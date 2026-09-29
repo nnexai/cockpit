@@ -629,7 +629,7 @@ fn follow_space_row(
     follow_id: &str, pages: Vec<SpaceCopyRow>, known: &[String], library: &[LibraryItemSummary],
     follow: Option<&LibraryFollowSummary>,
 ) -> SpaceCopyRow {
-    let new_pages = library.iter().filter(|item| item.follow_id.as_deref() == Some(follow_id)
+    let new_pages = library.iter().filter(|item| crate::library::refs::has_follow(item, follow_id)
         && item.state != LibraryItemState::RemovedAtSource
         && !known.contains(&item.item_id)
         && !pages.iter().any(|page| page.item_id.as_ref() == Some(&item.item_id))).count() as u32;
@@ -644,7 +644,7 @@ fn follow_space_row(
     SpaceCopyRow {
         item_id: None,
         logical_id: follow_id.to_owned(),
-        title: follow.map(|follow| format!("{} · {}", follow.space_key, follow.space_name))
+        title: follow.map(crate::library::refs::follow_title)
             .unwrap_or_else(|| follow_id.to_owned()),
         provider_id: follow.map(|follow| follow.provider_id.clone())
             .or_else(|| pages.iter().find_map(|page| page.provider_id.clone())),
@@ -659,7 +659,7 @@ fn follow_space_row(
         current_library_revision: None,
         follow: Some(SpaceFollowSummary {
             follow_id: follow_id.to_owned(),
-            space_key: follow.map(|follow| follow.space_key.clone()).unwrap_or_default(),
+            space_key: follow.and_then(crate::library::refs::space_key).map(str::to_owned).unwrap_or_default(),
             page_count: pages.len() as u32,
             new_pages,
             changed_pages,
@@ -2367,7 +2367,7 @@ mod library_copy_tests {
             ancestors: vec![], order: None, title: "Issue".into(), document_path: Some("item/Issue.md".into()),
             item_path: "item".into(), source_url: None, original_url: None, source_revision: Some("1".into()),
             revision: "revision-one".into(), state: LibraryItemState::Fresh, partial: None,
-            conflict: vec![], fetched_at: None, checked_at: None, follow_id: None, attachments: vec![],
+            conflict: vec![], fetched_at: None, checked_at: None, refs: vec![], purge_after: None, issue: None, attachments: vec![],
             folder: None, diagnostics: vec![],
         }
     }

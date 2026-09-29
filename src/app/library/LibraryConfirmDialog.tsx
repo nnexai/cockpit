@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { LibraryFollowSummary, LibraryOperation, SpaceCopyRow } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
-import { errorCode, errorText, pageCount, spaceDisplayName, type LibrarySpace } from "./libraryState";
+import { errorCode, errorText, followCountText, followTitle, type LibrarySpace } from "./libraryState";
 import { announceLibraryChanged } from "./useLibraryOperation";
 import "../projects/setup.css";
 import "../projects/taskSetup.css";
@@ -91,13 +91,14 @@ export function LibraryConfirmDialog({ title, body, safeLabel, confirmLabel, des
   </div>, document.body);
 }
 
-/** `stop_following` keeps the pages; `follow` removes them with the follow (design §4.10). */
+/** `stop_following` keeps the items; `follow` removes the ones no other reference holds with the follow (design §4.10). */
 export type FollowRemoveMode = "stop_following" | "follow";
 
 /**
- * Remove a followed space (design §4.10): `Cancel` is focused, `Stop following
- * only` keeps every page, and `Remove space` deletes its pages from the Library.
- * Space copies are never touched.
+ * Remove a followed space or query (design §4.10): `Cancel` is focused, `Stop
+ * following only` keeps every item, and `Remove` deletes the items only this
+ * follow holds from the Library. Items kept manually or held by another follow
+ * stay. Space copies are never touched.
  */
 export function FollowRemoveDialog({ follow, remove, onClose }: {
   follow: LibraryFollowSummary;
@@ -105,8 +106,10 @@ export function FollowRemoveDialog({ follow, remove, onClose }: {
   remove: (mode: FollowRemoveMode) => Promise<void>;
   onClose: () => void;
 }) {
-  return <LibraryConfirmDialog title={`Remove ${spaceDisplayName(follow)} from the Library?`} safeLabel="Cancel" confirmLabel="Remove space" destructive
-    body={<p>{`Deletes ${pageCount(follow.page_count)} from the Library and stops following the space. Copies already in Spaces stay as they are and stop receiving updates. Confluence isn't changed.`}</p>}
+  const query = follow.source.kind === "jira_query";
+  const noun = query ? "query" : "space";
+  return <LibraryConfirmDialog title={`Remove ${followTitle(follow)} from the Library?`} safeLabel="Cancel" confirmLabel={`Remove ${noun}`} destructive
+    body={<p>{`Deletes the items only this ${noun} holds (up to ${followCountText(follow)}) from the Library and stops following it. Items you kept in the Library or that another follow holds stay. Copies already in Spaces stay as they are and stop receiving updates. ${query ? "Jira" : "Confluence"} isn't changed.`}</p>}
     alternative={{ label: "Stop following only", onConfirm: () => remove("stop_following") }}
     onConfirm={() => remove("follow")} onClose={onClose} />;
 }

@@ -5,14 +5,14 @@ import { UiIcon } from "../UiIcon";
 
 /**
  * Provider refresh report (design §4.9). It stays until dismissed or the next
- * refresh; a Library refresh never writes to a Space. A followed space that hit
- * the page limit explains it: pages past the limit aren't added, and no page is
- * marked removed at source until a refresh reads the whole space.
+ * refresh; a Library refresh never writes to a Space. A followed space or query
+ * that read only part of its source explains it: nothing is marked removed at
+ * source or dropped until a refresh reads all of it.
  */
 export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onOpenItem, onRetry, onRetryFollow }: {
   operation: LibraryOperation;
-  /** `Refresh` for provider refreshes, `Replace` for a confirmed edited-file replace. */
-  verb: "Refresh" | "Replace";
+  /** `Refresh` for provider refreshes, `Replace` for a confirmed edited-file replace, `Keep` for `Keep in Library`. */
+  verb: "Refresh" | "Replace" | "Keep";
   error: string | null;
   onCancel: () => void;
   onDismiss: () => void;
@@ -28,7 +28,7 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
     const total = phase?.total ?? null;
     return <div className="context-notice library-report" role="status">
       <span className="library-spinner" aria-hidden="true" />
-      <span>{verb === "Refresh" ? `Refreshing${total !== null ? ` ${total} ${total === 1 ? "item" : "items"}` : ""}… ${phase?.done ?? 0} done` : "Replacing with the source version…"}</span>
+      <span>{verb === "Refresh" ? `Refreshing${total !== null ? ` ${total} ${total === 1 ? "item" : "items"}` : ""}… ${phase?.done ?? 0} done` : verb === "Keep" ? "Keeping in Library…" : "Replacing with the source version…"}</span>
       {operation.cancel_requested ? <span>Cancelling after the item in flight…</span> : <button type="button" onClick={onCancel}>Cancel</button>}
       {error ? <span className="library-report-error">{error}</span> : null}
     </div>;
@@ -44,7 +44,7 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
     : <span>{row.title}</span>;
   return <div className="library-report-block">
     <div className={`context-notice library-report${failed ? " context-notice-error" : ""}`} role="status">
-      <strong>{verb} {phase?.state === "cancelled" ? "cancelled" : failed ? "failed" : "finished"}:</strong>
+      <strong>{verb === "Keep" ? (phase?.state === "cancelled" ? "Keep cancelled:" : failed ? "Keep failed:" : "Kept in Library:") : `${verb} ${phase?.state === "cancelled" ? "cancelled" : failed ? "failed" : "finished"}:`}</strong>
       <span>{failed ? failed.message : report ? reportSummary(report) : "done"}</span>
       <span className="library-report-note">Spaces aren't changed.</span>
       <span className="context-toolbar-spacer" />
@@ -56,7 +56,7 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
     </div>
     {limitedFollows.map((row, index) => <p key={`${row.follow_id}:${index}`} className="context-notice context-notice-warning library-report-limit" role="status">
       <UiIcon name="half-ring" />
-      <span>{`${row.title}: ${row.reason ?? "partial"}. Pages past the limit aren't added, and no page is marked removed at source until a refresh reads the whole space.`}</span>
+      <span>{`${row.title}: ${row.reason ?? "partial"}. Only part of the source was read, so nothing is marked removed at source or dropped until a refresh reads all of it.`}</span>
     </p>)}
     {shown && rows.length > 0 ? <div className="library-report-rows">
       {REPORT_OUTCOMES.map((outcome) => {

@@ -16,7 +16,7 @@ function page(overrides: Partial<LibraryItemSummary>): LibraryItemSummary {
     item_id: "source:page", logical_id: "source:page", kind: "provider_snapshot", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", resource_type: "page",
     canonical_id: "0", container: { container_id: "SD", label: "SD · Software Development" }, parent_item_id: null, ancestors: [], order: null, title: "Page",
     document_path: "confluence/nnexai.atlassian.net/SD - Software Development/Page/Page.md", item_path: "confluence/nnexai.atlassian.net/SD - Software Development/Page", source_url: null, original_url: null, source_revision: "1", revision: "r1",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
     ...overrides,
   };
 }
@@ -236,16 +236,16 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
 
 it("shows followed spaces with their partial count and folder ancestors, and refreshes, stops following and removes a space from its menu", async () => {
   const follow = (overrides: Partial<LibraryFollowSummary>): LibraryFollowSummary => ({
-    follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", space_key: "SD", space_name: "Software Development",
-    include_attachments: false, page_count: 4, partial: null, excluded_page_ids: [], last_refreshed_at: null, state: "fresh", ...overrides,
+    follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", source: { kind: "confluence_space", space_key: "SD", space_name: "Software Development" },
+    include_attachments: false, item_count: 4, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh", ...overrides,
   });
   const sd = follow({});
   // Partial: the page limit stopped enumeration at 3 of 5, so nothing is shown for this space yet.
-  const ops = follow({ follow_id: "follow:ops", space_key: "OPS", space_name: "Operations", page_count: 3, partial: { unit: "pages", have: 3, total: 5, reason: "page limit" } });
+  const ops = follow({ follow_id: "follow:ops", source: { kind: "confluence_space", space_key: "OPS", space_name: "Operations" }, item_count: 3, partial: { unit: "pages", have: 3, total: 5, reason: "page limit" } });
   const homePage = { id: "1", title: "Home" };
   const folder = { id: "900", title: "Release folder" };
   const team = { id: "30", title: "Team" };
-  const followed = (overrides: Partial<LibraryItemSummary>) => page({ follow_id: "follow:sd", ...overrides });
+  const followed = (overrides: Partial<LibraryItemSummary>) => page({ refs: [{ kind: "follow", follow_id: "follow:sd" }], ...overrides });
   const pages = [
     followed({ item_id: "source:home", canonical_id: "1", title: "Home", order: 1 }),
     followed({ item_id: "source:architecture", canonical_id: "20", title: "Architecture", ancestors: [homePage], order: 2 }),
@@ -282,7 +282,7 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
     await act(async () => folderRow.click());
 
     await openMenu(named("SD · Software Development"));
-    expect(menuItems().map((item) => item.textContent)).toEqual(["Refresh space", "Stop following", "Remove space from Library…"]);
+    expect(menuItems().map((item) => item.textContent)).toEqual(["Refresh space", "Stop following", "Remove space and its items…"]);
     await choose("Refresh space");
     expect(actions.refresh).toHaveBeenCalledWith({ scope: "follow", follow_id: "follow:sd" }, ["source:home", "source:architecture", "source:team", "source:team-notes"]);
 
@@ -296,10 +296,10 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
 
     // Removal asks first, with Cancel focused and `Stop following only` as the lesser choice.
     await openMenu(named("SD · Software Development"));
-    await choose("Remove space from Library…");
+    await choose("Remove space and its items…");
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dialog.querySelector("h2")?.textContent).toBe("Remove SD · Software Development from the Library?");
-    expect(dialog.textContent).toContain("Deletes 4 pages from the Library and stops following the space. Copies already in Spaces stay as they are");
+    expect(dialog.textContent).toContain("Deletes the items only this space holds (up to 4 pages) from the Library and stops following it. Items you kept in the Library or that another follow holds stay.");
     expect([...dialog.querySelectorAll("footer button")].map((button) => button.textContent)).toEqual(["Cancel", "Stop following only", "Remove space"]);
     expect(document.activeElement?.textContent).toBe("Cancel");
     await act(async () => [...dialog.querySelectorAll<HTMLButtonElement>("footer button")].find((button) => button.textContent === "Remove space")!.click());
@@ -311,6 +311,56 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
     expect(named("SD · Software Development")).toBeUndefined();
     expect(document.activeElement).toBe(named("Confluence · nnexai.atlassian.net"));
     expect(actions.remove).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("shows a followed Jira query as a container titled by its JQL, marks unreferenced issues, and offers Keep in Library only for issues without their own reference", async () => {
+  const jira: ProjectProvider[] = [{ id: "jira", base_url: "https://jira.test", executable: "jira", login: "default" }];
+  const issue = (key: string, overrides: Partial<LibraryItemSummary>) => page({
+    item_id: `source:${key}`, provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue", canonical_id: key, container: { container_id: "OPS", label: "OPS" }, title: `Issue ${key}`,
+    document_path: `jira/jira.test/OPS/${key}/Issue.md`, item_path: `jira/jira.test/OPS/${key}`, source_url: `https://jira.test/browse/${key}`, ...overrides,
+  });
+  const query: LibraryFollowSummary = {
+    follow_id: "follow:q", provider_id: "jira", provider_instance: "https://jira.test", source: { kind: "jira_query", jql: "project = OPS AND updated >= -14d", mode: "accumulate" },
+    include_attachments: false, item_count: 2, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh",
+  };
+  const held = issue("OPS-1", { refs: [{ kind: "follow", follow_id: "follow:q" }] });
+  const tombstoned = issue("OPS-2", { refs: [], purge_after: String(Date.now() + 86_400_000) });
+  const own = issue("OPS-3", { refs: [{ kind: "manual" }] });
+  const keep = vi.fn();
+  const removeFollow = vi.fn(async () => undefined);
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false, removeFollow, keep };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const treeRows = () => [...host.querySelectorAll<HTMLElement>("[data-library-row]")];
+  const named = (label: string) => treeRows().find((row) => row.querySelector(".context-tree-name")?.textContent === label)!;
+  const menuItems = () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  const openMenu = (row: HTMLElement) => act(async () => { row.focus(); row.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })); });
+  try {
+    await act(async () => root.render(<LibraryTree items={[held, tombstoned, own]} follows={[query]} providers={jira} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    const names = treeRows().map((row) => row.querySelector(".context-tree-name")?.textContent);
+    // The followed issue sits under the query; the unfollowed ones under their project.
+    expect(names).toEqual(["Jira · jira.test", "OPS", "OPS-3 Issue OPS-3", "OPS-2 Issue OPS-2", "project = OPS AND updated >= -14d", "OPS-1 Issue OPS-1"]);
+    const followRow = named("project = OPS AND updated >= -14d");
+    expect([...followRow.querySelectorAll(".context-tree-meta")].map((meta) => meta.textContent)).toEqual(["Following", "2 issues · Accumulate"]);
+    expect(named("OPS-2 Issue OPS-2").querySelector(".context-tree-meta")?.textContent).toBe("Unreferenced");
+    expect(named("OPS-1 Issue OPS-1").querySelector(".context-tree-meta")).toBeNull();
+
+    await openMenu(named("OPS-2 Issue OPS-2"));
+    expect(menuItems().map((item) => item.textContent)).toContain("Keep in Library");
+    await act(async () => menuItems().find((item) => item.textContent === "Keep in Library")!.click());
+    expect(keep).toHaveBeenCalledWith(tombstoned);
+
+    await openMenu(named("OPS-3 Issue OPS-3"));
+    expect(menuItems().map((item) => item.textContent)).not.toContain("Keep in Library");
+    await act(async () => menuItems().find((item) => item.textContent === "Refresh from source")!.click());
+
+    await openMenu(followRow);
+    expect(menuItems().map((item) => item.textContent)).toEqual(["Refresh query", "Stop following", "Remove query and its items…"]);
   } finally {
     await act(async () => root.unmount());
     host.remove();

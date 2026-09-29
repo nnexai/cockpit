@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { LibraryAttachment, LibraryAttachmentAction, LibraryAttachmentRequest, LibraryFollowSummary, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { FollowRemoveDialog, type FollowRemoveMode } from "./LibraryConfirmDialog";
-import { attachmentTreeMeta, errorText, isConfluencePage, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, spaceDisplayName, type LibraryContainerNode, type LibraryInstanceNode, type StateShape, type StateTone } from "./libraryState";
+import { attachmentTreeMeta, errorText, followTitle, hasFollowRef, isConfluencePage, isKeepable, issueCount, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, purgeNotice, type LibraryContainerNode, type LibraryInstanceNode, type StateShape, type StateTone } from "./libraryState";
 import { ProviderMark } from "./ProviderMark";
 import { PendingPill, StatePill } from "./StatePill";
 import "./library.css";
@@ -142,8 +142,10 @@ export type LibraryItemActions = {
   refreshBusy: boolean;
   /** The target Space's actions for the item: `Add to <Space>`, or its copy's `Update`, replace, removal and Library version. */
   spaceEntries?: (item: LibraryItemSummary) => LibraryMenuEntry[];
-  /** Stops following a space or removes it from the Library; resolves once the Library accepted it. */
+  /** Stops following a space or query, or removes it from the Library; resolves once the Library accepted it. */
   removeFollow?: (follow: LibraryFollowSummary, mode: FollowRemoveMode) => Promise<void>;
+  /** `Keep in Library`: gives the item its own reference, so no follow's drop or unfollow can purge it. */
+  keep?: (item: LibraryItemSummary) => void;
   attachments?: LibraryAttachmentActions;
 };
 
@@ -153,6 +155,7 @@ export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemAc
   return [
     ...(includeOpen ? [{ label: "Open", onSelect: () => actions.open(item), disabled: !item.document_path }] : []),
     { label: item.folder ? `Re-copy from ${item.folder.origin_path}` : "Refresh from source", onSelect: () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]), disabled: actions.refreshBusy },
+    ...(actions.keep && isKeepable(item) ? [{ label: "Keep in Library", onSelect: () => actions.keep?.(item), disabled: actions.refreshBusy || !item.source_url }] : []),
     ...space,
     ...attachmentMenuEntries(item, actions.attachments),
     ...(actions.copyLibraryPath ? [{ label: "Copy Library path", onSelect: () => actions.copyLibraryPath?.(item), disabled: !actions.canCopyLibraryPath || !item.document_path }] : []),
@@ -194,7 +197,7 @@ function pageForest(container: LibraryContainerNode): PageNode[] {
   }
   const follow = container.follow;
   if (follow && !follow.partial) {
-    const excluded = new Set(follow.excluded_page_ids);
+    const excluded = new Set(follow.excluded_ids);
     for (const [id, node] of nodes) node.folder = !node.item && !excluded.has(id);
   }
   return roots;
@@ -229,9 +232,10 @@ function rowLabel(row: Row): string {
   }
 }
 
-/** Design §4.10: stopping keeps every page and ends new-page refreshes. */
+/** Design §4.10: stopping keeps every item and ends refreshes that add or update from the follow. */
 function stoppedFollowing(follow: LibraryFollowSummary): string {
-  return `Stopped following ${follow.space_key}. Its ${pageCount(follow.page_count)} stay in the Library; refresh no longer adds new pages.`;
+  if (follow.source.kind === "jira_query") return `Stopped following the query. Its ${issueCount(follow.item_count)} stay in the Library; refresh no longer adds or drops issues for it.`;
+  return `Stopped following ${follow.source.space_key}. Its ${pageCount(follow.item_count)} stay in the Library; refresh no longer adds new pages.`;
 }
 
 const NO_FOLLOWS: readonly LibraryFollowSummary[] = [];
@@ -325,7 +329,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
     if (!removeFollow) return;
     setFollowNotice(null);
     removeFollow(follow, "stop_following").then(() => setFollowNotice({ text: stoppedFollowing(follow), failed: false }), (cause: unknown) => {
-      setFollowNotice({ text: `Still following ${follow.space_key}. ${errorText(cause, "Stopping could not be completed.")}`, failed: true });
+      setFollowNotice({ text: `Still following ${follow.source.kind === "jira_query" ? "the query" : follow.source.space_key}. ${errorText(cause, "Stopping could not be completed.")}`, failed: true });
     });
   };
   const attachmentActions = actions.attachments;
@@ -346,13 +350,14 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
       : row.kind === "container" ? row.node.items.map((item) => item.item_id) : pageItemIds(row.node);
     const follow = row.kind === "container" ? row.node.follow : null;
     if (follow) {
-      // Design §5.3: `Refresh space` · `Stop following` · separator · `Remove space from Library…`.
+      // Design §5.3: `Refresh space` · `Stop following` · separator · `Remove space from Library…`; a query reads the same.
+      const noun = follow.source.kind === "jira_query" ? "query" : "space";
       return [
-        { label: "Refresh space", onSelect: () => actions.refresh({ scope: "follow", follow_id: follow.follow_id }, ids), disabled: actions.refreshBusy },
+        { label: `Refresh ${noun}`, onSelect: () => actions.refresh({ scope: "follow", follow_id: follow.follow_id }, ids), disabled: actions.refreshBusy },
         ...(removeFollow ? [
           { label: "Stop following", onSelect: () => stopFollowing(follow) },
           "separator" as const,
-          { label: "Remove space from Library…", onSelect: () => { setFollowNotice(null); setRemoving(follow); }, destructive: true },
+          { label: `Remove ${noun} and its items…`, onSelect: () => { setFollowNotice(null); setRemoving(follow); }, destructive: true },
         ] : []),
       ];
     }
@@ -438,7 +443,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
           <button type="button" data-library-row={row.key} data-context-path={item.document_path ?? undefined}
             className={`context-tree-row library-tree-row is-${row.kind}${item.item_id === selectedItemId ? " is-selected" : ""}`}
             aria-current={item.item_id === selectedItemId ? "true" : undefined}
-            aria-label={`${itemAccessibleName(item, providers)}${pending ? ", refreshing" : ""}`}
+            aria-label={`${itemAccessibleName(item, providers)}${item.purge_after !== null ? ", unreferenced" : ""}${pending ? ", refreshing" : ""}`}
             onClick={() => actions.open(item)} onContextMenu={onContextMenu(row)}>
             {/* A page node's chevron is its own hit target, drawn over this slot. */}
             <span className="library-row-chevron" aria-hidden="true" />
@@ -446,6 +451,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
             <span className="context-tree-name" title={item.item_path}>{label}</span>
             {pending ? <PendingPill className="context-tree-meta" word={progress ?? "Refreshing…"} />
               : item.state !== "fresh" ? <StatePill className="context-tree-meta" shape={chip.shape} word={chip.word} tone={chip.tone} /> : null}
+            {!pending && item.purge_after !== null ? <StatePill className="context-tree-meta" shape="slash-ring" word="Unreferenced" tone="muted" title={purgeNotice(item)} /> : null}
           </button>
         </div>;
       }
@@ -481,7 +487,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
       const follow = row.kind === "container" ? row.node.follow : null;
       const folder = row.kind === "ancestor" && row.node.folder;
       // Pages added one by one read `Pages`; a followed space a `Following` pill, plus `N of M` while partial.
-      const meta = row.kind === "container" && !follow && row.node.items.every((item) => isConfluencePage(item) && !item.follow_id) ? "Pages"
+      const meta = row.kind === "container" && !follow && row.node.items.every((item) => isConfluencePage(item) && !hasFollowRef(item)) ? "Pages"
         : row.kind === "attachments" ? attachmentTreeMeta(row.item)
         : folder ? "Folder" : null;
       const partial = follow?.partial ? partialText(follow) : null;
@@ -498,6 +504,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
           </span>
           <span className="context-tree-name" title={row.kind === "instance" ? row.node.instance ?? label : label}>{label}</span>
           {follow ? <StatePill className="context-tree-meta" shape="dot-ring" word="Following" tone="idle" /> : null}
+          {follow?.source.kind === "jira_query" ? <span className="context-tree-meta library-state is-muted">{`${issueCount(follow.item_count)} · ${follow.source.mode === "live" ? "Live" : "Accumulate"}`}</span> : null}
           {follow?.partial ? <StatePill className="context-tree-meta" shape="half-ring" word={`${follow.partial.have} of ${follow.partial.total ?? "?"}`} tone="working" title={partial ?? undefined} /> : null}
           {instanceNode?.unavailable ? <StatePill className="context-tree-meta" shape="close" word="Unavailable" tone="blocked" /> : null}
           {meta ? <span className="context-tree-meta library-state is-muted">{meta}</span> : null}
@@ -508,7 +515,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
     {removing && removeFollow ? <FollowRemoveDialog follow={removing} onClose={() => setRemoving(null)} remove={async (mode) => {
       await removeFollow(removing, mode);
       setRemoving(null);
-      setFollowNotice({ text: mode === "stop_following" ? stoppedFollowing(removing) : `Removed ${spaceDisplayName(removing)} from the Library.`, failed: false });
+      setFollowNotice({ text: mode === "stop_following" ? stoppedFollowing(removing) : `Removed ${followTitle(removing)} from the Library.`, failed: false });
     }} /> : null}
   </div>;
 }

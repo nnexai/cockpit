@@ -10,6 +10,7 @@ pub mod context_media;
 pub mod context_search;
 pub mod extension_adapter;
 pub mod library;
+pub mod jira_query;
 pub mod paste_adapter;
 pub mod process;
 pub mod project_adapter;

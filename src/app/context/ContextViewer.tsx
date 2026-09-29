@@ -1200,7 +1200,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const pollContext = useCallback((request: Parameters<CockpitClient["contextInvalidate"]>[2], signal: AbortSignal) =>
     reader?.invalidate ? reader.invalidate(request, signal) : Promise.reject(new Error("Change polling is unavailable for this root.")), [reader]);
   const [libraryPendingIds, setLibraryPendingIds] = useState<ReadonlySet<string>>(NO_PENDING_ITEMS);
-  const [libraryReportVerb, setLibraryReportVerb] = useState<"Refresh" | "Replace">("Refresh");
+  const [libraryReportVerb, setLibraryReportVerb] = useState<"Refresh" | "Replace" | "Keep">("Refresh");
   const [libraryReportDismissed, setLibraryReportDismissed] = useState(false);
   const [libraryAdd, setLibraryAdd] = useState<"library" | "space" | null>(null);
   const [libraryConfirm, setLibraryConfirm] = useState<{ kind: "remove" | "replace"; item: LibraryItemSummary } | null>(null);
@@ -1466,8 +1466,19 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     },
     removeFollow: async (follow, mode) => {
       await client.libraryRemove({ mode, follow_id: follow.follow_id });
-      if (mode === "follow" && selectedLibraryItem?.follow_id === follow.follow_id) onChange({ ...value, path: null });
+      // The open item goes only when this follow was all that held it.
+      const heldOnlyByFollow = selectedLibraryItem !== null && selectedLibraryItem !== undefined && selectedLibraryItem.refs.length > 0 && selectedLibraryItem.refs.every((ref) => ref.kind === "follow" && ref.follow_id === follow.follow_id);
+      if (mode === "follow" && heldOnlyByFollow) onChange({ ...value, path: null });
       announceLibraryChanged();
+    },
+    // Saving the item's own link again takes the "Already saved" path, which adds the `manual` reference.
+    keep: (item) => {
+      if (!item.source_url) return;
+      const input = item.source_url;
+      setLibraryReportVerb("Keep");
+      setLibraryReportDismissed(false);
+      setLibraryPendingIds(new Set([item.item_id]));
+      void startLibraryOperation(() => client.libraryAdd({ input, provider_id: item.provider_id, hydrate_references: false, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false, label: null, target: null }));
     },
   };
   // Palette commands and `Open in Library` wait until the listing can serve them.

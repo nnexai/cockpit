@@ -488,10 +488,10 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     item_id: "source:mr", logical_id: "source:gitlab:https://gitlab.test:review:platform/api!482", kind: "provider_snapshot", provider_id: "gitlab", provider_instance: "https://gitlab.test", resource_type: "review",
     canonical_id: "platform/api!482", container: { container_id: "platform/api", label: "platform/api" }, parent_item_id: null, ancestors: [], order: null, title: "Fix token refresh race",
     document_path: "gitlab/gitlab.test/platform/api/merge-requests/482/Fix token refresh race.md", item_path: "gitlab/gitlab.test/platform/api/merge-requests/482", source_url: "https://gitlab.test/platform/api/-/merge_requests/482", original_url: null, source_revision: "abc", revision: "sha256:r1",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
   };
   const listing: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
-  const operation: LibraryOperation = { operation_id: "op-1", kind: "refresh", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:mr"], report: { new: 0, updated: 1, unchanged: 0, removed_at_source: 0, partial: 0, failed: 0, conflict: 0, rows: [], truncated_rows: false }, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "" };
+  const operation: LibraryOperation = { operation_id: "op-1", kind: "refresh", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:mr"], report: { new: 0, updated: 1, unchanged: 0, removed_at_source: 0, dropped: 0, partial: 0, failed: 0, conflict: 0, rows: [], truncated_rows: false }, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "" };
   let documentText = "# Fix it";
   let currentListing = listing;
   const client = {
@@ -586,7 +586,7 @@ it("opens any file a folder copy captured, not only its first file", async () =>
     item_id: "folder:notes", logical_id: "folder:notes", kind: "folder_copy", provider_id: null, provider_instance: null, resource_type: null,
     canonical_id: null, container: null, parent_item_id: null, ancestors: [], order: null, title: "Design notes",
     document_path: "folders/Design notes/README.md", item_path: "folders/Design notes", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], diagnostics: [],
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], diagnostics: [],
     folder: { origin_path: "/home/user/notes", git_working_tree: false, files: 2, bytes: 20, skipped_symlinks: 0, skipped_special: 0, skipped_ignored: 0, skipped_other: 0 },
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
@@ -1050,7 +1050,7 @@ it("adds a Library item to the Space and rereads its standing after provider ref
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
     document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
   const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
@@ -1187,7 +1187,7 @@ it("keeps a failed Add to <Space> visible with its retry when no durable attempt
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
     document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
   // The copy stopped before its attempt was written: the reread listing has no attempt for it.
@@ -1240,7 +1240,7 @@ it("clears a header's failed Add to <Space> once another surface copies the item
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
     document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
   const stopped: LibraryOperation = {
@@ -1296,7 +1296,7 @@ it("offers the copy's Update, Replace and Remove for the target Space in the Lib
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
     document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r2",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
   const path = "sources/jira/issue/ops-311.md";

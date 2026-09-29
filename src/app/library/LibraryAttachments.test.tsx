@@ -11,7 +11,7 @@ import { LibraryItemHeader } from "./LibraryItemHeader";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const page: LibraryItemSummary = {
   item_id: "page:s7", logical_id: "page:s7", kind: "provider_snapshot", provider_id: "confluence", provider_instance: "https://wiki.test", resource_type: "page", canonical_id: "7",
-  container: { container_id: "SD", label: "SD" }, parent_item_id: null, ancestors: [], order: null, title: "Release", document_path: "confluence/wiki.test/SD - Software Development/Release/Release.md", item_path: "confluence/wiki.test/SD - Software Development/Release", source_url: null, original_url: null, source_revision: "1", revision: "r1", state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, folder: null, diagnostics: [],
+  container: { container_id: "SD", label: "SD" }, parent_item_id: null, ancestors: [], order: null, title: "Release", document_path: "confluence/wiki.test/SD - Software Development/Release/Release.md", item_path: "confluence/wiki.test/SD - Software Development/Release", source_url: null, original_url: null, source_revision: "1", revision: "r1", state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, folder: null, diagnostics: [],
   attachments: [
     { attachment_id: "png", original_name: "../flow.png", stored_name: "flow.png", media_type: "image/png", bytes: 68, version: "1", state: "not_downloaded", relative_path: null },
     { attachment_id: "pdf", original_name: "report.pdf", stored_name: "report.pdf", media_type: "application/pdf", bytes: 100, version: "1", state: "failed", relative_path: null },

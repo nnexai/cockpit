@@ -306,7 +306,7 @@ pub(super) fn prepare_saved_follow(
         &[AttemptSubject {
             id: follow.follow_id.clone(),
             follow: true,
-            title: format!("{} · {}", follow.space_key, follow.space_name),
+            title: super::refs::follow_title(follow),
         }],
     )
 }
@@ -516,6 +516,7 @@ impl LibraryService {
             if !follow_ids.iter().all(|id| follows.iter().any(|f| &f.follow_id == id)) {
                 return Err(error("library_item_not_found", "Followed space does not exist"));
             }
+            super::refs::reject_jira_follows(&follows, &follow_ids)?;
         }
         let (record, lease) = operations::create(
             &store,
@@ -567,6 +568,9 @@ impl LibraryService {
         let (rows, follow_rows) = {
             let _lock = store.shared()?;
             let index = store.index()?;
+            if let Some(ids) = selected_follows {
+                super::refs::reject_jira_follows(&index.follows, ids)?;
+            }
             let items = index.items.into_iter().map(|entry| entry.summary).collect::<Vec<_>>();
             let (follow_rows, item_rows): (Vec<_>, Vec<_>) = context_assets::library_space_rows(
                 &authorized.dir,
@@ -692,6 +696,22 @@ impl LibraryService {
         } else {
             context_assets::remove_library_copy(&authorized.dir, companion,
                 &request.logical_id, &request.confirmed)?;
+            let store = self.open()?;
+            let reference = LibraryItemRef::Space {
+                companion_root_id: authorized.root.root_id.clone(),
+            };
+            let now = crate::project_store::timestamp();
+            store.mutate_index(|index| {
+                for entry in &mut index.items {
+                    if entry.summary.logical_id == request.logical_id
+                        && super::refs::remove_ref(&mut entry.summary, &reference)
+                        && entry.summary.refs.is_empty()
+                    {
+                        entry.summary.purge_after = Some(now.clone());
+                    }
+                }
+                Ok(())
+            })?;
         }
         self.space_listing(request.target).await
     }
@@ -866,10 +886,11 @@ impl LibraryService {
                     let follow = index.follows.iter().find(|f| &f.follow_id == id).ok_or_else(|| {
                         error("library_item_not_found", "Followed space no longer exists")
                     })?;
+                    super::refs::require_space_key(follow)?;
                     Ok(AttemptSubject {
                         id: id.clone(),
                         follow: true,
-                        title: format!("{} · {}", follow.space_key, follow.space_name),
+                        title: super::refs::follow_title(follow),
                     })
                 })
                 .collect::<Result<Vec<_>, InspectionError>>()?;
@@ -877,7 +898,7 @@ impl LibraryService {
             index
                 .items
                 .iter()
-                .filter(|e| e.summary.follow_id.as_ref().is_some_and(|id| follow_ids.contains(id)))
+                .filter(|e| super::refs::follow_ids(&e.summary).iter().any(|id| follow_ids.contains(id)))
                 .count() as u32
         };
         operations::begin_space(store, operation, total)?;
@@ -1003,6 +1024,7 @@ fn copy_into(
     mode: LibraryCopyMode<'_>,
     follow_id: Option<&str>,
 ) -> Result<context_assets::LibraryCopyResult, InspectionError> {
+    let result = {
     let _lock = store.shared()?;
     let index = store.index()?;
     let entry = index
@@ -1029,7 +1051,14 @@ fn copy_into(
         &view,
         mode,
         follow_id,
-    )
+    )?
+    };
+    // The shared lock is released: `add_ref` takes the exclusive one.
+    store.add_ref(
+        id,
+        LibraryItemRef::Space { companion_root_id: authorized.root.root_id.clone() },
+    )?;
+    Ok(result)
 }
 
 /// D8: offer the follow's current Library pages this Space was never offered.
@@ -1053,7 +1082,7 @@ fn offer_follow_pages(
             .into_iter()
             .map(|entry| entry.summary)
             .filter(|item| {
-                item.follow_id.as_deref() == Some(follow_id)
+                super::refs::has_follow(item, follow_id)
                     && item.state != LibraryItemState::RemovedAtSource
                     && !copies.known.contains(&item.item_id)
                     && !copies.pages.iter().any(|(id, _)| id == &item.item_id)
@@ -1792,7 +1821,7 @@ pub(in crate::library) mod tests {
         std::fs::write(origin.join("nested/b.txt"), b"b").unwrap();
         let added = finished(&service, service.start_add(LibraryAddRequest {
             input: origin.to_string_lossy().into_owned(), provider_id: None,
-            hydrate_references: false, follow_space: false, download_attachments: false,
+            hydrate_references: false, follow: false, follow_mode: None, download_attachments: false,
             refresh_existing: false, label: Some("Folder notes".into()), target: Some(target()),
         }).await.unwrap()).await;
         assert!(added.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done));
@@ -1825,6 +1854,33 @@ pub(in crate::library) mod tests {
         }).await.unwrap();
         assert!(!root.join(a).exists());
         assert!(!root.join(b).exists());
+    }
+
+    #[tokio::test]
+    async fn space_copy_adds_space_ref_and_removal_drops_it() {
+        let f = fixture();
+        let (projects, adapter, _root) = companion(&f).await;
+        let service = reopen(&f).with_projects(projects, adapter);
+        let item = saved(&f, 1).await;
+        finished(&service, service.start_space_add(SpaceAddRequest {
+            target: target(), item_ids: vec![item.item_id.clone()], follow_ids: vec![],
+        }).await.unwrap()).await;
+        let store = service.open().unwrap();
+        let refs = |store: &Store| {
+            let _lock = store.shared().unwrap();
+            let entry = store.index().unwrap().items.into_iter()
+                .find(|e| e.summary.item_id == item.item_id).unwrap();
+            (entry.summary.refs, entry.summary.purge_after)
+        };
+        let (held, purge) = refs(&store);
+        assert!(held.iter().any(|r| matches!(r, LibraryItemRef::Space { .. })));
+        assert_eq!(purge, None);
+        let row = service.space_listing(target()).await.unwrap().rows.remove(0);
+        service.space_remove(SpaceRemoveRequest {
+            target: target(), logical_id: row.logical_id, confirmed: vec![],
+        }).await.unwrap();
+        let (held, _) = refs(&store);
+        assert!(!held.iter().any(|r| matches!(r, LibraryItemRef::Space { .. })));
     }
 
     #[tokio::test]

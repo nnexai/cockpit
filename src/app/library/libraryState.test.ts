@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LibraryFollowSummary, LibraryItemState, LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
-import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, parseLibraryTime, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
+import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, parseLibraryTime, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
 
 const providers: ProjectProvider[] = [
   { id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
@@ -13,7 +13,7 @@ function item(overrides: Partial<LibraryItemSummary>): LibraryItemSummary {
     item_id: "source:x", logical_id: "source:x", kind: "provider_snapshot", provider_id: "gitlab", provider_instance: "https://gitlab.test", resource_type: "issue",
     canonical_id: "platform/api#1", container: null, parent_item_id: null, ancestors: [], order: null, title: "Title",
     document_path: "gitlab/gitlab.test/platform/api/issues/1/Title.md", item_path: "gitlab/gitlab.test/platform/api/issues/1", source_url: null, original_url: null, source_revision: null, revision: "r",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
     ...overrides,
   };
 }
@@ -187,15 +187,42 @@ describe("Confluence space recognition", () => {
 describe("Followed spaces in the tree", () => {
   const confluence: ProjectProvider[] = [{ id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence" }];
   const follow = (overrides: Partial<LibraryFollowSummary>): LibraryFollowSummary => ({
-    follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", space_key: "SD", space_name: "Software Development",
-    include_attachments: false, page_count: 0, partial: null, excluded_page_ids: [], last_refreshed_at: null, state: "fresh", ...overrides,
+    follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", source: { kind: "confluence_space", space_key: "SD", space_name: "Software Development" },
+    include_attachments: false, item_count: 0, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh", ...overrides,
   });
 
   it("puts a follow's pages under its space container and lists a follow that holds no pages yet", () => {
-    const page = item({ item_id: "source:h", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", resource_type: "page", canonical_id: "1", title: "Home", container: { container_id: "SD", label: "SD · Software Development" }, follow_id: "follow:sd" });
-    const [instance] = libraryTree([page], confluence, [follow({ page_count: 1 }), follow({ follow_id: "follow:ops", space_key: "OPS", space_name: "Operations" })]);
+    const page = item({ item_id: "source:h", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", resource_type: "page", canonical_id: "1", title: "Home", container: { container_id: "SD", label: "SD · Software Development" }, refs: [{ kind: "follow", follow_id: "follow:sd" }] });
+    const [instance] = libraryTree([page], confluence, [follow({ item_count: 1 }), follow({ follow_id: "follow:ops", source: { kind: "confluence_space", space_key: "OPS", space_name: "Operations" } })]);
     expect(instance!.label).toBe("Confluence · nnexai.atlassian.net");
     expect(instance!.containers.map((container) => [container.label, container.follow?.follow_id, container.items.map((entry) => entry.item_id)]))
       .toEqual([["OPS · Operations", "follow:ops", []], ["SD · Software Development", "follow:sd", ["source:h"]]]);
+  });
+
+  it("puts a Jira issue under the first query in follows order that holds it, and under its project when none does", () => {
+    const query = (id: string, jql: string): LibraryFollowSummary => follow({ follow_id: id, provider_id: "jira", provider_instance: "https://jira.test/jira", source: { kind: "jira_query", jql, mode: "live" } });
+    const issue = (key: string, refs: LibraryItemSummary["refs"]) => item({ item_id: `source:${key}`, provider_id: "jira", provider_instance: "https://jira.test/jira", resource_type: "issue", canonical_id: key, container: { container_id: "OPS", label: "OPS" }, refs });
+    const [instance] = libraryTree(
+      [issue("OPS-1", [{ kind: "follow", follow_id: "follow:b" }, { kind: "follow", follow_id: "follow:a" }]), issue("OPS-2", [{ kind: "manual" }])],
+      providers, [query("follow:a", "project = OPS"), query("follow:b", "assignee = currentUser()")],
+    );
+    expect(instance!.containers.map((container) => [container.label, container.follow?.follow_id ?? null, container.items.map((entry) => entry.item_id)]))
+      .toEqual([["assignee = currentUser()", "follow:b", []], ["OPS", null, ["source:OPS-2"]], ["project = OPS", "follow:a", ["source:OPS-1"]]]);
+  });
+});
+
+describe("Jira query input", () => {
+  it("reads a bare project key or JQL operators, but not links, issue keys or folder paths, and needs a Jira provider", () => {
+    expect(jiraQueryInput("OPS", providers)).toMatchObject({ jql: "OPS", bare: true });
+    expect(jiraQueryInput("project = OPS AND updated >= -7d", providers)).toMatchObject({ bare: false });
+    expect(jiraQueryInput("status in (Open, Blocked)", providers)?.providers.map((provider) => provider.id)).toEqual(["jira"]);
+    for (const input of ["OPS-311", "https://jira.test/jira/browse/OPS-311", "~/notes", "/work/a=b", "ops", "", "just words"]) expect(jiraQueryInput(input, providers)).toBeNull();
+    expect(jiraQueryInput("OPS", providers.filter((provider) => provider.id !== "jira"))).toBeNull();
+  });
+
+  it("offers project presets for a bare key or a project query, and only the personal one otherwise", () => {
+    expect(jiraQueryPresets("OPS").map((preset) => preset.jql)).toEqual(["project = OPS", "project = OPS AND statusCategory != Done", "project = OPS AND updated >= -14d", "assignee = currentUser() AND resolution = Unresolved"]);
+    expect(jiraQueryPresets(null).map((preset) => preset.jql)).toEqual(["assignee = currentUser() AND resolution = Unresolved"]);
+    expect([jiraQueryProject("OPS"), jiraQueryProject("project = OPS AND updated >= -14d"), jiraQueryProject("assignee = x")]).toEqual(["OPS", "OPS", null]);
   });
 });

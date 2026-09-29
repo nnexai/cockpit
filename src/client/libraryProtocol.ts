@@ -1,7 +1,7 @@
 import type {
   ContextDirectory, ContextDocument, ContextMedia, ContextFileIndex, LibraryFileIndexRequest,
   LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest,
-  LibraryFollowSummary, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
+  LibraryFollowSource, LibraryFollowSummary, LibraryIssueMeta, LibraryItemRef, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
   LibraryRemoveRequest, LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, ProjectDiagnostic,
   SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest,
 } from "../protocol/generated/v1";
@@ -54,12 +54,35 @@ function item(value: unknown): LibraryItemSummary {
     order: nullable(r.order, v => integer(v, 0xffffffff)), title: text(r.title), document_path: nullable(r.document_path, v => path(v)), item_path: path(r.item_path),
     source_url: optionalText(r.source_url), original_url: optionalText(r.original_url), source_revision: optionalText(r.source_revision), revision: id(r.revision),
     state: oneOf(r.state, ["fresh", "changed", "unknown", "removed_at_source", "conflict", "failed", "partial"] as const), partial: partial(r.partial),
-    conflict: array(r.conflict, 5000, conflict), fetched_at: optionalText(r.fetched_at), checked_at: optionalText(r.checked_at), follow_id: optionalText(r.follow_id),
+    conflict: array(r.conflict, 5000, conflict), fetched_at: optionalText(r.fetched_at), checked_at: optionalText(r.checked_at),
+    refs: array(r.refs, 5000, itemRef), purge_after: optionalText(r.purge_after), issue: nullable(r.issue, issueMeta),
     attachments: array(r.attachments, 5000, attachment), folder, diagnostics: diagnostics(r.diagnostics),
   };
 }
+const followMode = (value: unknown) => oneOf(value, ["live", "accumulate"] as const);
+function itemRef(value: unknown): LibraryItemRef {
+  const r = record(value);
+  switch (r.kind) {
+    case "manual": return { kind: "manual" };
+    case "follow": return { kind: "follow", follow_id: id(r.follow_id) };
+    case "space": return { kind: "space", companion_root_id: id(r.companion_root_id) };
+    default: return fail();
+  }
+}
+function issueMeta(value: unknown): LibraryIssueMeta {
+  const r = record(value);
+  return { updated: text(r.updated, 128), fetched_updated: nullable(r.fetched_updated, v => text(v, 128)), status: text(r.status, 512), issue_type: text(r.issue_type, 512), assignee: nullable(r.assignee, v => text(v, 512)) };
+}
+function followSource(value: unknown): LibraryFollowSource {
+  const r = record(value);
+  switch (r.kind) {
+    case "confluence_space": return { kind: "confluence_space", space_key: id(r.space_key), space_name: text(r.space_name) };
+    case "jira_query": return { kind: "jira_query", jql: text(r.jql, 2048), mode: followMode(r.mode) };
+    default: return fail();
+  }
+}
 function follow(value: unknown): LibraryFollowSummary {
-  const r = record(value); return { follow_id: id(r.follow_id), provider_id: id(r.provider_id), provider_instance: id(r.provider_instance), space_key: id(r.space_key), space_name: text(r.space_name), include_attachments: bool(r.include_attachments), page_count: integer(r.page_count, 0xffffffff), partial: partial(r.partial), excluded_page_ids: array(r.excluded_page_ids, 5000, id), last_refreshed_at: optionalText(r.last_refreshed_at), state: oneOf(r.state, ["fresh", "changed", "unknown", "removed_at_source", "conflict", "failed", "partial"] as const) };
+  const r = record(value); return { follow_id: id(r.follow_id), provider_id: id(r.provider_id), provider_instance: id(r.provider_instance), source: followSource(r.source), include_attachments: bool(r.include_attachments), item_count: integer(r.item_count, 0xffffffff), partial: partial(r.partial), excluded_ids: array(r.excluded_ids, 5000, id), last_refreshed_at: optionalText(r.last_refreshed_at), state: oneOf(r.state, ["fresh", "changed", "unknown", "removed_at_source", "conflict", "failed", "partial"] as const) };
 }
 function libraryRoot(value: unknown) {
   const r = record(value);
@@ -73,7 +96,7 @@ export function parseLibraryListing(value: unknown): LibraryListing {
 }
 export function parseLibraryResolveRequest(value: unknown): LibraryResolveRequest { const r = record(value); return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id) }; }
 export function parseLibraryResolution(value: unknown): LibraryResolution {
-  const r = record(value); return { kind: oneOf(r.kind, ["artifact", "confluence_page", "confluence_space", "folder"] as const), provider_id: optionalText(r.provider_id), provider_instance: optionalText(r.provider_instance), title: text(r.title), canonical_id: optionalText(r.canonical_id), container_label: optionalText(r.container_label), existing_item_id: optionalText(r.existing_item_id), existing_follow_id: optionalText(r.existing_follow_id), page_count: nullable(r.page_count, v => integer(v, 0xffffffff)), git_working_tree: nullable(r.git_working_tree, bool), file_count: nullable(r.file_count, integer), diagnostics: diagnostics(r.diagnostics) };
+  const r = record(value); return { kind: oneOf(r.kind, ["artifact", "confluence_page", "confluence_space", "jira_query", "folder"] as const), provider_id: optionalText(r.provider_id), provider_instance: optionalText(r.provider_instance), title: text(r.title), canonical_id: optionalText(r.canonical_id), container_label: optionalText(r.container_label), existing_item_id: optionalText(r.existing_item_id), existing_follow_id: optionalText(r.existing_follow_id), item_count: nullable(r.item_count, v => integer(v, 0xffffffff)), item_count_exact: bool(r.item_count_exact), follow_mode: nullable(r.follow_mode, followMode), git_working_tree: nullable(r.git_working_tree, bool), file_count: nullable(r.file_count, integer), diagnostics: diagnostics(r.diagnostics) };
 }
 export function parseLibraryConfluenceSpacesRequest(value: unknown): LibraryConfluenceSpacesRequest {
   const r = record(value); const provider_id = id(r.provider_id);
@@ -85,7 +108,7 @@ export function parseLibraryConfluenceSpaces(value: unknown, request: LibraryCon
 }
 export function parseLibraryAddRequest(value: unknown): LibraryAddRequest {
   const r = record(value); const target = nullable(r.target, parseSpaceTarget);
-  return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id), hydrate_references: bool(r.hydrate_references), follow_space: bool(r.follow_space), download_attachments: bool(r.download_attachments), refresh_existing: bool(r.refresh_existing), label: optionalText(r.label), target };
+  return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id), hydrate_references: bool(r.hydrate_references), follow: bool(r.follow), follow_mode: r.follow_mode === undefined ? null : nullable(r.follow_mode, followMode), download_attachments: bool(r.download_attachments), refresh_existing: bool(r.refresh_existing), label: optionalText(r.label), target };
 }
 export function parseLibraryRefreshRequest(value: unknown): LibraryRefreshRequest {
   const r = record(value);
@@ -123,7 +146,7 @@ const phaseStates = ["pending", "running", "done", "partial", "failed", "cancell
 export function parseLibraryOperation(value: unknown): LibraryOperation {
   const r = record(value);
   const phases = array(r.phases, 256, v => { const p = record(v); return { phase: oneOf(p.phase, ["library", "space"] as const), state: oneOf(p.state, phaseStates), done: integer(p.done), total: nullable(p.total, integer), message: optionalText(p.message), error: nullable(p.error, e => { const x = record(e); return { code: id(x.code), message: text(x.message) }; }) }; });
-  const report = nullable(r.report, v => { const x = record(v); return { new: integer(x.new), updated: integer(x.updated), unchanged: integer(x.unchanged), removed_at_source: integer(x.removed_at_source), partial: integer(x.partial), failed: integer(x.failed), conflict: integer(x.conflict), rows: array(x.rows, 256, row => { const a = record(row); return { item_id: nullable(a.item_id, id), follow_id: nullable(a.follow_id, id), title: text(a.title), outcome: oneOf(a.outcome, ["new", "updated", "unchanged", "removed_at_source", "partial", "failed", "conflict"] as const), reason: optionalText(a.reason) }; }), truncated_rows: bool(x.truncated_rows) }; });
+  const report = nullable(r.report, v => { const x = record(v); return { new: integer(x.new), updated: integer(x.updated), unchanged: integer(x.unchanged), removed_at_source: integer(x.removed_at_source), dropped: integer(x.dropped), partial: integer(x.partial), failed: integer(x.failed), conflict: integer(x.conflict), rows: array(x.rows, 256, row => { const a = record(row); return { item_id: nullable(a.item_id, id), follow_id: nullable(a.follow_id, id), title: text(a.title), outcome: oneOf(a.outcome, ["new", "updated", "unchanged", "removed_at_source", "dropped", "partial", "failed", "conflict"] as const), reason: optionalText(a.reason) }; }), truncated_rows: bool(x.truncated_rows) }; });
   const space = nullable(r.space, v => { const x = record(v); return { space_id: id(x.space_id), copy_mode: nullable(x.copy_mode, m => oneOf(m, ["reflink", "copy", "mixed"] as const)), written: array(x.written, MAX_LIBRARY_OPERATION_COPY_PATHS, path), skipped_edited: array(x.skipped_edited, MAX_LIBRARY_OPERATION_COPY_PATHS, path), companion_root_id: optionalText(x.companion_root_id) }; });
   const target = nullable(r.target, parseSpaceTarget);
   return { operation_id: id(r.operation_id), kind: oneOf(r.kind, opKinds), phases, item_ids: array(r.item_ids, 1_000_000, id), report, space, target, cancel_requested: bool(r.cancel_requested), finished: bool(r.finished), created_at: text(r.created_at), updated_at: text(r.updated_at) };

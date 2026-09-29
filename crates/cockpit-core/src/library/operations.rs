@@ -51,6 +51,7 @@ pub(crate) fn create(
             updated: 0,
             unchanged: 0,
             removed_at_source: 0,
+            dropped: 0,
             partial: 0,
             failed: 0,
             conflict: 0,
@@ -204,6 +205,7 @@ pub(crate) fn row(
             LibraryReportOutcome::Updated => report.updated += 1,
             LibraryReportOutcome::Unchanged => report.unchanged += 1,
             LibraryReportOutcome::RemovedAtSource => report.removed_at_source += 1,
+            LibraryReportOutcome::Dropped => report.dropped += 1,
             LibraryReportOutcome::Partial => report.partial += 1,
             LibraryReportOutcome::Failed => report.failed += 1,
             LibraryReportOutcome::Conflict => report.conflict += 1,
@@ -211,7 +213,7 @@ pub(crate) fn row(
         if report.rows.len() < MAX_REPORT_ROWS {
             report.rows.push(LibraryReportRow {
                 item_id: entry.map(|e| e.item_id.clone()),
-                follow_id: entry.and_then(|e| e.follow_id.clone()),
+                follow_id: entry.and_then(|e| super::refs::first_follow(e).map(str::to_owned)),
                 title: entry.map(|e| e.title.clone()).unwrap_or_default(),
                 outcome,
                 reason,
@@ -239,6 +241,7 @@ pub(crate) fn follow_row(
             LibraryReportOutcome::Updated => report.updated += 1,
             LibraryReportOutcome::Unchanged => report.unchanged += 1,
             LibraryReportOutcome::RemovedAtSource => report.removed_at_source += 1,
+            LibraryReportOutcome::Dropped => report.dropped += 1,
             LibraryReportOutcome::Partial => report.partial += 1,
             LibraryReportOutcome::Failed => report.failed += 1,
             LibraryReportOutcome::Conflict => report.conflict += 1,
@@ -247,7 +250,7 @@ pub(crate) fn follow_row(
             report.rows.push(LibraryReportRow {
                 item_id: None,
                 follow_id: Some(follow.follow_id.clone()),
-                title: format!("{} · {}", follow.space_key, follow.space_name),
+                title: super::refs::follow_title(follow),
                 outcome,
                 reason,
             });

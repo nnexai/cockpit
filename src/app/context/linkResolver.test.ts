@@ -5,7 +5,7 @@ import { resolveContextLink } from "./linkResolver";
 const item = (overrides: Partial<LibraryItemSummary>): LibraryItemSummary => ({
   item_id: "page:98765", logical_id: "page:98765", kind: "provider_snapshot", provider_id: "confluence", provider_instance: "https://wiki.test/wiki", resource_type: "page", canonical_id: "98765",
   container: null, parent_item_id: null, ancestors: [], order: null, title: "Page", document_path: "confluence/wiki.test/Space/Page/Page.md", item_path: "confluence/wiki.test/Space/Page",
-  source_url: "https://wiki.test/wiki/spaces/KEY/pages/98765/Slug", original_url: null, source_revision: "1", revision: "r1", state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, folder: null, diagnostics: [], attachments: [], ...overrides,
+  source_url: "https://wiki.test/wiki/spaces/KEY/pages/98765/Slug", original_url: null, source_revision: "1", revision: "r1", state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, folder: null, diagnostics: [], attachments: [], ...overrides,
 });
 
 describe("resolveContextLink", () => {

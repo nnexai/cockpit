@@ -79,6 +79,25 @@ pub struct LibraryFolderInfo {
     pub skipped_ignored: u32,
     pub skipped_other: u32,
 }
+/// One reason an item is kept in the Library. An item with no references is
+/// tombstoned and purged after the grace period.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(tag = "kind", rename_all = "snake_case")]
+pub enum LibraryItemRef {
+    Manual,
+    Follow { follow_id: String },
+    Space { companion_root_id: String },
+}
+/// Per-issue metadata of a Jira item, shared by every follow that lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct LibraryIssueMeta {
+    pub updated: String,
+    pub fetched_updated: Option<String>,
+    pub status: String,
+    pub issue_type: String,
+    pub assignee: Option<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LibraryItemSummary {
     pub item_id: String,
@@ -104,22 +123,42 @@ pub struct LibraryItemSummary {
     pub conflict: Vec<LibraryConflictFile>,
     pub fetched_at: Option<String>,
     pub checked_at: Option<String>,
-    pub follow_id: Option<String>,
+    pub refs: Vec<LibraryItemRef>,
+    pub purge_after: Option<String>,
+    pub issue: Option<LibraryIssueMeta>,
     pub attachments: Vec<LibraryAttachment>,
     pub folder: Option<LibraryFolderInfo>,
     pub diagnostics: Vec<ProjectDiagnostic>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryFollowMode {
+    Live,
+    Accumulate,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(tag = "kind", rename_all = "snake_case")]
+pub enum LibraryFollowSource {
+    ConfluenceSpace {
+        space_key: String,
+        space_name: String,
+    },
+    JiraQuery {
+        jql: String,
+        mode: LibraryFollowMode,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LibraryFollowSummary {
     pub follow_id: String,
     pub provider_id: String,
     pub provider_instance: String,
-    pub space_key: String,
-    pub space_name: String,
+    pub source: LibraryFollowSource,
     pub include_attachments: bool,
-    pub page_count: u32,
+    pub item_count: u32,
     pub partial: Option<LibraryPartial>,
-    pub excluded_page_ids: Vec<String>,
+    pub excluded_ids: Vec<String>,
     pub last_refreshed_at: Option<String>,
     pub state: LibraryItemState,
 }
@@ -144,6 +183,7 @@ pub enum LibraryInputKind {
     ConfluencePage,
     ConfluenceSpace,
     Folder,
+    JiraQuery,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -167,7 +207,9 @@ pub struct LibraryResolution {
     pub container_label: Option<String>,
     pub existing_item_id: Option<String>,
     pub existing_follow_id: Option<String>,
-    pub page_count: Option<u32>,
+    pub item_count: Option<u32>,
+    pub item_count_exact: bool,
+    pub follow_mode: Option<LibraryFollowMode>,
     pub git_working_tree: Option<bool>,
     #[ts(type = "number | null")]
     pub file_count: Option<u64>,
@@ -181,7 +223,9 @@ pub struct LibraryAddRequest {
     #[serde(default)]
     pub hydrate_references: bool,
     #[serde(default)]
-    pub follow_space: bool,
+    pub follow: bool,
+    #[serde(default)]
+    pub follow_mode: Option<LibraryFollowMode>,
     #[serde(default)]
     pub download_attachments: bool,
     #[serde(default)]
@@ -281,6 +325,7 @@ pub enum LibraryReportOutcome {
     Unchanged,
     RemovedAtSource,
     Partial,
+    Dropped,
     Failed,
     Conflict,
 }
@@ -298,6 +343,7 @@ pub struct LibraryRefreshReport {
     pub updated: u32,
     pub unchanged: u32,
     pub removed_at_source: u32,
+    pub dropped: u32,
     pub partial: u32,
     pub failed: u32,
     pub conflict: u32,

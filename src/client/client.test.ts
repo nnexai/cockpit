@@ -237,7 +237,7 @@ const libraryOperation = {
 };
 const libraryRequests = {
   resolve: { input: "https://example.test/item", provider_id: null },
-  add: { input: "https://example.test/item", provider_id: null, hydrate_references: false, follow_space: false, download_attachments: false, refresh_existing: false, label: null, target: null },
+  add: { input: "https://example.test/item", provider_id: null, hydrate_references: false, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false, label: null, target: null },
   refresh: { scope: "all" as const },
   replace: { item_id: "item-1", confirmed: [] },
   remove: { mode: "follow" as const, follow_id: "follow-1" },
@@ -254,7 +254,7 @@ const unsafeLibraryItem = {
   item_id: "item", logical_id: "logical", kind: "provider_snapshot", provider_id: null, provider_instance: null, resource_type: null, canonical_id: null,
   container: null, parent_item_id: null, ancestors: [], order: null, title: "Item", document_path: "item/document.md", item_path: "../escape",
   source_url: null, original_url: null, source_revision: null, revision: "rev-1", state: "fresh", partial: null, conflict: [],
-  fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+  fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
 };
 
 describe("library client validation", () => {
@@ -320,7 +320,7 @@ describe("library client validation", () => {
     const request = vi.fn(async (path: string) => {
       if (path.endsWith("/resolve")) return jsonResponse({
         kind: "artifact", provider_id: null, provider_instance: null, title: "Item", canonical_id: null,
-        container_label: null, existing_item_id: null, existing_follow_id: null, page_count: null,
+        container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null,
         git_working_tree: null, file_count: null, diagnostics: [],
       });
       return jsonResponse(path.endsWith("/directory") ? directory : operation);
@@ -388,7 +388,7 @@ describe("library client validation", () => {
     }
   });
   it("browses one Confluence provider's spaces and refuses spaces of another provider in both transports", async () => {
-    const space = { kind: "confluence_space", provider_id: "confluence", provider_instance: "https://acme.atlassian.net/wiki", title: "Software Development", canonical_id: "SD", container_label: "SD · Software Development", existing_item_id: null, existing_follow_id: "follow:1", page_count: 38, git_working_tree: null, file_count: null, diagnostics: [] };
+    const space = { kind: "confluence_space", provider_id: "confluence", provider_instance: "https://acme.atlassian.net/wiki", title: "Software Development", canonical_id: "SD", container_label: "SD · Software Development", existing_item_id: null, existing_follow_id: "follow:1", item_count: 38, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] };
     let payload: unknown = [space];
     const request = vi.fn(async (_path: string, _init?: RequestInit) => jsonResponse(payload));
     const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>) => payload);
@@ -406,6 +406,17 @@ describe("library client validation", () => {
       await expect(client.libraryConfluenceSpaces({ provider_id: "confluence" })).rejects.toMatchObject({ code: "malformed_response" });
       payload = [space];
     }
+  });
+  it("parses Jira query follows, item refs and dropped outcomes strictly", async () => {
+    const jiraFollow = { follow_id: "follow:j", provider_id: "jira", provider_instance: "https://jira.test", source: { kind: "jira_query", jql: "project = OPS", mode: "live" }, include_attachments: false, item_count: 2, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh" };
+    const issue = { ...unsafeLibraryItem, item_path: "jira/x/OPS/OPS-1", refs: [{ kind: "follow", follow_id: "follow:j" }, { kind: "space", companion_root_id: "companion:c" }], purge_after: "0", issue: { updated: "2026-01-01 10:00:00", fetched_updated: null, status: "Open", issue_type: "Task", assignee: null } };
+    let payload: unknown = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/l", repository_id: "repo", checkout_path: "", companion_id: null }, generation: "1", items: [issue], follows: [jiraFollow], next_offset: null, diagnostics: [] };
+    const browser = createBrowserClient(vi.fn(async () => jsonResponse(payload)));
+    await expect(browser.libraryListing()).resolves.toMatchObject({ follows: [{ source: { kind: "jira_query", mode: "live" }, item_count: 2 }], items: [{ refs: [{ kind: "follow" }, { kind: "space" }] }] });
+    payload = { ...(payload as object), follows: [{ ...jiraFollow, source: { kind: "jira_query", jql: "x", mode: "sometimes" } }] };
+    await expect(browser.libraryListing()).rejects.toMatchObject({ code: "malformed_response" });
+    payload = { ...(payload as object), follows: [], items: [{ ...issue, refs: [{ kind: "pin" }] }] };
+    await expect(browser.libraryListing()).rejects.toMatchObject({ code: "malformed_response" });
   });
 });
 

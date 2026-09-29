@@ -47,10 +47,10 @@ export function LibraryView({ client, onClose, command = null, fullScreen = fals
   const [view, setView] = useState(createContextViewState);
   const library = useLibraryListing(client, true);
   const listing = library.listing;
-  // `12 items · 1 followed space`; `12+ items` while the listing has more pages.
+  // `12 items · 1 follow`; `12+ items` while the listing has more pages.
   const summary = listing ? [
     `${listing.items.length}${listing.next_offset === null ? "" : "+"} ${listing.items.length === 1 && listing.next_offset === null ? "item" : "items"}`,
-    listing.follows.length > 0 ? `${listing.follows.length} followed ${listing.follows.length === 1 ? "space" : "spaces"}` : null,
+    listing.follows.length > 0 ? `${listing.follows.length} ${listing.follows.length === 1 ? "follow" : "follows"}` : null,
   ].filter(Boolean).join(" · ") : null;
   const [compact, setCompact] = useState(false);
   useLayoutEffect(() => {

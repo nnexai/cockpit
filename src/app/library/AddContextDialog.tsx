@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { UiIcon } from "../UiIcon";
 import { trapDialogKeys, useRestoreFocus } from "./LibraryConfirmDialog";
 import { StatePill } from "./StatePill";
-import { JIRA_KEY, confluencePageInput, confluenceProviders, confluenceSite, confluenceSpaceInput, errorText, jiraProviders, libraryInputUrl, lookupFailure, pageCount, providerFamily, resolutionNote, resolutionSpaceName, type LibrarySpace, type LookupFailure } from "./libraryState";
+import { JIRA_KEY, confluencePageInput, confluenceProviders, confluenceSite, confluenceSpaceInput, errorText, issueCount, jiraProviders, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryInputUrl, lookupFailure, pageCount, providerFamily, resolutionNote, resolutionSpaceName, type LibrarySpace, type LookupFailure } from "./libraryState";
 import { headerSpaceAction } from "./spaceCopyPresentation";
 import { useLibraryOperation, useSpaceContextListing } from "./useLibraryOperation";
 import "../projects/setup.css";
@@ -28,14 +28,14 @@ type Tone = "running" | "done" | "failed";
  * still offers them; `complete` is false when part of the source wasn't added.
  * A Space-only retry starts from saved items.
  */
-function libraryPhase(operation: LibraryOperation, unit: "items" | "pages"): { text: string; tone: Tone; saved: boolean; complete: boolean } {
+function libraryPhase(operation: LibraryOperation, unit: "items" | "pages" | "issues"): { text: string; tone: Tone; saved: boolean; complete: boolean } {
   if (operation.kind === "space_add") return { text: "✓ Saved to Library", tone: "done", saved: true, complete: true };
   const phase = operation.phases.find((candidate) => candidate.phase === "library");
   const partialReason = operation.report?.rows.find((row) => row.outcome === "partial")?.reason;
   const unchanged = operation.report?.rows.find((row) => row.outcome === "unchanged");
   const count = operation.item_ids.length;
-  // A followed space counts its pages (`✓ Saved to Library · 38 pages`).
-  const summary = unit === "pages" ? ` · ${pageCount(count)}` : count > 1 ? ` · ${count} items` : "";
+  // A followed space counts its pages (`✓ Saved to Library · 38 pages`), a followed query its issues.
+  const summary = unit === "pages" ? ` · ${pageCount(count)}` : unit === "issues" ? ` · ${issueCount(count)}` : count > 1 ? ` · ${count} items` : "";
   switch (phase?.state ?? "pending") {
     case "pending":
     case "running":
@@ -96,8 +96,8 @@ function spacePhase(operation: LibraryOperation, space: string): { text: string;
 /** What a Space-only copy asked for: saved items, followed spaces, or both. */
 type SpaceSelection = { item_ids: string[]; follow_ids: string[] };
 
-/** A followed space's source, so a Space retry can look up the follow the add created. */
-type FollowSource = { input: string; provider_id: string | null };
+/** A followed space's or query's source, so a retry can look up the follow the add created. */
+type FollowSource = { input: string; provider_id: string | null; unit: "pages" | "issues" };
 
 /**
  * The dialog's accepted request outlives the dialog (design §4.7: closing does
@@ -170,7 +170,7 @@ function ConfluenceSpaceList({ client, provider, providers, onPick }: {
         const verb = space.existing_follow_id ? "Select" : "Follow";
         return <li key={space.canonical_id ?? name}>
           <span className="library-browse-name" title={name}>{name}</span>
-          {space.page_count !== null ? <span className="library-browse-detail">{pageCount(space.page_count)}</span> : null}
+          {space.item_count !== null ? <span className="library-browse-detail">{pageCount(space.item_count)}</span> : null}
           {space.existing_follow_id ? <StatePill shape="dot-ring" tone="idle" word="Following" /> : null}
           <button type="button" aria-label={`${verb} ${name}`} onClick={() => onPick(provider, space)}>{verb}</button>
         </li>;
@@ -203,6 +203,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const failureId = useId();
   const destinationId = useId();
   const followChoiceId = useId();
+  const followModeId = useId();
   const browseId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const closeActionRef = useRef<HTMLButtonElement>(null);
@@ -231,6 +232,8 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [followChoice, setFollowChoice] = useState(false);
   // A new Confluence page or followed space downloads attachments only when asked (Q6); unchecked by default.
   const [downloadAttachments, setDownloadAttachments] = useState(false);
+  // A Jira query follows `live` or `accumulate`; null keeps the resolution's suggestion.
+  const [modeChoice, setModeChoice] = useState<"live" | "accumulate" | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
   // A space chosen from the browser is already resolved; the lookup reuses it instead of asking again.
   const [picked, setPicked] = useState<{ input: string; providerId: string; resolution: LibraryResolution } | null>(null);
@@ -275,12 +278,19 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const jiraKey = JIRA_KEY.test(trimmed);
   const confluencePage = jiraKey ? null : confluencePageInput(trimmed, providers);
   const confluenceSpace = jiraKey || confluencePage ? null : confluenceSpaceInput(trimmed, providers);
-  // A Jira key or Confluence page or space names its provider here; every other input by its own link.
-  const choices = jiraKey ? jira : confluencePage?.providers ?? confluenceSpace?.providers ?? [];
+  const jiraQuery = jiraKey || confluencePage ? null : jiraQueryInput(trimmed, providers);
+  // A Jira key, Confluence page or space, or Jira query names its provider here; every other input by its own link.
+  // A bare key could be a Confluence space or a Jira project: Confluence providers stay first, so the field keeps reading it as a space.
+  const choices = jiraKey ? jira : confluencePage?.providers ?? (jiraQuery ? [...(jiraQuery.bare ? confluenceSpace?.providers ?? [] : []), ...jiraQuery.providers] : confluenceSpace?.providers) ?? [];
   const chosen = choices.find((provider) => provider.id === chosenProviderId) ?? choices[0];
-  const needsProvider = jiraKey || confluencePage !== null || confluenceSpace !== null;
+  const needsProvider = jiraKey || confluencePage !== null || confluenceSpace !== null || jiraQuery !== null;
   const requestUrl = libraryInputUrl(trimmed, jiraKey ? chosen : undefined);
   const requestProviderId = chosen?.id ?? null;
+  // Typing, or choosing a preset, replaces the source: choices made for the old one no longer apply.
+  const editInput = (value: string) => {
+    setInput(value);
+    if (value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); setFollowChoice(false); setModeChoice(null); setDownloadAttachments(false); setPicked(null); }
+  };
   const lookupKey = `${requestUrl}\u0000${requestProviderId ?? ""}\u0000${lookupRetry}\u0000${needsProvider && !providersLoaded}`;
   useEffect(() => {
     if (!trimmed) { setLookup({ status: "idle" }); return; }
@@ -311,11 +321,15 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   }, [client, lookupKey]);
   const resolution = lookup.status === "ok" ? lookup.resolution : null;
   const spaceResolution = resolution?.kind === "confluence_space";
+  // A Jira query is always followed; its mode is the user's pick, else the resolution's suggestion.
+  const jiraFollow = resolution?.kind === "jira_query";
+  const followMode = jiraFollow ? modeChoice ?? resolution.follow_mode ?? "live" : null;
   // A page can follow its whole space unless that space is already followed.
   const followOffered = resolution?.kind === "confluence_page" && !resolution.existing_follow_id;
-  const follow = spaceResolution || (followOffered && followChoice);
+  const follow = spaceResolution || jiraFollow || (followOffered && followChoice);
   const spaceName = resolution && (spaceResolution || followOffered) ? resolutionSpaceName(resolution) : null;
-  const existingFollow = follow ? resolution?.existing_follow_id ?? null : null;
+  // Following the same query again is allowed: it applies the chosen mode.
+  const existingFollow = follow && !jiraFollow ? resolution?.existing_follow_id ?? null : null;
   const existingItem = follow ? null : resolution?.existing_item_id ?? null;
   const existing = existingItem ?? existingFollow;
   // Attachment bytes are fetched only for a new page or followed space, and only when checked; a follow keeps the choice for its refreshes.
@@ -323,18 +337,20 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const folder = resolution?.kind === "folder";
   const family = resolution && !folder ? providerFamily(providers, resolution.provider_id) : null;
   const forge = resolution?.kind === "artifact" && family !== null && family.key !== "jira" && family.key !== "confluence";
-  const destinationSpace = destination === "space" ? spaceChoice : null;
+  const destinationSpace = destination === "space" && !jiraFollow ? spaceChoice : null;
   const companion = spaceListing.listing?.companion ?? null;
   // An item or followed space already in the target Space: the header's Space state decides whether adding applies.
   const existingRow = spaceListing.listing?.rows.find((row) => existingFollow ? row.follow?.follow_id === existingFollow : row.item_id === existingItem);
   const existingInSpace = existing && destinationSpace && spaceListing.listing ? headerSpaceAction(existingRow, destinationSpace.label) : null;
   const spaceAddable = !existingInSpace || existingInSpace.actions.some((action) => action.kind === "add");
   // A follow over the page limit saves only part of the space (design §4.6 `◐ Partial`).
-  const pageTotal = resolution?.page_count ?? null;
-  const overLimit = follow && !existingFollow && spacePageLimit !== null && pageTotal !== null && pageTotal > spacePageLimit;
+  const pageTotal = resolution?.item_count ?? null;
+  const overLimit = follow && !jiraFollow && !existingFollow && spacePageLimit !== null && pageTotal !== null && pageTotal > spacePageLimit;
+  // A query's preview reads one window, so it can only show that the cap is at or past it.
+  const overCap = jiraFollow && spacePageLimit !== null && pageTotal !== null && pageTotal >= spacePageLimit;
   const operation = add.operation;
   const shownSpace = operationSpace?.label ?? "the Space";
-  const unit = followSource ? "pages" : "items";
+  const unit = followSource?.unit ?? "items";
   const progress = operation ? libraryPhase(operation, unit) : null;
   const spaceStep = operation && progress?.saved ? spacePhase(operation, shownSpace) : null;
   const finished = operation?.finished ?? false;
@@ -342,7 +358,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const canAdd = resolution !== null && !add.starting && (!existing || refreshExisting || (destinationSpace !== null && spaceAddable));
   const primaryLabel = existing
     ? refreshExisting ? (destinationSpace ? `Refresh and add to ${destinationSpace.label}` : "Refresh from source") : destinationSpace ? `Add to ${destinationSpace.label}` : existingFollow ? "Already following" : "Already in Library"
-    : follow ? (destinationSpace ? `Follow and add to ${destinationSpace.label}` : "Follow space")
+    : follow ? (destinationSpace ? `Follow and add to ${destinationSpace.label}` : jiraFollow ? "Follow query" : "Follow space")
     : destinationSpace ? `Add to Library and ${destinationSpace.label}` : "Add to Library";
   const operationRef = useRef(operation);
   operationRef.current = operation;
@@ -350,7 +366,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   useEffect(() => () => {
     const latest = operationRef.current;
     if (!accepted?.seen || !latest?.finished || accepted.operation?.operation_id !== latest.operation_id) return;
-    const phase = libraryPhase(latest, accepted.followSource ? "pages" : "items");
+    const phase = libraryPhase(latest, accepted.followSource?.unit ?? "items");
     if (phase.saved && phase.complete && spacePhase(latest, "")?.tone !== "failed") accepted = null;
   }, []);
   useEffect(() => {
@@ -391,12 +407,13 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
       input: requestUrl,
       provider_id: providerId,
       hydrate_references: forge && linked,
-      follow_space: follow,
+      follow,
+      follow_mode: followMode,
       download_attachments: attachmentsOffered && downloadAttachments,
       refresh_existing: Boolean(existing) && refreshExisting,
       label: folder ? label?.trim() || resolution.title : null,
       target,
-    }), destinationSpace, null, follow ? { input: requestUrl, provider_id: providerId } : null);
+    }), destinationSpace, null, follow ? { input: requestUrl, provider_id: providerId, unit: jiraFollow ? "issues" : "pages" } : null);
   };
   // The same source again, whether the request never started or stopped part way.
   const retryAll = () => { if (lastBeginRef.current) begin(lastBeginRef.current, operationSpace, spaceSelection, followSource); };
@@ -430,6 +447,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     setLabel(null);
     setPicked(null);
     setFollowChoice(false);
+    setModeChoice(null);
     setDownloadAttachments(false);
     setLookup({ status: "idle" });
     setRefreshExisting(false);
@@ -479,7 +497,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
         {operation || starting ? <div className="library-progress" aria-live="polite">
           <ol className="library-progress-steps">
             <li className={`library-progress-step is-${progress?.tone ?? "running"}`}>
-              <span>{progress?.text ?? (spaceSelection ? `Adding to ${shownSpace}…` : followSource ? "Following the space…" : "Saving to Library…")}</span>
+              <span>{progress?.text ?? (spaceSelection ? `Adding to ${shownSpace}…` : followSource ? (followSource.unit === "issues" ? "Following the query…" : "Following the space…") : "Saving to Library…")}</span>
               {operation && !finished && !operation.cancel_requested && operation.kind !== "space_add" && !progress?.saved ? <button type="button" onClick={add.cancel}>Cancel</button> : null}
             </li>
             {spaceStep ? <li className={`library-progress-step is-${spaceStep.tone}`}>
@@ -500,14 +518,15 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
           <div className="task-setup-row">
             <label htmlFor={fieldId}>Source</label>
             <div>
-              <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => { setInput(event.target.value); if (event.target.value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); setFollowChoice(false); setDownloadAttachments(false); setPicked(null); } }}
-                placeholder="Issue, MR or PR link, Jira key, Confluence page or space, or folder path" autoComplete="off" spellCheck={false}
+              <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => editInput(event.target.value)}
+                placeholder="Issue, MR or PR link, Jira key or query, Confluence page or space, or folder path" autoComplete="off" spellCheck={false}
                 aria-invalid={failure ? "true" : undefined} aria-describedby={failure ? failureId : undefined} />
               {lookup.status === "pending" ? <p className="task-setup-note">{trimmed.startsWith("/") || trimmed === "~" || trimmed.startsWith("~/") ? "Checking the folder…"
                 : confluencePage ? `Looking up Confluence page ${confluencePage.pageId ?? `“${confluencePage.title}”`}${confluencePage.spaceKey ? ` in ${confluencePage.spaceKey}` : ""}${chosen ? ` on ${confluenceSite(chosen.base_url)}` : ""}…`
+                : jiraQuery && chosen && jiraQuery.providers.includes(chosen) ? "Counting the issues this query matches…"
                 : confluenceSpace ? `Looking up Confluence space ${confluenceSpace.spaceKey}${chosen ? ` on ${confluenceSite(chosen.base_url)}` : ""}…`
                 : "Looking up the link…"}</p> : null}
-              {resolution ? <p className="task-setup-note is-valid">✓ {existingFollow ? `Already following · ${spaceName}` : existingItem ? `Already in Library · ${resolution.title}` : resolutionNote(resolution, providers)}</p> : null}
+              {resolution ? <p className="task-setup-note is-valid">✓ {jiraFollow ? resolutionNote(resolution, providers) : existingFollow ? `Already following · ${spaceName}` : existingItem ? `Already in Library · ${resolution.title}` : resolutionNote(resolution, providers)}</p> : null}
               {resolution && (resolution.kind === "confluence_page" || resolution.kind === "confluence_space") ? <p className="task-setup-note">{[resolution.kind === "confluence_page" ? resolution.container_label : null, confluenceSite(resolution.provider_instance)].filter(Boolean).join(" · ")}</p> : null}
               {resolution?.diagnostics.map((diagnostic, index) => <p className="task-setup-note" key={`${diagnostic.code}:${index}`}>{diagnostic.message}</p>)}
               {existingInSpace?.status ? <p className="task-setup-note library-space-state">{existingInSpace.status.context ? <span className="library-space-context">{existingInSpace.status.context}</span> : null}<StatePill shape={existingInSpace.status.shape} word={existingInSpace.status.word} tone={existingInSpace.status.tone} /></p> : null}
@@ -515,6 +534,9 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
                 <strong>{failure.title}</strong>
                 <span>{failure.detail}</span>
                 {failure.retry ? <button type="button" className="task-setup-link" onClick={() => setLookupRetry((value) => value + 1)}>Retry lookup</button> : null}
+              </div> : null}
+              {providersLoaded && jira.length > 0 && (trimmed === "" || jiraQuery !== null) ? <div className="library-query-presets" role="group" aria-label="Jira query presets">
+                {jiraQueryPresets(jiraQuery ? jiraQueryProject(jiraQuery.jql) : null).map((preset) => <button key={preset.label} type="button" className="task-setup-link" title={preset.jql} onClick={() => { editInput(preset.jql); inputRef.current?.focus(); }}>{preset.label}</button>)}
               </div> : null}
               {providersError ? <p className="task-setup-note">{providersError}</p> : null}
               {providersLoaded && confluence.length > 0 ? <>
@@ -551,13 +573,29 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
               {overLimit ? <p className="task-setup-note library-note-partial" role="status"><span aria-hidden="true">◐</span> {`The page limit is ${spacePageLimit}, so this saves ${spacePageLimit} of ${pageTotal} pages. Refresh won't mark pages removed at source until the whole space fits.`}</p> : null}
             </div>
           </div> : null}
+          {jiraFollow ? <div className="task-setup-row">
+            <span id={followModeId} className="library-row-label">Mode</span>
+            <div>
+              <div role="radiogroup" aria-labelledby={followModeId} className="library-destination-choices">
+                <label className="task-setup-check"><input type="radio" name={followModeId} checked={followMode === "live"} onChange={() => setModeChoice("live")} /> Live — mirror the query</label>
+                <label className="task-setup-check"><input type="radio" name={followModeId} checked={followMode === "accumulate"} onChange={() => setModeChoice("accumulate")} /> Accumulate — keep every issue that ever matched</label>
+              </div>
+              {resolution.follow_mode === "accumulate" && !resolution.existing_follow_id && modeChoice === null ? <p className="task-setup-note">This query uses relative dates, so a live follow would drop issues as they age out of the window. Accumulate is preselected; it keeps every issue that ever matched.</p> : null}
+              <p className="task-setup-note">Each issue is saved once, even when several follows match it. A live follow drops issues that stop matching; an issue nothing else holds is removed from the Library after a grace period unless you keep it or it has edits.</p>
+              {resolution.existing_follow_id ? <p className="task-setup-note">This query is already followed. Following it again applies the chosen mode and restores issues you removed from it.</p> : null}
+              {overCap ? <p className="task-setup-note library-note-partial" role="status"><span aria-hidden="true">◐</span> {`The issue limit is ${spacePageLimit}, so this saves ${spacePageLimit} issues. Refresh won't drop issues until the whole query fits.`}</p> : null}
+            </div>
+          </div> : null}
           {resolution?.kind === "confluence_page" && resolution.existing_follow_id ? <p className="task-setup-check">{`${resolutionSpaceName(resolution)} is already followed; refreshing it keeps this page current.`}</p> : null}
           {attachmentsOffered ? <label className="task-setup-check"><input type="checkbox" checked={downloadAttachments} onChange={(event) => setDownloadAttachments(event.target.checked)} /> {`Download attachments${attachmentLimit !== null ? ` (up to ${Math.round(attachmentLimit / (1024 * 1024))} MB each)` : ""}`}</label> : null}
           {resolution && forge && !existing ? <label className="task-setup-check"><input type="checkbox" checked={linked} onChange={(event) => setLinked(event.target.checked)} /> Include linked issues and {family?.review}s within import limits</label> : null}
           {existing ? <label className="task-setup-check"><input type="checkbox" checked={refreshExisting} onChange={(event) => setRefreshExisting(event.target.checked)} /> Refresh from source first</label> : null}
           <div className="task-setup-row">
             <span id={destinationId} className="library-row-label">Destination</span>
-            {spaceChoice ? <div role="radiogroup" aria-labelledby={destinationId} className="library-destination-choices">
+            {jiraFollow ? <div>
+              <p className="library-destination">Library</p>
+              <p className="task-setup-note">Jira follows can't be added to a Space yet.</p>
+            </div> : spaceChoice ? <div role="radiogroup" aria-labelledby={destinationId} className="library-destination-choices">
               <label className="task-setup-check"><input type="radio" name={destinationId} checked={destination === "library"} onChange={() => setDestination("library")} /> Library only</label>
               <label className="task-setup-check"><input type="radio" name={destinationId} checked={destination === "space"} onChange={() => setDestination("space")} /> Library and {spaceChoice.label}</label>
               {destination === "space" ? <p className="task-setup-note">Saved to the Library first, then copied into {spaceChoice.label}. Later Library refreshes don't change {spaceChoice.label} until you update it.</p> : null}

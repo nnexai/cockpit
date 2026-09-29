@@ -170,7 +170,7 @@ impl LibraryService {
         Ok(LibraryResolution { kind: LibraryInputKind::Folder, provider_id: None, provider_instance: None,
             title: inventory.path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
             canonical_id: Some(inventory.info.origin_path), container_label: None,
-            existing_item_id: existing.map(|e| e.summary.item_id), existing_follow_id: None, page_count: None,
+            existing_item_id: existing.map(|e| e.summary.item_id), existing_follow_id: None, item_count: None, item_count_exact: true, follow_mode: None,
             git_working_tree: Some(inventory.info.git_working_tree), file_count: Some(inventory.paths.len() as u64), diagnostics: inventory.diagnostics })
     }
     pub(super) async fn start_folder_add(&self, request: LibraryAddRequest) -> Result<LibraryOperation, InspectionError> {
@@ -262,7 +262,7 @@ impl LibraryService {
             resource_type: None, canonical_id: None, container: None, parent_item_id: None, ancestors: vec![], order: None,
             title, document_path: files.first().map(|file| format!("{path}/{}", file.path)), item_path: path, source_url: None, original_url: None, source_revision: None, revision,
             state: if limited { LibraryItemState::Partial } else if old.is_some() && !equal { LibraryItemState::Changed } else { LibraryItemState::Fresh },
-            partial, conflict: vec![], fetched_at: Some(now.clone()), checked_at: Some(now), follow_id: None, attachments: vec![],
+            partial, conflict: vec![], fetched_at: Some(now.clone()), checked_at: Some(now), refs: vec![LibraryItemRef::Manual], purge_after: None, issue: None, attachments: vec![],
             folder: Some(captured.info), diagnostics: captured.diagnostics,
         }};
         if equal && confirmed.is_none() {

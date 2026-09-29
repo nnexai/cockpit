@@ -23,6 +23,9 @@ const MAX_TREE_ENTRIES: usize = 1_000_000;
 const MAX_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024 + MAX_RECORD;
 const MAX_TREE_DEPTH: usize = 64;
 
+/// On-disk index schema. 3 introduced item reference sets and follow sources.
+const SCHEMA: u32 = 3;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LibraryIndexEntry {
@@ -43,7 +46,7 @@ pub(crate) struct Index {
 impl Default for Index {
     fn default() -> Self {
         Self {
-            schema: 2,
+            schema: SCHEMA,
             generation: Uuid::new_v4().to_string(),
             items: vec![],
             follows: vec![],
@@ -276,8 +279,72 @@ impl Store {
             store.commit(&mut Index::default())?;
         }
         store.ensure_readme()?;
+        store.upgrade_v2()?;
         store.recover()?;
         Ok(store)
+    }
+    /// Rewrites a schema 2 index and its journal intents to schema 3 in place.
+    /// Works on raw JSON so no schema 2 types are retained. Journal intents go
+    /// first and the index (with its schema flip) last, so an interrupted
+    /// upgrade reruns cleanly: summaries that already carry `refs` are skipped.
+    /// Caller holds the exclusive library lock.
+    fn upgrade_v2(&self) -> Result<(), InspectionError> {
+        // An unreadable index is reported by the first `index_shared` call, as before.
+        let Ok(mut index) = read_json_bounded::<serde_json::Value>(&self.meta, "index.json", MAX_INDEX) else {
+            return Ok(());
+        };
+        if index.get("schema").and_then(serde_json::Value::as_u64) != Some(2) {
+            return Ok(());
+        }
+        let follows = index
+            .get("follows")
+            .and_then(serde_json::Value::as_array)
+            .map(|follows| {
+                follows
+                    .iter()
+                    .filter_map(|follow| follow.get("follow_id").and_then(serde_json::Value::as_str))
+                    .map(str::to_owned)
+                    .collect::<std::collections::HashSet<_>>()
+            })
+            .unwrap_or_default();
+        let mut pending = Vec::new();
+        for entry in self.journal.entries().map_err(io_error)? {
+            let name = entry.map_err(io_error)?.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".json") {
+                pending.push(name);
+            }
+        }
+        for name in pending {
+            let mut intent: serde_json::Value = read_json_bounded(&self.journal, &name, MAX_RECORD)
+                .map_err(|e| corrupt(e.message))?;
+            let mut changed = false;
+            for key in ["new_entry", "old_entry"] {
+                if let Some(entry) = intent.get_mut(key) {
+                    changed |= upgrade_v2_entry(entry, &follows);
+                }
+            }
+            if let Some(entries) = intent.get_mut("moved_entries").and_then(serde_json::Value::as_array_mut) {
+                for entry in entries {
+                    changed |= upgrade_v2_entry(entry, &follows);
+                }
+            }
+            if changed {
+                bounded_write(&self.journal, &name, &intent, MAX_RECORD)?;
+            }
+        }
+        if let Some(items) = index.get_mut("items").and_then(serde_json::Value::as_array_mut) {
+            for entry in items {
+                upgrade_v2_entry(entry, &follows);
+            }
+        }
+        if let Some(records) = index.get_mut("follows").and_then(serde_json::Value::as_array_mut) {
+            for record in records {
+                upgrade_v2_follow(record);
+            }
+        }
+        index["schema"] = SCHEMA.into();
+        index["generation"] = Uuid::new_v4().to_string().into();
+        bounded_write(&self.meta, "index.json", &index, MAX_INDEX)
     }
     fn ensure_readme(&self) -> Result<(), InspectionError> {
         const README: &str = "# Library\n\nThis directory is a human-readable mirror of saved provider content.\nProvider items are nested under provider, host, and source hierarchy; each Markdown document is named after its title. Attachments are stored in `_files/` beside the document. `.cockpit/` contains private Library index, journal, staging, and lock state and must not be edited.\n";
@@ -357,7 +424,7 @@ impl Store {
                 return Err(corrupt(parse_error.message));
             }
         };
-        if index.schema != 2 || index.items.len() > 1_000_000 {
+        if index.schema != SCHEMA || index.items.len() > 1_000_000 {
             return Err(corrupt("unsupported or oversized Library index"));
         }
         let mut ids = std::collections::HashSet::new();
@@ -376,6 +443,9 @@ impl Store {
         index.generation = Uuid::new_v4().to_string();
         bounded_write(&self.meta, "index.json", index, MAX_INDEX)
     }
+    /// Replaces an item's entry at an unchanged revision. The caller's `refs`
+    /// and `purge_after` are ignored: references change only through
+    /// `mutate_index` and `add_ref`.
     pub fn update(&self, entry: LibraryIndexEntry) -> Result<(), InspectionError> {
         let _lock = self.exclusive()?;
         let mut index = self.index()?;
@@ -387,8 +457,20 @@ impl Store {
         if old.summary.revision != entry.summary.revision {
             return Err(error("library_conflict", "Library revision changed"));
         }
-        *old = entry;
+        upsert(&mut index, entry);
         self.commit(&mut index)
+    }
+    /// Adds a reference to an existing item, clearing its purge mark.
+    pub fn add_ref(&self, item_id: &str, reference: LibraryItemRef) -> Result<(), InspectionError> {
+        self.mutate_index(|index| {
+            let entry = index
+                .items
+                .iter_mut()
+                .find(|e| e.summary.item_id == item_id)
+                .ok_or_else(|| error("library_item_not_found", "Library item no longer exists"))?;
+            crate::library::refs::insert_ref(&mut entry.summary, reference);
+            Ok(())
+        })
     }
     /// Commit presentation and follow-record changes that never touch item files.
     /// The closure must preserve every item's revision, path and inventory.
@@ -739,6 +821,17 @@ impl Store {
         result
     }
     pub fn remove(&self, id: &str, revision: &str) -> Result<(), InspectionError> {
+        self.remove_where(id, revision, |_| Ok(()))
+    }
+    /// Removes an item once `guard` accepts its current entry. The guard runs
+    /// under the item lease and the exclusive library lock, so a check on
+    /// `refs` cannot race a concurrent `add_ref`.
+    pub fn remove_where(
+        &self,
+        id: &str,
+        revision: &str,
+        guard: impl FnOnce(&LibraryIndexEntry) -> Result<(), InspectionError>,
+    ) -> Result<(), InspectionError> {
         let _lease = self.lease(id)?;
         let _lock = self.exclusive()?;
         let mut index = self.index()?;
@@ -750,6 +843,7 @@ impl Store {
         if entry.summary.revision != revision {
             return Err(error("library_conflict", "Library revision changed"));
         }
+        guard(entry)?;
         let (target_root, target_name) = self.item_parent(&entry.summary.item_path)?;
         let predecessor = owned_inventory(&self.item_dir(&entry.summary.item_path)?, entry)?;
         check_confirmation(&conflicts(entry, &predecessor), None)?;
@@ -1301,15 +1395,65 @@ fn validate_intent(i: &Intent, name: &str) -> Result<(), InspectionError> {
     }
     Ok(())
 }
-fn upsert(index: &mut Index, entry: LibraryIndexEntry) {
+/// Inserts a new entry, or replaces an existing one while keeping the index's
+/// current `refs` and `purge_after` (D3: only `mutate_index`/`add_ref` change them).
+fn upsert(index: &mut Index, mut entry: LibraryIndexEntry) {
     if let Some(old) = index
         .items
         .iter_mut()
         .find(|e| e.summary.item_id == entry.summary.item_id)
     {
+        entry.summary.refs = std::mem::take(&mut old.summary.refs);
+        entry.summary.purge_after = old.summary.purge_after.take();
         *old = entry;
     } else {
         index.items.push(entry);
+    }
+}
+/// Rewrites one schema 2 index entry (`{summary, ..}`) in place. A summary that
+/// already has `refs` is left alone. An existing follow becomes `[Follow]`; no
+/// follow or a dangling one becomes `[Manual]`, matching how a dangling
+/// `follow_id` was treated as unfollowed.
+fn upgrade_v2_entry(entry: &mut serde_json::Value, follows: &std::collections::HashSet<String>) -> bool {
+    let Some(summary) = entry.get_mut("summary").and_then(serde_json::Value::as_object_mut) else {
+        return false;
+    };
+    if summary.contains_key("refs") {
+        return false;
+    }
+    let follow_id = summary
+        .remove("follow_id")
+        .and_then(|id| id.as_str().map(str::to_owned))
+        .filter(|id| follows.contains(id));
+    let reference = match follow_id {
+        Some(follow_id) => serde_json::json!({ "kind": "follow", "follow_id": follow_id }),
+        None => serde_json::json!({ "kind": "manual" }),
+    };
+    summary.insert("refs".into(), serde_json::Value::Array(vec![reference]));
+    summary.insert("purge_after".into(), serde_json::Value::Null);
+    summary.insert("issue".into(), serde_json::Value::Null);
+    true
+}
+/// Rewrites one schema 2 follow record: Confluence space fields move into
+/// `source`, `page_count` becomes `item_count`, `excluded_page_ids` becomes `excluded_ids`.
+fn upgrade_v2_follow(record: &mut serde_json::Value) {
+    let Some(record) = record.as_object_mut() else {
+        return;
+    };
+    if record.contains_key("source") {
+        return;
+    }
+    let space_key = record.remove("space_key").unwrap_or(serde_json::Value::Null);
+    let space_name = record.remove("space_name").unwrap_or(serde_json::Value::Null);
+    record.insert(
+        "source".into(),
+        serde_json::json!({ "kind": "confluence_space", "space_key": space_key, "space_name": space_name }),
+    );
+    if let Some(count) = record.remove("page_count") {
+        record.insert("item_count".into(), count);
+    }
+    if let Some(excluded) = record.remove("excluded_page_ids") {
+        record.insert("excluded_ids".into(), excluded);
     }
 }
 pub(crate) fn bounded_write<T: Serialize>(
@@ -2380,5 +2524,110 @@ mod tests {
         assert_eq!(error.code, "library_layout_outdated");
         assert!(error.message.contains(&store.path.display().to_string()));
         assert!(error.message.contains("delete this Library root and re-add it"));
+    }
+
+    fn publish_asset(store: &Arc<Store>, n: u32, body: &str, previous: Option<&LibraryIndexEntry>) -> LibraryIndexEntry {
+        let mut entry = asset_entry(&asset(n, body), previous);
+        let stage = store.stage_asset(&mut entry, &asset(n, body)).unwrap();
+        if previous.is_none() {
+            crate::library::refs::insert_ref(&mut entry.summary, LibraryItemRef::Manual);
+        }
+        store
+            .publish(stage, entry.clone(), previous.map(|e| e.summary.revision.as_str()), None)
+            .unwrap();
+        entry
+    }
+
+    #[test]
+    fn schema_two_index_and_journal_upgrade_to_reference_sets() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let one = publish_asset(&store, 1, "one", None);
+        let two = publish_asset(&store, 2, "two", None);
+        let three = publish_asset(&store, 3, "three", None);
+        // A publish that crashes after journaling leaves a journal intent behind.
+        let mut changed = asset_entry(&asset(2, "two changed"), Some(&two));
+        let stage = store.stage_asset(&mut changed, &asset(2, "two changed")).unwrap();
+        fault(&store, "journal");
+        let crash = store.publish(stage, changed, Some(&two.summary.revision), None).unwrap_err();
+        assert_eq!(crash.code, "library_test_crash");
+
+        // Rewrite everything into the schema 2 shape.
+        let follow_of = |item_id: &str| -> serde_json::Value {
+            if item_id == one.summary.item_id {
+                "follow:sd".into()
+            } else if item_id == three.summary.item_id {
+                "follow:gone".into()
+            } else {
+                serde_json::Value::Null
+            }
+        };
+        let downgrade = |entry: &mut serde_json::Value| {
+            let summary = entry["summary"].as_object_mut().unwrap();
+            let id = summary["item_id"].as_str().unwrap().to_owned();
+            for key in ["refs", "purge_after", "issue"] {
+                summary.remove(key);
+            }
+            summary.insert("follow_id".into(), follow_of(&id));
+        };
+        let mut index: serde_json::Value = read_json_bounded(&store.meta, "index.json", MAX_INDEX).unwrap();
+        index["schema"] = 2.into();
+        for entry in index["items"].as_array_mut().unwrap() {
+            downgrade(entry);
+        }
+        index["follows"] = serde_json::json!([{
+            "follow_id": "follow:sd", "provider_id": "cloud", "provider_instance": "https://x.atlassian.net/wiki",
+            "space_key": "SD", "space_name": "Software Development", "include_attachments": false,
+            "page_count": 1, "partial": null, "excluded_page_ids": ["201"],
+            "last_refreshed_at": "1759000000000", "state": "fresh"
+        }]);
+        atomic_write_bytes(&store.meta, "index.json", &serde_json::to_vec(&index).unwrap()).unwrap();
+        let names = store
+            .journal
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 1);
+        let mut intent: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
+        downgrade(&mut intent["new_entry"]);
+        downgrade(&mut intent["old_entry"]);
+        atomic_write_bytes(&store.journal, &names[0], &serde_json::to_vec(&intent).unwrap()).unwrap();
+
+        let upgraded = reopen(&f).open().unwrap();
+        let raw: serde_json::Value = read_json_bounded(&upgraded.meta, "index.json", MAX_INDEX).unwrap();
+        assert_eq!(raw["schema"], 3);
+        let index = upgraded.index().unwrap();
+        let refs = |id: &str| index.items.iter().find(|e| e.summary.item_id == id).unwrap().summary.refs.clone();
+        assert_eq!(refs(&one.summary.item_id), [LibraryItemRef::Follow { follow_id: "follow:sd".into() }]);
+        assert_eq!(refs(&two.summary.item_id), [LibraryItemRef::Manual]);
+        assert_eq!(refs(&three.summary.item_id), [LibraryItemRef::Manual], "dangling follow is unfollowed");
+        let follow = &index.follows[0];
+        assert_eq!(
+            follow.source,
+            LibraryFollowSource::ConfluenceSpace { space_key: "SD".into(), space_name: "Software Development".into() }
+        );
+        assert_eq!((follow.item_count, follow.excluded_ids.as_slice()), (1, ["201".to_owned()].as_slice()));
+        assert_eq!(upgraded.journal.entries().unwrap().count(), 0, "the intent recovered");
+        assert_store_valid(&upgraded);
+        // A second open is a no-op on the upgraded store.
+        assert_eq!(reopen(&f).open().unwrap().index().unwrap().items.len(), 3);
+    }
+
+    #[test]
+    fn reference_added_between_snapshot_and_publish_survives_the_publish() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let first = publish_asset(&store, 1, "one", None);
+        // The save prepared its entry from this snapshot ...
+        let mut updated = asset_entry(&asset(1, "one changed"), Some(&first));
+        let stage = store.stage_asset(&mut updated, &asset(1, "one changed")).unwrap();
+        // ... and a follow adopts the item before the publish lands.
+        let follow = LibraryItemRef::Follow { follow_id: "follow:other".into() };
+        store.add_ref(&first.summary.item_id, follow.clone()).unwrap();
+        store.publish(stage, updated, Some(&first.summary.revision), None).unwrap();
+        let saved = store.index().unwrap().items.remove(0).summary;
+        assert_ne!(saved.revision, first.summary.revision, "the publish happened");
+        assert_eq!(saved.refs, [LibraryItemRef::Manual, follow]);
     }
 }

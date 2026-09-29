@@ -173,6 +173,66 @@ export function spaceDisplayName(space: { space_key: string; space_name: string 
   return space.space_name && space.space_name !== space.space_key ? `${space.space_key} · ${space.space_name}` : space.space_key;
 }
 
+/** What a follow is called everywhere: `SD · Software Development` for a space, the JQL for a query. */
+export function followTitle(follow: Pick<LibraryFollowSummary, "source">): string {
+  return follow.source.kind === "jira_query" ? follow.source.jql : spaceDisplayName(follow.source);
+}
+
+/** `1 issue`, `12 issues`; `100+ issues` when the count is a lower bound. */
+export function issueCount(count: number, exact = true): string {
+  return `${count}${exact ? "" : "+"} ${count === 1 && exact ? "issue" : "issues"}`;
+}
+
+/** `38 pages` for a followed space, `12 issues` for a followed query. */
+export function followCountText(follow: Pick<LibraryFollowSummary, "source" | "item_count">): string {
+  return follow.source.kind === "jira_query" ? issueCount(follow.item_count) : pageCount(follow.item_count);
+}
+
+/** A bare Jira project key, which Add reads as `project = KEY`. */
+const JIRA_PROJECT_KEY = /^[A-Z][A-Z0-9_]{1,31}$/;
+const JQL_OPERATOR = /[=~<>]|\s(?:in|is|was|changed)\s/i;
+
+/** A Jira query typed into Add (design: follows). */
+export type JiraQueryInput = {
+  jql: string;
+  /** A bare project key such as `OPS`; a Confluence provider could also read it as a space key. */
+  bare: boolean;
+  /** Configured Jira providers that can run it. */
+  providers: ProjectProvider[];
+};
+
+/**
+ * A bare project key or text with a JQL operator, while a Jira provider is
+ * configured. Links, Jira issue keys and folder paths are other inputs.
+ */
+export function jiraQueryInput(input: string, providers: readonly ProjectProvider[]): JiraQueryInput | null {
+  const trimmed = input.trim();
+  const jira = jiraProviders(providers);
+  if (jira.length === 0 || !trimmed || /^https?:\/\//i.test(trimmed) || JIRA_KEY.test(trimmed)) return null;
+  if (trimmed.startsWith("/") || trimmed.startsWith("~/") || trimmed === "~" || /^[A-Za-z]:[\\/]/.test(trimmed)) return null;
+  if (JIRA_PROJECT_KEY.test(trimmed)) return { jql: trimmed, bare: true, providers: jira };
+  return JQL_OPERATOR.test(trimmed) ? { jql: trimmed, bare: false, providers: jira } : null;
+}
+
+/** Queries offered as chips under the Add field; the project ones need a project key. */
+export function jiraQueryPresets(projectKey: string | null): { label: string; jql: string }[] {
+  return [
+    ...(projectKey ? [
+      { label: "Whole project", jql: `project = ${projectKey}` },
+      { label: "Not done", jql: `project = ${projectKey} AND statusCategory != Done` },
+      { label: "Updated in last 14 days", jql: `project = ${projectKey} AND updated >= -14d` },
+    ] : []),
+    { label: "Assigned to me, unresolved", jql: "assignee = currentUser() AND resolution = Unresolved" },
+  ];
+}
+
+/** The project a bare key or a `project = KEY …` query names. */
+export function jiraQueryProject(jql: string): string | null {
+  const trimmed = jql.trim();
+  if (JIRA_PROJECT_KEY.test(trimmed)) return trimmed;
+  return /^project\s*=\s*"?([A-Z][A-Z0-9_]{1,31})"?(?:\s|$)/i.exec(trimmed)?.[1]?.toUpperCase() ?? null;
+}
+
 /** The space a `confluence_space` resolution names, from its container label or its key and title. */
 export function resolutionSpaceName(resolution: Pick<LibraryResolution, "container_label" | "canonical_id" | "title">): string {
   return resolution.container_label ?? spaceDisplayName({ space_key: resolution.canonical_id ?? resolution.title, space_name: resolution.title });
@@ -361,6 +421,22 @@ export function itemAccessibleName(item: LibraryItemSummary, providers: readonly
   return `${itemTreeLabel(item, providers)}, ${itemKindLabel(item, providers)}, ${state}`;
 }
 
+/** The item is held by at least one follow. */
+export function hasFollowRef(item: Pick<LibraryItemSummary, "refs">): boolean {
+  return item.refs.some((ref) => ref.kind === "follow");
+}
+
+/** `Keep in Library` applies until the item holds its own `manual` reference. */
+export function isKeepable(item: Pick<LibraryItemSummary, "refs" | "kind">): boolean {
+  return item.kind !== "folder_copy" && !item.refs.some((ref) => ref.kind === "manual");
+}
+
+/** Tooltip for an item nothing references any more: when the Library deletes it, and how to prevent that. */
+export function purgeNotice(item: Pick<LibraryItemSummary, "purge_after">): string {
+  const time = parseLibraryTime(item.purge_after);
+  return `No follow or Space holds this item. It is deleted from the Library ${time === null ? "soon" : `on ${formatDateTime(time)}`} unless you keep it, or it has edits.`;
+}
+
 export type LibraryContainerNode = {
   kind: "container";
   key: string;
@@ -438,14 +514,17 @@ export function libraryTree(items: readonly LibraryItemSummary[], providers: rea
     }
     return node;
   };
+  const jiraFollows = follows.filter((follow) => follow.source.kind === "jira_query");
   for (const item of items) {
     const folder = item.kind === "folder_copy";
     const instance = instanceFor(item.provider_id, item.provider_instance, folder);
-    containerFor(instance, folder ? { id: null, label: "" } : itemContainer(item)).items.push(item);
+    // A Jira issue sits under the first query that follows it, else under its project.
+    const followed = folder ? undefined : jiraFollows.find((follow) => item.refs.some((ref) => ref.kind === "follow" && ref.follow_id === follow.follow_id));
+    containerFor(instance, folder ? { id: null, label: "" } : followed ? { id: followed.follow_id, label: followTitle(followed) } : itemContainer(item)).items.push(item);
   }
   for (const follow of follows) {
     const instance = instanceFor(follow.provider_id, follow.provider_instance, false);
-    containerFor(instance, { id: follow.space_key, label: spaceDisplayName(follow) }).follow = follow;
+    containerFor(instance, { id: follow.source.kind === "jira_query" ? follow.follow_id : follow.source.space_key, label: followTitle(follow) }).follow = follow;
   }
   for (const instance of instances.values()) {
     const all = instance.containers.flatMap((container) => container.items);
@@ -461,7 +540,7 @@ export function libraryTree(items: readonly LibraryItemSummary[], providers: rea
   });
 }
 
-export const REPORT_OUTCOMES: readonly LibraryReportOutcome[] = ["new", "updated", "unchanged", "removed_at_source", "partial", "conflict", "failed"];
+export const REPORT_OUTCOMES: readonly LibraryReportOutcome[] = ["new", "updated", "unchanged", "removed_at_source", "dropped", "partial", "conflict", "failed"];
 
 export function reportOutcomeLabel(outcome: LibraryReportOutcome): string {
   switch (outcome) {
@@ -469,6 +548,7 @@ export function reportOutcomeLabel(outcome: LibraryReportOutcome): string {
     case "updated": return "updated";
     case "unchanged": return "unchanged";
     case "removed_at_source": return "removed at source";
+    case "dropped": return "no longer followed";
     case "partial": return "partial";
     case "conflict": return "edited in Library";
     case "failed": return "failed";
@@ -490,7 +570,8 @@ export function resolutionNote(resolution: LibraryResolution, providers: readonl
   if (resolution.kind === "folder") return `Folder${resolution.git_working_tree ? " · Git working tree" : ""}${resolution.file_count !== null ? ` · ${resolution.file_count} files` : ""} · ${resolution.title}`;
   // `KEY · Space name`: the note names the space by its key.
   if (resolution.kind === "confluence_page") return `Confluence page · ${resolution.title}${resolution.container_label ? ` · ${resolution.container_label.split(" · ")[0]}` : ""}`;
-  if (resolution.kind === "confluence_space") return `Confluence space · ${resolutionSpaceName(resolution)}${resolution.page_count !== null ? ` · ${pageCount(resolution.page_count)}` : ""}`;
+  if (resolution.kind === "confluence_space") return `Confluence space · ${resolutionSpaceName(resolution)}${resolution.item_count !== null ? ` · ${pageCount(resolution.item_count)}` : ""}`;
+  if (resolution.kind === "jira_query") return `Jira query · ${resolution.title}${resolution.item_count !== null ? ` · ${issueCount(resolution.item_count, resolution.item_count_exact)}` : ""}`;
   const family = providerFamily(providers, resolution.provider_id);
   const host = instanceHost(resolution.provider_instance);
   if (family.key === "jira") return `Jira issue ${resolution.canonical_id ?? ""} · ${resolution.title} · ${host}`;

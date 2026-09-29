@@ -2,7 +2,9 @@
 mod attachments;
 mod folder;
 mod follow;
+mod jira_follow;
 mod operations;
+pub(crate) mod refs;
 mod layout;
 mod reader;
 pub(crate) mod store;
@@ -13,7 +15,7 @@ use crate::{
     project_store::timestamp,
     repositories::{confluence_provider_for_input, resolve_artifact},
     sources::{
-        ConfluencePage, FetchedAssets, FrontmatterValue, ProviderResolution, SourceAsset,
+        ConfluencePage, FetchedAssets, FrontmatterValue, IssueRow, ProviderResolution, SourceAsset,
         SourceFetchRequest, SourceRef, SourceService, content_revision, confluence_page_id,
         confluence_page_url, confluence_space_key, instance_authority, site_authority,
     },
@@ -286,6 +288,11 @@ impl LibraryService {
         if folder::recognizes(&request.input) {
             return self.resolve_folder(&request.input).await;
         }
+        if let Some((query, provider_id)) =
+            self.jira_query(&request.input, request.provider_id.as_deref())?
+        {
+            return self.resolve_jira_query(&provider_id, &query).await;
+        }
         let page_request = match self
             .confluence_resolution(&request.input, request.provider_id.as_deref())
             .await?
@@ -354,7 +361,7 @@ impl LibraryService {
                 .find(|follow| {
                     follow.provider_id == source.provider_id
                         && follow.provider_instance == source.provider_instance
-                        && follow.space_key == page.space_key
+                        && refs::space_key(follow) == Some(page.space_key.as_str())
                 })
                 .map(|follow| follow.follow_id.clone());
             return Ok(LibraryResolution {
@@ -366,7 +373,9 @@ impl LibraryService {
                 container_label: asset.container.map(|container| container.label),
                 existing_item_id: existing.map(|entry| entry.summary.item_id.clone()),
                 existing_follow_id,
-                page_count: None,
+                item_count: None,
+                item_count_exact: true,
+                follow_mode: None,
                 git_working_tree: None,
                 file_count: None,
                 diagnostics: vec![],
@@ -399,7 +408,9 @@ impl LibraryService {
                 .and_then(|e| e.summary.container.as_ref().map(|c| c.label.clone())),
             existing_item_id: existing.map(|e| e.summary.item_id),
             existing_follow_id: None,
-            page_count: None,
+            item_count: None,
+            item_count_exact: true,
+            follow_mode: None,
             git_working_tree: None,
             file_count: None,
             diagnostics: vec![],
@@ -415,7 +426,20 @@ impl LibraryService {
         &self,
         request: LibraryAddRequest,
     ) -> Result<LibraryOperation, InspectionError> {
-        if request.follow_space {
+        if !folder::recognizes(&request.input) {
+            if let Some((query, provider_id)) =
+                self.jira_query(&request.input, request.provider_id.as_deref())?
+            {
+                if !request.follow {
+                    return Err(error(
+                        "source_capability_unavailable",
+                        "A Jira query is added by following it",
+                    ));
+                }
+                return self.start_jira_follow_add(request, query, provider_id).await;
+            }
+        }
+        if request.follow {
             return self.start_follow_add(request).await;
         }
         if folder::recognizes(&request.input) {
@@ -530,8 +554,12 @@ impl LibraryService {
                 }
                 let old = service.entry(&worker_store, &asset_id)?;
                 if old.is_some() && !request.refresh_existing && !request.download_attachments {
+                    let saved = old.as_ref().expect("existing item");
+                    if !saved.summary.refs.contains(&LibraryItemRef::Manual) {
+                        worker_store.add_ref(&asset_id, LibraryItemRef::Manual)?;
+                    }
                     if let Some(target) = &request.target {
-                        space::prepare_saved_item(&worker_store, &id, target, &old.as_ref().expect("existing item").summary)?;
+                        space::prepare_saved_item(&worker_store, &id, target, &saved.summary)?;
                     }
                     operations::row(
                         &worker_store,
@@ -544,6 +572,7 @@ impl LibraryService {
                 }
                 service.save_asset_with(&worker_store, &id, asset, old, SaveOptions {
                     target: request.target.as_ref(),
+                    reference: Some(LibraryItemRef::Manual),
                     download_all: request.download_attachments,
                     ..SaveOptions::default()
                 }).await?;
@@ -606,7 +635,11 @@ impl LibraryService {
                 } else {
                     let asset = assets.remove(id).ok_or_else(||
                         error("library_item_not_found", "Saved setup item no longer exists"))?;
-                    service.save_asset(&worker_store, &worker_id, asset, None, None, Some(&target)).await?;
+                    service.save_asset_with(&worker_store, &worker_id, asset, None, SaveOptions {
+                        target: Some(&target),
+                        reference: Some(LibraryItemRef::Manual),
+                        ..SaveOptions::default()
+                    }).await?;
                 }
             }
             // Every item and its pending attempt are now durable. Companion
@@ -639,11 +672,18 @@ impl LibraryService {
         Ok((match request {
             LibraryRefreshRequest::All => {
                 let followed = |entry: &LibraryIndexEntry| {
-                    entry.summary.follow_id.as_ref().is_some_and(|id| {
-                        index.follows.iter().any(|follow| &follow.follow_id == id)
+                    entry.summary.refs.iter().any(|reference| {
+                        matches!(reference, LibraryItemRef::Follow { follow_id }
+                            if index.follows.iter().any(|follow| &follow.follow_id == follow_id))
                     })
                 };
-                let items = index.items.iter().filter(|e| !followed(e)).cloned().collect();
+                // A tombstoned item (no references) awaits purge, not a refresh.
+                let items = index
+                    .items
+                    .iter()
+                    .filter(|e| !followed(e) && !e.summary.refs.is_empty())
+                    .cloned()
+                    .collect();
                 return Ok((items, index.follows));
             }
             LibraryRefreshRequest::Items { item_ids } => {
@@ -674,17 +714,25 @@ impl LibraryService {
             LibraryRefreshRequest::Container {
                 provider_instance,
                 container_id,
-            } => index
-                .items
-                .into_iter()
-                .filter(|e| {
-                    e.summary.provider_instance.as_deref() == Some(&provider_instance)
-                        && e.summary
-                            .container
-                            .as_ref()
-                            .is_some_and(|c| c.container_id == container_id)
-                })
-                .collect(),
+            } => {
+                // A Jira query is its own container in the tree: its id is the follow id.
+                if let Some(follow) = index.follows.iter().find(|follow| {
+                    follow.follow_id == container_id && follow.provider_instance == provider_instance
+                }) {
+                    return Ok((vec![], vec![follow.clone()]));
+                }
+                index
+                    .items
+                    .into_iter()
+                    .filter(|e| {
+                        e.summary.provider_instance.as_deref() == Some(&provider_instance)
+                            && e.summary
+                                .container
+                                .as_ref()
+                                .is_some_and(|c| c.container_id == container_id)
+                    })
+                    .collect()
+            }
             LibraryRefreshRequest::Follow { follow_id } => {
                 let follow = index
                     .follows
@@ -732,7 +780,7 @@ impl LibraryService {
                 }
                 service.refresh_follow(&worker_store, &id, follow, false, None).await?;
             }
-            Ok(())
+            refs::purge_expired(&worker_store, &id)
         });
         Ok(record)
     }
@@ -923,7 +971,7 @@ impl LibraryService {
         old: Option<LibraryIndexEntry>,
         options: SaveOptions<'_>,
     ) -> Result<(), InspectionError> {
-        let SaveOptions { confirmed, target, follow_id, reason, download_all, attachment_request } = options;
+        let SaveOptions { confirmed, target, reference, reason, download_all, attachment_request, issue_row } = options;
         if let Some(old) = &old {
             asset.original_url = old.summary.original_url.clone();
         }
@@ -993,8 +1041,19 @@ impl LibraryService {
         };
         let mut entry = asset_entry(&asset, old.as_ref());
         entry.canonical_url = Some(canonical_url);
-        if let Some(follow_id) = follow_id {
-            entry.summary.follow_id = Some(follow_id.to_owned());
+        if let Some(row) = issue_row {
+            entry.summary.issue = Some(LibraryIssueMeta {
+                updated: row.updated.clone(),
+                fetched_updated: Some(row.updated.clone()),
+                status: row.status.clone(),
+                issue_type: row.issue_type.clone(),
+                assignee: row.assignee.clone(),
+            });
+        }
+        if old.is_none() {
+            if let Some(reference) = &reference {
+                refs::insert_ref(&mut entry.summary, reference.clone());
+            }
         }
         let index_items = {
             let _lock = store.shared()?;
@@ -1080,6 +1139,13 @@ impl LibraryService {
                 return Err(e);
             }
         }
+        // An existing item gains its reference only after the save succeeded, and
+        // through the index so a concurrent reference change is never overwritten.
+        if old.is_some() {
+            if let Some(reference) = reference {
+                store.add_ref(&entry.summary.item_id, reference)?;
+            }
+        }
         #[cfg(test)] {
             let mut fault = store.fault.lock().unwrap_or_else(|e| e.into_inner());
             if *fault == Some("space_after_library_publish") {
@@ -1151,12 +1217,15 @@ impl LibraryService {
 struct SaveOptions<'a> {
     confirmed: Option<&'a [LibraryConflictFile]>,
     target: Option<&'a SpaceTarget>,
-    /// The follow a page is saved for; items otherwise keep their own.
-    follow_id: Option<&'a str>,
+    /// The reference this save adds: the birth reference of a new item, or added
+    /// to an existing one after the save. `None` leaves references untouched.
+    reference: Option<LibraryItemRef>,
     /// Report reason for this item's row, e.g. why a followed page changed.
     reason: Option<String>,
     download_all: bool,
     attachment_request: Option<&'a LibraryAttachmentRequest>,
+    /// The listing row that led to this save of a Jira issue; sets `issue`.
+    issue_row: Option<&'a IssueRow>,
 }
 fn item_id(source: &SourceRef) -> String {
     let mut hash = Sha256::new();
@@ -1249,7 +1318,9 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
             conflict: vec![],
             fetched_at: Some(now.clone()),
             checked_at: Some(now),
-            follow_id: old.and_then(|e| e.summary.follow_id.clone()),
+            refs: old.map(|e| e.summary.refs.clone()).unwrap_or_default(),
+            purge_after: old.and_then(|e| e.summary.purge_after.clone()),
+            issue: old.and_then(|e| e.summary.issue.clone()),
             attachments: asset
                 .attachments
                 .iter()
@@ -1526,7 +1597,8 @@ mod tests {
             input: format!("https://forge.test/gitea/acme/repo/issues/{n}"),
             provider_id: None,
             hydrate_references: false,
-            follow_space: false,
+            follow: false,
+            follow_mode: None,
             download_attachments: false,
             refresh_existing: false,
             label: None,
@@ -2257,7 +2329,8 @@ mod confluence {
             input: input.into(),
             provider_id: provider_id.map(str::to_owned),
             hydrate_references: false,
-            follow_space: false,
+            follow: false,
+            follow_mode: None,
             download_attachments: false,
             refresh_existing: false,
             label: None,

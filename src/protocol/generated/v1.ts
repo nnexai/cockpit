@@ -307,23 +307,31 @@ export type LibraryAttachment = { attachment_id: string, original_name: string, 
 
 export type LibraryFolderInfo = { origin_path: string, git_working_tree: boolean, files: number, bytes: number, skipped_symlinks: number, skipped_special: number, skipped_ignored: number, skipped_other: number, };
 
-export type LibraryItemSummary = { item_id: string, logical_id: string, kind: LibraryItemKind, provider_id: string | null, provider_instance: string | null, resource_type: string | null, canonical_id: string | null, container: LibraryContainer | null, parent_item_id: string | null, ancestors: Array<LibraryAncestor>, order: number | null, title: string, document_path: string | null, item_path: string, source_url: string | null, original_url: string | null, source_revision: string | null, revision: string, state: LibraryItemState, partial: LibraryPartial | null, conflict: Array<LibraryConflictFile>, fetched_at: string | null, checked_at: string | null, follow_id: string | null, attachments: Array<LibraryAttachment>, folder: LibraryFolderInfo | null, diagnostics: Array<ProjectDiagnostic>, };
+export type LibraryItemRef = { "kind": "manual" } | { "kind": "follow", follow_id: string, } | { "kind": "space", companion_root_id: string, };
 
-export type LibraryFollowSummary = { follow_id: string, provider_id: string, provider_instance: string, space_key: string, space_name: string, include_attachments: boolean, page_count: number, partial: LibraryPartial | null, excluded_page_ids: Array<string>, last_refreshed_at: string | null, state: LibraryItemState, };
+export type LibraryIssueMeta = { updated: string, fetched_updated: string | null, status: string, issue_type: string, assignee: string | null, };
+
+export type LibraryItemSummary = { item_id: string, logical_id: string, kind: LibraryItemKind, provider_id: string | null, provider_instance: string | null, resource_type: string | null, canonical_id: string | null, container: LibraryContainer | null, parent_item_id: string | null, ancestors: Array<LibraryAncestor>, order: number | null, title: string, document_path: string | null, item_path: string, source_url: string | null, original_url: string | null, source_revision: string | null, revision: string, state: LibraryItemState, partial: LibraryPartial | null, conflict: Array<LibraryConflictFile>, fetched_at: string | null, checked_at: string | null, refs: Array<LibraryItemRef>, purge_after: string | null, issue: LibraryIssueMeta | null, attachments: Array<LibraryAttachment>, folder: LibraryFolderInfo | null, diagnostics: Array<ProjectDiagnostic>, };
+
+export type LibraryFollowMode = "live" | "accumulate";
+
+export type LibraryFollowSource = { "kind": "confluence_space", space_key: string, space_name: string, } | { "kind": "jira_query", jql: string, mode: LibraryFollowMode, };
+
+export type LibraryFollowSummary = { follow_id: string, provider_id: string, provider_instance: string, source: LibraryFollowSource, include_attachments: boolean, item_count: number, partial: LibraryPartial | null, excluded_ids: Array<string>, last_refreshed_at: string | null, state: LibraryItemState, };
 
 export type LibraryListing = { root: ContextRoot, generation: string, items: Array<LibraryItemSummary>, follows: Array<LibraryFollowSummary>, next_offset: number | null, diagnostics: Array<ProjectDiagnostic>, };
 
 export type SpaceTarget = { session_id: string, space_id: string, };
 
-export type LibraryInputKind = "artifact" | "confluence_page" | "confluence_space" | "folder";
+export type LibraryInputKind = "artifact" | "confluence_page" | "confluence_space" | "folder" | "jira_query";
 
 export type LibraryResolveRequest = { input: string, provider_id: string | null, };
 
 export type LibraryConfluenceSpacesRequest = { provider_id: string, };
 
-export type LibraryResolution = { kind: LibraryInputKind, provider_id: string | null, provider_instance: string | null, title: string, canonical_id: string | null, container_label: string | null, existing_item_id: string | null, existing_follow_id: string | null, page_count: number | null, git_working_tree: boolean | null, file_count: number | null, diagnostics: Array<ProjectDiagnostic>, };
+export type LibraryResolution = { kind: LibraryInputKind, provider_id: string | null, provider_instance: string | null, title: string, canonical_id: string | null, container_label: string | null, existing_item_id: string | null, existing_follow_id: string | null, item_count: number | null, item_count_exact: boolean, follow_mode: LibraryFollowMode | null, git_working_tree: boolean | null, file_count: number | null, diagnostics: Array<ProjectDiagnostic>, };
 
-export type LibraryAddRequest = { input: string, provider_id: string | null, hydrate_references: boolean, follow_space: boolean, download_attachments: boolean, refresh_existing: boolean, label: string | null, target: SpaceTarget | null, };
+export type LibraryAddRequest = { input: string, provider_id: string | null, hydrate_references: boolean, follow: boolean, follow_mode: LibraryFollowMode | null, download_attachments: boolean, refresh_existing: boolean, label: string | null, target: SpaceTarget | null, };
 
 export type LibraryRefreshRequest = { "scope": "items", item_ids: Array<string>, } | { "scope": "follow", follow_id: string, } | { "scope": "container", provider_instance: string, container_id: string, } | { "scope": "all" };
 
@@ -343,11 +351,11 @@ export type LibraryPhaseState = "pending" | "running" | "done" | "partial" | "fa
 
 export type LibraryPhase = { phase: LibraryPhaseName, state: LibraryPhaseState, done: number, total: number | null, message: string | null, error: ErrorResponse | null, };
 
-export type LibraryReportOutcome = "new" | "updated" | "unchanged" | "removed_at_source" | "partial" | "failed" | "conflict";
+export type LibraryReportOutcome = "new" | "updated" | "unchanged" | "removed_at_source" | "partial" | "dropped" | "failed" | "conflict";
 
 export type LibraryReportRow = { item_id: string | null, follow_id: string | null, title: string, outcome: LibraryReportOutcome, reason: string | null, };
 
-export type LibraryRefreshReport = { new: number, updated: number, unchanged: number, removed_at_source: number, partial: number, failed: number, conflict: number, rows: Array<LibraryReportRow>, truncated_rows: boolean, };
+export type LibraryRefreshReport = { new: number, updated: number, unchanged: number, removed_at_source: number, dropped: number, partial: number, failed: number, conflict: number, rows: Array<LibraryReportRow>, truncated_rows: boolean, };
 
 export type SpaceCopyMode = "reflink" | "copy" | "mixed";
 

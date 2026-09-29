@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use tokio::time::timeout;
 
 use crate::InspectionError;
+use crate::repositories::is_jira_key;
 mod hydration;
 
 const MAX_ASSETS_PER_FETCH: usize = 64;
@@ -187,6 +188,38 @@ pub struct SpacePageListing {
     pub total: Option<u64>,
     pub complete: bool,
 }
+
+/// One row of a Jira issue listing. `updated` is the CLI's plain format,
+/// `YYYY-MM-DD HH:MM:SS`, which is what a listing is compared against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueRow {
+    pub key: String,
+    pub updated: String,
+    pub status: String,
+    pub issue_type: String,
+    pub assignee: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueListing {
+    pub rows: Vec<IssueRow>,
+    /// False when the cap was reached or the listing could not be proven
+    /// exhaustive; a partial listing must never drop members.
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueQuery<'a> {
+    /// `updated_since` is a view-format ISO instant (probe lower bound).
+    Jql {
+        jql: &'a str,
+        updated_since: Option<&'a str>,
+    },
+    Keys(&'a [String]),
+}
+
+const MAX_ISSUE_JQL_BYTES: usize = 2048;
+const MAX_ISSUE_KEYS: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentRef {
@@ -459,6 +492,15 @@ pub trait SourceProvider: Send + Sync {
         _max_pages: u32,
         _cancel: &std::sync::atomic::AtomicBool,
     ) -> Result<SpacePageListing, InspectionError> {
+        capability_unavailable()
+    }
+    /// A metadata listing of Jira issues for a query or a set of keys.
+    async fn list_issues(
+        &self,
+        _query: &IssueQuery<'_>,
+        _max: u32,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<IssueListing, InspectionError> {
         capability_unavailable()
     }
     /// The page's current space key; `None` when the page no longer exists.
@@ -833,6 +875,72 @@ impl SourceService {
         Ok(listing)
     }
 
+    /// Metadata listing of Jira issues. The deadline scales with the number
+    /// of CLI calls the provider may make (one per 100 rows or keys, twice
+    /// over for bisection); the provider stops early when `cancel` is set.
+    pub async fn list_issues(
+        &self,
+        provider_id: &str,
+        query: &IssueQuery<'_>,
+        max: u32,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<IssueListing, InspectionError> {
+        let contract = |message: &str| InspectionError::new("source_provider_contract", message);
+        let batches = match query {
+            IssueQuery::Jql { jql, updated_since } => {
+                if jql.trim().is_empty()
+                    || !bounded_text(jql, MAX_ISSUE_JQL_BYTES)
+                    || updated_since.is_some_and(|since| crate::jira_query::instant_seconds(since).is_none())
+                {
+                    return Err(contract("issue listing requires a bounded query"));
+                }
+                max.div_ceil(100)
+            }
+            IssueQuery::Keys(keys) => {
+                if keys.is_empty()
+                    || keys.len() > MAX_ISSUE_KEYS
+                    || !keys.iter().all(|key| is_jira_key(key))
+                {
+                    return Err(contract("issue listing requires 1 to 10000 valid issue keys"));
+                }
+                (keys.len() as u32).div_ceil(100)
+            }
+        };
+        if max == 0 {
+            return Err(contract("issue listing requires a positive limit"));
+        }
+        let provider = self.selected_provider(provider_id)?;
+        let calls = batches.saturating_mul(2).saturating_add(2);
+        let listing = timeout(
+            self.operation_timeout.saturating_mul(calls),
+            provider.list_issues(query, max, cancel),
+        )
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "source_fetch_timeout",
+                "issue listing exceeded the configured operation deadline",
+            )
+        })??;
+        let mut keys = std::collections::BTreeSet::new();
+        let valid = listing.rows.len() <= max as usize
+            && listing.rows.iter().all(|row| {
+                is_jira_key(&row.key)
+                    && keys.insert(row.key.as_str())
+                    && issue_updated(&row.updated)
+                    && bounded_text(&row.status, MAX_METADATA_BYTES)
+                    && bounded_text(&row.issue_type, MAX_METADATA_BYTES)
+                    && row
+                        .assignee
+                        .as_deref()
+                        .is_none_or(|name| bounded_text(name, MAX_METADATA_BYTES))
+            });
+        if !valid {
+            return Err(contract("source provider returned an invalid issue listing"));
+        }
+        Ok(listing)
+    }
+
     /// The page's current space, or `None` when the provider reports it missing.
     pub async fn page_space(
         &self,
@@ -1168,6 +1276,16 @@ fn validate_asset(asset: &SourceAsset) -> Result<(), InspectionError> {
         ));
     }
     Ok(())
+}
+/// `YYYY-MM-DD HH:MM:SS`, the jira-cli plain listing format.
+fn issue_updated(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 19
+        && bytes[16] == b':'
+        && bytes[10] == b' '
+        && bytes[17..].iter().all(u8::is_ascii_digit)
+        && (bytes[17] - b'0') <= 5
+        && crate::jira_query::wall_minute(value).is_some()
 }
 fn bounded_text(value: &str, max: usize) -> bool {
     !value.is_empty()

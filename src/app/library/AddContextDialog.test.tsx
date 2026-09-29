@@ -26,7 +26,7 @@ it("resolves a Jira key on the configured site, adds to the Library only, and of
   };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
-    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [] })),
+    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     libraryAdd: vi.fn(async () => saved),
   } as unknown as CockpitClient;
   const onOpenItem = vi.fn();
@@ -55,7 +55,7 @@ it("resolves a Jira key on the configured site, adds to the Library only, and of
     expect(primary.disabled).toBe(false);
     await act(async () => primary.click());
     await advance(0);
-    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: "https://jira.test/jira/browse/OPS-311", provider_id: "jira", target: null, follow_space: false, download_attachments: false }));
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: "https://jira.test/jira/browse/OPS-311", provider_id: "jira", target: null, follow: false, follow_mode: null, download_attachments: false }));
     expect(document.body.textContent).toContain("✓ Saved to Library");
     const open = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Open in Library")!;
     expect(document.activeElement).toBe(open);
@@ -78,7 +78,7 @@ it("keeps focus trapped during add startup and exposes a retry for the same reje
   const firstStart = new Promise<LibraryOperation>((_resolve, reject) => { rejectStart = reject; });
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
-    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [] })),
+    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     libraryAdd: vi.fn().mockReturnValueOnce(firstStart).mockResolvedValueOnce(saved),
   } as unknown as CockpitClient;
   const onClose = vi.fn();
@@ -142,7 +142,7 @@ it("adds to the Library and the target Space, keeps a phase-2 failure across reo
   };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
-    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "github", provider_instance: "https://github.com", title: "Fix token refresh race", canonical_id: "acme/api#7", container_label: "acme/api", existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [] })),
+    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "github", provider_instance: "https://github.com", title: "Fix token refresh race", canonical_id: "acme/api#7", container_label: "acme/api", existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     librarySpaceList: vi.fn(async () => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
     libraryAdd: vi.fn(async () => running),
     libraryOperation: vi.fn(async () => failed),
@@ -218,7 +218,7 @@ it("adds to the Library and the target Space, keeps a phase-2 failure across reo
 it("offers only the Library when Herdr isn't live, and copies an already saved item without a provider fetch", async () => {
   vi.useFakeTimers();
   const target = { session_id: "session", space_id: "space-1" };
-  const resolution = { kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: "source:ops-311", existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [] };
+  const resolution = { kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: "source:ops-311", existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] };
   const copied: LibraryOperation = {
     operation_id: "op-existing", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:ops-311"],
     report: null, space: { space_id: "space-1", copy_mode: "copy", written: ["sources/jira/issue/ops-311.md"], skipped_edited: [], companion_root_id: "companion:c1" },
@@ -272,7 +272,7 @@ it("offers only the Library when Herdr isn't live, and copies an already saved i
 
 const githubClient = (overrides: Partial<Record<keyof CockpitClient, unknown>>) => ({
   projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
-  libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "github", provider_instance: "https://github.com", title: "Fix token refresh race", canonical_id: "acme/api#7", container_label: "acme/api", existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [] })),
+  libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "github", provider_instance: "https://github.com", title: "Fix token refresh race", canonical_id: "acme/api#7", container_label: "acme/api", existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
   librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
   ...overrides,
 }) as unknown as CockpitClient;
@@ -470,7 +470,7 @@ it("retries an interrupted Space-only copy with the items it asked for, not the 
   };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
-    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: "source:ops-311", existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [] })),
+    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: "source:ops-311", existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     librarySpaceList: vi.fn(async () => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
     libraryAdd: vi.fn(),
     librarySpaceAdd: vi.fn().mockResolvedValueOnce(interrupted).mockResolvedValueOnce(copied),
@@ -504,7 +504,7 @@ it("recognizes a typed folder path, defaults its label, and saves the renamed co
   };
   const client = githubClient({
     libraryResolve: vi.fn(async () => ({ kind: "folder", provider_id: null, provider_instance: null, title: "notes", canonical_id: null, container_label: null,
-      existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: true, file_count: 600, diagnostics: [] })),
+      existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: true, file_count: 600, diagnostics: [] })),
     libraryAdd: vi.fn(async () => saved),
   });
   const host = document.createElement("div");
@@ -532,7 +532,7 @@ it("recognizes a typed folder path, defaults its label, and saves the renamed co
     await advance(0);
     expect(client.libraryAdd).toHaveBeenCalledWith({
       input: "~/notes", label: "Design notes", provider_id: null, target: null,
-      hydrate_references: false, follow_space: false, download_attachments: false, refresh_existing: false,
+      hydrate_references: false, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false,
     });
     expect(document.body.textContent).toContain("Saved to Library, partial");
     expect(document.activeElement).toBe(dialogButton("Open in Library"));
@@ -558,7 +558,7 @@ function pageResolution(providerId: string | null) {
   return {
     kind: "confluence_page", provider_id: providerId, provider_instance: cloud ? "https://nnexai.atlassian.net/wiki" : "https://confluence.example.com/confluence",
     title: cloud ? "Release checklist" : "Release Checklist", canonical_id: cloud ? "98765" : "4242", container_label: cloud ? "SD · Software Development" : "ENG · Engineering",
-    existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [],
+    existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [],
   };
 }
 
@@ -616,7 +616,7 @@ it("recognizes a Cloud page link, asks for the provider only when several config
     await advance(0);
     expect(client.libraryAdd).toHaveBeenCalledWith({
       input: "98765", provider_id: "cloud-reader", target, label: null,
-      hydrate_references: false, follow_space: false, download_attachments: false, refresh_existing: false,
+      hydrate_references: false, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false,
     });
     expect(document.body.textContent).toContain("✓ Saved to Library");
     expect(document.body.textContent).not.toContain("@");
@@ -667,7 +667,7 @@ it("refuses a bare page id without a Confluence provider, and resolves ids and D
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
     await advance(0);
-    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: DC_DISPLAY, provider_id: "dc", target: null, follow_space: false, download_attachments: false }));
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: DC_DISPLAY, provider_id: "dc", target: null, follow: false, follow_mode: null, download_attachments: false }));
     expect(document.activeElement).toBe(dialogButton("Open in Library"));
   } finally {
     await act(async () => root.unmount());
@@ -709,7 +709,7 @@ it("explains a Confluence sign-in failure and a missing confluence CLI without c
 function spaceResolution(overrides: Record<string, unknown>) {
   return {
     kind: "confluence_space", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", title: "Software Development", canonical_id: "SD",
-    container_label: "SD · Software Development", existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [],
+    container_label: "SD · Software Development", existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [],
     ...overrides,
   };
 }
@@ -778,7 +778,7 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
     await advance(0);
     expect(client.libraryAdd).toHaveBeenCalledWith({
       input: "SD", provider_id: "cloud", target, label: null,
-      hydrate_references: false, follow_space: true, download_attachments: true, refresh_existing: false,
+      hydrate_references: false, follow: true, follow_mode: null, download_attachments: true, refresh_existing: false,
     });
     expect(document.body.textContent).toContain("✓ Saved to Library · 3 pages");
     expect(document.body.textContent).toContain("✓ Added to api-review · reflinked");
@@ -803,8 +803,8 @@ it("offers following a page's whole space, warns when the page limit makes it pa
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[0]], limits: { library_space_pages: 200 } })),
     libraryResolve: vi.fn(async (request: { input: string }) => request.input === CLOUD_PAGE
-      ? { ...pageResolution("cloud"), page_count: 312 }
-      : spaceResolution({ existing_follow_id: "follow:sd", page_count: 38 })),
+      ? { ...pageResolution("cloud"), item_count: 312 }
+      : spaceResolution({ existing_follow_id: "follow:sd", item_count: 38 })),
     libraryAdd: vi.fn(async () => saved),
     librarySpaceAdd: vi.fn(async () => copied),
   });
@@ -824,7 +824,7 @@ it("offers following a page's whole space, warns when the page limit makes it pa
     expect(document.body.querySelector("[role='status'].library-note-partial")?.textContent).toContain("The page limit is 200, so this saves 200 of 312 pages. Refresh won't mark pages removed at source until the whole space fits.");
     await act(async () => dialogButton("Follow space")!.click());
     await advance(0);
-    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: CLOUD_PAGE, provider_id: "cloud", target: null, follow_space: true, download_attachments: false }));
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: CLOUD_PAGE, provider_id: "cloud", target: null, follow: true, follow_mode: null, download_attachments: false }));
     expect(document.body.textContent).toContain("◐ Saved to Library, partial");
     await act(async () => root.unmount());
 
@@ -869,6 +869,48 @@ it("downloads attachments for a page only after its checkbox is checked", async 
     await act(async () => checkbox.click());
     await act(async () => dialogButton("Add to Library")!.click());
     await advance(0);
-    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ follow_space: false, download_attachments: true }));
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ follow: false, follow_mode: null, download_attachments: true }));
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it("follows a Jira query: a relative-date query preselects accumulate, shows the count, hides the Space destination and sends follow and follow_mode", async () => {
+  vi.useFakeTimers();
+  const target = { session_id: "session", space_id: "space-1" };
+  const jql = "project = OPS AND updated >= -7d";
+  const saved: LibraryOperation = {
+    operation_id: "op-query", kind: "add", phases: [{ phase: "library", state: "done", done: 2, total: 2, message: null, error: null }], item_ids: ["source:ops-1", "source:ops-2"],
+    report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+  const client = githubClient({
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    libraryResolve: vi.fn(async () => ({
+      kind: "jira_query", provider_id: "jira", provider_instance: "https://jira.test/jira", title: jql, canonical_id: jql, container_label: null, existing_item_id: null, existing_follow_id: null,
+      item_count: 100, item_count_exact: false, follow_mode: "accumulate", git_working_tree: null, file_count: null, diagnostics: [],
+    })),
+    libraryAdd: vi.fn(async () => saved),
+  });
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
+    await advance(0); await typeSource(jql);
+    await advance(450);
+    expect(client.libraryResolve).toHaveBeenCalledWith({ input: jql, provider_id: "jira" });
+    expect(document.body.textContent).toContain(`✓ Jira query · ${jql} · 100+ issues`);
+    expect(document.body.textContent).toContain("This query uses relative dates");
+    expect([...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => [radio.parentElement?.textContent?.trim(), radio.checked]))
+      .toEqual([["Live — mirror the query", false], ["Accumulate — keep every issue that ever matched", true]]);
+    // Jira follows can't go into a Space yet, even with a live target Space.
+    expect(document.body.textContent).toContain("Jira follows can't be added to a Space yet");
+    expect(document.body.textContent).not.toContain("Library and api-review");
+    await act(async () => dialogButton("Follow query")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: jql, provider_id: "jira", follow: true, follow_mode: "accumulate", target: null, download_attachments: false }));
+    expect(document.body.textContent).toContain("✓ Saved to Library · 2 issues");
+
+    // A preset fills the field; a bare key reads as a query on the Jira provider.
+    await act(async () => dialogButton("Add another")!.click());
+    await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>(".library-query-presets button")].find((chip) => chip.textContent === "Assigned to me, unresolved")!.click());
+    expect(document.body.querySelector<HTMLInputElement>("input[type='text']")!.value).toBe("assignee = currentUser() AND resolution = Unresolved");
   } finally { await act(async () => root.unmount()); host.remove(); }
 });

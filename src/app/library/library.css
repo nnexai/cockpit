@@ -469,6 +469,8 @@
 .library-note-partial { color: var(--working); }
 .task-setup-row .library-browse-toggle { display: inline-flex; align-items: center; gap: 4px; margin: 6px 0 0; font-size: var(--font-size-2xs); }
 .library-browse-toggle .ui-icon { width: 12px; height: 12px; }
+.library-query-presets { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 6px 0 0; }
+.task-setup-row .library-query-presets .task-setup-link { font-size: var(--font-size-2xs); }
 .library-browse { display: flex; flex-direction: column; gap: 8px; max-height: 260px; margin-top: 6px; overflow: auto; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
 .library-browse-provider h3 { margin: 0 0 4px; color: var(--text-secondary); font-size: var(--font-size-2xs); font-weight: 600; }
 .library-browse-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }

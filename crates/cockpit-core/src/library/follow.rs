@@ -1,15 +1,15 @@
 //! S6 followed Confluence spaces: durable follow records in the Library index,
 //! D20 enumeration refresh, D17 exclusions and follow removal.
 use super::{
-    LibraryService, SaveOptions, confluence_instance_authority, item_id, operations, space,
-    store::{LibraryIndexEntry, Store, error},
+    LibraryService, SaveOptions, confluence_instance_authority, item_id, operations, refs, space,
+    store::{Index, LibraryIndexEntry, Lease, Store, error},
 };
 use crate::{
     InspectionError,
     project_store::timestamp,
     sources::{
-        ProviderResolution, SourceFetchRequest, SourceRef, SpacePage, confluence_page_url,
-        site_authority,
+        ProviderResolution, SourceAsset, SourceFetchRequest, SourceRef, SpacePage,
+        confluence_page_url, site_authority,
     },
 };
 use cockpit_protocol::{library::*, projects::ProjectDiagnostic};
@@ -23,7 +23,25 @@ use std::{
     time::Duration,
 };
 
-const FOLLOW_FETCH_CONCURRENCY: usize = 8;
+pub(super) const FOLLOW_FETCH_CONCURRENCY: usize = 8;
+
+/// One item a follow refresh fetches. `tag` carries what the caller needs to
+/// save the result. A `container` demands the fetched asset lives there.
+pub(super) struct FetchWork<T> {
+    pub item_id: String,
+    pub canonical_id: String,
+    /// Names the item in a failure row.
+    pub label: String,
+    pub request: SourceFetchRequest,
+    pub container: Option<String>,
+    pub tag: T,
+}
+
+/// A fetched batch in work order. The item leases are held until it is dropped.
+pub(super) struct FetchedBatch<'a, T> {
+    pub results: Vec<(&'a FetchWork<T>, Result<SourceAsset, InspectionError>)>,
+    pub leases: Vec<Lease>,
+}
 
 /// D3: `follow:<sha256(provider_id \0 instance \0 space_key)>`.
 pub(super) fn follow_id(provider_id: &str, provider_instance: &str, space_key: &str) -> String {
@@ -114,7 +132,9 @@ impl LibraryService {
                     canonical_id: Some(space.key),
                     existing_item_id: None,
                     existing_follow_id: existing.map(|follow| follow.follow_id.clone()),
-                    page_count: existing.map(|follow| follow.page_count),
+                    item_count: existing.map(|follow| follow.item_count),
+                    item_count_exact: true,
+                    follow_mode: None,
                     git_working_tree: None,
                     file_count: None,
                     diagnostics: vec![],
@@ -143,7 +163,7 @@ impl LibraryService {
         let page_count = listing
             .total
             .map(|total| total.min(u32::MAX as u64) as u32)
-            .or(existing.as_ref().map(|follow| follow.page_count));
+            .or(existing.as_ref().map(|follow| follow.item_count));
         Ok(LibraryResolution {
             kind: LibraryInputKind::ConfluenceSpace,
             provider_id: Some(provider_id.to_owned()),
@@ -153,7 +173,9 @@ impl LibraryService {
             container_label: Some(format!("{space_key} · {}", listing.space_name)),
             existing_item_id: None,
             existing_follow_id: existing.map(|follow| follow.follow_id),
-            page_count,
+            item_count: page_count,
+            item_count_exact: true,
+            follow_mode: None,
             git_working_tree: None,
             file_count: None,
             diagnostics: vec![],
@@ -195,12 +217,14 @@ impl LibraryService {
             follow_id: follow_id(&provider_id, &site.provider_instance, &space_key),
             provider_id,
             provider_instance: site.provider_instance,
-            space_name: space_key.clone(),
-            space_key,
+            source: LibraryFollowSource::ConfluenceSpace {
+                space_name: space_key.clone(),
+                space_key,
+            },
             include_attachments: request.download_attachments,
-            page_count: 0,
+            item_count: 0,
             partial: None,
-            excluded_page_ids: vec![],
+            excluded_ids: vec![],
             last_refreshed_at: None,
             state: LibraryItemState::Unknown,
         };
@@ -236,7 +260,7 @@ impl LibraryService {
                         .await?;
                 }
             }
-            Ok(())
+            refs::purge_expired(&worker_store, &id)
         });
         Ok(record)
     }
@@ -253,6 +277,9 @@ impl LibraryService {
         create: bool,
         target: Option<&SpaceTarget>,
     ) -> Result<(), InspectionError> {
+        if matches!(follow.source, LibraryFollowSource::JiraQuery { .. }) {
+            return self.refresh_jira_follow(store, operation, follow, create).await;
+        }
         let listing = match self.enumerate(store, operation, &follow).await {
             Ok(Some(listing)) => listing,
             Ok(None) => return Ok(()),
@@ -276,14 +303,14 @@ impl LibraryService {
                 );
             }
         };
-        follow.space_name = listing.space_name.clone();
+        refs::set_space_name(&mut follow, &listing.space_name);
         if create {
             let created = follow.clone();
             store.mutate_index(|index| {
                 match index.follows.iter_mut().find(|f| f.follow_id == created.follow_id) {
                     Some(record) => {
-                        record.excluded_page_ids.clear();
-                        record.space_name = created.space_name.clone();
+                        record.excluded_ids.clear();
+                        record.source = created.source.clone();
                         record.include_attachments = created.include_attachments;
                     }
                     None => index.follows.push(created),
@@ -328,7 +355,7 @@ impl LibraryService {
             .follows
             .iter()
             .find(|f| f.follow_id == follow.follow_id)
-            .map(|f| f.excluded_page_ids.iter().cloned().collect::<BTreeSet<_>>())
+            .map(|f| f.excluded_ids.iter().cloned().collect::<BTreeSet<_>>())
             .unwrap_or_default();
         let mut existing = initial_index
             .items
@@ -358,80 +385,37 @@ impl LibraryService {
             };
             pending.push((page.clone(), old, reason));
         }
+        let space_key = refs::require_space_key(&follow)?.to_owned();
         let site = site_authority(&self.configuration, &follow.provider_id)?;
-        for batch in pending.chunks(FOLLOW_FETCH_CONCURRENCY) {
-            if operations::cancelled(store, operation)? {
-                cancelled = true;
-                break;
-            }
-            let mut leases = Vec::with_capacity(batch.len());
-            let mut jobs = tokio::task::JoinSet::new();
-            let mut ordered = Vec::with_capacity(batch.len());
-            for (page, old, reason) in batch {
-                let id = page_item_id(&follow, &page.page_id);
-                match store.lease(&id) {
-                    Ok(lease) => leases.push(lease),
-                    Err(failure) => {
-                        let title = if page.title.is_empty() { &page.page_id } else { &page.title };
-                        operations::follow_row(
-                            store,
-                            operation,
-                            &follow,
-                            LibraryReportOutcome::Failed,
-                            Some(format!("{title}: {}", failure.message)),
-                        )?;
-                        continue;
-                    }
-                }
-                let sources = self.sources.clone();
-                let request = SourceFetchRequest {
+        let work = pending
+            .into_iter()
+            .map(|(page, old, reason)| FetchWork {
+                item_id: page_item_id(&follow, &page.page_id),
+                canonical_id: page.page_id.clone(),
+                label: if page.title.is_empty() { page.page_id.clone() } else { page.title.clone() },
+                request: SourceFetchRequest {
                     provider_id: follow.provider_id.clone(),
                     artifact_url: confluence_page_url(&site.provider_instance, &page.page_id),
                     authority: site.clone(),
-                };
-                let page_id = page.page_id.clone();
-                let space_key = follow.space_key.clone();
-                jobs.spawn(async move {
-                    let result = async {
-                        let fetched = sources.fetch_assets(request, false).await?;
-                        let asset = fetched
-                            .assets
-                            .into_iter()
-                            .find(|asset| asset.source.canonical_id == page_id)
-                            .ok_or_else(|| error(
-                                "source_identity_mismatch",
-                                "Provider refresh omitted the requested page",
-                            ))?;
-                        match asset.container.as_ref().map(|container| container.id.as_str()) {
-                            Some(key) if key == space_key => Ok(asset),
-                            other => Err(error(
-                                "source_not_found",
-                                format!("moved to {}", other.unwrap_or("another space")),
-                            )),
-                        }
-                    }.await;
-                    (page_id, result)
-                });
-                ordered.push((page, old, reason));
-            }
-            let mut results = BTreeMap::new();
-            while let Some(result) = jobs.join_next().await {
-                let (page_id, asset) = result.map_err(|_| error(
-                    "source_provider_failed",
-                    "Confluence page fetch task failed",
-                ))?;
-                results.insert(page_id, asset);
-            }
-            // JoinSet completes in arbitrary order; consume by the ordered page list.
-            for (page, old, reason) in ordered {
+                },
+                container: Some(space_key.clone()),
+                tag: (page, old, reason),
+            })
+            .collect::<Vec<_>>();
+        for batch in work.chunks(FOLLOW_FETCH_CONCURRENCY) {
+            let Some(fetched) = self.fetch_batch(store, operation, &follow, batch).await? else {
+                cancelled = true;
+                break;
+            };
+            let FetchedBatch { results, leases } = fetched;
+            for (job, result) in results {
                 if operations::cancelled(store, operation)? {
                     cancelled = true;
                     break;
                 }
-                let result = results.remove(&page.page_id)
-                    .unwrap_or_else(|| Err(error("source_provider_failed", "Confluence page fetch result is missing")));
+                let (page, old, reason) = &job.tag;
                 self.save_follow_page_result(
-                    store, operation, &follow, &page, old.clone(), reason.clone(), result,
+                    store, operation, &follow, page, old.clone(), reason.clone(), result,
                 ).await?;
             }
             drop(leases);
@@ -467,6 +451,87 @@ impl LibraryService {
         self.commit_follow(store, &follow, &listing.pages, partial, cancelled)
     }
 
+    /// Fetches `batch` concurrently, each item under its lease. `None` means the
+    /// operation was cancelled before the batch started. An item whose lease
+    /// is busy gets a Failed row and is left out of the results.
+    pub(super) async fn fetch_batch<'a, T>(
+        &self,
+        store: &Arc<Store>,
+        operation: &str,
+        follow: &LibraryFollowSummary,
+        batch: &'a [FetchWork<T>],
+    ) -> Result<Option<FetchedBatch<'a, T>>, InspectionError> {
+        if operations::cancelled(store, operation)? {
+            return Ok(None);
+        }
+        let mut leases = Vec::with_capacity(batch.len());
+        let mut jobs = tokio::task::JoinSet::new();
+        let mut ordered = Vec::with_capacity(batch.len());
+        for (index, work) in batch.iter().enumerate() {
+            match store.lease(&work.item_id) {
+                Ok(lease) => leases.push(lease),
+                Err(failure) => {
+                    operations::follow_row(
+                        store,
+                        operation,
+                        follow,
+                        LibraryReportOutcome::Failed,
+                        Some(format!("{}: {}", work.label, failure.message)),
+                    )?;
+                    continue;
+                }
+            }
+            let sources = self.sources.clone();
+            let request = work.request.clone();
+            let canonical_id = work.canonical_id.clone();
+            let container = work.container.clone();
+            jobs.spawn(async move {
+                let result = async {
+                    let fetched = sources.fetch_assets(request, false).await?;
+                    let asset = fetched
+                        .assets
+                        .into_iter()
+                        .find(|asset| asset.source.canonical_id == canonical_id)
+                        .ok_or_else(|| error(
+                            "source_identity_mismatch",
+                            "Provider refresh omitted the requested item",
+                        ))?;
+                    match &container {
+                        None => Ok(asset),
+                        Some(expected) => match asset.container.as_ref().map(|c| c.id.as_str()) {
+                            Some(key) if key == expected => Ok(asset),
+                            other => Err(error(
+                                "source_not_found",
+                                format!("moved to {}", other.unwrap_or("another container")),
+                            )),
+                        },
+                    }
+                }.await;
+                (index, result)
+            });
+            ordered.push(index);
+        }
+        let mut results = BTreeMap::new();
+        while let Some(joined) = jobs.join_next().await {
+            let (index, asset) = joined.map_err(|_| error(
+                "source_provider_failed",
+                "Provider fetch task failed",
+            ))?;
+            results.insert(index, asset);
+        }
+        // JoinSet completes in arbitrary order; hand results back in work order.
+        let results = ordered
+            .into_iter()
+            .map(|index| {
+                let result = results.remove(&index).unwrap_or_else(|| {
+                    Err(error("source_provider_failed", "Provider fetch result is missing"))
+                });
+                (&batch[index], result)
+            })
+            .collect();
+        Ok(Some(FetchedBatch { results, leases }))
+    }
+
     async fn enumerate(
         &self,
         store: &Store,
@@ -480,12 +545,13 @@ impl LibraryService {
                 "Followed space belongs to a different configured site",
             ));
         }
+        let space_key = refs::require_space_key(follow)?;
         let cancel = AtomicBool::new(false);
         let limit = self.configuration.limits.library_space_pages.max(1);
         let listing = {
             let listing =
                 self.sources
-                    .list_space_pages(&follow.provider_id, &follow.space_key, limit, &cancel);
+                    .list_space_pages(&follow.provider_id, space_key, limit, &cancel);
             tokio::pin!(listing);
             loop {
                 tokio::select! {
@@ -532,7 +598,7 @@ impl LibraryService {
             Ok(asset) if item_id(&asset.source) == id => self.save_asset_with(
                 store, operation, asset, old.clone(),
                 SaveOptions {
-                    follow_id: Some(&follow.follow_id),
+                    reference: Some(LibraryItemRef::Follow { follow_id: follow.follow_id.clone() }),
                     reason,
                     download_all: follow.include_attachments,
                     ..SaveOptions::default()
@@ -559,6 +625,7 @@ impl LibraryService {
         follow: &LibraryFollowSummary,
         present: &BTreeSet<String>,
     ) -> Result<(), InspectionError> {
+        let space_key = refs::require_space_key(follow)?;
         let absent = {
             let _lock = store.shared()?;
             let index = store.index()?;
@@ -566,14 +633,14 @@ impl LibraryService {
                 .follows
                 .iter()
                 .find(|f| f.follow_id == follow.follow_id)
-                .map(|f| f.excluded_page_ids.clone())
+                .map(|f| f.excluded_ids.clone())
                 .unwrap_or_default();
             index
                 .items
                 .into_iter()
                 .filter(|entry| {
                     same_site_page(entry, follow)
-                        && entry.summary.follow_id.as_deref() == Some(follow.follow_id.as_str())
+                        && refs::has_follow(&entry.summary, &follow.follow_id)
                         && entry.summary.state != LibraryItemState::RemovedAtSource
                         && entry.summary.canonical_id.as_ref().is_some_and(|page_id| {
                             !present.contains(page_id) && !excluded.contains(page_id)
@@ -595,7 +662,7 @@ impl LibraryService {
                 Err(failure) if failure.code == "source_not_found" => {
                     ("source_not_found", "Not found at source".to_owned())
                 }
-                Ok(Some(key)) if key != follow.space_key => {
+                Ok(Some(key)) if key != space_key => {
                     ("source_moved", format!("moved to {key}"))
                 }
                 // Still in this space but not yet in the search results.
@@ -655,7 +722,7 @@ impl LibraryService {
                 .follows
                 .iter()
                 .find(|f| f.follow_id == follow.follow_id)
-                .map(|f| f.excluded_page_ids.clone())
+                .map(|f| f.excluded_ids.clone())
                 .ok_or_else(|| error("library_item_not_found", "Followed space was removed"))?;
             let page_items = index
                 .items
@@ -674,24 +741,22 @@ impl LibraryService {
                 if excluded.contains(&page_id) {
                     continue;
                 }
-                entry.summary.follow_id = Some(follow.follow_id.clone());
+                refs::insert_ref(
+                    &mut entry.summary,
+                    LibraryItemRef::Follow { follow_id: follow.follow_id.clone() },
+                );
                 entry.summary.order = Some(*position);
                 entry.summary.parent_item_id =
                     page.ancestors.last().and_then(|parent| page_items.get(parent).cloned());
             }
-            let page_count = index
-                .items
-                .iter()
-                .filter(|e| e.summary.follow_id.as_deref() == Some(follow.follow_id.as_str()))
-                .count() as u32;
+            recount(index, &follow.follow_id);
             let record = index
                 .follows
                 .iter_mut()
                 .find(|f| f.follow_id == follow.follow_id)
                 .expect("follow checked above");
-            record.page_count = page_count;
             if !cancelled {
-                record.space_name = follow.space_name.clone();
+                record.source = follow.source.clone();
                 record.state = if partial.is_some() {
                     LibraryItemState::Partial
                 } else {
@@ -704,39 +769,39 @@ impl LibraryService {
         })
     }
 
-    /// D17/OQ4: removing one page of a followed space excludes it from later
-    /// refreshes of that follow. The exclusion is durable before the removal.
+    /// D8: removing one item excludes it from every follow that lists it, so a
+    /// later refresh does not bring it back. The exclusions are durable before
+    /// the removal and are rolled back if the removal fails.
     pub(super) fn remove_item(&self, id: &str, revision: &str) -> Result<(), InspectionError> {
         let store = self.open()?;
         let exclusion = self.entry(&store, id)?.and_then(|entry| {
-            (entry.summary.resource_type.as_deref() == Some("page"))
+            let follows = refs::follow_ids(&entry.summary);
+            (!follows.is_empty())
                 .then_some(())
-                .and(entry.summary.follow_id.zip(entry.summary.canonical_id))
+                .and(entry.summary.canonical_id.map(|key| (follows, key)))
         });
         let added = match &exclusion {
-            Some((follow_id, page_id)) => store.mutate_index(|index| {
-                Ok(match index.follows.iter_mut().find(|f| &f.follow_id == follow_id) {
-                    Some(follow) if !follow.excluded_page_ids.contains(page_id) => {
-                        follow.excluded_page_ids.push(page_id.clone());
-                        true
+            Some((follow_ids, key)) => store.mutate_index(|index| {
+                let mut added = Vec::new();
+                for follow in index.follows.iter_mut().filter(|f| follow_ids.contains(&f.follow_id)) {
+                    if !follow.excluded_ids.contains(key) {
+                        follow.excluded_ids.push(key.clone());
+                        added.push(follow.follow_id.clone());
                     }
-                    _ => false,
-                })
+                }
+                Ok(added)
             })?,
-            None => false,
+            None => Vec::new(),
         };
         let removed = store.remove(id, revision);
-        if let Some((follow_id, page_id)) = &exclusion {
+        if let Some((follow_ids, key)) = &exclusion {
             store.mutate_index(|index| {
-                let count = index
-                    .items
-                    .iter()
-                    .filter(|e| e.summary.follow_id.as_ref() == Some(follow_id))
-                    .count() as u32;
-                if let Some(follow) = index.follows.iter_mut().find(|f| &f.follow_id == follow_id) {
-                    follow.page_count = count;
-                    if removed.is_err() && added {
-                        follow.excluded_page_ids.retain(|excluded| excluded != page_id);
+                for follow_id in follow_ids {
+                    recount(index, follow_id);
+                }
+                if removed.is_err() {
+                    for follow in index.follows.iter_mut().filter(|f| added.contains(&f.follow_id)) {
+                        follow.excluded_ids.retain(|excluded| excluded != key);
                     }
                 }
                 Ok(())
@@ -745,8 +810,9 @@ impl LibraryService {
         removed
     }
 
-    /// `Stop following` keeps the pages as ordinary items; `Remove space`
-    /// deletes every page (refusing Library-edited ones) and the record.
+    /// D8. `Stop following` keeps every member as an ordinary item (an item left
+    /// without references becomes Manual). `Remove` also deletes the members
+    /// this follow alone holds, refusing when one was edited in the Library.
     pub(super) fn remove_follow(
         &self,
         follow_id: &str,
@@ -754,43 +820,73 @@ impl LibraryService {
     ) -> Result<(), InspectionError> {
         let store = self.open()?;
         let _lease = store.lease(follow_id)?;
-        let pages = {
+        let own = LibraryItemRef::Follow { follow_id: follow_id.to_owned() };
+        let exclusive = {
             let _lock = store.shared()?;
             let index = store.index()?;
             if !index.follows.iter().any(|f| f.follow_id == follow_id) {
                 return Err(error("library_item_not_found", "Followed space does not exist"));
             }
-            let pages = index
-                .items
-                .into_iter()
-                .filter(|e| e.summary.follow_id.as_deref() == Some(follow_id))
-                .collect::<Vec<_>>();
-            if delete_pages {
-                for page in &pages {
-                    if !store.conflicts(page)?.is_empty() {
-                        return Err(error(
-                            "library_conflict",
-                            "A page of this followed space was edited in the Library",
-                        ));
-                    }
+            let exclusive = if delete_pages {
+                index
+                    .items
+                    .into_iter()
+                    .filter(|e| e.summary.refs == [own.clone()])
+                    .collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
+            for page in &exclusive {
+                if !store.conflicts(page)?.is_empty() {
+                    return Err(error(
+                        "library_conflict",
+                        "An item of this follow was edited in the Library",
+                    ));
                 }
             }
-            pages
+            exclusive
         };
-        if delete_pages {
-            for page in &pages {
-                store.remove(&page.summary.item_id, &page.summary.revision)?;
-            }
-        }
+        let now = timestamp();
         store.mutate_index(|index| {
             index.follows.retain(|f| f.follow_id != follow_id);
             for entry in &mut index.items {
-                if entry.summary.follow_id.as_deref() == Some(follow_id) {
-                    entry.summary.follow_id = None;
+                if refs::remove_ref(&mut entry.summary, &own) && entry.summary.refs.is_empty() {
+                    if delete_pages {
+                        entry.summary.purge_after = Some(now.clone());
+                    } else {
+                        refs::insert_ref(&mut entry.summary, LibraryItemRef::Manual);
+                    }
                 }
             }
             Ok(())
-        })
+        })?;
+        for page in &exclusive {
+            let removed = store.remove_where(&page.summary.item_id, &page.summary.revision, |entry| {
+                if entry.summary.refs.is_empty() {
+                    Ok(())
+                } else {
+                    Err(error("library_item_referenced", "Library item gained a reference"))
+                }
+            });
+            match removed {
+                // A concurrent copy took a reference; the item stays.
+                Err(failure) if failure.code == "library_item_referenced" => {}
+                other => other?,
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Recompute a follow record's member count from the items holding it.
+pub(super) fn recount(index: &mut Index, follow_id: &str) {
+    let count = index
+        .items
+        .iter()
+        .filter(|e| refs::has_follow(&e.summary, follow_id))
+        .count() as u32;
+    if let Some(follow) = index.follows.iter_mut().find(|f| f.follow_id == follow_id) {
+        follow.item_count = count;
     }
 }
 
@@ -1011,7 +1107,8 @@ mod tests {
             input: key.into(),
             provider_id: Some("confluence".into()),
             hydrate_references: false,
-            follow_space: true,
+            follow: true,
+            follow_mode: None,
             download_attachments: false,
             refresh_existing: false,
             label: None,
@@ -1027,7 +1124,7 @@ mod tests {
             .unwrap()
             .follows
             .into_iter()
-            .find(|follow| follow.space_key == key)
+            .find(|follow| refs::space_key(follow) == Some(key))
             .unwrap()
             .follow_id;
         (operation, id)
@@ -1065,11 +1162,11 @@ mod tests {
             let listing = service.listing(None).await.unwrap();
             let record = &listing.follows[0];
             assert_eq!(record.follow_id, follow_id);
-            assert_eq!((record.page_count, record.state), (6, LibraryItemState::Fresh));
-            assert_eq!(record.space_name, "Software Development");
+            assert_eq!((record.item_count, record.state), (6, LibraryItemState::Fresh));
+            assert_eq!(refs::follow_title(record), "SD · Software Development");
             assert!(record.last_refreshed_at.is_some());
             let before = pages(service).await;
-            assert!(before.values().all(|page| page.follow_id.as_ref() == Some(&follow_id)));
+            assert!(before.values().all(|page| refs::has_follow(page, &follow_id)));
             let folder = before["200"].ancestors.iter().map(|a| (a.id.as_str(), a.title.as_str())).collect::<Vec<_>>();
             assert_eq!(folder, if cloud { vec![("900", "Folder F")] } else { vec![] });
             assert_eq!(before["200"].parent_item_id, None);
@@ -1181,8 +1278,8 @@ mod tests {
             .await
             .unwrap();
         let record = service.listing(None).await.unwrap().follows.remove(0);
-        assert_eq!(record.excluded_page_ids, ["111"]);
-        assert_eq!(record.page_count, 5);
+        assert_eq!(record.excluded_ids, ["111"]);
+        assert_eq!(record.item_count, 5);
         f.provider.take_fetched();
         f.provider.bump("111");
         for _ in 0..2 {
@@ -1195,25 +1292,46 @@ mod tests {
         let (again, same) = follow(service, "SD").await;
         assert_eq!(same, follow_id);
         assert_eq!(again.report.unwrap().new, 1);
-        assert!(service.listing(None).await.unwrap().follows[0].excluded_page_ids.is_empty());
-        assert_eq!(pages(service).await["111"].follow_id.as_ref(), Some(&follow_id));
+        assert!(service.listing(None).await.unwrap().follows[0].excluded_ids.is_empty());
+        assert!(refs::has_follow(&pages(service).await["111"], &follow_id));
 
         // Stop following keeps the pages as ordinary items.
         service.remove(LibraryRemoveRequest::StopFollowing { follow_id: follow_id.clone() }).await.unwrap();
         let listing = service.listing(None).await.unwrap();
         assert!(listing.follows.is_empty());
         assert_eq!(listing.items.len(), 6);
-        assert!(listing.items.iter().all(|item| item.follow_id.is_none()));
-        // Following again adopts them; removing the space deletes every page.
+        assert!(listing.items.iter().all(|item| item.refs == [LibraryItemRef::Manual]));
+        // Following again adopts them; they keep their Manual reference, so
+        // removing the space forgets the record but keeps every page.
         let (again, _) = follow(service, "SD").await;
         assert_eq!(again.report.unwrap().new, 0);
-        assert!(pages(service).await.values().all(|page| page.follow_id.as_ref() == Some(&follow_id)));
+        assert!(pages(service).await.values().all(|page| refs::has_follow(page, &follow_id)));
         let listing = service.remove(LibraryRemoveRequest::Follow { follow_id: follow_id.clone() }).await.unwrap();
-        assert!(listing.follows.is_empty() && listing.items.is_empty());
+        assert!(listing.follows.is_empty() && listing.items.len() == 6);
+        assert!(listing.items.iter().all(|item| item.refs == [LibraryItemRef::Manual]));
         assert_eq!(
             service.remove(LibraryRemoveRequest::Follow { follow_id }).await.unwrap_err().code,
             "library_item_not_found"
         );
+    }
+
+    #[tokio::test]
+    async fn remove_space_deletes_only_pages_the_follow_alone_holds() {
+        let f = fixture(CLOUD, true, 200);
+        let service = &f.base.service;
+        let (_, follow_id) = follow(service, "SD").await;
+        // Adding a followed page by hand gives it a second reference.
+        let manual = LibraryAddRequest { follow: false, ..follow_request("200", None) };
+        finished(service, service.start_add(manual).await.unwrap()).await;
+        let kept = pages(service).await["200"].clone();
+        assert_eq!(kept.refs.len(), 2);
+
+        let listing = service.remove(LibraryRemoveRequest::Follow { follow_id }).await.unwrap();
+        assert!(listing.follows.is_empty());
+        assert_eq!(listing.items.len(), 1, "{:?}", listing.items.iter().map(|i| &i.title).collect::<Vec<_>>());
+        assert_eq!(listing.items[0].item_id, kept.item_id);
+        assert_eq!(listing.items[0].refs, [LibraryItemRef::Manual]);
+        assert_eq!(listing.items[0].purge_after, None);
     }
 
     #[tokio::test]
@@ -1228,12 +1346,12 @@ mod tests {
         assert_eq!(resolved.canonical_id.as_deref(), Some("SD"));
         assert_eq!(resolved.title, "Software Development");
         assert_eq!(resolved.container_label.as_deref(), Some("SD · Software Development"));
-        assert_eq!((resolved.page_count, resolved.existing_follow_id), (Some(6), None));
+        assert_eq!((resolved.item_count, resolved.existing_follow_id), (Some(6), None));
         let (_, follow_id) = follow(service, "SD").await;
         let spaces = service.confluence_spaces("confluence").await.unwrap();
         assert_eq!(spaces.iter().map(|s| s.canonical_id.as_deref().unwrap()).collect::<Vec<_>>(), ["SD", "OPS"]);
         assert_eq!(spaces[0].existing_follow_id.as_ref(), Some(&follow_id));
-        assert_eq!(spaces[0].page_count, Some(6));
+        assert_eq!(spaces[0].item_count, Some(6));
         assert_eq!(spaces[1].existing_follow_id, None);
         assert!(spaces.iter().all(|s| s.provider_instance.as_deref() == Some(CLOUD)));
         let page = service
@@ -1245,7 +1363,7 @@ mod tests {
         // Following through a page follows its space.
         let operation = finished(service, service.start_add(follow_request("301", None)).await.unwrap()).await;
         assert_eq!(operation.report.unwrap().new, 2);
-        assert!(service.listing(None).await.unwrap().follows.iter().any(|f| f.space_key == "OPS"));
+        assert!(service.listing(None).await.unwrap().follows.iter().any(|f| refs::space_key(f) == Some("OPS")));
     }
 
     fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
@@ -1311,7 +1429,7 @@ mod tests {
         // Follow and add to X in one operation: phase 2 copies the new follow.
         let added = finished(&sx, sx.start_add(follow_request("OPS", Some(tx.clone()))).await.unwrap()).await;
         assert!(added.phases.iter().all(|p| p.state == LibraryPhaseState::Done), "{added:?}");
-        let f2 = sx.listing(None).await.unwrap().follows.into_iter().find(|f| f.space_key == "OPS").unwrap().follow_id;
+        let f2 = sx.listing(None).await.unwrap().follows.into_iter().find(|f| refs::space_key(f) == Some("OPS")).unwrap().follow_id;
         for (service, target, follows) in [(&sx, &tx, vec![f1.clone()]), (&sy, &ty, vec![f1.clone()])] {
             let request = SpaceAddRequest { target: target.clone(), item_ids: vec![], follow_ids: follows };
             let operation = finished(service, service.start_space_add(request).await.unwrap()).await;

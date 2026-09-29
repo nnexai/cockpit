@@ -1,13 +1,20 @@
+use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::path::Path;
+use std::process::Output;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
+use cockpit_core::jira_query::{
+    format_wall_minute, instant_seconds, is_normalized_jql, wall_minute,
+};
 use cockpit_core::process::run_bounded_command;
-use cockpit_core::repositories::resolve_jira_url;
+use cockpit_core::repositories::{is_jira_key, resolve_jira_url};
 use cockpit_core::sources::{
-    FrontmatterField, FrontmatterValue, SourceAsset, SourceContainer, SourceFetchRequest,
-    SourceMetadata, SourceProvider, SourceRef,
+    FrontmatterField, FrontmatterValue, IssueListing, IssueQuery, IssueRow, SourceAsset,
+    SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, ProjectProvider};
 use cockpit_protocol::sources::SourceCapability;
@@ -96,13 +103,13 @@ impl JiraSourceProvider {
         Ok(resolve_jira_url(&self.provider, &request.artifact_url)?.canonical_id)
     }
 
-    async fn issue(&self, key: &str) -> Result<Value, InspectionError> {
+    async fn run(&self, call: &JiraCall<'_>) -> Result<Output, InspectionError> {
         let mut command = Command::new(&self.provider.executable);
         command
-            .args(["issue", "view", key, "--raw"])
+            .args(jira_args(call)?)
             .env("NO_COLOR", "1")
             .env("TERM", "dumb");
-        let output = run_bounded_command(
+        run_bounded_command(
             command,
             self.limits.0,
             self.limits.0,
@@ -123,7 +130,145 @@ impl JiraSourceProvider {
                 InspectionError::new("source_cli_unavailable", "Jira CLI could not be started")
             }
             _ => InspectionError::new("source_provider_failed", "Jira CLI request failed"),
-        })?;
+        })
+    }
+
+    /// One `issue list` call: at most `limit` rows, newest first. The CLI's
+    /// "No result found" failure is an empty answer, not an error.
+    async fn run_list(&self, jql: &str, limit: u32) -> Result<Vec<IssueRow>, ListFailure> {
+        let output = self.run(&JiraCall::List { jql, limit }).await?;
+        if output.status.success() {
+            return Ok(parse_issue_rows(&output.stdout, limit)?);
+        }
+        if String::from_utf8_lossy(&output.stderr).contains(NO_RESULT) {
+            return Ok(Vec::new());
+        }
+        let error = classify_failure(&output.stderr);
+        let rejected = error.code == "source_not_found"
+            || String::from_utf8_lossy(&output.stderr).contains("400 Bad Request");
+        Err(ListFailure { error, rejected })
+    }
+
+    /// Newest-first windowed listing of `jql`. Paging is by narrowing
+    /// `updated`, never by offset (the CLI ignores `from` on Cloud): each
+    /// window is the query with `updated < <oldest minute seen + 1 min>`.
+    async fn list_jql(
+        &self,
+        jql: &str,
+        updated_since: Option<&str>,
+        max: u32,
+        cancel: &AtomicBool,
+    ) -> Result<IssueListing, InspectionError> {
+        if !is_normalized_jql(jql) || jql.len() > 2048 {
+            return Err(list_contract("Jira query is not a normalized query"));
+        }
+        let since = match updated_since {
+            Some(since) => {
+                if instant_seconds(since).is_none() {
+                    return Err(list_contract("Jira probe time is not an ISO instant"));
+                }
+                let minute = wall_minute(since)
+                    .ok_or_else(|| list_contract("Jira probe time is not an ISO instant"))?;
+                Some(format_wall_minute(minute - 1))
+            }
+            None => None,
+        };
+        let mut rows: Vec<IssueRow> = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut upper: Option<String> = None;
+        let complete = loop {
+            if cancel.load(Ordering::Relaxed) {
+                break false;
+            }
+            let mut body = if since.is_some() || upper.is_some() {
+                format!("({jql})")
+            } else {
+                jql.to_owned()
+            };
+            if let Some(since) = &since {
+                body.push_str(&format!(" AND updated >= \"{since}\""));
+            }
+            if let Some(upper) = &upper {
+                body.push_str(&format!(" AND updated < \"{upper}\""));
+            }
+            let window = self.run_list(&body, PAGE).await.map_err(|failure| failure.error)?;
+            let full = window.len() == PAGE as usize;
+            let oldest = window
+                .iter()
+                .filter_map(|row| wall_minute(&row.updated))
+                .min();
+            let fresh = unique_new(window, &mut seen);
+            let progressed = !fresh.is_empty();
+            rows.extend(fresh);
+            if rows.len() > max as usize {
+                rows.truncate(max as usize);
+                break false;
+            }
+            if !full {
+                break true;
+            }
+            // A full window with nothing new means more than a page of
+            // issues share one minute, which windowing cannot split.
+            let Some(oldest) = oldest.filter(|_| progressed) else {
+                break false;
+            };
+            upper = Some(format_wall_minute(oldest + 1));
+        };
+        Ok(IssueListing { rows, complete })
+    }
+
+    /// Metadata for specific keys, 100 per call. A batch Jira rejects is
+    /// bisected; a single rejected key is absent from the answer.
+    async fn list_keys(
+        &self,
+        keys: &[String],
+        max: u32,
+        cancel: &AtomicBool,
+    ) -> Result<IssueListing, InspectionError> {
+        let mut requested = BTreeSet::new();
+        let unique: Vec<&String> = keys.iter().filter(|key| requested.insert(key.as_str())).collect();
+        let mut stack: Vec<Vec<&String>> = unique
+            .chunks(PAGE as usize)
+            .rev()
+            .map(<[&String]>::to_vec)
+            .collect();
+        let mut rows: Vec<IssueRow> = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut complete = true;
+        while let Some(part) = stack.pop() {
+            if cancel.load(Ordering::Relaxed) {
+                complete = false;
+                break;
+            }
+            let names: Vec<&str> = part.iter().map(|key| key.as_str()).collect();
+            let jql = format!("key in ({})", names.join(", "));
+            match self.run_list(&jql, part.len() as u32).await {
+                Ok(found) => {
+                    // Moved issues answer under a new key; ignore them.
+                    let found = found
+                        .into_iter()
+                        .filter(|row| requested.contains(row.key.as_str()))
+                        .collect();
+                    rows.extend(unique_new(found, &mut seen));
+                }
+                Err(failure) if failure.rejected && part.len() > 1 => {
+                    let (left, right) = part.split_at(part.len() / 2);
+                    stack.push(right.to_vec());
+                    stack.push(left.to_vec());
+                }
+                Err(failure) if failure.rejected => {}
+                Err(failure) => return Err(failure.error),
+            }
+        }
+        if rows.len() > max as usize {
+            rows.truncate(max as usize);
+            complete = false;
+        }
+        Ok(IssueListing { rows, complete })
+    }
+
+    async fn issue(&self, key: &str) -> Result<Value, InspectionError> {
+        let output = self.run(&JiraCall::View { key }).await?;
         if !output.status.success() {
             return Err(classify_failure(&output.stderr));
         }
@@ -261,11 +406,30 @@ impl SourceProvider for JiraSourceProvider {
             attachments: Vec::new(),
         }])
     }
+
+    async fn list_issues(
+        &self,
+        query: &IssueQuery<'_>,
+        max: u32,
+        cancel: &AtomicBool,
+    ) -> Result<IssueListing, InspectionError> {
+        match query {
+            IssueQuery::Jql { jql, updated_since } => {
+                self.list_jql(jql, *updated_since, max, cancel).await
+            }
+            IssueQuery::Keys(keys) => self.list_keys(keys, max, cancel).await,
+        }
+    }
 }
 
 fn classify_failure(stderr: &[u8]) -> InspectionError {
     let text = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-    if text.contains("404") || text.contains("does not exist") {
+    if text.contains("400 bad request") {
+        InspectionError::new(
+            "source_provider_failed",
+            "Jira rejected the request (400); check the query",
+        )
+    } else if text.contains("404") || text.contains("does not exist") {
         InspectionError::new(
             "source_not_found",
             "Jira work item does not exist or is not visible to the configured login",
@@ -283,6 +447,203 @@ fn classify_failure(stderr: &[u8]) -> InspectionError {
     } else {
         InspectionError::new("source_provider_failed", "Jira CLI request failed")
     }
+}
+
+const NO_RESULT: &str = "No result found for given query";
+const LIST_COLUMNS: &str = "key,updated,status,type,assignee";
+const LIST_DELIMITER: char = '\u{1f}';
+const GUARD_PREFIX: &str = "project IS NOT EMPTY AND (";
+/// The CLI answers at most this many rows per call.
+const PAGE: u32 = 100;
+const MAX_LIST_JQL_BYTES: usize = 4096;
+
+/// The only CLI calls Cockpit makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JiraCall<'a> {
+    View { key: &'a str },
+    /// `jql` is the query body; the builder wraps it in the guard group
+    /// `project IS NOT EMPTY AND (<jql>)` that keeps the CLI from adding its
+    /// configured default project. `limit` is 1..=100.
+    List { jql: &'a str, limit: u32 },
+}
+
+fn refused(message: &str) -> InspectionError {
+    InspectionError::new(
+        "source_provider_contract",
+        format!("refused Jira CLI argv: {message}"),
+    )
+}
+
+/// Render one typed call as the argv after the executable. Invalid values are
+/// refused here, before any process exists.
+pub fn jira_args(call: &JiraCall) -> Result<Vec<OsString>, InspectionError> {
+    let strings: Vec<String> = match call {
+        JiraCall::View { key } => {
+            if !is_jira_key(key) {
+                return Err(refused("Jira work item key is malformed"));
+            }
+            vec!["issue".into(), "view".into(), (*key).into(), "--raw".into()]
+        }
+        JiraCall::List { jql, limit } => {
+            if !(1..=PAGE).contains(limit) {
+                return Err(refused("Jira list limit must be 1–100"));
+            }
+            vec![
+                "issue".into(),
+                "list".into(),
+                "--jql".into(),
+                format!("{GUARD_PREFIX}{jql})"),
+                "--plain".into(),
+                "--no-headers".into(),
+                "--columns".into(),
+                LIST_COLUMNS.into(),
+                "--delimiter".into(),
+                LIST_DELIMITER.to_string(),
+                "--order-by".into(),
+                "updated".into(),
+                "--paginate".into(),
+                format!("0:{limit}"),
+            ]
+        }
+    };
+    let argv: Vec<OsString> = strings.into_iter().map(OsString::from).collect();
+    allowlisted_argv(&argv)?;
+    Ok(argv)
+}
+
+fn guarded_jql_allowed(value: &str) -> bool {
+    value.len() <= MAX_LIST_JQL_BYTES
+        && is_normalized_jql(value)
+        && value
+            .strip_prefix(GUARD_PREFIX)
+            .and_then(|rest| rest.strip_suffix(')'))
+            .is_some_and(|inner| !inner.is_empty() && is_normalized_jql(inner))
+}
+
+/// The exhaustive allowlist, applied to the complete argv right before spawn.
+/// Anything the typed builder cannot produce is refused.
+pub fn allowlisted_argv(argv: &[OsString]) -> Result<(), InspectionError> {
+    let mut strings = Vec::with_capacity(argv.len());
+    for arg in argv {
+        let Some(text) = arg.to_str() else {
+            return Err(refused("non-UTF-8 argument"));
+        };
+        if text.contains('\0') {
+            return Err(refused("NUL in argument"));
+        }
+        strings.push(text);
+    }
+    let delimiter = LIST_DELIMITER.to_string();
+    let allowed = match strings.as_slice() {
+        ["issue", "view", key, "--raw"] => is_jira_key(key),
+        [
+            "issue",
+            "list",
+            "--jql",
+            jql,
+            "--plain",
+            "--no-headers",
+            "--columns",
+            LIST_COLUMNS,
+            "--delimiter",
+            separator,
+            "--order-by",
+            "updated",
+            "--paginate",
+            paginate,
+        ] => {
+            *separator == delimiter
+                && guarded_jql_allowed(jql)
+                && paginate
+                    .strip_prefix("0:")
+                    .and_then(|limit| {
+                        limit.parse::<u32>().ok().filter(|parsed| {
+                            (1..=PAGE).contains(parsed) && parsed.to_string() == limit
+                        })
+                    })
+                    .is_some()
+        }
+        _ => false,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(refused("not an allowlisted read call"))
+    }
+}
+
+/// `YYYY-MM-DD HH:MM:SS`, the CLI's plain `updated` format.
+fn listed_updated(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 19
+        && bytes[10] == b' '
+        && bytes[16] == b':'
+        && bytes[17..].iter().all(u8::is_ascii_digit)
+        && bytes[17] <= b'5'
+        && wall_minute(value).is_some()
+}
+
+fn list_contract(message: &str) -> InspectionError {
+    InspectionError::new("source_provider_contract", message)
+}
+
+/// Parse the plain listing: one line per issue, five cells split on the
+/// unit separator. Blank lines are skipped; any other malformed row rejects
+/// the whole answer rather than guessing.
+fn parse_issue_rows(stdout: &[u8], limit: u32) -> Result<Vec<IssueRow>, InspectionError> {
+    let text = std::str::from_utf8(stdout)
+        .map_err(|_| list_contract("Jira CLI listing is not UTF-8"))?;
+    let mut rows = Vec::new();
+    for line in text.lines().map(|line| line.trim_end_matches('\r')) {
+        if line.is_empty() {
+            continue;
+        }
+        let cells: Vec<&str> = line.split(LIST_DELIMITER).collect();
+        let [key, updated, status, issue_type, assignee] = cells.as_slice() else {
+            return Err(list_contract("Jira CLI listing row does not have 5 cells"));
+        };
+        let (status, issue_type, assignee) = (status.trim(), issue_type.trim(), assignee.trim());
+        if !is_jira_key(key)
+            || !listed_updated(updated)
+            || status.is_empty()
+            || issue_type.is_empty()
+        {
+            return Err(list_contract("Jira CLI listing row is malformed"));
+        }
+        rows.push(IssueRow {
+            key: (*key).into(),
+            updated: (*updated).into(),
+            status: status.into(),
+            issue_type: issue_type.into(),
+            assignee: (!assignee.is_empty()).then(|| assignee.into()),
+        });
+    }
+    if rows.len() > limit as usize {
+        return Err(list_contract("Jira CLI listing exceeded the requested limit"));
+    }
+    Ok(rows)
+}
+
+/// A failed `issue list` call. `rejected` means Jira refused the query
+/// itself (400 or not found), which is what a key batch bisects on.
+struct ListFailure {
+    error: InspectionError,
+    rejected: bool,
+}
+
+impl From<InspectionError> for ListFailure {
+    fn from(error: InspectionError) -> Self {
+        Self {
+            error,
+            rejected: false,
+        }
+    }
+}
+
+fn unique_new(rows: Vec<IssueRow>, seen: &mut BTreeSet<String>) -> Vec<IssueRow> {
+    rows.into_iter()
+        .filter(|row| seen.insert(row.key.clone()))
+        .collect()
 }
 
 fn field_str<'a>(issue: &'a Value, name: &str) -> Option<&'a str> {
@@ -778,5 +1139,64 @@ mod tests {
             "source_auth_required"
         );
         assert_eq!(classify_failure(b"boom").code, "source_provider_failed");
+    }
+
+    fn argv(items: &[&str]) -> Vec<std::ffi::OsString> {
+        items.iter().map(std::ffi::OsString::from).collect()
+    }
+
+    #[test]
+    fn list_rows_split_on_the_separator_and_bad_rows_reject_the_answer() {
+        let good = "OPS-2\x1f2026-09-28 11:28:44\x1fIn Progress\x1fStory\x1fAnn Lee\n\
+                    OPS-1\x1f2026-09-24 18:41:22\x1fTo Do\x1fTask\x1f\n\n";
+        let rows = super::parse_issue_rows(good.as_bytes(), 100).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].assignee.as_deref(), Some("Ann Lee"));
+        assert_eq!(rows[0].status, "In Progress");
+        assert_eq!(rows[1].assignee, None);
+        for bad in [
+            "OPS-1\x1f2026-09-24 18:41:22\x1fTo Do\x1fTask\n",
+            "ops-1\x1f2026-09-24 18:41:22\x1fTo Do\x1fTask\x1f\n",
+            "OPS-1\x1f2026-09-24T18:41:22\x1fTo Do\x1fTask\x1f\n",
+            "OPS-1\x1f2026-02-30 18:41:22\x1fTo Do\x1fTask\x1f\n",
+            "OPS-1\x1f2026-09-24 18:41:22\x1f\x1fTask\x1f\n",
+            "OPS-1\x1f2026-09-24 18:41:22\x1fTo Do\x1fTask\x1fa\x1fb\n",
+        ] {
+            assert!(super::parse_issue_rows(bad.as_bytes(), 100).is_err(), "{bad:?}");
+        }
+        assert!(super::parse_issue_rows(good.as_bytes(), 1).is_err());
+    }
+
+    #[test]
+    fn only_builder_argv_passes_the_allowlist() {
+        use super::{JiraCall, allowlisted_argv, jira_args};
+        let view = jira_args(&JiraCall::View { key: "OPS-7" }).unwrap();
+        assert_eq!(view, argv(&["issue", "view", "OPS-7", "--raw"]));
+        let list = jira_args(&JiraCall::List { jql: "project = OPS", limit: 100 }).unwrap();
+        assert_eq!(list[3], "project IS NOT EMPTY AND (project = OPS)");
+        assert_eq!(list.last().unwrap(), "0:100");
+        assert!(jira_args(&JiraCall::List { jql: "project = OPS", limit: 101 }).is_err());
+        assert!(jira_args(&JiraCall::List { jql: "a) OR (b", limit: 5 }).is_err());
+        assert!(jira_args(&JiraCall::View { key: "--raw" }).is_err());
+
+        let mut without_guard = list.clone();
+        without_guard[3] = "project = OPS".into();
+        let mut reordered = list.clone();
+        reordered.swap(4, 5);
+        let mut other_delimiter = list.clone();
+        other_delimiter[9] = ",".into();
+        let mut extra = list.clone();
+        extra.push("--raw".into());
+        for refused in [
+            without_guard,
+            reordered,
+            other_delimiter,
+            extra,
+            argv(&["issue", "delete", "OPS-1"]),
+            argv(&["issue", "view", "OPS-1"]),
+            argv(&["me"]),
+        ] {
+            assert!(allowlisted_argv(&refused).is_err(), "{refused:?}");
+        }
     }
 }
