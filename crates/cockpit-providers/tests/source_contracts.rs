@@ -283,23 +283,15 @@ async fn on_prem_jira_keeps_wiki_markup_and_rejects_wrong_api_authority() {
     assert!(
         asset
             .body
-            .contains("h2. Legacy heading\n{code}unchanged{code}")
+            .contains("\n## Description\n\n#### Legacy heading\n\n```\nunchanged\n```\n")
     );
-    assert!(asset.body.contains("{quote}Legacy comment{quote}"));
-    assert!(
-        asset
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "source_markup_unconverted")
-    );
+    assert!(asset.body.contains("\n> Legacy comment\n"));
+    assert!(asset.diagnostics.is_empty());
     fixture.data["jira"]["fields"]["description"] = json!({"type":"doc","content":[]});
     fixture.save();
-    assert!(
-        provider.fetch(&request).await.unwrap()[0]
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "source_markup_unconverted")
-    );
+    let adf = provider.fetch(&request).await.unwrap();
+    assert!(adf[0].diagnostics.is_empty());
+    assert!(adf[0].body.contains("\n> Legacy comment\n"));
     for url in [
         "https://jira.internal.test/elsewhere/rest/api/2/issue/10007",
         "https://other.test/jira/rest/api/2/issue/10007",

@@ -22,6 +22,8 @@ use serde_json::Value;
 use tokio::process::Command;
 use url::Url;
 
+use crate::jira_wiki::wiki_to_markdown;
+
 const MAX_ISSUE_BYTES: usize = 1024 * 1024;
 const MAX_DOCUMENT_DEPTH: usize = 48;
 
@@ -364,7 +366,7 @@ impl SourceProvider for JiraSourceProvider {
         let title = summary(&issue)?;
         let source_url = self.browse_url(&key);
         let (body, complete) = issue_markdown(&issue, &source_url)?;
-        let mut diagnostics = if complete {
+        let diagnostics = if complete {
             Vec::new()
         } else {
             vec![ProjectDiagnostic {
@@ -373,13 +375,6 @@ impl SourceProvider for JiraSourceProvider {
                 path: None,
             }]
         };
-        if has_wiki_markup(&issue) {
-            diagnostics.push(ProjectDiagnostic {
-                code: "source_markup_unconverted".into(),
-                message: "Jira returned wiki markup; shown unconverted".into(),
-                path: None,
-            });
-        }
         let project_key = key
             .rsplit_once('-')
             .map(|(project, _)| project)
@@ -664,20 +659,6 @@ fn summary(issue: &Value) -> Result<String, InspectionError> {
         })
 }
 
-fn has_wiki_markup(issue: &Value) -> bool {
-    issue
-        .pointer("/fields/description")
-        .is_some_and(Value::is_string)
-        || issue
-            .pointer("/fields/comment/comments")
-            .and_then(Value::as_array)
-            .is_some_and(|comments| {
-                comments
-                    .iter()
-                    .any(|comment| comment.get("body").is_some_and(Value::is_string))
-            })
-}
-
 /// Render an issue and comments as the stable provider Markdown contract.
 fn issue_markdown(issue: &Value, source_url: &str) -> Result<(String, bool), InspectionError> {
     let fields = issue.get("fields");
@@ -840,7 +821,7 @@ fn append_bounded(body: &mut String, value: &str) -> Result<(), InspectionError>
 
 fn document_markdown_at(value: &Value, heading_offset: usize) -> String {
     match value {
-        Value::String(text) => text.clone(),
+        Value::String(text) => wiki_to_markdown(text, heading_offset),
         Value::Object(_) => blocks(children(value), 0, heading_offset),
         _ => String::new(),
     }
