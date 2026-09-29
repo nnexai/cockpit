@@ -49,6 +49,7 @@ const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
 mod comments;
 mod context;
 mod context_media;
+mod credentials;
 mod projects;
 mod review;
 mod library;
@@ -215,6 +216,7 @@ fn build_router_with_validated_root(
         .merge(projects::routes())
         .merge(context::routes())
         .merge(library::routes())
+        .merge(credentials::routes())
         .merge(browser_view::routes())
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))

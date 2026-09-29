@@ -2,12 +2,13 @@ use async_trait::async_trait;
 use axum::{http::Request, serve};
 use cockpit_core::{
     CockpitService, HerdrAdapter, InspectionError, SessionSubscription, TerminalSession,
+    credentials::{MemoryVault, ProviderCredentials},
     library::LibraryService,
     sources::SourceService,
 };
 use cockpit_host::server::{build_router, validate_bind, validate_static_root};
 use cockpit_protocol::{
-    projects::{ProjectConfiguration, ProjectLimits},
+    projects::{ProjectConfiguration, ProjectLimits, ProjectProvider},
     v1::{
         AgentSummary, CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
         LayoutPane, LayoutRect, PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
@@ -286,8 +287,8 @@ async fn request(addr: std::net::SocketAddr, path: &str) -> (u16, String) {
 }
 
 
-fn service_with_library(root: &std::path::Path) -> CockpitService {
-    let config = ProjectConfiguration {
+fn project_configuration(root: &std::path::Path) -> ProjectConfiguration {
+    ProjectConfiguration {
         version: 1,
         repository_roots: vec![],
         worktree_root: root.join("worktrees").display().to_string(),
@@ -317,7 +318,11 @@ fn service_with_library(root: &std::path::Path) -> CockpitService {
             library_max_items: 1000,
         },
         origins: Default::default(),
-    };
+    }
+}
+
+fn service_with_library(root: &std::path::Path) -> CockpitService {
+    let config = project_configuration(root);
     let sources = Arc::new(SourceService::new(&config, vec![]).expect("source service"));
     service().with_library(LibraryService::new(config, sources))
 }
@@ -989,5 +994,218 @@ fn serve_startup_reports_bind_and_rejects_invalid_configuration() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("static index"));
 
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+const CREDENTIAL_TOKEN: &str = "tok-7f3a9c1e-not-for-echo";
+
+fn credential_service(root: &std::path::Path) -> (CockpitService, Arc<MemoryVault>) {
+    let mut config = project_configuration(root);
+    config.providers = vec![ProjectProvider {
+        id: "jira".to_owned(),
+        base_url: "https://example.atlassian.net".to_owned(),
+        executable: "jira".to_owned(),
+        login: None,
+    }];
+    let vault = Arc::new(MemoryVault::new());
+    let credentials = ProviderCredentials::new(
+        &config,
+        vault.clone(),
+        cockpit_providers::credential_kinds,
+    );
+    (service().with_credentials(Arc::new(credentials)), vault)
+}
+
+async fn credential_call(
+    router: &axum::Router,
+    method: &str,
+    path: &str,
+    origin: Option<&str>,
+    body: Vec<u8>,
+) -> (u16, String) {
+    let authority = test_authority();
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("host", authority.to_string())
+        .header("content-type", "application/json");
+    if let Some(origin) = origin {
+        builder = builder.header("origin", origin);
+    }
+    let response = router
+        .clone()
+        .oneshot(builder.body(axum::body::Body::from(body)).expect("request"))
+        .await
+        .expect("response");
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8(bytes.to_vec()).expect("UTF-8 body"))
+}
+
+#[tokio::test]
+async fn provider_credentials_are_write_only_over_http() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let origin = format!("http://{authority}");
+    let (service, vault) = credential_service(&root);
+    let router = build_router(service, &root, authority).expect("router");
+    let list = "/api/v1/provider-credentials";
+
+    let (status, body) = credential_call(&router, "GET", list, None, vec![]).await;
+    assert_eq!(status, 200);
+    let listed: serde_json::Value = serde_json::from_str(&body).expect("status JSON");
+    assert_eq!(listed["providers"][0]["provider_id"], "jira");
+    assert_eq!(listed["providers"][0]["state"], "not_stored");
+
+    let set = serde_json::json!({"provider_id": "jira", "kind": "bearer", "token": CREDENTIAL_TOKEN});
+    let (status, body) = credential_call(
+        &router,
+        "POST",
+        &format!("{list}/set"),
+        Some(&origin),
+        set.to_string().into_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(!body.contains(CREDENTIAL_TOKEN));
+    let stored: serde_json::Value = serde_json::from_str(&body).expect("set JSON");
+    assert_eq!(stored["provider_id"], "jira");
+    assert_eq!(stored["state"], "stored");
+    assert_eq!(stored["kind"], "bearer");
+    assert!(vault.label("jira https://example.atlassian.net").is_some());
+
+    let (status, body) = credential_call(&router, "GET", list, None, vec![]).await;
+    assert_eq!(status, 200);
+    assert!(!body.contains(CREDENTIAL_TOKEN));
+    let listed: serde_json::Value = serde_json::from_str(&body).expect("status JSON");
+    assert_eq!(listed["providers"][0]["state"], "stored");
+
+    let clear = serde_json::json!({"provider_id": "jira"});
+    let (status, body) = credential_call(
+        &router,
+        "POST",
+        &format!("{list}/clear"),
+        Some(&origin),
+        clear.to_string().into_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let cleared: serde_json::Value = serde_json::from_str(&body).expect("clear JSON");
+    assert_eq!(cleared["state"], "not_stored");
+    assert!(vault.label("jira https://example.atlassian.net").is_none());
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn provider_credential_mutations_require_the_gateway_origin() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let (service, vault) = credential_service(&root);
+    let router = build_router(service, &root, authority).expect("router");
+    let set = serde_json::json!({"provider_id": "jira", "kind": "bearer", "token": CREDENTIAL_TOKEN})
+        .to_string();
+    let path = "/api/v1/provider-credentials/set";
+
+    let (status, body) =
+        credential_call(&router, "POST", path, None, set.clone().into_bytes()).await;
+    assert_eq!((status, body.contains("request_origin_required")), (400, true));
+    assert!(!body.contains(CREDENTIAL_TOKEN));
+
+    let (status, body) = credential_call(
+        &router,
+        "POST",
+        path,
+        Some("http://evil.example"),
+        set.into_bytes(),
+    )
+    .await;
+    assert_eq!((status, body.contains("invalid_request_authority")), (403, true));
+    assert!(!body.contains(CREDENTIAL_TOKEN));
+
+    let clear = serde_json::json!({"provider_id": "jira"}).to_string();
+    let (status, _) = credential_call(
+        &router,
+        "POST",
+        "/api/v1/provider-credentials/clear",
+        Some("http://evil.example"),
+        clear.into_bytes(),
+    )
+    .await;
+    assert_eq!(status, 403);
+    assert!(vault.label("jira https://example.atlassian.net").is_none());
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn provider_credential_set_rejections_are_generic_and_never_echo_the_body() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let origin = format!("http://{authority}");
+    let (service, vault) = credential_service(&root);
+    let router = build_router(service, &root, authority).expect("router");
+    let path = "/api/v1/provider-credentials/set";
+    let oversized = serde_json::json!({
+        "provider_id": "jira",
+        "kind": "bearer",
+        "token": format!("{CREDENTIAL_TOKEN}{}", "x".repeat(20 * 1024)),
+    })
+    .to_string();
+    let bodies = [
+        oversized,
+        format!(r#"{{"provider_id":"jira","kind":"bearer","token":"{CREDENTIAL_TOKEN}","unexpected":true}}"#),
+        format!(r#"{{"provider_id":"jira","kind":"digest","token":"{CREDENTIAL_TOKEN}"}}"#),
+        format!(r#"{{"provider_id":"jira","kind":"bearer","token":"{CREDENTIAL_TOKEN}""#),
+        format!(r#"{{"provider_id":"jira","kind":"basic","token":"{CREDENTIAL_TOKEN}"}}"#),
+        format!(r#"{{"provider_id":"jira","kind":"bearer","token":"{CREDENTIAL_TOKEN}\n"}}"#),
+        format!(r#"{{"provider_id":"","kind":"bearer","token":"{CREDENTIAL_TOKEN}"}}"#),
+        format!(r#"{{"provider_id":"ji\u0000ra","kind":"bearer","token":"{CREDENTIAL_TOKEN}"}}"#),
+    ];
+    for body in bodies {
+        let (status, response) =
+            credential_call(&router, "POST", path, Some(&origin), body.into_bytes()).await;
+        assert_eq!(status, 400, "{response}");
+        let error: serde_json::Value = serde_json::from_str(&response).expect("error JSON");
+        assert_eq!(error["code"], "invalid_credential_request");
+        assert!(!response.contains("tok-"), "{response}");
+    }
+    assert!(vault.label("jira https://example.atlassian.net").is_none());
+
+    let (status, response) = credential_call(
+        &router,
+        "POST",
+        path,
+        Some(&origin),
+        format!(r#"{{"provider_id":"missing","kind":"bearer","token":"{CREDENTIAL_TOKEN}"}}"#)
+            .into_bytes(),
+    )
+    .await;
+    assert_eq!(status, 503);
+    assert!(response.contains("credential_provider_unsupported"));
+    assert!(!response.contains(CREDENTIAL_TOKEN));
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn provider_credential_routes_fail_closed_without_composed_credentials() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let origin = format!("http://{authority}");
+    let router = build_router(service(), &root, authority).expect("router");
+    let (status, body) =
+        credential_call(&router, "GET", "/api/v1/provider-credentials", None, vec![]).await;
+    assert_eq!((status, body.contains("credentials_unavailable")), (503, true));
+    let (status, body) = credential_call(
+        &router,
+        "POST",
+        "/api/v1/provider-credentials/set",
+        Some(&origin),
+        format!(r#"{{"provider_id":"jira","kind":"bearer","token":"{CREDENTIAL_TOKEN}"}}"#)
+            .into_bytes(),
+    )
+    .await;
+    assert_eq!((status, body.contains("credentials_unavailable")), (503, true));
+    assert!(!body.contains(CREDENTIAL_TOKEN));
     std::fs::remove_dir_all(root).expect("cleanup");
 }

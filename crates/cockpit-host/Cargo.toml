@@ -14,6 +14,7 @@ path = "src/bin/cockpit.rs"
 
 [dependencies]
 cockpit-providers = { path = "../cockpit-providers" }
+cockpit-secrets = { path = "../cockpit-secrets" }
 axum.workspace = true
 futures-util.workspace = true
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }

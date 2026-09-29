@@ -142,13 +142,15 @@ fn make_service(
     let service = CockpitService::new(mode, adapter.clone());
     match projects {
         Some(config) => {
+            let credentials = Arc::new(cockpit_core::credentials::ProviderCredentials::new(
+                &config,
+                cockpit_secrets::os_vault(),
+                cockpit_providers::credential_kinds,
+            ));
             let sources = Arc::new(
                 cockpit_core::sources::SourceService::new(
                     &config,
-                    cockpit_providers::configured_providers(
-                        &config,
-                        cockpit_core::credentials::ProviderCredentials::disabled(),
-                    )
+                    cockpit_providers::configured_providers(&config, credentials.clone())
                         .map_err(|error| error.to_string())?,
                 )
                 .map_err(|error| error.to_string())?,
@@ -156,7 +158,7 @@ fn make_service(
             let projects = ProjectService::new(config.clone(), adapter.clone())
                 .map_err(|error| error.to_string())?
                 .with_sources(sources.clone());
-            let service = service.with_projects(projects);
+            let service = service.with_projects(projects).with_credentials(credentials);
             service.projects().map_err(|error| error.to_string())?.prewarm_repositories();
             let library = LibraryService::new(config.clone(), sources.clone())
                 .with_projects(service.projects().map_err(|error| error.to_string())?.clone(), adapter.clone());

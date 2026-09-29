@@ -2,6 +2,7 @@ mod comments;
 mod context;
 mod context_media;
 mod context_search;
+mod credentials;
 mod projects;
 mod requests;
 mod review;
@@ -1655,13 +1656,15 @@ pub fn run() {
     let startup_inspector = Arc::clone(&inspector);
     let project_config = cockpit_core::config::load_project_configuration(None, None)
         .expect("failed to load project configuration");
+    let credentials = Arc::new(cockpit_core::credentials::ProviderCredentials::new(
+        &project_config,
+        cockpit_secrets::os_vault(),
+        cockpit_providers::credential_kinds,
+    ));
     let sources = Arc::new(
         cockpit_core::sources::SourceService::new(
             &project_config,
-            cockpit_providers::configured_providers(
-                &project_config,
-                cockpit_core::credentials::ProviderCredentials::disabled(),
-            )
+            cockpit_providers::configured_providers(&project_config, credentials.clone())
                 .expect("invalid configured source providers"),
         )
         .expect("failed to initialize source providers"),
@@ -1689,8 +1692,9 @@ pub fn run() {
         ))
         .expect("failed to initialize browser runtime"),
     );
-    let service =
-        CockpitService::new(CockpitMode::Normal, inspector.clone()).with_projects(project_service);
+    let service = CockpitService::new(CockpitMode::Normal, inspector.clone())
+        .with_projects(project_service)
+        .with_credentials(credentials);
     let warm_projects = service.projects().expect("project operations configured").clone();
     tauri::async_runtime::spawn(async move { warm_projects.prewarm_repositories(); });
     let shutdown_projects = service
@@ -1769,6 +1773,9 @@ pub fn run() {
             projects::cockpit_workspace_teardown_preview,
             projects::cockpit_workspace_teardown_execute,
             projects::cockpit_workspace_teardown_recoveries,
+            credentials::cockpit_provider_credentials,
+            credentials::cockpit_provider_credential_set,
+            credentials::cockpit_provider_credential_clear,
             context::cockpit_pane_presentation,
             context::cockpit_context_directory,
             context::cockpit_context_file_index,
