@@ -90,6 +90,8 @@ it.each(["loading", "needs_token", "stored"] as const)("gates a Jira issue's att
       expect(button("Download all")).toBeUndefined();
       expect(host.querySelector('[aria-label="Select trace.log"]')).toBeNull();
     }
+    // Until token state is known, the head claims nothing: no "not downloaded" line that a stored token would contradict.
+    if (access === "loading") expect(host.querySelector(".library-attachments-head")?.textContent).toBe("");
     if (access === "needs_token") {
       expect(host.querySelector(".library-attachments-head")?.textContent).toContain("Downloading Jira attachments needs a token stored in Cockpit");
       await act(async () => button("Provider token…")!.click());

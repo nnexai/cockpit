@@ -239,7 +239,7 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
         <div className="library-attachments-head">
           {jira === "needs_token" && credentials
             ? <><span>Downloading Jira attachments needs a token stored in Cockpit</span><button type="button" className="library-button is-panel" onClick={() => credentials.open(item.provider_id ?? "")}>Provider token…</button></>
-            : <span>{page || jira === "stored" ? `${downloaded.length} of ${item.attachments.length} downloaded` : "Listed from Jira; attachment files are not downloaded"}</span>}
+            : jira === "loading" ? null : <span>{page || jira === "stored" ? `${downloaded.length} of ${item.attachments.length} downloaded` : "Listed from Jira; attachment files are not downloaded"}</span>}
           <span className="context-toolbar-spacer" />
           {attachments && !narrow ? <>
             {selectedIds.length > 0 ? <button type="button" className="library-button is-panel" onClick={() => download(selectedIds)} disabled={attachments.busy}>{`Download selected (${selectedIds.length})`}</button> : null}

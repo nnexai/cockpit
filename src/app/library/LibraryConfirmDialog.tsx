@@ -33,11 +33,29 @@ export function trapDialogKeys(event: KeyboardEvent<HTMLElement>, onClose: () =>
   else if (!event.shiftKey && current === focusable.length - 1) { event.preventDefault(); focusable[0]?.focus(); }
 }
 
-/** Remembers the opener when mounted and focuses it again when unmounted. */
+/**
+ * Remembers the opener when mounted and focuses it again when unmounted. When the opener is gone by then (the
+ * `Provider token…` button disappears once a token is stored), focus goes to the nearest of its former ancestors
+ * that is still mounted, so the next Tab and Escape stay in the same part of the page instead of the page body.
+ */
 export function useRestoreFocus(): void {
   useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return () => { if (opener?.isConnected) opener.focus({ preventScroll: true }); };
+    const opener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    const ancestors: HTMLElement[] = [];
+    for (let element = opener?.parentElement; element && element !== document.body; element = element.parentElement) ancestors.push(element);
+    return () => {
+      if (opener?.isConnected) { opener.focus({ preventScroll: true }); return; }
+      const container = ancestors.find((element) => element.isConnected);
+      if (!container) return;
+      // A container takes focus only while it holds it, and without a ring: it is a landing place, not a control.
+      if (!container.hasAttribute("tabindex")) {
+        const outline = container.style.outline;
+        container.tabIndex = -1;
+        container.style.outline = "none";
+        container.addEventListener("blur", () => { container.removeAttribute("tabindex"); container.style.outline = outline; }, { once: true });
+      }
+      container.focus({ preventScroll: true });
+    };
   }, []);
 }
 

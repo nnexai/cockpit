@@ -79,6 +79,12 @@ describe("parseProviderCredentialSetRequest", () => {
     expect(error.message).not.toContain("oauth");
   });
 
+  it("explains a colon in the email instead of the generic message, still without quoting the email or token", () => {
+    const error = failure(() => parseProviderCredentialSetRequest({ provider_id: "jira", kind: "basic", username: "a:b@example.com", token: TOKEN }));
+    expect(error.code).toBe("malformed_response");
+    expect(error.message).toBe("Email can't contain a colon");
+  });
+
   it("accepts a token of exactly 8192 bytes", () => {
     expect(parseProviderCredentialSetRequest({ provider_id: "jira", kind: "bearer", token: "a".repeat(8192) }).token).toHaveLength(8192);
   });

@@ -100,6 +100,8 @@ Provider authority is resolved against the selected configured provider instance
 
 Jira and Confluence accept a token stored in the OS vault (Linux Secret Service; the macOS Keychain backend is compiled but unverified). In the Library, use `Provider token…` on a provider row, in the Add dialog's sign-in failure, or in a Jira item's attachments panel. Choose `Personal access token (Bearer)` (Data Center) or `Email and API token (Basic)` (Cloud), paste the token and save; it can be replaced or removed but never read back, and the dialog shows only `Token stored` and its kind. One item exists per provider id and `base_url`, so editing `base_url` makes an old token not apply. glab, gh and tea report `unsupported`.
 
+New token forms default to Basic for `*.atlassian.net` and Bearer otherwise; both remain selectable, and replacement forms retain the stored kind. A colon in the Basic email is rejected with a specific inline message before submission, without clearing the entered token. Closing a Library dialog returns focus to its opener, or the nearest surviving ancestor if the opener disappeared (for example, after storing a token from the attachments header). Jira attachment headers make no download-state claim until the token status has loaded.
+
 A stored token is injected only into that provider's CLI child environment; with none stored, or the vault unavailable, the CLI keeps its own login (the `Keyring unavailable` status can take 20 s to appear when no keyring daemon runs). Vault values are cached per process, so edits made in Seahorse/KWallet appear after a restart. Jira also still needs the user's `jira init` config file (installation type lives there).
 
 | Jira env | Value |

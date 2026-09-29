@@ -83,6 +83,15 @@ export function confluenceSite(instance: string | null): string {
   return instanceHost(instance).replace(/\/wiki$/, "");
 }
 
+/** An Atlassian Cloud site (`*.atlassian.net`): its API takes an email and API token (Basic); Data Center takes a bearer PAT. */
+export function isAtlassianCloud(instance: string | null): boolean {
+  try {
+    return !!instance && new URL(instance).hostname.toLowerCase().endsWith(".atlassian.net");
+  } catch {
+    return false;
+  }
+}
+
 /** A bare Jira work-item key such as `OPS-311`. */
 export const JIRA_KEY = /^[A-Z][A-Z0-9_]+-[1-9][0-9]*$/;
 

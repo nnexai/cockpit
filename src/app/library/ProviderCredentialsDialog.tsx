@@ -2,10 +2,11 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { ProjectProvider, ProviderAuthKind, ProviderCredentialStatus } from "../../protocol/generated/v1";
+import { EMAIL_COLON_MESSAGE } from "../../client/credentialProtocol";
 import { UiIcon } from "../UiIcon";
 import { LibraryConfirmDialog, trapDialogKeys, useRestoreFocus } from "./LibraryConfirmDialog";
 import { StatePill } from "./StatePill";
-import { confluenceSite, errorText, executableName, instanceHost, providerFamily, type StateShape, type StateTone } from "./libraryState";
+import { confluenceSite, errorText, executableName, instanceHost, isAtlassianCloud, providerFamily, type StateShape, type StateTone } from "./libraryState";
 import "../projects/setup.css";
 import "../projects/taskSetup.css";
 import "./library.css";
@@ -37,6 +38,13 @@ type Editing = { providerId: string; kind: ProviderAuthKind; username: string };
 function providerLabel(provider: ProjectProvider, providers: readonly ProjectProvider[]): string {
   const family = providerFamily(providers, provider.id);
   return `${family.name} · ${family.key === "confluence" ? confluenceSite(provider.base_url) : instanceHost(provider.base_url)}`;
+}
+
+/** The kind a form opens with: the stored one when replacing; else Basic (email and API token) for an Atlassian Cloud site and Bearer (Data Center PAT) elsewhere. Both stay selectable. */
+function defaultKind(provider: ProjectProvider | undefined, status: ProviderCredentialStatus): ProviderAuthKind {
+  if (status.kind && status.supported_kinds.includes(status.kind)) return status.kind;
+  if (provider && isAtlassianCloud(provider.base_url) && status.supported_kinds.includes("basic")) return "basic";
+  return status.supported_kinds.includes("bearer") ? "bearer" : status.supported_kinds[0]!;
 }
 
 /**
@@ -76,7 +84,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
       if (!current) return;
       setLoad({ status: "ready", providers: configuration.providers, statuses: list.providers });
       const focus = focusProviderId === null ? undefined : list.providers.find((status) => status.provider_id === focusProviderId);
-      if (focus && focus.supported_kinds.length > 0 && focus.state !== "stored") setEditing({ providerId: focus.provider_id, kind: focus.supported_kinds[0]!, username: "" });
+      if (focus && focus.supported_kinds.length > 0 && focus.state !== "stored") setEditing({ providerId: focus.provider_id, kind: defaultKind(configuration.providers.find((candidate) => candidate.id === focus.provider_id), focus), username: "" });
     }, (cause: unknown) => {
       if (current) setLoad({ status: "error", message: errorText(cause, "Provider tokens could not be read.") });
     });
@@ -99,11 +107,11 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
       : current);
     onChanged?.(status);
   };
-  const open = (status: ProviderCredentialStatus) => {
+  const open = (provider: ProjectProvider, status: ProviderCredentialStatus) => {
     setNotice(null);
     setFormError(null);
     setHasToken(false);
-    setEditing({ providerId: status.provider_id, kind: status.kind && status.supported_kinds.includes(status.kind) ? status.kind : status.supported_kinds.includes("bearer") ? "bearer" : status.supported_kinds[0]!, username: "" });
+    setEditing({ providerId: status.provider_id, kind: defaultKind(provider, status), username: "" });
   };
   const cancel = () => {
     if (tokenRef.current) tokenRef.current.value = "";
@@ -115,6 +123,8 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
     event.preventDefault();
     const input = tokenRef.current;
     if (!editing || !input || saving) return;
+    // A colon can't be in a Basic email; say so before the token is cleared, so it isn't retyped for nothing.
+    if (editing.kind === "basic" && editing.username.includes(":")) { setFormError(EMAIL_COLON_MESSAGE); usernameRef.current?.focus(); return; }
     const token = input.value.trim();
     // Emptied before the request is dispatched: success and failure both leave nothing behind.
     input.value = "";
@@ -168,7 +178,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
                 <StatePill shape={pill.shape} tone={pill.tone} word={pill.word} />
                 <span className="context-toolbar-spacer" />
                 <span className="library-credentials-actions">
-                  {supported && !form ? <button type="button" className="library-button is-panel" aria-label={`${status?.state === "stored" ? "Replace" : "Store"} token for ${label}`} onClick={() => open(status!)}>{status?.state === "stored" ? "Replace token…" : "Store token…"}</button> : null}
+                  {supported && !form ? <button type="button" className="library-button is-panel" aria-label={`${status?.state === "stored" ? "Replace" : "Store"} token for ${label}`} onClick={() => open(provider, status!)}>{status?.state === "stored" ? "Replace token…" : "Store token…"}</button> : null}
                   {status?.state === "stored" ? <button type="button" className="library-button is-panel" aria-label={`Remove token for ${label}`} onClick={() => { setNotice(null); setRemoving(provider); }}>Remove</button> : null}
                 </span>
               </div>
@@ -180,7 +190,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
                 </div> : <p className="task-setup-note">{KIND_LABEL[form.kind]}</p>}
                 {form.kind === "basic" ? <div className="task-setup-row">
                   <label htmlFor={`${formId}-username`}>Email</label>
-                  <div><input id={`${formId}-username`} ref={usernameRef} type="text" autoComplete="off" spellCheck={false} value={form.username} disabled={saving} onChange={(event) => setEditing({ ...form, username: event.target.value })} /></div>
+                  <div><input id={`${formId}-username`} ref={usernameRef} type="text" autoComplete="off" spellCheck={false} value={form.username} disabled={saving} aria-invalid={formError === EMAIL_COLON_MESSAGE || undefined} onChange={(event) => { setFormError(null); setEditing({ ...form, username: event.target.value }); }} /></div>
                 </div> : null}
                 <div className="task-setup-row">
                   <label htmlFor={`${formId}-token`}>{form.kind === "basic" ? "API token" : "Token"}</label>

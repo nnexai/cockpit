@@ -11,9 +11,15 @@ const MAX_USERNAME_BYTES = 256;
 const MAX_PROVIDERS = 256;
 
 /** Fixed text only: no message here may quote a request field, above all the token. */
-function malformed(what: string): never {
-  throw new CockpitClientError("malformed_response", `Invalid provider credential ${what}`);
+function invalid(message: string): never {
+  throw new CockpitClientError("malformed_response", message);
 }
+function malformed(what: string): never {
+  invalid(`Invalid provider credential ${what}`);
+}
+
+/** The one request rule a person can break by typing: the host joins the email and token with a colon. */
+export const EMAIL_COLON_MESSAGE = "Email can't contain a colon";
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const utf8Length = (value: string) => new TextEncoder().encode(value).length;
@@ -65,7 +71,8 @@ export function parseProviderCredentialSetRequest(value: unknown): ProviderCrede
     if (username !== undefined && username !== null) malformed("request");
     return { provider_id: id, kind, token: token as string };
   }
-  if (typeof username !== "string" || username.length === 0 || utf8Length(username) > MAX_USERNAME_BYTES || CONTROL.test(username) || username.includes(":")) malformed("request");
+  if (typeof username === "string" && username.includes(":")) invalid(EMAIL_COLON_MESSAGE);
+  if (typeof username !== "string" || username.length === 0 || utf8Length(username) > MAX_USERNAME_BYTES || CONTROL.test(username)) malformed("request");
   return { provider_id: id, kind, username: username as string, token: token as string };
 }
 
