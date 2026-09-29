@@ -21,13 +21,14 @@ pub struct WindowConfiguration {
     pub decorations: bool,
 }
 
-/// Paths for the installed browser tooling that Cockpit is allowed to invoke.
+/// Browser launch settings and paths for tooling Cockpit is allowed to invoke.
 ///
 /// The CLI is resolved from the owner's environment. Its normal browser selection
 /// is preserved unless an executable override is configured.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserConfiguration {
     pub playwright_cli: PathBuf,
+    pub default_url: String,
     pub chromium_executable: Option<PathBuf>,
     /// Optional Node executable used only by the private inline-browser helper.
     pub node_executable: Option<PathBuf>,
@@ -70,6 +71,7 @@ struct TomlWindow {
 #[serde(deny_unknown_fields)]
 struct TomlBrowser {
     playwright_cli: Option<String>,
+    default_url: Option<String>,
     chromium_executable: Option<String>,
     node_executable: Option<String>,
     browser_helper: Option<String>,
@@ -420,7 +422,7 @@ pub fn load_project_configuration(
     })
 }
 
-/// Load browser executable paths from the shared Cockpit TOML.
+/// Load browser launch settings and executable paths from the shared Cockpit TOML.
 ///
 /// Environment values override `[browser]`, while command-name defaults remain
 /// explicit so missing installed prerequisites can be reported at use time.
@@ -434,6 +436,12 @@ pub fn load_browser_configuration(
         browser.playwright_cli,
         DEFAULT_PLAYWRIGHT_CLI,
     )?;
+    let (default_url, _) = choose_path(
+        "COCKPIT_BROWSER_DEFAULT_URL",
+        browser.default_url,
+        "about:blank",
+    )?;
+    crate::browser::validate_url(&default_url)?;
     let (chromium_executable, chromium_source) = choose_path(
         "COCKPIT_CHROMIUM_EXECUTABLE",
         browser.chromium_executable,
@@ -459,6 +467,7 @@ pub fn load_browser_configuration(
     }
     Ok(BrowserConfiguration {
         playwright_cli: PathBuf::from(playwright_cli),
+        default_url,
         chromium_executable: (chromium_source != "default")
             .then(|| PathBuf::from(chromium_executable)),
         node_executable: (node_source != "default").then(|| PathBuf::from(node_executable)),
@@ -734,7 +743,10 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{load_project_configuration, load_window_configuration, validate_template};
+    use super::{
+        load_browser_configuration, load_project_configuration, load_window_configuration,
+        validate_template,
+    };
 
     #[test]
     fn template_accepts_only_documented_variables() {
@@ -742,6 +754,91 @@ mod tests {
         assert!(validate_template("{repo}/{unknown}", true, "checkout_template").is_err());
         assert!(validate_template("../{repo}", true, "checkout_template").is_err());
         assert!(validate_template("/tmp/{repo}", true, "checkout_template").is_err());
+    }
+
+    #[test]
+    fn browser_default_url_loading_and_validation() {
+        // Isolate environment overrides in subprocesses, without mutating the
+        // shared test process environment while other configuration tests run.
+        if let Some(path) = std::env::var_os("COCKPIT_TEST_BROWSER_DEFAULT_URL_PATH") {
+            let expected = std::env::var("COCKPIT_TEST_BROWSER_DEFAULT_URL_EXPECTED")
+                .expect("expected URL or error");
+            let result = load_browser_configuration(Some(std::path::Path::new(&path)));
+            if expected == "invalid_browser_url" {
+                assert_eq!(result.expect_err("unsafe default URL").code, expected);
+            } else {
+                assert_eq!(result.expect("browser configuration").default_url, expected);
+            }
+            return;
+        }
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-browser-default-{nonce}.toml"));
+        let cases = [
+            (None, None, "about:blank"),
+            (Some("https://example.test/start"), None, "https://example.test/start"),
+            (Some("http://localhost:3000/"), None, "http://localhost:3000/"),
+            (Some("about:blank"), None, "about:blank"),
+            (
+                Some("https://example.test/toml"),
+                Some("https://example.test/environment"),
+                "https://example.test/environment",
+            ),
+            // Validate only the effective value: a safe environment override
+            // can replace an invalid value in the TOML.
+            (Some("file:///tmp/unsafe"), Some("about:blank"), "about:blank"),
+            (Some("file:///tmp/unsafe"), None, "invalid_browser_url"),
+            (Some("javascript:alert(1)"), None, "invalid_browser_url"),
+            (Some("/relative"), None, "invalid_browser_url"),
+            (Some("https://user:password@example.test/"), None, "invalid_browser_url"),
+            (Some("https://example.test/"), Some("file:///tmp/unsafe"), "invalid_browser_url"),
+            (
+                None,
+                Some("https://user@example.test/"),
+                "invalid_browser_url",
+            ),
+        ];
+        for (toml_url, environment_url, expected) in cases {
+            let content = match toml_url {
+                Some(url) => format!("version = 1\n[browser]\ndefault_url = {url:?}\n"),
+                None => "version = 1\n".into(),
+            };
+            fs::write(&path, content).expect("write browser configuration");
+            let mut child = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            );
+            child.args([
+                "--exact",
+                "config::tests::browser_default_url_loading_and_validation",
+                "--nocapture",
+            ]);
+            for name in [
+                "COCKPIT_BROWSER_DEFAULT_URL",
+                "COCKPIT_PLAYWRIGHT_CLI",
+                "COCKPIT_CHROMIUM_EXECUTABLE",
+                "COCKPIT_NODE_EXECUTABLE",
+                "COCKPIT_BROWSER_HELPER",
+                "COCKPIT_PLAYWRIGHT_CORE",
+            ] {
+                child.env_remove(name);
+            }
+            child.env("COCKPIT_TEST_BROWSER_DEFAULT_URL_PATH", &path);
+            child.env("COCKPIT_TEST_BROWSER_DEFAULT_URL_EXPECTED", expected);
+            if let Some(value) = environment_url {
+                child.env("COCKPIT_BROWSER_DEFAULT_URL", value);
+            }
+            let output = child.output().expect("run isolated configuration case");
+            assert!(
+                output.status.success(),
+                "default URL case TOML={toml_url:?}, environment={environment_url:?}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        fs::remove_file(path).expect("remove browser configuration");
     }
 
     #[test]

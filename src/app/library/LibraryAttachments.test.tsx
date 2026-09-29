@@ -4,7 +4,7 @@ import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation } from "../../protocol/generated/v1";
+import type { LibraryItemSummary, LibraryListing, LibraryOperation } from "../../protocol/generated/v1";
 import { ContextViewer, createContextViewState, type ContextViewState } from "../context/ContextViewer";
 import { LibraryItemHeader } from "./LibraryItemHeader";
 
@@ -143,7 +143,7 @@ it("keeps metadata-only selection local, polls an explicit download, then opens 
       return { ...operation, finished: true, phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }] };
     }),
   } as unknown as CockpitClient;
-  function Harness() { const [view, onChange] = useState(createContextViewState()); return <ContextViewer client={client} presentation={null} value={view} onChange={onChange} controlAllowed onRequestControl={vi.fn()} />; }
+  function Harness() { const [view, onChange] = useState(createContextViewState()); return <ContextViewer client={client} context={null} value={view} onChange={onChange} />; }
   vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:s7-png"), revokeObjectURL: vi.fn() });
   try {
     await act(async () => root.render(<Harness />)); await flush();
@@ -177,19 +177,19 @@ it.each(["library", "companion"] as const)("resolves a page-relative image throu
     projectConfiguration: vi.fn(async () => ({ providers })),
     libraryListing: vi.fn(async () => ({ root, generation: "1", items: [page], follows: [], next_offset: null, diagnostics: [] })),
     libraryDocument: vi.fn(documentRead), contextDocument: vi.fn(documentRead),
-    contextDirectory: vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: rootId, path: request.path, entries: [], truncated: false, diagnostics: [] })),
+    contextDirectory: vi.fn(async (_session: string, _viewer: string, request: { path: string }) => ({ binding_id: "binding", root_id: rootId, path: request.path, entries: [], truncated: false, diagnostics: [] })),
     libraryMedia: vi.fn(async () => media), contextMedia: vi.fn(async () => media),
   } as unknown as CockpitClient;
   function Harness() {
     const [view, onChange] = useState<ContextViewState>(() => ({ ...createContextViewState(), rootId, path, files: { [`${rootId}\u0000${path}`]: { rootId, path, mode: "auto", selectionStart: null, selectionEnd: null, scrollTop: 0 } } }));
-    return <ContextViewer client={client} presentation={kind === "library" ? null : { session_id: "session", pane_id: "pane", terminal_id: "terminal", binding_id: "binding", extension: null, renderer: null, confidence: "none", reason: "", default_root_id: rootId, roots: [root], can_open_context: false, can_open_files: false, files_root_id: null, can_open_review: false, diagnostics: [] }} value={view} onChange={onChange} controlAllowed onRequestControl={vi.fn()} />;
+    return <ContextViewer client={client} context={kind === "library" ? null : { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "c1", default_root_id: rootId, roots: [root], diagnostics: [] }} value={view} onChange={onChange} />;
   }
   vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:shared-layout"), revokeObjectURL: vi.fn() });
   try {
     await act(async () => mounted.render(<Harness />)); await flush();
     const request = { path: `${prefix}/_files/flow.png`, expected_revision: null };
     if (kind === "library") expect(client.libraryMedia).toHaveBeenCalledWith(request, expect.any(AbortSignal));
-    else expect(client.contextMedia).toHaveBeenCalledWith("session", "pane", { ...request, binding_id: "binding", root_id: rootId }, expect.any(AbortSignal));
+    else expect(client.contextMedia).toHaveBeenCalledWith("session", "viewer", { ...request, binding_id: "binding", root_id: rootId }, expect.any(AbortSignal));
     expect(host.querySelector<HTMLImageElement>('img[alt="Flow"]')?.src).toBe("blob:shared-layout");
   } finally { await act(async () => mounted.unmount()); host.remove(); vi.unstubAllGlobals(); }
 });
@@ -208,7 +208,7 @@ it.each(["pdf", "svg", "html"])("never activates a downloaded %s attachment as a
   } as unknown as CockpitClient;
   function Harness() {
     const [view, onChange] = useState<ContextViewState>(() => ({ ...createContextViewState(), rootId: "library", path }));
-    return <ContextViewer client={client} presentation={null} value={view} onChange={onChange} controlAllowed onRequestControl={vi.fn()} />;
+    return <ContextViewer client={client} context={null} value={view} onChange={onChange} />;
   }
   try {
     await act(async () => mounted.render(<Harness />)); await flush();

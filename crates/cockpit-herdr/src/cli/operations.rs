@@ -1,6 +1,5 @@
 use cockpit_protocol::v1::{
-    FocusKind, FocusRequest, PaneMoveDestination, PaneResizeDirection, PaneSplitDirection,
-    PaneZoomMode, ResourceMutationRequest,
+    FocusKind, FocusRequest, PaneMoveDestination, PaneSplitDirection, ResourceMutationRequest,
 };
 use serde_json::{Value, json};
 
@@ -21,16 +20,12 @@ pub(crate) fn request_is_mutating(method: &str) -> bool {
             | "tab.close"
             | "tab.focus"
             | "pane.split"
-            | "pane.resize"
             | "pane.rename"
-            | "pane.swap"
             | "pane.move"
-            | "pane.zoom"
             | "pane.close"
             | "pane.focus"
             | "agent.focus"
             | "pane.send_text"
-            | "plugin.pane.open"
     )
 }
 
@@ -41,8 +36,6 @@ pub(crate) fn request_is_safe_to_dispatch_before_identity(method: &str) -> bool 
         method,
         "ping"
             | "session.snapshot"
-            | "plugin.list"
-            | "pane.process_info"
             | "pane.get"
             | "worktree.list"
             | "workspace.list"
@@ -68,23 +61,6 @@ fn split_direction(direction: PaneSplitDirection) -> &'static str {
     match direction {
         PaneSplitDirection::Right => "right",
         PaneSplitDirection::Down => "down",
-    }
-}
-
-fn resize_direction(direction: PaneResizeDirection) -> &'static str {
-    match direction {
-        PaneResizeDirection::Left => "left",
-        PaneResizeDirection::Right => "right",
-        PaneResizeDirection::Up => "up",
-        PaneResizeDirection::Down => "down",
-    }
-}
-
-fn zoom_mode(mode: PaneZoomMode) -> &'static str {
-    match mode {
-        PaneZoomMode::Toggle => "toggle",
-        PaneZoomMode::On => "on",
-        PaneZoomMode::Off => "off",
     }
 }
 
@@ -197,31 +173,9 @@ pub(crate) fn mutation_call(request: &ResourceMutationRequest) -> (&'static str,
             insert_optional_number(&mut params, "ratio", *ratio);
             ("pane.split", Value::Object(params))
         }
-        ResourceMutationRequest::PaneResize {
-            pane_id,
-            direction,
-            amount,
-        } => (
-            "pane.resize",
-            json!({
-                "pane_id": pane_id,
-                "direction": resize_direction(*direction),
-                "amount": amount
-            }),
-        ),
         ResourceMutationRequest::PaneRename { pane_id, label } => {
             ("pane.rename", json!({"pane_id": pane_id, "label": label}))
         }
-        ResourceMutationRequest::PaneSwap {
-            source_pane_id,
-            target_pane_id,
-        } => (
-            "pane.swap",
-            json!({
-                "source_pane_id": source_pane_id,
-                "target_pane_id": target_pane_id
-            }),
-        ),
         ResourceMutationRequest::PaneMove {
             pane_id,
             destination,
@@ -232,10 +186,6 @@ pub(crate) fn mutation_call(request: &ResourceMutationRequest) -> (&'static str,
                 "destination": pane_move_destination(destination),
                 "focus": true
             }),
-        ),
-        ResourceMutationRequest::PaneZoom { pane_id, mode } => (
-            "pane.zoom",
-            json!({"pane_id": pane_id, "mode": zoom_mode(*mode)}),
         ),
         ResourceMutationRequest::PaneClose { pane_id } => {
             ("pane.close", json!({"pane_id": pane_id}))
@@ -285,7 +235,6 @@ mod tests {
         assert!(request_is_safe_to_dispatch_before_identity("session.snapshot"));
         assert!(request_is_safe_to_dispatch_before_identity("worktree.list"));
         assert!(!request_is_safe_to_dispatch_before_identity("pane.send_text"));
-        assert!(!request_is_safe_to_dispatch_before_identity("plugin.pane.open"));
         assert!(!request_is_safe_to_dispatch_before_identity("unknown.future_method"));
     }
 }

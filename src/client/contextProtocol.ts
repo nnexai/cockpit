@@ -1,7 +1,7 @@
 import type {
   ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
-  ContextEntry, ContextFileIndex, ContextFileIndexRequest, ContextLaunchRequest,
-  ContextRoot, PanePresentation,
+  ContextEntry, ContextFileIndex, ContextFileIndexRequest,
+  ContextRoot, ViewerSourceOptions, ViewerSourceSelector, ViewerOpenRequest, ViewerContext,
 } from "../protocol/generated/v1";
 import { CockpitClientError } from "./CockpitClient";
 
@@ -29,27 +29,64 @@ function root(value: unknown): value is ContextRoot {
     && (value.kind === "companion" ? identity(value.companion_id) : value.companion_id === null);
 }
 
-export function parsePanePresentation(value: unknown): PanePresentation {
-  if (!record(value) || !identity(value.session_id) || !identity(value.pane_id) || !identity(value.terminal_id)
-    || !identity(value.binding_id) || !(value.extension === null || value.extension === "context" || value.extension === "review")
-    || !(value.renderer === null || (value.renderer === value.extension && (value.renderer === "context" || value.renderer === "review")))
-    || !text(value.confidence) || !["verified_launch", "verified_process", "candidate", "none", "unsupported"].includes(value.confidence)
-    || !text(value.reason) || !Array.isArray(value.roots) || !value.roots.every(root)
-    || !nullableText(value.default_root_id) || typeof value.can_open_context !== "boolean"
-    || typeof value.can_open_files !== "boolean" || !nullableText(value.files_root_id)
-    || typeof value.can_open_review !== "boolean" || !diagnostics(value.diagnostics)) malformed("pane presentation");
-  const ids = value.roots.map((item) => item.root_id);
-  const filesRoot = value.files_root_id === null
-    ? undefined
-    : value.roots.find((item) => item.root_id === value.files_root_id);
-  if (new Set(ids).size !== ids.length || (value.default_root_id !== null && !ids.includes(value.default_root_id))
-    || (value.can_open_files && filesRoot?.kind !== "folder")
-    || (!value.can_open_files && value.files_root_id !== null)) malformed("Context root identity");
-  return value as unknown as PanePresentation;
+export function parseViewerSourceOptions(value: unknown): ViewerSourceOptions {
+  if (!record(value) || !identity(value.session_id) || !identity(value.pane_id) || !identity(value.tab_id)
+    || !identity(value.space_id) || !nullableText(value.files_context_root_id) || !nullableText(value.files_folder_root_id)
+    || !Array.isArray(value.review_repository_ids) || !value.review_repository_ids.every(identity)
+    || !Array.isArray(value.roots) || !value.roots.every(root) || !text(value.reason)
+    || !diagnostics(value.diagnostics)) malformed("viewer source options");
+  const roots = value.roots;
+  if (new Set(roots.map((item) => item.root_id)).size !== roots.length
+    || new Set(value.review_repository_ids).size !== value.review_repository_ids.length
+    || (value.files_context_root_id !== null && !roots.some((item) => item.root_id === value.files_context_root_id && item.kind === "companion"))
+    || (value.files_folder_root_id !== null && !roots.some((item) => item.root_id === value.files_folder_root_id && item.kind === "folder"))
+    || value.review_repository_ids.some((id) => !roots.some((item) => item.repository_id === id && item.kind === "repository"))) {
+    malformed("viewer source root identity");
+  }
+  return value as unknown as ViewerSourceOptions;
 }
 
-export function matchPanePresentation(value: PanePresentation, sessionId: string, paneId?: string): PanePresentation {
-  if (value.session_id !== sessionId || (paneId !== undefined && value.pane_id !== paneId)) malformed("pane presentation identity");
+export function matchViewerSourceOptions(value: ViewerSourceOptions, sessionId: string, paneId: string): ViewerSourceOptions {
+  if (value.session_id !== sessionId || value.pane_id !== paneId) malformed("viewer source options identity");
+  return value;
+}
+
+export function parseViewerSourceSelector(value: unknown): ViewerSourceSelector {
+  if (!record(value)) malformed("viewer source selector");
+  if (value.kind === "files_context" || value.kind === "files_folder") return { kind: value.kind };
+  if (value.kind === "review" && identity(value.repository_id)) return { kind: "review", repository_id: value.repository_id };
+  return malformed("viewer source selector");
+}
+
+export function parseViewerOpenRequest(value: unknown): ViewerOpenRequest {
+  if (!record(value) || !identity(value.tab_id) || !identity(value.source_pane_id)
+    || !identity(value.client_id) || (value.kind !== "files" && value.kind !== "review")) malformed("viewer open request");
+  const source = parseViewerSourceSelector(value.source);
+  if ((value.kind === "review") !== (source.kind === "review")) malformed("viewer source kind");
+  return { tab_id: value.tab_id, source_pane_id: value.source_pane_id, client_id: value.client_id, kind: value.kind, source };
+}
+
+export function parseViewerContext(value: unknown): ViewerContext {
+  if (!record(value) || !identity(value.session_id) || !identity(value.viewer_id) || !identity(value.binding_id)
+    || !identity(value.tab_id) || !identity(value.space_id) || !identity(value.source_id)
+    || (value.kind !== "files" && value.kind !== "review")
+    || (value.source_kind !== "context" && value.source_kind !== "review")
+    || ((value.kind === "review") !== (value.source_kind === "review"))
+    || !Array.isArray(value.roots) || !value.roots.every(root)
+    || !nullableText(value.default_root_id) || !diagnostics(value.diagnostics)) malformed("viewer context");
+  const ids = value.roots.map((item) => item.root_id);
+  if (new Set(ids).size !== ids.length || (value.default_root_id !== null && !ids.includes(value.default_root_id))) {
+    malformed("viewer context root identity");
+  }
+  return value as unknown as ViewerContext;
+}
+
+export function matchViewerContext(value: ViewerContext, sessionId: string, request: ViewerOpenRequest): ViewerContext {
+  if (value.session_id !== sessionId || value.tab_id !== request.tab_id || value.kind !== request.kind) malformed("viewer context identity");
+  const source = request.source;
+  if (source.kind === "review" && !value.roots.some((item) => item.kind === "repository" && item.repository_id === source.repository_id)) {
+    malformed("viewer context repository identity");
+  }
   return value;
 }
 
@@ -142,8 +179,3 @@ export function matchContextResponse<T extends { binding_id: string; root_id: st
   return value;
 }
 
-export function parseContextLaunchRequest(value: unknown): ContextLaunchRequest {
-  if (!record(value) || !identity(value.pane_id) || !identity(value.binding_id) || !identity(value.root_id)
-    || (value.direction !== "right" && value.direction !== "down")) malformed("Context launch request");
-  return value as unknown as ContextLaunchRequest;
-}

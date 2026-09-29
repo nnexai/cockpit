@@ -111,6 +111,7 @@ pub struct TabSummary {
     pub number: u32,
     pub pane_count: u32,
     pub focused: bool,
+    pub focused_pane_id: Option<String>,
 }
 
 /// A summary of a pane in the current session.
@@ -146,38 +147,11 @@ pub struct AgentSummary {
     pub state_change_seq: u64,
 }
 
-/// A rectangle in a tab's pane layout.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
-pub struct LayoutRect {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// A pane and its rectangle within a tab layout.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
-pub struct LayoutPane {
-    pub pane_id: String,
-    pub focused: bool,
-    pub rect: LayoutRect,
-}
-
-/// The layout of a tab and its panes.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
-pub struct TabLayout {
-    pub space_id: String,
-    pub tab_id: String,
-    pub area: LayoutRect,
-    pub focused_pane_id: Option<String>,
-    pub panes: Vec<LayoutPane>,
-    pub zoomed: bool,
-}
-
 /// The read-only current Herdr session workbench.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct SessionSnapshotResponse {
     pub session_id: String,
+    pub server_instance: String,
     pub version: String,
     pub protocol: u32,
     pub focused_space_id: Option<String>,
@@ -186,7 +160,6 @@ pub struct SessionSnapshotResponse {
     pub spaces: Vec<SpaceSummary>,
     pub tabs: Vec<TabSummary>,
     pub panes: Vec<PaneSummary>,
-    pub layouts: Vec<TabLayout>,
     pub agents: Vec<AgentSummary>,
 }
 
@@ -245,25 +218,6 @@ pub struct FocusResponse {
 pub enum PaneSplitDirection {
     Right,
     Down,
-}
-
-/// Direction in which a pane boundary is resized.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum PaneResizeDirection {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
-/// Requested pane zoom transition.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum PaneZoomMode {
-    Toggle,
-    On,
-    Off,
 }
 
 /// Typed destination for moving a live pane.
@@ -325,30 +279,26 @@ pub enum ResourceMutationRequest {
         direction: PaneSplitDirection,
         ratio: Option<f64>,
     },
-    PaneResize {
-        pane_id: String,
-        direction: PaneResizeDirection,
-        amount: f64,
-    },
     PaneRename {
         pane_id: String,
         label: Option<String>,
-    },
-    PaneSwap {
-        source_pane_id: String,
-        target_pane_id: String,
     },
     PaneMove {
         pane_id: String,
         destination: PaneMoveDestination,
     },
-    PaneZoom {
-        pane_id: String,
-        mode: PaneZoomMode,
-    },
     PaneClose {
         pane_id: String,
     },
+}
+
+/// Identity returned by Herdr and confirmed in the post-mutation snapshot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct CreatedPane {
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub space_id: String,
+    pub tab_id: String,
 }
 
 /// Authoritative session state read after a successful resource mutation.
@@ -356,6 +306,7 @@ pub enum ResourceMutationRequest {
 pub struct ResourceMutationResponse {
     pub session_id: String,
     pub snapshot: SessionSnapshotResponse,
+    pub created: Option<CreatedPane>,
 }
 
 /// A full replacement snapshot or an explicit session stream failure state.
@@ -388,7 +339,6 @@ pub enum SessionStreamMessage {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalMode {
-    Observe,
     Control,
 }
 
@@ -722,7 +672,6 @@ impl<'de> Deserialize<'de> for TerminalCommand {
 #[serde(rename_all = "snake_case")]
 pub enum TerminalOwnershipState {
     Pending,
-    Observing,
     Owned,
     Conflict,
     Released,

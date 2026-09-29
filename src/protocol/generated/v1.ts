@@ -12,31 +12,63 @@ export type StatusResponse = { protocol_version: string, cockpit_version: string
 
 export type ErrorResponse = { code: string, message: string, };
 
-export type BrowserTarget = { session_id: string, space_id: string | null, pane_id: string | null, endpoint_path: string | null, };
+export type BrowserTarget = { session_id: string, tab_id: string | null, pane_id: string | null, endpoint_path: string | null, };
 
-export type BrowserAction = { "kind": "open", url: string | null, } | { "kind": "status" } | { "kind": "close" };
+export type BrowserAction = { "kind": "open", url: string | null, } | { "kind": "open_fresh", url: string | null, } | { "kind": "status" } | { "kind": "close" } | { "kind": "cleanup" };
 
 export type BrowserRequest = { target: BrowserTarget, action: BrowserAction, };
 
 export type BrowserConnectionState = "absent" | "open" | "closed" | "disconnected" | "outcome_unknown";
 
-export type BrowserAssociation = { association_key: string, owner_id: string, session_id: string, space_id: string, space_label: string, playwright_session: string, working_directory: string, profile_path: string, invocation: string, connection: BrowserConnectionState, incarnation: string | null, opened_tab: string | null, };
+export type BrowserAssociation = { association_key: string, owner_id: string, session_id: string, space_id: string, space_label: string, tab_id: string, tab_label: string, playwright_session: string, working_directory: string, profile_path: string, invocation: string, connection: BrowserConnectionState, incarnation: string | null, opened_tab: string | null, };
 
-export type BrowserResponse = { association: BrowserAssociation | null, connection: BrowserConnectionState, message: string, };
+export type BrowserResponse = { association: BrowserAssociation | null, connection: BrowserConnectionState, message: string, cleanup: BrowserCleanupState, cleanup_reason: string | null, };
 
-export type BrowserFeedbackRequest = { target: BrowserTarget, };
+export type BrowserWorkScope = { "kind": "tab", target: BrowserTarget, } | { "kind": "legacy_archive", association_key: string, } | { "kind": "saved_tab", association_key: string, };
 
-export type BrowserFeedbackAckRequest = { target: BrowserTarget, ids: Array<string>, };
+export type BrowserCleanupState = "none" | "pending" | "done" | "failed";
+
+export type BrowserCleanupScope = { "kind": "legacy_space", space_id: string, } | { "kind": "tab", session_id: string, tab_id: string, };
+
+export type BrowserCleanupFailure = { association_key: string, scope: BrowserCleanupScope, reason: string, unproven_paths: Array<string>, };
+
+export type BrowserCleanupStatus = { cutover: BrowserCutoverState, failures: Array<BrowserCleanupFailure>, saved_tabs: Array<BrowserSavedTabWork>, };
+
+export type BrowserSavedTabWork = { association_key: string, session_id: string, tab_id: string, tab_label: string, space_id: string, space_label: string, saved_capture_count: number, draft_count: number, pending_capture: boolean, };
+
+export type BrowserCleanupRetryRequest = { association_key: string, };
+
+export type BrowserCutoverState = "not_needed" | "running" | "done" | "failed";
+
+export type BrowserLegacyCandidateKind = "directory" | "file";
+
+export type BrowserLegacyCandidateState = "pending" | "kept" | "removed" | "changed";
+
+export type BrowserLegacyArtifactCandidate = { path: string, kind: BrowserLegacyCandidateKind, dev: string, inode: string, entry_count: number, total_bytes: number, captured_at: string, state: BrowserLegacyCandidateState, };
+
+export type BrowserLegacyArchive = { association_key: string, session_id: string, space_id: string, space_label: string, archived_at: string, session_stopped: boolean, saved_capture_count: number, draft_count: number, pending_capture: boolean, candidates: Array<BrowserLegacyArtifactCandidate>, not_candidates: Array<string>, };
+
+export type BrowserLegacyArchiveList = { archives: Array<BrowserLegacyArchive>, };
+
+export type BrowserLegacyRemovalRequest = { association_key: string, candidates: Array<BrowserLegacyArtifactCandidate>, };
+
+export type BrowserLegacyKeepRequest = { association_key: string, };
+
+export type BrowserLegacyRecipientsRequest = { session_id: string, };
+
+export type BrowserFeedbackRequest = { scope: BrowserWorkScope, };
+
+export type BrowserFeedbackAckRequest = { scope: BrowserWorkScope, ids: Array<string>, };
 
 export type BrowserFeedbackDeliveryStatus = { capture_id: string, operation_id: string, selected_ids: Array<string>, state: CommentPasteState, message: string, };
 
 export type BrowserFeedbackLookup = { browser: BrowserResponse, feedback: BrowserFeedbackResponse, deliveries: Array<BrowserFeedbackDeliveryStatus>, drafts: BrowserViewDraftInventory | null, };
 
-export type BrowserFeedbackImageRequest = { target: BrowserTarget, capture_id: string, };
+export type BrowserFeedbackImageRequest = { scope: BrowserWorkScope, capture_id: string, };
 
 export type BrowserFeedbackImage = { mime_type: string, data_base64: string, };
 
-export type BrowserFeedbackSendRequest = { target: BrowserTarget, ids: Array<string>, operation_id: string, acknowledge_duplicate_risk: boolean, };
+export type BrowserFeedbackSendRequest = { scope: BrowserWorkScope, ids: Array<string>, operation_id: string, acknowledge_duplicate_risk: boolean, recipient: CommentPasteTarget | null, };
 
 export type BrowserFeedbackSendResponse = { operation_id: string, state: CommentPasteState, target: CommentPasteTarget | null, acknowledged_ids: Array<string>, pending_count: number, message: string, };
 
@@ -73,11 +105,9 @@ export type BrowserFeedbackResponse = { captures: Array<BrowserFeedbackCapture>,
 
 export type BrowserFeedbackAck = { acknowledged_ids: Array<string>, remaining: number, };
 
-export type BrowserViewPresentation = "split" | "browser_only";
-
 export type BrowserViewViewportRequest = { css_width: number, css_height: number, device_pixel_ratio: number, };
 
-export type BrowserViewOpenRequest = { target: BrowserTarget, client_id: string, presentation: BrowserViewPresentation, viewport: BrowserViewViewportRequest, takeover: boolean, };
+export type BrowserViewOpenRequest = { target: BrowserTarget, client_id: string, viewport: BrowserViewViewportRequest, takeover: boolean, };
 
 export type BrowserViewIdentity = { association_key: string, browser_incarnation: string, view_id: string, stream_epoch: number, };
 
@@ -195,7 +225,7 @@ export type BrowserViewDraftCommand = { "type": "list" } | { "type": "open", dra
 
 export type BrowserDraftRecoveryAction = { "type": "list" } | { "type": "retry_pending" } | { "type": "discard_pending" } | { "type": "set_editor", draft_id: string, expected_revision: number, editor: BrowserViewDraftEditorState, } | { "type": "upsert_annotation", draft_id: string, expected_revision: number, annotation: BrowserViewDraftAnnotation, } | { "type": "remove_annotation", draft_id: string, expected_revision: number, annotation_id: string, } | { "type": "discard_draft", draft_id: string, expected_revision: number, };
 
-export type BrowserDraftRecoveryRequest = { target: BrowserTarget, action: BrowserDraftRecoveryAction, };
+export type BrowserDraftRecoveryRequest = { scope: BrowserWorkScope, action: BrowserDraftRecoveryAction, };
 
 export type BrowserViewCommand = { "type": "take_control", viewport: BrowserViewViewportRequest, } | { "type": "release_control", lease_generation: number, } | { "type": "detach" } | { "type": "resize", context: BrowserViewDocumentCommandContext, viewport: BrowserViewViewportRequest, } | { "type": "pointer", location: BrowserViewLocation, input: BrowserViewPointerInput, } | { "type": "wheel", location: BrowserViewLocation, input: BrowserViewWheelInput, } | { "type": "keyboard", context: BrowserViewDocumentCommandContext, input: BrowserViewKeyboardInput, } | { "type": "text", context: BrowserViewDocumentCommandContext, input: BrowserViewTextInput, } | { "type": "composition", context: BrowserViewDocumentCommandContext, input: BrowserViewCompositionInput, } | { "type": "clipboard", context: BrowserViewDocumentCommandContext, command: BrowserViewClipboardCommand, } | { "type": "navigation", context: BrowserViewDocumentCommandContext, command: BrowserViewNavigationCommand, } | { "type": "tab", command: BrowserViewTabCommand, } | { "type": "dialog", blocker_id: string, command: BrowserViewDialogCommand, } | { "type": "file", blocker_id: string, command: BrowserViewFileCommand, } | { "type": "download", blocker_id: string, command: BrowserViewDownloadCommand, } | { "type": "permission", blocker_id: string, command: BrowserViewPermissionCommand, } | { "type": "inspect", command: BrowserViewInspectCommand, } | { "type": "capture", command: BrowserViewCaptureCommand, } | { "type": "draft", context: BrowserViewDocumentCommandContext, draft_id: string | null, expected_revision: number | null, command: BrowserViewDraftCommand, };
 
@@ -221,7 +251,7 @@ export type SpaceGitStatusResponse = { session_id: string, spaces: Array<SpaceGi
 
 export type SpaceSummary = { id: string, label: string, number: number, tab_count: number, pane_count: number, focused: boolean, agent_status: string, git: SpaceGitSummary | null, };
 
-export type TabSummary = { id: string, space_id: string, label: string, number: number, pane_count: number, focused: boolean, };
+export type TabSummary = { id: string, space_id: string, label: string, number: number, pane_count: number, focused: boolean, focused_pane_id: string | null, };
 
 export type PaneSummary = { id: string, terminal_id: string, space_id: string, tab_id: string, title: string | null, focused: boolean, agent: string | null, agent_status: string, revision: number,
 /**
@@ -231,13 +261,7 @@ cwd?: string, };
 
 export type AgentSummary = { pane_id: string, space_id: string, tab_id: string, name: string, status: string, title: string | null, focused: boolean, state_change_seq: number, };
 
-export type LayoutRect = { x: number, y: number, width: number, height: number, };
-
-export type LayoutPane = { pane_id: string, focused: boolean, rect: LayoutRect, };
-
-export type TabLayout = { space_id: string, tab_id: string, area: LayoutRect, focused_pane_id: string | null, panes: Array<LayoutPane>, zoomed: boolean, };
-
-export type SessionSnapshotResponse = { session_id: string, version: string, protocol: number, focused_space_id: string | null, focused_tab_id: string | null, focused_pane_id: string | null, spaces: Array<SpaceSummary>, tabs: Array<TabSummary>, panes: Array<PaneSummary>, layouts: Array<TabLayout>, agents: Array<AgentSummary>, };
+export type SessionSnapshotResponse = { session_id: string, server_instance: string, version: string, protocol: number, focused_space_id: string | null, focused_tab_id: string | null, focused_pane_id: string | null, spaces: Array<SpaceSummary>, tabs: Array<TabSummary>, panes: Array<PaneSummary>, agents: Array<AgentSummary>, };
 
 export type PaneOutputResponse = { pane_id: string, text: string, revision: number | null, };
 
@@ -253,19 +277,17 @@ export type FocusResponse = { session_id: string, kind: FocusKind, target_id: st
 
 export type PaneSplitDirection = "right" | "down";
 
-export type PaneResizeDirection = "left" | "right" | "up" | "down";
-
-export type PaneZoomMode = "toggle" | "on" | "off";
-
 export type PaneMoveDestination = { "type": "existing_tab", tab_id: string, direction: PaneSplitDirection, target_pane_id: string | null, ratio: number | null, } | { "type": "new_tab", space_id: string | null, label: string | null, } | { "type": "new_space", label: string | null, tab_label: string | null, };
 
-export type ResourceMutationRequest = { "type": "space_create", cwd: string | null, label: string | null, } | { "type": "space_rename", space_id: string, label: string, } | { "type": "space_move_block", space_ids: Array<string>, before_space_id: string | null, } | { "type": "space_close", space_id: string, } | { "type": "tab_create", space_id: string, label: string | null, } | { "type": "tab_rename", tab_id: string, label: string, } | { "type": "tab_move", tab_id: string, insert_index: number, } | { "type": "tab_close", tab_id: string, } | { "type": "pane_split", pane_id: string, direction: PaneSplitDirection, ratio: number | null, } | { "type": "pane_resize", pane_id: string, direction: PaneResizeDirection, amount: number, } | { "type": "pane_rename", pane_id: string, label: string | null, } | { "type": "pane_swap", source_pane_id: string, target_pane_id: string, } | { "type": "pane_move", pane_id: string, destination: PaneMoveDestination, } | { "type": "pane_zoom", pane_id: string, mode: PaneZoomMode, } | { "type": "pane_close", pane_id: string, };
+export type ResourceMutationRequest = { "type": "space_create", cwd: string | null, label: string | null, } | { "type": "space_rename", space_id: string, label: string, } | { "type": "space_move_block", space_ids: Array<string>, before_space_id: string | null, } | { "type": "space_close", space_id: string, } | { "type": "tab_create", space_id: string, label: string | null, } | { "type": "tab_rename", tab_id: string, label: string, } | { "type": "tab_move", tab_id: string, insert_index: number, } | { "type": "tab_close", tab_id: string, } | { "type": "pane_split", pane_id: string, direction: PaneSplitDirection, ratio: number | null, } | { "type": "pane_rename", pane_id: string, label: string | null, } | { "type": "pane_move", pane_id: string, destination: PaneMoveDestination, } | { "type": "pane_close", pane_id: string, };
 
-export type ResourceMutationResponse = { session_id: string, snapshot: SessionSnapshotResponse, };
+export type CreatedPane = { pane_id: string, terminal_id: string, space_id: string, tab_id: string, };
+
+export type ResourceMutationResponse = { session_id: string, snapshot: SessionSnapshotResponse, created: CreatedPane | null, };
 
 export type SessionStreamMessage = { "type": "snapshot", session_id: string, generation: number, sequence: number, snapshot: SessionSnapshotResponse, } | { "type": "stale", session_id: string, generation: number, sequence: number, code: string, message: string, } | { "type": "disconnected", session_id: string, generation: number, sequence: number, code: string, message: string, };
 
-export type TerminalMode = "observe" | "control";
+export type TerminalMode = "control";
 
 export type TerminalOpenRequest = { session_id: string, pane_id: string, mode: TerminalMode, takeover: boolean, cols: number, rows: number, cell_width_px: number, cell_height_px: number, };
 
@@ -279,7 +301,7 @@ export type TerminalMouseKind = "down" | "up" | "drag" | "moved";
 
 export type TerminalCommand = { "type": "terminal.input", text: string | null, bytes: string | null, } | { "type": "terminal.resize", cols: number, rows: number, cell_width_px: number, cell_height_px: number, } | { "type": "terminal.scroll", direction: TerminalScrollDirection, lines: number, source: TerminalScrollSource, column: number | null, row: number | null, modifiers: number, } | { "type": "terminal.mouse", kind: TerminalMouseKind, button: TerminalMouseButton | null, column: number, row: number, modifiers: number, } | { "type": "terminal.release" };
 
-export type TerminalOwnershipState = "pending" | "observing" | "owned" | "conflict" | "released" | "lost";
+export type TerminalOwnershipState = "pending" | "owned" | "conflict" | "released" | "lost";
 
 export type TerminalStreamMessage = { "type": "mouse_mode", session_id: string, pane_id: string, stream_id: string, enabled: boolean, } | { "type": "ownership", session_id: string, pane_id: string, stream_id: string, state: TerminalOwnershipState, message: string | null, } | { "type": "frame", session_id: string, pane_id: string, stream_id: string, seq: string, encoding: string, width: number, height: number, full: boolean, bytes: string, } | { "type": "closed", session_id: string, pane_id: string, stream_id: string, reason: string, } | { "type": "disconnected", session_id: string, pane_id: string, stream_id: string, code: string, message: string, } | { "type": "error", session_id: string, pane_id: string, stream_id: string, code: string, message: string, };
 
@@ -463,34 +485,21 @@ export type WorkspaceOwnedResource = { kind: string, path: string, created_by_op
 
 export type WorkspaceOperation = { operation_id: string, generation: number, sequence: number, session_id: string, plan: WorkspaceSetupPlan, state: WorkspaceOperationState, step: WorkspaceOperationStep, workspace_id: string | null, tab_id: string | null, pane_id: string | null, companion_id: string | null, owned_resources: Array<WorkspaceOwnedResource>, error: ErrorResponse | null, resume_allowed: boolean, cancel_requested: boolean, updated_at: string, };
 
-export type ExtensionKind = "context" | "review";
+export type ViewerSourceKind = "context" | "review";
 
-export type DetectionConfidence = "verified_launch" | "verified_process" | "candidate" | "none" | "unsupported";
+export type ViewerKind = "files" | "review";
+
+export type ViewerSourceSelector = { "kind": "files_context" } | { "kind": "files_folder" } | { "kind": "review", repository_id: string, };
+
+export type ViewerSourceOptions = { session_id: string, pane_id: string, tab_id: string, space_id: string, files_context_root_id: string | null, files_folder_root_id: string | null, review_repository_ids: Array<string>, roots: Array<ContextRoot>, reason: string, diagnostics: Array<ProjectDiagnostic>, };
+
+export type ViewerOpenRequest = { tab_id: string, kind: ViewerKind, source_pane_id: string, source: ViewerSourceSelector, client_id: string, };
+
+export type ViewerContext = { session_id: string, viewer_id: string, binding_id: string, tab_id: string, space_id: string, kind: ViewerKind, source_kind: ViewerSourceKind, source_id: string, roots: Array<ContextRoot>, default_root_id: string | null, diagnostics: Array<ProjectDiagnostic>, };
 
 export type ContextRootKind = "repository" | "companion" | "folder" | "library";
 
 export type ContextRoot = { root_id: string, kind: ContextRootKind, label: string, path: string, repository_id: string, checkout_path: string, companion_id: string | null, };
-
-export type PanePresentation = { session_id: string, pane_id: string, terminal_id: string, binding_id: string, extension: ExtensionKind | null,
-/**
- * Eligible automatic replacement, distinct from detected extension identity.
- */
-renderer: ExtensionKind | null, confidence: DetectionConfidence, reason: string, roots: Array<ContextRoot>, default_root_id: string | null,
-/**
- * Installed file-viewer support can open a fresh, source-pane-derived
- * Folder root. This remains distinct from Cockpit companion Context.
- */
-can_open_files: boolean,
-/**
- * The only Folder root accepted by `ContextLaunchRequest` when opening
- * files from the current source pane.
- */
-files_root_id: string | null, can_open_context: boolean,
-/**
- * Reviewr is installed/enabled at this endpoint and the current pane can
- * launch it only from an authorized primary repository checkout.
- */
-can_open_review: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
 export type ContextDirectoryRequest = { binding_id: string, root_id: string, path: string, offset?: number, revision?: string, };
 
@@ -520,24 +529,9 @@ export type ContextMediaRequest = { binding_id: string, root_id: string, path: s
 
 export type ContextMedia = { binding_id: string, root_id: string, path: string, revision: string, content_hash: string, bytes: number, mime_type: string, width: number, height: number, data_base64: string, };
 
-export type ContextSplitDirection = "right" | "down";
-
-export type ContextLaunchRequest = { pane_id: string, binding_id: string, root_id: string, direction: ContextSplitDirection, };
-
-export type ReviewLaunchRequest = { pane_id: string, binding_id: string,
-/**
- * Opaque repository identity resolved from the authoritative source
- * pane's Git checkout at the launch boundary.
- */
-repository_id: string, direction: ContextSplitDirection, };
-
 export type CommentRequestScope = { binding_id: string, client_id: string, };
 
-export type CommentOwner = { session_id: string, pane_id: string, terminal_id: string, source_kind: ExtensionKind,
-/**
- * Companion identity for Context; a separate review identity for Review.
- */
-source_id: string, };
+export type CommentOwner = { "kind": "viewer", session_id: string, server_instance: string, tab_id: string, source_kind: ViewerSourceKind, source_id: string, } | { "kind": "legacy_pane", session_id: string, pane_id: string, terminal_id: string, source_kind: ViewerSourceKind, source_id: string, };
 
 export type CommentLocation = { workspace_id: string, tab_id: string, };
 
@@ -688,7 +682,7 @@ comparison: ReviewComparison, status: ReviewFileStatus, old_path: string | null,
  */
 additions: number | null, deletions: number | null, summary: string, old_revision: string | null, new_revision: string | null, };
 
-export type ReviewSnapshot = { binding_id: string, session_id: string, pane_id: string, review_id: string, generation: number, repository_id: string, checkout_path: string,
+export type ReviewSnapshot = { binding_id: string, session_id: string, viewer_id: string, review_id: string, generation: number, repository_id: string, checkout_path: string,
 /**
  * Stable direct-checkout identity shared with Review comment batches.
  */
@@ -714,7 +708,7 @@ text: string, };
 
 export type ReviewHunk = { old_path: string | null, new_path: string | null, old_start: number, new_start: number, lines: Array<ReviewDiffLine>, };
 
-export type ReviewFileDiff = { binding_id: string, session_id: string, pane_id: string, review_id: string, generation: number, file: ReviewChangedFile, hunks: Array<ReviewHunk>,
+export type ReviewFileDiff = { binding_id: string, session_id: string, viewer_id: string, review_id: string, generation: number, file: ReviewChangedFile, hunks: Array<ReviewHunk>,
 /**
  * Bounded immutable text retained for old/new review-side capture and
  * expansion of unchanged lines. None means binary, unreadable, or capped.

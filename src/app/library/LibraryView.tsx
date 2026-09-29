@@ -100,6 +100,6 @@ export function LibraryView({ client, onClose, command = null, fullScreen = fals
       <span className="context-toolbar-spacer" />
       <button type="button" className="library-icon-button" onClick={onClose} aria-label="Close Library" title="Close Library (Esc)"><UiIcon name="close" /></button>
     </header>
-    <ContextViewer client={client} presentation={null} value={view} onChange={setView} controlAllowed onRequestControl={() => undefined} library={library} libraryCommand={command} space={space} />
+    <ContextViewer client={client} context={null} value={view} onChange={setView} library={library} libraryCommand={command} space={space} />
   </section>;
 }

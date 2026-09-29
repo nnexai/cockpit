@@ -22,12 +22,13 @@ use cockpit_core::{
     process::{OwnedChild, run_bounded_command},
 };
 use cockpit_protocol::v1::{
-    AgentSummary, FocusKind, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
-    LayoutPane, LayoutRect, PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
+    AgentSummary, CreatedPane, FocusKind, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
+    PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
     SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceGitSummary, SpaceSummary,
-    TabLayout, TabSummary, TerminalOpenRequest,
+    TabSummary, TerminalOpenRequest,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 mod capabilities;
 mod config;
 mod extensions;
@@ -35,12 +36,10 @@ mod operations;
 mod projects;
 mod transport;
 
-#[cfg(test)]
-use capabilities::REQUIRED_METHODS;
 use capabilities::missing_required_methods;
 #[cfg(test)]
 use cockpit_protocol::v1::{
-    PaneMoveDestination, PaneResizeDirection, PaneSplitDirection, PaneZoomMode,
+    PaneMoveDestination, PaneSplitDirection,
 };
 use config::valid_session_name;
 pub use config::{ConfigError, HerdrCliConfig};
@@ -184,16 +183,6 @@ fn optional_id(
     optional_string(object, key, context)
 }
 
-fn layout_rect(value: &Value, context: &str) -> Result<LayoutRect, InspectionError> {
-    let object = object(value, context)?;
-    Ok(LayoutRect {
-        x: required_u32(object, "x", context)?,
-        y: required_u32(object, "y", context)?,
-        width: required_u32(object, "width", context)?,
-        height: required_u32(object, "height", context)?,
-    })
-}
-
 fn parse_snapshot_worktree(workspace: &serde_json::Map<String, Value>) -> Option<SpaceGitSummary> {
     let worktree = workspace.get("worktree")?.as_object()?;
     let repository_key = worktree.get("repo_key")?.as_str()?;
@@ -219,6 +208,7 @@ fn parse_snapshot_worktree(workspace: &serde_json::Map<String, Value>) -> Option
 fn parse_snapshot(
     value: Value,
     session_id: &str,
+    endpoint_identity: &str,
 ) -> Result<SessionSnapshotResponse, InspectionError> {
     let root = object(&value, "response")?;
     let result = root
@@ -261,7 +251,7 @@ fn parse_snapshot(
         })
         .collect::<Result<Vec<_>, InspectionError>>()?;
 
-    let tabs = required_array(snapshot, "tabs", "snapshot")?
+    let mut tabs = required_array(snapshot, "tabs", "snapshot")?
         .iter()
         .enumerate()
         .map(|(index, value)| {
@@ -274,6 +264,7 @@ fn parse_snapshot(
                 number: required_u32(object, "number", &context)?,
                 pane_count: required_u32(object, "pane_count", &context)?,
                 focused: required_bool(object, "focused", &context)?,
+                focused_pane_id: None,
             })
         })
         .collect::<Result<Vec<_>, InspectionError>>()?;
@@ -306,45 +297,19 @@ fn parse_snapshot(
         })
         .collect::<Result<Vec<_>, InspectionError>>()?;
 
-    let layouts = required_array(snapshot, "layouts", "snapshot")?
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            let context = format!("snapshot.layouts[{index}]");
-            let layout = object(value, &context)?;
-            let panes = required_array(layout, "panes", &context)?
-                .iter()
-                .enumerate()
-                .map(|(pane_index, value)| {
-                    let pane_context = format!("{context}.panes[{pane_index}]");
-                    let pane = object(value, &pane_context)?;
-                    Ok(LayoutPane {
-                        pane_id: required_string(pane, "pane_id", &pane_context)?,
-                        focused: required_bool(pane, "focused", &pane_context)?,
-                        rect: layout_rect(
-                            pane.get("rect").ok_or_else(|| {
-                                malformed(format!("{pane_context}.rect is required"))
-                            })?,
-                            &format!("{pane_context}.rect"),
-                        )?,
-                    })
-                })
-                .collect::<Result<Vec<_>, InspectionError>>()?;
-            Ok(TabLayout {
-                space_id: required_string(layout, "workspace_id", &context)?,
-                tab_id: required_string(layout, "tab_id", &context)?,
-                area: layout_rect(
-                    layout
-                        .get("area")
-                        .ok_or_else(|| malformed(format!("{context}.area is required")))?,
-                    &format!("{context}.area"),
-                )?,
-                focused_pane_id: optional_id(layout, "focused_pane_id", &context)?,
-                panes,
-                zoomed: required_bool(layout, "zoomed", &context)?,
-            })
-        })
-        .collect::<Result<Vec<_>, InspectionError>>()?;
+    let mut focused_tabs = BTreeSet::new();
+    for (index, value) in required_array(snapshot, "layouts", "snapshot")?.iter().enumerate() {
+        let context = format!("snapshot.layouts[{index}]");
+        let layout = object(value, &context)?;
+        let tab_id = required_string(layout, "tab_id", &context)?;
+        let space_id = required_string(layout, "workspace_id", &context)?;
+        if !focused_tabs.insert(tab_id.clone()) {
+            return Err(malformed(format!("{context} duplicates tab_id {tab_id}")));
+        }
+        let tab = tabs.iter_mut().find(|tab| tab.id == tab_id && tab.space_id == space_id)
+            .ok_or_else(|| malformed(format!("{context} references an unknown tab")))?;
+        tab.focused_pane_id = optional_id(layout, "focused_pane_id", &context)?;
+    }
 
     let agents = required_array(snapshot, "agents", "snapshot")?
         .iter()
@@ -397,6 +362,9 @@ fn parse_snapshot(
 
     let response = SessionSnapshotResponse {
         session_id: session_id.to_owned(),
+        server_instance: format!("{:016x}", u64::from_be_bytes(
+            Sha256::digest(endpoint_identity.as_bytes())[..8].try_into().expect("SHA-256 has eight prefix bytes")
+        )),
         version,
         protocol,
         focused_space_id,
@@ -405,7 +373,6 @@ fn parse_snapshot(
         spaces,
         tabs,
         panes,
-        layouts,
         agents,
     };
     validate_snapshot(&response)?;
@@ -416,7 +383,6 @@ fn validate_snapshot(snapshot: &SessionSnapshotResponse) -> Result<(), Inspectio
     let spaces = &snapshot.spaces;
     let tabs = &snapshot.tabs;
     let panes = &snapshot.panes;
-    let layouts = &snapshot.layouts;
     let agents = &snapshot.agents;
     let focused_space_id = snapshot.focused_space_id.as_deref();
     let focused_tab_id = snapshot.focused_tab_id.as_deref();
@@ -469,57 +435,13 @@ fn validate_snapshot(snapshot: &SessionSnapshotResponse) -> Result<(), Inspectio
         }
     }
 
-    let mut layout_ids = BTreeSet::new();
-    for layout in layouts {
-        let layout_key = (layout.space_id.as_str(), layout.tab_id.as_str());
-        if !layout_ids.insert(layout_key) {
-            return Err(malformed(format!(
-                "snapshot.layouts has duplicate layout for tab_id {}",
-                layout.tab_id
-            )));
-        }
-        let tab = tabs_by_id.get(layout.tab_id.as_str()).ok_or_else(|| {
-            malformed(format!(
-                "snapshot.layouts[{}] references unknown tab_id {}",
-                layout.tab_id, layout.tab_id
-            ))
-        })?;
-        if tab.space_id != layout.space_id {
-            return Err(malformed(format!(
-                "snapshot.layouts[{}] workspace_id does not match tab",
-                layout.tab_id
-            )));
-        }
-        let mut layout_pane_ids = BTreeSet::new();
-        for layout_pane in &layout.panes {
-            if !layout_pane_ids.insert(layout_pane.pane_id.as_str()) {
-                return Err(malformed(format!(
-                    "snapshot.layouts[{}] has duplicate pane_id {}",
-                    layout.tab_id, layout_pane.pane_id
-                )));
+    for tab in tabs {
+        if let Some(pane_id) = &tab.focused_pane_id {
+            let pane = panes_by_id.get(pane_id.as_str())
+                .ok_or_else(|| malformed(format!("snapshot.tabs[{}] focused_pane_id is absent", tab.id)))?;
+            if pane.tab_id != tab.id || pane.space_id != tab.space_id {
+                return Err(malformed(format!("snapshot.tabs[{}] focused pane is not a member", tab.id)));
             }
-            let pane = panes_by_id
-                .get(layout_pane.pane_id.as_str())
-                .ok_or_else(|| {
-                    malformed(format!(
-                        "snapshot.layouts[{}] references unknown pane_id {}",
-                        layout.tab_id, layout_pane.pane_id
-                    ))
-                })?;
-            if pane.space_id != layout.space_id || pane.tab_id != layout.tab_id {
-                return Err(malformed(format!(
-                    "snapshot.layouts[{}] pane_id {} does not match layout",
-                    layout.tab_id, layout_pane.pane_id
-                )));
-            }
-        }
-        if let Some(focused_pane_id) = &layout.focused_pane_id
-            && !layout_pane_ids.contains(focused_pane_id.as_str())
-        {
-            return Err(malformed(format!(
-                "snapshot.layouts[{}].focused_pane_id {} is not in layout",
-                layout.tab_id, focused_pane_id
-            )));
         }
     }
 
@@ -753,13 +675,9 @@ impl HerdrCliAdapter {
         &self.config
     }
 
-    /// Construct the extension-pane adapter on the same endpoint configuration.
-    ///
-    /// The returned adapter shares this CLI adapter's endpoint selection and
-    /// bounded request machinery, while keeping extension manifests and launch
-    /// receipts in its own bounded cache.
-    pub fn extension_adapter(&self) -> Arc<dyn cockpit_core::ExtensionHerdrAdapter> {
-        Arc::new(extensions::ExtensionHerdrAdapter::new(self.clone()))
+    /// Construct fresh source-pane evidence on the same endpoint configuration.
+    pub fn source_adapter(&self) -> Arc<dyn cockpit_core::SourcePaneAdapter> {
+        Arc::new(extensions::HerdrSourcePaneAdapter::new(self.clone()))
     }
 
     /// Construct the capability-gated acknowledged raw-paste adapter.
@@ -1359,7 +1277,7 @@ impl HerdrCliAdapter {
         expected_identity: Option<&str>,
     ) -> Result<SessionSnapshotResponse, InspectionError> {
         self.selected_session(session_id)?;
-        let (result, _) = self
+        let (result, identity) = self
             .socket_request_with_identity(
                 session_id,
                 "session.snapshot",
@@ -1367,7 +1285,7 @@ impl HerdrCliAdapter {
                 expected_identity,
             )
             .await?;
-        parse_snapshot(json!({"result": result}), session_id)
+        parse_snapshot(json!({"result": result}), session_id, &identity)
     }
     async fn mutate_resource(
         &self,
@@ -1384,9 +1302,11 @@ impl HerdrCliAdapter {
         {
             params["cwd"] = json!(cwd);
         }
-        let result = self.socket_request(session_id, method, params).await?;
-        validate_mutation_result(request, result)?;
-        let snapshot = self.read_snapshot(session_id).await.map_err(|error| {
+        let (result, identity) = self
+            .socket_request_with_identity(session_id, method, params, None)
+            .await?;
+        let created = validate_mutation_result(request, result)?;
+        let snapshot = self.read_structure_with_identity(session_id, Some(&identity)).await.map_err(|error| {
             InspectionError::new(
                 "mutation_applied_snapshot_failed",
                 format!(
@@ -1395,9 +1315,11 @@ impl HerdrCliAdapter {
                 ),
             )
         })?;
+        confirm_created_pane(created.as_ref(), &snapshot)?;
         Ok(ResourceMutationResponse {
             session_id: session_id.to_owned(),
             snapshot,
+            created,
         })
     }
 
@@ -2057,9 +1979,31 @@ pub(crate) fn parse_focus_result(
 fn validate_mutation_result(
     request: &ResourceMutationRequest,
     result: Value,
-) -> Result<(), InspectionError> {
+) -> Result<Option<CreatedPane>, InspectionError> {
+    if matches!(request, ResourceMutationRequest::PaneSplit { .. }) {
+        let parse = || {
+            let result = object(&result, "pane.split result")?;
+            if required_string(result, "type", "pane.split result")? != "pane_info" {
+                return Err(malformed("pane.split result.type must be pane_info"));
+            }
+            let pane = result.get("pane")
+                .ok_or_else(|| malformed("pane.split result.pane is required"))?;
+            let pane = object(pane, "pane.split result.pane")?;
+            Ok(CreatedPane {
+                pane_id: required_string(pane, "pane_id", "pane.split result.pane")?,
+                terminal_id: required_string(pane, "terminal_id", "pane.split result.pane")?,
+                space_id: required_string(pane, "workspace_id", "pane.split result.pane")?,
+                tab_id: required_string(pane, "tab_id", "pane.split result.pane")?,
+            })
+        };
+        return parse().map(Some).map_err(|error: InspectionError| {
+            InspectionError::new("mutation_applied_snapshot_failed", format!(
+                "the split may already be applied; only resync is safe because its creation identity could not be validated: {}", error.message
+            ))
+        });
+    }
     let ResourceMutationRequest::PaneMove { .. } = request else {
-        return Ok(());
+        return Ok(None);
     };
     let result = object(&result, "pane.move result")?;
     if required_string(result, "type", "pane.move result")? != "pane_move" {
@@ -2078,7 +2022,7 @@ fn validate_mutation_result(
         })
         .and_then(|value| object(value, "pane.move result.move_result"))?;
     if required_bool(move_result, "changed", "pane.move result.move_result")? {
-        return Ok(());
+        return Ok(None);
     }
     let reason = optional_string(move_result, "reason", "pane.move result.move_result")?
         .unwrap_or_else(|| "an unspecified constraint".into());
@@ -2091,6 +2035,25 @@ fn validate_mutation_result(
     Err(InspectionError::new(
         "pane_move_not_applied",
         format!("Herdr did not move the pane: {reason}"),
+    ))
+}
+
+fn confirm_created_pane(
+    created: Option<&CreatedPane>,
+    snapshot: &SessionSnapshotResponse,
+) -> Result<(), InspectionError> {
+    let Some(created) = created else { return Ok(()); };
+    if snapshot.panes.iter().any(|pane| {
+        pane.id == created.pane_id && pane.terminal_id == created.terminal_id
+            && pane.space_id == created.space_id && pane.tab_id == created.tab_id
+    }) && snapshot.tabs.iter().any(|tab| tab.id == created.tab_id && tab.space_id == created.space_id)
+        && snapshot.spaces.iter().any(|space| space.id == created.space_id)
+    {
+        return Ok(());
+    }
+    Err(InspectionError::new(
+        "mutation_applied_snapshot_failed",
+        "the split may already be applied; only resync is safe because the authoritative snapshot did not confirm its creation identity",
     ))
 }
 
@@ -2206,9 +2169,9 @@ impl BrowserHerdrAdapter for HerdrCliAdapter {
             .socket_request_with_identity(session_id, "session.snapshot", json!({}), None)
             .await?;
         Ok(BrowserHerdrSnapshot {
+            snapshot: parse_snapshot(json!({"result": result}), session_id, &endpoint_identity)?,
             endpoint_identity,
             endpoint_path,
-            snapshot: parse_snapshot(json!({"result": result}), session_id)?,
         })
     }
     async fn browser_endpoint_identity(
@@ -2281,6 +2244,7 @@ mod tests {
     fn subscription_snapshot(panes: &[&str]) -> SessionSnapshotResponse {
         SessionSnapshotResponse {
             session_id: "default".into(),
+            server_instance: "0123456789abcdef".into(),
             version: "0.9.0".into(),
             protocol: 22,
             focused_space_id: None,
@@ -2303,7 +2267,6 @@ mod tests {
                     cwd: None,
                 })
                 .collect(),
-            layouts: Vec::new(),
             agents: Vec::new(),
         }
     }
@@ -2314,7 +2277,7 @@ mod tests {
         raw["result"]["snapshot"]["agents"][0]["display_agent"] = json!("assistant");
 
         raw["result"]["snapshot"]["agents"][0]["name"] = json!("assistant");
-        let pending = parse_snapshot(raw.clone(), "default").expect("unidentified agent is schema-valid");
+        let pending = parse_snapshot(raw.clone(), "default", "fixture-endpoint").expect("unidentified agent is schema-valid");
         assert!(pending.agents.is_empty());
         assert_eq!(pending.focused_pane_id.as_deref(), Some("pane-a"));
         assert_eq!(pending.panes[0].id, "pane-a");
@@ -2322,11 +2285,48 @@ mod tests {
         assert!(!known_event("pane.agent_detected", &json!({"pane_id":"other"}), &pending));
 
         raw["result"]["snapshot"]["agents"][0]["agent"] = json!({"name":"assistant"});
-        assert!(parse_snapshot(raw.clone(), "default").is_err());
+        assert!(parse_snapshot(raw.clone(), "default", "fixture-endpoint").is_err());
         raw["result"]["snapshot"]["agents"][0]["agent"] = json!("assistant");
-        let identified = parse_snapshot(raw, "default").expect("confirmed agent identity");
+        let identified = parse_snapshot(raw, "default", "fixture-endpoint").expect("confirmed agent identity");
         assert_eq!(identified.agents[0].name, "assistant");
         assert_eq!(identified.agents[0].pane_id, "pane-a");
+    }
+
+    #[test]
+    fn snapshot_server_instance_tracks_endpoint_and_ignores_geometry() {
+        let mut raw: Value = serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        let first = parse_snapshot(raw.clone(), "default", "endpoint-one").unwrap();
+        raw["result"]["snapshot"]["layouts"][0]["area"] = Value::Null;
+        raw["result"]["snapshot"]["layouts"][0]["panes"] = Value::Null;
+        raw["result"]["snapshot"]["layouts"][0]["zoomed"] = json!("untrusted-positioning-hint");
+        let repeated = parse_snapshot(raw.clone(), "default", "endpoint-one").unwrap();
+        let restarted = parse_snapshot(raw, "default", "endpoint-two").unwrap();
+        assert_eq!(first.server_instance, repeated.server_instance);
+        assert_ne!(first.server_instance, restarted.server_instance);
+        assert_eq!(first.server_instance.len(), 16);
+        assert_eq!(repeated.tabs[0].focused_pane_id.as_deref(), Some("pane-a"));
+    }
+
+    #[test]
+    fn split_receipt_requires_complete_identity_and_post_snapshot_membership() {
+        let raw: Value = serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        let snapshot = parse_snapshot(raw, "default", "fixture-endpoint").unwrap();
+        let pane = &snapshot.panes[0];
+        let request = ResourceMutationRequest::PaneSplit {
+            pane_id: "source-terminal".into(), direction: PaneSplitDirection::Right, ratio: None,
+        };
+        let result = json!({"type":"pane_info","pane":{
+            "pane_id":pane.id,"terminal_id":pane.terminal_id,
+            "workspace_id":pane.space_id,"tab_id":pane.tab_id,"focused":true
+        }});
+        let mut created = validate_mutation_result(&request, result.clone()).unwrap().unwrap();
+        confirm_created_pane(Some(&created), &snapshot).unwrap();
+        assert_eq!(created.pane_id, pane.id);
+        created.terminal_id = "different-terminal".into();
+        assert_eq!(confirm_created_pane(Some(&created), &snapshot).unwrap_err().code, "mutation_applied_snapshot_failed");
+        let mut incomplete = result;
+        incomplete["pane"].as_object_mut().unwrap().remove("terminal_id");
+        assert_eq!(validate_mutation_result(&request, incomplete).unwrap_err().code, "mutation_applied_snapshot_failed");
     }
 
     #[test]
@@ -2873,29 +2873,12 @@ mod tests {
                 json!({"target_pane_id": "p1", "direction": "right", "ratio": 0.4, "focus": true}),
             ),
             (
-                ResourceMutationRequest::PaneResize {
-                    pane_id: "p1".into(),
-                    direction: PaneResizeDirection::Up,
-                    amount: 0.1,
-                },
-                "pane.resize",
-                json!({"pane_id": "p1", "direction": "up", "amount": 0.1}),
-            ),
-            (
                 ResourceMutationRequest::PaneRename {
                     pane_id: "p1".into(),
                     label: None,
                 },
                 "pane.rename",
                 json!({"pane_id": "p1", "label": null}),
-            ),
-            (
-                ResourceMutationRequest::PaneSwap {
-                    source_pane_id: "p1".into(),
-                    target_pane_id: "p2".into(),
-                },
-                "pane.swap",
-                json!({"source_pane_id": "p1", "target_pane_id": "p2"}),
             ),
             (
                 ResourceMutationRequest::PaneMove {
@@ -2919,14 +2902,6 @@ mod tests {
                     },
                     "focus": true
                 }),
-            ),
-            (
-                ResourceMutationRequest::PaneZoom {
-                    pane_id: "p1".into(),
-                    mode: PaneZoomMode::Off,
-                },
-                "pane.zoom",
-                json!({"pane_id": "p1", "mode": "off"}),
             ),
             (
                 ResourceMutationRequest::PaneClose {
@@ -3020,38 +2995,6 @@ mod tests {
         assert!(pane_folder(json!({"cwd": 7}).as_object().unwrap(), "pane").is_err());
     }
 
-    #[test]
-    fn required_schema_methods_cover_session_features() {
-        assert_eq!(
-            REQUIRED_METHODS,
-            [
-                "ping",
-                "session.snapshot",
-                "events.subscribe",
-                "worktree.list",
-                "pane.read",
-                "workspace.focus",
-                "tab.focus",
-                "pane.focus",
-                "agent.focus",
-                "workspace.create",
-                "workspace.rename",
-                "workspace.move_block",
-                "workspace.close",
-                "tab.create",
-                "tab.rename",
-                "tab.move",
-                "tab.close",
-                "pane.split",
-                "pane.resize",
-                "pane.rename",
-                "pane.swap",
-                "pane.move",
-                "pane.zoom",
-                "pane.close",
-            ]
-        );
-    }
 
     #[test]
     fn worktree_dispatches_have_unknown_outcomes_after_a_response_deadline() {
@@ -3078,7 +3021,6 @@ mod tests {
             "tab.close",
             "pane.split",
             "pane.close",
-            "plugin.pane.open",
         ] {
             assert_eq!(
                 response_deadline(method),

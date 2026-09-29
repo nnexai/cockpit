@@ -11,7 +11,7 @@ use super::{inspection_error_response, requests::decode_request};
 #[tauri::command]
 pub async fn cockpit_context_media(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<ContextMedia, ErrorResponse> {
@@ -19,7 +19,7 @@ pub async fn cockpit_context_media(
     service
         .contexts()
         .map_err(inspection_error_response)?
-        .media(&session_id, &pane_id, &request)
+        .media(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }

@@ -1,6 +1,6 @@
 # Cockpit-owned tab layout: interaction and state design
 
-Status: design only. No product code, configuration or active decision/architecture docs are changed by this document. Authority order: [`00-contract.md`](00-contract.md) (user decisions C1-C19 and the approved reference), then this design, then existing repository decisions (evidence, not constraints). Backend facts confirmed by the parent are in [`03-contract-evidence.md`](03-contract-evidence.md). The data/interface plan is `02-implementation-plan.md` (TabLayoutPlan); shared decisions with it are listed in section 5.9.
+Status: implemented design reference. Authority order: [`00-contract.md`](00-contract.md) (user decisions C1-C19 and the approved reference), then this design, then the implementation plan. [`03-contract-evidence.md`](03-contract-evidence.md) records exercised product scenarios and verification limits; the full acceptance matrix below is not a claim that every scenario was run.
 
 Notation: `demo:N` (and `D:N` inside the acceptance tables) is a line in the approved reference [`mocks/tab-layout/demo.html`](mocks/tab-layout/demo.html) (commit `6aa0331`); `path:N` is a repository line read for this design. `[INFERENCE]` marks a claim that was not observed. **No runtime, screenshot or performance number was measured for this design** (no screenshot was captured; the visual evidence is the demo source lines); every number below is either quoted from the demo source or is a design value that the acceptance matrix asks the implementation to observe.
 

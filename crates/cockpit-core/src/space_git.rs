@@ -211,6 +211,7 @@ mod tests {
     fn snapshot(spaces: Vec<SpaceSummary>) -> SessionSnapshotResponse {
         SessionSnapshotResponse {
             session_id: "session".to_owned(),
+            server_instance: "0123456789abcdef".into(),
             version: "0.9.1".to_owned(),
             protocol: 22,
             focused_space_id: None,
@@ -220,7 +221,6 @@ mod tests {
             tabs: Vec::new(),
             panes: Vec::new(),
             agents: Vec::new(),
-            layouts: Vec::new(),
         }
     }
 

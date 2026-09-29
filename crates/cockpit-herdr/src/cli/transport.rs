@@ -24,7 +24,7 @@ pub(crate) fn response_deadline(method: &str) -> Duration {
     match method {
         "worktree.create" | "worktree.open" | "worktree.remove" => GIT_MUTATION_RESPONSE_TIMEOUT,
         "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.split"
-        | "pane.close" | "plugin.pane.open" => PROCESS_MUTATION_RESPONSE_TIMEOUT,
+        | "pane.close" => PROCESS_MUTATION_RESPONSE_TIMEOUT,
         _ => FINITE_RESPONSE_TIMEOUT,
     }
 }

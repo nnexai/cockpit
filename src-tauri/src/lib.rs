@@ -7,6 +7,7 @@ mod projects;
 mod requests;
 mod review;
 mod library;
+mod viewer;
 
 use std::{
     collections::HashMap,
@@ -29,9 +30,11 @@ use cockpit_host::{
 };
 use cockpit_protocol::{
     browser::{
-        BrowserFeedbackAckRequest, BrowserFeedbackImage, BrowserFeedbackImageRequest,
-        BrowserFeedbackLookup, BrowserFeedbackRequest, BrowserFeedbackSendRequest,
-        BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse,
+        BrowserCleanupRetryRequest, BrowserCleanupStatus, BrowserFeedbackAckRequest,
+        BrowserFeedbackImage, BrowserFeedbackImageRequest, BrowserFeedbackLookup,
+        BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserFeedbackSendResponse,
+        BrowserLegacyArchiveList, BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest,
+        BrowserLegacyRemovalRequest, BrowserRequest, BrowserResponse,
     },
     browser_view::{
         BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewEvent,
@@ -650,6 +653,52 @@ async fn cockpit_browser_feedback_send(
         .send_feedback(request)
         .await
         .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_cleanup_status(
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserCleanupStatus, ErrorResponse> {
+    runtime.cleanup_status().await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_cleanup_retry(
+    request: BrowserCleanupRetryRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserCleanupStatus, ErrorResponse> {
+    runtime.retry_cleanup(request).await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_legacy_list(
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserLegacyArchiveList, ErrorResponse> {
+    runtime.legacy_list().await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_legacy_remove(
+    request: BrowserLegacyRemovalRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserLegacyArchiveList, ErrorResponse> {
+    runtime.legacy_remove(request).await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_legacy_keep(
+    request: BrowserLegacyKeepRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserLegacyArchiveList, ErrorResponse> {
+    runtime.legacy_keep(request).await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_legacy_recipients(
+    request: BrowserLegacyRecipientsRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<Vec<cockpit_protocol::comment_paste::CommentPasteTarget>, ErrorResponse> {
+    runtime.legacy_recipients(request).await.map_err(inspection_error_response)
 }
 #[derive(Clone, Debug, Serialize)]
 struct BrowserViewSubscribeResponse {
@@ -1703,10 +1752,12 @@ pub fn run() {
         .clone();
     let contexts = cockpit_core::context::ContextService::new(
         project_config.clone(),
-        inspector.extension_adapter(),
+        inspector.source_adapter(),
         shutdown_projects.clone(),
     );
-    let service = service.with_contexts(contexts);
+    let viewers = Arc::new(cockpit_core::viewer::ViewerService::new(Arc::new(contexts.clone())));
+    let contexts = contexts.with_viewers(viewers.clone());
+    let service = service.with_contexts(contexts).with_viewers(viewers);
     let library = cockpit_core::library::LibraryService::new(project_config.clone(), sources)
         .with_projects(shutdown_projects.clone(), inspector.clone());
     let service = service.with_library(library);
@@ -1776,11 +1827,12 @@ pub fn run() {
             credentials::cockpit_provider_credentials,
             credentials::cockpit_provider_credential_set,
             credentials::cockpit_provider_credential_clear,
-            context::cockpit_pane_presentation,
+            viewer::cockpit_viewer_sources,
+            viewer::cockpit_viewer_open,
+            viewer::cockpit_viewer_release,
             context::cockpit_context_directory,
             context::cockpit_context_file_index,
             context::cockpit_context_document,
-            context::cockpit_context_open,
             context_search::cockpit_context_search,
             context_search::cockpit_context_invalidate,
             context_media::cockpit_context_media,
@@ -1805,7 +1857,6 @@ pub fn run() {
             library::cockpit_library_space_attempts_dismiss,
             review::cockpit_review_snapshot,
             review::cockpit_review_file,
-            review::cockpit_review_open,
             comments::cockpit_comments_list,
             comments::cockpit_comments_batch,
             comments::cockpit_comments_upsert,
@@ -1827,6 +1878,12 @@ pub fn run() {
             cockpit_browser_feedback_ack,
             cockpit_browser_feedback_image,
             cockpit_browser_feedback_send,
+            cockpit_browser_cleanup_status,
+            cockpit_browser_cleanup_retry,
+            cockpit_browser_legacy_list,
+            cockpit_browser_legacy_remove,
+            cockpit_browser_legacy_keep,
+            cockpit_browser_legacy_recipients,
             cockpit_sessions,
             cockpit_session_snapshot,
             cockpit_space_git_status,

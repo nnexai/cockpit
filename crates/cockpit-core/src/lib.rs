@@ -23,9 +23,11 @@ pub mod repositories;
 pub mod review;
 pub mod sources;
 pub mod space_git;
+pub mod viewer;
 
 pub use browser::{BrowserHerdrAdapter, BrowserHerdrSnapshot, BrowserService};
-pub use extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
+pub use extension_adapter::{SourcePaneAdapter, SourcePaneEvidence, TabEvidence};
+pub use viewer::ViewerService;
 pub use paste_adapter::CommentPasteAdapter;
 pub use project_adapter::ProjectHerdrAdapter;
 
@@ -132,6 +134,7 @@ pub struct CockpitService {
     compatibility: Arc<RwLock<CompatibilityCache>>,
     projects: Option<Arc<projects::ProjectService>>,
     contexts: Option<Arc<context::ContextService>>,
+    viewers: Option<Arc<viewer::ViewerService>>,
     comments: Option<Arc<comments::CommentsService>>,
     reviews: Option<Arc<review::ReviewService>>,
     library: Option<Arc<library::LibraryService>>,
@@ -196,6 +199,7 @@ impl CockpitService {
             compatibility: Arc::new(RwLock::new(CompatibilityCache::default())),
             projects: None,
             contexts: None,
+            viewers: None,
             comments: None,
             reviews: None,
             library: None,
@@ -229,6 +233,17 @@ impl CockpitService {
                 "Context operations are not configured in this host",
             )
         })
+    }
+
+    pub fn with_viewers(mut self, viewers: Arc<viewer::ViewerService>) -> Self {
+        self.viewers = Some(viewers);
+        self
+    }
+
+    pub fn viewers(&self) -> Result<&Arc<viewer::ViewerService>, InspectionError> {
+        self.viewers.as_ref().ok_or_else(|| InspectionError::new(
+            "viewer_not_found", "Viewer operations are not configured in this host",
+        ))
     }
 
     pub fn with_library(mut self, library: library::LibraryService) -> Self {
@@ -476,7 +491,7 @@ impl CockpitService {
             .await?;
         self.session_result(
             &request.session_id,
-            validate_terminal_pane_in_layout(&request.session_id, &request.pane_id, &snapshot),
+            validate_terminal_pane_membership(&request.session_id, &request.pane_id, &snapshot),
         )
         .await?;
         self.session_result(
@@ -742,35 +757,9 @@ fn validate_mutation(request: &ResourceMutationRequest) -> Result<(), Inspection
             }
             Ok(())
         }
-        ResourceMutationRequest::PaneResize {
-            pane_id, amount, ..
-        } => {
-            validate_resource_id(pane_id, "pane")?;
-            if !amount.is_finite() || *amount <= 0.0 {
-                return Err(InspectionError::new(
-                    "invalid_pane_resize_amount",
-                    "pane resize amount must be finite and positive",
-                ));
-            }
-            Ok(())
-        }
         ResourceMutationRequest::PaneRename { pane_id, label } => {
             validate_resource_id(pane_id, "pane")?;
             validate_optional_text(label.as_deref(), "label", MAX_LABEL_BYTES)
-        }
-        ResourceMutationRequest::PaneSwap {
-            source_pane_id,
-            target_pane_id,
-        } => {
-            validate_resource_id(source_pane_id, "source_pane")?;
-            validate_resource_id(target_pane_id, "target_pane")?;
-            if source_pane_id == target_pane_id {
-                return Err(InspectionError::new(
-                    "invalid_pane_swap",
-                    "source and target panes must differ",
-                ));
-            }
-            Ok(())
         }
         ResourceMutationRequest::PaneMove {
             pane_id,
@@ -779,8 +768,7 @@ fn validate_mutation(request: &ResourceMutationRequest) -> Result<(), Inspection
             validate_resource_id(pane_id, "pane")?;
             validate_pane_destination(destination)
         }
-        ResourceMutationRequest::PaneZoom { pane_id, .. }
-        | ResourceMutationRequest::PaneClose { pane_id } => validate_resource_id(pane_id, "pane"),
+        ResourceMutationRequest::PaneClose { pane_id } => validate_resource_id(pane_id, "pane"),
     }
 }
 
@@ -854,37 +842,20 @@ fn validate_snapshot_session(
         ))
     }
 }
-/// A terminal may attach while its tab is not focused, so the client can size
-/// the pane before Herdr shows it; the pane only has to be in its own tab's layout.
-fn validate_terminal_pane_in_layout(
+/// A terminal may attach before its tab is focused. Eligibility is membership
+/// in an existing authoritative tab, never an upstream positioning hint.
+fn validate_terminal_pane_membership(
     session_id: &str,
     pane_id: &str,
     snapshot: &SessionSnapshotResponse,
 ) -> Result<(), InspectionError> {
     validate_snapshot_session(session_id, snapshot)?;
-    let Some(tab_id) = snapshot
-        .panes
-        .iter()
-        .find(|pane| pane.id == pane_id)
-        .map(|pane| pane.tab_id.as_str())
-    else {
-        return Err(pane_not_in_layout());
-    };
-    let present_in_layout = snapshot.layouts.iter().any(|layout| {
-        layout.tab_id == tab_id && layout.panes.iter().any(|pane| pane.pane_id == pane_id)
-    });
-    if present_in_layout {
+    if snapshot.panes.iter().any(|pane| pane.id == pane_id
+        && snapshot.tabs.iter().any(|tab| tab.id == pane.tab_id && tab.space_id == pane.space_id)) {
         Ok(())
     } else {
-        Err(pane_not_in_layout())
+        Err(InspectionError::new("pane_not_in_tab", "terminal pane is not a member of an existing tab"))
     }
-}
-
-fn pane_not_in_layout() -> InspectionError {
-    InspectionError::new(
-        "pane_not_in_layout",
-        "terminal pane is not in its tab's layout",
-    )
 }
 
 fn live_inspection_disabled() -> InspectionError {

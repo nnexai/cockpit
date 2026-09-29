@@ -15,7 +15,7 @@ export type SyncError = { code: string; message: string };
 
 export type PaneAttachment = {
   streamId: string | null;
-  mode: "observe" | "control";
+  mode: "control";
   ownership: TerminalOwnershipState | null;
   terminalSequence: bigint | null;
   error: SyncError | null;
@@ -59,7 +59,8 @@ export type SessionAction =
   | { type: "stream/error"; epoch: number; sessionId: string; code: string; message: string }
   | { type: "focus/request"; epoch: number; sessionId: string; request: FocusRequest; token?: number }
   | { type: "focus/error"; epoch: number; sessionId: string; code: string; message: string; token?: number }
-  | { type: "attachment/opened"; epoch: number; sessionId: string; paneId: string; streamId: string; mode: "observe" | "control" }
+  | { type: "focus/clear"; epoch: number; sessionId: string; token: number }
+  | { type: "attachment/opened"; epoch: number; sessionId: string; paneId: string; streamId: string; mode: "control" }
   | { type: "attachment/message"; epoch: number; sessionId: string; paneId: string; message: TerminalStreamMessage }
   | { type: "attachment/error"; epoch: number; sessionId: string; paneId: string; streamId: string; code: string; message: string }
   | { type: "attachment/dispose"; epoch: number; sessionId: string; paneId: string; streamId: string }
@@ -74,7 +75,7 @@ function current(state: SessionState, epoch: number, sessionId: string): boolean
 function attachment(state: SessionState, paneId: string): PaneAttachment {
   return state.attachments[paneId] ?? {
     streamId: null,
-    mode: "observe",
+    mode: "control",
     ownership: null,
     terminalSequence: null,
     error: null,
@@ -92,9 +93,7 @@ export function focusFulfilled(
     case "pane":
       return snapshot.focused_pane_id === pending.target_id;
     case "agent":
-      return snapshot.agents.some(
-        (agent) => agent.pane_id === pending.target_id && agent.focused,
-      );
+      return snapshot.focused_pane_id === pending.target_id;
     case "space":
       return snapshot.focused_space_id === pending.target_id;
     case "tab":
@@ -187,6 +186,9 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     case "focus/error":
       if (!current(state, action.epoch, action.sessionId) || (action.token !== undefined && action.token !== state.focusToken)) return state;
       return { ...state, focusPending: null, focusError: errorOf(action.code, action.message) };
+    case "focus/clear":
+      if (!current(state, action.epoch, action.sessionId) || action.token < state.focusToken) return state;
+      return { ...state, focusPending: null, focusToken: action.token, focusError: null };
     case "attachment/opened":
       if (!current(state, action.epoch, action.sessionId)) return state;
       return {

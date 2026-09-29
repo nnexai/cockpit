@@ -1,25 +1,20 @@
-// Presentational pieces of the browser pane: the tab strip, the saved-feedback
-// recovery list and the SVG annotation layer. They hold no state; BrowserPane
-// owns the stream, drafts and deliveries and passes callbacks in.
-import type { BrowserPoint, BrowserRect, BrowserViewDraftAnnotation, BrowserViewPresentation, BrowserViewSnapshot } from "../../protocol/generated/v1";
+// Stateless browser chrome and saved-feedback receipt controls.
+import type { BrowserPoint, BrowserRect, BrowserViewDraftAnnotation, BrowserViewSnapshot } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket } from "../../client/CockpitClient";
 import { UiIcon } from "../UiIcon";
 import { imagePointFor, kindFor, statusText, type PaneStatus, type SavedDelivery, type Tool } from "./browserPaneModel";
 
 type BrowserTargetTab = BrowserViewSnapshot["targets"][number];
 
-export function BrowserTabStrip({ tabs, displayedTargetId, status, message, presentation, onSelect, onClose, onCreate, onRetry, onBackToTerminals, onExpand }: {
+export function BrowserTabStrip({ tabs, displayedTargetId, status, message, onSelect, onClose, onCreate, onRetry }: {
   tabs: BrowserTargetTab[];
   displayedTargetId: string | null | undefined;
   status: PaneStatus;
   message: string | null;
-  presentation: BrowserViewPresentation;
   onSelect: (targetId: string) => void;
   onClose: (targetId: string) => void;
   onCreate: () => void;
   onRetry: () => void;
-  onBackToTerminals?: () => void;
-  onExpand?: () => void;
 }) {
   const statusLabel = statusText(status, message);
   return <header className="browser-toolbar">
@@ -40,12 +35,6 @@ export function BrowserTabStrip({ tabs, displayedTargetId, status, message, pres
     <div className="browser-toolbar-actions">
       <span className={`browser-toolbar-status is-${status}`} role="status" aria-live="polite" title={statusLabel}>{statusLabel}</span>
       {status === "error" ? <button type="button" onClick={onRetry}>Retry</button> : null}
-      {presentation === "browser_only" && onBackToTerminals
-        ? <button type="button" className="browser-toolbar-icon" aria-label="Restore split" title="Restore split" onClick={onBackToTerminals}><UiIcon name="expand" /></button>
-        : null}
-      {presentation !== "browser_only" && onExpand
-        ? <button type="button" className="browser-toolbar-icon" aria-label="Expand browser" title="Expand browser" onClick={onExpand}><UiIcon name="expand" /></button>
-        : null}
     </div>
   </header>;
 }
@@ -53,10 +42,12 @@ export function BrowserTabStrip({ tabs, displayedTargetId, status, message, pres
 const deliveryStateLabel = (state: SavedDelivery["state"]): string =>
   state === "outcome_unknown" ? "Outcome unknown" : state === "rejected" ? "Rejected" : state === "accepted" ? "Accepted" : "Pending";
 
-export function SavedDeliveryList({ deliveries, selectedCaptureId, duplicateRisk, onSelect, onDuplicateRiskChange, onResolveDuplicateRisk, onAcknowledge, onRetry }: {
+export function SavedDeliveryList({ deliveries, selectedCaptureId, duplicateRisk, sendDisabled = false, busy = false, onSelect, onDuplicateRiskChange, onResolveDuplicateRisk, onAcknowledge, onRetry }: {
   deliveries: SavedDelivery[];
   selectedCaptureId: string | null;
   duplicateRisk: boolean;
+  sendDisabled?: boolean;
+  busy?: boolean;
   onSelect: (captureId: string) => void;
   onDuplicateRiskChange: (checked: boolean) => void;
   onResolveDuplicateRisk: () => void;
@@ -73,10 +64,10 @@ export function SavedDeliveryList({ deliveries, selectedCaptureId, duplicateRisk
         {unknownAndSelected
           ? <label><input type="checkbox" checked={duplicateRisk} onChange={(event) => onDuplicateRiskChange(event.target.checked)} /> I checked the destination; a new operation may duplicate feedback.</label>
           : null}
-        {unknownAndSelected ? <button type="button" disabled={!duplicateRisk} onClick={onResolveDuplicateRisk}>Resolve and retry</button> : null}
-        {item.state === "accepted" ? <button type="button" disabled={item.blocked} onClick={() => onAcknowledge(item.capture_id)}>Acknowledge saved receipt</button> : null}
+        {unknownAndSelected ? <button type="button" disabled={!duplicateRisk || sendDisabled || busy} onClick={onResolveDuplicateRisk}>Resolve and retry</button> : null}
+        {item.state === "accepted" ? <button type="button" disabled={item.blocked || busy} onClick={() => onAcknowledge(item.capture_id)}>Acknowledge saved receipt</button> : null}
         {item.state !== "accepted" && item.state !== "outcome_unknown"
-          ? <button type="button" disabled={item.blocked} aria-label={`Retry saved capture ${index + 1}`} onClick={() => onRetry(item.capture_id)}>Retry saved feedback</button>
+          ? <button type="button" disabled={item.blocked || sendDisabled || busy} aria-label={`Retry saved capture ${index + 1}`} onClick={() => onRetry(item.capture_id)}>Retry saved feedback</button>
           : null}
       </div>;
     })}

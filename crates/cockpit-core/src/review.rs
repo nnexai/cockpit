@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, OpenOptions};
-use cockpit_protocol::context::{DetectionConfidence, ExtensionKind};
+use cockpit_protocol::viewer::ViewerKind;
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, RepositoryCandidate};
 use cockpit_protocol::review::{
     ReviewChangedFile, ReviewComparison, ReviewDiffLine, ReviewDiffLineKind, ReviewFileDiff,
@@ -21,8 +21,9 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::context::ContextService;
+use crate::viewer::ViewerAuthorization;
 #[cfg(test)]
-use crate::extension_adapter::ExtensionHerdrAdapter;
+use crate::extension_adapter::{SourcePaneAdapter, SourcePaneEvidence, TabEvidence};
 use crate::project_store::{atomic_write_json, read_json_bounded, timestamp, ProjectStore};
 #[cfg(test)]
 use crate::repositories::RepositoryCatalog;
@@ -81,7 +82,8 @@ struct Change {
 pub(crate) struct ReviewCommentEvidence {
     pub binding_id: String,
     pub session_id: String,
-    pub pane_id: String,
+    pub viewer_id: String,
+    pub server_instance: String,
     pub terminal_id: String,
     pub workspace_id: String,
     pub tab_id: String,
@@ -141,50 +143,18 @@ impl ReviewService {
         request: &ReviewSnapshotRequest,
     ) -> Result<ReviewSnapshot, InspectionError> {
         validate_snapshot_request(request)?;
-        // Keep the presentation and its process evidence paired: together they
-        // form one fresh authorization read for this request.
-        let (presentation, evidence) = self
-            .context
-            .inspect_pane_with_evidence(session_id, pane_id)
-            .await?;
-        if presentation.binding_id != request.binding_id
-            || presentation.session_id != session_id
-            || presentation.pane_id != pane_id
-            || presentation.extension != Some(ExtensionKind::Review)
-            || presentation.renderer != Some(ExtensionKind::Review)
+        let authorization = self.authorize_review_viewer(session_id, pane_id, &request.binding_id).await?;
+        let evidence = self.comment_evidence_for_authorization(&authorization).await?;
+        let repository = self.resolve_checkout(
+            &authorization.source.cwd,
+            &authorization.source.foreground_cwd,
+            &request.repository_id,
+        ).await?;
+        if repository.repository_id != evidence.repository_id
+            || repository.checkout_path != evidence.checkout_path
         {
-            return Err(InspectionError::new(
-                "review_snapshot_mismatch",
-                "Reviewr pane identity is no longer current",
-            ));
+            return Err(InspectionError::new("review_checkout_mismatch", "selected repository differs from the authorized viewer root"));
         }
-        if evidence.pane_id != pane_id
-            || evidence.extension != Some(ExtensionKind::Review)
-            || !verified(evidence.confidence)
-        {
-            return Err(InspectionError::new(
-                "review_unavailable",
-                "Reviewr process evidence changed while preparing review",
-            ));
-        }
-        // The filesystem read below can race with pane changes, so revalidate
-        // the terminal identity immediately before returning the snapshot.
-        let confirmed = self
-            .authorize_review_pane(session_id, pane_id, &request.binding_id)
-            .await?;
-        if confirmed.terminal_id != presentation.terminal_id {
-            return Err(InspectionError::new(
-                "review_unavailable",
-                "Reviewr pane identity changed while preparing review",
-            ));
-        }
-        let repository = self
-            .resolve_checkout(
-                &evidence.cwd,
-                &evidence.foreground_cwd,
-                &request.repository_id,
-            )
-            .await?;
         let checkout = PathBuf::from(&repository.checkout_path);
         let binding_id = request.binding_id.clone();
         let source_id = checkout_source_id(&checkout)?;
@@ -215,10 +185,7 @@ impl ReviewService {
                 index.and_then(|index| entries.remove(index))
             };
             if let Some(entry) = cached {
-                let confirmed = self.authorize_review_pane(session_id, pane_id, &request.binding_id).await?;
-                if confirmed.terminal_id != presentation.terminal_id {
-                    return Err(InspectionError::new("review_unavailable", "Reviewr pane identity changed while preparing review"));
-                }
+                self.authorize_review_viewer(session_id, pane_id, &request.binding_id).await?;
                 if let Ok(Some(stored)) = self.load_snapshot(&entry.snapshot.review_id).await {
                     let snapshot = stored.snapshot;
                     // Untracked tokens hold metadata only (path, length, mtime, inode), so a same-size rewrite that keeps its
@@ -230,6 +197,7 @@ impl ReviewService {
                         && snapshot.index_revision == before.index
                         && snapshot.worktree_revision == before.worktree
                     {
+                        self.authorize_review_viewer(session_id, pane_id, &request.binding_id).await?;
                         let mut entries = self.snapshot_cache.lock().unwrap_or_else(|p| p.into_inner());
                         entries.push_front(entry);
                         return Ok(snapshot);
@@ -245,7 +213,7 @@ impl ReviewService {
                 let snapshot = ReviewSnapshot {
                     binding_id,
                     session_id: session_id.to_owned(),
-                    pane_id: pane_id.to_owned(),
+                    viewer_id: pane_id.to_owned(),
                     review_id: review_id.clone(),
                     generation,
                     repository_id: repository.repository_id,
@@ -267,6 +235,7 @@ impl ReviewService {
                     created_at: timestamp(),
                 })
                 .await?;
+                self.authorize_review_viewer(session_id, pane_id, &request.binding_id).await?;
                 let mut entries = self.snapshot_cache.lock().unwrap_or_else(|p| p.into_inner());
                 entries.retain(|entry| entry.key != cache_key);
                 entries.push_front(ReviewCacheEntry { key: cache_key, revisions: before, snapshot: snapshot.clone() });
@@ -316,14 +285,15 @@ impl ReviewService {
                 request.generation,
             )
             .await?;
-        self.materialize_file(
+        let response = self.materialize_file(
             stored,
             &request.file_id,
             request.source_side,
             request.source_offset,
             request.source_revision.as_deref(),
-        )
-        .await
+        ).await?;
+        self.authorize_review_viewer(session_id, pane_id, &request.binding_id).await?;
+        Ok(response)
     }
 
     /// Resolve one file from the immutable change inventory. The first access
@@ -402,7 +372,7 @@ impl ReviewService {
         diff.generation = stored.snapshot.generation;
         diff.binding_id = stored.snapshot.binding_id.clone();
         diff.session_id = stored.snapshot.session_id.clone();
-        diff.pane_id = stored.snapshot.pane_id.clone();
+        diff.viewer_id = stored.snapshot.viewer_id.clone();
         self.save_file_cache(&stored.snapshot.review_id, &diff)
             .await?;
         let response = self
@@ -563,95 +533,46 @@ impl ReviewService {
         }
     }
 
-    /// Obtain fresh pane and checkout proof for a Reviewr comment batch.
-    /// The caller never supplies an endpoint, process, or checkout identity.
+    /// Obtain fresh viewer and pinned checkout proof for a comment batch.
     pub(crate) async fn comment_evidence(
         &self,
         session_id: &str,
         pane_id: &str,
         binding_id: &str,
     ) -> Result<ReviewCommentEvidence, InspectionError> {
-        let (presentation, runtime_evidence) = self
-            .context
-            .inspect_pane_with_evidence(session_id, pane_id)
-            .await?;
-        self.comment_evidence_for_presentation(
-            session_id,
-            pane_id,
-            binding_id,
-            &presentation,
-            &runtime_evidence,
-        )
-        .await
+        let authorization = self.authorize_review_viewer(session_id, pane_id, binding_id).await?;
+        self.comment_evidence_for_authorization(&authorization).await
     }
 
-    /// Derive one sealed review identity from the presentation freshly read by
-    /// the enclosing comments operation. It is never retained across requests.
-    pub(crate) async fn comment_evidence_for_presentation(
+    pub(crate) async fn comment_evidence_for_authorization(
         &self,
-        session_id: &str,
-        pane_id: &str,
-        binding_id: &str,
-        presentation: &cockpit_protocol::context::PanePresentation,
-        runtime_evidence: &crate::ExtensionPaneEvidence,
+        authorization: &ViewerAuthorization,
     ) -> Result<ReviewCommentEvidence, InspectionError> {
-        if presentation.binding_id != binding_id
-            || presentation.session_id != session_id
-            || presentation.pane_id != pane_id
-            || presentation.extension != Some(ExtensionKind::Review)
-            || presentation.renderer != Some(ExtensionKind::Review)
-        {
-            return Err(InspectionError::new(
-                "review_snapshot_mismatch",
-                "Reviewr pane identity is no longer current",
-            ));
+        let context = &authorization.context;
+        if context.kind != ViewerKind::Review {
+            return Err(InspectionError::new("review_snapshot_mismatch", "viewer is not a Review viewer"));
         }
-        if runtime_evidence.pane_id != pane_id
-            || runtime_evidence.terminal_id != presentation.terminal_id
-            || runtime_evidence.extension != Some(ExtensionKind::Review)
-            || !verified(runtime_evidence.confidence)
-        {
-            return Err(InspectionError::new(
-                "review_unavailable",
-                "Reviewr process evidence changed while preparing comments",
-            ));
-        }
-        let root_id = presentation.default_root_id.as_deref().ok_or_else(|| {
-            InspectionError::new(
-                "review_checkout_mismatch",
-                "Reviewr pane has no current repository checkout",
-            )
-        })?;
-        let root = presentation
-            .roots
-            .iter()
-            .find(|root| {
-                root.root_id == root_id
-                    && root.kind == cockpit_protocol::context::ContextRootKind::Repository
-            })
-            .ok_or_else(|| {
-                InspectionError::new(
-                    "review_checkout_mismatch",
-                    "Reviewr pane has no current repository checkout",
-                )
-            })?;
+        let root = context.default_root_id.as_deref()
+            .and_then(|id| context.roots.iter().find(|root| root.root_id == id
+                && root.kind == cockpit_protocol::context::ContextRootKind::Repository))
+            .ok_or_else(|| InspectionError::new("review_checkout_mismatch", "Review viewer has no authorized repository checkout"))?;
         let checkout_path = PathBuf::from(&root.checkout_path);
-        let pane_path =
-            verified_checkout_path(&runtime_evidence.cwd, &runtime_evidence.foreground_cwd)?;
-        if !pane_path.starts_with(&checkout_path) {
-            return Err(InspectionError::new(
-                "review_checkout_mismatch",
-                "Reviewr pane directory differs from its current repository checkout",
-            ));
+        let source_path = verified_checkout_path(&authorization.source.cwd, &authorization.source.foreground_cwd)?;
+        if !source_path.starts_with(&checkout_path) {
+            return Err(InspectionError::new("review_checkout_mismatch", "pinned source directory differs from the authorized checkout"));
         }
         let source_id = checkout_source_id(&checkout_path)?;
+        if source_id != context.source_id {
+            return Err(InspectionError::new("context_root_not_authorized", "Review checkout identity differs from the pinned viewer source"));
+        }
         Ok(ReviewCommentEvidence {
-            binding_id: presentation.binding_id.clone(),
-            session_id: session_id.to_owned(),
-            pane_id: pane_id.to_owned(),
-            terminal_id: presentation.terminal_id.clone(),
-            workspace_id: runtime_evidence.workspace_id.clone(),
-            tab_id: runtime_evidence.tab_id.clone(),
+            binding_id: context.binding_id.clone(),
+            session_id: context.session_id.clone(),
+            viewer_id: context.viewer_id.clone(),
+            server_instance: authorization.server_instance.clone(),
+            terminal_id: authorization.source.terminal_id.clone(),
+            workspace_id: context.space_id.clone(),
+            tab_id: context.tab_id.clone(),
             checkout_path: checkout_path.to_string_lossy().into_owned(),
             repository_id: root.repository_id.clone(),
             source_id,
@@ -794,17 +715,15 @@ impl ReviewService {
                 "review snapshot is no longer retained",
             )
         })?;
-        let fresh = self
-            .authorize_review_pane(session_id, pane_id, binding_id)
-            .await?;
+        let fresh = self.comment_evidence(session_id, pane_id, binding_id).await?;
         let snapshot = &stored.snapshot;
         if snapshot.binding_id != binding_id
             || snapshot.session_id != session_id
-            || snapshot.pane_id != pane_id
+            || snapshot.viewer_id != pane_id
         {
             return Err(InspectionError::new(
                 "review_snapshot_mismatch",
-                "review snapshot belongs to another pane identity",
+                "review snapshot belongs to another viewer identity",
             ));
         }
         if fresh.binding_id != snapshot.binding_id || snapshot.generation != generation {
@@ -812,6 +731,12 @@ impl ReviewService {
                 "stale_generation",
                 "review snapshot generation is no longer current",
             ));
+        }
+        if snapshot.repository_id != fresh.repository_id
+            || snapshot.checkout_path != fresh.checkout_path
+            || snapshot.source_id != fresh.source_id
+        {
+            return Err(InspectionError::new("review_checkout_mismatch", "review checkout differs from the authorized viewer root"));
         }
         Ok(stored)
     }
@@ -831,11 +756,11 @@ impl ReviewService {
         let snapshot = &stored.snapshot;
         if snapshot.binding_id != evidence.binding_id
             || snapshot.session_id != evidence.session_id
-            || snapshot.pane_id != evidence.pane_id
+            || snapshot.viewer_id != evidence.viewer_id
         {
             return Err(InspectionError::new(
                 "review_snapshot_mismatch",
-                "review snapshot belongs to another pane identity",
+                "review snapshot belongs to another viewer identity",
             ));
         }
         if snapshot.generation != generation {
@@ -856,25 +781,17 @@ impl ReviewService {
         Ok(stored)
     }
 
-    async fn authorize_review_pane(
+    async fn authorize_review_viewer(
         &self,
         session_id: &str,
         pane_id: &str,
         binding_id: &str,
-    ) -> Result<cockpit_protocol::context::PanePresentation, InspectionError> {
-        let fresh = self.context.inspect_pane(session_id, pane_id).await?;
-        if fresh.binding_id != binding_id
-            || fresh.session_id != session_id
-            || fresh.pane_id != pane_id
-            || fresh.extension != Some(ExtensionKind::Review)
-            || fresh.renderer != Some(ExtensionKind::Review)
-        {
-            return Err(InspectionError::new(
-                "review_snapshot_mismatch",
-                "Reviewr pane identity is no longer current",
-            ));
+    ) -> Result<ViewerAuthorization, InspectionError> {
+        let authorization = self.context.authorize_viewer(session_id, pane_id, binding_id).await?;
+        if authorization.context.kind != ViewerKind::Review {
+            return Err(InspectionError::new("review_snapshot_mismatch", "viewer is not a Review viewer"));
         }
-        Ok(fresh)
+        Ok(authorization)
     }
 
     async fn resolve_checkout(
@@ -1178,7 +1095,7 @@ impl ReviewService {
             ReviewFileDiff {
                 binding_id: String::new(),
                 session_id: String::new(),
-                pane_id: String::new(),
+                viewer_id: String::new(),
                 review_id: String::new(),
                 generation: 0,
                 file,
@@ -1388,16 +1305,25 @@ impl ReviewService {
                 }
                 let offset = u64::from(offset).min(size);
                 let mut skipped = 0u64;
-                let mut discard = [0u8; 64 * 1024];
                 while skipped < offset {
-                    let want = (offset - skipped).min(discard.len() as u64) as usize;
-                    reader.read_exact(&mut discard[..want]).await.map_err(|_| {
+                    // Reuse BufReader's existing buffer: a separate large
+                    // scratch array across await inflates every enclosing
+                    // Review future and overflows native worker stacks.
+                    let available = reader.fill_buf().await.map_err(|_| {
                         InspectionError::new(
                             "review_source_unreadable",
                             "Git source could not be seeked",
                         )
                     })?;
-                    skipped += want as u64;
+                    if available.is_empty() {
+                        return Err(InspectionError::new(
+                            "review_source_unreadable",
+                            "Git source could not be seeked",
+                        ));
+                    }
+                    let consumed = (offset - skipped).min(available.len() as u64) as usize;
+                    reader.consume(consumed);
+                    skipped += consumed as u64;
                 }
                 let amount = (size - offset).min(MAX_FILE_BYTES as u64) as usize;
                 let mut bytes = vec![0u8; amount];
@@ -1889,7 +1815,7 @@ fn verified_checkout_path(
     let pane_cwd = foreground_cwd.as_ref().or(cwd.as_ref()).ok_or_else(|| {
         InspectionError::new(
             "review_unavailable",
-            "verified Reviewr pane did not report a checkout directory",
+            "pinned Review source did not report a checkout directory",
         )
     })?;
     let pane_path = PathBuf::from(pane_cwd);
@@ -1902,7 +1828,7 @@ fn verified_checkout_path(
     Ok(pane_path)
 }
 
-fn checkout_source_id(checkout: &Path) -> Result<String, InspectionError> {
+pub(crate) fn checkout_source_id(checkout: &Path) -> Result<String, InspectionError> {
     let metadata = std::fs::symlink_metadata(checkout).map_err(|_| {
         InspectionError::new(
             "review_unavailable",
@@ -2180,12 +2106,6 @@ fn safe_relative_path(path: &str) -> Result<&Path, InspectionError> {
     Ok(path)
 }
 
-fn verified(confidence: DetectionConfidence) -> bool {
-    matches!(
-        confidence,
-        DetectionConfidence::VerifiedLaunch | DetectionConfidence::VerifiedProcess
-    )
-}
 
 fn validate_snapshot_request(request: &ReviewSnapshotRequest) -> Result<(), InspectionError> {
     if request.binding_id.is_empty()
@@ -2507,7 +2427,7 @@ fn truncated_diff(
     ReviewFileDiff {
         binding_id: String::new(),
         session_id: String::new(),
-        pane_id: String::new(),
+        viewer_id: String::new(),
         review_id: String::new(),
         generation: 0,
         file: ReviewChangedFile {
@@ -2822,7 +2742,7 @@ fn prune_snapshots(state: &ProjectStore) -> Result<(), InspectionError> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use cockpit_protocol::{
         projects::{ProjectLimits, ProjectProvider},
@@ -2844,8 +2764,8 @@ mod tests {
 
     #[derive(Default)]
     struct NoopAdapter {
-        extension_evidence: Option<crate::ExtensionPaneEvidence>,
-        extension_inspections: AtomicUsize,
+        source_evidence: Option<SourcePaneEvidence>,
+        source_closed: AtomicBool,
     }
 
     fn unavailable<T>() -> Result<T, InspectionError> {
@@ -2950,30 +2870,20 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl ExtensionHerdrAdapter for NoopAdapter {
-        async fn inspect_extension_pane(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> Result<crate::ExtensionPaneEvidence, InspectionError> {
-            self.extension_inspections.fetch_add(1, Ordering::Relaxed);
-            self.extension_evidence.clone().ok_or_else(|| {
-                InspectionError::new("test_adapter_unused", "test adapter method is not expected")
+    impl SourcePaneAdapter for NoopAdapter {
+        async fn source_pane_evidence(&self, _: &str, _: &str) -> Result<SourcePaneEvidence, InspectionError> {
+            if self.source_closed.load(Ordering::Relaxed) {
+                return unavailable();
+            }
+            self.source_evidence.clone().ok_or_else(|| InspectionError::new("test_adapter_unused", "source unavailable"))
+        }
+        async fn tab_evidence(&self, _: &str, _: &str) -> Result<TabEvidence, InspectionError> {
+            Ok(TabEvidence {
+                endpoint_identity: "endpoint".to_owned(),
+                server_instance: "server".to_owned(),
+                workspace_id: "workspace".to_owned(),
+                present: true,
             })
-        }
-        async fn launch_context_pane(
-            &self,
-            _: &str,
-            _: &crate::ExtensionLaunch,
-        ) -> Result<crate::ExtensionPaneEvidence, InspectionError> {
-            unavailable()
-        }
-        async fn launch_review_pane(
-            &self,
-            _: &str,
-            _: &crate::ExtensionLaunch,
-        ) -> Result<crate::ExtensionPaneEvidence, InspectionError> {
-            unavailable()
         }
     }
 
@@ -3031,12 +2941,9 @@ mod tests {
         let projects = Arc::new(
             ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"),
         );
-        let context = Arc::new(ContextService::new(
-            configuration.clone(),
-            adapter.clone(),
-            projects,
-        ));
-        ReviewService::new(configuration, context).expect("review service")
+        let context = ContextService::new(configuration.clone(), adapter.clone(), projects);
+        let viewers = Arc::new(crate::viewer::ViewerService::new(Arc::new(context.clone())));
+        ReviewService::new(configuration, Arc::new(context.with_viewers(viewers))).expect("review service")
     }
 
     fn fixture(label: &str) -> PathBuf {
@@ -3204,69 +3111,14 @@ mod tests {
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 
-    #[tokio::test]
-    async fn scoped_comment_evidence_reuses_one_inspection_and_checkout_proof() {
-        let root = fixture("scoped-comment-evidence");
-        let adapter = Arc::new(NoopAdapter {
-            extension_evidence: Some(crate::ExtensionPaneEvidence {
-                endpoint_identity: "endpoint".to_owned(),
-                pane_id: "pane".to_owned(),
-                terminal_id: "terminal".to_owned(),
-                workspace_id: "workspace".to_owned(),
-                tab_id: "tab".to_owned(),
-                cwd: Some(root.to_string_lossy().into_owned()),
-                foreground_cwd: None,
-                viewer_cwd: None,
-                label: None,
-                process_identity: "process".to_owned(),
-                extension: Some(ExtensionKind::Review),
-                confidence: DetectionConfidence::VerifiedProcess,
-                reason: "review".to_owned(),
-                can_open_context: false,
-                can_open_review: true,
-            }),
-            ..Default::default()
-        });
-        let service = service_with_adapter(configuration(&root), adapter.clone());
-        let (presentation, runtime_evidence) = service
-            .context
-            .inspect_pane_with_evidence("session", "pane")
-            .await
-            .expect("fresh pane inspection");
-        let binding_id = presentation.binding_id.clone();
-
-        let evidence = service
-            .comment_evidence_for_presentation(
-                "session",
-                "pane",
-                &binding_id,
-                &presentation,
-                &runtime_evidence,
-            )
-            .await
-            .expect("checkout evidence");
-        assert_eq!(adapter.extension_inspections.load(Ordering::Relaxed), 1);
-        assert_eq!(evidence.checkout_path, root.to_string_lossy());
-
-        let error = service
-            .capture_with_evidence(
-                &evidence,
-                &Uuid::new_v4().to_string(),
-                1,
-                "file",
-                ReviewSide::New,
-            )
-            .await
-            .expect_err("missing snapshot");
-        assert_eq!(error.code, "review_snapshot_not_found");
-        assert_eq!(adapter.extension_inspections.load(Ordering::Relaxed), 1);
-        std::fs::remove_dir_all(root).expect("cleanup");
-    }
 
     struct ServiceFixture {
         workspace: PathBuf,
         checkout: PathBuf,
         service: ReviewService,
+        viewers: Arc<crate::viewer::ViewerService>,
+        adapter: Arc<NoopAdapter>,
+        viewer_id: String,
         binding_id: String,
         repository_id: String,
     }
@@ -3274,8 +3126,8 @@ mod tests {
     const FIXTURE_SESSION: &str = "session";
     const FIXTURE_PANE: &str = "pane";
 
-    /// A real Git checkout below a workspace directory (so Cockpit state stays
-    /// outside the checkout) with a verified Review pane pointing at it.
+    /// A real Git checkout below a workspace directory with a local Review
+    /// viewer authorized from a real source terminal, without any plugin proof.
     async fn service_fixture(label: &str) -> ServiceFixture {
         let workspace =
             std::env::temp_dir().join(format!("cockpit-review-{label}-{}", Uuid::new_v4()));
@@ -3295,7 +3147,7 @@ mod tests {
             .expect("fixture checkout in catalog")
             .repository_id;
         let adapter = Arc::new(NoopAdapter {
-            extension_evidence: Some(crate::ExtensionPaneEvidence {
+            source_evidence: Some(SourcePaneEvidence {
                 endpoint_identity: "endpoint".to_owned(),
                 pane_id: FIXTURE_PANE.to_owned(),
                 terminal_id: "terminal".to_owned(),
@@ -3303,28 +3155,29 @@ mod tests {
                 tab_id: "tab".to_owned(),
                 cwd: Some(checkout_text),
                 foreground_cwd: None,
-                viewer_cwd: None,
-                label: None,
-                process_identity: "process".to_owned(),
-                extension: Some(ExtensionKind::Review),
-                confidence: DetectionConfidence::VerifiedProcess,
-                reason: "review".to_owned(),
-                can_open_context: false,
-                can_open_review: true,
             }),
             ..Default::default()
         });
-        let service = service_with_adapter(configured, adapter);
-        let binding_id = service
-            .context
-            .inspect_pane(FIXTURE_SESSION, FIXTURE_PANE)
-            .await
-            .expect("verified review pane")
-            .binding_id;
+        let projects = Arc::new(ProjectService::new(configured.clone(), adapter.clone()).expect("projects"));
+        let context = ContextService::new(configured.clone(), adapter.clone(), projects);
+        let viewers = Arc::new(crate::viewer::ViewerService::new(Arc::new(context.clone())));
+        let context = Arc::new(context.with_viewers(viewers.clone()));
+        let service = ReviewService::new(configured, context).expect("review service");
+        let viewer = viewers.open(FIXTURE_SESSION, &cockpit_protocol::viewer::ViewerOpenRequest {
+            tab_id: "tab".to_owned(),
+            kind: ViewerKind::Review,
+            source_pane_id: FIXTURE_PANE.to_owned(),
+            source: cockpit_protocol::viewer::ViewerSourceSelector::Review { repository_id: repository_id.clone() },
+            client_id: "client".to_owned(),
+        }).await.expect("open review viewer");
+        let binding_id = viewer.binding_id;
         ServiceFixture {
             workspace,
             checkout,
             service,
+            viewers,
+            adapter,
+            viewer_id: viewer.viewer_id,
             binding_id,
             repository_id,
         }
@@ -3342,7 +3195,7 @@ mod tests {
 
         async fn snapshot(&self, comparison: ReviewComparison) -> ReviewSnapshot {
             self.service
-                .snapshot(FIXTURE_SESSION, FIXTURE_PANE, &self.request(comparison))
+                .snapshot(FIXTURE_SESSION, &self.viewer_id, &self.request(comparison))
                 .await
                 .expect("review snapshot")
         }
@@ -3351,7 +3204,7 @@ mod tests {
             self.service
                 .file(
                     FIXTURE_SESSION,
-                    FIXTURE_PANE,
+                    &self.viewer_id,
                     &ReviewFileRequest {
                         binding_id: self.binding_id.clone(),
                         review_id: snapshot.review_id.clone(),
@@ -3365,6 +3218,37 @@ mod tests {
                 .await
                 .expect("review file diff")
         }
+    }
+
+    #[tokio::test]
+    async fn review_remains_authorized_after_source_closes_and_rejects_retired_binding() {
+        let fixture = service_fixture("viewer-authorization").await;
+        fixture.adapter.source_closed.store(true, Ordering::Relaxed);
+        let snapshot = fixture.snapshot(ReviewComparison::AllLocal).await;
+        assert_eq!(snapshot.viewer_id, fixture.viewer_id);
+        let evidence = fixture.service.comment_evidence(FIXTURE_SESSION, &fixture.viewer_id, &fixture.binding_id)
+            .await.expect("pinned source comments remain authorized");
+        assert_eq!(evidence.source_id, checkout_source_id(&fixture.checkout).expect("checkout identity"));
+        fixture.viewers.release(FIXTURE_SESSION, &fixture.viewer_id).await.expect("release");
+        assert_eq!(fixture.service.snapshot(FIXTURE_SESSION, &fixture.viewer_id, &fixture.request(ReviewComparison::AllLocal))
+            .await.expect_err("released viewer cannot read").code, "viewer_not_found");
+        std::fs::remove_dir_all(fixture.workspace).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn review_rejects_a_replaced_root_and_a_changed_binding() {
+        let fixture = service_fixture("root-authorization").await;
+        let error = fixture.service.snapshot(FIXTURE_SESSION, &fixture.viewer_id, &ReviewSnapshotRequest {
+            binding_id: "retired".to_owned(),
+            ..fixture.request(ReviewComparison::AllLocal)
+        }).await.expect_err("binding cannot be guessed or reused");
+        assert_eq!(error.code, "context_stale_binding");
+        std::fs::rename(&fixture.checkout, fixture.workspace.join("old-repo")).expect("replace root");
+        fixture_at(&fixture.checkout);
+        let error = fixture.service.snapshot(FIXTURE_SESSION, &fixture.viewer_id, &fixture.request(ReviewComparison::AllLocal))
+            .await.expect_err("replaced directory inode cannot inherit access");
+        assert_eq!(error.code, "context_root_not_authorized");
+        std::fs::remove_dir_all(fixture.workspace).expect("cleanup");
     }
 
     fn untracked_file_id(snapshot: &ReviewSnapshot, path: &str) -> String {
@@ -3434,6 +3318,31 @@ mod tests {
         assert!(second_text.contains("AFTER!"), "{second_text}");
         assert!(!second_text.contains("BEFORE"), "{second_text}");
         std::fs::remove_dir_all(&fixture.workspace).expect("cleanup");
+    }
+
+    #[test]
+    fn tracked_viewer_diff_runs_on_a_standard_worker_stack() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(2 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .expect("review worker runtime");
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let fixture = service_fixture("worker-stack").await;
+                std::fs::write(fixture.checkout.join("tracked.txt"), "base\nchanged\n")
+                    .expect("modify tracked file");
+                let snapshot = fixture.snapshot(ReviewComparison::Unstaged).await;
+                let file = snapshot.files.iter()
+                    .find(|file| file.new_path.as_deref() == Some("tracked.txt"))
+                    .expect("tracked change");
+                let diff = fixture.file(&snapshot, &file.file_id).await;
+                assert_eq!(diff.old_source.as_deref(), Some("base\n"));
+                assert_eq!(diff.new_source.as_deref(), Some("base\nchanged\n"));
+                std::fs::remove_dir_all(&fixture.workspace).expect("cleanup");
+            }).await.expect("worker completes tracked Review");
+        });
     }
 
     #[tokio::test]
@@ -3661,8 +3570,9 @@ mod tests {
     #[tokio::test]
     async fn git_source_pages_stream_large_blob_sides() {
         let root = fixture("git-paged-source");
-        std::fs::write(root.join("large.txt"), vec![b'x'; MAX_FILE_BYTES + 17])
-            .expect("write source");
+        let mut bytes = vec![b'x'; MAX_FILE_BYTES];
+        bytes.extend_from_slice(b"continuation-tail");
+        std::fs::write(root.join("large.txt"), bytes).expect("write source");
         commit(&root, "large source");
         let head = String::from_utf8(git_bytes(&root, &["rev-parse", "HEAD"]))
             .expect("head text")
@@ -3680,7 +3590,7 @@ mod tests {
             .git_source_page(&root, &head, "large.txt", MAX_FILE_BYTES as u32)
             .await
             .expect("second Git page");
-        assert_eq!(second.text.as_deref(), Some("xxxxxxxxxxxxxxxxx"));
+        assert_eq!(second.text.as_deref(), Some("continuation-tail"));
         assert!(!second.truncated);
         std::fs::remove_dir_all(root).expect("cleanup");
     }

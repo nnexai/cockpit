@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContextInvalidationResponse, ContextSearchResponse } from "../../protocol/generated/v1";
 import { ContextSearch } from "./ContextSearch";
+import { CockpitClientError } from "../../client/CockpitClient";
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 
@@ -40,7 +41,7 @@ describe("ContextSearch", () => {
       .mockReturnValueOnce(second.promise);
     act(() => {
       root.render(<ContextSearch
-        identity="session\u0000pane"
+        identity="session\u0000viewer"
         bindingId="binding"
         rootId="root"
         known={[]}
@@ -93,7 +94,7 @@ describe("ContextSearch", () => {
     const known = [{ path: "visible.md", revision: "r1" }];
     act(() => {
       root.render(<ContextSearch
-        identity="session\u0000pane-a"
+        identity="session\u0000viewer-a"
         bindingId="binding"
         rootId="root"
         known={known}
@@ -110,7 +111,7 @@ describe("ContextSearch", () => {
 
     act(() => {
       root.render(<ContextSearch
-        identity="session\u0000pane-b"
+        identity="session\u0000viewer-b"
         bindingId="binding"
         rootId="root"
         known={known}
@@ -142,5 +143,55 @@ describe("ContextSearch", () => {
     });
     await settle();
     expect(onInvalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports expired authority from search and visible-file polling while retaining ordinary errors inline", async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    const missing = new CockpitClientError("http_error", "Viewer expired", { operationCode: "viewer_not_found" });
+    const unavailable = new Error("Source is unavailable");
+    const search = vi.fn().mockRejectedValueOnce(unavailable).mockRejectedValueOnce(missing);
+    const poll = vi.fn().mockRejectedValue(missing);
+    const onViewerError = vi.fn();
+    act(() => root.render(<ContextSearch
+      identity="session\u0000viewer"
+      bindingId="binding"
+      rootId="root"
+      known={[]}
+      search={search}
+      poll={poll}
+      onSelect={vi.fn()}
+      onInvalidate={vi.fn()}
+      onViewerError={onViewerError}
+    />));
+    const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+    const form = container.querySelector("form")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "notes");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(container.querySelector(".context-search-error")?.textContent).toBe("Source is unavailable");
+    expect(onViewerError).not.toHaveBeenCalled();
+    await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(onViewerError).toHaveBeenCalledOnce();
+    expect(onViewerError).toHaveBeenLastCalledWith(missing);
+    act(() => root.render(<ContextSearch
+      identity="session\u0000viewer"
+      bindingId="binding"
+      rootId="root"
+      known={[{ path: "visible.md", revision: "r1" }]}
+      search={search}
+      poll={poll}
+      onSelect={vi.fn()}
+      onInvalidate={vi.fn()}
+      onViewerError={onViewerError}
+    />));
+    await settle();
+    expect(onViewerError).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".context-search-poll")?.textContent).toContain("Viewer expired");
+    expect(search).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,23 +1,25 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Authoritative Herdr evidence that identifies exactly one eligible Space.
+/// Authoritative Herdr evidence that identifies exactly one eligible tab.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserTarget {
     pub session_id: String,
-    pub space_id: Option<String>,
+    pub tab_id: Option<String>,
     pub pane_id: Option<String>,
     pub endpoint_path: Option<String>,
 }
 
-/// A Space-scoped browser lifecycle operation.
+/// A tab-scoped browser lifecycle operation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BrowserAction {
     Open { url: Option<String> },
+    OpenFresh { url: Option<String> },
     Status,
     Close,
+    Cleanup,
 }
 
 /// A browser operation and the Herdr identity it must revalidate.
@@ -48,6 +50,8 @@ pub struct BrowserAssociation {
     pub session_id: String,
     pub space_id: String,
     pub space_label: String,
+    pub tab_id: String,
+    pub tab_label: String,
     pub playwright_session: String,
     pub working_directory: String,
     pub profile_path: String,
@@ -64,18 +68,165 @@ pub struct BrowserResponse {
     pub association: Option<BrowserAssociation>,
     pub connection: BrowserConnectionState,
     pub message: String,
+    pub cleanup: BrowserCleanupState,
+    pub cleanup_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserCleanupState {
+    None,
+    Pending,
+    Done,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserCutoverState {
+    NotNeeded,
+    Running,
+    Done,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BrowserCleanupScope {
+    LegacySpace { space_id: String },
+    Tab { session_id: String, tab_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCleanupFailure {
+    pub association_key: String,
+    pub scope: BrowserCleanupScope,
+    pub reason: String,
+    pub unproven_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCleanupStatus {
+    pub cutover: BrowserCutoverState,
+    pub failures: Vec<BrowserCleanupFailure>,
+    pub saved_tabs: Vec<BrowserSavedTabWork>,
+}
+
+/// Durable saved-work provenance remains discoverable after tab retirement.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserSavedTabWork {
+    pub association_key: String,
+    pub session_id: String,
+    pub tab_id: String,
+    pub tab_label: String,
+    pub space_id: String,
+    pub space_label: String,
+    pub saved_capture_count: u32,
+    pub draft_count: u32,
+    pub pending_capture: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCleanupRetryRequest {
+    pub association_key: String,
+}
+
+/// Durable browser work keeps its original identity across the tab cutover.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BrowserWorkScope {
+    Tab { target: BrowserTarget },
+    LegacyArchive { association_key: String },
+    SavedTab { association_key: String },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserLegacyCandidateKind {
+    Directory,
+    File,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserLegacyCandidateState {
+    Pending,
+    Kept,
+    Removed,
+    Changed,
+}
+
+/// An exact no-follow object manifest reviewed before explicit removal.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserLegacyArtifactCandidate {
+    pub path: String,
+    pub kind: BrowserLegacyCandidateKind,
+    pub dev: String,
+    pub inode: String,
+    #[ts(type = "number")]
+    pub entry_count: u64,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    pub captured_at: String,
+    pub state: BrowserLegacyCandidateState,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserLegacyArchive {
+    pub association_key: String,
+    pub session_id: String,
+    pub space_id: String,
+    pub space_label: String,
+    pub archived_at: String,
+    pub session_stopped: bool,
+    pub saved_capture_count: u32,
+    pub draft_count: u32,
+    pub pending_capture: bool,
+    pub candidates: Vec<BrowserLegacyArtifactCandidate>,
+    pub not_candidates: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserLegacyArchiveList {
+    pub archives: Vec<BrowserLegacyArchive>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserLegacyRemovalRequest {
+    pub association_key: String,
+    pub candidates: Vec<BrowserLegacyArtifactCandidate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserLegacyKeepRequest {
+    pub association_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserLegacyRecipientsRequest {
+    pub session_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserFeedbackRequest {
-    pub target: BrowserTarget,
+    pub scope: BrowserWorkScope,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserFeedbackAckRequest {
-    pub target: BrowserTarget,
+    pub scope: BrowserWorkScope,
     pub ids: Vec<String>,
 }
 
@@ -104,7 +255,7 @@ pub struct BrowserFeedbackLookup {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserFeedbackImageRequest {
-    pub target: BrowserTarget,
+    pub scope: BrowserWorkScope,
     pub capture_id: String,
 }
 
@@ -118,10 +269,11 @@ pub struct BrowserFeedbackImage {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserFeedbackSendRequest {
-    pub target: BrowserTarget,
+    pub scope: BrowserWorkScope,
     pub ids: Vec<String>,
     pub operation_id: String,
     pub acknowledge_duplicate_risk: bool,
+    pub recipient: Option<crate::comment_paste::CommentPasteTarget>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]

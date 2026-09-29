@@ -25,9 +25,12 @@ pub(super) struct CommentStore {
 
 impl CommentStore {
     pub(super) fn new(root: &Path) -> Result<Self, InspectionError> {
-        Ok(Self {
-            state: ProjectStore::new(root)?,
-        })
+        let state = ProjectStore::new(root)?;
+        {
+            let _lock = state.acquire_named_lock(".comments.lock", "comments_lock")?;
+            migrate_legacy_batches(&state)?;
+        }
+        Ok(Self { state })
     }
 
     pub(super) async fn list(&self) -> Result<(Vec<CommentBatch>, bool), InspectionError> {
@@ -102,6 +105,37 @@ impl CommentStore {
     }
 }
 
+fn migrate_legacy_batches(state: &ProjectStore) -> Result<(), InspectionError> {
+    let entries = state.state_dir().entries()
+        .map_err(|error| InspectionError::new("comments_read", error.to_string()))?;
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_SCANNED_ENTRIES {
+            return Err(InspectionError::new("comments_lookup_bounded", "comment migration exceeded its directory-entry limit"));
+        }
+        let entry = entry.map_err(|error| InspectionError::new("comments_read", error.to_string()))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(id) = name.strip_suffix(".json") else { continue };
+        if Uuid::parse_str(id).is_err() { continue; }
+        let _record_lock = state.acquire_record_lock(id)?;
+        let mut value: serde_json::Value = read_json_bounded(state.state_dir(), name, MAX_BATCH_BYTES)?;
+        let owner = value.get_mut("owner").and_then(serde_json::Value::as_object_mut)
+            .ok_or_else(|| InspectionError::new("comments_corrupt", "comment owner is missing"))?;
+        if owner.contains_key("kind") { continue; }
+        owner.insert("kind".to_owned(), serde_json::Value::String("legacy_pane".to_owned()));
+        let mut batch: CommentBatch = serde_json::from_value(value)
+            .map_err(|error| InspectionError::new("comments_corrupt", error.to_string()))?;
+        validate_batch(&batch)?;
+        if batch.batch_id != id {
+            return Err(InspectionError::new("comments_corrupt", "comment record and filename identities differ"));
+        }
+        batch.live_attachment = None;
+        atomic_write_json(state.state_dir(), name, &batch)
+            .map_err(|error| InspectionError::new("comments_write", error.to_string()))?;
+    }
+    Ok(())
+}
+
 fn commit_blocking(
     state: &ProjectStore,
     mut batch: CommentBatch,
@@ -133,13 +167,20 @@ fn commit_blocking(
                     "comment batch generation is no longer current",
                 ));
             }
-            if current.owner.source_kind != batch.owner.source_kind
-                || current.owner.source_id != batch.owner.source_id
-            {
+            if current.owner.source_identity() != batch.owner.source_identity() {
                 return Err(InspectionError::new(
                     "owner_mismatch",
                     "comment source identity cannot change",
                 ));
+            }
+            if current.owner != batch.owner {
+                let (others, truncated) = scan_batches(state)?;
+                if truncated {
+                    return Err(InspectionError::new("comments_batches_bounded", "cannot prove owner uniqueness in a truncated store"));
+                }
+                if others.iter().any(|other| other.batch_id != batch.batch_id && other.owner == batch.owner) {
+                    return Err(InspectionError::new("duplicate_owner", "a comment batch already exists for this owner"));
+                }
             }
             current.generation.checked_add(1).ok_or_else(|| {
                 InspectionError::new("invalid_generation", "comment batch generation overflow")
@@ -311,10 +352,20 @@ fn validate_batch(batch: &CommentBatch) -> Result<(), InspectionError> {
 }
 
 fn validate_owner(owner: &CommentOwner) -> Result<(), InspectionError> {
-    validate_text_id(&owner.session_id, "session")?;
-    validate_text_id(&owner.pane_id, "pane")?;
-    validate_text_id(&owner.terminal_id, "terminal")?;
-    validate_text_id(&owner.source_id, "source")
+    match owner {
+        CommentOwner::Viewer { session_id, server_instance, tab_id, source_id, .. } => {
+            validate_text_id(session_id, "session")?;
+            validate_text_id(server_instance, "server instance")?;
+            validate_text_id(tab_id, "tab")?;
+            validate_text_id(source_id, "source")
+        }
+        CommentOwner::LegacyPane { session_id, pane_id, terminal_id, source_id, .. } => {
+            validate_text_id(session_id, "session")?;
+            validate_text_id(pane_id, "pane")?;
+            validate_text_id(terminal_id, "terminal")?;
+            validate_text_id(source_id, "source")
+        }
+    }
 }
 
 fn validate_draft(draft: &CommentDraft) -> Result<(), InspectionError> {
@@ -414,7 +465,7 @@ fn record_name(id: &str) -> String {
 mod tests {
     use super::*;
     use cockpit_protocol::comments::{CommentFileRef, CommentLocation, CommentSourceState};
-    use cockpit_protocol::context::ExtensionKind;
+    use cockpit_protocol::context::ViewerSourceKind;
     use std::fs;
 
     fn temp_root(label: &str) -> std::path::PathBuf {
@@ -428,11 +479,11 @@ mod tests {
         CommentBatch {
             batch_id: Uuid::new_v4().to_string(),
             generation: 0,
-            owner: CommentOwner {
+            owner: CommentOwner::Viewer {
                 session_id: format!("session-{owner_suffix}"),
-                pane_id: format!("pane-{owner_suffix}"),
-                terminal_id: format!("terminal-{owner_suffix}"),
-                source_kind: ExtensionKind::Context,
+                server_instance: "server".to_owned(),
+                tab_id: "tab".to_owned(),
+                source_kind: ViewerSourceKind::Context,
                 source_id: Uuid::new_v4().to_string(),
             },
             last_known_location: CommentLocation {
@@ -591,6 +642,66 @@ mod tests {
             .await
             .expect_err("line anchors must retain every selected line");
         assert_eq!(error.code, "comments_anchor_invalid");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn legacy_upgrade_preserves_saved_work_and_is_byte_idempotent() {
+        let root = temp_root("legacy");
+        let original = batch("legacy", "durable legacy comment");
+        let mut value = serde_json::to_value(&original).expect("batch");
+        value["owner"] = serde_json::json!({
+            "session_id": "old-session",
+            "pane_id": "old-pane",
+            "terminal_id": "old-terminal",
+            "source_kind": "context",
+            "source_id": original.owner.source_identity().1,
+        });
+        let path = root.join(record_name(&original.batch_id));
+        fs::write(&path, serde_json::to_vec_pretty(&value).expect("legacy bytes")).expect("seed legacy");
+        let store = CommentStore::new(&root).expect("upgrade");
+        let loaded = store.load(&original.batch_id).await.expect("read").expect("saved batch");
+        assert!(matches!(&loaded.owner, CommentOwner::LegacyPane { session_id, pane_id, terminal_id, .. }
+            if session_id == "old-session" && pane_id == "old-pane" && terminal_id == "old-terminal"));
+        assert!(loaded.live_attachment.is_none());
+        assert_eq!(loaded.generation, original.generation);
+        assert_eq!(loaded.updated_at, original.updated_at);
+        assert_eq!(loaded.drafts[0].comment_text, original.drafts[0].comment_text);
+        assert_eq!(loaded.drafts[0].file_ref.root_id, original.drafts[0].file_ref.root_id);
+        let migrated_bytes = fs::read(&path).expect("migrated bytes");
+        CommentStore::new(&root).expect("repeat upgrade");
+        assert_eq!(fs::read(&path).expect("repeat bytes"), migrated_bytes);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn reattach_checks_source_and_owner_uniqueness_without_overwriting_saved_work() {
+        let root = temp_root("reattach");
+        let store = CommentStore::new(&root).expect("store");
+        let target = store.commit(batch("viewer", "viewer comment"), 0).await.expect("viewer batch");
+        let mut legacy = batch("legacy", "legacy comment");
+        legacy.owner = CommentOwner::LegacyPane {
+            session_id: "old-session".to_owned(),
+            pane_id: "old-pane".to_owned(),
+            terminal_id: "old-terminal".to_owned(),
+            source_kind: target.owner.source_identity().0,
+            source_id: target.owner.source_identity().1.to_owned(),
+        };
+        let saved = store.commit(legacy, 0).await.expect("legacy batch");
+        let mut attaching = saved.clone();
+        attaching.owner = target.owner.clone();
+        assert_eq!(store.commit(attaching.clone(), saved.generation).await.expect_err("duplicate reattach").code, "duplicate_owner");
+        if let CommentOwner::Viewer { source_id, .. } = &mut attaching.owner {
+            *source_id = "different-source".to_owned();
+        }
+        assert_eq!(store.commit(attaching, saved.generation).await.expect_err("source cannot change").code, "owner_mismatch");
+        assert_eq!(store.load(&saved.batch_id).await.expect("load").expect("saved").generation, saved.generation);
+        store.discard(&target.batch_id, target.generation).await.expect("explicitly discard existing target");
+        let mut attaching = saved.clone();
+        attaching.owner = target.owner.clone();
+        let attached = store.commit(attaching, saved.generation).await.expect("matching legacy reattach");
+        assert_eq!(attached.owner, target.owner);
+        assert_eq!(attached.drafts[0].comment_text, "legacy comment");
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

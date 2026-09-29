@@ -12,7 +12,7 @@ use std::{
 use cockpit_protocol::{
     browser::{
         BrowserConnectionState, BrowserFeedbackAckRequest, BrowserFeedbackLookup, BrowserResponse,
-        BrowserTarget,
+        BrowserTarget, BrowserWorkScope,
     },
     browser_feedback::{
         BrowserAnnotation, BrowserCaptureContext, BrowserCaptureSaved, BrowserCaptureSubmission,
@@ -1663,7 +1663,7 @@ impl BrowserService {
         )
     }
     /// Recovers persisted drafts and frozen captures without launching or
-    /// attaching a browser. Target resolution still uses fresh Herdr authority.
+    /// attaching a browser. Saved-tab and legacy archive authorization need no live Herdr.
     pub async fn browser_draft_recovery(
         &self,
         request: BrowserDraftRecoveryRequest,
@@ -1672,14 +1672,12 @@ impl BrowserService {
             .validate()
             .map_err(|message| InspectionError::new("browser_draft_command", message))?;
         let _operation = self.operation_lock.lock().await;
-        let resolved = self.resolve_target(&request.target).await?;
-        let association_key = super::association_key(
-            &resolved.endpoint_identity,
-            &resolved.session_id,
-            &resolved.space_id,
-        );
+        let resolved = self.resolve_work_scope(&request.scope).await?;
+        let association_key = resolved.association_key;
         let store = self.draft_store()?;
-        match request.action {
+        let prune_archive = matches!(&request.scope, BrowserWorkScope::LegacyArchive { .. })
+            && !matches!(&request.action, BrowserDraftRecoveryAction::List);
+        let outcome: Result<BrowserViewCommandOutcome, InspectionError> = match request.action {
             BrowserDraftRecoveryAction::List => Ok(BrowserViewCommandOutcome::DraftInventory {
                 inventory: store.list(&association_key)?,
             }),
@@ -1737,29 +1735,35 @@ impl BrowserService {
                     inventory: store.list(&association_key)?,
                 })
             }
+        };
+        let outcome = outcome?;
+        if prune_archive {
+            self.prune_legacy_archive(&association_key)?;
         }
+        Ok(outcome)
     }
 
-    /// Existing saved-feedback discovery remains available even when no inline
-    /// browser view is attached. Draft inventory shares the same fresh Space
-    /// resolution and is optional for records written before inline drafts.
+    /// Saved work is addressed by its live tab or durable saved-association key.
+    /// Saved-tab and archive reads never inspect or launch a browser or contact Herdr.
     pub async fn feedback(
         &self,
-        target: &BrowserTarget,
+        scope: &BrowserWorkScope,
     ) -> Result<BrowserFeedbackLookup, InspectionError> {
         let _operation = self.operation_lock.lock().await;
-        let target = self.resolve_target(target).await?;
-        let key = super::association_key(
-            &target.endpoint_identity,
-            &target.session_id,
-            &target.space_id,
-        );
-        let browser = match self.load(&key)? {
+        let resolved = self.resolve_work_scope(scope).await?;
+        let key = resolved.association_key;
+        let browser = match resolved.tab.as_ref().map(|_| self.load(&key)).transpose()?.flatten() {
             Some(mut receipt) => self.status(&mut receipt).await?,
             None => BrowserResponse {
                 association: None,
                 connection: BrowserConnectionState::Absent,
-                message: "No browser association exists for this Space".into(),
+                message: match scope {
+                    BrowserWorkScope::Tab { .. } => "No browser association exists for this tab",
+                    BrowserWorkScope::SavedTab { .. } => "Saved browser work from this tab",
+                    BrowserWorkScope::LegacyArchive { .. } => "Saved browser work from before tabs",
+                }.into(),
+                cleanup: cockpit_protocol::browser::BrowserCleanupState::None,
+                cleanup_reason: None,
             },
         };
         let feedback = self.feedback.list(&key)?;
@@ -1784,13 +1788,13 @@ impl BrowserService {
         request: BrowserFeedbackAckRequest,
     ) -> Result<BrowserFeedbackAck, InspectionError> {
         let _operation = self.operation_lock.lock().await;
-        let target = self.resolve_target(&request.target).await?;
-        let key = super::association_key(
-            &target.endpoint_identity,
-            &target.session_id,
-            &target.space_id,
-        );
-        self.feedback.ack(&key, &request.ids)
+        let resolved = self.resolve_work_scope(&request.scope).await?;
+        let key = resolved.association_key;
+        let ack = self.feedback.ack(&key, &request.ids)?;
+        if matches!(request.scope, BrowserWorkScope::LegacyArchive { .. }) {
+            self.prune_legacy_archive(&key)?;
+        }
+        Ok(ack)
     }
 
     pub fn prune_feedback(&self) -> Result<(), InspectionError> {
@@ -1801,7 +1805,7 @@ impl BrowserService {
         self.root.as_ref()
     }
 
-    fn draft_store(&self) -> Result<BrowserDraftStore, InspectionError> {
+    pub(super) fn draft_store(&self) -> Result<BrowserDraftStore, InspectionError> {
         let state_root = self.root.parent().ok_or_else(|| {
             InspectionError::new("browser_draft_root", "Browser state root has no parent")
         })?;
@@ -1817,12 +1821,12 @@ impl BrowserService {
         let association_key = super::association_key(
             &resolved.endpoint_identity,
             &resolved.session_id,
-            &resolved.space_id,
+            &resolved.tab_id,
         );
         if attachment.association_key != association_key {
             return Err(InspectionError::new(
                 "browser_draft_association",
-                "Browser view belongs to another Space association",
+                "Browser view belongs to another tab association",
             ));
         }
         let receipt = self.load(&association_key)?.ok_or_else(|| {

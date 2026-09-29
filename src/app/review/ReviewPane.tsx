@@ -21,11 +21,12 @@ export type ReviewLineSelection = { fileId: string; side: "old" | "new"; start: 
 export type ReviewPaneProps = {
   identity: string;
   sessionId: string;
-  paneId: string;
+  viewerId: string;
   bindingId: string;
   repositoryId: string;
   snapshot: (request: ReviewSnapshotRequest, signal: AbortSignal) => Promise<ReviewSnapshot>;
   file: (request: ReviewFileRequest, signal: AbortSignal) => Promise<ReviewFileDiff>;
+  onViewerError?: (error: unknown) => void;
   selectedLines?: ReviewLineSelection;
   onCreateLineComment?: () => void;
   onCreateFileComment?: () => void;
@@ -146,12 +147,12 @@ type SourcePageRequest = {
   revision: string | null;
 };
 
-export function reviewScrollIdentity(sessionId: string, paneId: string, bindingId: string, reviewId: string, generation: number, comparison: ReviewComparison, kind: "diff" | "source", fileId: string, side: "old" | "new" | null, revision: string | null): string {
-  return [sessionId, paneId, bindingId, reviewId, generation, comparison, kind, fileId, side ?? "", revision ?? ""].join("\u0000");
+export function reviewScrollIdentity(sessionId: string, viewerId: string, bindingId: string, reviewId: string, generation: number, comparison: ReviewComparison, kind: "diff" | "source", fileId: string, side: "old" | "new" | null, revision: string | null): string {
+  return [sessionId, viewerId, bindingId, reviewId, generation, comparison, kind, fileId, side ?? "", revision ?? ""].join("\u0000");
 }
 
 
-export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryId, snapshot, file, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, onOpenSource, commentCount = null, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, presentationControls, onTogglePresentation, renderLineComments, viewState, onViewStateChange }: ReviewPaneProps) {
+export function ReviewPane({ identity, sessionId, viewerId, bindingId, repositoryId, snapshot, file, onViewerError, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, onOpenSource, commentCount = null, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, presentationControls, onTogglePresentation, renderLineComments, viewState, onViewStateChange }: ReviewPaneProps) {
   const baseId = useId();
   const [comparison, setComparison] = useState<ReviewComparison>(viewState?.comparison ?? "all_local");
   const [baseRef, setBaseRef] = useState(viewState?.baseRef ?? "");
@@ -172,10 +173,17 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const filesRef = useRef<HTMLElement | null>(null);
   const paneRef = useRef<HTMLElement | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const overview = useFileOverview(paneRef);
+  const [overviewChoice, setOverviewChoice] = useState<boolean | null>(viewState?.overviewChoice ?? null);
+  const overview = useFileOverview(paneRef, overviewChoice, setOverviewChoice);
   const tree = useTreeWidth();
   const [wrap, toggleWrap] = useWrapPreference();
   const [error, setError] = useState<string | null>(null);
+  const viewerErrorRef = useRef(onViewerError);
+  viewerErrorRef.current = onViewerError;
+  const reportError = useCallback((reason: unknown) => {
+    setError(errorText(reason));
+    viewerErrorRef.current?.(reason);
+  }, []);
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const identityRef = useRef(identity);
@@ -198,7 +206,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const diffRevision = diff ? `${diff.file.old_revision ?? ""}\u0000${diff.file.new_revision ?? ""}` : null;
   const activeScrollIdentity = reviewMode === "diff"
     ? review && diff && diff.file.file_id === selected && diff.review_id === review.review_id && diff.generation === review.generation
-      ? reviewScrollIdentity(sessionId, paneId, bindingId, review.review_id, review.generation, review.comparison, "diff", diff.file.file_id, null, diffRevision)
+      ? reviewScrollIdentity(sessionId, viewerId, bindingId, review.review_id, review.generation, review.comparison, "diff", diff.file.file_id, null, diffRevision)
       : null
     : viewStateRef.current?.scrollIdentity ?? null;
   const scrollTop = reviewMode === "diff" && activeScrollIdentity
@@ -224,8 +232,9 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       scrollIdentity: activeScrollIdentity ?? viewStateRef.current?.scrollIdentity ?? null,
       mode: reviewMode,
       commentCount: viewStateRef.current?.commentCount ?? null,
+      overviewChoice,
     });
-  }, [activeScrollIdentity, baseRef, bindingId, comparison, draftBaseRef, hunkIndex, onViewStateChange, paneId, reviewMode, scrollTop, selected, selectedFile, selectedLines, sessionId]);
+  }, [activeScrollIdentity, baseRef, bindingId, comparison, draftBaseRef, hunkIndex, onViewStateChange, overviewChoice, viewerId, reviewMode, scrollTop, selected, selectedFile, selectedLines, sessionId]);
 
   const refresh = useCallback(async () => {
     invalidateSourcePage();
@@ -246,7 +255,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     try {
       const next = await snapshot({ binding_id: bindingId, repository_id: repositoryId, comparison, base_ref: comparison === "branch" ? baseRef.trim() || null : null }, controller.signal);
       if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current
-        && next.binding_id === bindingId && next.session_id === sessionId && next.pane_id === paneId) {
+        && next.binding_id === bindingId && next.session_id === sessionId && next.viewer_id === viewerId) {
         setReview(next);
         const retained = next.files.find((item) => item.file_id === selectedRef.current)
           ?? next.files.find((item) => (item.new_path ?? item.old_path) === viewStateRef.current?.filePath && item.comparison === comparison)
@@ -254,11 +263,11 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         setSelected(retained?.file_id ?? null);
       }
     } catch (reason) {
-      if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current) setError(errorText(reason));
+      if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current) reportError(reason);
     } finally {
       if (!controller.signal.aborted && generation === generationRef.current) setPending(false);
     }
-  }, [baseRef, bindingId, comparison, identity, invalidateSourcePage, paneId, repositoryId, sessionId, snapshot]);
+  }, [baseRef, bindingId, comparison, identity, invalidateSourcePage, viewerId, reportError, repositoryId, sessionId, snapshot]);
   const editBaseRef = (value: string) => {
     invalidateSourcePage();
     abortRef.current?.abort();
@@ -291,11 +300,12 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     void file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: selected, source_side: null, source_offset: 0, source_revision: null }, controller.signal)
       .then((next) => {
         if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current
-          && next.review_id === review.review_id && next.generation === review.generation && next.binding_id === bindingId) setDiff(next);
+          && next.review_id === review.review_id && next.generation === review.generation && next.binding_id === bindingId
+          && next.session_id === sessionId && next.viewer_id === viewerId && next.file.file_id === selected) setDiff(next);
       })
-      .catch((reason) => { if (!controller.signal.aborted && generation === generationRef.current) setError(errorText(reason)); });
+      .catch((reason) => { if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current) reportError(reason); });
     return () => controller.abort();
-  }, [bindingId, file, identity, review, selected]);
+  }, [bindingId, file, identity, reportError, review, selected, sessionId, viewerId]);
   useEffect(() => {
     if (reviewMode !== "diff" || !activeScrollIdentity) { restoredDiff.current = null; return; }
     if (!diffRef.current || restoredDiff.current === activeScrollIdentity) return;
@@ -310,7 +320,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     if (!review || !diff) return null;
     invalidateSourcePage();
     const revision = side === "old" ? diff.file.old_revision ?? null : diff.file.new_revision ?? null;
-    const sourceIdentity = reviewScrollIdentity(sessionId, paneId, bindingId, review.review_id, review.generation, review.comparison, "source", diff.file.file_id, side, revision);
+    const sourceIdentity = reviewScrollIdentity(sessionId, viewerId, bindingId, review.review_id, review.generation, review.comparison, "source", diff.file.file_id, side, revision);
     const token = sourcePageSequence.current + 1;
     sourcePageSequence.current = token;
     const controller = new AbortController();
@@ -332,7 +342,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         || comparisonRef.current !== comparison || selectedRef.current !== selected
         || currentReview?.review_id !== review.review_id || currentReview.generation !== review.generation
         || currentDiff?.file.file_id !== diff.file.file_id
-        || next.binding_id !== bindingId || next.session_id !== sessionId || next.pane_id !== paneId
+        || next.binding_id !== bindingId || next.session_id !== sessionId || next.viewer_id !== viewerId
         || next.review_id !== review.review_id || next.generation !== review.generation
         || next.file.file_id !== diff.file.file_id
         || (revision !== null && (side === "old" ? next.file.old_revision : next.file.new_revision) !== revision)) return null;
@@ -345,12 +355,12 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         || comparisonRef.current !== comparison || selectedRef.current !== selected
         || currentReview?.review_id !== review.review_id || currentReview.generation !== review.generation
         || currentDiff?.file.file_id !== diff.file.file_id) return null;
-      setError(errorText(reason));
+      reportError(reason);
       return null;
     } finally {
       if (sourcePageRef.current?.token === token) sourcePageRef.current = null;
     }
-  }, [bindingId, comparison, diff, file, identity, invalidateSourcePage, paneId, review, selected, sessionId]);
+  }, [bindingId, comparison, diff, file, identity, invalidateSourcePage, viewerId, reportError, review, selected, sessionId]);
 
   const fileNavigationOrder = () => {
     if (!review?.files.length) return [];
@@ -500,7 +510,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         {diff?.diagnostics.filter(item => !(diff.file.binary && /binary/i.test(item.message))).map((item, index) => <p key={`${item.code}-${index}`} className="review-notice">{item.message}</p>)}
         {diff && diff.hunks.length === 0 && !diff.file.binary ? <p className="review-empty">No textual hunk is available for this change.</p> : null}
         {review && review.files.length === 0 && !pending && !error ? <div className="review-empty" role="status"><UiIcon name="file" /><span>No changes in this comparison.</span><button type="button" onClick={submitComparison}>Refresh</button></div> : null}
-        {!review && !pending ? <p className="review-empty">{comparison === "branch" ? "Enter a base ref, then press Enter or Refresh to compare branches." : "Choose a verified Review pane to load a local Git snapshot."}</p> : null}
+        {!review && !pending ? <p className="review-empty">{comparison === "branch" ? "Enter a base ref, then press Enter or Refresh to compare branches." : "Open Review for a local Git snapshot."}</p> : null}
   </>;
   };
 

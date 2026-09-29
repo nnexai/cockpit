@@ -1,4 +1,4 @@
-use crate::browser::BrowserTarget;
+use crate::browser::{BrowserTarget, BrowserWorkScope};
 use crate::browser_feedback::{
     BrowserAnnotationKind, BrowserCaptureSaved, BrowserCaptureSubmission, BrowserElementEvidence,
     BrowserPoint, BrowserRect,
@@ -51,14 +51,7 @@ pub const BROWSER_VIEW_FRAME_V2_JPEG_LENGTH_OFFSET: u16 = 80;
 pub const BROWSER_VIEW_FRAME_V2_FLAGS_OFFSET: u16 = 84;
 pub const BROWSER_VIEW_FRAME_V2_RESERVED_OFFSET: u16 = 88;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum BrowserViewPresentation {
-    Split,
-    BrowserOnly,
-}
-
-/// The controller-owned browser viewport requested by a Cockpit presentation.
+/// The controller-owned browser viewport requested by a Cockpit leaf.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserViewViewportRequest {
@@ -84,13 +77,12 @@ impl BrowserViewViewportRequest {
     }
 }
 
-/// Attach a Cockpit presentation to the browser selected by fresh Herdr authority.
+/// Attach a Cockpit leaf to the browser selected by fresh Herdr authority.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserViewOpenRequest {
     pub target: BrowserTarget,
     pub client_id: String,
-    pub presentation: BrowserViewPresentation,
     pub viewport: BrowserViewViewportRequest,
     pub takeover: bool,
 }
@@ -817,9 +809,8 @@ pub enum BrowserViewDraftCommand {
     DiscardPending,
 }
 
-/// Recovery is available without an attached inline view. The target still
-/// resolves through fresh Herdr authority before Cockpit reads or changes the
-/// association-owned records.
+/// Recovery is available without an attached inline view. Tab scopes resolve
+/// through fresh Herdr authority; legacy scopes require an immutable archive.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserDraftRecoveryAction {
@@ -854,7 +845,7 @@ pub enum BrowserDraftRecoveryAction {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserDraftRecoveryRequest {
-    pub target: BrowserTarget,
+    pub scope: BrowserWorkScope,
     pub action: BrowserDraftRecoveryAction,
 }
 

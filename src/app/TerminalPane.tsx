@@ -11,8 +11,6 @@ import { detectPlatform, shortcutForms } from "./input/shortcuts";
 export const MAX_PENDING_CONTROL_COMMANDS = 64;
 const MAX_QUEUED_FRAME_COUNT = 64;
 const MAX_QUEUED_FRAME_BYTES = 8 * 1024 * 1024;
-/** How long control survives a transient loss before the stream drops to observe. */
-const CONTROL_RELEASE_DELAY_MS = 750;
 /** How long a resize may go unanswered before the next one is sent anyway. */
 const RESIZE_ANSWER_TIMEOUT_MS = 150;
 /** DEC 2026: xterm holds rendering until the frame's closing sequence. */
@@ -28,6 +26,7 @@ export type TerminalPaneProps = {
   selected: boolean;
   /** Whether the pane is painted; a hidden element cannot take DOM focus, so a tab switch focuses only once its pane is shown. */
   presented?: boolean;
+  /** Confirmed input eligibility, independent of the control-only attachment lifecycle. */
   controlAllowed: boolean;
   controlPending: boolean;
   focusEpoch: number;
@@ -240,7 +239,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   const terminalRef = useRef<Terminal | null>(null);
   const streamRef = useRef<TerminalStream | null>(null);
   const attachmentGeneration = useRef(0);
-  const [ownership, setOwnership] = useState<TerminalOwnershipState>("observing");
+  const [ownership, setOwnership] = useState<TerminalOwnershipState>("pending");
   const [error, setError] = useState<PaneError | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [closed, setClosed] = useState(false);
@@ -256,8 +255,6 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   const pendingIntentRef = useRef<{ epoch: number; paneId: string; token: number } | null>(null);
   const attachRetryKeyRef = useRef<string | null>(null);
   const attachRetryCountRef = useRef(0);
-  const [controlRequested, setControlRequested] = useState(controlAllowed || (controlPending && selected));
-  const controlRequestedRef = useRef(controlRequested);
   const controlRequestPendingRef = useRef(false);
   const takeoverRequestedRef = useRef(false);
   const controlAllowedRef = useRef(controlAllowed);
@@ -291,7 +288,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       return;
     }
     const stream = streamRef.current;
-    if (!stream || (ownershipRef.current !== "owned" && ownershipRef.current !== "observing")) return;
+    if (!stream || ownershipRef.current !== "owned") return;
     const geometry = terminalCellGeometry(terminal, renderedGridRef.current ?? { cols: terminal.cols, rows: terminal.rows });
     const resizeCommand: TerminalResize = {
       type: "terminal.resize",
@@ -324,6 +321,8 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   controlAllowedRef.current = controlAllowed;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const presentedRef = useRef(presented);
+  presentedRef.current = presented;
   const focusOnAttachRef = useRef(focusOnAttach);
   focusOnAttachRef.current = focusOnAttach;
   const onRequestControlRef = useRef(onRequestControl);
@@ -332,6 +331,8 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
   onSelectRef.current = onSelect;
+  const registerStreamRef = useRef(registerStream);
+  registerStreamRef.current = registerStream;
   const controlPendingRef = useRef(controlPending);
   controlPendingRef.current = controlPending;
   const focusEpochRef = useRef(focusEpoch);
@@ -358,6 +359,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     pendingIntentRef.current = null;
   };
   const sendInput = (command: TerminalCommand) => {
+    if (!selectedRef.current || ownershipRef.current === "lost" || ownershipRef.current === "conflict") return;
     const hasSelectedFocusIntent = selectedRef.current && focusTokenRef.current > 0;
     if (!controlAllowedRef.current && !controlRequestPendingRef.current && !controlPendingRef.current && !hasSelectedFocusIntent) return;
     if (controlAllowedRef.current && ownershipRef.current === "owned" && streamRef.current) sendStreamCommand(streamRef.current, command);
@@ -390,21 +392,25 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     const stream = streamRef.current;
     const intent = pendingIntentRef.current;
     const current = currentIntent();
-    if (!controlAllowedRef.current || !controlRequestedRef.current || ownershipRef.current !== "owned" || !stream || pendingCommands.current.length === 0
+    if (!selectedRef.current || !controlAllowedRef.current || ownershipRef.current !== "owned" || !stream || pendingCommands.current.length === 0
       || !intent || intent.epoch !== current.epoch || intent.paneId !== current.paneId || intent.token !== current.token) return;
     for (const command of pendingCommands.current) sendStreamCommand(stream, command);
     clearPendingCommands();
   };
   const requestControl = () => {
-    terminalRef.current?.focus();
+    if (selectedRef.current && presentedRef.current && controlAllowedRef.current && ownershipRef.current === "owned") terminalRef.current?.focus();
     onRequestControlRef.current?.();
     if (!selectedRef.current) onSelectRef.current?.();
-    if (controlAllowedRef.current && controlRequestedRef.current && ownershipRef.current === "owned") return;
-    takeoverRequestedRef.current = true;
+    if (controlAllowedRef.current && ownershipRef.current === "owned") return;
+    if (ownershipRef.current === "lost" || ownershipRef.current === "conflict") return;
     controlRequestPendingRef.current = true;
-    const wantsControl = controlAllowedRef.current || (controlPendingRef.current && selectedRef.current);
-    controlRequestedRef.current = wantsControl;
-    setControlRequested(wantsControl);
+  };
+  const retryAttachment = (takeover = false) => {
+    clearPendingCommands();
+    pendingPasteRef.current = null;
+    takeoverRequestedRef.current = takeover;
+    attachRetryCountRef.current = 0;
+    setAttempt((value) => value + 1);
   };
 
   const flushPendingPaste = () => {
@@ -556,15 +562,8 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   }, []);
 
   useEffect(() => {
-    if (selected && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
-  }, [deferAttachment, focusEpoch, selected, terminalReady]);
-  const wasInputReadyRef = useRef(controlAllowed && presented);
-  useEffect(() => {
-    const inputReady = controlAllowed && presented;
-    const gainedInput = inputReady && !wasInputReadyRef.current;
-    wasInputReadyRef.current = inputReady;
-    if (gainedInput && selected && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
-  }, [controlAllowed, deferAttachment, presented, selected, terminalReady]);
+    if (selected && presented && controlAllowed && ownership === "owned" && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
+  }, [controlAllowed, deferAttachment, focusEpoch, ownership, presented, selected, terminalReady]);
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
@@ -607,7 +606,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       desiredViewportGridRef.current = { cols, rows };
       renderedGridRef.current = { cols, rows };
       const stream = streamRef.current;
-      if (!stream || (ownershipRef.current !== "owned" && ownershipRef.current !== "observing")) return;
+      if (!stream || ownershipRef.current !== "owned") return;
       const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
       const resizeCommand: TerminalResize = {
         type: "terminal.resize",
@@ -657,35 +656,12 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   useEffect(() => {
     if (controlAllowed) {
       controlRequestPendingRef.current = false;
-      if (!controlRequestedRef.current) {
-        controlRequestedRef.current = true;
-        setControlRequested(true);
-      }
       flushPending();
-      return;
-    }
-    if (!controlPending) {
+    } else if (!controlPending) {
       controlRequestPendingRef.current = false;
-      if (!controlAllowed) clearPendingCommands();
-      clearMouseMode();
+      clearPendingCommands();
+      releaseCapturedPointer();
     }
-    if (controlPending && selected) {
-      // Attach for control while Herdr confirms focus; input stays queued until it does.
-      if (!controlRequestedRef.current) {
-        controlRequestedRef.current = true;
-        setControlRequested(true);
-      }
-      return;
-    }
-    if (!controlRequestedRef.current) return;
-    // Control drops for a moment during a session resync; switching the stream
-    // to observe and back would reattach twice. Input stays gated meanwhile.
-    const release = window.setTimeout(() => {
-      if (controlAllowedRef.current || !controlRequestedRef.current) return;
-      controlRequestedRef.current = false;
-      setControlRequested(false);
-    }, CONTROL_RELEASE_DELAY_MS);
-    return () => window.clearTimeout(release);
   }, [controlAllowed, controlPending, selected]);
 
   useEffect(() => {
@@ -703,27 +679,25 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   useEffect(() => {
     ownershipRef.current = ownership;
   }, [ownership]);
-  const wantsControl = controlRequested;
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal || !terminalReady || deferAttachment) return;
-    // The control effect queues its intent-state update before this effect runs.
-    if (wantsControl !== controlRequestedRef.current) return;
     const viewportGrid = desiredViewportGridRef.current ?? {
       cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
     };
-    const restoreFocus = selectedRef.current && controlAllowedRef.current && focusOnAttachRef.current;
     const geometry = terminalCellGeometry(terminal, renderedGridRef.current ?? { cols: terminal.cols, rows: terminal.rows });
     const openRequest: TerminalOpenRequest = {
       ...request,
-      mode: wantsControl ? "control" : "observe",
-      takeover: wantsControl && takeoverRequestedRef.current,
+      mode: "control",
+      takeover: takeoverRequestedRef.current,
       cols: viewportGrid.cols,
       rows: viewportGrid.rows,
       cell_width_px: geometry.cell_width_px,
       cell_height_px: geometry.cell_height_px,
     };
+    takeoverRequestedRef.current = false;
+    const registerAttachment = registerStreamRef.current;
     lastResizeRef.current = {
       type: "terminal.resize",
       cols: openRequest.cols,
@@ -799,8 +773,9 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       ownershipRef.current = "released";
       setOwnership("released");
       streamRef.current = null;
-      if (stream) registerStream?.(stream, false);
+      if (stream) registerAttachment?.(stream, false);
       stream?.close();
+      stream = null;
     };
     drainFrameQueue = () => {
       if (frameApplying || cancelled || generation !== attachmentGeneration.current || terminalRef.current !== terminal) return;
@@ -822,7 +797,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
             });
             terminal.refresh(0, terminal.rows - 1);
           }
-          if (frame.retainedFocus && selectedRef.current && controlAllowedRef.current && document.activeElement === document.body) terminal.focus();
+          if (frame.retainedFocus && selectedRef.current && presentedRef.current && controlAllowedRef.current && ownershipRef.current === "owned" && document.activeElement === document.body) terminal.focus();
         } catch {
           if (!cancelled && generation === attachmentGeneration.current) fail("terminal_frame", "Terminal could not render a frame");
         } finally {
@@ -901,13 +876,27 @@ export function TerminalPane({ client, request, selected, presented = true, cont
           clearPendingCommands();
           clearMouseMode();
           controlRequestPendingRef.current = false;
-          controlRequestedRef.current = false;
-          takeoverRequestedRef.current = false;
-          setControlRequested(false);
+          pendingPasteRef.current = null;
+          cancelled = true;
+          clearFrameQueue();
+          controller.abort();
+          readinessRender?.dispose();
+          if (attachRetryTimerRef.current !== null) {
+            window.clearTimeout(attachRetryTimerRef.current);
+            attachRetryTimerRef.current = null;
+          }
+          if (resizeInFlightRef.current) window.clearTimeout(resizeInFlightRef.current.timer);
+          resizeInFlightRef.current = null;
+          resizeFollowUpRef.current = false;
+          streamRef.current = null;
+          if (stream) registerAttachment?.(stream, false);
+          stream?.close();
+          stream = null;
+          onReadyRef.current?.();
         } else if (message.state === "released") clearMouseMode();
         ownershipRef.current = message.state;
         setOwnership(message.state);
-        if (message.state === "owned" || message.state === "observing") requestViewportSizing();
+        if (message.state === "owned") requestViewportSizing();
         if (message.state === "owned") flushPending();
         return;
       }
@@ -974,8 +963,9 @@ export function TerminalPane({ client, request, selected, presented = true, cont
         setOwnership("released");
         streamRef.current = null;
         onClosed?.();
-        if (stream) registerStream?.(stream, false);
+        if (stream) registerAttachment?.(stream, false);
         stream?.close();
+        stream = null;
       }
     };
     void client.openTerminal(openRequest, onMessage, (cause: unknown) => {
@@ -991,10 +981,9 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       stream = opened;
       streamRef.current = opened;
       if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal
-        && (ownershipRef.current === "owned" || ownershipRef.current === "observing")) requestViewportSizing();
-      if (restoreFocus) terminal.focus();
+        && ownershipRef.current === "owned") requestViewportSizing();
       flushPending();
-      registerStream?.(opened, true);
+      registerAttachment?.(opened, true);
     }, (cause: unknown) => {
       if (cancelled || schedulePaneVisibilityRetry(cause)) return;
       const typed = cause instanceof Error ? cause : new Error("Could not attach terminal");
@@ -1012,10 +1001,10 @@ export function TerminalPane({ client, request, selected, presented = true, cont
         window.clearTimeout(attachRetryTimerRef.current);
         attachRetryTimerRef.current = null;
       }
-      if (stream) registerStream?.(stream, false);
+      if (stream) registerAttachment?.(stream, false);
       stream?.close();
     };
-  }, [client, deferAttachment, request.session_id, request.pane_id, wantsControl, terminalReady, attempt, registerStream]);
+  }, [client, deferAttachment, request.session_id, request.pane_id, terminalReady, attempt]);
 
   const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
     const terminal = terminalRef.current;
@@ -1098,8 +1087,14 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       ) : error ? (
         <div className="terminal-overlay" role="alert">
           <span>{error.message}</span>
-          <button type="button" className="recovery-button" onClick={() => setAttempt((value) => value + 1)}>Retry</button>
+          <button type="button" className="recovery-button" onClick={() => retryAttachment()}>Retry</button>
           <button type="button" className="recovery-button" onClick={onResync}>Resync</button>
+        </div>
+      ) : ownership === "lost" || ownership === "conflict" ? (
+        <div className="terminal-overlay" role="alert">
+          <span>Control taken by another client</span>
+          <button type="button" className="recovery-button" onClick={() => retryAttachment(true)}>Take control</button>
+          <button type="button" className="recovery-button" onClick={() => retryAttachment()}>Retry</button>
         </div>
       ) : null}
     </div>

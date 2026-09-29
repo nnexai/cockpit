@@ -1,6 +1,6 @@
 # Keyboard navigation
 
-Cockpit-wide shortcuts are `Ctrl+B` sequences on Linux and macOS alike (the literal Control key on macOS, as in Herdr). A key that Herdr binds by default keeps Herdr's meaning here or stays unbound. The tables below are generated from `src/app/input/shortcuts.ts`, the one registry that also drives the Commands list and every tooltip; a test fails when this file drifts from it. On macOS, read Ctrl+P / Alt+M as Cmd+P / Option+M in the viewer tables.
+Cockpit-wide shortcuts are `Ctrl+B` sequences on Linux and macOS alike (the literal Control key on macOS, as in Herdr). Existing keys are retained, but placement, zoom, resizing and pane navigation use Cockpit's tab-local layout of terminals and viewers, not Herdr's geometry. The tables below are generated from `src/app/input/shortcuts.ts`, the one registry that also drives the Commands list and every tooltip; a test fails when this file drifts from it. On macOS, read Ctrl+P / Alt+M as Cmd+P / Option+M in the viewer tables.
 
 Open **Commands** (Ctrl+B ?) to search every action by name or by key.
 
@@ -23,28 +23,28 @@ Press Ctrl+B, release it, then press the key. Shift and other modifier keys keep
 | Ctrl+B Shift+W | Rename Space |
 | Ctrl+B Shift+D | Close Space. Asks for confirmation. |
 | Ctrl+B Shift+S | Set up a Space. Opens the task Space setup dialog, like the Spaces + button. |
-| Ctrl+B Shift+P | Rename pane |
-| Ctrl+B v | Split pane right |
-| Ctrl+B - | Split pane below |
-| Ctrl+B x | Close pane. Asks for confirmation. |
-| Ctrl+B z | Toggle pane zoom |
-| Ctrl+B r | Focus a resize border. Then use the arrow keys. |
-| Ctrl+B h | Focus pane left |
-| Ctrl+B j | Focus pane below |
-| Ctrl+B k | Focus pane above |
-| Ctrl+B l | Focus pane right |
-| Ctrl+B Shift+H | Swap pane left |
-| Ctrl+B Shift+J | Swap pane below |
-| Ctrl+B Shift+K | Swap pane above |
-| Ctrl+B Shift+L | Swap pane right |
-| Ctrl+B Tab | Next pane. Only as the key right after Ctrl+B; a plain Tab always reaches the focused terminal. |
-| Ctrl+B Shift+Tab | Previous pane. Ctrl+B, Shift, Tab works too. |
+| Ctrl+B Shift+P | Rename terminal. Real terminals only; viewers have fixed titles. |
+| Ctrl+B v | Split right: new terminal. Creates a terminal beside the selected terminal or viewer. |
+| Ctrl+B - | Split down: new terminal. Creates a terminal below the selected terminal or viewer. |
+| Ctrl+B x | Close pane. Terminals ask for confirmation; Files and Review close locally. Browser close stops its session and removes its managed profile. |
+| Ctrl+B z | Toggle local pane zoom. Zooms the selected terminal or viewer in Cockpit only. |
+| Ctrl+B r | Focus adjacent pane divider. Arrow keys resize by 24 px, Shift+arrow by 96 px; Esc returns focus to the selected pane. |
+| Ctrl+B h | Focus pane left. Uses local geometry across terminals and viewers; restores zoom if the target is hidden. |
+| Ctrl+B j | Focus pane below. Uses local geometry across terminals and viewers; restores zoom if the target is hidden. |
+| Ctrl+B k | Focus pane above. Uses local geometry across terminals and viewers; restores zoom if the target is hidden. |
+| Ctrl+B l | Focus pane right. Uses local geometry across terminals and viewers; restores zoom if the target is hidden. |
+| Ctrl+B Shift+H | Swap pane left. Swaps locally with a terminal or viewer; Herdr's layout is unchanged. |
+| Ctrl+B Shift+J | Swap pane below. Swaps locally with a terminal or viewer; Herdr's layout is unchanged. |
+| Ctrl+B Shift+K | Swap pane above. Swaps locally with a terminal or viewer; Herdr's layout is unchanged. |
+| Ctrl+B Shift+L | Swap pane right. Swaps locally with a terminal or viewer; Herdr's layout is unchanged. |
+| Ctrl+B Tab | Next pane. Cycles all terminals and viewers in visual tree order, restoring zoom when needed. Only as the key right after Ctrl+B; a plain Tab reaches the focused surface. |
+| Ctrl+B Shift+Tab | Previous pane. Cycles all terminals and viewers in reverse visual tree order, restoring zoom when needed. Ctrl+B, Shift, Tab works too. |
 | Ctrl+B b | Toggle sidebar. Collapses or expands the sidebar; opens or closes the drawer on narrow windows. |
 | Ctrl+B w | Focus Spaces list. Then ↑ ↓ move, Enter selects through Herdr, Esc returns. |
 | Ctrl+B a | Focus Agents list |
 | Ctrl+B g | Switch session… |
 | Ctrl+B i | Open Library. Closing with Ctrl+B i returns focus to the pane it was opened from. |
-| Ctrl+B Shift+B | Toggle browser for Space. Opens or closes the Space browser, like the top-bar button. |
+| Ctrl+B Shift+B | Toggle browser for tab. Opens or closes the selected tab's browser, like the tab-strip button. |
 | Ctrl+B f | Open file picker. Acts only when focus is inside a Files, Review, Context or Library viewer. |
 
 ### Prefix control keys
@@ -103,11 +103,13 @@ These Herdr prefix keys have no Cockpit action, so Ctrl+B followed by one of the
 
 ### Where things happen
 
-- Pane commands (split, close, zoom, rename, swap, resize border) close the Library first when it is open, then act on the selected pane.
+- Pane commands (split, close, zoom, rename, swap, resize divider) close the Library first when it is open, then act on the selected layout leaf. Split always creates a real terminal, even beside a viewer; only real terminals can be renamed.
 - Closing the Library with Ctrl+B i returns keyboard focus to the pane it was opened from; Esc or a click on Close leaves focus on the selected tab.
-- Esc closes the innermost layer first: an armed prefix, then a menu, then a dialog or picker, then the narrow drawer or file overlay, then the Library. In a terminal or the browser surface Esc belongs to the program.
+- Esc closes the innermost layer first: an armed prefix, then a menu, then a dialog or picker, then the narrow drawer or file overlay, then the Library. In terminal, browser and viewer content Esc belongs to that surface. With focus on layout chrome, Esc restores zoom; during a pane-header drag it cancels the drag first. On a focused divider it returns focus to the selected leaf.
 - Ctrl+B works from the inline browser surface, not from its address field or note editor. Press Ctrl+B twice to send a literal Ctrl+B to the page.
+- Zoom, divider resizing and swapping change only Cockpit's layout. Directional focus and pane cycling include all terminals and viewers; selecting a leaf hidden by zoom restores the layout first.
+- Ctrl+B Shift+B toggles the selected tab's independent browser. Switching tabs, zooming another pane or opening the Library hides its view without closing its session; closing the browser stops that session and removes its managed profile and launch artifacts.
 
 Files and Review: clicking a file or pressing Enter opens it; renderable Markdown and HTML start in preview and Alt+M switches between preview and source. The picker matches characters in order anywhere in a path (for example `ctv` matches `context/ContextViewer.tsx`). Use arrows or Ctrl+N/P to move, Enter to open and Escape to close. Files indexes nested directories on demand while the picker is open, up to 512 directories and 10,000 files, subject to the configured directory listing and depth limits; an incomplete index is labeled and closing the picker cancels further reads. Review searches the changed files in its current comparison.
 
-Tab and pane selection follows Herdr confirmation. Focus requests run in order; when several clicks arrive during a pending request, the newest queued selection is sent next.
+Tab and terminal selection follows Herdr confirmation. Focus requests run in order; when several clicks arrive during a pending request, the newest queued selection is sent next. Viewer selection is local and sends no Herdr focus request; routine snapshots with unchanged Herdr focus do not take selection away from a viewer.

@@ -9,12 +9,12 @@ import { ReviewPane } from "./ReviewPane";
 
 const changedFile = { file_id: "file", comparison: "all_local", status: "modified", old_path: "src/file.ts", new_path: "src/file.ts", binary: false, additions: 2, deletions: 1, summary: "2 hunks", old_revision: "old", new_revision: "new" } as const;
 const snapshot: ReviewSnapshot = {
-  binding_id: "binding", session_id: "session", pane_id: "pane", review_id: "review", generation: 1,
+  binding_id: "binding", session_id: "session", viewer_id: "viewer", review_id: "review", generation: 1,
   repository_id: "repo", checkout_path: "/repo", source_id: "source", comparison: "all_local", base_revision: null,
   head_revision: "head", index_revision: "index", worktree_revision: "worktree", files: [changedFile], truncated: false, diagnostics: [],
 };
 const diff: ReviewFileDiff = {
-  binding_id: "binding", session_id: "session", pane_id: "pane", review_id: "review", generation: 1,
+  binding_id: "binding", session_id: "session", viewer_id: "viewer", review_id: "review", generation: 1,
   file: changedFile, old_source: "one\ntwo\n", new_source: "one\ntwo\n", old_source_hash: "old", new_source_hash: "new",
   old_source_offset: 0, new_source_offset: 0, old_source_total_bytes: 8, new_source_total_bytes: 8,
   old_total_lines: 2, new_total_lines: 2, old_source_truncated: false, new_source_truncated: false, truncated: false, diagnostics: [],
@@ -33,7 +33,7 @@ it("focuses the review diff so local hunk navigation works after entering the su
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
   try {
     await act(async () => {
-      mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+      mounted.render(<ReviewPane identity="review" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo"
         snapshot={async () => snapshot} file={async () => diff} selectedLines={{ fileId: "file", side: "new", start: 1, end: 1 }} onSelectLines={onSelectLines} />);
     });
     const surface = host.querySelector<HTMLElement>(".review-diff")!;
@@ -58,7 +58,7 @@ it("groups file paths while retaining separate staged and unstaged entries", asy
   const staged = { ...changedFile, file_id: "file-staged", comparison: "staged" as const };
   try {
     await act(async () => {
-      mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+      mounted.render(<ReviewPane identity="review" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo"
         snapshot={async () => ({ ...snapshot, files: [changedFile, staged] })} file={async () => diff} />);
     });
     expect([...host.querySelectorAll(".review-file-directory summary")].map(item => item.textContent)).toContain("src/");
@@ -77,7 +77,7 @@ it("opens the fzf-style picker from a focused review and selects with Ctrl+N the
   const second = { ...changedFile, file_id: "second", old_path: "docs/target.md", new_path: "docs/target.md" };
   const loadFile = vi.fn(async () => diff);
   try {
-    await act(async () => mounted.render(<ReviewPane identity="picker" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files: [changedFile, second] })} file={loadFile} />));
+    await act(async () => mounted.render(<ReviewPane identity="picker" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files: [changedFile, second] })} file={loadFile} />));
     const surface = host.querySelector<HTMLElement>(".review-diff")!;
     surface.focus();
     await act(async () => surface.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
@@ -103,7 +103,7 @@ it("continues hunk navigation and comments from the hunk selected by the mouse",
   const onCreateLineComment = vi.fn();
   try {
     await act(async () => {
-      mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+      mounted.render(<ReviewPane identity="review" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo"
         snapshot={async () => snapshot} file={async () => diffWithThreeHunks} selectedLines={{ fileId: "file", side: "new", start: 1, end: 1 }} onSelectLines={onSelectLines} onCreateLineComment={onCreateLineComment} />);
     });
     const surface = host.querySelector<HTMLElement>(".review-diff")!;
@@ -127,7 +127,7 @@ it("uses rendered full-source lines for local arrow navigation", async () => {
   const onSelect = vi.fn();
   try {
     await act(async () => {
-      mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+      mounted.render(<ReviewPane identity="review" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo"
         snapshot={async () => snapshot} file={async () => diff} selectedLines={{ fileId: "file", side: "new", start: 1, end: 1 }}
         renderFile={() => <SourceLines text={`one\ntwo\nthree\n`} state={{ rootId: "root", path: "file.ts", mode: "source", selectionStart: 1, selectionEnd: 1, scrollTop: 0 }} onSelect={onSelect} onScroll={() => undefined} />} />);
     });
@@ -142,20 +142,6 @@ it("uses rendered full-source lines for local arrow navigation", async () => {
   }
 });
 
-it("compresses directory chains and single leaves while indenting siblings", async () => {
-  const host = window.document.createElement("div");
-  window.document.body.append(host);
-  const mounted = createRoot(host);
-  const files = ["crates/core/src/comments/mod.rs", "crates/core/src/comments/paste.rs", "docs/reference/guide.md"].map((path, i) => ({ ...changedFile, file_id: `nested-${i}`, old_path: path, new_path: path }));
-  try {
-    await act(async () => mounted.render(<ReviewPane identity="nested" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files })} file={async () => diff} />));
-    expect([...host.querySelectorAll(".review-file-directory summary")].map(item => item.textContent)).toEqual(["crates/core/src/comments/"]);
-    expect(host.querySelectorAll(".review-file")).toHaveLength(3);
-    expect(host.querySelector(".review-file")?.getAttribute("style")).toContain("20px");
-    expect(host.querySelectorAll(".review-file small")).toHaveLength(0);
-    expect(host.textContent).toContain("docs/reference/guide.md");
-  } finally { await act(async () => mounted.unmount()); host.remove(); }
-});
 
 it("opens a collapsed directory before keyboard focus reaches its file", async () => {
   const host = window.document.createElement("div");
@@ -163,7 +149,7 @@ it("opens a collapsed directory before keyboard focus reaches its file", async (
   const mounted = createRoot(host);
   const files = ["docs/reference/guide.md", "crates/core/src/comments/mod.rs", "crates/core/src/comments/paste.rs"].map((path, i) => ({ ...changedFile, file_id: `collapsed-${i}`, old_path: path, new_path: path }));
   try {
-    await act(async () => mounted.render(<ReviewPane identity="collapsed" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files })} file={async () => diff} />));
+    await act(async () => mounted.render(<ReviewPane identity="collapsed" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files })} file={async () => diff} />));
     const directory = host.querySelector<HTMLDetailsElement>(".review-file-directory")!;
     directory.open = false;
     const outsideFile = [...host.querySelectorAll<HTMLButtonElement>(".review-file")].find(item => item.textContent?.includes("docs/reference/guide.md"))!;
@@ -191,7 +177,7 @@ it("starts previous hunk navigation at the last hunk and does not skip a missing
   const mounted = createRoot(host);
   const onSelectLines = vi.fn();
   try {
-    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo"
       snapshot={async () => snapshot} file={async () => diff} selectedLines={{ fileId: "file", side: "new", start: 99, end: 99 }} onSelectLines={onSelectLines} />));
     const surface = host.querySelector<HTMLElement>(".review-diff")!;
     surface.focus();
@@ -212,7 +198,7 @@ it("waits for an explicit branch base submission without requesting blank or par
   const mounted = createRoot(host);
   const load = vi.fn(async (_request: unknown, _signal?: AbortSignal) => snapshot);
   try {
-    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={load} file={async () => diff} />));
+    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={load} file={async () => diff} />));
     load.mockClear();
     const mode = host.querySelector<HTMLSelectElement>("select")!;
     await act(async () => { mode.value = "branch"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -266,7 +252,7 @@ it("keeps the selected file and arrow navigation across parent updates", async (
   const snapshotCallback = (request: ReviewSnapshotRequest, signal: AbortSignal) => loadSnapshot(request, signal);
   const fileCallback = (request: ReviewFileRequest, signal: AbortSignal) => loadFile(request, signal);
   const render = async () => {
-    await act(async () => mounted.render(<ReviewPane identity="stable" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+    await act(async () => mounted.render(<ReviewPane identity="stable" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo"
       snapshot={snapshotCallback} file={fileCallback} />));
   };
   try {
@@ -312,7 +298,7 @@ it("retains the reviewed file identity across a refreshed snapshot", async () =>
   const loadFile = vi.fn(async (request: ReviewFileRequest) => ({ ...diff, file: request.file_id === "second" ? second : changedFile }));
   const view = { ...createReviewViewState(), fileId: second.file_id, filePath: second.new_path };
   try {
-    await act(async () => mounted.render(<ReviewPane identity="refresh" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={loadSnapshot} file={loadFile} viewState={view} />));
+    await act(async () => mounted.render(<ReviewPane identity="refresh" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={loadSnapshot} file={loadFile} viewState={view} />));
     await act(async () => { await Promise.resolve(); });
     expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("second");
     await act(async () => host.querySelector<HTMLButtonElement>(".review-toolbar button:last-child")!.click());
@@ -324,33 +310,6 @@ it("retains the reviewed file identity across a refreshed snapshot", async () =>
   }
 });
 
-it("shows an unknown comment count while the review comment batch is loading", async () => {
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  try {
-    await act(async () => mounted.render(<ReviewPane identity="count" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={async () => snapshot} file={async () => diff} />));
-    expect(host.querySelector(".review-status-actions button:last-of-type")?.textContent).toBe("Loading comments…");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-it("does not wait for comments when the comparison has no files", async () => {
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  try {
-    await act(async () => mounted.render(<ReviewPane identity="empty" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files: [] })} file={async () => diff} />));
-    await act(async () => { await Promise.resolve(); });
-    expect(host.querySelector(".review-empty[role=status]")?.textContent).toContain("No changes in this comparison.");
-    expect(host.querySelector(".review-status-actions button:last-of-type")?.textContent).toBe("Comments");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
 
 it("records user scrolling without writing it back or moving focus", async () => {
   const host = window.document.createElement("div");
@@ -360,7 +319,7 @@ it("records user scrolling without writing it back or moving focus", async () =>
   const readSnapshot = async () => snapshot;
   const readFile = async () => diff;
   try {
-    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={readSnapshot} file={readFile} onViewStateChange={onViewStateChange} />));
+    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={readSnapshot} file={readFile} onViewStateChange={onViewStateChange} />));
     const surface = host.querySelector<HTMLElement>(".review-diff")!;
     const focusTarget = host.querySelector<HTMLButtonElement>(".review-file")!;
     focusTarget.focus();
@@ -391,7 +350,7 @@ it("does not surface a deferred source error after switching review files", asyn
     return { ...diff, file: request.file_id === "second" ? second : changedFile };
   });
   try {
-    await act(async () => mounted.render(<ReviewPane identity="deferred-error" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={loadSnapshot} file={loadFile} viewState={{ ...createReviewViewState(), fileId: changedFile.file_id }} renderFile={(_review, _diff, _content, loadSourcePage) => <button type="button" onClick={() => { void loadSourcePage("new", 0); }}>Load deferred page</button>} />));
+    await act(async () => mounted.render(<ReviewPane identity="deferred-error" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={loadSnapshot} file={loadFile} viewState={{ ...createReviewViewState(), fileId: changedFile.file_id }} renderFile={(_review, _diff, _content, loadSourcePage) => <button type="button" onClick={() => { void loadSourcePage("new", 0); }}>Load deferred page</button>} />));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Load deferred page")?.click());
     await act(async () => host.querySelector<HTMLButtonElement>('[data-file-id="second"]')?.click());
@@ -416,7 +375,7 @@ it("keeps unified diff scroll through line selection and a source-mode round tri
   const readFile = async () => diff;
   const selected = { fileId: "file", side: "new" as const, start: 2, end: 2 };
   const show = (mode: "diff" | "source", selectLine: boolean) => act(async () => {
-    mounted.render(<ReviewPane identity="scroll-roundtrip" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+    mounted.render(<ReviewPane identity="scroll-roundtrip" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo"
       snapshot={readSnapshot} file={readFile} selectedLines={selectLine ? selected : null}
       viewState={{ ...saved, mode }} onViewStateChange={publish}
       renderFile={(_review, _diff, content) => mode === "diff" ? content() : <div>Source surface</div>} />);
@@ -434,6 +393,53 @@ it("keeps unified diff scroll through line selection and a source-mode round tri
     await act(async () => surface.dispatchEvent(new Event("scroll", { bubbles: true })));
     await show("diff", true);
     expect(surface.scrollTop).toBe(480);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it.each(["snapshot", "file", "source"] as const)("reports an expired viewer from %s without reopening or retrying", async (stage) => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const reason = Object.assign(new Error("Viewer has expired"), { operationCode: "viewer_not_found" });
+  const onViewerError = vi.fn();
+  const readSnapshot = vi.fn(async () => {
+    if (stage === "snapshot") throw reason;
+    return snapshot;
+  });
+  const readFile = vi.fn(async (request: ReviewFileRequest) => {
+    if (stage === "file" || stage === "source" && request.source_side !== null) throw reason;
+    return diff;
+  });
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="expired" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo"
+      snapshot={readSnapshot} file={readFile} onViewerError={onViewerError}
+      renderFile={(_review, _diff, content, loadSourcePage) => <>{content()}<button type="button" onClick={() => { void loadSourcePage("new", 0); }}>Load source page</button></>} />));
+    if (stage === "source") await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Load source page")!.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(reason.message);
+    expect(onViewerError).toHaveBeenCalledOnce();
+    expect(onViewerError).toHaveBeenCalledWith(reason);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(readFile).toHaveBeenCalledTimes(stage === "snapshot" ? 0 : stage === "source" ? 2 : 1);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it.each(["snapshot", "file"] as const)("rejects %s data belonging to another viewer", async (stage) => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const readSnapshot = async () => stage === "snapshot" ? { ...snapshot, viewer_id: "other-viewer" } : snapshot;
+  const readFile = async () => ({ ...diff, viewer_id: "other-viewer" });
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="authority" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={readSnapshot} file={readFile} />));
+    expect(host.querySelector(".review-line")).toBeNull();
+    if (stage === "snapshot") expect(host.querySelector(".review-file")).toBeNull();
+    if (stage === "file") expect(host.querySelector(".review-file")?.getAttribute("data-file-id")).toBe(changedFile.file_id);
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

@@ -35,18 +35,19 @@ function parseScope(value: unknown): CommentRequestScope {
 }
 
 function parseOwner(value: unknown): CommentOwner {
-  if (!record(value) || !keys(value, ["session_id", "pane_id", "terminal_id", "source_kind", "source_id"])
-    || !identity(value.session_id) || !identity(value.pane_id) || !identity(value.terminal_id)
-    || (value.source_kind !== "context" && value.source_kind !== "review") || !identity(value.source_id)) {
-    return invalid("owner");
+  if (!record(value) || !identity(value.session_id)
+    || (value.source_kind !== "context" && value.source_kind !== "review") || !identity(value.source_id)) return invalid("owner");
+  if (value.kind === "viewer" && keys(value, ["kind", "session_id", "server_instance", "tab_id", "source_kind", "source_id"])
+    && text(value.server_instance) && /^[0-9a-f]{16}$/.test(value.server_instance) && identity(value.tab_id)) {
+    return { kind: "viewer", session_id: value.session_id, server_instance: value.server_instance,
+      tab_id: value.tab_id, source_kind: value.source_kind, source_id: value.source_id };
   }
-  return {
-    session_id: value.session_id,
-    pane_id: value.pane_id,
-    terminal_id: value.terminal_id,
-    source_kind: value.source_kind,
-    source_id: value.source_id,
-  };
+  if (value.kind === "legacy_pane" && keys(value, ["kind", "session_id", "pane_id", "terminal_id", "source_kind", "source_id"])
+    && identity(value.pane_id) && identity(value.terminal_id)) {
+    return { kind: "legacy_pane", session_id: value.session_id, pane_id: value.pane_id,
+      terminal_id: value.terminal_id, source_kind: value.source_kind, source_id: value.source_id };
+  }
+  return invalid("owner");
 }
 
 function parseLocation(value: unknown): CommentLocation {
@@ -58,9 +59,12 @@ function parseLocation(value: unknown): CommentLocation {
 function parseAttachment(value: unknown): CommentAttachment {
   if (!record(value) || !keys(value, ["owner", "location", "binding_id", "client_id"])
     || !identity(value.binding_id) || !identity(value.client_id)) return invalid("attachment");
+  const owner = parseOwner(value.owner);
+  const location = parseLocation(value.location);
+  if (owner.kind !== "viewer" || owner.tab_id !== location.tab_id) return invalid("live viewer attachment");
   return {
-    owner: parseOwner(value.owner),
-    location: parseLocation(value.location),
+    owner,
+    location,
     binding_id: value.binding_id,
     client_id: value.client_id,
   };
@@ -210,12 +214,15 @@ export function parseCommentBatch(value: unknown): CommentBatch {
   const drafts = value.drafts.map(parseDraft);
   if (new Set(drafts.map((draft) => draft.draft_id)).size !== drafts.length) return invalid("duplicate draft identity");
   validateBatchSize(value);
+  const owner = parseOwner(value.owner);
+  const liveAttachment = value.live_attachment === null ? null : parseAttachment(value.live_attachment);
+  if (owner.kind === "legacy_pane" && liveAttachment !== null) return invalid("legacy batch attachment");
   return {
     batch_id: value.batch_id,
     generation: value.generation,
-    owner: parseOwner(value.owner),
+    owner,
     last_known_location: parseLocation(value.last_known_location),
-    live_attachment: value.live_attachment === null ? null : parseAttachment(value.live_attachment),
+    live_attachment: liveAttachment,
     drafts,
     updated_at: value.updated_at,
   };
@@ -276,17 +283,17 @@ export function parseCommentPreview(value: unknown): CommentPreview {
 export function matchCommentAttachment(
   value: CommentAttachment,
   sessionId: string,
-  paneId: string,
   request: CommentRequestScope,
 ): void {
-  if (value.owner.session_id !== sessionId || value.owner.pane_id !== paneId
+  // binding_id pins the freshly authorized viewer; durable ownership is tab/source scoped.
+  if (value.owner.kind !== "viewer" || value.owner.session_id !== sessionId
+    || value.location.tab_id !== value.owner.tab_id
     || value.binding_id !== request.binding_id || value.client_id !== request.client_id) invalid("attachment identity");
 }
 
 export function matchCommentBatch(
   value: CommentBatch,
   sessionId: string,
-  paneId: string,
   request: CommentRequestScope,
   batchId?: string | null,
   expectedGeneration?: number,
@@ -299,9 +306,10 @@ export function matchCommentBatch(
     if (requireAttachment) invalid("missing attachment");
   } else {
     const live = value.live_attachment;
-    matchCommentAttachment(live, sessionId, paneId, request);
-    if (value.owner.session_id !== live.owner.session_id || value.owner.pane_id !== live.owner.pane_id
-      || value.owner.terminal_id !== live.owner.terminal_id || value.owner.source_kind !== live.owner.source_kind
+    matchCommentAttachment(live, sessionId, request);
+    if (value.owner.kind !== "viewer" || live.owner.kind !== "viewer"
+      || value.owner.session_id !== live.owner.session_id || value.owner.server_instance !== live.owner.server_instance
+      || value.owner.tab_id !== live.owner.tab_id || value.owner.source_kind !== live.owner.source_kind
       || value.owner.source_id !== live.owner.source_id
       || value.last_known_location.workspace_id !== live.location.workspace_id
       || value.last_known_location.tab_id !== live.location.tab_id) invalid("batch attachment identity");

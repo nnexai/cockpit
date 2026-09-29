@@ -10,8 +10,9 @@ import type {
   ContextRoot,
   ContextSearchRequest,
   ContextSearchResponse,
-  PanePresentation,
+  ViewerContext,
 } from "../../protocol/generated/v1";
+import { viewerErrorCode } from "../layout/viewerLifecycle";
 
 /** Client-side id of the Library root in every Context root selector; the server root id stays inside the reader. */
 export const LIBRARY_ROOT_ID = "library";
@@ -21,7 +22,7 @@ export type ContextDocumentRead = { root_id: string; path: string; expected_revi
 export type ContextMediaRead = { root_id: string; path: string; expected_revision: string | null };
 
 /**
- * One place the Context viewer reads files from: a pane's authorized roots or
+ * One place the Context viewer reads files from: a viewer's authorized roots or
  * the session-independent Library. `identity` changes whenever reads go to a
  * different authority, so late responses from the previous one are discarded.
  */
@@ -35,16 +36,24 @@ export interface ContextReader {
   invalidate?(request: ContextInvalidationRequest, signal: AbortSignal): Promise<ContextInvalidationResponse>;
 }
 
-export function paneReader(client: CockpitClient, presentation: PanePresentation): ContextReader {
-  const { session_id: sessionId, pane_id: paneId, binding_id: bindingId } = presentation;
+export function viewerReader(client: CockpitClient, context: ViewerContext, onViewerError?: (error: unknown) => void): ContextReader {
+  const { session_id: sessionId, viewer_id: viewerId, binding_id: bindingId } = context;
+  const read = async <T,>(request: Promise<T>, signal?: AbortSignal): Promise<T> => {
+    try {
+      return await request;
+    } catch (error) {
+      if (!signal?.aborted && viewerErrorCode(error) === "viewer_not_found") onViewerError?.(error);
+      throw error;
+    }
+  };
   return {
-    identity: `pane\u0000${sessionId}\u0000${paneId}\u0000${bindingId}`,
-    directory: (request, signal) => client.contextDirectory(sessionId, paneId, { binding_id: bindingId, ...request }, signal),
-    fileIndex: (rootId, mode, signal) => client.contextFileIndex(sessionId, paneId, { binding_id: bindingId, root_id: rootId, mode }, signal),
-    document: (request, signal) => client.contextDocument(sessionId, paneId, { binding_id: bindingId, ...request }, signal),
-    media: (request, signal) => client.contextMedia(sessionId, paneId, { binding_id: bindingId, ...request }, signal),
-    search: (request, signal) => client.contextSearch(sessionId, paneId, request, signal),
-    invalidate: (request, signal) => client.contextInvalidate(sessionId, paneId, request, signal),
+    identity: `viewer\u0000${sessionId}\u0000${viewerId}\u0000${bindingId}`,
+    directory: (request, signal) => read(client.contextDirectory(sessionId, viewerId, { binding_id: bindingId, ...request }, signal), signal),
+    fileIndex: (rootId, mode, signal) => read(client.contextFileIndex(sessionId, viewerId, { binding_id: bindingId, root_id: rootId, mode }, signal), signal),
+    document: (request, signal) => read(client.contextDocument(sessionId, viewerId, { binding_id: bindingId, ...request }, signal), signal),
+    media: (request, signal) => read(client.contextMedia(sessionId, viewerId, { binding_id: bindingId, ...request }, signal), signal),
+    search: (request, signal) => read(client.contextSearch(sessionId, viewerId, request, signal), signal),
+    invalidate: (request, signal) => read(client.contextInvalidate(sessionId, viewerId, request, signal), signal),
   };
 }
 

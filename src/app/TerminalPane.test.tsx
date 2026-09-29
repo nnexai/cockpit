@@ -172,7 +172,6 @@ function paneProps(client: CockpitClient, terminalMouseInput: boolean, overrides
     selected: true,
     controlAllowed: true,
     controlPending: false,
-    focusTransitionPending: false,
     focusEpoch: 1,
     focusToken: 0,
     terminalMouseInput,
@@ -211,7 +210,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
     }
   });
 
-  it("moves DOM focus into the terminal on ready and open only when focusOnAttach allows it", async () => {
+  it("moves DOM focus only after ownership confirmation when focusOnAttach allows it", async () => {
     for (const focusOnAttach of [false, true, undefined]) {
       const sent: TerminalCommand[] = [];
       const messages: Array<(value: TerminalStreamMessage) => void> = [];
@@ -226,6 +225,8 @@ describe("TerminalPane fitting and pointer ownership", () => {
         });
         expect(openTerminal).toHaveBeenCalledOnce();
         const terminal = mocks.terminals.at(-1)!;
+        expect(terminal.focus).not.toHaveBeenCalled();
+        await act(async () => { messages[0]!(message("owned")); });
         if (focusOnAttach === false) expect(terminal.focus).not.toHaveBeenCalled();
         else expect(terminal.focus).toHaveBeenCalled();
       } finally {
@@ -254,6 +255,8 @@ describe("TerminalPane fitting and pointer ownership", () => {
       await render({ controlAllowed: true, controlPending: false, presented: false });
       expect(terminal.focus).not.toHaveBeenCalled();
       await render({ controlAllowed: true, controlPending: false, presented: true });
+      expect(terminal.focus).not.toHaveBeenCalled();
+      await act(async () => { messages[0]!(message("owned")); });
       expect(terminal.focus).toHaveBeenCalledOnce();
     } finally {
       await act(async () => root.unmount());
@@ -285,7 +288,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
       host.remove();
     }
   });
-  it("closes an outgoing stream without reopening a hidden observer, then reattaches input on revisit", async () => {
+  it("closes an outgoing stream while hidden, then reattaches input on revisit", async () => {
     const sent: TerminalCommand[] = [];
     const messages: Array<(value: TerminalStreamMessage) => void> = [];
     const { client, openTerminal } = makeClient(sent, messages);
@@ -523,6 +526,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
         root.render(<TerminalPane {...paneProps(client, false)} />);
         await settle();
       });
+      await act(async () => { messages[0]!(message("owned")); });
       const terminal = mocks.terminals[0]!;
       terminal.focus.mockClear();
       const input = document.createElement("textarea");
@@ -920,7 +924,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
 
         await act(async () => {
           messages[1](mouseMode(true));
-          messages[1](message("observing"));
+          messages[1](message("owned"));
         });
         const pendingPointer = pointer("pointerdown", 20);
         host.querySelector<HTMLElement>(".terminal-host")!.dispatchEvent(pendingPointer);
@@ -938,33 +942,6 @@ describe("TerminalPane fitting and pointer ownership", () => {
         if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
         else delete (HTMLElement.prototype as Partial<Record<typeof name, unknown>>)[name];
       }
-      host.remove();
-    }
-  });
-  it("observes after a control conflict and only takes over on a new local click", async () => {
-    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
-    const sent: TerminalCommand[] = [];
-    const messages: Array<(value: TerminalStreamMessage) => void> = [];
-    const { client, openTerminal } = makeClient(sent, messages);
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = createRoot(host);
-    try {
-      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); });
-      await act(async () => { messages[0](message("conflict")); });
-      expect(openTerminal.mock.calls.map(([request]) => request.mode)).toEqual(["control", "observe"]);
-      await act(async () => { messages[1](message("observing")); });
-      expect(openTerminal.mock.calls.map(([request]) => request.mode)).toEqual(["control", "observe"]);
-      await act(async () => {
-        messages[1]({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 80, height: 24, full: true, bytes: btoa("observer output") });
-      });
-      expect(new TextDecoder().decode(mocks.terminals.at(-1)!.write.mock.calls[0][0])).toBe("observer output");
-      await act(async () => { host.querySelector(".terminal-host")!.dispatchEvent(pointer("pointerdown", 10)); });
-      expect(openTerminal.mock.calls.at(-1)![0]).toMatchObject({ mode: "control", takeover: true });
-      expect(openTerminal.mock.calls.map(([request]) => request.mode)).toEqual(["control", "observe", "control"]);
-      expect(sent).toEqual([]);
-    } finally {
-      await act(async () => root.unmount());
       host.remove();
     }
   });
@@ -997,61 +974,6 @@ describe("TerminalPane fitting and pointer ownership", () => {
     }
   });
 
-  it("attaches for control while focus is confirmed, but holds input until control is allowed", async () => {
-    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
-    const sent: TerminalCommand[] = [];
-    const messages: Array<(value: TerminalStreamMessage) => void> = [];
-    const { client, openTerminal } = makeClient(sent, messages);
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = createRoot(host);
-    try {
-      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { selected: false, controlAllowed: false })} />); await settle(); });
-      expect(openTerminal.mock.calls.at(-1)![0]).toMatchObject({ mode: "observe" });
-      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { selected: true, controlAllowed: false, controlPending: true })} />); await settle(); });
-      expect(openTerminal).toHaveBeenCalledTimes(2);
-      expect(openTerminal.mock.calls[1]![0]).toMatchObject({ mode: "control" });
-      await act(async () => { messages.at(-1)!(message("owned")); });
-      (mocks.terminals.at(-1)!.onData.mock.calls[0][0] as (data: string) => void)("typed early");
-      expect(sent.filter((command) => command.type === "terminal.input")).toEqual([]);
-      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { selected: true })} />); await settle(); });
-      expect(openTerminal).toHaveBeenCalledTimes(2);
-      expect(sent.filter((command) => command.type === "terminal.input")).toHaveLength(1);
-    } finally {
-      await act(async () => root.unmount());
-      host.remove();
-    }
-  });
-
-  it("keeps the control stream through a brief loss of control and releases it after a pause", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
-    const sent: TerminalCommand[] = [];
-    const messages: Array<(value: TerminalStreamMessage) => void> = [];
-    const { client, openTerminal } = makeClient(sent, messages);
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = createRoot(host);
-    try {
-      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); await settle(); });
-      expect(openTerminal).toHaveBeenCalledTimes(1);
-      expect(openTerminal.mock.calls[0]![0]).toMatchObject({ mode: "control" });
-      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false })} />); });
-      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); });
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-      expect(openTerminal).toHaveBeenCalledTimes(1);
-      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false })} />); });
-      await act(async () => { await vi.advanceTimersByTimeAsync(749); });
-      expect(openTerminal).toHaveBeenCalledTimes(1);
-      await act(async () => { await vi.advanceTimersByTimeAsync(1); await settle(); });
-      expect(openTerminal).toHaveBeenCalledTimes(2);
-      expect(openTerminal.mock.calls[1]![0]).toMatchObject({ mode: "observe" });
-    } finally {
-      await act(async () => root.unmount());
-      host.remove();
-    }
-  });
 
   it("discards input queued during a rejected control request", async () => {
     vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
@@ -1070,6 +992,112 @@ describe("TerminalPane fitting and pointer ownership", () => {
       await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); });
       await act(async () => { messages.at(-1)!(message("owned")); });
       expect(sent).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("keeps unselected terminals control-attached without accepting input or reopening on selection changes", async () => {
+    vi.useFakeTimers();
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const render = async (overrides: Partial<Parameters<typeof TerminalPane>[0]>) => {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false, overrides)} />); await settle(); });
+    };
+    try {
+      await render({ selected: false, controlAllowed: false });
+      expect(openTerminal.mock.calls[0]![0]).toMatchObject({ mode: "control", takeover: false });
+      await act(async () => { messages[0]!(message("owned")); });
+      const terminal = mocks.terminals.at(-1)!;
+      terminal.dataHandler?.("unselected");
+      expect(sent).toEqual([]);
+      await render({ selected: true, controlAllowed: false, controlPending: true, focusToken: 1 });
+      terminal.dataHandler?.("pending");
+      expect(sent).toEqual([]);
+      await render({ selected: true, controlAllowed: true, focusToken: 1 });
+      expect(sent).toEqual([{ type: "terminal.input", text: "pending", bytes: null }]);
+      await render({ selected: false, controlAllowed: false, focusToken: 2 });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      terminal.dataHandler?.("unselected again");
+      expect(sent).toEqual([{ type: "terminal.input", text: "pending", bytes: null }]);
+      await render({ selected: true, controlAllowed: true, focusToken: 3 });
+      terminal.dataHandler?.("selected");
+      expect(sent).toEqual([
+        { type: "terminal.input", text: "pending", bytes: null },
+        { type: "terminal.input", text: "selected", bytes: null },
+      ]);
+      expect(openTerminal).toHaveBeenCalledOnce();
+      expect((await openTerminal.mock.results[0]!.value).close).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it.each([
+    ["lost", "Take control", true],
+    ["lost", "Retry", false],
+    ["conflict", "Take control", true],
+    ["conflict", "Retry", false],
+  ] as const)("retains the last frame after %s and waits for explicit %s", async (state, action, takeover) => {
+    vi.useFakeTimers();
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const registerStream = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const frame = (text: string, seq = "1"): TerminalStreamMessage => ({
+      type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream",
+      seq, encoding: "ansi", width: 80, height: 24, full: seq === "1", bytes: btoa(text),
+    });
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false, { registerStream })} />); await settle(); });
+      const opened = await openTerminal.mock.results[0]!.value;
+      await act(async () => {
+        messages[0]!(message("owned"));
+        messages[0]!(frame("last owned output"));
+        await settle();
+      });
+      const terminal = mocks.terminals.at(-1)!;
+      await act(async () => { messages[0]!(message(state)); });
+      expect(opened.close).toHaveBeenCalledOnce();
+      expect(registerStream).toHaveBeenLastCalledWith(opened, false);
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain("Control taken by another client");
+      const writeCount = terminal.write.mock.calls.length;
+      await act(async () => {
+        messages[0]!(frame("retired output", "2"));
+        host.querySelector(".terminal-host")!.dispatchEvent(pointer("pointerdown", 10));
+        terminal.dataHandler?.("discarded after ownership loss");
+        root.render(<TerminalPane {...paneProps(client, false, { selected: false, controlAllowed: false, registerStream })} />);
+        await settle();
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false, { registerStream })} />); await settle(); });
+      expect(openTerminal).toHaveBeenCalledOnce();
+      expect(terminal.write).toHaveBeenCalledTimes(writeCount);
+      expect(sent).toEqual([]);
+      const button = Array.from(host.querySelectorAll("button")).find((entry) => entry.textContent === action)!;
+      await act(async () => { button.click(); await settle(); });
+      expect(openTerminal).toHaveBeenCalledTimes(2);
+      expect(openTerminal.mock.calls[1]![0]).toMatchObject({ mode: "control", takeover });
+      expect(opened.close).toHaveBeenCalledOnce();
+      expect(mocks.terminals.at(-1)).toBe(terminal);
+      await act(async () => {
+        messages[1]!(message("owned"));
+        messages[1]!(frame("fresh baseline"));
+        await settle();
+      });
+      expect(host.querySelector('[role="alert"]')).toBeNull();
+      expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)![0])).toBe("fresh baseline");
+      terminal.dataHandler?.("new input");
+      expect(sent.filter((command) => command.type === "terminal.input")).toEqual([{ type: "terminal.input", text: "new input", bytes: null }]);
     } finally {
       await act(async () => root.unmount());
       host.remove();

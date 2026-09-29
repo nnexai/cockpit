@@ -1,13 +1,18 @@
 import type { ContextMedia, ContextMediaRequest } from "../protocol/generated/v1";
 import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest } from "../protocol/generated/v1";
-import type { ReviewLaunchRequest, ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
+import type { ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
 import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
 import type {
   ContextSearchRequest, ContextSearchResponse, ContextInvalidationRequest, ContextInvalidationResponse,
-  ContextLaunchRequest, CommentRequestScope, CommentBatchList, CommentBatchRequest, CommentBatch,
+  CommentRequestScope, CommentBatchList, CommentBatchRequest, CommentBatch,
   CommentBatchMutation, CommentUpsertRequest, CommentRemoveRequest, CommentPreviewRequest, CommentPreview,
 } from "../protocol/generated/v1";
 import type {
+  BrowserCleanupState, BrowserCleanupScope, BrowserCleanupFailure, BrowserCleanupStatus, BrowserCleanupRetryRequest,
+  BrowserCutoverState, BrowserWorkScope, BrowserSavedTabWork, BrowserLegacyCandidateKind, BrowserLegacyCandidateState,
+  BrowserLegacyArtifactCandidate, BrowserLegacyArchive, BrowserLegacyArchiveList, BrowserLegacyRemovalRequest,
+  BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest, CreatedPane,
+  ViewerKind, ViewerSourceKind, ViewerSourceSelector, ViewerSourceOptions, ViewerOpenRequest, ViewerContext,
   AgentSummary,
   BrowserAction,
   BrowserAssociation,
@@ -81,7 +86,6 @@ import type {
   BrowserViewPointerButton,
   BrowserViewPointerInput,
   BrowserViewPointerKind,
-  BrowserViewPresentation,
   BrowserViewSnapshot,
   BrowserViewTabCommand,
   BrowserViewTargetKind,
@@ -96,8 +100,6 @@ import type {
   ErrorResponse,
   FocusRequest,
   FocusResponse,
-  LayoutPane,
-  LayoutRect,
   PaneMoveDestination,
   ResourceMutationRequest,
   ResourceMutationResponse,
@@ -110,7 +112,6 @@ import type {
   SpaceGitStatusResponse,
   SpaceGitSummary,
   SpaceSummary,
-  TabLayout,
   TabSummary,
   StatusResponse,
   TerminalCommand,
@@ -134,7 +135,6 @@ import type {
   WorkspaceTeardownPreviewRequest,
   WorkspaceTeardownRecoveryList,
   WorkspaceTeardownResult,
-  PanePresentation,
   ContextDirectoryRequest,
   ContextDirectory,
   ContextFileIndexRequest,
@@ -206,7 +206,6 @@ export type {
   BrowserViewPointerButton,
   BrowserViewPointerInput,
   BrowserViewPointerKind,
-  BrowserViewPresentation,
   BrowserViewSnapshot,
   BrowserViewTabCommand,
   BrowserViewTargetKind,
@@ -240,6 +239,11 @@ export type CockpitHerdrIdentity = Extract<
 >["identity"];
 export type CockpitSessionSnapshot = SessionSnapshotResponse;
 export type {
+  BrowserCleanupState, BrowserCleanupScope, BrowserCleanupFailure, BrowserCleanupStatus, BrowserCleanupRetryRequest,
+  BrowserCutoverState, BrowserWorkScope, BrowserSavedTabWork, BrowserLegacyCandidateKind, BrowserLegacyCandidateState,
+  BrowserLegacyArtifactCandidate, BrowserLegacyArchive, BrowserLegacyArchiveList, BrowserLegacyRemovalRequest,
+  BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest, CreatedPane,
+  ViewerKind, ViewerSourceKind, ViewerSourceSelector, ViewerSourceOptions, ViewerOpenRequest, ViewerContext,
   AgentSummary,
   ContextDirectory,
   ContextDirectoryRequest,
@@ -288,6 +292,12 @@ export interface TerminalStream extends ClosableStream {
 export interface CockpitClient {
   status(): Promise<StatusResponse>;
   browserAction(request: BrowserRequest): Promise<BrowserResponse>;
+  browserCleanupStatus(): Promise<BrowserCleanupStatus>;
+  browserCleanupRetry(request: BrowserCleanupRetryRequest): Promise<BrowserCleanupStatus>;
+  browserLegacyList(): Promise<BrowserLegacyArchiveList>;
+  browserLegacyRemove(request: BrowserLegacyRemovalRequest): Promise<BrowserLegacyArchiveList>;
+  browserLegacyKeep(request: BrowserLegacyKeepRequest): Promise<BrowserLegacyArchiveList>;
+  browserLegacyRecipients(request: BrowserLegacyRecipientsRequest): Promise<CommentPasteTarget[]>;
   browserFeedback(request: BrowserFeedbackRequest): Promise<BrowserFeedbackLookup>;
   browserDraftRecovery(request: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome>;
   acknowledgeBrowserFeedback(request: BrowserFeedbackAckRequest): Promise<BrowserFeedbackAck>;
@@ -310,15 +320,17 @@ export interface CockpitClient {
   workspaceTeardownPreview(sessionId: string, request: WorkspaceTeardownPreviewRequest): Promise<WorkspaceTeardownPreview>;
   workspaceTeardownExecute(sessionId: string, request: WorkspaceTeardownExecuteRequest): Promise<WorkspaceTeardownResult>;
   workspaceTeardownRecoveries(sessionId: string): Promise<WorkspaceTeardownRecoveryList>;
-  inspectPane(sessionId: string, paneId: string, signal?: AbortSignal): Promise<PanePresentation>;
-  contextDirectory(sessionId: string, paneId: string, request: ContextDirectoryRequest, signal?: AbortSignal): Promise<ContextDirectory>;
-  contextFileIndex(sessionId: string, paneId: string, request: ContextFileIndexRequest, signal?: AbortSignal): Promise<ContextFileIndex>;
-  contextDocument(sessionId: string, paneId: string, request: ContextDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
-  reviewSnapshot(sessionId: string, paneId: string, request: ReviewSnapshotRequest, signal?: AbortSignal): Promise<ReviewSnapshot>;
-  reviewFile(sessionId: string, paneId: string, request: ReviewFileRequest, signal?: AbortSignal): Promise<ReviewFileDiff>;
-  contextSearch(sessionId: string, paneId: string, request: ContextSearchRequest, signal?: AbortSignal): Promise<ContextSearchResponse>;
-  contextInvalidate(sessionId: string, paneId: string, request: ContextInvalidationRequest, signal?: AbortSignal): Promise<ContextInvalidationResponse>;
-  contextMedia(sessionId: string, paneId: string, request: ContextMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;
+  viewerSources(sessionId: string, paneId: string, signal?: AbortSignal): Promise<ViewerSourceOptions>;
+  viewerOpen(sessionId: string, request: ViewerOpenRequest): Promise<ViewerContext>;
+  viewerRelease(sessionId: string, viewerId: string): Promise<void>;
+  contextDirectory(sessionId: string, viewerId: string, request: ContextDirectoryRequest, signal?: AbortSignal): Promise<ContextDirectory>;
+  contextFileIndex(sessionId: string, viewerId: string, request: ContextFileIndexRequest, signal?: AbortSignal): Promise<ContextFileIndex>;
+  contextDocument(sessionId: string, viewerId: string, request: ContextDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
+  reviewSnapshot(sessionId: string, viewerId: string, request: ReviewSnapshotRequest, signal?: AbortSignal): Promise<ReviewSnapshot>;
+  reviewFile(sessionId: string, viewerId: string, request: ReviewFileRequest, signal?: AbortSignal): Promise<ReviewFileDiff>;
+  contextSearch(sessionId: string, viewerId: string, request: ContextSearchRequest, signal?: AbortSignal): Promise<ContextSearchResponse>;
+  contextInvalidate(sessionId: string, viewerId: string, request: ContextInvalidationRequest, signal?: AbortSignal): Promise<ContextInvalidationResponse>;
+  contextMedia(sessionId: string, viewerId: string, request: ContextMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;
   librarySpaceList(request: SpaceContextRequest, signal?: AbortSignal): Promise<SpaceContextListing>;
   librarySpaceAdd(request: SpaceAddRequest): Promise<LibraryOperation>;
   librarySpaceAttemptsDismiss(request: SpaceAttemptsDismissRequest): Promise<void>;
@@ -326,18 +338,16 @@ export interface CockpitClient {
   librarySpaceUpdate(request: SpaceUpdateRequest): Promise<LibraryOperation>;
   /** Deletes one Space copy; edited files are removed only when `confirmed` matches their current hashes. Returns the Space's listing afterwards. */
   librarySpaceRemove(request: SpaceRemoveRequest): Promise<SpaceContextListing>;
-  openReview(sessionId: string, request: ReviewLaunchRequest): Promise<PanePresentation>;
-  openContext(sessionId: string, request: ContextLaunchRequest): Promise<PanePresentation>;
-  commentBatches(sessionId: string, paneId: string, request: CommentRequestScope, signal?: AbortSignal): Promise<CommentBatchList>;
-  commentBatch(sessionId: string, paneId: string, request: CommentBatchRequest, signal?: AbortSignal): Promise<CommentBatch>;
-  commentUpsert(sessionId: string, paneId: string, request: CommentUpsertRequest, signal?: AbortSignal): Promise<CommentBatch>;
-  commentRemove(sessionId: string, paneId: string, request: CommentRemoveRequest, signal?: AbortSignal): Promise<CommentBatch>;
-  commentDiscard(sessionId: string, paneId: string, request: CommentBatchMutation, signal?: AbortSignal): Promise<CommentBatchList>;
-  commentAttach(sessionId: string, paneId: string, request: CommentBatchMutation, signal?: AbortSignal): Promise<CommentBatch>;
-  commentPastePrepare(sessionId: string, paneId: string, request: CommentPastePrepareRequest, signal?: AbortSignal): Promise<CommentPastePrepareResponse>;
-  commentPasteMarkPasted(sessionId: string, paneId: string, request: CommentPasteMarkPastedRequest): Promise<CommentPasteReceipt>;
-  commentPasteSend(sessionId: string, paneId: string, request: CommentPasteSendRequest): Promise<CommentPasteReceipt>;
-  commentPreview(sessionId: string, paneId: string, request: CommentPreviewRequest, signal?: AbortSignal): Promise<CommentPreview>;
+  commentBatches(sessionId: string, viewerId: string, request: CommentRequestScope, signal?: AbortSignal): Promise<CommentBatchList>;
+  commentBatch(sessionId: string, viewerId: string, request: CommentBatchRequest, signal?: AbortSignal): Promise<CommentBatch>;
+  commentUpsert(sessionId: string, viewerId: string, request: CommentUpsertRequest, signal?: AbortSignal): Promise<CommentBatch>;
+  commentRemove(sessionId: string, viewerId: string, request: CommentRemoveRequest, signal?: AbortSignal): Promise<CommentBatch>;
+  commentDiscard(sessionId: string, viewerId: string, request: CommentBatchMutation, signal?: AbortSignal): Promise<CommentBatchList>;
+  commentAttach(sessionId: string, viewerId: string, request: CommentBatchMutation, signal?: AbortSignal): Promise<CommentBatch>;
+  commentPastePrepare(sessionId: string, viewerId: string, request: CommentPastePrepareRequest, signal?: AbortSignal): Promise<CommentPastePrepareResponse>;
+  commentPasteMarkPasted(sessionId: string, viewerId: string, request: CommentPasteMarkPastedRequest): Promise<CommentPasteReceipt>;
+  commentPasteSend(sessionId: string, viewerId: string, request: CommentPasteSendRequest): Promise<CommentPasteReceipt>;
+  commentPreview(sessionId: string, viewerId: string, request: CommentPreviewRequest, signal?: AbortSignal): Promise<CommentPreview>;
   libraryListing(offset?: number | null): Promise<LibraryListing>;
   libraryResolve(request: LibraryResolveRequest): Promise<LibraryResolution>;
   /** Spaces readable by one configured Confluence provider, each with its existing follow. */
@@ -476,7 +486,8 @@ function isTabSummary(value: unknown): value is TabSummary {
     isString(value.label) &&
     isU32(value.number) &&
     isU32(value.pane_count) &&
-    isBoolean(value.focused)
+    isBoolean(value.focused) &&
+    isNullableString(value.focused_pane_id)
   );
 }
 function isPaneSummary(value: unknown): value is PaneSummary {
@@ -492,30 +503,6 @@ function isPaneSummary(value: unknown): value is PaneSummary {
     isString(value.agent_status) &&
     isU64(value.revision) &&
     (value.cwd === undefined || isString(value.cwd))
-  );
-}
-function isLayoutRect(value: unknown): value is LayoutRect {
-  return (
-    isRecord(value) &&
-    isU32(value.x) &&
-    isU32(value.y) &&
-    isU32(value.width) &&
-    isU32(value.height)
-  );
-}
-function isLayoutPane(value: unknown): value is LayoutPane {
-  return isRecord(value) && isString(value.pane_id) && isBoolean(value.focused) && isLayoutRect(value.rect);
-}
-function isTabLayout(value: unknown): value is TabLayout {
-  return (
-    isRecord(value) &&
-    isString(value.space_id) &&
-    isString(value.tab_id) &&
-    isLayoutRect(value.area) &&
-    isNullableString(value.focused_pane_id) &&
-    Array.isArray(value.panes) &&
-    value.panes.every(isLayoutPane) &&
-    isBoolean(value.zoomed)
   );
 }
 type AgentSummaryWire = Omit<AgentSummary, "state_change_seq"> & { state_change_seq?: number };
@@ -576,28 +563,29 @@ const browserConnections: readonly BrowserConnectionState[] = ["absent", "open",
 function isBrowserConnection(value: unknown): value is BrowserConnectionState {
   return isString(value) && browserConnections.includes(value as BrowserConnectionState);
 }
-function parseBrowserTarget(value: unknown): BrowserTarget {
+export function parseBrowserTarget(value: unknown): BrowserTarget {
   if (!isRecord(value) || !isString(value.session_id) || value.session_id.length === 0
-    || !(value.space_id === null || isString(value.space_id))
-    || !(value.pane_id === null || isString(value.pane_id))
-    || !(value.endpoint_path === null || isString(value.endpoint_path))
-    || (value.space_id === null) === (value.pane_id === null)) {
+    || !(value.tab_id === null || (isString(value.tab_id) && value.tab_id.length > 0))
+    || !(value.pane_id === null || (isString(value.pane_id) && value.pane_id.length > 0))
+    || !isNullableString(value.endpoint_path)
+    || (value.tab_id === null) === (value.pane_id === null)) {
     return malformed("Browser target is malformed");
   }
-  return value as BrowserTarget;
+  return { session_id: value.session_id, tab_id: value.tab_id, pane_id: value.pane_id, endpoint_path: value.endpoint_path };
 }
 function parseBrowserAction(value: unknown): BrowserAction {
   if (!isRecord(value) || !isString(value.kind)) return malformed("Browser action is malformed");
-  if (value.kind === "open") {
+  if (value.kind === "open" || value.kind === "open_fresh") {
     if (!(value.url === null || isString(value.url))) return malformed("Browser open URL is malformed");
     return value as BrowserAction;
   }
-  if (value.kind === "status" || value.kind === "close") return value as BrowserAction;
+  if (value.kind === "status" || value.kind === "close" || value.kind === "cleanup") return value as BrowserAction;
   return malformed("Unknown browser action");
 }
 function parseBrowserAssociation(value: unknown): BrowserAssociation {
   if (!isRecord(value) || !isString(value.association_key) || !isString(value.owner_id)
     || !isString(value.session_id) || !isString(value.space_id) || !isString(value.space_label)
+    || !isString(value.tab_id) || value.tab_id.length === 0 || !isString(value.tab_label)
     || !isString(value.playwright_session) || !isString(value.working_directory)
     || !isString(value.profile_path) || !isString(value.invocation) || !isBrowserConnection(value.connection)
     || !(value.incarnation === null || isString(value.incarnation))
@@ -612,9 +600,126 @@ export function parseBrowserRequest(value: unknown): BrowserRequest {
 }
 export function parseBrowserResponse(value: unknown): BrowserResponse {
   if (!isRecord(value) || !(value.association === null || isRecord(value.association))
-    || !isBrowserConnection(value.connection) || !isString(value.message)) return malformed("Browser response is malformed");
-  return { association: value.association === null ? null : parseBrowserAssociation(value.association), connection: value.connection, message: value.message };
+    || !isBrowserConnection(value.connection) || !isString(value.message)
+    || !isOneOf(value.cleanup, ["none", "pending", "done", "failed"] as const)
+    || !isNullableString(value.cleanup_reason)) return malformed("Browser response is malformed");
+  return {
+    association: value.association === null ? null : parseBrowserAssociation(value.association),
+    connection: value.connection, message: value.message, cleanup: value.cleanup, cleanup_reason: value.cleanup_reason,
+  };
 }
+export function parseBrowserWorkScope(value: unknown): BrowserWorkScope {
+  if (!isRecord(value)) return malformed("Browser work scope is malformed");
+  if (value.kind === "tab") return { kind: "tab", target: parseBrowserTarget(value.target) };
+  if ((value.kind === "legacy_archive" || value.kind === "saved_tab") && isString(value.association_key) && /^[0-9a-f]{24}$/.test(value.association_key)) {
+    return { kind: value.kind, association_key: value.association_key };
+  }
+  return malformed("Browser work scope is malformed");
+}
+
+export function parseBrowserCleanupScope(value: unknown): BrowserCleanupScope {
+  if (!isRecord(value)) return malformed("Browser cleanup scope is malformed");
+  if (value.kind === "legacy_space" && isBoundedId(value.space_id)) return { kind: "legacy_space", space_id: value.space_id };
+  if (value.kind === "tab" && isBoundedId(value.session_id) && isBoundedId(value.tab_id)) {
+    return { kind: "tab", session_id: value.session_id, tab_id: value.tab_id };
+  }
+  return malformed("Browser cleanup scope is malformed");
+}
+
+export function parseBrowserCleanupFailure(value: unknown): BrowserCleanupFailure {
+  if (!isRecord(value) || !isString(value.association_key) || !/^[0-9a-f]{24}$/.test(value.association_key)
+    || !isString(value.reason) || !Array.isArray(value.unproven_paths) || !value.unproven_paths.every(isString)) {
+    return malformed("Browser cleanup failure is malformed");
+  }
+  return { association_key: value.association_key, scope: parseBrowserCleanupScope(value.scope), reason: value.reason, unproven_paths: value.unproven_paths };
+}
+
+export function parseBrowserSavedTabWork(value: unknown): BrowserSavedTabWork {
+  if (!isRecord(value) || !isString(value.association_key) || !/^[0-9a-f]{24}$/.test(value.association_key)
+    || !isBoundedId(value.session_id) || !isBoundedId(value.tab_id) || !isString(value.tab_label)
+    || !isBoundedId(value.space_id) || !isString(value.space_label) || !isU32(value.saved_capture_count)
+    || !isU32(value.draft_count) || !isBoolean(value.pending_capture)) return malformed("Saved tab browser work is malformed");
+  return {
+    association_key: value.association_key, session_id: value.session_id, tab_id: value.tab_id, tab_label: value.tab_label,
+    space_id: value.space_id, space_label: value.space_label, saved_capture_count: value.saved_capture_count,
+    draft_count: value.draft_count, pending_capture: value.pending_capture,
+  };
+}
+
+export function parseBrowserCleanupStatus(value: unknown): BrowserCleanupStatus {
+  if (!isRecord(value) || !isOneOf(value.cutover, ["not_needed", "running", "done", "failed"] as const)
+    || !Array.isArray(value.failures) || !Array.isArray(value.saved_tabs)) return malformed("Browser cleanup status is malformed");
+  const savedTabs = value.saved_tabs.map(parseBrowserSavedTabWork);
+  if (new Set(savedTabs.map((tab) => tab.association_key)).size !== savedTabs.length) return malformed("Duplicate saved tab browser work identities");
+  return { cutover: value.cutover, failures: value.failures.map(parseBrowserCleanupFailure), saved_tabs: savedTabs };
+}
+
+export function parseBrowserCleanupRetryRequest(value: unknown): BrowserCleanupRetryRequest {
+  if (!isRecord(value) || !isString(value.association_key) || !/^[0-9a-f]{24}$/.test(value.association_key)) {
+    return malformed("Browser cleanup retry request is malformed");
+  }
+  return { association_key: value.association_key };
+}
+
+export function parseBrowserLegacyArtifactCandidate(value: unknown): BrowserLegacyArtifactCandidate {
+  if (!isRecord(value) || !isString(value.path) || value.path.length === 0 || value.path.includes("\0")
+    || !isOneOf(value.kind, ["directory", "file"] as const)
+    || !isString(value.dev) || !/^[0-9]+$/.test(value.dev) || !isString(value.inode) || !/^[0-9]+$/.test(value.inode)
+    || !isU64(value.entry_count) || !isU64(value.total_bytes) || !isString(value.captured_at)
+    || !isOneOf(value.state, ["pending", "kept", "removed", "changed"] as const)) return malformed("Browser legacy artifact candidate is malformed");
+  return {
+    path: value.path, kind: value.kind, dev: value.dev, inode: value.inode, entry_count: value.entry_count,
+    total_bytes: value.total_bytes, captured_at: value.captured_at, state: value.state,
+  };
+}
+
+export function parseBrowserLegacyArchive(value: unknown): BrowserLegacyArchive {
+  if (!isRecord(value) || !isString(value.association_key) || !/^[0-9a-f]{24}$/.test(value.association_key)
+    || !isBoundedId(value.session_id) || !isBoundedId(value.space_id) || !isString(value.space_label)
+    || !isString(value.archived_at) || !isBoolean(value.session_stopped) || !isU32(value.saved_capture_count)
+    || !isU32(value.draft_count) || !isBoolean(value.pending_capture) || !Array.isArray(value.candidates)
+    || !Array.isArray(value.not_candidates) || !value.not_candidates.every(isString)) return malformed("Browser legacy archive is malformed");
+  const candidates = value.candidates.map(parseBrowserLegacyArtifactCandidate);
+  if (new Set(candidates.map((candidate) => candidate.path)).size !== candidates.length) return malformed("Duplicate browser legacy artifact paths");
+  return {
+    association_key: value.association_key, session_id: value.session_id, space_id: value.space_id,
+    space_label: value.space_label, archived_at: value.archived_at, session_stopped: value.session_stopped,
+    saved_capture_count: value.saved_capture_count, draft_count: value.draft_count, pending_capture: value.pending_capture,
+    candidates, not_candidates: value.not_candidates,
+  };
+}
+
+export function parseBrowserLegacyArchiveList(value: unknown): BrowserLegacyArchiveList {
+  if (!isRecord(value) || !Array.isArray(value.archives)) return malformed("Browser legacy archive list is malformed");
+  const archives = value.archives.map(parseBrowserLegacyArchive);
+  if (new Set(archives.map((archive) => archive.association_key)).size !== archives.length) return malformed("Duplicate browser legacy archive identities");
+  return { archives };
+}
+
+export function parseBrowserLegacyRemovalRequest(value: unknown): BrowserLegacyRemovalRequest {
+  const { association_key } = parseBrowserCleanupRetryRequest(value);
+  if (!isRecord(value) || !Array.isArray(value.candidates) || value.candidates.length === 0) return malformed("Browser legacy removal manifest is malformed");
+  const candidates = value.candidates.map(parseBrowserLegacyArtifactCandidate);
+  if (new Set(candidates.map((candidate) => candidate.path)).size !== candidates.length
+    || candidates.some((candidate) => candidate.state !== "pending")) return malformed("Browser legacy removal manifest is not pending or has duplicate paths");
+  return { association_key, candidates };
+}
+
+export function parseBrowserLegacyKeepRequest(value: unknown): BrowserLegacyKeepRequest {
+  return parseBrowserCleanupRetryRequest(value);
+}
+
+export function parseBrowserLegacyRecipientsRequest(value: unknown): BrowserLegacyRecipientsRequest {
+  if (!isRecord(value) || !isBoundedId(value.session_id)) return malformed("Browser legacy recipients request is malformed");
+  validateSessionId(value.session_id);
+  return { session_id: value.session_id };
+}
+
+export function parseBrowserLegacyRecipients(value: unknown): CommentPasteTarget[] {
+  if (!Array.isArray(value)) return malformed("Browser legacy recipients are malformed");
+  return value.map(parseCommentPasteTargetForFeedback);
+}
+
 const browserViewMaxId = 512;
 const browserViewMaxText = 64 * 1024;
 const browserViewMaxFileSelections = 64;
@@ -649,12 +754,10 @@ export function parseBrowserViewViewportRequest(value: unknown): BrowserViewView
 
 export function parseBrowserViewOpenRequest(value: unknown): BrowserViewOpenRequest {
   if (!isRecord(value) || !isBoundedId(value.client_id)
-    || (value.presentation !== "split" && value.presentation !== "browser_only")
     || !isBoolean(value.takeover)) return malformed("Browser view open request is malformed");
   return {
     target: parseBrowserTarget(value.target),
     client_id: value.client_id,
-    presentation: value.presentation,
     viewport: parseBrowserViewViewportRequest(value.viewport),
     takeover: value.takeover,
   };
@@ -1188,7 +1291,7 @@ export function parseBrowserDraftRecoveryRequest(value: unknown): BrowserDraftRe
           : value.action.type === "discard_draft" && isBoundedId(value.action.draft_id) && isU64(value.action.expected_revision)
             ? { type: "discard_draft", draft_id: value.action.draft_id, expected_revision: value.action.expected_revision }
             : malformed("Browser draft recovery action is malformed");
-  return { target: parseBrowserTarget(value.target), action };
+  return { scope: parseBrowserWorkScope(value.scope), action };
 }
 
 export function parseBrowserViewCommand(value: unknown): BrowserViewCommand {
@@ -1396,23 +1499,26 @@ function parseBrowserFeedbackResponse(value: unknown): BrowserFeedbackResponse {
 }
 export function parseBrowserFeedbackRequest(value: unknown): BrowserFeedbackRequest {
   if (!isRecord(value)) return malformed("Browser feedback request is malformed");
-  return { target: parseBrowserTarget(value.target) };
+  return { scope: parseBrowserWorkScope(value.scope) };
 }
 export function parseBrowserFeedbackAckRequest(value: unknown): BrowserFeedbackAckRequest {
   if (!isRecord(value) || !Array.isArray(value.ids) || value.ids.length > 10000 || !value.ids.every((id) => isString(id) && id.length > 0)) {
     return malformed("Browser feedback acknowledgement request is malformed");
   }
-  return { target: parseBrowserTarget(value.target), ids: value.ids };
+  return { scope: parseBrowserWorkScope(value.scope), ids: value.ids };
 }
 export function parseBrowserFeedbackImageRequest(value: unknown): BrowserFeedbackImageRequest {
   if (!isRecord(value) || !isString(value.capture_id) || value.capture_id.length === 0) return malformed("Browser feedback image request is malformed");
-  return { target: parseBrowserTarget(value.target), capture_id: value.capture_id };
+  return { scope: parseBrowserWorkScope(value.scope), capture_id: value.capture_id };
 }
 export function parseBrowserFeedbackSendRequest(value: unknown): BrowserFeedbackSendRequest {
   if (!isRecord(value) || !Array.isArray(value.ids) || value.ids.length > 10000
     || !value.ids.every((id) => isString(id) && id.length > 0) || !isString(value.operation_id)
     || value.operation_id.length === 0 || !isBoolean(value.acknowledge_duplicate_risk)) return malformed("Browser feedback send request is malformed");
-  return { target: parseBrowserTarget(value.target), ids: value.ids, operation_id: value.operation_id, acknowledge_duplicate_risk: value.acknowledge_duplicate_risk };
+  const scope = parseBrowserWorkScope(value.scope);
+  const recipient = value.recipient === undefined || value.recipient === null ? null : parseCommentPasteTargetForFeedback(value.recipient);
+  if ((scope.kind !== "tab") !== (recipient !== null)) return malformed("Browser feedback recipient does not match work scope");
+  return { scope, recipient, ids: value.ids, operation_id: value.operation_id, acknowledge_duplicate_risk: value.acknowledge_duplicate_risk };
 }
 function parseBrowserFeedbackDeliveryStatus(value: unknown): BrowserFeedbackDeliveryStatus {
   if (!isRecord(value) || !isString(value.capture_id) || value.capture_id.length === 0
@@ -1477,16 +1583,16 @@ export function parseBrowserFeedbackAck(value: unknown): BrowserFeedbackAck {
 
 export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotResponse {
   if (
-    !isRecord(value) || !isString(value.session_id) || !isString(value.version) || !isU32(value.protocol) ||
+    !isRecord(value) || !isString(value.session_id) || !isString(value.server_instance) || !/^[0-9a-f]{16}$/.test(value.server_instance) || !isString(value.version) || !isU32(value.protocol) ||
     !isNullableString(value.focused_space_id) || !isNullableString(value.focused_tab_id) || !isNullableString(value.focused_pane_id) ||
     !Array.isArray(value.spaces) || !value.spaces.every(isSpaceSummary) || !Array.isArray(value.tabs) || !value.tabs.every(isTabSummary) ||
-    !Array.isArray(value.panes) || !value.panes.every(isPaneSummary) || !Array.isArray(value.layouts) || !value.layouts.every(isTabLayout) ||
+    !Array.isArray(value.panes) || !value.panes.every(isPaneSummary) ||
     !Array.isArray(value.agents) || !value.agents.every(isAgentSummary)
   ) return malformed("Session snapshot response is missing required fields");
   return {
-    session_id: value.session_id, version: value.version, protocol: value.protocol,
+    session_id: value.session_id, server_instance: value.server_instance, version: value.version, protocol: value.protocol,
     focused_space_id: value.focused_space_id, focused_tab_id: value.focused_tab_id, focused_pane_id: value.focused_pane_id,
-    spaces: value.spaces, tabs: value.tabs, panes: value.panes, layouts: value.layouts,
+    spaces: value.spaces, tabs: value.tabs, panes: value.panes,
     agents: value.agents.map((agent) => ({ ...agent, state_change_seq: agent.state_change_seq ?? 0 })),
   };
 }
@@ -1536,8 +1642,6 @@ export function parseFocusResponse(value: unknown): FocusResponse {
 }
 
 const paneSplitDirections = ["right", "down"] as const;
-const paneResizeDirections = ["left", "right", "up", "down"] as const;
-const paneZoomModes = ["toggle", "on", "off"] as const;
 function isOneOf<T extends string>(value: unknown, choices: readonly T[]): value is T {
   return typeof value === "string" && choices.includes(value as T);
 }
@@ -1604,24 +1708,11 @@ export function parseResourceMutationRequest(value: unknown): ResourceMutationRe
         return { type: value.type, pane_id: value.pane_id, direction: value.direction, ratio: value.ratio };
       }
       break;
-    case "pane_resize":
-      if (isString(value.pane_id) && isOneOf(value.direction, paneResizeDirections) && typeof value.amount === "number" && Number.isFinite(value.amount) && value.amount > 0) {
-        return { type: value.type, pane_id: value.pane_id, direction: value.direction, amount: value.amount };
-      }
-      break;
     case "pane_rename":
       if (isString(value.pane_id) && isNullableString(value.label)) return { type: value.type, pane_id: value.pane_id, label: value.label };
       break;
-    case "pane_swap":
-      if (isString(value.source_pane_id) && isString(value.target_pane_id)) {
-        return { type: value.type, source_pane_id: value.source_pane_id, target_pane_id: value.target_pane_id };
-      }
-      break;
     case "pane_move":
       if (isString(value.pane_id)) return { type: value.type, pane_id: value.pane_id, destination: parsePaneMoveDestination(value.destination) };
-      break;
-    case "pane_zoom":
-      if (isString(value.pane_id) && isOneOf(value.mode, paneZoomModes)) return { type: value.type, pane_id: value.pane_id, mode: value.mode };
       break;
     case "pane_close":
       if (isString(value.pane_id)) return { type: value.type, pane_id: value.pane_id };
@@ -1632,11 +1723,24 @@ export function parseResourceMutationRequest(value: unknown): ResourceMutationRe
   return malformed(`Resource mutation ${value.type} is missing required fields`);
 }
 
+export function parseCreatedPane(value: unknown): CreatedPane {
+  if (!isRecord(value) || !isBoundedId(value.pane_id) || !isBoundedId(value.terminal_id)
+    || !isBoundedId(value.space_id) || !isBoundedId(value.tab_id)) return malformed("Created pane identity is malformed");
+  return { pane_id: value.pane_id, terminal_id: value.terminal_id, space_id: value.space_id, tab_id: value.tab_id };
+}
+
 export function parseResourceMutationResponse(value: unknown): ResourceMutationResponse {
   if (!isRecord(value) || !isString(value.session_id)) return malformed("Resource mutation response is missing required fields");
   const snapshot = parseSessionSnapshotResponse(value.snapshot);
   if (snapshot.session_id !== value.session_id) return malformed("Resource mutation snapshot belongs to another session");
-  return { session_id: value.session_id, snapshot };
+  const created = value.created === undefined || value.created === null ? null : parseCreatedPane(value.created);
+  if (created !== null && (!snapshot.panes.some((pane) => pane.id === created.pane_id
+    && pane.terminal_id === created.terminal_id && pane.tab_id === created.tab_id && pane.space_id === created.space_id)
+    || !snapshot.tabs.some((tab) => tab.id === created.tab_id && tab.space_id === created.space_id)
+    || !snapshot.spaces.some((space) => space.id === created.space_id))) {
+    return malformed("Created pane does not match mutation snapshot identity");
+  }
+  return { session_id: value.session_id, snapshot, created };
 }
 
 function isSessionStreamMessage(value: unknown): value is SessionStreamMessage {
@@ -1664,7 +1768,7 @@ export function parseSessionStreamMessage(value: unknown): SessionStreamMessage 
 function isBase64(value: unknown): value is string {
   return isString(value) && value.length % 4 === 0 && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
 }
-const ownershipStates: readonly TerminalOwnershipState[] = ["pending", "observing", "owned", "conflict", "released", "lost"];
+const ownershipStates: readonly TerminalOwnershipState[] = ["pending", "owned", "conflict", "released", "lost"];
 function isOwnershipState(value: unknown): value is TerminalOwnershipState {
   return typeof value === "string" && ownershipStates.includes(value as TerminalOwnershipState);
 }
@@ -1673,7 +1777,7 @@ export function parseTerminalOpenRequest(value: unknown): TerminalOpenRequest {
     !isRecord(value) ||
     !isString(value.session_id) ||
     !isString(value.pane_id) ||
-    (value.mode !== "observe" && value.mode !== "control") ||
+    value.mode !== "control" ||
     !isBoolean(value.takeover) ||
     !isU16(value.cols) ||
     !isU16(value.rows) ||

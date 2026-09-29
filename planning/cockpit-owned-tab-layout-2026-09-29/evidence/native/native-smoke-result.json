@@ -1,0 +1,57 @@
+{
+  "fixtures": [
+    "/tmp/cpol-5d087nca",
+    "/tmp/cpol-5zxwk9cm"
+  ],
+  "nativeSurface": "actual Tauri/WebKitWebDriver in owned nested niri",
+  "verified": {
+    "terminalActualInputOutput": "NATIVE_LAYOUT_SMOKE_OK visible screenshot",
+    "pluginlessFiles": [
+      "README.md",
+      "sample.txt",
+      "rendered README"
+    ],
+    "reviewDiff": [
+      "-Original line 5",
+      "+Changed line five",
+      "+Added review line"
+    ],
+    "unchangedSnapshotViewerRetention": true,
+    "ownedBrowserFixtureNavigation": true,
+    "provenBrowserProfileAndReceiptRemoved": true
+  },
+  "observations": [
+    "Initial stale native binary required explicit parent native build.",
+    "Native Review debug stack overflow reproduced; parent rebuilt with buffer fix; actual native diff visible on fresh matching native/host owner.",
+    "Browser close initially pending >2 minutes, later completed on same page without repeat action; latency remains unexplained."
+  ],
+  "cleanup": {
+    "fixtureStopScriptUsed": true,
+    "childProcesses": [
+      {
+        "name": "webdriver",
+        "pid": 2589239,
+        "returncode": -15
+      },
+      {
+        "name": "compositor",
+        "pid": 2589203,
+        "returncode": 0
+      }
+    ],
+    "knownFixturePidsRemaining": {},
+    "static5173Closed": true,
+    "rootNamedProcessesRemaining": [],
+    "userPluginRegistryUnchanged": true
+  },
+  "evidence": [
+    "02-files-pluginless.png",
+    "04-browser-owned-fixture.png",
+    "05-browser-profile-removed.png",
+    "06-files-retained-after-terminal-focus.png",
+    "07-terminal-actual-input.png",
+    "09-review-current-native-owner.png",
+    "browser-profile-cleanup.json",
+    "unchanged-snapshot-retention.json"
+  ]
+}

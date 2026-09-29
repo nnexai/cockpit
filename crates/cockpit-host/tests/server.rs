@@ -11,8 +11,8 @@ use cockpit_protocol::{
     projects::{ProjectConfiguration, ProjectLimits, ProjectProvider},
     v1::{
         AgentSummary, CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
-        LayoutPane, LayoutRect, PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
-        SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceSummary, TabLayout,
+        PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
+        SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceSummary,
         TabSummary, TerminalOpenRequest,
     },
 };
@@ -168,6 +168,7 @@ fn live_service_with_counter(
             mutation: Ok(ResourceMutationResponse {
                 session_id: "session-1".to_owned(),
                 snapshot: snapshot(),
+                created: None,
             }),
             mutation_calls,
         }),
@@ -177,6 +178,7 @@ fn live_service_with_counter(
 fn snapshot() -> SessionSnapshotResponse {
     SessionSnapshotResponse {
         session_id: "session-1".to_owned(),
+        server_instance: "0123456789abcdef".into(),
         version: "0.8.2".to_owned(),
         protocol: 20,
         focused_space_id: Some("space-1".to_owned()),
@@ -199,6 +201,7 @@ fn snapshot() -> SessionSnapshotResponse {
             number: 1,
             pane_count: 1,
             focused: true,
+            focused_pane_id: Some("pane-1".to_owned()),
         }],
         panes: vec![PaneSummary {
             id: "pane-1".to_owned(),
@@ -211,28 +214,6 @@ fn snapshot() -> SessionSnapshotResponse {
             agent_status: "working".to_owned(),
             revision: 7,
             cwd: None,
-        }],
-        layouts: vec![TabLayout {
-            space_id: "space-1".to_owned(),
-            tab_id: "tab-1".to_owned(),
-            area: LayoutRect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 24,
-            },
-            focused_pane_id: Some("pane-1".to_owned()),
-            panes: vec![LayoutPane {
-                pane_id: "pane-1".to_owned(),
-                focused: true,
-                rect: LayoutRect {
-                    x: 0,
-                    y: 0,
-                    width: 80,
-                    height: 24,
-                },
-            }],
-            zoomed: false,
         }],
         agents: vec![AgentSummary {
             pane_id: "pane-1".to_owned(),

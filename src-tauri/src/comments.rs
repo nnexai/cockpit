@@ -18,7 +18,7 @@ use super::{inspection_error_response, requests::decode_request};
 #[tauri::command]
 pub async fn cockpit_comments_list(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentBatchList, ErrorResponse> {
@@ -27,7 +27,7 @@ pub async fn cockpit_comments_list(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .list(&session_id, &pane_id, &request)
+        .list(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -35,7 +35,7 @@ pub async fn cockpit_comments_list(
 #[tauri::command]
 pub async fn cockpit_comments_batch(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentBatch, ErrorResponse> {
@@ -43,7 +43,7 @@ pub async fn cockpit_comments_batch(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .batch(&session_id, &pane_id, &request)
+        .batch(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -51,7 +51,7 @@ pub async fn cockpit_comments_batch(
 #[tauri::command]
 pub async fn cockpit_comments_upsert(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentBatch, ErrorResponse> {
@@ -59,7 +59,7 @@ pub async fn cockpit_comments_upsert(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .upsert(&session_id, &pane_id, &request)
+        .upsert(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -67,7 +67,7 @@ pub async fn cockpit_comments_upsert(
 #[tauri::command]
 pub async fn cockpit_comments_remove(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentBatch, ErrorResponse> {
@@ -75,7 +75,7 @@ pub async fn cockpit_comments_remove(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .remove(&session_id, &pane_id, &request)
+        .remove(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -83,7 +83,7 @@ pub async fn cockpit_comments_remove(
 #[tauri::command]
 pub async fn cockpit_comments_discard(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentBatchList, ErrorResponse> {
@@ -91,7 +91,7 @@ pub async fn cockpit_comments_discard(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .discard(&session_id, &pane_id, &request)
+        .discard(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -99,7 +99,7 @@ pub async fn cockpit_comments_discard(
 #[tauri::command]
 pub async fn cockpit_comments_attach(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentBatch, ErrorResponse> {
@@ -107,7 +107,7 @@ pub async fn cockpit_comments_attach(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .attach(&session_id, &pane_id, &request)
+        .attach(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -115,7 +115,7 @@ pub async fn cockpit_comments_attach(
 #[tauri::command]
 pub async fn cockpit_comments_preview(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentPreview, ErrorResponse> {
@@ -123,7 +123,7 @@ pub async fn cockpit_comments_preview(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .preview(&session_id, &pane_id, &request)
+        .preview(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -131,7 +131,7 @@ pub async fn cockpit_comments_preview(
 #[tauri::command]
 pub async fn cockpit_comments_paste_prepare(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentPastePrepareResponse, ErrorResponse> {
@@ -139,7 +139,7 @@ pub async fn cockpit_comments_paste_prepare(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .paste_prepare(&session_id, &pane_id, &request)
+        .paste_prepare(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -147,7 +147,7 @@ pub async fn cockpit_comments_paste_prepare(
 #[tauri::command]
 pub async fn cockpit_comments_paste_send(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentPasteReceipt, ErrorResponse> {
@@ -155,7 +155,7 @@ pub async fn cockpit_comments_paste_send(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .paste_send(&session_id, &pane_id, &request)
+        .paste_send(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -163,7 +163,7 @@ pub async fn cockpit_comments_paste_send(
 #[tauri::command]
 pub async fn cockpit_comments_paste_mark_pasted(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<CommentPasteReceipt, ErrorResponse> {
@@ -171,7 +171,7 @@ pub async fn cockpit_comments_paste_mark_pasted(
     service
         .comments()
         .map_err(inspection_error_response)?
-        .paste_mark_pasted(&session_id, &pane_id, &request)
+        .paste_mark_pasted(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }

@@ -1,18 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ResourceMutationRequest, ResourceMutationResponse, SessionSnapshotResponse, SessionSummary, TabLayout, TerminalCommand } from "../protocol/generated/v1";
+import type { ResourceMutationRequest, ResourceMutationResponse, SessionSnapshotResponse, SessionSummary, TerminalCommand } from "../protocol/generated/v1";
 import {
   authoritativeMutationSnapshot,
-  authoritativeSelection,
   canSwitchSessions,
   contextMenuPosition,
   mutationFailureCanRetry,
   moveDestinationLabel,
   reconcileSessionChoice,
   rendererReasonFor,
-  paneIdInDirection,
   tabLabelIsRedundant,
 } from "./App";
-import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex } from "./layout/layoutProjection";
+import { tabDropInsertionIndex } from "./layout/layoutProjection";
 import { initialMutationCoordinatorState, mutationCoordinatorReducer } from "./session/mutationCoordinator";
 import { initialSessionState, sessionReducer } from "./session/sessionStore";
 import { scheduleFocusFallback } from "./session/focusCoordinator";
@@ -21,21 +19,21 @@ import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMous
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
   return {
     session_id: sessionId,
+    server_instance: "0123456789abcdef",
     version: "0.8.2",
     protocol: 20,
     focused_space_id: "space-1",
     focused_tab_id: "tab-1",
     focused_pane_id: focusedPaneId,
     spaces: [{ id: "space-1", label: "Space", number: 1, tab_count: 1, pane_count: 2, focused: true, agent_status: "idle", git: null }],
-    tabs: [{ id: "tab-1", space_id: "space-1", label: "Tab", number: 1, pane_count: 2, focused: true }],
+    tabs: [{ id: "tab-1", space_id: "space-1", label: "Tab", number: 1, pane_count: 2, focused: true, focused_pane_id: focusedPaneId }],
     panes: ["pane-1", "pane-2"].map((id) => ({ id, terminal_id: `terminal-${id}`, space_id: "space-1", tab_id: "tab-1", title: null, focused: id === focusedPaneId, agent: null, agent_status: "idle", revision: 1 })),
-    layouts: [],
     agents: [],
   };
 }
 it("renders a Herdr mutation snapshot immediately while stream recovery begins", () => {
   const initial = { ...initialSessionState, epoch: 1, sessionId: "session-1", sync: "live" as const, snapshot: snapshot() };
-  const updated = { ...snapshot(), layouts: [{ space_id: "space-1", tab_id: "tab-1", area: { x: 0, y: 0, width: 120, height: 40 }, focused_pane_id: "pane-1", panes: [{ pane_id: "pane-1", focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }], zoomed: true }] };
+  const updated = { ...snapshot(), panes: snapshot().panes.map((pane) => ({ ...pane, title: "Renamed terminal" })) };
   expect(sessionReducer(initial, { type: "snapshot/authoritative", epoch: 1, sessionId: "session-1", snapshot: updated }).snapshot).toEqual(updated);
 });
 
@@ -107,7 +105,7 @@ it("renders a Herdr mutation snapshot immediately while stream recovery begins",
     expect(send.mock.calls.map(([command]) => command.kind)).toEqual(["down", "moved", "drag", "up"]);
   });
 
-const firstOperation = { epoch: 1, token: 1, key: "pane:pane-1", request: { type: "pane_zoom", pane_id: "pane-1", mode: "toggle" } as const, focusFromSnapshot: false };
+const firstOperation = { epoch: 1, token: 1, key: "pane:pane-1", request: { type: "pane_rename", pane_id: "pane-1", label: "Logs" } as const, focusFromSnapshot: false };
 
 describe("mutation coordination", () => {
   it("keeps the first pending operation and rejects stale responses", () => {
@@ -130,7 +128,7 @@ describe("mutation coordination", () => {
   });
 
   it("adopts only a parser-validated authoritative mutation snapshot for the requested session", () => {
-    const response: ResourceMutationResponse = { session_id: "session-1", snapshot: snapshot() };
+    const response: ResourceMutationResponse = { session_id: "session-1", snapshot: snapshot(), created: null };
     expect(authoritativeMutationSnapshot("session-1", response)).toEqual(response.snapshot);
     expect(() => authoritativeMutationSnapshot("other-session", response)).toThrow(/another session/);
     expect(() => authoritativeMutationSnapshot("session-1", { ...response, snapshot: { ...response.snapshot, panes: [{}] } as SessionSnapshotResponse })).toThrow();
@@ -174,23 +172,6 @@ describe("desktop command routing", () => {
     expect(canSwitchSessions(1)).toBe(false);
     expect(canSwitchSessions(2)).toBe(true);
   });
-  it("uses authoritative layout geometry only to choose the next pane focus target", () => {
-    const layout: TabLayout = {
-      space_id: "space-1", tab_id: "tab-1", area: { x: 0, y: 0, width: 40, height: 40 }, focused_pane_id: "center", zoomed: false,
-      panes: [
-        { pane_id: "center", focused: true, rect: { x: 10, y: 10, width: 20, height: 20 } },
-        { pane_id: "left", focused: false, rect: { x: 0, y: 10, width: 10, height: 20 } },
-        { pane_id: "right", focused: false, rect: { x: 30, y: 10, width: 10, height: 20 } },
-        { pane_id: "up", focused: false, rect: { x: 10, y: 0, width: 20, height: 10 } },
-        { pane_id: "down", focused: false, rect: { x: 10, y: 30, width: 20, height: 10 } },
-      ],
-    };
-    expect(paneIdInDirection(layout, "center", "left")).toBe("left");
-    expect(paneIdInDirection(layout, "center", "right")).toBe("right");
-    expect(paneIdInDirection(layout, "center", "up")).toBe("up");
-    expect(paneIdInDirection(layout, "center", "down")).toBe("down");
-    expect(paneIdInDirection(layout, "left", "left")).toBeNull();
-  });
   it("replays only idempotent absolute mutations", () => {
     const retryable: ResourceMutationRequest[] = [
       { type: "space_rename", space_id: "space-1", label: "Main" },
@@ -198,18 +179,13 @@ describe("desktop command routing", () => {
       { type: "tab_rename", tab_id: "tab-1", label: "Shell" },
       { type: "tab_move", tab_id: "tab-1", insert_index: 0 },
       { type: "pane_rename", pane_id: "pane-1", label: "Logs" },
-      { type: "pane_zoom", pane_id: "pane-1", mode: "on" },
-      { type: "pane_zoom", pane_id: "pane-1", mode: "off" },
     ];
     const ambiguous: ResourceMutationRequest[] = [
       { type: "space_create", cwd: null, label: null },
       { type: "tab_create", space_id: "space-1", label: null },
       { type: "pane_split", pane_id: "pane-1", direction: "right", ratio: null },
-      { type: "pane_resize", pane_id: "pane-1", direction: "right", amount: 0.1 },
-      { type: "pane_swap", source_pane_id: "pane-1", target_pane_id: "pane-2" },
       { type: "pane_move", pane_id: "pane-1", destination: { type: "new_space", label: null, tab_label: null } },
       { type: "pane_close", pane_id: "pane-1" },
-      { type: "pane_zoom", pane_id: "pane-1", mode: "toggle" },
     ];
     retryable.forEach((request) => expect(mutationFailureCanRetry(request, "transport_error")).toBe(true));
     ambiguous.forEach((request) => expect(mutationFailureCanRetry(request, "transport_error")).toBe(false));
@@ -240,45 +216,6 @@ describe("desktop command routing", () => {
     expect(queue.at(-1)).toMatchObject({ text: String(MAX_PENDING_CONTROL_COMMANDS + 2) });
   });
 
-});
-
-describe("pane interactions", () => {
-  const layout: TabLayout = {
-    space_id: "space-1",
-    tab_id: "tab-1",
-    area: { x: 0, y: 0, width: 80, height: 24 },
-    focused_pane_id: "pane-1",
-    zoomed: false,
-    panes: [
-      { pane_id: "pane-1", focused: true, rect: { x: 0, y: 0, width: 40, height: 24 } },
-      { pane_id: "pane-2", focused: false, rect: { x: 40, y: 0, width: 40, height: 24 } },
-      { pane_id: "pane-floating", focused: false, rect: { x: 100, y: 30, width: 10, height: 10 } },
-    ],
-  };
-
-  it("creates handles only for shared edges and normalizes resize direction and amount", () => {
-    const handles = deriveResizeHandles(layout);
-    expect(handles).toHaveLength(1);
-    expect(handles[0]).toMatchObject({ paneId: "pane-1", axis: "x", positiveDirection: "right" });
-    expect(resizeRequest(handles[0], 100, 1000)).toEqual({ type: "pane_resize", pane_id: "pane-1", direction: "right", amount: 0.1 });
-    expect(resizeRequest(handles[0], -50, 1000)).toEqual({ type: "pane_resize", pane_id: "pane-1", direction: "left", amount: 0.05 });
-    expect(resizeRequest(handles[0], 0, 1000)).toBeNull();
-  });
-
-  it("projects exactly the focused pane over the full canvas while zoomed and restores every pane when unzoomed", () => {
-    const paneIds = ["pane-1", "pane-2"];
-    const zoomed = { ...layout, zoomed: true, focused_pane_id: "pane-2" };
-    expect(projectedPaneIds(paneIds, zoomed, "pane-1")).toEqual(["pane-2"]);
-    expect(projectedPaneRect(zoomed, "pane-2")).toEqual(layout.area);
-    expect(projectedPaneIds(paneIds, layout, "pane-2")).toEqual(paneIds);
-    expect(projectedPaneRect(layout, "pane-2")).toEqual(layout.panes[1].rect);
-  });
-
-  it("hands selection and input ownership to the pane focused by an authoritative split snapshot", () => {
-    const afterSplit = snapshot("session-1", "pane-2");
-    expect(authoritativeSelection(afterSplit)).toEqual({ spaceId: "space-1", tabId: "tab-1", paneId: "pane-2" });
-    expect(authoritativeMutationSnapshot("session-1", { session_id: "session-1", snapshot: afterSplit }).focused_pane_id).toBe("pane-2");
-  });
 });
 
 describe("focus fallback", () => {

@@ -13,6 +13,8 @@ import {
   parseTerminalOpenRequest,
   parseTerminalStreamMessage,
   parseSessionStreamMessage,
+  parseBrowserRequest, parseBrowserWorkScope, parseBrowserFeedbackSendRequest, parseBrowserDraftRecoveryRequest,
+  parseBrowserCleanupStatus, parseBrowserLegacyArchiveList, parseBrowserLegacyRemovalRequest,
   type CockpitClient,
   type CockpitSessionSnapshot,
   type ResourceMutationRequest,
@@ -23,18 +25,19 @@ import {
   transitionSessionStream,
   type StreamOrderCursor,
 } from "./streamOrder";
+import { parseViewerContext, parseViewerSourceOptions, parseViewerOpenRequest, matchViewerContext } from "./contextProtocol";
 
 const snapshot: CockpitSessionSnapshot = {
   session_id: "session-1",
+  server_instance: "0123456789abcdef",
   version: "0.8.2",
   protocol: 20,
   focused_space_id: "space-1",
   focused_tab_id: "tab-1",
   focused_pane_id: "pane-1",
   spaces: [{ id: "space-1", label: "Main", number: 1, tab_count: 1, pane_count: 1, focused: true, agent_status: "working", git: { repository_key: "repo-opaque", repository: "cockpit", branch: "main", checkout_path: "/work/cockpit", is_linked_worktree: false } }],
-  tabs: [{ id: "tab-1", space_id: "space-1", label: "Shell", number: 1, pane_count: 1, focused: true }],
+  tabs: [{ id: "tab-1", space_id: "space-1", label: "Shell", number: 1, pane_count: 1, focused: true, focused_pane_id: "pane-1" }],
   panes: [{ id: "pane-1", terminal_id: "terminal-1", space_id: "space-1", tab_id: "tab-1", title: "Terminal", focused: true, agent: null, agent_status: "idle", revision: 1 }],
-  layouts: [{ space_id: "space-1", tab_id: "tab-1", area: { x: 0, y: 0, width: 80, height: 24 }, focused_pane_id: "pane-1", panes: [{ pane_id: "pane-1", focused: true, rect: { x: 0, y: 0, width: 80, height: 24 } }], zoomed: false }],
   agents: [],
 };
 const status = { protocol_version: "v1", cockpit_version: "0.1.0", mode: "normal" as const, capabilities: { terminal_mouse_input: true }, herdr: { status: "unavailable" as const, code: "test", message: "test" } };
@@ -42,7 +45,7 @@ const sessions = { sessions: [{ id: "session-1", label: "Main", is_default: true
 const terminalRequest: TerminalOpenRequest = {
   session_id: "session-1",
   pane_id: "pane-1",
-  mode: "observe" as const,
+  mode: "control" as const,
   takeover: false,
   cols: 80,
   rows: 24,
@@ -79,7 +82,13 @@ function streamStale(sequence: number, generation = 1) {
 function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
   const base: CockpitClient = {
     status: vi.fn(async () => status),
-    browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this Space" })),
+    browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this tab", cleanup: "none" as const, cleanup_reason: null })),
+    browserCleanupStatus: vi.fn(async () => ({ cutover: "not_needed" as const, failures: [], saved_tabs: [] })),
+    browserCleanupRetry: vi.fn(async () => ({ cutover: "done" as const, failures: [], saved_tabs: [] })),
+    browserLegacyList: vi.fn(async () => ({ archives: [] })),
+    browserLegacyRemove: vi.fn(async () => ({ archives: [] })),
+    browserLegacyKeep: vi.fn(async () => ({ archives: [] })),
+    browserLegacyRecipients: vi.fn(async () => []),
     browserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback in terminal fixture"); }),
     browserDraftRecovery: vi.fn(async () => ({ type: "none" as const })),
     acknowledgeBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback acknowledgement in terminal fixture"); }),
@@ -100,7 +109,9 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     workspaceTeardownPreview: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
     workspaceTeardownExecute: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
     workspaceTeardownRecoveries: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
-    inspectPane: vi.fn(async () => { throw new Error("Context inspection is unavailable in this terminal fixture"); }),
+    viewerSources: vi.fn(async () => { throw new Error("Unexpected viewer sources in terminal fixture"); }),
+    viewerOpen: vi.fn(async () => { throw new Error("Unexpected viewer open in terminal fixture"); }),
+    viewerRelease: vi.fn(async () => {}),
     contextDirectory: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
     contextFileIndex: vi.fn(async () => { throw new Error("Unexpected Context file index in terminal fixture"); }),
     contextDocument: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
@@ -108,7 +119,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     reviewSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
-    contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(), openReview: vi.fn(), openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
+    contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -137,7 +148,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     sessionSnapshot: vi.fn(async () => snapshot),
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
     focus: vi.fn(async () => ({ session_id: snapshot.session_id, kind: "pane" as const, target_id: "pane-1", accepted: true })),
-    mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot })),
+    mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot, created: null })),
     subscribeSession: vi.fn(async () => ({ close: vi.fn() })),
     openTerminal: vi.fn(async () => ({ send: vi.fn(), close: vi.fn() })),
     openBrowserView: vi.fn(async () => ({ command: vi.fn(), close: vi.fn() })),
@@ -189,21 +200,16 @@ describe("client DTO parsers", () => {
       { type: "tab_move", tab_id: "tab-1", insert_index: 2 },
       { type: "tab_close", tab_id: "tab-1" },
       { type: "pane_split", pane_id: "pane-1", direction: "right", ratio: null },
-      { type: "pane_resize", pane_id: "pane-1", direction: "left", amount: 0.1 },
       { type: "pane_rename", pane_id: "pane-1", label: null },
-      { type: "pane_swap", source_pane_id: "pane-1", target_pane_id: "pane-2" },
       {
         type: "pane_move",
         pane_id: "pane-1",
         destination: { type: "existing_tab", tab_id: "tab-2", direction: "down", target_pane_id: null, ratio: null },
       },
-      { type: "pane_zoom", pane_id: "pane-1", mode: "toggle" },
       { type: "pane_close", pane_id: "pane-1" },
     ];
     for (const mutation of mutations) expect(parseResourceMutationRequest(mutation)).toEqual(mutation);
     expect(() => parseResourceMutationRequest({ type: "space_create", label: null })).toThrow(CockpitClientError);
-    expect(() => parseResourceMutationRequest({ type: "pane_resize", pane_id: "pane-1", direction: "left", amount: Number.NaN })).toThrow(CockpitClientError);
-    expect(() => parseResourceMutationRequest({ type: "pane_resize", pane_id: "pane-1", direction: "left", amount: 0 })).toThrow(CockpitClientError);
     expect(() => parseResourceMutationRequest({ type: "pane_split", pane_id: "pane-1", direction: "right", ratio: 1 })).toThrow(CockpitClientError);
 
     expect(() => parseResourceMutationRequest({ type: "pane_move", pane_id: "pane-1", destination: { type: "raw", method: "pane.move" } })).toThrow(CockpitClientError);
@@ -584,7 +590,7 @@ describe("browser CockpitClient", () => {
     const firstOpen = client.openTerminal(terminalOpen(), vi.fn(), (error) => errors.push(error));
     first.open();
     await firstOpen;
-    first.message(JSON.stringify({ type: "ownership", session_id: "other", pane_id: "pane-1", stream_id: "stream-1", state: "observing", message: null }));
+    first.message(JSON.stringify({ type: "ownership", session_id: "other", pane_id: "pane-1", stream_id: "stream-1", state: "owned", message: null }));
     expect(first.readyState).toBe(3);
     const secondOpen = client.openTerminal(terminalOpen(), vi.fn(), (error) => errors.push(error));
     second.open();
@@ -630,7 +636,7 @@ describe("native CockpitClient", () => {
     await expect(client.sessionSnapshot("session-1")).resolves.toEqual(snapshot);
     await expect(client.focus("session-1", { kind: "pane", target_id: "pane-1" })).resolves.toMatchObject({ accepted: true });
     const subscription = await client.subscribeSession("session-1", vi.fn(), (error) => errors.push(error));
-    await expect(client.mutate("session-1", { type: "pane_close", pane_id: "pane-1" })).resolves.toEqual({ session_id: "session-1", snapshot });
+    await expect(client.mutate("session-1", { type: "pane_close", pane_id: "pane-1" })).resolves.toEqual({ session_id: "session-1", snapshot, created: null });
     sessionChannel!.onmessage(streamSnapshot(1));
     subscription.close();
     subscription.close();
@@ -810,14 +816,102 @@ describe("client selector mocks", () => {
 it("discards saved batches through both transports with generation and attachment checks", async () => {
   const scope = { binding_id: "binding", client_id: "client" };
   const mutation = { scope, batch_id: "batch", expected_generation: 3 };
-  const result = { attachment: { owner: { session_id: "session-1", pane_id: "pane-1", terminal_id: "terminal-1", source_kind: "review", source_id: "source" }, location: { workspace_id: "space-1", tab_id: "tab-1" }, ...scope }, batches: [], truncated: false };
+  const result = { attachment: { owner: { kind: "viewer", session_id: "session-1", server_instance: "0123456789abcdef", tab_id: "tab-1", source_kind: "review", source_id: "source" }, location: { workspace_id: "space-1", tab_id: "tab-1" }, ...scope }, batches: [], truncated: false };
   const request = vi.fn(async () => jsonResponse(result));
-  expect(await createBrowserClient(request).commentDiscard("session-1", "pane-1", mutation)).toEqual(result);
+  expect(await createBrowserClient(request).commentDiscard("session-1", "viewer-1", mutation)).toEqual(result);
   expect(request.mock.calls[0]).toEqual([expect.stringContaining("/comments/discard"), expect.objectContaining({ method: "POST", body: JSON.stringify(mutation) })]);
   const invoke = vi.fn(async () => result);
   const native = createNativeClient(invoke, <T,>(onmessage: (message: T) => void) => ({ onmessage }));
-  expect(await native.commentDiscard("session-1", "pane-1", mutation)).toEqual(result);
-  expect(invoke).toHaveBeenCalledWith("cockpit_comments_discard", { sessionId: "session-1", paneId: "pane-1", request: mutation });
+  expect(await native.commentDiscard("session-1", "viewer-1", mutation)).toEqual(result);
+  expect(invoke).toHaveBeenCalledWith("cockpit_comments_discard", { sessionId: "session-1", viewerId: "viewer-1", request: mutation });
   const wrong = createBrowserClient(vi.fn(async () => jsonResponse({ ...result, attachment: { ...result.attachment, binding_id: "other" } })));
-  await expect(wrong.commentDiscard("session-1", "pane-1", mutation)).rejects.toThrow();
+  await expect(wrong.commentDiscard("session-1", "viewer-1", mutation)).rejects.toThrow();
+});
+
+describe("owned-tab client identity boundaries", () => {
+  const target = { session_id: "session-1", tab_id: "tab-1", pane_id: null, endpoint_path: null };
+  const key = "0123456789abcdef01234567";
+  const folder = { root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null };
+  const context = {
+    session_id: "session-1", viewer_id: "viewer-1", binding_id: "binding", tab_id: "tab-1", space_id: "space-1",
+    kind: "files", source_kind: "context", source_id: "source", roots: [folder], default_root_id: "folder", diagnostics: [],
+  };
+  const open = { tab_id: "tab-1", kind: "files", source_pane_id: "pane-1", source: { kind: "files_folder" }, client_id: "client" } as const;
+  const candidate = {
+    path: "/browser/profiles/legacy", kind: "directory", dev: "1", inode: "9007199254740993",
+    entry_count: 2, total_bytes: 8, captured_at: "now", state: "pending",
+  };
+
+  it("requires the server incarnation and nullable tab focus fact", () => {
+    for (const server_instance of [undefined, "", "0123456789abcdeg", "0123456789abcdef0"]) {
+      expect(() => parseSessionSnapshotResponse({ ...snapshot, server_instance })).toThrow(CockpitClientError);
+    }
+    expect(() => parseSessionSnapshotResponse({ ...snapshot, tabs: [{ ...snapshot.tabs[0], focused_pane_id: undefined }] })).toThrow(CockpitClientError);
+    expect(parseSessionSnapshotResponse({ ...snapshot, tabs: [{ ...snapshot.tabs[0], focused_pane_id: null }] }).tabs[0]?.focused_pane_id).toBeNull();
+  });
+
+  it("accepts creation receipts only for the same pane, terminal and membership", () => {
+    const created = { pane_id: "pane-1", terminal_id: "terminal-1", space_id: "space-1", tab_id: "tab-1" };
+    expect(parseResourceMutationResponse({ session_id: "session-1", snapshot, created }).created).toEqual(created);
+    expect(parseResourceMutationResponse({ session_id: "session-1", snapshot }).created).toBeNull();
+    for (const field of ["pane_id", "terminal_id", "space_id", "tab_id"]) {
+      expect(() => parseResourceMutationResponse({ session_id: "session-1", snapshot, created: { ...created, [field]: "other" } })).toThrow(CockpitClientError);
+    }
+  });
+
+  it("rejects viewer kind/source mismatches and unadvertised roots", () => {
+    expect(parseViewerOpenRequest(open)).toEqual(open);
+    expect(() => parseViewerOpenRequest({ ...open, source: { kind: "review", repository_id: "repo" } })).toThrow(CockpitClientError);
+    expect(() => parseViewerContext({ ...context, default_root_id: "missing" })).toThrow(CockpitClientError);
+    expect(() => parseViewerContext({ ...context, roots: [folder, folder] })).toThrow(CockpitClientError);
+    expect(() => parseViewerContext({ ...context, source_kind: "review" })).toThrow(CockpitClientError);
+    const sources = { session_id: "session-1", pane_id: "pane-1", tab_id: "tab-1", space_id: "space-1", files_context_root_id: null, files_folder_root_id: "folder", review_repository_ids: [], roots: [folder], reason: "", diagnostics: [] };
+    expect(parseViewerSourceOptions(sources).files_folder_root_id).toBe("folder");
+    expect(() => parseViewerSourceOptions({ ...sources, files_context_root_id: "folder" })).toThrow(CockpitClientError);
+    expect(() => matchViewerContext(parseViewerContext(context), "session-1", { ...open, tab_id: "other" })).toThrow(CockpitClientError);
+  });
+
+  it("rejects viewer-open responses from another tab through both transports", async () => {
+    const response = { ...context, tab_id: "other" };
+    await expect(createBrowserClient(vi.fn(async () => jsonResponse(response))).viewerOpen("session-1", open)).rejects.toThrow(CockpitClientError);
+    await expect(createNativeClient(vi.fn(async () => response)).viewerOpen("session-1", open)).rejects.toThrow(CockpitClientError);
+  });
+
+  it("resolves tab browser targets exclusively and requires explicit legacy recipients", () => {
+    expect(parseBrowserRequest({ target, action: { kind: "open_fresh", url: null } }).target).toEqual(target);
+    expect(() => parseBrowserRequest({ target: { ...target, pane_id: "pane-1" }, action: { kind: "status" } })).toThrow(CockpitClientError);
+    expect(() => parseBrowserRequest({ target: { ...target, tab_id: null }, action: { kind: "status" } })).toThrow(CockpitClientError);
+    expect(() => parseBrowserWorkScope({ kind: "legacy_archive", association_key: "../receipt" })).toThrow(CockpitClientError);
+    expect(() => parseBrowserWorkScope({ kind: "saved_tab", association_key: "../receipt" })).toThrow(CockpitClientError);
+    const send = { ids: ["capture"], operation_id: "operation", acknowledge_duplicate_risk: false };
+    expect(() => parseBrowserFeedbackSendRequest({ ...send, scope: { kind: "legacy_archive", association_key: key } })).toThrow(CockpitClientError);
+    expect(() => parseBrowserFeedbackSendRequest({ ...send, scope: { kind: "saved_tab", association_key: key } })).toThrow(CockpitClientError);
+    const recipient = { endpoint_identity: "endpoint", session_id: "session-1", workspace_id: "space-1", tab_id: "tab-1", pane_id: "agent", terminal_id: "terminal", agent_fingerprint: "fingerprint", agent_label: "Agent" };
+    expect(parseBrowserFeedbackSendRequest({ ...send, recipient, scope: { kind: "legacy_archive", association_key: key } }).recipient).toEqual(recipient);
+    expect(parseBrowserFeedbackSendRequest({ ...send, recipient, scope: { kind: "saved_tab", association_key: key } }).recipient).toEqual(recipient);
+    expect(parseBrowserDraftRecoveryRequest({ scope: { kind: "saved_tab", association_key: key }, action: { type: "discard_pending" } }).scope).toEqual({ kind: "saved_tab", association_key: key });
+    expect(() => parseBrowserFeedbackSendRequest({ ...send, recipient, scope: { kind: "tab", target } })).toThrow(CockpitClientError);
+  });
+
+  it("preserves exact reviewed inode strings and rejects malformed cleanup manifests", () => {
+    expect(parseBrowserLegacyRemovalRequest({ association_key: key, candidates: [candidate] }).candidates[0]?.inode).toBe("9007199254740993");
+    expect(() => parseBrowserLegacyRemovalRequest({ association_key: key, candidates: [candidate, candidate] })).toThrow(CockpitClientError);
+    expect(() => parseBrowserLegacyRemovalRequest({ association_key: key, candidates: [{ ...candidate, inode: 1 }] })).toThrow(CockpitClientError);
+    expect(() => parseBrowserCleanupStatus({ cutover: "done", saved_tabs: [], failures: [{ association_key: key, scope: { kind: "tab", session_id: "session-1" }, reason: "blocked", unproven_paths: [] }] })).toThrow(CockpitClientError);
+    const archive = { association_key: key, session_id: "session-1", space_id: "space-1", space_label: "Main", archived_at: "now", session_stopped: true, saved_capture_count: 0, draft_count: 0, pending_capture: false, candidates: [candidate], not_candidates: [] };
+    expect(() => parseBrowserLegacyArchiveList({ archives: [archive, archive] })).toThrow(CockpitClientError);
+  });
+
+  it("preserves saved tab provenance and validates saved-work counts and identities", () => {
+    const savedTab = {
+      association_key: key, session_id: "session-1", tab_id: "retired-tab", tab_label: "Retired tab",
+      space_id: "space-1", space_label: "Main", saved_capture_count: 1, draft_count: 2, pending_capture: true,
+    };
+    const status = { cutover: "done", failures: [], saved_tabs: [savedTab] };
+    expect(parseBrowserCleanupStatus(status).saved_tabs).toEqual([savedTab]);
+    expect(() => parseBrowserCleanupStatus({ ...status, saved_tabs: undefined })).toThrow(CockpitClientError);
+    expect(() => parseBrowserCleanupStatus({ ...status, saved_tabs: [savedTab, savedTab] })).toThrow(CockpitClientError);
+    expect(() => parseBrowserCleanupStatus({ ...status, saved_tabs: [{ ...savedTab, draft_count: -1 }] })).toThrow(CockpitClientError);
+    expect(() => parseBrowserCleanupStatus({ ...status, saved_tabs: [{ ...savedTab, pending_capture: undefined }] })).toThrow(CockpitClientError);
+  });
 });

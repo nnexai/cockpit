@@ -1,6 +1,6 @@
 import { useCallback, useReducer, useRef, type Dispatch, type MutableRefObject } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ResourceMutationRequest } from "../../protocol/generated/v1";
+import type { CreatedPane, ResourceMutationRequest, SessionSnapshotResponse } from "../../protocol/generated/v1";
 import type { SessionAction, SessionState } from "./sessionStore";
 
 type StatusError = { message: string; code?: string };
@@ -50,23 +50,30 @@ export type MutationCoordinatorOptions = {
   stateRef: MutableRefObject<SessionState>;
   mountedRef: MutableRefObject<boolean>;
   sessionObservationRef: MutableRefObject<number>;
-  focusTokenRef: MutableRefObject<number>;
   dispatchSession: Dispatch<SessionAction>;
   describeError(error: unknown, fallback: string): StatusError;
-  mutationSnapshot(sessionId: string, response: unknown): SessionState["snapshot"] & { focused_pane_id: string | null };
+  mutationSnapshot(sessionId: string, response: unknown): SessionSnapshotResponse;
+  onBegin(operation: MutationOperation): void;
+  onSettled(operation: MutationOperation, created: CreatedPane | null, snapshot?: SessionSnapshotResponse, responseIsCurrent?: boolean): void;
   onResync(): void;
 };
 
-export function useMutationCoordinator({ client, stateRef, mountedRef, sessionObservationRef, focusTokenRef, dispatchSession, describeError, mutationSnapshot, onResync }: MutationCoordinatorOptions) {
+export type MutationCoordinator = {
+  mutate(key: string, request: ResourceMutationRequest, focusFromSnapshot?: boolean): boolean;
+  reset(): void;
+  retry(operation: MutationOperation): boolean;
+  state: MutationCoordinatorState;
+  tokenRef: MutableRefObject<number>;
+};
+
+export function useMutationCoordinator({ client, stateRef, mountedRef, sessionObservationRef, dispatchSession, describeError, mutationSnapshot, onBegin, onSettled, onResync }: MutationCoordinatorOptions): MutationCoordinator {
   const [state, dispatch] = useReducer(mutationCoordinatorReducer, initialMutationCoordinatorState);
   const tokenRef = useRef(0);
   const pendingRef = useRef(false);
-  const focusIntentRef = useRef<{ epoch: number; token: number; paneId: string } | null>(null);
 
   const reset = useCallback(() => {
     tokenRef.current += 1;
     pendingRef.current = false;
-    focusIntentRef.current = null;
     dispatch({ type: "reset" });
   }, []);
 
@@ -76,7 +83,6 @@ export function useMutationCoordinator({ client, stateRef, mountedRef, sessionOb
     if (!sessionId || pendingRef.current) return false;
     const epoch = current.epoch;
     const observation = sessionObservationRef.current;
-    const focusToken = focusTokenRef.current;
     const streamGeneration = current.generation;
     const streamSequence = current.sequence;
     const token = tokenRef.current + 1;
@@ -84,42 +90,37 @@ export function useMutationCoordinator({ client, stateRef, mountedRef, sessionOb
     pendingRef.current = true;
     const operation: MutationOperation = { epoch, token, key, request, focusFromSnapshot };
     dispatch({ type: "begin", operation });
+    onBegin(operation);
     void client.mutate(sessionId, request).then((response) => {
-      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || tokenRef.current !== token) return;
       const snapshot = mutationSnapshot(sessionId, response);
-      pendingRef.current = false;
-      dispatch({ type: "succeed", epoch, token });
-      const responseIsCurrent = observation === sessionObservationRef.current
+      const operationIsCurrent = mountedRef.current && stateRef.current.epoch === epoch
+        && stateRef.current.sessionId === sessionId && tokenRef.current === token;
+      const responseIsCurrent = operationIsCurrent && observation === sessionObservationRef.current
         && stateRef.current.generation === streamGeneration
         && stateRef.current.sequence === streamSequence;
-      focusIntentRef.current = focusFromSnapshot && snapshot.focused_pane_id && responseIsCurrent && focusToken === focusTokenRef.current
-        ? { epoch, token, paneId: snapshot.focused_pane_id }
-        : null;
+      onSettled(operation, response.created, snapshot, responseIsCurrent);
+      if (!operationIsCurrent) return;
+      pendingRef.current = false;
+      dispatch({ type: "succeed", epoch, token });
       // Use the mutation snapshot only until an ordered stream event supersedes it.
       // A response that arrived behind the stream cannot overwrite a newer user action.
       if (responseIsCurrent) dispatchSession({ type: "snapshot/authoritative", epoch, sessionId, snapshot });
       dispatchSession({ type: "snapshot/request", epoch, sessionId });
       onResync();
     }).catch((error: unknown) => {
+      onSettled(operation, null);
       if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || tokenRef.current !== token) return;
       pendingRef.current = false;
       const errorState = describeError(error, "Could not update Herdr resource");
       dispatch({ type: "fail", epoch, token, error: errorState });
       if (errorState.code === "mutation_applied_snapshot_failed" || errorState.code === "request_outcome_unknown") {
-        focusIntentRef.current = null;
         onResync();
       }
     });
     return true;
-  }, [client, describeError, dispatchSession, focusTokenRef, mountedRef, mutationSnapshot, onResync, sessionObservationRef, stateRef]);
+  }, [client, describeError, dispatchSession, mountedRef, mutationSnapshot, onBegin, onSettled, onResync, sessionObservationRef, stateRef]);
 
   const retry = useCallback((operation: MutationOperation) => mutate(operation.key, operation.request, operation.focusFromSnapshot), [mutate]);
-  const consumeFocusedPane = useCallback((epoch: number, focusedPaneId: string | null): string | null => {
-    const intent = focusIntentRef.current;
-    if (!intent?.paneId || intent.epoch !== epoch || intent.token !== tokenRef.current) return null;
-    focusIntentRef.current = null;
-    return focusedPaneId === intent.paneId ? intent.paneId : null;
-  }, []);
 
-  return { consumeFocusedPane, mutate, reset, retry, state, tokenRef };
+  return { mutate, reset, retry, state, tokenRef };
 }

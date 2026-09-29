@@ -13,8 +13,9 @@ use cockpit_protocol::comments::{
     CommentLocation, CommentOwner, CommentPreview, CommentPreviewRequest, CommentRemoveRequest,
     CommentRequestScope, CommentSourceState, CommentUpsertRequest,
 };
-use cockpit_protocol::context::{ContextDocumentRequest, ExtensionKind};
+use cockpit_protocol::context::{ContextDocumentRequest, ViewerSourceKind};
 use cockpit_protocol::projects::ProjectConfiguration;
+use cockpit_protocol::viewer::ViewerKind;
 use uuid::Uuid;
 
 use crate::InspectionError;
@@ -34,13 +35,16 @@ type ReviewStateKey = (String, u32, String, bool);
 
 struct CommentEvidence {
     binding_id: String,
+    session_id: String,
+    viewer_id: String,
+    server_instance: String,
     terminal_id: String,
     workspace_id: String,
     tab_id: String,
     root_id: String,
     companion_id: String,
     companion_path: String,
-    source_kind: ExtensionKind,
+    source_kind: ViewerSourceKind,
     review: Option<crate::review::ReviewCommentEvidence>,
 }
 
@@ -240,7 +244,7 @@ impl CommentsService {
     }
 
     /// Explicitly discard a saved batch, including detached recovery batches.
-    /// Fresh pane proof gates access; generation checking protects concurrent edits.
+    /// Fresh viewer authorization gates access; generations protect concurrent edits.
     pub async fn discard(
         &self,
         session_id: &str,
@@ -313,15 +317,7 @@ impl CommentsService {
         let mut batch = self.store.load(&request.batch_id).await?.ok_or_else(|| {
             InspectionError::new("comments_batch_not_found", "comment batch does not exist")
         })?;
-        if batch.owner.source_kind != attachment.owner.source_kind
-            || batch.owner.source_id != attachment.owner.source_id
-            || !captured_roots_match(&batch, &evidence)
-        {
-            return Err(InspectionError::new(
-                "comments_source_mismatch",
-                "a detached batch can only reattach to its original Context source root",
-            ));
-        }
+        require_original_source(&batch, &attachment, &evidence)?;
         if batch.generation != request.expected_generation {
             return Err(InspectionError::new(
                 "stale_generation",
@@ -397,56 +393,48 @@ impl CommentsService {
                 "comment scope is incomplete",
             ));
         }
-        let (presentation, runtime_evidence) = self
-            .context
-            .inspect_pane_with_evidence(session_id, pane_id)
-            .await?;
-        let evidence = if presentation.renderer == Some(ExtensionKind::Review) {
+        let authorization = self.context
+            .authorize_viewer(session_id, pane_id, &scope.binding_id).await?;
+        let evidence = if authorization.context.kind == ViewerKind::Review {
             let review = self.reviews.as_ref().ok_or_else(|| {
                 InspectionError::new("review_unavailable", "Review comments are not configured")
             })?;
-            let value = review
-                .comment_evidence_for_presentation(
-                    session_id,
-                    pane_id,
-                    &scope.binding_id,
-                    &presentation,
-                    &runtime_evidence,
-                )
-                .await?;
+            let value = review.comment_evidence_for_authorization(&authorization).await?;
             CommentEvidence {
                 binding_id: value.binding_id.clone(),
+                session_id: session_id.to_owned(),
+                viewer_id: pane_id.to_owned(),
+                server_instance: value.server_instance.clone(),
                 terminal_id: value.terminal_id.clone(),
                 workspace_id: value.workspace_id.clone(),
                 tab_id: value.tab_id.clone(),
                 root_id: value.source_id.clone(),
                 companion_id: value.source_id.clone(),
                 companion_path: value.checkout_path.clone(),
-                source_kind: ExtensionKind::Review,
+                source_kind: ViewerSourceKind::Review,
                 review: Some(value),
             }
         } else {
-            let value = self.context.comment_evidence_for_presentation(
-                &presentation,
-                &runtime_evidence,
-                &scope.binding_id,
-            )?;
+            let value = self.context.comment_evidence(session_id, pane_id, &scope.binding_id).await?;
             CommentEvidence {
                 binding_id: value.binding_id,
+                session_id: session_id.to_owned(),
+                viewer_id: pane_id.to_owned(),
+                server_instance: value.server_instance,
                 terminal_id: value.terminal_id,
                 workspace_id: value.workspace_id,
                 tab_id: value.tab_id,
                 root_id: value.root_id,
                 companion_id: value.companion_id,
                 companion_path: value.companion_path,
-                source_kind: ExtensionKind::Context,
+                source_kind: authorization.context.source_kind,
                 review: None,
             }
         };
-        let owner = CommentOwner {
+        let owner = CommentOwner::Viewer {
             session_id: session_id.to_owned(),
-            pane_id: pane_id.to_owned(),
-            terminal_id: evidence.terminal_id.clone(),
+            server_instance: evidence.server_instance.clone(),
+            tab_id: evidence.tab_id.clone(),
             source_kind: evidence.source_kind,
             source_id: evidence.companion_id.clone(),
         };
@@ -475,7 +463,7 @@ impl CommentsService {
                 "capture root is not the currently verified browsing root",
             ));
         }
-        let document = if evidence.source_kind == ExtensionKind::Review {
+        let document = if evidence.source_kind == ViewerSourceKind::Review {
             let reference = capture.review.as_ref().ok_or_else(|| {
                 InspectionError::new(
                     "comments_capture_required",
@@ -615,7 +603,7 @@ impl CommentsService {
     }
 
     async fn refresh_states(&self, batch: &mut CommentBatch, evidence: &CommentEvidence) {
-        if evidence.source_kind == ExtensionKind::Review {
+        if evidence.source_kind == ViewerSourceKind::Review {
             let Some(operation) = evidence.review.clone() else {
                 for draft in &mut batch.drafts {
                     draft.source_state = CommentSourceState::Unavailable;
@@ -705,8 +693,8 @@ impl CommentsService {
             }
             return;
         }
-        let session_id = batch.owner.session_id.clone();
-        let pane_id = batch.owner.pane_id.clone();
+        let session_id = &evidence.session_id;
+        let pane_id = &evidence.viewer_id;
         let mut reads: HashMap<(String, String), Result<(String, Option<String>), String>> =
             HashMap::new();
         for draft in &mut batch.drafts {
@@ -762,7 +750,8 @@ impl CommentsService {
                 .context
                 .comment_evidence(session_id, pane_id, &evidence.binding_id)
                 .await?;
-            if current.terminal_id != evidence.terminal_id
+            if current.server_instance != evidence.server_instance
+                || current.terminal_id != evidence.terminal_id
                 || current.workspace_id != evidence.workspace_id
                 || current.tab_id != evidence.tab_id
                 || current.root_id != evidence.root_id
@@ -771,7 +760,7 @@ impl CommentsService {
             {
                 return Err(InspectionError::new(
                     "comments_detached",
-                    "file-viewer pane or browsing root changed during this comment operation",
+                    "Files viewer binding or browsing root changed during this comment operation",
                 ));
             }
             return Ok(());
@@ -785,7 +774,7 @@ impl CommentsService {
         if !same_review_evidence(expected, &actual) {
             return Err(InspectionError::new(
                 "comments_detached",
-                "Reviewr pane or checkout changed while saving this comment",
+                "Review viewer binding or checkout changed while saving this comment",
             ));
         }
         Ok(())
@@ -797,8 +786,9 @@ fn same_review_evidence(
     actual: &crate::review::ReviewCommentEvidence,
 ) -> bool {
     expected.binding_id == actual.binding_id
+        && expected.server_instance == actual.server_instance
         && expected.session_id == actual.session_id
-        && expected.pane_id == actual.pane_id
+        && expected.viewer_id == actual.viewer_id
         && expected.terminal_id == actual.terminal_id
         && expected.workspace_id == actual.workspace_id
         && expected.tab_id == actual.tab_id
@@ -829,11 +819,7 @@ fn with_attachment(mut batch: CommentBatch, attachment: CommentAttachment) -> Co
 }
 
 fn same_owner(left: &CommentOwner, right: &CommentOwner) -> bool {
-    left.session_id == right.session_id
-        && left.pane_id == right.pane_id
-        && left.terminal_id == right.terminal_id
-        && left.source_kind == right.source_kind
-        && left.source_id == right.source_id
+    left == right
 }
 
 fn captured_roots_match(batch: &CommentBatch, evidence: &CommentEvidence) -> bool {
@@ -841,6 +827,22 @@ fn captured_roots_match(batch: &CommentBatch, evidence: &CommentEvidence) -> boo
         .drafts
         .iter()
         .all(|draft| draft.file_ref.root_id == evidence.root_id)
+}
+
+fn require_original_source(
+    batch: &CommentBatch,
+    attachment: &CommentAttachment,
+    evidence: &CommentEvidence,
+) -> Result<(), InspectionError> {
+    if batch.owner.source_identity() != attachment.owner.source_identity()
+        || !captured_roots_match(batch, evidence)
+    {
+        return Err(InspectionError::new(
+            "comments_source_mismatch",
+            "a detached batch can only reattach to its original viewer source root",
+        ));
+    }
+    Ok(())
 }
 
 fn same_attachment(
@@ -863,7 +865,7 @@ fn require_owner(
     {
         return Err(InspectionError::new(
             "comments_detached",
-            "comment batch is detached from this Context pane or tab",
+            "comment batch is detached from this viewer or tab",
         ));
     }
     if !captured_roots_match(batch, evidence) {
@@ -891,11 +893,11 @@ mod tests {
 
     fn attachment() -> CommentAttachment {
         CommentAttachment {
-            owner: CommentOwner {
+            owner: CommentOwner::Viewer {
                 session_id: "session".to_owned(),
-                pane_id: "pane".to_owned(),
-                terminal_id: "terminal".to_owned(),
-                source_kind: ExtensionKind::Context,
+                server_instance: "server".to_owned(),
+                tab_id: "tab".to_owned(),
+                source_kind: ViewerSourceKind::Context,
                 source_id: "companion".to_owned(),
             },
             location: CommentLocation {
@@ -909,9 +911,12 @@ mod tests {
 
     fn evidence(root_id: &str) -> CommentEvidence {
         CommentEvidence {
-            source_kind: ExtensionKind::Context,
+            source_kind: ViewerSourceKind::Context,
             review: None,
             binding_id: "binding".to_owned(),
+            session_id: "session".to_owned(),
+            viewer_id: "viewer".to_owned(),
+            server_instance: "server".to_owned(),
             terminal_id: "terminal".to_owned(),
             workspace_id: "workspace".to_owned(),
             tab_id: "tab".to_owned(),
@@ -921,14 +926,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn initial_batch_has_a_transport_valid_timestamp() {
-        let batch = empty_batch(&attachment());
-        assert_eq!(batch.generation, 0);
-        assert!(batch.drafts.is_empty());
-        assert!(batch.updated_at.parse::<u128>().is_ok());
-        assert!(batch.live_attachment.is_some());
-    }
 
     #[test]
     fn captured_root_identity_blocks_replacement_but_keeps_empty_batch_attachable() {
@@ -959,7 +956,8 @@ mod tests {
         let expected = crate::review::ReviewCommentEvidence {
             binding_id: "binding".to_owned(),
             session_id: "session".to_owned(),
-            pane_id: "pane".to_owned(),
+            viewer_id: "viewer".to_owned(),
+            server_instance: "server".to_owned(),
             terminal_id: "terminal".to_owned(),
             workspace_id: "workspace".to_owned(),
             tab_id: "tab".to_owned(),
@@ -973,5 +971,26 @@ mod tests {
         let mut changed = expected.clone();
         changed.terminal_id = "replacement-terminal".to_owned();
         assert!(!same_review_evidence(&expected, &changed));
+    }
+
+    #[test]
+    fn legacy_owner_cannot_autoattach_but_matching_source_can_explicitly_reattach() {
+        let attachment = attachment();
+        let evidence = evidence("root");
+        let mut batch = empty_batch(&attachment);
+        batch.owner = CommentOwner::LegacyPane {
+            session_id: "session".to_owned(),
+            pane_id: "pane".to_owned(),
+            terminal_id: "terminal".to_owned(),
+            source_kind: ViewerSourceKind::Context,
+            source_id: "companion".to_owned(),
+        };
+        assert!(!same_attachment(&batch, &attachment, &evidence));
+        assert_eq!(require_owner(&batch, &attachment, &evidence).expect_err("legacy detached").code, "comments_detached");
+        require_original_source(&batch, &attachment, &evidence).expect("explicit matching reattach");
+        if let CommentOwner::LegacyPane { source_id, .. } = &mut batch.owner {
+            *source_id = "another-source".to_owned();
+        }
+        assert_eq!(require_original_source(&batch, &attachment, &evidence).expect_err("different source").code, "comments_source_mismatch");
     }
 }

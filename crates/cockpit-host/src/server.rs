@@ -31,8 +31,9 @@ use cockpit_core::{
 };
 use cockpit_protocol::{
     browser::{
-        BrowserFeedbackAckRequest, BrowserFeedbackImageRequest, BrowserFeedbackRequest,
-        BrowserFeedbackSendRequest, BrowserRequest,
+        BrowserCleanupRetryRequest, BrowserFeedbackAckRequest, BrowserFeedbackImageRequest,
+        BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserLegacyKeepRequest,
+        BrowserLegacyRecipientsRequest, BrowserLegacyRemovalRequest, BrowserRequest,
     },
     v1::{
         ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
@@ -53,6 +54,7 @@ mod credentials;
 mod projects;
 mod review;
 mod library;
+mod viewer;
 
 // The enclosing guard verifies the exact bound Host and Origin.
 async fn require_origin(request: Request<Body>, next: Next) -> Response {
@@ -175,6 +177,24 @@ fn build_router_with_validated_root(
             "/api/v1/browser/action",
             post(browser_action).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
         )
+        .route("/api/v1/browser/cleanup", get(browser_cleanup_status))
+        .route(
+            "/api/v1/browser/cleanup/retry",
+            post(browser_cleanup_retry).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
+        .route("/api/v1/browser/legacy", get(browser_legacy_list))
+        .route(
+            "/api/v1/browser/legacy/remove",
+            post(browser_legacy_remove).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
+        .route(
+            "/api/v1/browser/legacy/keep",
+            post(browser_legacy_keep).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
+        .route(
+            "/api/v1/browser/legacy/recipients",
+            post(browser_legacy_recipients).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
         .route(
             "/api/v1/browser/feedback",
             post(browser_feedback).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
@@ -215,6 +235,7 @@ fn build_router_with_validated_root(
         .merge(context_media::routes())
         .merge(projects::routes())
         .merge(context::routes())
+        .merge(viewer::routes())
         .merge(library::routes())
         .merge(credentials::routes())
         .merge(browser_view::routes())
@@ -361,6 +382,82 @@ async fn browser_feedback_send(
         );
     };
     match runtime.send_feedback(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_cleanup_status(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
+    };
+    match runtime.cleanup_status().await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_cleanup_retry(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserCleanupRetryRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
+    };
+    match runtime.retry_cleanup(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_legacy_list(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
+    };
+    match runtime.legacy_list().await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_legacy_remove(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserLegacyRemovalRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
+    };
+    match runtime.legacy_remove(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_legacy_keep(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserLegacyKeepRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
+    };
+    match runtime.legacy_keep(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_legacy_recipients(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserLegacyRecipientsRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
+    };
+    match runtime.legacy_recipients(request).await {
         Ok(response) => Json(response).into_response(),
         Err(error) => inspection_error(error),
     }

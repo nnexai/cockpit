@@ -14,7 +14,7 @@ use super::{inspection_error_response, requests::decode_request};
 #[tauri::command]
 pub async fn cockpit_context_search(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<ContextSearchResponse, ErrorResponse> {
@@ -24,7 +24,7 @@ pub async fn cockpit_context_search(
         .map_err(inspection_error_response)?
         .clone();
     ContextSearchService::new(contexts)
-        .search(&session_id, &pane_id, &request)
+        .search(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }
@@ -32,7 +32,7 @@ pub async fn cockpit_context_search(
 #[tauri::command]
 pub async fn cockpit_context_invalidate(
     session_id: String,
-    pane_id: String,
+    viewer_id: String,
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<ContextInvalidationResponse, ErrorResponse> {
@@ -42,7 +42,7 @@ pub async fn cockpit_context_invalidate(
         .map_err(inspection_error_response)?
         .clone();
     ContextSearchService::new(contexts)
-        .invalidate(&session_id, &pane_id, &request)
+        .invalidate(&session_id, &viewer_id, &request)
         .await
         .map_err(inspection_error_response)
 }

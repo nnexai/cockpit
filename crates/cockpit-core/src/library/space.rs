@@ -1196,6 +1196,7 @@ pub(in crate::library) mod tests {
             }
             Ok(SessionSnapshotResponse {
                 session_id: session.into(),
+                server_instance: "0123456789abcdef".into(),
                 version: "test".into(),
                 protocol: 1,
                 focused_space_id: None,
@@ -1217,7 +1218,6 @@ pub(in crate::library) mod tests {
                 },
                 tabs: vec![],
                 panes: vec![],
-                layouts: vec![],
                 agents: vec![],
             })
         }

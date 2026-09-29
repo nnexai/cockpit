@@ -9,12 +9,12 @@ import {
   parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
   parseSpaceUpdateRequest, parseSpaceRemoveRequest,
 } from "./libraryProtocol";
-import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
+import { parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
-  matchContextResponse, matchPanePresentation, parseContextDirectory, parseContextFileIndex,
+  matchContextResponse, parseContextDirectory, parseContextFileIndex,
   parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
-  parseContextFileIndexRequest, parseContextLaunchRequest, parsePanePresentation,
+  parseContextFileIndexRequest, parseViewerSourceOptions, matchViewerSourceOptions, parseViewerOpenRequest, parseViewerContext, matchViewerContext,
 } from "./contextProtocol";
 import {
   matchContextInvalidationResponse, matchContextSearchResponse,
@@ -66,6 +66,8 @@ import {
   parseBrowserFeedbackSendResponse,
   parseBrowserRequest,
   parseBrowserResponse,
+  parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseBrowserLegacyArchiveList,
+  parseBrowserLegacyRemovalRequest, parseBrowserLegacyKeepRequest, parseBrowserLegacyRecipientsRequest, parseBrowserLegacyRecipients,
   parseErrorEnvelope,
   parseFocusRequest,
   parseFocusResponse,
@@ -726,72 +728,86 @@ export function createBrowserClient(
       validateSessionId(sessionId);
       return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-teardown/recoveries`, "workspace teardown recoveries", parseWorkspaceTeardownRecoveryList);
     },
-    async inspectPane(sessionId, paneId, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(paneId);
-      return matchPanePresentation(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/presentation`, "pane presentation", parsePanePresentation, { signal }), sessionId, paneId);
+    async viewerSources(sessionId, paneId, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const value = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/viewer-sources`, "viewer sources", parseViewerSourceOptions, { signal });
+      signal?.throwIfAborted();
+      return matchViewerSourceOptions(value, sessionId, paneId);
     },
-    async contextDirectory(sessionId, paneId, value, signal) {
+    async viewerOpen(sessionId, value) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      const body = parseViewerOpenRequest(value);
+      return matchViewerContext(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/open`, "viewer open", parseViewerContext, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), sessionId, body);
+    },
+    async viewerRelease(sessionId, viewerId) {
+      validateSessionId(sessionId); validateResourceId(viewerId);
+      await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/release`, "viewer release", (value) => {
+        if (value !== null) throw new CockpitClientError("malformed_response", "Viewer release response is malformed");
+      }, { method: "POST" });
+    },
+    async contextDirectory(sessionId, viewerId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(viewerId);
       const body = parseContextDirectoryRequest(value);
-      return matchContextResponse(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/directory`, "Context directory", parseContextDirectory, {
+      return matchContextResponse(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/directory`, "Context directory", parseContextDirectory, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       }), body);
     },
-    async contextFileIndex(sessionId, paneId, value, signal) {
+    async contextFileIndex(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseContextFileIndexRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/files`, "Context file index", parseContextFileIndex, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/files`, "Context file index", parseContextFileIndex, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       });
       signal?.throwIfAborted();
       if (response.binding_id !== body.binding_id || response.root_id !== body.root_id) throw new CockpitClientError("malformed_response", "Context file index belongs to another root");
       return response;
     },
-    async contextDocument(sessionId, paneId, value, signal) {
+    async contextDocument(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseContextDocumentRequest(value);
-      return matchContextResponse(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/document`, "Context document", parseContextDocument, {
+      return matchContextResponse(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/document`, "Context document", parseContextDocument, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       }), body);
     },
-    async reviewSnapshot(sessionId, paneId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(paneId); signal?.throwIfAborted();
+    async reviewSnapshot(sessionId, viewerId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(viewerId); signal?.throwIfAborted();
       const parsed = parseReviewSnapshotRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/review/snapshot`, "Review snapshot", parseReviewSnapshot, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
-      signal?.throwIfAborted(); return matchReviewSnapshot(response, sessionId, paneId, parsed);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/review/snapshot`, "Review snapshot", parseReviewSnapshot, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+      signal?.throwIfAborted(); return matchReviewSnapshot(response, sessionId, viewerId, parsed);
     },
-    async reviewFile(sessionId, paneId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(paneId); signal?.throwIfAborted();
+    async reviewFile(sessionId, viewerId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(viewerId); signal?.throwIfAborted();
       const parsed = parseReviewFileRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/review/file`, "Review file", parseReviewFile, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
-      signal?.throwIfAborted(); return matchReviewFile(response, sessionId, paneId, parsed);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/review/file`, "Review file", parseReviewFile, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+      signal?.throwIfAborted(); return matchReviewFile(response, sessionId, viewerId, parsed);
     },
-    async contextSearch(sessionId, paneId, value, signal) {
+    async contextSearch(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseContextSearchRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/search`, "Context search", parseContextSearchResponse, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/search`, "Context search", parseContextSearchResponse, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       });
       return matchContextSearchResponse(response, body);
     },
-    async contextInvalidate(sessionId, paneId, value, signal) {
+    async contextInvalidate(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseContextInvalidationRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/invalidate`, "Context invalidation", parseContextInvalidationResponse, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/invalidate`, "Context invalidation", parseContextInvalidationResponse, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       });
       return matchContextInvalidationResponse(response, body);
     },
-    async contextMedia(sessionId, paneId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+    async contextMedia(sessionId, viewerId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(viewerId);
       const body = parseContextMediaRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/media`, "Context image", parseContextMedia, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/media`, "Context image", parseContextMedia, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       return matchContextMedia(response, body);
     },
     async libraryListing(offset) {
@@ -893,124 +909,134 @@ export function createBrowserClient(
       const response = await getJson(request, "/api/v1/library/space/remove", "Space removal", parseSpaceContextListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       return matchSpaceContextListing(response, body);
     },
-    async openReview(sessionId, value) {
+    async commentBatches(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      const body = parseReviewLaunchRequest(value);
-      return matchPanePresentation(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/review/open`, "Review launch", parsePanePresentation, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), sessionId);
-    },
-    async openContext(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseContextLaunchRequest(value);
-      return matchPanePresentation(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/context/open`, "Context launch", parsePanePresentation, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), sessionId);
-    },
-    async commentBatches(sessionId, paneId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseCommentScope(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/list`, "comment batches", parseCommentBatchList, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/list`, "comment batches", parseCommentBatchList, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       });
-      matchCommentAttachment(response.attachment, sessionId, paneId, body);
+      matchCommentAttachment(response.attachment, sessionId, body);
       return response;
     },
-    async commentBatch(sessionId, paneId, value, signal) {
+    async commentBatch(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseCommentBatchRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/batch`, "comment batch", parseCommentBatch, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/batch`, "comment batch", parseCommentBatch, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       });
-      return matchCommentBatch(response, sessionId, paneId, body.scope, body.batch_id);
+      return matchCommentBatch(response, sessionId, body.scope, body.batch_id);
     },
-    async commentUpsert(sessionId, paneId, value, signal) {
+    async commentUpsert(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseCommentUpsert(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/upsert`, "comment upsert", parseCommentBatch, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/upsert`, "comment upsert", parseCommentBatch, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       });
-      return matchCommentBatch(response, sessionId, paneId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
+      return matchCommentBatch(response, sessionId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
     },
-    async commentRemove(sessionId, paneId, value, signal) {
+    async commentRemove(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseCommentRemove(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/remove`, "comment remove", parseCommentBatch, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/remove`, "comment remove", parseCommentBatch, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       });
-      return matchCommentBatch(response, sessionId, paneId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
+      return matchCommentBatch(response, sessionId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
     },
-    async commentDiscard(sessionId, paneId, value, signal) {
+    async commentDiscard(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseCommentMutation(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/discard`, "comment discard", parseCommentBatchList, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/discard`, "comment discard", parseCommentBatchList, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       });
-      matchCommentAttachment(response.attachment, sessionId, paneId, body.scope);
+      matchCommentAttachment(response.attachment, sessionId, body.scope);
       return response;
-    },    async commentAttach(sessionId, paneId, value, signal) {
+    },    async commentAttach(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseCommentMutation(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/attach`, "comment attach", parseCommentBatch, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/attach`, "comment attach", parseCommentBatch, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       });
-      return matchCommentBatch(response, sessionId, paneId, body.scope, body.batch_id, body.expected_generation, true);
+      return matchCommentBatch(response, sessionId, body.scope, body.batch_id, body.expected_generation, true);
     },
-    async commentPastePrepare(sessionId, paneId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(paneId);
+    async commentPastePrepare(sessionId, viewerId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(viewerId);
       const parsed = parseCommentPastePrepareRequest(value);
       signal?.throwIfAborted();
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/paste-prepare`, "comment paste prepare", parseCommentPastePrepare, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/paste-prepare`, "comment paste prepare", parseCommentPastePrepare, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
       signal?.throwIfAborted();
       return matchPastePrepare(response, sessionId, parsed);
     },
-    async commentPasteSend(sessionId, paneId, value) {
-      validateSessionId(sessionId); validateResourceId(paneId);
+    async commentPasteSend(sessionId, viewerId, value) {
+      validateSessionId(sessionId); validateResourceId(viewerId);
       const parsed = parseCommentPasteSendRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/paste-send`, "comment paste send", parseCommentPasteReceipt, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed) });
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/paste-send`, "comment paste send", parseCommentPasteReceipt, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed) });
       return matchPasteReceipt(response, parsed);
     },
-    async commentPasteMarkPasted(sessionId, paneId, value) {
-      validateSessionId(sessionId); validateResourceId(paneId);
+    async commentPasteMarkPasted(sessionId, viewerId, value) {
+      validateSessionId(sessionId); validateResourceId(viewerId);
       const parsed = parseCommentPasteMarkPastedRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/paste-mark-pasted`, "comment paste resolution", parseCommentPasteReceipt, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed) });
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/paste-mark-pasted`, "comment paste resolution", parseCommentPasteReceipt, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed) });
       return matchMarkedReceipt(response, parsed);
     },
-    async commentPreview(sessionId, paneId, value, signal) {
+    async commentPreview(sessionId, viewerId, value, signal) {
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const body = parseCommentPreviewRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/preview`, "comment preview", parseCommentPreview, {
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/preview`, "comment preview", parseCommentPreview, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       });
       return matchCommentPreview(response, body.batch);
+    },
+    browserCleanupStatus() {
+      return getJson(request, "/api/v1/browser/cleanup", "browser cleanup", parseBrowserCleanupStatus);
+    },
+    async browserCleanupRetry(value) {
+      const body = parseBrowserCleanupRetryRequest(value);
+      return getJson(request, "/api/v1/browser/cleanup/retry", "browser cleanup retry", parseBrowserCleanupStatus, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    browserLegacyList() {
+      return getJson(request, "/api/v1/browser/legacy", "browser legacy archives", parseBrowserLegacyArchiveList);
+    },
+    async browserLegacyRemove(value) {
+      const body = parseBrowserLegacyRemovalRequest(value);
+      return getJson(request, "/api/v1/browser/legacy/remove", "browser legacy removal", parseBrowserLegacyArchiveList, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async browserLegacyKeep(value) {
+      const body = parseBrowserLegacyKeepRequest(value);
+      return getJson(request, "/api/v1/browser/legacy/keep", "browser legacy keep", parseBrowserLegacyArchiveList, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async browserLegacyRecipients(value) {
+      const body = parseBrowserLegacyRecipientsRequest(value);
+      const recipients = await getJson(request, "/api/v1/browser/legacy/recipients", "browser legacy recipients", parseBrowserLegacyRecipients, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (recipients.some((recipient) => recipient.session_id !== body.session_id)) throw new CockpitClientError("malformed_response", "Browser recipient belongs to another session");
+      return recipients;
     },
     async browserAction(value) {
       const body = parseBrowserRequest(value);

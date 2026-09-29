@@ -23,43 +23,43 @@ use super::{
 pub(super) fn routes() -> Router<CockpitService> {
     Router::new()
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/list",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/list",
             post(list),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/batch",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/batch",
             post(batch),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/upsert",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/upsert",
             post(upsert),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/remove",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/remove",
             post(remove),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/discard",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/discard",
             post(discard),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/attach",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/attach",
             post(attach),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/preview",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/preview",
             post(preview),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-prepare",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/paste-prepare",
             post(paste_prepare),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-send",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/paste-send",
             post(paste_send),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-mark-pasted",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/comments/paste-mark-pasted",
             post(paste_mark_pasted),
         )
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
@@ -75,17 +75,17 @@ fn request<T: DeserializeOwned>(body: Result<Json<T>, JsonRejection>) -> Result<
     })
 }
 
-fn valid_pane(session: &str, pane: &str) -> bool {
-    valid_session_id(session) && valid_resource_id(pane)
+fn valid_viewer(session: &str, viewer: &str) -> bool {
+    valid_session_id(session) && valid_resource_id(viewer)
 }
 
 async fn list(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<cockpit_protocol::comments::CommentRequestScope>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -95,7 +95,7 @@ async fn list(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.list(&session, &pane, &request).await {
+    match comments.list(&session, &viewer, &request).await {
         Ok(value) => Json::<CommentBatchList>(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -103,11 +103,11 @@ async fn list(
 
 async fn batch(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentBatchRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -117,7 +117,7 @@ async fn batch(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.batch(&session, &pane, &request).await {
+    match comments.batch(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -125,11 +125,11 @@ async fn batch(
 
 async fn upsert(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentUpsertRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -139,7 +139,7 @@ async fn upsert(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.upsert(&session, &pane, &request).await {
+    match comments.upsert(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -147,11 +147,11 @@ async fn upsert(
 
 async fn remove(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentRemoveRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -161,7 +161,7 @@ async fn remove(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.remove(&session, &pane, &request).await {
+    match comments.remove(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -169,11 +169,11 @@ async fn remove(
 
 async fn discard(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentBatchMutation>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -183,7 +183,7 @@ async fn discard(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.discard(&session, &pane, &request).await {
+    match comments.discard(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -191,11 +191,11 @@ async fn discard(
 
 async fn attach(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentBatchMutation>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -205,7 +205,7 @@ async fn attach(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.attach(&session, &pane, &request).await {
+    match comments.attach(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -213,11 +213,11 @@ async fn attach(
 
 async fn preview(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentPreviewRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -227,7 +227,7 @@ async fn preview(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.preview(&session, &pane, &request).await {
+    match comments.preview(&session, &viewer, &request).await {
         Ok(value) => Json::<CommentPreview>(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -235,11 +235,11 @@ async fn preview(
 
 async fn paste_prepare(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentPastePrepareRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -249,7 +249,7 @@ async fn paste_prepare(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.paste_prepare(&session, &pane, &request).await {
+    match comments.paste_prepare(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -257,11 +257,11 @@ async fn paste_prepare(
 
 async fn paste_send(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentPasteSendRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -271,7 +271,7 @@ async fn paste_send(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.paste_send(&session, &pane, &request).await {
+    match comments.paste_send(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -279,11 +279,11 @@ async fn paste_send(
 
 async fn paste_mark_pasted(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<CommentPasteMarkPastedRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_comments_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -293,7 +293,7 @@ async fn paste_mark_pasted(
         Ok(comments) => comments,
         Err(error) => return inspection_error(error),
     };
-    match comments.paste_mark_pasted(&session, &pane, &request).await {
+    match comments.paste_mark_pasted(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }

@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use cockpit_protocol::browser::{
     BrowserAction, BrowserAssociation, BrowserConnectionState, BrowserRequest, BrowserResponse,
-    BrowserTarget,
+    BrowserTarget, BrowserWorkScope, BrowserCleanupState, BrowserCutoverState,
+    BrowserCleanupFailure,
 };
 use cockpit_protocol::browser_view::BrowserViewOpenRequest;
 use cockpit_protocol::v1::SessionSnapshotResponse;
@@ -32,6 +33,13 @@ use crate::process::run_bounded_command;
 
 mod delivery;
 pub mod drafts;
+mod cleanup;
+mod legacy;
+mod saved_tab;
+#[cfg(all(test, unix))]
+mod saved_tab_tests;
+#[cfg(all(test, unix))]
+mod lifecycle_tests;
 
 const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
 const MAX_ASSOCIATIONS: usize = 1024;
@@ -79,6 +87,9 @@ pub struct BrowserService {
     shutting_down: Arc<AtomicBool>,
     feedback: Arc<crate::browser_feedback::BrowserFeedbackStore>,
     paste_adapter: Option<Arc<dyn crate::paste_adapter::CommentPasteAdapter>>,
+    cutover: Arc<Mutex<BrowserCutoverState>>,
+    cleanup_failures: Arc<parking_lot::Mutex<Vec<BrowserCleanupFailure>>>,
+    legacy_started: Arc<AtomicBool>,
 }
 
 /// A host-only capability for attaching the private inline helper. This type is
@@ -90,6 +101,7 @@ pub struct BrowserRuntimeAttachment {
     pub browser_incarnation: String,
     pub session_id: String,
     pub space_id: String,
+    pub tab_id: String,
     pub endpoint_identity: String,
     pub endpoint_path: String,
     pub profile_path: PathBuf,
@@ -111,6 +123,12 @@ struct BrowserReceipt {
     session_id: String,
     space_id: String,
     space_label: String,
+    tab_id: String,
+    tab_label: String,
+    artifacts: cleanup::ArtifactIdentities,
+    cleanup_reason: Option<String>,
+    #[serde(default)]
+    unproven_paths: Vec<String>,
     playwright_session: String,
     working_directory: String,
     profile_path: String,
@@ -140,6 +158,8 @@ enum ReceiptState {
     Closed,
     OutcomeUnknown,
     Disconnected,
+    CleanupPending,
+    CleanupFailed,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -166,7 +186,10 @@ impl BrowserService {
             )
         })?;
         for name in [
-            "associations",
+            "tab-associations",
+            "saved-tab-associations",
+            "legacy-archive",
+            "legacy-decisions",
             "profiles",
             "workspaces",
             "configs",
@@ -190,6 +213,9 @@ impl BrowserService {
             shutting_down: Arc::new(AtomicBool::new(false)),
             feedback: Arc::new(feedback),
             paste_adapter: None,
+            cutover: Arc::new(Mutex::new(BrowserCutoverState::NotNeeded)),
+            cleanup_failures: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            legacy_started: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -205,51 +231,70 @@ impl BrowserService {
         &self,
         request: BrowserRequest,
     ) -> Result<BrowserResponse, InspectionError> {
-        if self.shutting_down.load(Ordering::Acquire) {
-            return Err(InspectionError::new(
-                "browser_runtime_stopping",
-                "browser runtime is shutting down",
-            ));
-        }
         let _operation = self.operation_lock.lock().await;
         if self.shutting_down.load(Ordering::Acquire) {
-            return Err(InspectionError::new(
-                "browser_runtime_stopping",
-                "browser runtime is shutting down",
-            ));
+            return Err(InspectionError::new("browser_runtime_stopping", "browser runtime is shutting down"));
         }
-        let snapshot = self.resolve_target(&request.target).await?;
-        let key = association_key(
-            &snapshot.endpoint_identity,
-            &snapshot.session_id,
-            &snapshot.space_id,
-        );
-        let mut receipt = match self.load(&key)? {
-            Some(receipt) => receipt,
-            None if matches!(&request.action, BrowserAction::Open { .. }) => {
-                if self.load_all()?.len() >= MAX_ASSOCIATIONS {
-                    return Err(InspectionError::new(
-                        "browser_state_limit",
-                        "too many browser associations",
-                    ));
-                }
-                self.load_or_create(&snapshot)?
+        if let BrowserAction::Open { url: Some(url) } | BrowserAction::OpenFresh { url: Some(url) } = &request.action {
+            validate_url(url)?;
+        }
+        let allow_absent = matches!(&request.action, BrowserAction::Close | BrowserAction::Status | BrowserAction::Cleanup);
+        let target = self.resolve_target_inner(&request.target, allow_absent).await?;
+        if !target.tab_present && !allow_absent {
+            return Err(InspectionError::new("tab_not_visible", "browser target tab has no terminal"));
+        }
+        let key = association_key(&target.endpoint_identity, &target.session_id, &target.tab_id);
+        let mut receipt = self.load(&key)?;
+        if let Some(existing) = &receipt
+            && (existing.endpoint_path != target.endpoint_path || existing.endpoint_identity != target.endpoint_identity)
+        {
+            return Err(InspectionError::new("stale_endpoint", "browser receipt belongs to another Herdr endpoint"));
+        }
+        if matches!(&request.action, BrowserAction::OpenFresh { .. })
+            && let Some(existing) = &mut receipt
+        {
+            let response = self.close(existing).await?;
+            if response.cleanup != BrowserCleanupState::Done {
+                return Ok(response);
             }
-            None => {
-                return Ok(BrowserResponse {
-                    association: None,
-                    connection: BrowserConnectionState::Absent,
-                    message: "no browser association exists for this Space".into(),
-                });
+            receipt = None;
+        }
+        if receipt.is_none() && matches!(&request.action, BrowserAction::Open { .. } | BrowserAction::OpenFresh { .. }) {
+            self.load_all()?;
+            let directory = crate::project_store::open_dir_nofollow_absolute(&self.root.join("tab-associations"))
+                .map_err(|error| InspectionError::new("browser_state_unavailable", error.to_string()))?;
+            let count = directory.entries().map_err(|error| InspectionError::new("browser_state_unavailable", error.to_string()))?.count();
+            if count >= MAX_ASSOCIATIONS {
+                return Err(InspectionError::new("browser_state_limit", "too many browser associations"));
             }
+            receipt = Some(self.load_or_create(&target)?);
+        }
+        let Some(mut receipt) = receipt else {
+            return Ok(BrowserResponse {
+                association: None,
+                connection: BrowserConnectionState::Absent,
+                message: "no browser association exists for this tab".into(),
+                cleanup: if matches!(request.action, BrowserAction::Close | BrowserAction::Cleanup) { BrowserCleanupState::Done } else { BrowserCleanupState::None },
+                cleanup_reason: None,
+            });
         };
-        receipt.space_label = snapshot.space_label;
+        receipt.space_id = target.space_id;
+        receipt.space_label = target.space_label;
+        receipt.tab_label = target.tab_label;
         self.store(&receipt)?;
-
         match request.action {
-            BrowserAction::Open { url } => self.open(&mut receipt, url.as_deref()).await,
+            BrowserAction::OpenFresh { url } => {
+                let url = url.unwrap_or_else(|| self.configuration.default_url.clone());
+                self.open(&mut receipt, Some(&url)).await
+            }
+            BrowserAction::Open { url } => {
+                if matches!(receipt.state, ReceiptState::CleanupPending | ReceiptState::CleanupFailed) {
+                    return Ok(self.response(&receipt, BrowserConnectionState::Closed, "Retry browser cleanup before opening"));
+                }
+                self.open(&mut receipt, url.as_deref()).await
+            }
             BrowserAction::Status => self.status(&mut receipt).await,
-            BrowserAction::Close => self.close(&mut receipt).await,
+            BrowserAction::Close | BrowserAction::Cleanup => self.close(&mut receipt).await,
         }
     }
 
@@ -275,7 +320,7 @@ impl BrowserService {
         let key = association_key(
             &target.endpoint_identity,
             &target.session_id,
-            &target.space_id,
+            &target.tab_id,
         );
         let receipt = self.load(&key)?.ok_or_else(|| {
             InspectionError::new(
@@ -283,6 +328,7 @@ impl BrowserService {
                 "Open the browser association before attaching an inline browser view",
             )
         })?;
+        cleanup::verify_artifacts(&self.root, &receipt)?;
         if receipt.state != ReceiptState::Open {
             return Err(InspectionError::new(
                 "browser_view_association_unavailable",
@@ -344,6 +390,7 @@ impl BrowserService {
             browser_incarnation: incarnation,
             session_id: receipt.session_id,
             space_id: receipt.space_id,
+            tab_id: receipt.tab_id,
             endpoint_identity: receipt.endpoint_identity,
             endpoint_path: receipt.endpoint_path,
             profile_path: PathBuf::from(receipt.profile_path),
@@ -383,45 +430,30 @@ impl BrowserService {
         Ok(())
     }
 
-    /// Reconcile durable associations without treating a transient Herdr failure
-    /// or a restarted endpoint as permission to close or transfer an association.
+    /// Only fresh membership authorizes retirement; transient failures preserve sessions.
     pub async fn reconcile(&self) -> Result<(), InspectionError> {
         let _operation = self.operation_lock.lock().await;
-        let receipts = self.load_all()?;
         let mut first_error = None;
-        for mut receipt in receipts {
-            let snapshot = match self.adapter.browser_snapshot(&receipt.session_id).await {
-                Ok(snapshot) => snapshot,
-                Err(_) => continue,
+        for mut receipt in self.load_all()? {
+            let source = match self.adapter.browser_snapshot(&receipt.session_id).await {
+                Ok(source) if source.snapshot.session_id == receipt.session_id => source,
+                _ => continue,
             };
-            let result = if snapshot.endpoint_identity != receipt.endpoint_identity
-                || snapshot.endpoint_path != receipt.endpoint_path
-            {
-                receipt.state = ReceiptState::Disconnected;
-                Ok(())
-            } else if !snapshot
-                .snapshot
-                .spaces
-                .iter()
-                .any(|space| space.id == receipt.space_id)
-            {
+            let changed = source.endpoint_identity != receipt.endpoint_identity || source.endpoint_path != receipt.endpoint_path;
+            let tab = source.snapshot.tabs.iter().find(|tab| tab.id == receipt.tab_id);
+            let empty = !source.snapshot.panes.iter().any(|pane| pane.tab_id == receipt.tab_id);
+            let result = if changed || tab.is_none() || empty {
                 self.close(&mut receipt).await.map(|_| ())
             } else {
-                receipt.space_label = snapshot
-                    .snapshot
-                    .spaces
-                    .iter()
-                    .find(|space| space.id == receipt.space_id)
-                    .map(|space| space.label.clone())
-                    .unwrap_or_else(|| receipt.space_label.clone());
+                let tab = tab.expect("present tab");
+                receipt.space_id = tab.space_id.clone();
+                receipt.tab_label = tab.label.clone();
+                if let Some(space) = source.snapshot.spaces.iter().find(|space| space.id == tab.space_id) {
+                    receipt.space_label = space.label.clone();
+                }
                 self.status(&mut receipt).await.map(|_| ())
             };
-            if let Err(error) = result {
-                first_error.get_or_insert(error);
-            }
-            if let Err(error) = self.store(&receipt) {
-                first_error.get_or_insert(error);
-            }
+            if let Err(error) = result { first_error.get_or_insert(error); }
         }
         first_error.map_or(Ok(()), Err)
     }
@@ -431,7 +463,7 @@ impl BrowserService {
     pub async fn shutdown(&self) -> Result<(), InspectionError> {
         self.shutting_down.store(true, Ordering::Release);
         let _operation = self.operation_lock.lock().await;
-        let receipts = self.load_all()?;
+        let receipts = self.load_all()?.into_iter().filter(|receipt| receipt.owner_id == self.owner_id).collect::<Vec<_>>();
         let mut pending = receipts.into_iter().enumerate();
         let mut receipt_errors = std::iter::repeat_with(|| None)
             .take(pending.len())
@@ -449,9 +481,6 @@ impl BrowserService {
                     let mut first_error = None;
                     if let Err(error) = service.close(&mut receipt).await {
                         first_error = Some(error);
-                    }
-                    if let Err(error) = service.store(&receipt) {
-                        first_error.get_or_insert(error);
                     }
                     (index, first_error)
                 });
@@ -479,74 +508,88 @@ impl BrowserService {
             .map_or(Ok(()), Err)
     }
 
-    async fn resolve_target(
-        &self,
-        target: &BrowserTarget,
-    ) -> Result<ResolvedTarget, InspectionError> {
-        let exactly_one = target.space_id.is_some() ^ target.pane_id.is_some();
-        if !exactly_one {
-            return Err(InspectionError::new(
-                "invalid_browser_target",
-                "browser target must name exactly one Space or pane",
-            ));
+    async fn resolve_target(&self, target: &BrowserTarget) -> Result<ResolvedTarget, InspectionError> {
+        let resolved = self.resolve_target_inner(target, false).await?;
+        if !resolved.tab_present {
+            return Err(InspectionError::new("tab_not_visible", "browser target tab has no terminal"));
+        }
+        Ok(resolved)
+    }
+
+    async fn resolve_target_inner(&self, target: &BrowserTarget, allow_absent: bool) -> Result<ResolvedTarget, InspectionError> {
+        if !(target.tab_id.is_some() ^ target.pane_id.is_some()) {
+            return Err(InspectionError::new("invalid_browser_target", "browser target must name exactly one tab or pane"));
         }
         validate_id(&target.session_id, "session")?;
         let source = self.adapter.browser_snapshot(&target.session_id).await?;
         if source.snapshot.session_id != target.session_id {
-            return Err(InspectionError::new(
-                "session_mismatch",
-                "Herdr snapshot belongs to another session",
-            ));
+            return Err(InspectionError::new("session_mismatch", "Herdr snapshot belongs to another session"));
         }
-        if let Some(path) = &target.endpoint_path
-            && path != &source.endpoint_path
-        {
-            return Err(InspectionError::new(
-                "stale_endpoint",
-                "browser target endpoint does not match the fresh Herdr endpoint",
-            ));
+        if target.endpoint_path.as_ref().is_some_and(|path| path != &source.endpoint_path) {
+            return Err(InspectionError::new("stale_endpoint", "browser target endpoint does not match the fresh Herdr endpoint"));
         }
-        let space_id = match (&target.space_id, &target.pane_id) {
-            (Some(space_id), None) => space_id.clone(),
-            (None, Some(pane_id)) => source
-                .snapshot
-                .panes
-                .iter()
-                .find(|pane| pane.id == *pane_id)
-                .map(|pane| pane.space_id.clone())
-                .ok_or_else(|| {
-                    InspectionError::new("pane_not_visible", "browser target pane is absent")
-                })?,
+        let tab_id = match (&target.tab_id, &target.pane_id) {
+            (Some(tab), None) => tab.clone(),
+            (None, Some(pane)) => source.snapshot.panes.iter().find(|p| p.id == *pane).map(|p| p.tab_id.clone())
+                .ok_or_else(|| InspectionError::new("pane_not_visible", "browser target pane is absent"))?,
             _ => unreachable!(),
         };
-        validate_id(&space_id, "Space")?;
-        let space = source
-            .snapshot
-            .spaces
-            .iter()
-            .find(|space| space.id == space_id)
-            .ok_or_else(|| {
-                InspectionError::new("space_not_visible", "browser target Space is absent")
-            })?;
-        Ok(ResolvedTarget {
-            endpoint_identity: source.endpoint_identity,
-            endpoint_path: source.endpoint_path,
-            session_id: target.session_id.clone(),
-            space_id,
-            space_label: space.label.clone(),
-        })
+        validate_id(&tab_id, "tab")?;
+        if let Some(tab) = source.snapshot.tabs.iter().find(|tab| tab.id == tab_id) {
+            let space = source.snapshot.spaces.iter().find(|space| space.id == tab.space_id)
+                .ok_or_else(|| InspectionError::new("space_not_visible", "browser target Space is absent"))?;
+            let present = source.snapshot.panes.iter().any(|pane| pane.tab_id == tab_id);
+            return Ok(ResolvedTarget {
+                endpoint_identity: source.endpoint_identity, endpoint_path: source.endpoint_path,
+                session_id: target.session_id.clone(), space_id: tab.space_id.clone(), space_label: space.label.clone(),
+                tab_id, tab_label: tab.label.clone(), tab_present: present,
+            });
+        }
+        if allow_absent {
+            let key = association_key(&source.endpoint_identity, &target.session_id, &tab_id);
+            if let Some(receipt) = self.load(&key)?
+                && receipt.endpoint_path == source.endpoint_path
+            {
+                return Ok(ResolvedTarget {
+                    endpoint_identity: source.endpoint_identity, endpoint_path: source.endpoint_path,
+                    session_id: target.session_id.clone(), space_id: receipt.space_id, space_label: receipt.space_label,
+                    tab_id, tab_label: receipt.tab_label, tab_present: false,
+                });
+            }
+            if self.load_all()?.iter().any(|receipt| receipt.session_id == target.session_id && receipt.tab_id == tab_id) {
+                return Err(InspectionError::new("stale_endpoint", "absent tab receipt belongs to another endpoint"));
+            }
+        }
+        Err(InspectionError::new("tab_not_visible", "browser target tab is absent"))
+    }
+
+    pub(crate) async fn resolve_work_scope(&self, scope: &BrowserWorkScope) -> Result<ResolvedWorkScope, InspectionError> {
+        match scope {
+            BrowserWorkScope::Tab { target } => {
+                let tab = self.resolve_target(target).await?;
+                Ok(ResolvedWorkScope { association_key: association_key(&tab.endpoint_identity, &tab.session_id, &tab.tab_id), tab: Some(tab) })
+            }
+            BrowserWorkScope::SavedTab { association_key } => {
+                self.load_saved_tab(association_key)?.ok_or_else(|| InspectionError::new("browser_saved_tab_absent", "Saved tab provenance is absent"))?;
+                Ok(ResolvedWorkScope { association_key: association_key.clone(), tab: None })
+            }
+            BrowserWorkScope::LegacyArchive { association_key } => {
+                self.load_legacy_archive(association_key)?.ok_or_else(|| InspectionError::new("browser_legacy_archive_absent", "Legacy browser archive is absent"))?;
+                Ok(ResolvedWorkScope { association_key: association_key.clone(), tab: None })
+            }
+        }
     }
 
     fn load_or_create(&self, target: &ResolvedTarget) -> Result<BrowserReceipt, InspectionError> {
         let key = association_key(
             &target.endpoint_identity,
             &target.session_id,
-            &target.space_id,
+            &target.tab_id,
         );
         if let Some(receipt) = self.load(&key)? {
             if receipt.endpoint_identity == target.endpoint_identity
                 && receipt.session_id == target.session_id
-                && receipt.space_id == target.space_id
+                && receipt.tab_id == target.tab_id
             {
                 return Ok(receipt);
             }
@@ -555,15 +598,8 @@ impl BrowserService {
                 "browser receipt identity is inconsistent",
             ));
         }
-        let working_directory = self.root.join("workspaces").join(&key);
-        prepare_root(&working_directory)?;
-        prepare_root(&working_directory.join(".playwright"))?;
-        let profile_path = self.root.join("profiles").join(&key);
-        prepare_root(&profile_path)?;
-        let config_path = self.root.join("configs").join(format!("{key}.json"));
-        atomic_write_json(
-            &config_path,
-            &launch_configuration(&self.configuration)?,
+        let (working_directory, profile_path, config_path, artifacts) = cleanup::create_artifacts(
+            &self.root, &key, &launch_configuration(&self.configuration)?,
         )?;
         let receipt = BrowserReceipt {
             association_key: key.clone(),
@@ -573,6 +609,11 @@ impl BrowserService {
             session_id: target.session_id.clone(),
             space_id: target.space_id.clone(),
             space_label: target.space_label.clone(),
+            tab_id: target.tab_id.clone(),
+            tab_label: target.tab_label.clone(),
+            artifacts,
+            cleanup_reason: None,
+            unproven_paths: Vec::new(),
             playwright_session: format!("cockpit-{key}"),
             working_directory: path_string(&working_directory)?,
             profile_path: path_string(&profile_path)?,
@@ -594,6 +635,7 @@ impl BrowserService {
         receipt: &mut BrowserReceipt,
         url: Option<&str>,
     ) -> Result<BrowserResponse, InspectionError> {
+        cleanup::verify_artifacts(&self.root, receipt)?;
         if let Some(url) = url {
             validate_url(url)?;
         }
@@ -662,17 +704,8 @@ impl BrowserService {
                 receipt.cdp_endpoint = None;
                 receipt.cdp_browser_identity = None;
                 self.store(receipt)?;
-                // Association state outlives installed Cockpit versions. Refresh
-                // the owned launch config only when creating a new browser
-                // process; a live browser keeps its original launch contract.
-                atomic_write_json(
-                    Path::new(&receipt.config_path),
-                    &launch_configuration(&self.configuration)?,
-                )?;
                 let mut args = vec![format!("-s={}", receipt.playwright_session), "open".into()];
-                if let Some(url) = url {
-                    args.push(url.into());
-                }
+                args.push(url.unwrap_or(&self.configuration.default_url).into());
                 args.extend([
                     format!("--profile={}", receipt.profile_path),
                     format!("--config={}", receipt.config_path),
@@ -726,6 +759,10 @@ impl BrowserService {
         &self,
         receipt: &mut BrowserReceipt,
     ) -> Result<BrowserResponse, InspectionError> {
+        if matches!(receipt.state, ReceiptState::CleanupPending | ReceiptState::CleanupFailed) {
+            let connection = if receipt.intent == ReceiptIntent::Close || receipt.incarnation.is_some() { BrowserConnectionState::OutcomeUnknown } else { BrowserConnectionState::Closed };
+            return Ok(self.response(receipt, connection, "browser cleanup is incomplete"));
+        }
         let live = self.inspect_live(receipt).await;
         receipt.opened_tab = None;
         if receipt.intent == ReceiptIntent::Launch {
@@ -765,17 +802,7 @@ impl BrowserService {
                 .as_ref()
                 .is_err_and(may_launch_after_inspection_failure)
         {
-            receipt.state = ReceiptState::Closed;
-            receipt.intent = ReceiptIntent::None;
-            receipt.incarnation = None;
-            receipt.cdp_endpoint = None;
-            receipt.cdp_browser_identity = None;
-            self.store(receipt)?;
-            return Ok(self.response(
-                receipt,
-                BrowserConnectionState::Closed,
-                "browser close was reconciled; profile retained",
-            ));
+            return self.finish_cleanup(receipt).await;
         }
         if matches!(
             receipt.state,
@@ -810,7 +837,7 @@ impl BrowserService {
                 Ok(self.response(
                     receipt,
                     BrowserConnectionState::Closed,
-                    "browser is closed; profile retained",
+                    "browser is closed",
                 ))
             }
             Err(error) => {
@@ -825,76 +852,30 @@ impl BrowserService {
         }
     }
 
-    async fn close(
-        &self,
-        receipt: &mut BrowserReceipt,
-    ) -> Result<BrowserResponse, InspectionError> {
+    async fn close(&self, receipt: &mut BrowserReceipt) -> Result<BrowserResponse, InspectionError> {
         receipt.opened_tab = None;
-        if matches!(receipt.intent, ReceiptIntent::Launch | ReceiptIntent::Close)
-            || receipt.state == ReceiptState::Closing
-        {
-            let response = self.status(receipt).await?;
-            if receipt.state != ReceiptState::Open || receipt.intent != ReceiptIntent::None {
-                return Ok(response);
-            }
-        }
         match self.inspect_live(receipt).await {
-            Ok(incarnation) => receipt.incarnation = Some(incarnation),
-            Err(error) if may_launch_after_inspection_failure(&error) => {
-                receipt.state = ReceiptState::Closed;
-                receipt.intent = ReceiptIntent::None;
-                receipt.incarnation = None;
-                receipt.cdp_endpoint = None;
-                receipt.cdp_browser_identity = None;
-                self.store(receipt)?;
-                return Ok(self.response(
-                    receipt,
-                    BrowserConnectionState::Closed,
-                    "browser is closed; profile retained",
-                ));
+            Err(error) if may_launch_after_inspection_failure(&error) => return self.finish_cleanup(receipt).await,
+            Err(error) => {
+                receipt.intent = ReceiptIntent::Close;
+                self.record_cleanup_failure(receipt, &error.message, Vec::new())?;
+                return Ok(self.response(receipt, BrowserConnectionState::OutcomeUnknown, &error.message));
             }
-            Err(error) => return Err(error),
+            Ok(incarnation) => receipt.incarnation = Some(incarnation),
         }
         receipt.state = ReceiptState::Closing;
-        receipt.owner_id = self.owner_id.clone();
         receipt.intent = ReceiptIntent::Close;
         self.store(receipt)?;
-        let args = [format!("-s={}", receipt.playwright_session), "close".into()];
-        match self.run_cli(receipt, &args).await {
-            Ok(_)
-                if self
-                    .inspect_live(receipt)
-                    .await
-                    .as_ref()
-                    .is_err_and(may_launch_after_inspection_failure) =>
-            {
-                receipt.state = ReceiptState::Closed;
-                receipt.intent = ReceiptIntent::None;
-                receipt.incarnation = None;
-                receipt.cdp_endpoint = None;
-                receipt.cdp_browser_identity = None;
-                self.store(receipt)?;
-                Ok(self.response(
-                    receipt,
-                    BrowserConnectionState::Closed,
-                    "browser closed; profile retained",
-                ))
-            }
-            Ok(_) => {
-                receipt.state = ReceiptState::OutcomeUnknown;
-                self.store(receipt)?;
-                Ok(self.response(
-                    receipt,
-                    BrowserConnectionState::OutcomeUnknown,
-                    "close completed without confirming daemon shutdown",
-                ))
-            }
-            Err(error) => {
-                receipt.state = ReceiptState::OutcomeUnknown;
-                self.store(receipt)?;
-                Err(error)
+        let result = self.run_cli(receipt, &[format!("-s={}", receipt.playwright_session), "close".into()]).await;
+        for _ in 0..5 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            if self.inspect_live(receipt).await.as_ref().is_err_and(may_launch_after_inspection_failure) {
+                return self.finish_cleanup(receipt).await;
             }
         }
+        let reason = result.err().map(|error| error.message).unwrap_or_else(|| "browser stop was not confirmed after five checks".into());
+        self.record_cleanup_failure(receipt, &reason, Vec::new())?;
+        Ok(self.response(receipt, BrowserConnectionState::OutcomeUnknown, &reason))
     }
 
 
@@ -1141,6 +1122,12 @@ impl BrowserService {
             association: Some(self.association(receipt, connection)),
             connection,
             message: message.into(),
+            cleanup: match receipt.state {
+                ReceiptState::CleanupPending => BrowserCleanupState::Pending,
+                ReceiptState::CleanupFailed => BrowserCleanupState::Failed,
+                _ => BrowserCleanupState::None,
+            },
+            cleanup_reason: receipt.cleanup_reason.clone(),
         }
     }
 
@@ -1155,6 +1142,8 @@ impl BrowserService {
             session_id: receipt.session_id.clone(),
             space_id: receipt.space_id.clone(),
             space_label: receipt.space_label.clone(),
+            tab_id: receipt.tab_id.clone(),
+            tab_label: receipt.tab_label.clone(),
             playwright_session: receipt.playwright_session.clone(),
             working_directory: receipt.working_directory.clone(),
             profile_path: receipt.profile_path.clone(),
@@ -1170,11 +1159,12 @@ impl BrowserService {
         }
     }
 
-    fn association_path(&self, key: &str) -> PathBuf {
-        self.root.join("associations").join(format!("{key}.json"))
+    fn tab_association_path(&self, key: &str) -> PathBuf {
+        self.root.join("tab-associations").join(format!("{key}.json"))
     }
     fn store(&self, receipt: &BrowserReceipt) -> Result<(), InspectionError> {
-        atomic_write_json(&self.association_path(&receipt.association_key), receipt)
+        self.preserve_saved_tab(receipt)?;
+        atomic_write_json(&self.tab_association_path(&receipt.association_key), receipt)
     }
     fn load(&self, key: &str) -> Result<Option<BrowserReceipt>, InspectionError> {
         if key.len() != 24 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -1183,14 +1173,14 @@ impl BrowserService {
                 "Invalid browser association key",
             ));
         }
-        let Some(receipt) = read_json::<BrowserReceipt>(&self.association_path(key))? else {
+        let Some(receipt) = read_json::<BrowserReceipt>(&self.tab_association_path(key))? else {
             return Ok(None);
         };
         if receipt.association_key != key
             || association_key(
                 &receipt.endpoint_identity,
                 &receipt.session_id,
-                &receipt.space_id,
+                &receipt.tab_id,
             ) != key
             || receipt.playwright_session != format!("cockpit-{key}")
             || Path::new(&receipt.working_directory) != self.root.join("workspaces").join(key)
@@ -1203,24 +1193,10 @@ impl BrowserService {
                 "Browser receipt does not match its association",
             ));
         }
-        for path in [&receipt.working_directory, &receipt.profile_path] {
-            crate::project_store::open_dir_nofollow_absolute(Path::new(path)).map_err(|_| {
-                InspectionError::new(
-                    "unsafe_path",
-                    "Browser profile or working directory is unsafe",
-                )
-            })?;
-        }
-        if !receipt_config_has_inline_debugging(&receipt)? {
-            return Err(InspectionError::new(
-                "browser_receipt_mismatch",
-                "Inline browser launch configuration lacks the private loopback CDP binding",
-            ));
-        }
         Ok(Some(receipt))
     }
     fn load_all(&self) -> Result<Vec<BrowserReceipt>, InspectionError> {
-        let directory = self.root.join("associations");
+        let directory = self.root.join("tab-associations");
         let mut values = Vec::new();
         for (index, entry) in fs::read_dir(&directory)
             .map_err(|_| {
@@ -1255,8 +1231,30 @@ impl BrowserService {
                             "Invalid browser receipt filename",
                         )
                     })?;
-                if let Some(value) = self.load(key)? {
-                    values.push(value);
+                match self.load(key) {
+                    Ok(Some(value)) => {
+                        self.cleanup_failures.lock().retain(|failure| !(failure.association_key == key && matches!(failure.scope, cockpit_protocol::browser::BrowserCleanupScope::Tab { .. })));
+                        values.push(value);
+                    }
+                    Ok(None) => {},
+                    Err(error) => {
+                        let raw = read_json::<BrowserReceipt>(&path).ok().flatten();
+                        let mut unproven_paths = vec![path.display().to_string()];
+                        if let Some(receipt) = &raw {
+                            unproven_paths.extend([receipt.profile_path.clone(), receipt.working_directory.clone(), receipt.config_path.clone()]);
+                        }
+                        let mut failures = self.cleanup_failures.lock();
+                        failures.retain(|failure| failure.association_key != key);
+                        failures.push(BrowserCleanupFailure {
+                            association_key: key.to_owned(),
+                            scope: cockpit_protocol::browser::BrowserCleanupScope::Tab {
+                                session_id: raw.as_ref().map(|r| r.session_id.clone()).unwrap_or_default(),
+                                tab_id: raw.as_ref().map(|r| r.tab_id.clone()).unwrap_or_default(),
+                            },
+                            reason: error.message,
+                            unproven_paths,
+                        });
+                    }
                 }
             }
         }
@@ -1265,12 +1263,20 @@ impl BrowserService {
 }
 
 #[derive(Clone)]
-struct ResolvedTarget {
-    endpoint_identity: String,
-    endpoint_path: String,
-    session_id: String,
-    space_id: String,
-    space_label: String,
+pub(crate) struct ResolvedTarget {
+    pub(crate) endpoint_identity: String,
+    pub(crate) endpoint_path: String,
+    pub(crate) session_id: String,
+    pub(crate) space_id: String,
+    pub(crate) space_label: String,
+    pub(crate) tab_id: String,
+    pub(crate) tab_label: String,
+    pub(crate) tab_present: bool,
+}
+
+pub(crate) struct ResolvedWorkScope {
+    pub(crate) association_key: String,
+    pub(crate) tab: Option<ResolvedTarget>,
 }
 
 struct DaemonReceipt {
@@ -1367,7 +1373,9 @@ fn daemon_receipt(receipt: &BrowserReceipt) -> Result<DaemonReceipt, InspectionE
         .and_then(Value::as_object)
         .and_then(|options| options.get("executablePath"))
         .and_then(Value::as_str);
-    if receipt_config_executable(receipt)?
+    let cleanup_only = matches!(receipt.state, ReceiptState::CleanupPending | ReceiptState::CleanupFailed)
+        && receipt.intent == ReceiptIntent::None && receipt.incarnation.is_none();
+    if !cleanup_only && receipt_config_executable(receipt)?
         .is_some_and(|expected| Some(expected.as_str()) != executable)
     {
         return Err(InspectionError::new(
@@ -1430,26 +1438,6 @@ fn launch_configuration(
     Ok(config)
 }
 
-fn receipt_config_has_inline_debugging(receipt: &BrowserReceipt) -> Result<bool, InspectionError> {
-    let config: Value = serde_json::from_slice(&read_regular(
-        Path::new(&receipt.config_path),
-        MAX_RECEIPT_BYTES,
-    )?)
-    .map_err(|_| {
-        InspectionError::new(
-            "browser_config_corrupt",
-            "browser launch configuration is invalid",
-        )
-    })?;
-    let Some(args) = config
-        .pointer("/browser/launchOptions/args")
-        .and_then(Value::as_array)
-    else {
-        return Ok(false);
-    };
-    Ok(args.iter().any(|argument| argument.as_str() == Some("--remote-debugging-address=127.0.0.1"))
-        && args.iter().any(|argument| argument.as_str() == Some("--remote-debugging-port=0")))
-}
 #[derive(Debug)]
 struct CdpBinding {
     endpoint: String,
@@ -1998,13 +1986,14 @@ fn resolve_executable(path: &Path, label: &str) -> Result<PathBuf, InspectionErr
     })
 }
 
-fn association_key(endpoint_identity: &str, session_id: &str, space_id: &str) -> String {
+fn association_key(endpoint_identity: &str, session_id: &str, tab_id: &str) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(b"tab\0");
     hasher.update(endpoint_identity.as_bytes());
     hasher.update([0]);
     hasher.update(session_id.as_bytes());
     hasher.update([0]);
-    hasher.update(space_id.as_bytes());
+    hasher.update(tab_id.as_bytes());
     format!("{:x}", hasher.finalize())[..24].to_owned()
 }
 
@@ -2056,7 +2045,7 @@ fn validate_id(value: &str, label: &str) -> Result<(), InspectionError> {
         Ok(())
     }
 }
-fn validate_url(value: &str) -> Result<(), InspectionError> {
+pub(crate) fn validate_url(value: &str) -> Result<(), InspectionError> {
     let parsed = url::Url::parse(value)
         .map_err(|_| InspectionError::new("invalid_browser_url", "browser URL must be absolute"))?;
     if !matches!(parsed.scheme(), "http" | "https" | "about") {

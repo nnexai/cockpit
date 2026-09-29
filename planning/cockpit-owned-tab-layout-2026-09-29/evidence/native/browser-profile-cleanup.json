@@ -1,0 +1,14 @@
+{
+  "before": {
+    "path": "/tmp/cpol-5d087nca/cockpit-state/browser/profiles/570f7b2dd1c70b141dd2b789",
+    "receipt": "/tmp/cpol-5d087nca/cockpit-state/browser/tab-associations/570f7b2dd1c70b141dd2b789.json",
+    "exists": true,
+    "tab": "w1:t2",
+    "incarnation": "pid=2615194:start=83157977:receipt=f69337127aec686340fc7ed794366345fd9e5472db9774667d7e26b2e65bf18f"
+  },
+  "after": {
+    "profileExists": false,
+    "receiptExists": false
+  },
+  "note": "Close initially remained pending >2min, eventually completed without repeat close action"
+}

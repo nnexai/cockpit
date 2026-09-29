@@ -177,18 +177,18 @@ mod tests {
         CommentAnchor, CommentBatch, CommentDraft, CommentFileRef, CommentLocation, CommentOwner,
         CommentReviewRef, CommentSourceState,
     };
-    use cockpit_protocol::context::ExtensionKind;
+    use cockpit_protocol::context::ViewerSourceKind;
     use cockpit_protocol::review::ReviewSide;
 
     fn batch(drafts: Vec<CommentDraft>) -> CommentBatch {
         CommentBatch {
             batch_id: "batch".to_owned(),
             generation: 1,
-            owner: CommentOwner {
+            owner: CommentOwner::Viewer {
                 session_id: "session".to_owned(),
-                pane_id: "pane".to_owned(),
-                terminal_id: "terminal".to_owned(),
-                source_kind: ExtensionKind::Review,
+                server_instance: "server".to_owned(),
+                tab_id: "tab".to_owned(),
+                source_kind: ViewerSourceKind::Review,
                 source_id: "source".to_owned(),
             },
             last_known_location: CommentLocation {

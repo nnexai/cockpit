@@ -16,14 +16,27 @@ pub mod review;
 pub mod sources;
 pub mod typescript;
 pub mod v1;
+pub mod viewer;
+
+pub use viewer::{ViewerContext, ViewerKind, ViewerOpenRequest, ViewerSourceOptions, ViewerSourceSelector};
+pub use context::ViewerSourceKind;
+pub use comments::CommentOwner;
+pub use browser::{
+    BrowserAction, BrowserAssociation, BrowserResponse, BrowserTarget,
+    BrowserCleanupFailure, BrowserCleanupRetryRequest, BrowserCleanupScope, BrowserCleanupState,
+    BrowserCleanupStatus, BrowserCutoverState, BrowserLegacyArchive, BrowserLegacyArchiveList,
+    BrowserLegacyArtifactCandidate, BrowserLegacyCandidateKind, BrowserLegacyCandidateState,
+    BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest, BrowserLegacyRemovalRequest, BrowserWorkScope,
+    BrowserSavedTabWork,
+};
 
 pub use v1::{
-    AgentSummary, CockpitCapabilities, CockpitMode, ErrorResponse, FocusKind, FocusRequest,
-    FocusResponse, HerdrCompatibility, HerdrIdentity, LayoutPane, LayoutRect, PaneMoveDestination,
-    PaneOutputResponse, PaneResizeDirection, PaneSplitDirection, PaneSummary, PaneZoomMode,
+    AgentSummary, CockpitCapabilities, CockpitMode, CreatedPane, ErrorResponse, FocusKind, FocusRequest,
+    FocusResponse, HerdrCompatibility, HerdrIdentity, PaneMoveDestination,
+    PaneOutputResponse, PaneSplitDirection, PaneSummary,
     ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
     SessionSnapshotResponse, SessionStreamMessage, SessionSummary, SpaceGitStatus,
-    SpaceGitStatusResponse, SpaceGitSummary, SpaceSummary, StatusResponse, TabLayout, TabSummary,
+    SpaceGitStatusResponse, SpaceGitSummary, SpaceSummary, StatusResponse, TabSummary,
     TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalOwnershipState,
     TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };

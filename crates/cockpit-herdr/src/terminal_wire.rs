@@ -5,7 +5,7 @@ use std::time::Duration;
 use base64::Engine;
 use cockpit_core::{InspectionError, TerminalSession};
 use cockpit_protocol::v1::{
-    TerminalCommand, TerminalMode, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest,
+    TerminalCommand, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest,
     TerminalOwnershipState, TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };
 use serde::{Deserialize, Serialize};
@@ -51,9 +51,6 @@ enum ClientMessage {
         column: Option<u16>,
         row: Option<u16>,
         modifiers: u8,
-    },
-    ObserveTerminal {
-        target: String,
     },
     ControlTerminal {
         target: String,
@@ -220,14 +217,9 @@ async fn open_terminal_within(
         }
     }
 
-    let attach = match request.mode {
-        TerminalMode::Observe => ClientMessage::ObserveTerminal {
-            target: request.pane_id.clone(),
-        },
-        TerminalMode::Control => ClientMessage::ControlTerminal {
-            target: request.pane_id.clone(),
-            takeover: request.takeover,
-        },
+    let attach = ClientMessage::ControlTerminal {
+        target: request.pane_id.clone(),
+        takeover: request.takeover,
     };
     timeout(deadline, send_message(&mut socket, &attach))
         .await
@@ -246,7 +238,6 @@ async fn open_terminal_within(
         session_id: request.session_id.clone(),
         pane_id: request.pane_id.clone(),
         stream_id: stream_id.clone(),
-        mode: request.mode,
     };
     tokio::spawn(run_terminal(
         reader,
@@ -273,7 +264,6 @@ struct TerminalContext {
     session_id: String,
     pane_id: String,
     stream_id: String,
-    mode: TerminalMode,
 }
 
 async fn run_terminal<R, W>(
@@ -290,7 +280,6 @@ async fn run_terminal<R, W>(
         session_id,
         pane_id,
         stream_id,
-        mode,
     } = context;
     if sender
         .send(TerminalStreamMessage::Ownership {
@@ -329,19 +318,14 @@ async fn run_terminal<R, W>(
                         }
                         previous_seq = Some(frame.seq);
                         if !attached {
-                            // A terminal frame can only follow server-side mode selection, so it
-                            // is the verified attach outcome; opening the socket never grants
-                            // control.
+                            // A terminal frame confirms server-side control attachment;
+                            // opening the socket never grants control.
                             attached = true;
-                            let state = match mode {
-                                TerminalMode::Observe => TerminalOwnershipState::Observing,
-                                TerminalMode::Control => TerminalOwnershipState::Owned,
-                            };
                             if sender.send(TerminalStreamMessage::Ownership {
                                 session_id: session_id.clone(),
                                 pane_id: pane_id.clone(),
                                 stream_id: stream_id.clone(),
-                                state,
+                                state: TerminalOwnershipState::Owned,
                                 message: None,
                             }).await.is_err() {
                                 break;
@@ -375,10 +359,12 @@ async fn run_terminal<R, W>(
                     Some(Ok(ServerMessage::ServerShutdown { reason })) => {
                         let reason = bounded_reason(reason.as_deref().unwrap_or("closed"));
                         let lower = reason.to_ascii_lowercase();
-                        let ownership = match mode {
-                            TerminalMode::Control if !attached && lower.contains("already has an attached client") => Some(TerminalOwnershipState::Conflict),
-                            TerminalMode::Control if attached && lower.contains("taken over") => Some(TerminalOwnershipState::Lost),
-                            _ => None,
+                        let ownership = if !attached && lower.contains("already has an attached client") {
+                            Some(TerminalOwnershipState::Conflict)
+                        } else if attached && lower.contains("taken over") {
+                            Some(TerminalOwnershipState::Lost)
+                        } else {
+                            None
                         };
                         if let Some(state) = ownership {
                             let _ = sender.send(TerminalStreamMessage::Ownership {
@@ -434,10 +420,6 @@ async fn run_terminal<R, W>(
                 }
                 if !attached {
                     send_error(&sender, &session_id, &pane_id, &stream_id, "terminal_command_rejected", "terminal attach is still pending").await;
-                    continue;
-                }
-                if mode == TerminalMode::Observe && !matches!(command, TerminalCommand::Resize { .. }) {
-                    send_error(&sender, &session_id, &pane_id, &stream_id, "terminal_command_rejected", "terminal observe stream is read-only").await;
                     continue;
                 }
                 if matches!(command, TerminalCommand::Mouse { .. }) && !mouse_enabled {
@@ -668,9 +650,6 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             &(6_u32, source, direction, lines, column, row, modifiers),
             config,
         ),
-        ClientMessage::ObserveTerminal { target } => {
-            bincode::serde::encode_to_vec(&(7_u32, target), config)
-        }
         ClientMessage::ControlTerminal { target, takeover } => {
             bincode::serde::encode_to_vec(&(8_u32, target, takeover), config)
         }
@@ -821,6 +800,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use cockpit_protocol::v1::TerminalMode;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixListener;
     use tokio::time::timeout;
@@ -909,12 +889,6 @@ mod tests {
             [6, 1, 4, 27, b'[', b'5', b'~', 0, 1, 0, 0, 0],
         );
         assert_eq!(
-            client_payload(ClientMessage::ObserveTerminal {
-                target: "w1:p".to_owned(),
-            }),
-            [7, 4, b'w', b'1', b':', b'p'],
-        );
-        assert_eq!(
             client_payload(ClientMessage::ControlTerminal {
                 target: "w1:p".to_owned(),
                 takeover: true,
@@ -969,7 +943,6 @@ mod tests {
                 session_id: "session".to_owned(),
                 pane_id: "pane".to_owned(),
                 stream_id: "stream".to_owned(),
-                mode: TerminalMode::Control,
             },
         ));
 
@@ -1094,7 +1067,7 @@ mod tests {
         let request = TerminalOpenRequest {
             session_id: "session".to_owned(),
             pane_id: "pane".to_owned(),
-            mode: TerminalMode::Observe,
+            mode: TerminalMode::Control,
             takeover: false,
             cols: 80,
             rows: 24,

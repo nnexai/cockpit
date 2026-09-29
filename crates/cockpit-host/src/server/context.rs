@@ -3,11 +3,11 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::post,
 };
 use cockpit_core::{CockpitService, context_search::ContextSearchService};
 use cockpit_protocol::context::{
-    ContextDirectoryRequest, ContextDocumentRequest, ContextFileIndexRequest, ContextLaunchRequest,
+    ContextDirectoryRequest, ContextDocumentRequest, ContextFileIndexRequest,
 };
 use cockpit_protocol::context_search::{ContextInvalidationRequest, ContextSearchRequest};
 use serde::de::DeserializeOwned;
@@ -20,30 +20,25 @@ use super::{
 pub(super) fn routes() -> Router<CockpitService> {
     Router::new()
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/presentation",
-            get(presentation),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/context/files",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/context/files",
             post(files),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/context/directory",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/context/directory",
             post(directory),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/context/document",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/context/document",
             post(document),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/context/search",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/context/search",
             post(search),
         )
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/context/invalidate",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/context/invalidate",
             post(invalidate),
         )
-        .route("/api/v1/sessions/{session_id}/context/open", post(open))
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
 }
@@ -57,34 +52,18 @@ fn request<T: DeserializeOwned>(body: Result<Json<T>, JsonRejection>) -> Result<
     })
 }
 
-fn valid_pane(session: &str, pane: &str) -> bool {
-    valid_session_id(session) && valid_resource_id(pane)
+fn valid_viewer(session: &str, viewer: &str) -> bool {
+    valid_session_id(session) && valid_resource_id(viewer)
 }
 
-async fn presentation(
-    State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
-) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_context_request", "Session or pane ID is invalid");
-    }
-    let contexts = match service.contexts() {
-        Ok(contexts) => contexts,
-        Err(error) => return inspection_error(error),
-    };
-    match contexts.inspect_pane(&session, &pane).await {
-        Ok(value) => Json(value).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
 
 async fn directory(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<ContextDirectoryRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_context_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_context_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -94,7 +73,7 @@ async fn directory(
         Ok(contexts) => contexts,
         Err(error) => return inspection_error(error),
     };
-    match contexts.directory(&session, &pane, &request).await {
+    match contexts.directory(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -102,11 +81,11 @@ async fn directory(
 
 async fn files(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<ContextFileIndexRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_context_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_context_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -116,7 +95,7 @@ async fn files(
         Ok(contexts) => contexts,
         Err(error) => return inspection_error(error),
     };
-    match contexts.file_index(&session, &pane, &request).await {
+    match contexts.file_index(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -124,11 +103,11 @@ async fn files(
 
 async fn document(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<ContextDocumentRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_context_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_context_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -138,7 +117,7 @@ async fn document(
         Ok(contexts) => contexts,
         Err(error) => return inspection_error(error),
     };
-    match contexts.document(&session, &pane, &request).await {
+    match contexts.document(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -146,11 +125,11 @@ async fn document(
 
 async fn search(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<ContextSearchRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_context_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_context_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -161,7 +140,7 @@ async fn search(
         Err(error) => return inspection_error(error),
     };
     match ContextSearchService::new(contexts)
-        .search(&session, &pane, &request)
+        .search(&session, &viewer, &request)
         .await
     {
         Ok(value) => Json(value).into_response(),
@@ -171,11 +150,11 @@ async fn search(
 
 async fn invalidate(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<ContextInvalidationRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_pane(&session, &pane) {
-        return bad_request("invalid_context_request", "Session or pane ID is invalid");
+    if !valid_viewer(&session, &viewer) {
+        return bad_request("invalid_context_request", "Session or viewer ID is invalid");
     }
     let request = match request(body) {
         Ok(request) => request,
@@ -186,7 +165,7 @@ async fn invalidate(
         Err(error) => return inspection_error(error),
     };
     match ContextSearchService::new(contexts)
-        .invalidate(&session, &pane, &request)
+        .invalidate(&session, &viewer, &request)
         .await
     {
         Ok(value) => Json(value).into_response(),
@@ -194,24 +173,3 @@ async fn invalidate(
     }
 }
 
-async fn open(
-    State(service): State<CockpitService>,
-    Path(session): Path<String>,
-    body: Result<Json<ContextLaunchRequest>, JsonRejection>,
-) -> Response {
-    if !valid_session_id(&session) {
-        return bad_request("invalid_session_id", "Session ID is invalid");
-    }
-    let request = match request(body) {
-        Ok(request) => request,
-        Err(response) => return response,
-    };
-    let contexts = match service.contexts() {
-        Ok(contexts) => contexts,
-        Err(error) => return inspection_error(error),
-    };
-    match contexts.open(&session, &request).await {
-        Ok(value) => Json(value).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}

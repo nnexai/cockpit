@@ -1187,7 +1187,7 @@ mod tests {
         CommentAnchor, CommentBatch, CommentDraft, CommentFileRef, CommentLocation, CommentOwner,
         CommentSourceState,
     };
-    use cockpit_protocol::context::ExtensionKind;
+    use cockpit_protocol::context::ViewerSourceKind;
     use std::fs;
 
     fn temp_root(label: &str) -> std::path::PathBuf {
@@ -1214,11 +1214,11 @@ mod tests {
         CommentBatch {
             batch_id: Uuid::new_v4().to_string(),
             generation: 1,
-            owner: CommentOwner {
+            owner: CommentOwner::Viewer {
                 session_id: "session".to_owned(),
-                pane_id: "context".to_owned(),
-                terminal_id: "terminal".to_owned(),
-                source_kind: ExtensionKind::Context,
+                server_instance: "server".to_owned(),
+                tab_id: "tab".to_owned(),
+                source_kind: ViewerSourceKind::Context,
                 source_id: Uuid::new_v4().to_string(),
             },
             last_known_location: CommentLocation {

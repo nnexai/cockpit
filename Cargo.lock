@@ -696,6 +696,7 @@ dependencies = [
  "fs2",
  "libproc",
  "nix",
+ "parking_lot",
  "percent-encoding",
  "rustix",
  "serde",

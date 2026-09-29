@@ -8,7 +8,7 @@ import type { SpaceListingState } from "../library/useLibraryOperation";
 
 /**
  * The companion root's `Context resources` overlay (design §4.8): the Library
- * context held by this pane's Space. Add uses the Library-first workflow.
+ * context held by this viewer's Space. Add uses the Library-first workflow.
  */
 export function ContextResources({
   client,
@@ -20,7 +20,7 @@ export function ContextResources({
 }: {
   client: CockpitClient;
   root: ContextRoot;
-  /** The pane's own Space; its listing is read only while Herdr is live. */
+  /** The viewer's own Space; its listing is read only while Herdr is live. */
   space: LibrarySpace | null;
   spaceListing: SpaceListingState;
   onAdd: () => void;

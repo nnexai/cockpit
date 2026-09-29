@@ -1,6 +1,6 @@
 import { CommentOverview } from "./CommentOverview";
 import { CommentEditor } from "./CommentEditor";
-import type { CommentReviewRef, ExtensionKind } from "../../protocol/generated/v1";
+import type { CommentReviewRef, ViewerSourceKind } from "../../protocol/generated/v1";
 import { CommentPasteControls } from "./CommentPasteControls";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
@@ -16,17 +16,12 @@ import type {
   CommentUpsertRequest,
   ContextDocument,
   ContextRoot,
-  PanePresentation,
+  ViewerContext,
 } from "../../protocol/generated/v1";
 import type { ContextCommentEditorState } from "./ContextViewer";
+import { getViewerClientId } from "../layout/viewerLifecycle";
 import "./comments.css";
 
-const windowClientId = (() => {
-  try {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  } catch { /* old webviews may not expose crypto */ }
-  return `cockpit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-})();
 type CommentSelection = { start: number; end: number } | null;
 type NewDraftTarget = { review?: CommentReviewRef; rootId: string; path: string; revision: string; selection: CommentSelection };
 export type CommentDraftActions = {
@@ -40,7 +35,7 @@ export type InlineCommentEditor = (line: number) => ReactNode;
 
 type CommentDraftsProps = {
   client: CockpitClient;
-  presentation: PanePresentation;
+  context: ViewerContext;
   root: ContextRoot;
   path: string;
   document: ContextDocument | null;
@@ -57,8 +52,9 @@ type CommentDraftsProps = {
   invalidationGeneration?: number;
   refreshGeneration?: number;
   sourceIdentity?: string;
-  sourceKind?: ExtensionKind;
+  sourceKind?: ViewerSourceKind;
   reviewCapture?: CommentReviewRef;
+  onViewerError?: (error: unknown) => void;
 };
 
 function errorText(error: unknown): string {
@@ -99,9 +95,9 @@ export function InlineCommentDrafts({ drafts, line, actions, rootId, path }: { d
   </article>)}</div>;
 }
 
-export function CommentDrafts({ client, presentation, root, path, document, selection, mode, editorState, onEditorStateChange, children, inlineEditor = false, showToolbar = true, onCommentStatusChange, onEditorDismissed, onCountChange, invalidationGeneration = 0, refreshGeneration = 0, sourceIdentity, sourceKind = "context", reviewCapture }: CommentDraftsProps) {
-  const currentSourceId = sourceIdentity ?? root.companion_id;
-  const scope = useMemo<CommentRequestScope>(() => ({ binding_id: presentation.binding_id, client_id: windowClientId }), [presentation.binding_id]);
+export function CommentDrafts({ client, context, root, path, document, selection, mode, editorState, onEditorStateChange, children, inlineEditor = false, showToolbar = true, onCommentStatusChange, onEditorDismissed, onCountChange, invalidationGeneration = 0, refreshGeneration = 0, sourceIdentity, sourceKind = context.source_kind, reviewCapture, onViewerError }: CommentDraftsProps) {
+  const currentSourceId = sourceIdentity ?? context.source_id;
+  const scope = useMemo<CommentRequestScope>(() => ({ binding_id: context.binding_id, client_id: getViewerClientId() }), [context.binding_id]);
   const [batch, setBatch] = useState<CommentBatch | null>(null);
   const [batchList, setBatchList] = useState<CommentBatchList | null>(null);
   const [discardConfirmation, setDiscardConfirmation] = useState<string | null>(null);
@@ -112,7 +108,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   const [editing, setEditing] = useState<CommentDraft | null>(null);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const identity = `${presentation.session_id}\u0000${presentation.pane_id}\u0000${presentation.binding_id}\u0000${root.root_id}\u0000${currentSourceId ?? ""}`;
+  const identity = `${context.session_id}\u0000${context.viewer_id}\u0000${context.binding_id}\u0000${root.root_id}\u0000${currentSourceId ?? ""}`;
   const [pending, setPending] = useState(false);
   const [preview, setPreview] = useState<CommentPreview | null>(null);
   const [retainedStale, setRetainedStale] = useState(false);
@@ -122,6 +118,12 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   const persistedBatchId = batch && batch.generation > 0 ? batch.batch_id : null;
   const identityRef = useRef(identity);
   identityRef.current = identity;
+  const onViewerErrorRef = useRef(onViewerError);
+  onViewerErrorRef.current = onViewerError;
+  const reportError = useCallback((reason: unknown) => {
+    setError(errorText(reason));
+    onViewerErrorRef.current?.(reason);
+  }, []);
 
   const clearEditor = useCallback(() => {
     setEditor(null);
@@ -137,17 +139,17 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setLoading(true);
     setError(null);
     try {
-      const next = await client.commentBatch(presentation.session_id, presentation.pane_id, { scope, batch_id: batchId });
+      const next = await client.commentBatch(context.session_id, context.viewer_id, { scope, batch_id: batchId });
       if (generation !== generationRef.current || identityRef.current !== identity) return;
       setBatch(next);
       setPreview(null);
       onCountChange?.(next.drafts.length);
     } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) setError(errorText(reason));
+      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
     } finally {
       if (generation === generationRef.current && identityRef.current === identity) setLoading(false);
     }
-  }, [client, identity, onCountChange, presentation.pane_id, presentation.session_id, scope]);
+  }, [client, identity, onCountChange, context.viewer_id, context.session_id, reportError, scope]);
 
   useEffect(() => {
     if (pending || loading) return;
@@ -204,18 +206,18 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setError(null);
     try {
       const request: CommentRemoveRequest = { batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, draft_id: draft.draft_id };
-      const next = await client.commentRemove(presentation.session_id, presentation.pane_id, request);
+      const next = await client.commentRemove(context.session_id, context.viewer_id, request);
       if (generation !== generationRef.current || identityRef.current !== identity) return;
       setBatch(next);
       onCountChange?.(next.drafts.length);
       if (editing?.draft_id === draft.draft_id) clearEditor();
       setPreview(null);
     } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) setError(errorText(reason));
+      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
     } finally {
       if (generation === generationRef.current && identityRef.current === identity) setPending(false);
     }
-  }, [batch, clearEditor, client, editing?.draft_id, identity, onCountChange, pending, presentation.pane_id, presentation.session_id, scope]);
+  }, [batch, clearEditor, client, editing?.draft_id, identity, onCountChange, pending, context.viewer_id, context.session_id, reportError, scope]);
 
   const currentDrafts = batch?.drafts ?? [];
   const selectedRange = selection && document?.text !== null && document?.text !== undefined
@@ -292,14 +294,14 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setPending(true); setError(null);
     try {
       const request: CommentUpsertRequest = { batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, draft_id: editing?.draft_id ?? null, capture, comment_text: text };
-      const next = await client.commentUpsert(presentation.session_id, presentation.pane_id, request);
+      const next = await client.commentUpsert(context.session_id, context.viewer_id, request);
       if (generation !== generationRef.current || identityRef.current !== identity) return;
       setBatch(next);
       onCountChange?.(next.drafts.length);
       clearEditor();
       setPreview(null);
     } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) setError(errorText(reason));
+      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
     } finally {
       if (generation === generationRef.current && identityRef.current === identity) setPending(false);
     }
@@ -318,19 +320,20 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setOverviewOpen(true); setError(null);
     const generation = ++generationRef.current;
     try {
-      const list = await client.commentBatches(presentation.session_id, presentation.pane_id, scope);
+      const list = await client.commentBatches(context.session_id, context.viewer_id, scope);
       if (generation === generationRef.current && identityRef.current === identity) setBatchList(list);
     } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) setError(errorText(reason));
+      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
     }
   };
 
   const refreshBatchList = async () => {
     try {
-      const list = await client.commentBatches(presentation.session_id, presentation.pane_id, scope);
+      const list = await client.commentBatches(context.session_id, context.viewer_id, scope);
       if (identityRef.current === identity) setBatchList(list);
-    } catch {
+    } catch (reason) {
       // Keep the original error visible; a list refresh is only recovery for a stale generation.
+      if (identityRef.current === identity) onViewerErrorRef.current?.(reason);
     }
   };
 
@@ -340,7 +343,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setPending(true);
     setError(null);
     try {
-      const list = await client.commentDiscard(presentation.session_id, presentation.pane_id, { scope, batch_id: batchId, expected_generation: expectedGeneration });
+      const list = await client.commentDiscard(context.session_id, context.viewer_id, { scope, batch_id: batchId, expected_generation: expectedGeneration });
       if (generation !== generationRef.current || identityRef.current !== identity) return;
       setBatchList(list);
       setDiscardConfirmation(null);
@@ -354,7 +357,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     } catch (reason) {
       if (generation !== generationRef.current || identityRef.current !== identity) return;
       const message = errorText(reason);
-      setError(message);
+      reportError(reason);
       setDiscardConfirmation(null);
       if (message.includes("stale_generation") || message.includes("generation is no longer current")) void refreshBatchList();
     } finally {
@@ -367,10 +370,10 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     const generation = ++generationRef.current;
     setPending(true); setError(null);
     try {
-      const next = await client.commentAttach(presentation.session_id, presentation.pane_id, { scope, batch_id: batch.batch_id, expected_generation: batch.generation });
+      const next = await client.commentAttach(context.session_id, context.viewer_id, { scope, batch_id: batch.batch_id, expected_generation: batch.generation });
       if (generation === generationRef.current && identityRef.current === identity) { setBatch(next); setPreview(null); }
     } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) setError(errorText(reason));
+      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
     } finally {
       if (generation === generationRef.current && identityRef.current === identity) setPending(false);
     }
@@ -382,7 +385,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setPending(true); setError(null);
     try {
       const request = { batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, retain_stale_excerpts: retain };
-      const next = await client.commentPreview(presentation.session_id, presentation.pane_id, request);
+      const next = await client.commentPreview(context.session_id, context.viewer_id, request);
       if (generation === generationRef.current && identityRef.current === identity) {
         setPreview(next);
         setRetainedStale(retain);
@@ -394,7 +397,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
         }
       }
     } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) setError(errorText(reason));
+      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
     } finally {
       if (generation === generationRef.current && identityRef.current === identity) setPending(false);
     }
@@ -448,7 +451,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
         {batch && detached ? <div className="comment-recovery"><strong>Detached batch</strong><span>Reattach after confirming this {sourceKind === "review" ? "Review" : "Context"} source.</span><button type="button" onClick={() => void attach()} disabled={pending || !sameSource}>Reattach</button></div> : null}
         <section className="comment-overview-list"><h3>Current comments</h3>{currentDrafts.length === 0 ? <p>No comments yet.</p> : currentDrafts.map((draft) => <article className={`comment-draft${stale(draft) ? " is-stale" : ""}`} key={draft.draft_id}><div className="comment-draft-meta"><strong>{sourceLabel(draft)}</strong><span>{draftAnchorLabel(draft.anchor)}{stale(draft) ? " · source changed" : ""}</span></div><p>{draft.comment_text}</p><div className="comment-draft-actions"><button type="button" onClick={() => actions.edit(draft)}>Edit</button><button type="button" onClick={() => actions.remove(draft)}>Delete</button></div></article>)}</section>
         <details className="comment-preview"><summary>Preview message</summary><div className="comment-preview-heading"><h3>Preview</h3><div><button type="button" onClick={() => void makePreview(false)} disabled={pending}>Refresh</button>{currentDrafts.some(stale) ? <button type="button" onClick={() => void makePreview(true)} disabled={pending}>Include stale excerpts</button> : null}</div></div>{preview ? <>{preview.reason ? <span className="comment-preview-reason">{preview.reason}</span> : null}<textarea readOnly value={preview.payload} rows={10} aria-label="Comment preview" />{preview.stale_draft_ids.length > 0 ? <span className="comment-preview-blocked">{preview.stale_draft_ids.length} stale comment{preview.stale_draft_ids.length === 1 ? "" : "s"} need review.</span> : null}{preview.exportable && retainedStale ? <span className="comment-preview-ok">Stale excerpts retained.</span> : null}</> : <span className="comment-preview-empty">Preview is optional.</span>}</details>
-        {batch && persistedBatchId && currentDrafts.length > 0 ? <CommentPasteControls client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} scope={scope} batch={batch} retainStale={retainedStale} preview={preview} onBatchChanged={() => { setPreview(null); void loadBatch(batch.batch_id); }} /> : null}
+        {batch && persistedBatchId && currentDrafts.length > 0 ? <CommentPasteControls client={client} context={context} scope={scope} batch={batch} retainStale={retainedStale} onViewerError={onViewerError} onBatchChanged={() => { setPreview(null); void loadBatch(batch.batch_id); }} /> : null}
     </CommentOverview> : null}
   </>;
 }

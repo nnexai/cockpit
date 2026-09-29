@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::context::ExtensionKind;
+use crate::context::ViewerSourceKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -11,13 +11,31 @@ pub struct CommentRequestScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-pub struct CommentOwner {
-    pub session_id: String,
-    pub pane_id: String,
-    pub terminal_id: String,
-    pub source_kind: ExtensionKind,
-    /// Companion identity for Context; a separate review identity for Review.
-    pub source_id: String,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CommentOwner {
+    Viewer {
+        session_id: String,
+        server_instance: String,
+        tab_id: String,
+        source_kind: ViewerSourceKind,
+        source_id: String,
+    },
+    LegacyPane {
+        session_id: String,
+        pane_id: String,
+        terminal_id: String,
+        source_kind: ViewerSourceKind,
+        source_id: String,
+    },
+}
+
+impl CommentOwner {
+    pub fn source_identity(&self) -> (ViewerSourceKind, &str) {
+        match self {
+            Self::Viewer { source_kind, source_id, .. }
+            | Self::LegacyPane { source_kind, source_id, .. } => (*source_kind, source_id),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

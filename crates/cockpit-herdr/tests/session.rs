@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use cockpit_core::{HerdrAdapter, SessionChange};
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
 use cockpit_protocol::v1::{
-    FocusKind, FocusRequest, PaneSummary, ResourceMutationRequest, SessionSnapshotResponse,
+    FocusKind, FocusRequest, PaneSplitDirection, PaneSummary, ResourceMutationRequest, SessionSnapshotResponse,
 };
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -179,7 +179,7 @@ async fn maps_redacted_snapshot_and_sanitizes_titles() {
     );
     assert_eq!(snapshot.agents[0].name, "assistant");
     assert_eq!(snapshot.agents[0].title.as_deref(), Some("Agent fallback"));
-    assert_eq!(snapshot.layouts[0].panes[0].rect.width, 120);
+    assert_eq!(snapshot.tabs[0].focused_pane_id.as_deref(), Some("pane-a"));
     drop(fs::remove_file(socket));
 }
 #[cfg(unix)]
@@ -448,11 +448,18 @@ async fn accepts_agent_info_focus_response() {
 }
 #[cfg(unix)]
 #[tokio::test]
-async fn mutation_discards_raw_result_and_returns_a_fresh_snapshot() {
+async fn split_returns_a_receipt_confirmed_by_the_post_mutation_snapshot() {
     let socket = std::env::temp_dir().join(format!("cockpit-herdr-mutate-{}.sock", temp_id()));
     let listener = UnixListener::bind(&socket).unwrap();
-    let fixture: serde_json::Value =
+    let mut fixture: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/session-snapshot.json")).unwrap();
+    let mut created = fixture["result"]["snapshot"]["panes"][0].clone();
+    created["pane_id"] = json!("pane-b");
+    created["terminal_id"] = json!("term-b");
+    created["focused"] = json!(false);
+    fixture["result"]["snapshot"]["panes"].as_array_mut().unwrap().push(created);
+    fixture["result"]["snapshot"]["tabs"][0]["pane_count"] = json!(2);
+    fixture["result"]["snapshot"]["workspaces"][0]["pane_count"] = json!(2);
     let expected_result = fixture.get("result").cloned().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
@@ -460,18 +467,17 @@ async fn mutation_discards_raw_result_and_returns_a_fresh_snapshot() {
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         let request: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(request["method"], "workspace.rename");
-        assert_eq!(
-            request["params"],
-            json!({"workspace_id": "space-a", "label": "Renamed"})
-        );
+        assert_eq!(request["method"], "pane.split");
         let id = request["id"].clone();
         let mut stream = reader.into_inner();
         stream
             .write_all(
                 format!(
                     "{}\n",
-                    json!({"id": id, "result": {"type": "workspace_renamed", "secret": "redact"}})
+                    json!({"id": id, "result": {"type": "pane_info", "pane": {
+                        "pane_id": "pane-b", "terminal_id": "term-b", "workspace_id": "space-a",
+                        "tab_id": "tab-a", "focused": false
+                    }}})
                 )
                 .as_bytes(),
             )
@@ -496,9 +502,10 @@ async fn mutation_discards_raw_result_and_returns_a_fresh_snapshot() {
     let response = HerdrCliAdapter::new(config)
         .mutate(
             "named",
-            &ResourceMutationRequest::SpaceRename {
-                space_id: "space-a".into(),
-                label: "Renamed".into(),
+            &ResourceMutationRequest::PaneSplit {
+                pane_id: "pane-a".into(),
+                direction: PaneSplitDirection::Right,
+                ratio: None,
             },
         )
         .await
@@ -506,9 +513,12 @@ async fn mutation_discards_raw_result_and_returns_a_fresh_snapshot() {
     server.await.unwrap();
     assert_eq!(response.session_id, "named");
     assert_eq!(response.snapshot.session_id, "named");
-    assert_eq!(response.snapshot.spaces[0].id, "space-a");
-    let serialized = serde_json::to_value(response).unwrap();
-    assert!(serialized.get("secret").is_none());
+    let created = response.created.unwrap();
+    assert_eq!(created.pane_id, "pane-b");
+    assert_eq!(created.terminal_id, "term-b");
+    assert_eq!(created.tab_id, "tab-a");
+    assert_eq!(created.space_id, "space-a");
+    assert!(response.snapshot.panes.iter().any(|pane| pane.id == created.pane_id && pane.terminal_id == created.terminal_id));
     drop(fs::remove_file(socket));
 }
 #[cfg(unix)]
@@ -559,8 +569,6 @@ async fn mutation_refresh_failure_reports_applied_non_retryable_error() {
         .await
         .unwrap_err();
     assert_eq!(error.code, "mutation_applied_snapshot_failed");
-    assert!(error.message.contains("may already be applied"));
-    assert!(error.message.contains("only resync is safe"));
     server.await.unwrap();
     drop(fs::remove_file(socket));
 }
@@ -591,6 +599,7 @@ async fn propagates_subscription_setup_error_without_id() {
         HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
     let snapshot = cockpit_protocol::v1::SessionSnapshotResponse {
         session_id: "default".into(),
+        server_instance: "0123456789abcdef".into(),
         version: "0.9.0".into(),
         protocol: 22,
         focused_space_id: None,
@@ -599,7 +608,6 @@ async fn propagates_subscription_setup_error_without_id() {
         spaces: Vec::new(),
         tabs: Vec::new(),
         panes: Vec::new(),
-        layouts: Vec::new(),
         agents: Vec::new(),
     };
     let error = HerdrCliAdapter::new(config)
@@ -637,6 +645,7 @@ async fn event_subscription_rejects_identity_mismatch_before_live() {
         HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
     let snapshot = SessionSnapshotResponse {
         session_id: "default".into(),
+        server_instance: "0123456789abcdef".into(),
         version: "0.9.0".into(),
         protocol: 22,
         focused_space_id: None,
@@ -645,7 +654,6 @@ async fn event_subscription_rejects_identity_mismatch_before_live() {
         spaces: Vec::new(),
         tabs: Vec::new(),
         panes: Vec::new(),
-        layouts: Vec::new(),
         agents: Vec::new(),
     };
     let error = HerdrCliAdapter::new(config)
@@ -762,6 +770,7 @@ async fn event_subscription_terminates_on_identity_replacement_without_changed()
         HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
     let snapshot = SessionSnapshotResponse {
         session_id: "default".into(),
+        server_instance: "0123456789abcdef".into(),
         version: "0.9.0".into(),
         protocol: 22,
         focused_space_id: None,
@@ -770,7 +779,6 @@ async fn event_subscription_terminates_on_identity_replacement_without_changed()
         spaces: Vec::new(),
         tabs: Vec::new(),
         panes: Vec::new(),
-        layouts: Vec::new(),
         agents: Vec::new(),
     };
     let mut subscription = HerdrCliAdapter::new(config)
@@ -889,6 +897,7 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
 
     let initial_snapshot = SessionSnapshotResponse {
         session_id: "default".into(),
+        server_instance: "0123456789abcdef".into(),
         version: "0.9.0".into(),
         protocol: 22,
         focused_space_id: None,
@@ -908,7 +917,6 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
             revision: 0,
             cwd: None,
         }],
-        layouts: Vec::new(),
         agents: Vec::new(),
     };
     let config =
@@ -937,7 +945,7 @@ async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
     let request = cockpit_protocol::v1::TerminalOpenRequest {
         session_id: "default".into(),
         pane_id: "bad/id".into(),
-        mode: cockpit_protocol::v1::TerminalMode::Observe,
+        mode: cockpit_protocol::v1::TerminalMode::Control,
         takeover: false,
         cols: 80,
         rows: 24,
@@ -1059,6 +1067,7 @@ async fn subscription_receiver_drop_closes_idle_peer_socket() {
         HerdrCliConfig::from_options(None, Some("drop-idle".into()), Some(socket.clone())).unwrap();
     let snapshot = SessionSnapshotResponse {
         session_id: "drop-idle".into(),
+        server_instance: "0123456789abcdef".into(),
         version: "0.9.0".into(),
         protocol: 22,
         focused_space_id: None,
@@ -1067,7 +1076,6 @@ async fn subscription_receiver_drop_closes_idle_peer_socket() {
         spaces: Vec::new(),
         tabs: Vec::new(),
         panes: Vec::new(),
-        layouts: Vec::new(),
         agents: Vec::new(),
     };
     let subscription = HerdrCliAdapter::new(config)

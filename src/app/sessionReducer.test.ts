@@ -5,15 +5,15 @@ import { initialSessionState, sessionReducer } from "./session/sessionStore";
 function snapshot(sessionId: string, pane = "pane-1", focused = pane): SessionSnapshotResponse {
   return {
     session_id: sessionId,
+    server_instance: "server-1",
     version: "0.8.2",
     protocol: 20,
     focused_space_id: "space-1",
     focused_tab_id: "tab-1",
     focused_pane_id: focused,
     spaces: [{ id: "space-1", label: "Space", number: 1, tab_count: 1, pane_count: 1, focused: true, agent_status: "idle", git: null }],
-    tabs: [{ id: "tab-1", space_id: "space-1", label: "Tab", number: 1, pane_count: 1, focused: true }],
+    tabs: [{ id: "tab-1", space_id: "space-1", label: "Tab", number: 1, pane_count: 1, focused: true, focused_pane_id: focused }],
     panes: [{ id: pane, terminal_id: "term-1", space_id: "space-1", tab_id: "tab-1", title: null, focused: true, agent: null, agent_status: "idle", revision: 1 }],
-    layouts: [],
     agents: [],
   };
 }
@@ -165,6 +165,26 @@ describe("sessionReducer", () => {
     expect(state.focusPending).toBeNull();
     expect(state.focusError).toBeNull();
   });
+
+  it("clears superseded input intent without resetting ordered stream state or admitting old focus errors", () => {
+    const live = ready("one");
+    let state = sessionReducer(live, { type: "focus/request", epoch: live.epoch, sessionId: "one", request: { kind: "pane", target_id: "pane-2" }, token: 1 });
+    state = sessionReducer(state, { type: "focus/error", epoch: live.epoch, sessionId: "one", token: 1, code: "focus_error", message: "failed" });
+    const cleared = sessionReducer(state, { type: "focus/clear", epoch: live.epoch, sessionId: "one", token: 2 });
+    expect(cleared.focusPending).toBeNull();
+    expect(cleared.focusError).toBeNull();
+    expect(cleared.focusToken).toBe(2);
+    expect(cleared.snapshot).toBe(live.snapshot);
+    expect(cleared.attachments).toBe(live.attachments);
+    expect([cleared.sync, cleared.generation, cleared.sequence]).toEqual(["live", 1, 1]);
+    expect(sessionReducer(cleared, { type: "focus/error", epoch: live.epoch, sessionId: "one", token: 1, code: "focus_timeout", message: "late" })).toBe(cleared);
+    expect(sessionReducer(cleared, { type: "focus/clear", epoch: live.epoch, sessionId: "one", token: 1 })).toBe(cleared);
+    expect(sessionReducer(cleared, { type: "focus/clear", epoch: live.epoch - 1, sessionId: "one", token: 3 })).toBe(cleared);
+    const next = sessionReducer(cleared, { type: "stream/message", epoch: live.epoch, sessionId: "one", message: stream("one", 1, 2, snapshot("one", "pane-2")) });
+    expect(next.sequence).toBe(2);
+    expect(next.focusPending).toBeNull();
+    expect(next.snapshot?.focused_pane_id).toBe("pane-2");
+  });
   it("rejects duplicate and skipped terminal full frames", () => {
     for (const invalidSequence of ["1", "3"]) {
       let state = ready("one");
@@ -174,7 +194,7 @@ describe("sessionReducer", () => {
         sessionId: "one",
         paneId: "pane-1",
         streamId: "stream-1",
-        mode: "observe",
+        mode: "control",
       });
       state = sessionReducer(state, {
         type: "attachment/message",
@@ -203,17 +223,17 @@ describe("sessionReducer", () => {
     let state = ready("one");
     state = sessionReducer(state, { type: "stream/error", epoch: state.epoch, sessionId: "one", code: "closed", message: "closed" });
     expect(state.sync).toBe("disconnected");
-    state = sessionReducer(state, { type: "attachment/opened", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-1", mode: "observe" });
-    state = sessionReducer(state, { type: "attachment/message", epoch: state.epoch, sessionId: "one", paneId: "pane-1", message: { type: "ownership", session_id: "one", pane_id: "pane-1", stream_id: "stream-1", state: "observing", message: null } });
-    expect(state.attachments["pane-1"].ownership).toBe("observing");
+    state = sessionReducer(state, { type: "attachment/opened", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-1", mode: "control" });
+    state = sessionReducer(state, { type: "attachment/message", epoch: state.epoch, sessionId: "one", paneId: "pane-1", message: { type: "ownership", session_id: "one", pane_id: "pane-1", stream_id: "stream-1", state: "owned", message: null } });
+    expect(state.attachments["pane-1"].ownership).toBe("owned");
     state = sessionReducer(state, { type: "attachment/dispose", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-1" });
-    const late = sessionReducer(state, { type: "attachment/message", epoch: state.epoch, sessionId: "one", paneId: "pane-1", message: { type: "ownership", session_id: "one", pane_id: "pane-1", stream_id: "stream-1", state: "owned", message: null } });
-    expect(late.attachments["pane-1"].ownership).toBe("observing");
+    const late = sessionReducer(state, { type: "attachment/message", epoch: state.epoch, sessionId: "one", paneId: "pane-1", message: { type: "ownership", session_id: "one", pane_id: "pane-1", stream_id: "stream-1", state: "lost", message: "late" } });
+    expect(late.attachments["pane-1"].ownership).toBe("owned");
   });
 
   it("keeps a replacement attachment when delayed errors or disposal name the retired stream", () => {
     let state = ready("one");
-    state = sessionReducer(state, { type: "attachment/opened", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-a", mode: "observe" });
+    state = sessionReducer(state, { type: "attachment/opened", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-a", mode: "control" });
     state = sessionReducer(state, { type: "attachment/opened", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-b", mode: "control" });
     const delayedError = sessionReducer(state, { type: "attachment/error", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-a", code: "terminal_disconnected", message: "old" });
     const delayedDispose = sessionReducer(delayedError, { type: "attachment/dispose", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-a" });

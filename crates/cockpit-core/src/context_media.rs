@@ -16,17 +16,17 @@ const MAX_DECODED_BYTES: u64 = 64 * 1024 * 1024;
 const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 
 impl ContextService {
-    /// Read one host-authorized, bounded raster image from the current Context
-    /// companion or verified Folder root. This accepts no URL-like input and
-    /// does not expose a path to the browser.
+    /// Read one host-authorized, bounded raster image from a Files viewer's
+    /// pinned Context companion or verified Folder root.
+    /// It accepts no URL-like input and exposes no path to the browser.
     pub async fn media(
         &self,
         session_id: &str,
-        pane_id: &str,
+        viewer_id: &str,
         request: &ContextMediaRequest,
     ) -> Result<ContextMedia, InspectionError> {
         let authorized = self
-            .authorize_media_root(session_id, pane_id, &request.binding_id, &request.root_id)
+            .authorize_media_root(session_id, viewer_id, &request.binding_id, &request.root_id)
             .await?;
         let max_bytes = self.configuration.limits.context_preview_bytes as usize;
         read_media(authorized, request, max_bytes)

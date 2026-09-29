@@ -11,10 +11,9 @@ use cockpit_core::{
 };
 use cockpit_protocol::v1::{
     CockpitMode, FocusKind, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
-    LayoutPane, LayoutRect, PaneMoveDestination, PaneResizeDirection, PaneSummary,
+    PaneMoveDestination, PaneSummary,
     ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
-    SessionSnapshotResponse, SessionSummary, TabLayout, TabSummary, TerminalCommand, TerminalMode,
-    TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
+    SessionSnapshotResponse, SessionSummary, TabSummary, TerminalMode, TerminalOpenRequest,
 };
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -177,6 +176,7 @@ fn compatible() -> HerdrCompatibility {
 fn snapshot(session_id: &str) -> SessionSnapshotResponse {
     SessionSnapshotResponse {
         session_id: session_id.into(),
+        server_instance: "0123456789abcdef".into(),
         version: "0.8.2".into(),
         protocol: 20,
         focused_space_id: Some("space-1".into()),
@@ -190,6 +190,7 @@ fn snapshot(session_id: &str) -> SessionSnapshotResponse {
             number: 1,
             pane_count: 1,
             focused: true,
+            focused_pane_id: Some("pane-1".into()),
         }],
         panes: vec![PaneSummary {
             id: "pane-1".into(),
@@ -202,28 +203,6 @@ fn snapshot(session_id: &str) -> SessionSnapshotResponse {
             agent_status: "idle".into(),
             revision: 1,
             cwd: None,
-        }],
-        layouts: vec![TabLayout {
-            space_id: "space-1".into(),
-            tab_id: "tab-1".into(),
-            area: LayoutRect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 24,
-            },
-            focused_pane_id: Some("pane-1".into()),
-            panes: vec![LayoutPane {
-                pane_id: "pane-1".into(),
-                focused: true,
-                rect: LayoutRect {
-                    x: 0,
-                    y: 0,
-                    width: 80,
-                    height: 24,
-                },
-            }],
-            zoomed: false,
         }],
         agents: vec![],
     }
@@ -276,6 +255,7 @@ fn fake() -> FakeAdapter {
         mutation_result: Ok(ResourceMutationResponse {
             session_id: "session-a".into(),
             snapshot: snapshot("session-a"),
+            created: None,
         }),
         subscribe_result: Arc::new(Mutex::new(None)),
         terminal_result: Arc::new(Mutex::new(None)),
@@ -610,25 +590,6 @@ async fn focus_is_validated_gated_and_delegated() {
         &[(String::from("session-a"), request)]
     );
 }
-#[tokio::test]
-async fn mutation_is_validated_gated_and_delegated() {
-    let adapter = fake();
-    let calls = adapter.mutation_calls.clone();
-    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
-    let request = ResourceMutationRequest::PaneResize {
-        pane_id: "pane-1".into(),
-        direction: PaneResizeDirection::Right,
-        amount: 0.1,
-    };
-
-    let response = service.mutate("session-a", &request).await.unwrap();
-    assert_eq!(response.session_id, "session-a");
-    assert_eq!(response.snapshot.session_id, "session-a");
-    assert_eq!(
-        calls.lock().await.as_slice(),
-        &[(String::from("session-a"), request)]
-    );
-}
 
 #[tokio::test]
 async fn invalid_mutations_are_rejected_before_adapter_calls() {
@@ -645,11 +606,6 @@ async fn invalid_mutations_are_rejected_before_adapter_calls() {
         ResourceMutationRequest::SpaceRename {
             space_id: "space-1".into(),
             label: " ".into(),
-        },
-        ResourceMutationRequest::PaneResize {
-            pane_id: "pane-1".into(),
-            direction: PaneResizeDirection::Right,
-            amount: f64::INFINITY,
         },
         ResourceMutationRequest::PaneMove {
             pane_id: "pane-1".into(),
@@ -673,6 +629,7 @@ async fn mutation_rejects_mismatched_response_identity() {
     adapter.mutation_result = Ok(ResourceMutationResponse {
         session_id: "session-b".into(),
         snapshot: snapshot("session-a"),
+        created: None,
     });
     let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
 
@@ -694,6 +651,7 @@ async fn mutation_rejects_mismatched_snapshot_identity() {
     adapter.mutation_result = Ok(ResourceMutationResponse {
         session_id: "session-a".into(),
         snapshot: snapshot("session-b"),
+        created: None,
     });
     let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
 
@@ -724,7 +682,7 @@ async fn subscription_and_terminal_are_delegated() {
         .open_terminal(&TerminalOpenRequest {
             session_id: "session-a".into(),
             pane_id: "pane-1".into(),
-            mode: TerminalMode::Observe,
+            mode: TerminalMode::Control,
             takeover: false,
             cols: 80,
             rows: 24,
@@ -771,7 +729,7 @@ async fn terminal_attaches_to_a_pane_in_an_unfocused_tab() {
 }
 
 #[tokio::test]
-async fn terminal_rejects_pane_missing_from_its_tab_layout() {
+async fn terminal_rejects_pane_in_an_absent_tab() {
     let adapter = fake();
     let snapshots = adapter.snapshots.clone();
     let terminals = adapter.terminal_calls.clone();
@@ -784,7 +742,7 @@ async fn terminal_rejects_pane_missing_from_its_tab_layout() {
         .open_terminal(&TerminalOpenRequest {
             session_id: "session-a".into(),
             pane_id: "pane-1".into(),
-            mode: TerminalMode::Observe,
+            mode: TerminalMode::Control,
             takeover: false,
             cols: 80,
             rows: 24,
@@ -794,13 +752,7 @@ async fn terminal_rejects_pane_missing_from_its_tab_layout() {
         .await
         .unwrap_err();
 
-    assert_eq!(
-        error,
-        InspectionError::new(
-            "pane_not_in_layout",
-            "terminal pane is not in its tab's layout"
-        )
-    );
+    assert_eq!(error.code, "pane_not_in_tab");
     assert!(terminals.lock().await.is_empty());
 }
 
@@ -811,7 +763,6 @@ async fn terminal_rejects_missing_pane_before_adapter_launch() {
     let terminals = adapter.terminal_calls.clone();
     let mut missing = snapshot("session-a");
     missing.panes.clear();
-    missing.layouts[0].panes.clear();
     *snapshots.lock().await = Ok(missing);
     let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
 
@@ -819,7 +770,7 @@ async fn terminal_rejects_missing_pane_before_adapter_launch() {
         .open_terminal(&TerminalOpenRequest {
             session_id: "session-a".into(),
             pane_id: "pane-1".into(),
-            mode: TerminalMode::Observe,
+            mode: TerminalMode::Control,
             takeover: false,
             cols: 80,
             rows: 24,
@@ -829,7 +780,7 @@ async fn terminal_rejects_missing_pane_before_adapter_launch() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.code, "pane_not_in_layout");
+    assert_eq!(error.code, "pane_not_in_tab");
     assert!(terminals.lock().await.is_empty());
 }
 
@@ -868,7 +819,7 @@ async fn invalid_requests_are_rejected_before_adapter_calls() {
             .open_terminal(&TerminalOpenRequest {
                 session_id: "session-a".into(),
                 pane_id: "pane-1".into(),
-                mode: TerminalMode::Observe,
+                mode: TerminalMode::Control,
                 takeover: false,
                 cols: 0,
                 rows: 24,
@@ -905,15 +856,3 @@ async fn incompatible_session_blocks_operation_and_is_not_cached() {
     assert_eq!(session_calls.lock().await.len(), 2);
 }
 
-#[test]
-fn stream_message_types_are_available_to_transport_owners() {
-    let _ = SessionChange::Changed;
-    let _ = TerminalOwnershipState::Observing;
-    let _ = TerminalCommand::Release;
-    let _ = TerminalStreamMessage::Closed {
-        session_id: "session-a".into(),
-        pane_id: "pane-1".into(),
-        stream_id: "stream-1".into(),
-        reason: "closed".into(),
-    };
-}

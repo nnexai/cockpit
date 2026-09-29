@@ -1,6 +1,6 @@
 # Cockpit Architecture Context
 
-Status: architecture reference. The Herdr client, workspace setup, Context browsing and media, comments/paste, Library provider imports, copied folders, followed Confluence spaces and followed Jira queries, graphical Review snapshots, and inline browser are implemented. Verified delivery boundaries are recorded in `DECISIONS.md`.
+Status: architecture reference. The Herdr client, workspace setup, Cockpit-owned tab placement, virtual Files/Review viewers, per-tab disposable Browser sessions, comments/paste, and Library/provider flows are implemented. This file describes ownership and behavior, not a claim that every acceptance scenario has been verified; current rules are recorded in `DECISIONS.md`.
 
 All filesystem roots, executable locations, Herdr endpoints, and provider settings are configurable. Example absolute paths are intentionally omitted.
 
@@ -72,13 +72,13 @@ Herdr-server is the authoritative state machine for:
 
 - named sessions;
 - Spaces/workspaces;
-- tabs and panes;
+- tabs and real terminal existence/membership;
 - PTYs and processes;
-- terminal focus and layout;
+- real terminal focus identity and Herdr's own TUI layout;
 - agent detection and agent state;
 - Herdr-owned metadata (agent-list ordering is client presentation; see `DECISIONS.md`).
 
-Cockpit does not create a competing session registry or duplicate Herdr lifecycle state. Its local state is a cache of authoritative Herdr data.
+Cockpit does not create a competing session registry or duplicate Herdr lifecycle state. Its session mirror caches authoritative snapshots and ordered events. Cockpit separately owns in-memory placement and viewer selection inside each tab: those are presentation state, not Herdr terminal membership or focus authority.
 
 ## 4. Herdr integration
 
@@ -100,7 +100,7 @@ Herdr’s documented socket API provides the required model:
 
 - `session.snapshot` bootstraps the local cache;
 - `events.subscribe` supplies lifecycle and state changes;
-- workspace, tab, pane, layout, and agent methods perform mutations;
+- workspace, tab, pane, and agent methods perform lifecycle/focus mutations; Cockpit does not use Herdr geometry mutations;
 - terminal attach/read/input operations connect UI panes to server-owned terminals.
 
 The socket transport is newline-delimited JSON. The client must handle request IDs, ordered events, reconnect, stale state, and explicit unsupported-capability errors.
@@ -110,7 +110,7 @@ The socket transport is newline-delimited JSON. The client must handle request I
 The client selects one Herdr named session at a time.
 
 - Startup selects Herdr’s default session when available and provides a session selector.
-- Switching sessions detaches old subscriptions/renderers, connects to the new session, loads `session.snapshot`, subscribes to events, and clears stale selection state.
+- Switching sessions detaches old subscriptions/renderers, connects to the new session, loads `session.snapshot`, subscribes to events, and clears stale selection state. Tab placement is keyed by session, server instance and tab id above the workbench; same-instance resync preserves it, while a changed server instance starts fresh.
 - Multiple Cockpit windows may connect, but Herdr remains the authority for focus and writable terminal ownership.
 
 ### 4.3 Workspace and worktree operations
@@ -149,7 +149,7 @@ The implemented Cockpit foundation includes:
 
 - a real Herdr session mirror with schema-gated socket connectivity;
 - terminal pane read, attach, input, and output through Herdr;
-- Herdr-semantic focus and layout operations;
+- Herdr-semantic hierarchy and focus operations with Cockpit-local terminal/viewer placement;
 - workspace creation and context hydration;
 - provider-backed source import and refresh;
 - the `cockpit serve` browser client path.
@@ -162,7 +162,7 @@ The first screen uses the native Herdr TUI as a behavioral baseline:
 - a scrollable hierarchical **Spaces** section in the sidebar;
 - an **Agents** attention queue below Spaces;
 - a main view containing tabs for the selected Space;
-- terminal panes arranged according to the selected tab’s Herdr layout.
+- real terminals and local Files/Review/Browser leaves arranged in the selected tab's Cockpit-owned split tree.
 
 This is baseline parity, not a permanent imitation target. Cockpit preserves Herdr semantics and authority while deliberately evolving the presentation toward a dense graphical operations workbench.
 
@@ -172,31 +172,24 @@ The UI uses Herdr-native labels such as Spaces, Agents, tabs, and panes. The Her
 
 Herdr is authoritative for agent state. The client renders Herdr’s state categories, including blocked, working, done, idle, and other supported states, with transition detail and freshness when available.
 
-User-initiated selection of a Space, tab, pane, or agent:
+Selecting a real terminal records local intent and uses the ordered Herdr focus acknowledgement before enabling input. Selecting a viewer changes local selection and DOM focus only; Herdr remains focused on the tab's last real terminal. Layout selection, Herdr focus identity, attachment/input ownership and DOM keyboard focus are separate state.
 
-- records local intent;
-- sends the corresponding Herdr focus operation;
-- updates confirmed selection from Herdr’s response/event;
-- focuses the owning resource;
-- attaches the terminal renderer when terminal content is selected and visible.
+A changed external Herdr focus triple selects its real terminal, tab and Space, restoring local zoom if necessary. A local request echo completes only still-current intent; an unchanged focus in a repeated snapshot never steals selection from a viewer.
 
-Semantic focus, DOM keyboard focus, and writable terminal ownership remain separate. An external authoritative focus change supersedes local intent.
+The client supports Herdr-semantic hierarchy operations: create, rename, reparent, reorder and close Spaces/tabs where supported, and create, rename, close and move real terminals. Cockpit owns positioning within each tab: header dragging swaps at the centre or places at an edge, live dividers resize sibling shares, and zoom is local. These actions never send `pane_resize`, `pane_swap` or `pane_zoom`; Herdr geometry and zoom hints are ignored. Fitting a control-attached terminal still updates its PTY grid.
 
-The client supports Herdr-semantic hierarchy operations:
+Layouts are never persisted. First load is a balanced grid in stable pane-id order. Externally added terminals arrive at the full-height right edge; Cockpit splits place the terminal beside the selected leaf using the validated creation receipt. Runtime source selection is separate from placement: selected real terminal, last real terminal, Herdr-focused terminal, then first real terminal.
 
-- expand/collapse;
-- create, rename, reparent, reorder, and close Spaces where supported;
-- create, close, rename, focus, split, resize, reorder, and move tabs/panes where supported;
-- direct tree controls, context menus, and drag/drop where Herdr supports them.
+Only live authoritative membership can prune leaves. Loss of a tab or its final real terminal releases its viewer contexts and stops/cleans its Browser session; stale, disconnected or loading snapshots never imply loss. Durable comments and browser work remain recoverable. Viewers cannot move across tabs or Spaces. Opening the Library leaves layouts unchanged while membership and focus reconciliation continue.
 
-The behavioral authority is Herdr; the presentation is graphical. Pane/layout actions are primarily shortcut-driven, while native Herdr mouse behavior remains available. GUI controls are discoverable. The Herdr magic escape key should have priority over GUI shortcuts (not yet implemented; the current keymap handles only Cockpit's `Ctrl+B` prefix and Escape).
+Commands act on the selected leaf; terminal creation and cross-tab terminal moves remain Herdr operations, while cycle, directional focus, swap, resize and zoom use local geometry. Header controls and Commands make actions discoverable. `Ctrl+B` routing is shared across native and browser clients; Esc belongs to content surfaces except when cancelling a drag or restoring zoom from layout chrome.
 
 ### 5.4 Terminal attachment and scalability
 
 Herdr owns every PTY, process, terminal model, and terminal stream. xterm.js owns rendering and input capture only.
 
-- Compatibility requires Herdr protocol 22, schema 1, and the adapter's required methods, not an exact display-version patch. Each visible pane opens a direct ANSI terminal stream using `TerminalHello` and `ControlTerminal` or `ObserveTerminal`. This does not restore the historical client-shell/graphics implementation.
-- Herdr's JSON API owns hierarchy, focus, and layout. Stable `TerminalFrame` messages supply sequence numbers, dimensions, and ANSI bytes for each attached pane.
+- Compatibility requires Herdr protocol 22, schema 1, and the adapter's required methods, not an exact display-version patch. Every painted terminal leaf opens a direct ANSI stream using `TerminalHello` and `ControlTerminal`; no observe attachment or downgrade path remains.
+- Herdr's JSON API owns hierarchy, real terminal membership and focus. Cockpit owns placement; public snapshots contain no layout rectangles. Stable `TerminalFrame` messages supply sequence numbers, dimensions, and ANSI bytes for each attached pane.
 - Attachment uses fitted per-pane dimensions and measured cell pixels. The first frame must be full; every later sequence must be consecutive, including full repaints.
 - A full frame is an ANSI baseline, not permission to reset xterm. Socket framing has one uninterrupted reader with bounded buffering and deterministic shutdown.
 - Terminal graphics are parked. Known auxiliary messages are consumed without exposing graphics payloads or disconnecting an otherwise usable text terminal. The image addon is not loaded.
@@ -204,18 +197,18 @@ Herdr owns every PTY, process, terminal model, and terminal stream. xterm.js own
 - Herdr's per-attachment `MouseCapture` signal enables application mouse handling automatically. Cockpit sends structured `AttachMouse` cell coordinates, and Herdr chooses the application's encoding and rejects reports when tracking is disabled. Mode-off and Shift-drag retain xterm text selection. Idle hover reports and exact pixel coordinates are not forwarded.
 - `Shift+Enter` sends a bare line-feed.
 - Local xterm enables Kitty keyboard support; stable end-to-end enhanced-reporting behavior still requires TERM-03 evidence.
-- Only panes visible in the selected tab keep active xterm renderers/subscriptions. Hidden tabs detach UI renderers without stopping Herdr processes.
+- Only painted terminals in the active tab keep xterm renderers/subscriptions. Zoom-hidden terminals, inactive tabs and the Library detach without stopping Herdr processes. Files/Review state is retained per source in the layout store; hidden Browser views release captures but keep their managed session.
 - Herdr remains authoritative for scrollback and screen state. Reconnect requires a fresh full baseline before consecutive updates.
-- Control and observe requests use stable attachment modes. Semantic focus, local control intent, attachment state, and terminal process lifetime remain distinct.
+- Control attachment and permission to send input are distinct: input requires local terminal DOM focus, Herdr-confirmed focus and owned control. Tab switches prepare the incoming painted terminal grid before Herdr focus (first focused-terminal frame or 300 ms) and retain outgoing attachments until the swap is painted.
 - Attach failure leaves the pane visible with stale/disconnected state, retry, and resync. It never silently closes the Herdr process.
 
 The client loads hierarchy metadata for all resources. It does not require an xterm.js DOM instance or live output subscription for every pane.
 
-### 5.5 Context and graphical review panes
+### 5.5 Virtual Files, Review and Browser viewers
 
-Cockpit detects supported Herdr extension panes and replaces their renderer with a complete graphical implementation. The initial targets are `herdr-file-viewer` for Context/files and `persiyanov.reviewr` for local review. These remain real Herdr panes with normal layout, move, resize, focus, and close behavior. There are no Build/Review workbench modes or synthetic Context tabs.
+Each tab has at most one Files, one Review and one Browser leaf. Opening an existing Files/Review leaf focuses it and changes its requested source; per-source view state, including unsaved comment editor text, survives switching sources and unmounting. Viewers do not launch addons, inspect addon-private state or replace real pane renderers; existing addon panes remain ordinary terminals with no graphical/terminal toggle.
 
-Detection uses supported Herdr plugin launch provenance and bounded `pane.process_info` evidence, with explicit per-pane renderer selection for ambiguous cases. It does not communicate with the extension's internal state, scrape terminal output, or require extension/Herdr-server changes. The original TUI continues independently; switching to terminal view does not synchronize its comments with Cockpit's own GUI drafts.
+The core's `ViewerService` opens Files/Review contexts from fresh evidence of a real terminal in the same tab. It pins only the requested root and records source cwd, endpoint, tab and Space. Requests use `viewer_id` and `binding_id`, revalidate current tab/endpoint/Space and root filesystem identity, and reject replaced bindings. A later `cd` or source-pane close does not retarget a viewer. Missing contexts require explicit Reopen; closing a viewer or retiring its tab releases the context without deleting durable batches.
 
 The Context browser:
 
@@ -233,9 +226,17 @@ Context and Library file pickers request one sorted server-side file index rathe
 
 Repository catalog scans are cached only for read-path authorization, with a mutation generation and stale-while-refill window; setup and teardown continue to perform fresh checks. Review reuses an in-memory snapshot only when its Git revision tokens and comparison identity still match, and revision tokens stream Git output into a digest rather than retaining large diff output.
 
-Cockpit owns durable GUI drafts and a local Git review model for the complete Reviewr replacement. Local review includes staged, unstaged, branch, and untracked scopes with explicit revisions and side-aware anchors. It does not mutate Git or post provider comments.
+Cockpit owns durable GUI comment batches and a read-only local Git Review model with staged, unstaged, branch and untracked scopes, explicit revisions and side-aware anchors. It does not mutate Git or post provider comments. Comment owners are tagged `viewer` or `legacy_pane`; the one-way idempotent upgrade preserves old pane-owned batches as detached Saved batches. Explicit Reattach revalidates source identity and roots, never merges or discards batches automatically.
 
-The inline browser displays a supervised Chromium tab beside the selected Space. Cockpit owns browser interaction, durable drafts, and feedback; hiding the view releases capture resources without closing the browser.
+Browser is a tab-local leaf with an independently managed Chromium session per Herdr tab. Views, input, captures, drafts and feedback are isolated by the tab association key. Hiding by tab switch, zoom or Library releases capture resources but does not close the browser. Explicit close, tab/final-terminal retirement and owning-runtime shutdown stop the process and remove only identity-proven profile/workspace/config artifacts; cookies, logins and site storage are disposable. Failed cleanup stays visible with retry, and cannot delete unrelated or unproven resources.
+
+Leaf creation/reopening uses `OpenFresh`: a surviving tab session is stopped and cleaned, never adopted, before starting at `[browser] default_url` / `COCKPIT_BROWSER_DEFAULT_URL` (default `about:blank`). The configured URL is validated at load. CLI `Open` and an existing leaf's Reconnect preserve attach/new-page behavior rather than restoring a closed leaf's navigation.
+
+Retained Browser work has durable original provenance independent of live Herdr state. `BrowserWorkScope::SavedTab` (`saved_tab`) is authorized by immutable no-follow `browser/saved-tab-associations/<key>.json`, published durably before live receipt removal and retaining original endpoint/session/tab/Space identity. Feedback/image reads, exact-ID acknowledgement and draft/pending-capture recovery work without the old tab or endpoint. `BrowserCleanupStatus.saved_tabs` lists nonempty retained work after cleanup/reload. Sending saved work requires an explicit eligible agent of the currently focused tab with fresh focus/fingerprint revalidation; live `Tab` scope retains automatic recipient semantics.
+
+At cutover, old Space-scoped sessions are stopped and their original receipts are durably archived under `browser/legacy-archive/` before unlink. The cleanup UI lists proven artifact candidates for reviewed `Remove selected` or `Keep files`; it never silently deletes legacy profiles. Removal checks exact reviewed filesystem identities again. `BrowserWorkScope::LegacyArchive` exposes saved work offline under its original key and requires an explicit current-tab recipient for delivery. Profile cleanup excludes provenance, saved captures/feedback/drafts, comments, the vault and the Library.
+
+The CLI uses `cockpit browser open|status|close|feedback --tab <tab-id>` with explicit Herdr session/socket, or `--current` to resolve the calling real pane's tab. `cockpit browser feedback --legacy <association-key>` and `feedback ack --legacy <association-key> --id <id>` access original legacy work without a live target; `--legacy` cannot open a session and is mutually exclusive with `--tab`/`--current`.
 
 ### 5.6 Errors, settings, and accessibility
 
@@ -339,7 +340,7 @@ The `cockpit` CLI provides:
 - `cockpit status` to inspect the configured Herdr installation;
 - `cockpit serve` to serve the browser client and HTTP API in the foreground;
 - `cockpit configuration` to inspect effective non-secret project configuration;
-- `cockpit browser` to control the browser associated with a Herdr Space.
+- `cockpit browser` to control a Herdr tab's managed browser via `--tab` or `--current`, and read/acknowledge archived pre-tab feedback via `--legacy`.
 
 Workspace lifecycle and context operations are provided through core and host services, not separate CLI subcommands.
 

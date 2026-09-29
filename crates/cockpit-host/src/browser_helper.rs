@@ -68,7 +68,6 @@ pub(crate) struct BrowserHelperSupervisor {
 }
 
 struct ManagedView {
-    target: BrowserTarget,
     attachment: BrowserRuntimeAttachment,
     snapshot: Arc<Mutex<BrowserViewSnapshot>>,
     /// Serializes snapshot reads with each broadcast so subscribers get an
@@ -362,7 +361,6 @@ impl BrowserHelperSupervisor {
             snapshot.lock().await.clone()
         };
         let managed = ManagedView {
-            target: request.target.clone(),
             attachment: attachment.clone(),
             snapshot,
             barrier,
@@ -487,7 +485,6 @@ impl BrowserHelperSupervisor {
         request: BrowserViewOpenRequest,
     ) -> Result<BrowserViewOpen, InspectionError> {
         let (
-            target,
             input,
             responses,
             endpoint,
@@ -513,7 +510,6 @@ impl BrowserHelperSupervisor {
                 )
             })?;
             (
-                source.target.clone(),
                 source.input.clone(),
                 Arc::clone(&source.responses),
                 source.endpoint.clone(),
@@ -582,7 +578,6 @@ impl BrowserHelperSupervisor {
         });
         let current_snapshot = snapshot.lock().await.clone();
         let managed = ManagedView {
-            target,
             attachment,
             snapshot,
             barrier,
@@ -641,7 +636,15 @@ impl BrowserHelperSupervisor {
         if let Some(target_id) = view.snapshot.lock().await.displayed_target_id.clone() {
             attachment.target_id = target_id;
         }
-        Ok((view.target.clone(), attachment))
+        // A pane is only an initial selector. Keep the verified tab as the
+        // live view's work scope even if that source pane moves or closes.
+        let target = BrowserTarget {
+            session_id: attachment.session_id.clone(),
+            tab_id: Some(attachment.tab_id.clone()),
+            pane_id: None,
+            endpoint_path: Some(attachment.endpoint_path.clone()),
+        };
+        Ok((target, attachment))
     }
 
     pub(crate) async fn frame_endpoint(

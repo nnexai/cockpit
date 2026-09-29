@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState, type Dispatch, type MutableRefObject } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { FocusRequest } from "../../protocol/generated/v1";
-import type { SessionAction, SessionState } from "./sessionStore";
+import type { FocusEcho } from "../layout/reconcile";
+import { focusFulfilled, type SessionAction, type SessionState } from "./sessionStore";
 
 export const FOCUS_FALLBACK_MS = 500;
 /** How long a tab switch waits for the target pane to attach at its own size before Herdr is asked to focus it anyway. */
@@ -26,27 +27,59 @@ export type FocusCoordinatorOptions = {
   mountedRef: MutableRefObject<boolean>;
   dispatch: Dispatch<SessionAction>;
   describeError(error: unknown, fallback: string): StatusError;
+  onIntent(echo: FocusEcho): void;
   onTimeout(): void;
 };
 
-export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, describeError, onTimeout }: FocusCoordinatorOptions) {
+export type FocusCoordinator = {
+  focus(request: FocusRequest, location: FocusLocation, prepare?: { paneId: string }): void;
+  focusDelayed: boolean;
+  panePrepared(paneId: string): void;
+  reconcile(state: SessionState, selection: FocusLocation, controlPaneId: string | null): string | null | undefined;
+  reset(): void;
+  retryFocus(): void;
+  supersedeSelection(): void;
+  getEchoes(): FocusEcho[];
+  consumeEcho(token: number): void;
+  tokenRef: MutableRefObject<number>;
+};
+
+export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, describeError, onIntent, onTimeout }: FocusCoordinatorOptions): FocusCoordinator {
   const tokenRef = useRef(0);
   const intentRef = useRef<FocusIntent | null>(null);
   const inFlightRef = useRef(new Map<string, FocusIntent>());
+  const echoesRef = useRef(new Map<number, FocusIntent>());
   const queuedIntentRef = useRef<FocusIntent | null>(null);
   const fallbackCancelRef = useRef<(() => void) | null>(null);
-  const prepareGateRef = useRef<{ token: number; paneId: string; release: () => void } | null>(null);
+  const prepareGateRef = useRef<{ token: number; paneId: string; release: () => void; cancel: () => void } | null>(null);
   const [focusDelayed, setFocusDelayed] = useState(false);
 
-  const reset = useCallback(() => {
+  const supersedeSelection = useCallback(() => {
     tokenRef.current += 1;
     intentRef.current = null;
     queuedIntentRef.current = null;
+    prepareGateRef.current?.cancel();
     prepareGateRef.current = null;
     fallbackCancelRef.current?.();
     fallbackCancelRef.current = null;
     setFocusDelayed(false);
-  }, []);
+    const current = stateRef.current;
+    if (current.sessionId) dispatch({ type: "focus/clear", epoch: current.epoch, sessionId: current.sessionId, token: tokenRef.current });
+  }, [dispatch, stateRef]);
+
+  const reset = useCallback(() => {
+    supersedeSelection();
+    echoesRef.current.clear();
+  }, [supersedeSelection]);
+
+  const getEchoes = useCallback((): FocusEcho[] => {
+    const current = stateRef.current;
+    return Array.from(echoesRef.current.values())
+      .filter((intent) => intent.epoch === current.epoch && intent.sessionId === current.sessionId)
+      .map((intent) => ({ token: intent.token, kind: intent.request.kind, targetId: intent.request.target_id }));
+  }, [stateRef]);
+
+  const consumeEcho = useCallback((token: number) => { echoesRef.current.delete(token); }, []);
 
   const isCurrent = (intent: FocusIntent): boolean =>
     mountedRef.current &&
@@ -56,7 +89,9 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
 
   const sendFocus = (intent: FocusIntent): void => {
     inFlightRef.current.set(intent.sessionId, intent);
+    echoesRef.current.set(intent.token, intent);
     void client.focus(intent.sessionId, intent.request).then((response) => {
+      if (!response.accepted) echoesRef.current.delete(intent.token);
       if (!isCurrent(intent)) return;
       if (!response.accepted) {
         dispatch({ type: "focus/error", epoch: intent.epoch, sessionId: intent.sessionId, token: intent.token, code: "focus_rejected", message: "Herdr did not accept this focus request" });
@@ -74,6 +109,7 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
         },
       );
     }, (error: unknown) => {
+      echoesRef.current.delete(intent.token);
       if (!isCurrent(intent)) return;
       const described = describeError(error, "Could not focus resource");
       intentRef.current = intent;
@@ -96,15 +132,21 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
     const current = stateRef.current;
     const sessionId = current.sessionId;
     if (!sessionId) return;
+    if (current.sync === "live" && current.snapshot?.session_id === sessionId && focusFulfilled(current.snapshot, request)) {
+      supersedeSelection();
+      return;
+    }
     const epoch = current.epoch;
     const token = tokenRef.current + 1;
     tokenRef.current = token;
     fallbackCancelRef.current?.();
     fallbackCancelRef.current = null;
+    prepareGateRef.current?.cancel();
     prepareGateRef.current = null;
     setFocusDelayed(false);
     const intent = { epoch, sessionId, token, request, location };
     intentRef.current = intent;
+    onIntent({ token, kind: request.kind, targetId: request.target_id });
     dispatch({ type: "focus/request", epoch, sessionId, request, token });
     const dispatchIntent = () => {
       if (!isCurrent(intent)) return;
@@ -127,8 +169,8 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
       dispatchIntent();
     };
     const timer = globalThis.setTimeout(release, FOCUS_PREPARE_MS);
-    prepareGateRef.current = { token, paneId: prepare.paneId, release };
-  }, [client, describeError, dispatch, mountedRef, onTimeout, stateRef]);
+    prepareGateRef.current = { token, paneId: prepare.paneId, release, cancel: () => globalThis.clearTimeout(timer) };
+  }, [client, describeError, dispatch, mountedRef, onIntent, onTimeout, stateRef, supersedeSelection]);
 
   /** Reports that a pane painted its first frame; releases a focus request waiting on it. */
   const panePrepared = useCallback((paneId: string) => {
@@ -154,5 +196,5 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
     return undefined;
   }, []);
 
-  return { focus, focusDelayed, panePrepared, reconcile, reset, retryFocus, tokenRef };
+  return { consumeEcho, focus, focusDelayed, getEchoes, panePrepared, reconcile, reset, retryFocus, supersedeSelection, tokenRef };
 }

@@ -8,6 +8,7 @@ import type {
   ContextSearchResponse,
   ContextSearchResult,
 } from "../../protocol/generated/v1";
+import { viewerErrorCode } from "../layout/viewerLifecycle";
 
 const POLL_INTERVAL_MS = 3_000;
 
@@ -20,7 +21,7 @@ export type ContextSearchProps = {
   poll: (request: ContextInvalidationRequest, signal: AbortSignal) => Promise<ContextInvalidationResponse>;
   onSelect: (result: ContextSearchResult) => void;
   onInvalidate: (invalidations: ContextInvalidation[]) => void;
-  disabled?: boolean;
+  onViewerError?: (error: unknown) => void;
 };
 
 function errorText(error: unknown): string {
@@ -38,7 +39,7 @@ export function ContextSearch({
   poll,
   onSelect,
   onInvalidate,
-  disabled = false,
+  onViewerError,
 }: ContextSearchProps) {
   const queryId = useId();
   const [query, setQuery] = useState("");
@@ -55,6 +56,8 @@ export function ContextSearch({
   const searchAbortRef = useRef<AbortController | null>(null);
   const identityRef = useRef(identity);
   const onInvalidateRef = useRef(onInvalidate);
+  const onViewerErrorRef = useRef(onViewerError);
+  onViewerErrorRef.current = onViewerError;
   identityRef.current = identity;
   onInvalidateRef.current = onInvalidate;
   const knownKey = useMemo(
@@ -85,7 +88,7 @@ export function ContextSearch({
 
   const runSearch = useCallback(async () => {
     const requestQuery = query.trim();
-    if (!requestQuery || disabled) return;
+    if (!requestQuery) return;
     searchAbortRef.current?.abort();
     const controller = new AbortController();
     searchAbortRef.current = controller;
@@ -111,13 +114,14 @@ export function ContextSearch({
     } catch (error) {
       if (!controller.signal.aborted && identityRef.current === identity && generation === searchGenerationRef.current) {
         setSearchError(errorText(error));
+        if (viewerErrorCode(error) === "viewer_not_found") onViewerErrorRef.current?.(error);
       }
     } finally {
       if (!controller.signal.aborted && identityRef.current === identity && generation === searchGenerationRef.current) {
         setSearching(false);
       }
     }
-  }, [bindingId, disabled, identity, nextOffset, nextSearchGeneration, query, rootId, search, searchRevision, validSearchResponse]);
+  }, [bindingId, identity, nextOffset, nextSearchGeneration, query, rootId, search, searchRevision, validSearchResponse]);
 
   useEffect(() => {
     searchAbortRef.current?.abort();
@@ -140,7 +144,7 @@ export function ContextSearch({
   }, [nextSearchGeneration]);
 
   useEffect(() => {
-    if (disabled || knownSnapshot.length === 0) return undefined;
+    if (knownSnapshot.length === 0) return undefined;
     let cancelled = false;
     let timeout: number | undefined;
     let activeController: AbortController | null = null;
@@ -165,6 +169,7 @@ export function ContextSearch({
         if (!cancelled && activeController === controller && !controller.signal.aborted
           && generation === pollGenerationRef.current && identityRef.current === identity) {
           setPollError(errorText(error));
+          if (viewerErrorCode(error) === "viewer_not_found") onViewerErrorRef.current?.(error);
         }
       } finally {
         if (activeController === controller) activeController = null;
@@ -179,7 +184,7 @@ export function ContextSearch({
       if (timeout !== undefined) window.clearTimeout(timeout);
       activeController?.abort();
     };
-  }, [bindingId, disabled, identity, knownSnapshot, nextPollGeneration, poll, rootId]);
+  }, [bindingId, identity, knownSnapshot, nextPollGeneration, poll, rootId]);
 
   return (
     <section className="context-search" aria-label="Search Context">
@@ -201,10 +206,9 @@ export function ContextSearch({
             setPartialReason(null);
           }}
           maxLength={256}
-          disabled={disabled}
           placeholder="Find text in companion files"
         />
-        <button type="submit" disabled={disabled || searching || !query.trim()}>{searching ? "Searching…" : nextOffset !== null ? "Load more" : "Search"}</button>
+        <button type="submit" disabled={searching || !query.trim()}>{searching ? "Searching…" : nextOffset !== null ? "Load more" : "Search"}</button>
       </form>
       {searchError ? <p className="context-search-error" role="status">{searchError}</p> : null}
       {pollError ? <p className="context-search-poll" role="status">Visible-file refresh: {pollError}</p> : null}

@@ -1,6 +1,6 @@
 # Cockpit-owned tab layout: agreed contract
 
-Status: design and implementation planning resumed after interactive refinement. Implementation remains a separate second step. The user has approved the demo's drag/drop, resizing, visual direction and pane control icons as implementation references; this does not establish backend integration.
+Status: approved contract implemented. The user authorized implementation after approving the demo and planning documents. Product verification and remaining measurement limits are recorded in [`03-contract-evidence.md`](03-contract-evidence.md).
 
 ## Approved implementation reference
 
@@ -10,7 +10,7 @@ Status: design and implementation planning resumed after interactive refinement.
 - Preserve header-based dragging, centre-drop swaps, edge-drop placement, destination previews and live divider resizing. Use the demo's pane chrome, selected-state treatment and control icon appearance as the visual reference.
 - Compare the implemented surface against the runnable demo for mouse behavior and appearance. Product integration may adapt existing tokens and accessibility behavior without silently replacing the approved interaction model or icon treatment.
 - Approval is limited to the stated interaction and visual feedback. Mock content, simulation controls, missing focus preservation and absence of backend integration are not approved product behavior.
-- The demo is standalone, with no Herdr or real browser sessions. Planning resumed at the user's request; product implementation is not authorized by this planning step.
+- The demo remains standalone, with no Herdr or managed browser integration. The product implementation follows it; product verification is recorded separately.
 
 ## User decisions
 
@@ -49,9 +49,9 @@ Legacy cleanup safety default: old receipts lack creation-time artifact identiti
 - [`02-implementation-plan.md`](02-implementation-plan.md): backend authorization/browser identity findings, fixed interfaces, clean cutover and implementation dependencies.
 - [`03-contract-evidence.md`](03-contract-evidence.md): observed raw Herdr split-result identity and confirming membership, with explicit verification limits.
 
-## Required outputs
+## Planning outputs (completed)
 
 - `01-design.md`: exact interaction/state/focus/lifecycle design, examples/mock, acceptance matrix, proposed DECISIONS changes (text only).
 - `02-implementation-plan.md`: repository-grounded dependencies, interfaces/data shapes, caller migration and obsolete paths removal, runtime acceptance and technical prerequisites.
 - Example mock under `mocks/tab-layout/`; example state/transition fixtures if useful, explicitly design artifacts not product code.
-- No builds/lints/tests/formatters mid-flight. No product code edits, configuration edits, changes to active decision/architecture docs, or commits claiming implementation.
+- The planning phase made no product/configuration edits and ran no product builds or tests. Implementation was subsequently authorized separately and delivered against these documents.

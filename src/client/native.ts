@@ -9,12 +9,12 @@ import {
   parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
   parseSpaceUpdateRequest, parseSpaceRemoveRequest,
 } from "./libraryProtocol";
-import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
+import { parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
-  matchContextResponse, matchPanePresentation, parseContextDirectory, parseContextFileIndex,
+  matchContextResponse, parseContextDirectory, parseContextFileIndex,
   parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
-  parseContextFileIndexRequest, parseContextLaunchRequest, parsePanePresentation,
+  parseContextFileIndexRequest, parseViewerSourceOptions, matchViewerSourceOptions, parseViewerOpenRequest, parseViewerContext, matchViewerContext,
 } from "./contextProtocol";
 import {
   matchContextInvalidationResponse, matchContextSearchResponse,
@@ -82,6 +82,8 @@ import {
   parseBrowserFeedbackSendResponse,
   parseBrowserRequest,
   parseBrowserResponse,
+  parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseBrowserLegacyArchiveList,
+  parseBrowserLegacyRemovalRequest, parseBrowserLegacyKeepRequest, parseBrowserLegacyRecipientsRequest, parseBrowserLegacyRecipients,
   parseErrorEnvelope,
   parseFocusRequest,
   parseFocusResponse,
@@ -655,76 +657,85 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       validateSessionId(sessionId);
       return invokeAndParse(invoke, "cockpit_workspace_teardown_recoveries", { sessionId }, "workspace teardown recoveries", parseWorkspaceTeardownRecoveryList);
     },
-    async inspectPane(sessionId, paneId, signal) {
+    async viewerSources(sessionId, paneId, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const value = await invokeAndParse(invoke, "cockpit_viewer_sources", { sessionId, paneId }, "viewer sources", parseViewerSourceOptions);
       signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(paneId);
-      const value = await invokeAndParse(invoke, "cockpit_pane_presentation", { sessionId, paneId }, "pane presentation", parsePanePresentation);
-      signal?.throwIfAborted();
-      return matchPanePresentation(value, sessionId, paneId);
+      return matchViewerSourceOptions(value, sessionId, paneId);
     },
-    async contextDirectory(sessionId, paneId, value, signal) {
+    async viewerOpen(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseViewerOpenRequest(value);
+      return matchViewerContext(await invokeAndParse(invoke, "cockpit_viewer_open", { sessionId, request }, "viewer open", parseViewerContext), sessionId, request);
+    },
+    async viewerRelease(sessionId, viewerId) {
+      validateSessionId(sessionId); validateResourceId(viewerId);
+      await invokeAndParse(invoke, "cockpit_viewer_release", { sessionId, viewerId }, "viewer release", (value) => {
+        if (value !== null) throw new CockpitClientError("malformed_response", "Viewer release response is malformed");
+      });
+    },
+    async contextDirectory(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseContextDirectoryRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_directory", { sessionId, paneId, request }, "Context directory", parseContextDirectory);
+      const response = await invokeAndParse(invoke, "cockpit_context_directory", { sessionId, viewerId, request }, "Context directory", parseContextDirectory);
       signal?.throwIfAborted();
       return matchContextResponse(response, request);
     },
-    async contextFileIndex(sessionId, paneId, value, signal) {
+    async contextFileIndex(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseContextFileIndexRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_file_index", { sessionId, paneId, request }, "Context file index", parseContextFileIndex);
+      const response = await invokeAndParse(invoke, "cockpit_context_file_index", { sessionId, viewerId, request }, "Context file index", parseContextFileIndex);
       signal?.throwIfAborted();
       if (response.binding_id !== request.binding_id || response.root_id !== request.root_id) throw new CockpitClientError("malformed_response", "Context file index belongs to another root");
       return response;
     },
-    async contextDocument(sessionId, paneId, value, signal) {
+    async contextDocument(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseContextDocumentRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_document", { sessionId, paneId, request }, "Context document", parseContextDocument);
+      const response = await invokeAndParse(invoke, "cockpit_context_document", { sessionId, viewerId, request }, "Context document", parseContextDocument);
       signal?.throwIfAborted();
       return matchContextResponse(response, request);
     },
-    async reviewSnapshot(sessionId, paneId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(paneId); signal?.throwIfAborted();
+    async reviewSnapshot(sessionId, viewerId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(viewerId); signal?.throwIfAborted();
       const parsed = parseReviewSnapshotRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_review_snapshot", { sessionId, paneId, request: parsed }, "Review snapshot", parseReviewSnapshot);
-      signal?.throwIfAborted(); return matchReviewSnapshot(response, sessionId, paneId, parsed);
+      const response = await invokeAndParse(invoke, "cockpit_review_snapshot", { sessionId, viewerId, request: parsed }, "Review snapshot", parseReviewSnapshot);
+      signal?.throwIfAborted(); return matchReviewSnapshot(response, sessionId, viewerId, parsed);
     },
-    async reviewFile(sessionId, paneId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(paneId); signal?.throwIfAborted();
+    async reviewFile(sessionId, viewerId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(viewerId); signal?.throwIfAborted();
       const parsed = parseReviewFileRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_review_file", { sessionId, paneId, request: parsed }, "Review file", parseReviewFile);
-      signal?.throwIfAborted(); return matchReviewFile(response, sessionId, paneId, parsed);
+      const response = await invokeAndParse(invoke, "cockpit_review_file", { sessionId, viewerId, request: parsed }, "Review file", parseReviewFile);
+      signal?.throwIfAborted(); return matchReviewFile(response, sessionId, viewerId, parsed);
     },
-    async contextSearch(sessionId, paneId, value, signal) {
+    async contextSearch(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseContextSearchRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_search", { sessionId, paneId, request }, "Context search", parseContextSearchResponse);
+      const response = await invokeAndParse(invoke, "cockpit_context_search", { sessionId, viewerId, request }, "Context search", parseContextSearchResponse);
       signal?.throwIfAborted();
       return matchContextSearchResponse(response, request);
     },
-    async contextInvalidate(sessionId, paneId, value, signal) {
+    async contextInvalidate(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseContextInvalidationRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_invalidate", { sessionId, paneId, request }, "Context invalidation", parseContextInvalidationResponse);
+      const response = await invokeAndParse(invoke, "cockpit_context_invalidate", { sessionId, viewerId, request }, "Context invalidation", parseContextInvalidationResponse);
       signal?.throwIfAborted();
       return matchContextInvalidationResponse(response, request);
     },
-    async contextMedia(sessionId, paneId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+    async contextMedia(sessionId, viewerId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(viewerId);
       const body = parseContextMediaRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_media", { sessionId, paneId, request: body }, "Context image", parseContextMedia);
+      const response = await invokeAndParse(invoke, "cockpit_context_media", { sessionId, viewerId, request: body }, "Context image", parseContextMedia);
       signal?.throwIfAborted();
       return matchContextMedia(response, body);
     },
@@ -824,99 +835,113 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const response = await invokeAndParse(invoke, "cockpit_library_space_remove", { request }, "Space removal", parseSpaceContextListing);
       return matchSpaceContextListing(response, request);
     },
-    async openReview(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseReviewLaunchRequest(value);
-      return matchPanePresentation(await invokeAndParse(invoke, "cockpit_review_open", { sessionId, request }, "Review launch", parsePanePresentation), sessionId);
-    },
-    async openContext(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseContextLaunchRequest(value);
-      return matchPanePresentation(await invokeAndParse(invoke, "cockpit_context_open", { sessionId, request }, "Context launch", parsePanePresentation), sessionId);
-    },
-    async commentBatches(sessionId, paneId, value, signal) {
+    async commentBatches(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseCommentScope(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_list", { sessionId, paneId, request }, "comment batches", parseCommentBatchList);
+      const response = await invokeAndParse(invoke, "cockpit_comments_list", { sessionId, viewerId, request }, "comment batches", parseCommentBatchList);
       signal?.throwIfAborted();
-      matchCommentAttachment(response.attachment, sessionId, paneId, request);
+      matchCommentAttachment(response.attachment, sessionId, request);
       return response;
     },
-    async commentBatch(sessionId, paneId, value, signal) {
+    async commentBatch(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseCommentBatchRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_batch", { sessionId, paneId, request }, "comment batch", parseCommentBatch);
+      const response = await invokeAndParse(invoke, "cockpit_comments_batch", { sessionId, viewerId, request }, "comment batch", parseCommentBatch);
       signal?.throwIfAborted();
-      return matchCommentBatch(response, sessionId, paneId, request.scope, request.batch_id);
+      return matchCommentBatch(response, sessionId, request.scope, request.batch_id);
     },
-    async commentUpsert(sessionId, paneId, value, signal) {
+    async commentUpsert(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseCommentUpsert(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_upsert", { sessionId, paneId, request }, "comment upsert", parseCommentBatch);
+      const response = await invokeAndParse(invoke, "cockpit_comments_upsert", { sessionId, viewerId, request }, "comment upsert", parseCommentBatch);
       signal?.throwIfAborted();
-      return matchCommentBatch(response, sessionId, paneId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
+      return matchCommentBatch(response, sessionId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
     },
-    async commentRemove(sessionId, paneId, value, signal) {
+    async commentRemove(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseCommentRemove(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_remove", { sessionId, paneId, request }, "comment remove", parseCommentBatch);
+      const response = await invokeAndParse(invoke, "cockpit_comments_remove", { sessionId, viewerId, request }, "comment remove", parseCommentBatch);
       signal?.throwIfAborted();
-      return matchCommentBatch(response, sessionId, paneId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
+      return matchCommentBatch(response, sessionId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
     },
-    async commentDiscard(sessionId, paneId, value, signal) {
+    async commentDiscard(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseCommentMutation(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_discard", { sessionId, paneId, request }, "comment discard", parseCommentBatchList);
+      const response = await invokeAndParse(invoke, "cockpit_comments_discard", { sessionId, viewerId, request }, "comment discard", parseCommentBatchList);
       signal?.throwIfAborted();
-      matchCommentAttachment(response.attachment, sessionId, paneId, request.scope);
+      matchCommentAttachment(response.attachment, sessionId, request.scope);
       return response;
-    },    async commentAttach(sessionId, paneId, value, signal) {
+    },    async commentAttach(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseCommentMutation(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_attach", { sessionId, paneId, request }, "comment attach", parseCommentBatch);
+      const response = await invokeAndParse(invoke, "cockpit_comments_attach", { sessionId, viewerId, request }, "comment attach", parseCommentBatch);
       signal?.throwIfAborted();
-      return matchCommentBatch(response, sessionId, paneId, request.scope, request.batch_id, request.expected_generation, true);
+      return matchCommentBatch(response, sessionId, request.scope, request.batch_id, request.expected_generation, true);
     },
-    async commentPastePrepare(sessionId, paneId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(paneId);
+    async commentPastePrepare(sessionId, viewerId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(viewerId);
       const parsed = parseCommentPastePrepareRequest(value);
       signal?.throwIfAborted();
-      const response = await invokeAndParse(invoke, "cockpit_comments_paste_prepare", { sessionId, paneId, request: parsed }, "comment paste prepare", parseCommentPastePrepare);
+      const response = await invokeAndParse(invoke, "cockpit_comments_paste_prepare", { sessionId, viewerId, request: parsed }, "comment paste prepare", parseCommentPastePrepare);
       signal?.throwIfAborted();
       return matchPastePrepare(response, sessionId, parsed);
     },
-    async commentPasteSend(sessionId, paneId, value) {
-      validateSessionId(sessionId); validateResourceId(paneId);
+    async commentPasteSend(sessionId, viewerId, value) {
+      validateSessionId(sessionId); validateResourceId(viewerId);
       const parsed = parseCommentPasteSendRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_paste_send", { sessionId, paneId, request: parsed }, "comment paste send", parseCommentPasteReceipt);
+      const response = await invokeAndParse(invoke, "cockpit_comments_paste_send", { sessionId, viewerId, request: parsed }, "comment paste send", parseCommentPasteReceipt);
       return matchPasteReceipt(response, parsed);
     },
-    async commentPasteMarkPasted(sessionId, paneId, value) {
-      validateSessionId(sessionId); validateResourceId(paneId);
+    async commentPasteMarkPasted(sessionId, viewerId, value) {
+      validateSessionId(sessionId); validateResourceId(viewerId);
       const parsed = parseCommentPasteMarkPastedRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_paste_mark_pasted", { sessionId, paneId, request: parsed }, "comment paste resolution", parseCommentPasteReceipt);
+      const response = await invokeAndParse(invoke, "cockpit_comments_paste_mark_pasted", { sessionId, viewerId, request: parsed }, "comment paste resolution", parseCommentPasteReceipt);
       return matchMarkedReceipt(response, parsed);
     },
-    async commentPreview(sessionId, paneId, value, signal) {
+    async commentPreview(sessionId, viewerId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
-      validateResourceId(paneId);
+      validateResourceId(viewerId);
       const request = parseCommentPreviewRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_preview", { sessionId, paneId, request }, "comment preview", parseCommentPreview);
+      const response = await invokeAndParse(invoke, "cockpit_comments_preview", { sessionId, viewerId, request }, "comment preview", parseCommentPreview);
       signal?.throwIfAborted();
       return matchCommentPreview(response, request.batch);
+    },
+    browserCleanupStatus() {
+      return invokeAndParse(invoke, "cockpit_browser_cleanup_status", undefined, "browser cleanup", parseBrowserCleanupStatus);
+    },
+    browserCleanupRetry(value) {
+      const request = parseBrowserCleanupRetryRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_cleanup_retry", { request }, "browser cleanup retry", parseBrowserCleanupStatus);
+    },
+    browserLegacyList() {
+      return invokeAndParse(invoke, "cockpit_browser_legacy_list", undefined, "browser legacy archives", parseBrowserLegacyArchiveList);
+    },
+    browserLegacyRemove(value) {
+      const request = parseBrowserLegacyRemovalRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_legacy_remove", { request }, "browser legacy removal", parseBrowserLegacyArchiveList);
+    },
+    browserLegacyKeep(value) {
+      const request = parseBrowserLegacyKeepRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_legacy_keep", { request }, "browser legacy keep", parseBrowserLegacyArchiveList);
+    },
+    async browserLegacyRecipients(value) {
+      const request = parseBrowserLegacyRecipientsRequest(value);
+      const recipients = await invokeAndParse(invoke, "cockpit_browser_legacy_recipients", { request }, "browser legacy recipients", parseBrowserLegacyRecipients);
+      if (recipients.some((recipient) => recipient.session_id !== request.session_id)) throw new CockpitClientError("malformed_response", "Browser recipient belongs to another session");
+      return recipients;
     },
     browserAction(value) {
       const request = parseBrowserRequest(value);

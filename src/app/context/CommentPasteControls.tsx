@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { CommentBatch, CommentPastePrepareResponse, CommentPasteReceipt, CommentRequestScope, CommentPreview } from "../../protocol/generated/v1";
+import type { CommentBatch, CommentPastePrepareResponse, CommentPasteReceipt, CommentRequestScope, ViewerContext } from "../../protocol/generated/v1";
 
 function operationCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null || !("operationCode" in error)) return null;
@@ -27,10 +27,12 @@ function mayHaveDispatched(error: unknown): boolean {
   return code === null || !PROVEN_PRE_DISPATCH_ERRORS.has(code);
 }
 
-export function CommentPasteControls({ client, sessionId, paneId, scope, batch, retainStale, preview, onBatchChanged }: {
-  client: CockpitClient; sessionId: string; paneId: string; scope: CommentRequestScope;
-  batch: CommentBatch; retainStale: boolean; preview: CommentPreview | null; onBatchChanged: () => void;
+export function CommentPasteControls({ client, context, scope, batch, retainStale, onBatchChanged, onViewerError }: {
+  client: CockpitClient; context: ViewerContext; scope: CommentRequestScope;
+  batch: CommentBatch; retainStale: boolean; onBatchChanged: () => void;
+  onViewerError?: (error: unknown) => void;
 }) {
+  const { session_id: sessionId, viewer_id: viewerId } = context;
   const [prepared, setPrepared] = useState<CommentPastePrepareResponse | null>(null);
   const [targetPane, setTargetPane] = useState("");
   const [receipt, setReceipt] = useState<CommentPasteReceipt | null>(null);
@@ -38,19 +40,21 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [duplicateRisk, setDuplicateRisk] = useState(false);
-  const identity = `${sessionId}\0${paneId}\0${scope.binding_id}\0${batch.batch_id}\0${batch.generation}`;
+  const identity = `${sessionId}\0${viewerId}\0${scope.binding_id}\0${batch.batch_id}\0${batch.generation}`;
   const identityRef = useRef(identity); identityRef.current = identity;
   const onBatchChangedRef = useRef(onBatchChanged); onBatchChangedRef.current = onBatchChanged;
+  const onViewerErrorRef = useRef(onViewerError); onViewerErrorRef.current = onViewerError;
   const requestSequence = useRef(0);
   const prepare = useCallback(async () => {
     const sequence = ++requestSequence.current;
     setError(null); setPrepared(null); setDuplicateRisk(false);
     try {
-      const result = await client.commentPastePrepare(sessionId, paneId, { batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, retain_stale_excerpts: retainStale });
+      const result = await client.commentPastePrepare(sessionId, viewerId, { batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, retain_stale_excerpts: retainStale });
       if (identityRef.current !== identity || sequence !== requestSequence.current) return;
       setPrepared(result);
     } catch (reason) {
       if (identityRef.current !== identity || sequence !== requestSequence.current) return;
+      onViewerErrorRef.current?.(reason);
       if (operationCode(reason) === "stale_generation") {
         // A send whose response was lost may have archived the sent drafts.
         // Only the reloaded batch can show what remains to paste.
@@ -60,7 +64,7 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
       }
       setError(reason instanceof Error ? reason.message : "Could not prepare paste.");
     }
-  }, [batch.batch_id, batch.generation, client, identity, paneId, retainStale, scope, sessionId]);
+  }, [batch.batch_id, batch.generation, client, identity, viewerId, retainStale, scope, sessionId]);
   useEffect(() => {
     setReceipt(null); void prepare();
     return () => { requestSequence.current += 1; };
@@ -76,7 +80,7 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
     setPending(true); setError(null); setReceipt(null);
     const operationId = crypto.randomUUID();
     try {
-      const result = await client.commentPasteSend(sessionId, paneId, {
+      const result = await client.commentPasteSend(sessionId, viewerId, {
         batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, target,
         expected_payload_hash: prepared.payload_hash, retain_stale_excerpts: retainStale,
         operation_id: operationId, request_id: operationId, acknowledge_duplicate_risk: duplicateRisk,
@@ -87,6 +91,7 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
       if (result.state === "accepted") onBatchChanged();
     } catch (reason) {
       if (identityRef.current === identity) {
+        onViewerErrorRef.current?.(reason);
         if (mayHaveDispatched(reason)) {
           setError(`Paste outcome is unconfirmed. Your comments are retained. Refresh the receipt before any retry. ${errorText(reason)}`);
           setPrepared(null); setTargetPane("");
@@ -100,13 +105,16 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
     if (pending || !duplicateRisk) return;
     setPending(true); setError(null);
     try {
-      const result = await client.commentPasteMarkPasted(sessionId, paneId, {
+      const result = await client.commentPasteMarkPasted(sessionId, viewerId, {
         batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, operation_id: operationId,
       });
       if (identityRef.current !== identity) return;
       setReceipt(result); setPrepared(null); setTargetPane(""); onBatchChanged();
     } catch (reason) {
-      if (identityRef.current === identity) setError(reason instanceof Error ? reason.message : "Could not resolve the paste receipt.");
+      if (identityRef.current === identity) {
+        setError(reason instanceof Error ? reason.message : "Could not resolve the paste receipt.");
+        onViewerErrorRef.current?.(reason);
+      }
     } finally { setPending(false); }
   };
   const receipts = receipt ? [receipt] : prepared?.receipts ?? [];

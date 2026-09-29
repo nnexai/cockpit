@@ -1,6 +1,5 @@
 import { UiIcon } from "./UiIcon";
-import { ReviewViewer } from "./review/ReviewViewer";
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
   parseResourceMutationResponse,
   type CockpitClient,
@@ -8,39 +7,39 @@ import {
   type TerminalStream,
 } from "../client/CockpitClient";
 import type {
-  BrowserTarget,
-  BrowserViewPresentation,
-  BrowserViewViewportRequest,
   FocusRequest,
   ResourceMutationRequest,
-  ResourceMutationResponse,
   SessionSnapshotResponse,
   SessionStreamMessage,
   SessionSummary,
-  SpaceGitStatus,
-  TabLayout,
-  TerminalOpenRequest,
+  ViewerSourceOptions,
 } from "../protocol/generated/v1";
-import { initialSessionState, sessionReducer, type SessionState } from "./session/sessionStore";
+import { initialSessionState, sessionReducer, type SessionAction, type SessionState } from "./session/sessionStore";
 import { useFocusCoordinator } from "./session/focusCoordinator";
 import { spaceCheckoutKey, useSpaceGitStatus } from "./session/spaceGitStatus";
 import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
-import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex, type ResizeHandle } from "./layout/layoutProjection";
+import { tabDropInsertionIndex } from "./layout/layoutProjection";
+import { useTabLayouts, type LayoutAction, type LeafCtx, type PendingCreation, type TabLayoutState } from "./layout/tabLayoutStore";
+import { leaves, type Leaf } from "./layout/splitTree";
+import { solveLayout, type Rect } from "./layout/solveLayout";
+import { runtimeSource, type FocusEcho } from "./layout/reconcile";
+import { TabCanvas, focusSelectedDivider } from "./layout/TabCanvas";
+import { LeafHost } from "./layout/LeafHost";
+import { openViewerLeaf, closeViewerLeaf, releaseViewers, getViewerClientId } from "./layout/viewerLifecycle";
+import { openBrowserLeaf, closeBrowserLeaf, retireTabBrowser, browserOpenDisabledReason, retryBrowserCleanup, subscribeBrowserLifecycle } from "./layout/browserLifecycle";
+import { BrowserCleanupStrip } from "./layout/BrowserCleanupStrip";
 import { routeWorkbenchKeydown } from "./input/keymap";
 import { SHORTCUTS, SHORTCUT_SEPARATOR, armedPrefixHint, focusSidebarList, formatShortcut, shortcutEntry, withShortcut, type PrefixCommand } from "./input/shortcuts";
 import { trapModalTab, useModalFocus } from "./input/modal";
 import { flushSync } from "react-dom";
 import { dispatchFileNavigation, rankFuzzyMatches } from "./input/fileNavigation";
-import { TerminalPane } from "./TerminalPane";
 import { SetupDialog, setupParentFor } from "./projects/SetupDialog";
 import { TeardownDialog } from "./projects/TeardownDialog";
 import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
-import { ContextViewer, type ContextViewState, type LibraryCommand } from "./context/ContextViewer";
+import type { LibraryCommand } from "./context/ContextViewer";
 import { AddContextDialog } from "./library/AddContextDialog";
 import { LibraryView } from "./library/LibraryView";
 import type { LibrarySpace } from "./library/libraryState";
-import { isGraphicalContext, isGraphicalReview, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
-import { BrowserPane, type BrowserPaneRecoveryRegistration } from "./browser/BrowserPane";
 import { InlineRename } from "./InlineRename";
 import { Sidebar } from "./sidebar/Sidebar";
 import { spaceNotesFromFailures, type ContextAnchor } from "./sidebar/Spaces";
@@ -62,15 +61,7 @@ function describeError(error: unknown, fallback: string): StatusError {
 function byId<T extends { id: string }>(items: T[], id: string | null): T | undefined { return id ? items.find((item) => item.id === id) : undefined; }
 function tabsForSpace(tabs: Tab[], spaceId: string | null): Tab[] { return spaceId ? tabs.filter((tab) => tab.space_id === spaceId) : []; }
 function panesForTab(panes: Pane[], tabId: string | null): Pane[] { return tabId ? panes.filter((pane) => pane.tab_id === tabId) : []; }
-export function authoritativeSelection(snapshot: SessionSnapshot): Selection {
-  const spaceId = snapshot.spaces.some((space) => space.id === snapshot.focused_space_id) ? snapshot.focused_space_id : snapshot.spaces[0]?.id ?? null;
-  const tabs = tabsForSpace(snapshot.tabs, spaceId);
-  const tabId = tabs.some((tab) => tab.id === snapshot.focused_tab_id) ? snapshot.focused_tab_id : tabs[0]?.id ?? null;
-  const panes = panesForTab(snapshot.panes, tabId);
-  const paneId = panes.some((pane) => pane.id === snapshot.focused_pane_id) ? snapshot.focused_pane_id : panes[0]?.id ?? null;
-  return { spaceId, tabId, paneId };
-}
-export function authoritativeMutationSnapshot(expectedSessionId: string, response: ResourceMutationResponse): SessionSnapshot {
+export function authoritativeMutationSnapshot(expectedSessionId: string, response: unknown): SessionSnapshot {
   const parsed = parseResourceMutationResponse(response);
   if (parsed.session_id !== expectedSessionId) {
     throw new Error("Mutation response belongs to another session");
@@ -102,13 +93,6 @@ type PaneDialog =
   | { kind: "rename"; paneId: string }
   | { kind: "swap"; paneId: string }
   | { kind: "move"; paneId: string };
-type PaneCanvasProjection = {
-  key: string | null;
-  panes: Pane[];
-  layout: TabLayout | undefined;
-  visiblePaneIds: string[];
-  selectedPaneId: string | null;
-};
 
 export function canSwitchSessions(sessionCount: number): boolean {
   return sessionCount > 1;
@@ -121,33 +105,6 @@ export function tabLabelIsRedundant(label: string, displayedNumber: number): boo
 
 export type PaneFocusDirection = "left" | "right" | "up" | "down";
 
-const LAYOUT_EPSILON = 0.000001;
-
-function overlapLength(firstStart: number, firstLength: number, secondStart: number, secondLength: number): number {
-  return Math.min(firstStart + firstLength, secondStart + secondLength) - Math.max(firstStart, secondStart);
-}
-
-export function paneIdInDirection(layout: TabLayout | undefined, paneId: string | null, direction: PaneFocusDirection): string | null {
-  if (!layout || layout.zoomed || !paneId) return null;
-  const current = layout.panes.find((candidate) => candidate.pane_id === paneId);
-  if (!current) return null;
-  const candidates = layout.panes.flatMap((candidate, index) => {
-    if (candidate.pane_id === paneId) return [];
-    const horizontal = overlapLength(current.rect.x, current.rect.width, candidate.rect.x, candidate.rect.width);
-    const vertical = overlapLength(current.rect.y, current.rect.height, candidate.rect.y, candidate.rect.height);
-    const overlaps = direction === "left" || direction === "right" ? vertical : horizontal;
-    const touches = direction === "left"
-      ? Math.abs(candidate.rect.x + candidate.rect.width - current.rect.x) <= LAYOUT_EPSILON
-      : direction === "right"
-        ? Math.abs(current.rect.x + current.rect.width - candidate.rect.x) <= LAYOUT_EPSILON
-        : direction === "up"
-          ? Math.abs(candidate.rect.y + candidate.rect.height - current.rect.y) <= LAYOUT_EPSILON
-          : Math.abs(current.rect.y + current.rect.height - candidate.rect.y) <= LAYOUT_EPSILON;
-    return touches && overlaps > LAYOUT_EPSILON ? [{ paneId: candidate.pane_id, overlap: overlaps, index }] : [];
-  });
-  candidates.sort((left, right) => right.overlap - left.overlap || left.index - right.index);
-  return candidates[0]?.paneId ?? null;
-}
 
 export function contextMenuPosition(
   x: number,
@@ -205,12 +162,13 @@ function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; ch
   }}>{children}</div>;
 }
 
-function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, libraryOpen, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
   busy: boolean;
   browserOpen: boolean;
+  browserDisabledReason: string | null;
   libraryOpen: boolean;
   onEdit: (id: string | null) => void;
   onSelect: (tab: Tab) => void;
@@ -256,148 +214,10 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, libraryOp
         : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={displayedNumber <= 9 ? withShortcut(redundantLabel ? `Tab ${displayedNumber}` : tab.label, `select-tab-${displayedNumber as 1}`) : redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" disabled={busy} aria-label="Browser" aria-pressed={browserOpen} title={withShortcut(browserOpen ? "Close browser" : "Open browser", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
   </nav>;
 }
 
-/** Header of a graphical pane: what it shows and, for files, which folder. */
-function viewerTitle(renderer: PaneRendererState): { title: string; subtitle: string | null; path?: string } {
-  if (isGraphicalReview(renderer)) return { title: "Review", subtitle: null };
-  const { roots, default_root_id } = renderer.presentation;
-  const root = roots.find(candidate => candidate.root_id === (renderer.view.rootId ?? default_root_id)) ?? roots[0];
-  if (root?.kind === "companion") return { title: "Context", subtitle: null, path: root.path };
-  // Task worktrees are named `<repository>-<operation id>`; the id is noise here.
-  const label = root?.label.replace(/-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "") ?? null;
-  return { title: "Files", subtitle: label, path: root?.path };
-}
-
-function PaneView({ pane, label, solo = false, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, focusOnAttach, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady, onPrepared, space }: {
-  pane: Pane;
-  label: string;
-  /** The only Herdr pane in its tab; like Herdr, a lone terminal needs no header row. */
-  solo?: boolean;
-  selected: boolean;
-  paintedSelected: boolean;
-  retained: boolean;
-  busy: boolean;
-  controlAllowed: boolean;
-  controlPending: boolean;
-  focusError: { code: string; message: string } | null;
-  focusEpoch: number;
-  focusToken: number;
-  terminalMouseInput: boolean;
-  onRequestControl: () => void;
-  onSelect: () => void;
-  onContext: (event: MouseEvent, target: ContextTarget) => void;
-  onRetryFocus: () => void;
-  request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows" | "cell_width_px" | "cell_height_px">;
-  client: CockpitClient;
-  registerStream: (stream: TerminalStream, active: boolean) => void;
-  onResync: () => void;
-  mutate: Mutate;
-  style: { left: string; top: string; width: string; height: string; visibility?: CSSProperties["visibility"]; pointerEvents?: CSSProperties["pointerEvents"] };
-  renderer: PaneRendererState | undefined;
-  rendererReady: boolean;
-  deferTerminal: boolean;
-  /** The terminal painted its first frame, even if Herdr has not confirmed focus yet. */
-  onPrepared: () => void;
-  /** False after the Library view closes, until an explicit local pane action (D13). */
-  focusOnAttach: boolean;
-  onRendererViewChange: (bindingId: string, value: ContextViewState) => void;
-  onTerminalView: () => void;
-  onRefreshRenderer: () => void;
-  onReady: () => void;
-  /** The pane's own Space, which its Context viewer's `Resources` and `Add to <Space>` act on. */
-  space: LibrarySpace | null;
-}) {
-  const title = pane.title || label;
-  const closePane = () => { if (window.confirm(`Close ${title}?`)) mutate(`pane:${pane.id}`, { type: "pane_close", pane_id: pane.id }); };
-  const graphical = isGraphicalContext(renderer) || isGraphicalReview(renderer);
-  const graphicalRef = useRef<HTMLDivElement>(null);
-  const paneRef = useRef<HTMLElement>(null);
-  const [terminalReadiness, setTerminalReadiness] = useState({ deferred: deferTerminal, ready: false });
-  useLayoutEffect(() => {
-    setTerminalReadiness({ deferred: deferTerminal, ready: false });
-  }, [deferTerminal]);
-  const intendedControl = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    if (!graphical) { intendedControl.current = null; return; }
-    if (controlAllowed) {
-      intendedControl.current?.focus({ preventScroll: true });
-      intendedControl.current = null;
-    } else if (!controlPending) {
-      intendedControl.current = null;
-      const active = document.activeElement;
-      if (active instanceof HTMLElement && graphicalRef.current?.contains(active)) active.blur();
-    }
-  }, [graphical, controlAllowed, controlPending]);
-  const reportTerminalReady = () => {
-    setTerminalReadiness({ deferred: deferTerminal, ready: true });
-  };
-  useEffect(() => {
-    if (!graphical && !deferTerminal && terminalReadiness.deferred === deferTerminal && terminalReadiness.ready) onPrepared();
-  }, [deferTerminal, graphical, onPrepared, terminalReadiness]);
-  useEffect(() => {
-    if (controlPending) return;
-    if (graphical ? rendererReady : !deferTerminal && terminalReadiness.deferred === deferTerminal && terminalReadiness.ready) onReady();
-  }, [controlPending, deferTerminal, graphical, onReady, rendererReady, terminalReadiness]);
-  useEffect(() => {
-    if (selected) return;
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && paneRef.current?.contains(active)) active.blur();
-  }, [selected]);
-  const focusStatus = controlPending ? <span className="pane-focus-status" role="status" aria-label="Waiting for Herdr focus confirmation" title="Waiting for Herdr focus confirmation">⟳</span> : focusError ? <span className="pane-focus-status pane-focus-status-error" role="alert" aria-label={focusError.message} title={`${focusError.code}: ${focusError.message}`}><span aria-hidden="true">!</span><button type="button" className="pane-focus-retry" aria-label="Retry focus" onClick={onRetryFocus}>↻</button></span> : null;
-  return <section ref={paneRef} className={`pane-view${selected || paintedSelected ? " is-selected" : ""}`} style={style} aria-label={title} inert={retained}
-    onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
-    <header className={`pane-header${solo && !graphical ? " is-hidden" : ""}`}>
-      <button type="button" className="pane-header-select" onClick={onSelect} title={title}>
-        <UiIcon name={graphical ? "file" : "terminal"} /><span className="pane-title">{graphical && renderer ? viewerTitle(renderer).title : title}</span>{graphical && renderer && viewerTitle(renderer).subtitle ? <span className="pane-subtitle" title={viewerTitle(renderer).path}>{viewerTitle(renderer).subtitle}</span> : null}
-      </button>
-      {!solo || graphical ? focusStatus : null}
-      <button type="button" className="pane-header-expand" aria-label="Expand or restore pane" title={withShortcut("Expand / restore pane", "zoom-pane")} onClick={() => mutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" })}><UiIcon name="expand" /></button>
-    </header>
-    {solo && !graphical ? <div className="pane-focus-overlay">{focusStatus}</div> : null}
-    {graphical && renderer ? <div ref={graphicalRef} className="graphical-pane"
-      onPointerDownCapture={(event) => {
-        if (!controlAllowed) {
-          event.preventDefault();
-          intendedControl.current = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("button,input,select,textarea,[tabindex]") : null;
-        }
-      }}
-      onFocusCapture={(event) => {
-        if (!controlAllowed) {
-          intendedControl.current = event.target;
-          event.target.blur();
-          onRequestControl();
-        }
-      }}>
-      {isGraphicalReview(renderer) ? <ReviewViewer client={client} presentation={renderer.presentation} value={renderer.view} onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)} onRequestControl={onRequestControl} onTerminalView={onTerminalView} /> : <ContextViewer client={client} presentation={renderer.presentation} value={renderer.view}
-        onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)}
-        controlAllowed={controlAllowed} onRequestControl={onRequestControl} onTerminalView={onTerminalView} space={space} />}
-    </div> : <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} presented={paintedSelected} controlAllowed={controlAllowed} controlPending={controlPending} focusEpoch={focusEpoch} focusToken={focusToken} terminalMouseInput={terminalMouseInput} deferAttachment={deferTerminal} focusOnAttach={focusOnAttach} onRequestControl={onRequestControl} onSelect={onSelect} onReady={reportTerminalReady} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>}
-    {renderer?.actionError || (graphical && renderer?.inspectionError) ? <div className="pane-presentation-error" role="status"><span>{renderer.actionError ?? renderer.inspectionError}</span><button type="button" onClick={onRefreshRenderer}>Refresh</button>{graphical ? <button type="button" onClick={onTerminalView}>Terminal</button> : null}</div> : null}
-  </section>;
-}
-
-function ResizeHandles({ layout, mutate }: { layout: TabLayout | undefined; mutate: Mutate }) {
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-  const [preview, setPreview] = useState<{ id: string; delta: number } | null>(null);
-  const drag = useRef<{ handle: ResizeHandle; pointerId: number; start: number } | null>(null);
-  useEffect(() => () => document.body.classList.remove("is-resizing-panes"), []);
-  const area = layout?.area;
-  const pctX = (value: number) => area && area.width ? `${((value - area.x) / area.width) * 100}%` : "0%";
-  const pctY = (value: number) => area && area.height ? `${((value - area.y) / area.height) * 100}%` : "0%";
-  return <div ref={canvasRef} className="resize-layer">{deriveResizeHandles(layout).map((handle) => {
-    const delta = preview?.id === handle.id ? preview.delta : 0;
-    const style = handle.axis === "x" ? { left: pctX(handle.coordinate), top: pctY(handle.start), height: area ? `${handle.length / area.height * 100}%` : "0%", transform: `translateX(${delta}px)` } : { top: pctY(handle.coordinate), left: pctX(handle.start), width: area ? `${handle.length / area.width * 100}%` : "0%", transform: `translateY(${delta}px)` };
-    return <div key={handle.id} role="separator" aria-label={`Resize pane ${handle.paneId} ${handle.axis === "x" ? "horizontally" : "vertically"}`} aria-orientation={handle.axis === "x" ? "vertical" : "horizontal"} tabIndex={0} className={`resize-handle resize-${handle.axis}`} style={style}
-      onKeyDown={(event) => { const step = event.shiftKey ? 20 : 5; const deltaValue = handle.axis === "x" ? event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0 : event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0; if (!deltaValue) return; event.preventDefault(); const bounds = canvasRef.current?.getBoundingClientRect(); const request = resizeRequest(handle, deltaValue, handle.axis === "x" ? bounds?.width ?? 0 : bounds?.height ?? 0); if (request) mutate(`pane:${handle.paneId}`, request); }}
-      onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); document.body.classList.add("is-resizing-panes"); drag.current = { handle, pointerId: event.pointerId, start: handle.axis === "x" ? event.clientX : event.clientY }; setPreview({ id: handle.id, delta: 0 }); }}
-      onPointerMove={(event) => { const active = drag.current; if (!active || active.pointerId !== event.pointerId) return; setPreview({ id: active.handle.id, delta: (active.handle.axis === "x" ? event.clientX : event.clientY) - active.start }); }}
-      onPointerUp={(event) => { const active = drag.current; if (!active || active.pointerId !== event.pointerId) return; const deltaValue = (active.handle.axis === "x" ? event.clientX : event.clientY) - active.start; const bounds = canvasRef.current?.getBoundingClientRect(); const request = resizeRequest(active.handle, deltaValue, active.handle.axis === "x" ? bounds?.width ?? 0 : bounds?.height ?? 0); drag.current = null; setPreview(null); document.body.classList.remove("is-resizing-panes"); if (request) mutate(`pane:${active.handle.paneId}`, request); }}
-      onPointerCancel={() => { drag.current = null; setPreview(null); document.body.classList.remove("is-resizing-panes"); }} />;
-  })}</div>;
-}
 
 type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser" | "Library"; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
 
@@ -476,19 +296,21 @@ export function moveDestinationLabel(tab: Tab, spaces: Space[]): string {
   return `${space?.label ?? `Space ${space?.number ?? "?"}`} / ${tab.label || `Tab ${tab.number}`}`;
 }
 
-function PaneDialogOverlay({ dialog, panes, tabs, spaces, busy, onDismiss, mutate }: { dialog: PaneDialog; panes: Pane[]; tabs: Tab[]; spaces: Space[]; busy: boolean; onDismiss: () => void; mutate: Mutate }) {
+function PaneDialogOverlay({ dialog, panes, tabs, spaces, busy, onDismiss, mutate, leafChoices, onSwap, confirmMove }: { dialog: PaneDialog; panes: Pane[]; tabs: Tab[]; spaces: Space[]; busy: boolean; onDismiss: () => void; mutate: Mutate; leafChoices: { id: string; title: string }[]; onSwap(a: string, b: string): void; confirmMove(pane: Pane): boolean }) {
   const pane = panes.find((candidate) => candidate.id === dialog.paneId);
   const [value, setValue] = useState(dialog.kind === "rename" ? pane?.title ?? "" : "");
   const ref = useModalFocus<HTMLFormElement>(onDismiss);
-  if (!pane) return null;
+  if (!pane && dialog.kind !== "swap") return null;
   const submit = () => {
-    const key = `pane:${pane.id}`;
+    const key = `pane:${dialog.paneId}`;
     let accepted = false;
-    if (dialog.kind === "rename") accepted = mutate(key, { type: "pane_rename", pane_id: pane.id, label: value.trim() || null });
-    if (dialog.kind === "swap" && value) accepted = mutate(key, { type: "pane_swap", source_pane_id: pane.id, target_pane_id: value });
-    if (dialog.kind === "move" && value === "new-tab") accepted = mutate(key, { type: "pane_move", pane_id: pane.id, destination: { type: "new_tab", space_id: pane.space_id, label: null } }, true);
-    if (dialog.kind === "move" && value === "new-space") accepted = mutate(key, { type: "pane_move", pane_id: pane.id, destination: { type: "new_space", label: null, tab_label: null } }, true);
-    if (dialog.kind === "move" && value.startsWith("tab:")) accepted = mutate(key, { type: "pane_move", pane_id: pane.id, destination: { type: "existing_tab", tab_id: value.slice(4), direction: "right", target_pane_id: null, ratio: null } }, true);
+    if (dialog.kind === "rename" && pane) accepted = mutate(key, { type: "pane_rename", pane_id: pane.id, label: value.trim() || null });
+    if (dialog.kind === "swap" && value) { onSwap(dialog.paneId, value); accepted = true; }
+    if (dialog.kind === "move" && pane && value && confirmMove(pane)) {
+      if (value === "new-tab") accepted = mutate(key, { type: "pane_move", pane_id: pane.id, destination: { type: "new_tab", space_id: pane.space_id, label: null } }, true);
+      if (value === "new-space") accepted = mutate(key, { type: "pane_move", pane_id: pane.id, destination: { type: "new_space", label: null, tab_label: null } }, true);
+      if (value.startsWith("tab:")) accepted = mutate(key, { type: "pane_move", pane_id: pane.id, destination: { type: "existing_tab", tab_id: value.slice(4), direction: "right", target_pane_id: null, ratio: null } }, true);
+    }
     if (accepted) onDismiss();
   };
   const onChooserKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>) => {
@@ -508,7 +330,7 @@ function PaneDialogOverlay({ dialog, panes, tabs, spaces, busy, onDismiss, mutat
   };
   return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><form ref={ref} className="chooser-overlay" role="dialog" aria-modal="true" aria-labelledby="chooser-title" onSubmit={(event) => { event.preventDefault(); submit(); }} onKeyDown={onChooserKeyDown}>
     <h2 id="chooser-title">{dialog.kind} pane</h2>
-    {dialog.kind === "rename" ? <input aria-label="Pane name" value={value} onChange={(event) => setValue(event.target.value)} /> : <select aria-label={dialog.kind === "swap" ? "Swap target" : "Move destination"} value={value} onChange={(event) => setValue(event.target.value)}><option value="">Choose...</option>{dialog.kind === "swap" ? panes.filter((candidate) => candidate.id !== pane.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title ?? `Pane ${panes.findIndex((item) => item.id === candidate.id) + 1}`}</option>) : <><option value="new-tab">New tab in this space</option><option value="new-space">New space</option>{tabs.filter((tab) => tab.id !== pane.tab_id).map((tab) => <option key={tab.id} value={`tab:${tab.id}`}>{moveDestinationLabel(tab, spaces)}</option>)}</>}</select>}
+    {dialog.kind === "rename" ? <input aria-label="Pane name" value={value} onChange={(event) => setValue(event.target.value)} /> : <select aria-label={dialog.kind === "swap" ? "Swap target" : "Move destination"} value={value} onChange={(event) => setValue(event.target.value)}><option value="">Choose...</option>{dialog.kind === "swap" ? leafChoices.filter(candidate => candidate.id !== dialog.paneId).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.title}</option>) : <><option value="new-tab">New tab in this space</option><option value="new-space">New space</option>{tabs.filter(tab => tab.id !== pane?.tab_id).map(tab => <option key={tab.id} value={`tab:${tab.id}`}>{moveDestinationLabel(tab, spaces)}</option>)}</>}</select>}
     <footer><button type="button" onClick={onDismiss}>Cancel</button><button type="submit" disabled={busy || (dialog.kind !== "rename" && !value)}>{dialog.kind}</button></footer>
   </form></div>;
 }
@@ -546,8 +368,7 @@ function SessionDialogOverlay({ sessions, currentSessionId, onRefresh, onDismiss
 
 export function mutationFailureCanRetry(request: ResourceMutationRequest, code: string | undefined): boolean {
   if (code === "mutation_applied_snapshot_failed" || code === "request_outcome_unknown") return false;
-  if (request.type === "space_rename" || request.type === "space_move_block" || request.type === "tab_rename" || request.type === "tab_move" || request.type === "pane_rename") return true;
-  return request.type === "pane_zoom" && request.mode !== "toggle";
+  return request.type === "space_rename" || request.type === "space_move_block" || request.type === "tab_rename" || request.type === "tab_move" || request.type === "pane_rename";
 }
 
 function RecoveryPanel({ state, mutations, onReconnect, onRetryMutation }: { state: SessionState; mutations: MutationCoordinatorState; onReconnect: () => void; onRetryMutation: (operation: MutationOperation) => void }) {
@@ -558,43 +379,6 @@ function RecoveryPanel({ state, mutations, onReconnect, onRetryMutation }: { sta
     {failures.map((failure) => <div key={`${failure.operation.key}:${failure.operation.token}`}><span>{failure.message}</span>{failure.code ? <code>{failure.code}</code> : null}{mutationFailureCanRetry(failure.operation.request, failure.code) ? <button type="button" onClick={() => onRetryMutation(failure.operation)}>Retry</button> : null}<button type="button" onClick={onReconnect}>Resync</button></div>)}
 
   </aside>;
-}
-type BrowserPresentationState = { associationOpen: boolean; visible: boolean; presentation: BrowserViewPresentation };
-type BrowserGuardEntry = { key: string; recovery: BrowserPaneRecoveryRegistration; settling?: Promise<void> };
-type BrowserGuardHandoff = {
-  current: BrowserGuardEntry | null;
-  outgoing: BrowserGuardEntry | null;
-  incoming: BrowserGuardEntry | null;
-  notify?: () => void;
-};
-const BROWSER_FALLBACK_VIEWPORT: BrowserViewViewportRequest = { css_width: 800, css_height: 600, device_pixel_ratio: 1 };
-const BROWSER_SPLIT_MIN_RATIO = 0.25;
-const BROWSER_SPLIT_MAX_RATIO = 0.65;
-const BROWSER_SPLIT_DEFAULT_RATIO = 0.42;
-const BROWSER_SPLIT_KEY = "cockpit.browser.split-ratio";
-
-function boundedBrowserViewport(width: number, height: number, devicePixelRatio: number): BrowserViewViewportRequest {
-  // CSS dimensions remain logical viewport coordinates; DPR controls capture
-  // density and is kept separate from annotation and input coordinates.
-  return {
-    css_width: Math.max(1, Math.min(2560, Math.round(Number.isFinite(width) && width > 0 ? width : BROWSER_FALLBACK_VIEWPORT.css_width))),
-    css_height: Math.max(1, Math.min(1600, Math.round(Number.isFinite(height) && height > 0 ? height : BROWSER_FALLBACK_VIEWPORT.css_height))),
-    device_pixel_ratio: Math.max(0.1, Math.min(16, Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1)),
-  };
-}
-
-function boundedBrowserSplitRatio(value: number): number {
-  return Math.max(BROWSER_SPLIT_MIN_RATIO, Math.min(BROWSER_SPLIT_MAX_RATIO, Number.isFinite(value) ? value : BROWSER_SPLIT_DEFAULT_RATIO));
-}
-
-function readBrowserSplitRatio(key: string): number {
-  if (typeof window === "undefined") return BROWSER_SPLIT_DEFAULT_RATIO;
-  try {
-    const stored = window.sessionStorage.getItem(`${BROWSER_SPLIT_KEY}:${key}`);
-    return stored === null ? BROWSER_SPLIT_DEFAULT_RATIO : boundedBrowserSplitRatio(Number(stored));
-  } catch {
-    return BROWSER_SPLIT_DEFAULT_RATIO;
-  }
 }
 
 const SIDEBAR_MIN_WIDTH = 224;
@@ -627,76 +411,69 @@ function readSidebarCollapsed(): boolean {
   }
 }
 
-function Workbench({ client, state, sessions, selection, controlPaneId, terminalMouseInput, mutations, browserHandoff, onSession, onFocus, onPanePrepared, onRequestControl, onReconnect, onRetry, onRefreshSessions, onOpenSession, onMutate, onRetryMutation }: {
-  client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; controlPaneId: string | null; terminalMouseInput: boolean; mutations: MutationCoordinatorState; browserHandoff: BrowserGuardHandoff;
-  onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection, prepare?: { paneId: string }) => void; onPanePrepared: (paneId: string) => void; onRequestControl: (paneId: string) => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onOpenSession: () => void; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
+function Workbench({ client, state, sessions, selection, terminalMouseInput, mutations, ctx, tabLayout, registerTransient, onSession, onFocus, onSelectLeaf, onSplit, onPanePrepared, onReconnect, onRetry, onRefreshSessions, onOpenSession, onMutate, onRetryMutation }: {
+  client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
+  ctx: LeafCtx; tabLayout: TabLayoutState | null; registerTransient(cancel: () => void): () => void;
+  onSession(id: string): void; onFocus(request: FocusRequest, location: Selection, prepare?: { paneId: string }): void;
+  onSelectLeaf(tabId: string, leafId: string): void; onSplit(tabId: string, leafId: string, direction: "right" | "down"): void;
+  onPanePrepared(paneId: string): void; onReconnect(): void; onRetry(): void; onRefreshSessions(): Promise<void>; onOpenSession(): void; onMutate: Mutate; onRetryMutation(operation: MutationOperation): void;
 }) {
   const snapshot = state.snapshot;
   const spaces = snapshot?.spaces ?? [];
-  const selectedSpace = byId(spaces, selection.spaceId);
-  // Herdr's selected Space is the Library view's and palette add's target; no focus or selection request follows from it.
-  const librarySpace: LibrarySpace | null = state.sessionId && selectedSpace
-    ? { target: { session_id: state.sessionId, space_id: selectedSpace.id }, label: selectedSpace.label, live: state.sync === "live" }
-    : null;
-  const setupParent = setupParentFor(selectedSpace, snapshot?.panes ?? [], snapshot?.focused_pane_id ?? null);
   const allTabs = snapshot?.tabs ?? [];
   const tabs = tabsForSpace(allTabs, selection.spaceId);
+  const selectedSpace = byId(spaces, selection.spaceId);
   const selectedTab = byId(tabs, selection.tabId);
-  const layout = snapshot?.layouts.find((candidate) => candidate.tab_id === selectedTab?.id && candidate.space_id === selection.spaceId);
   const panes = panesForTab(snapshot?.panes ?? [], selectedTab?.id ?? null);
-  const visiblePaneIds = projectedPaneIds(panes.map((pane) => pane.id), layout, snapshot?.focused_pane_id ?? selection.paneId);
-  const visiblePanes = panes.filter((pane) => visiblePaneIds.includes(pane.id));
-  const allPaneIds = (snapshot?.panes ?? []).map((pane) => pane.id);
+  const localLeaves = leaves(tabLayout?.root ?? null);
+  const selectedLeaf = localLeaves.find(leaf => leaf.id === selection.paneId);
+  const selectedPane = byId(panes, selection.paneId);
+  const sourcePaneId = tabLayout ? runtimeSource(tabLayout, selection.paneId, snapshot?.focused_pane_id) : null;
+  const librarySpace: LibrarySpace | null = state.sessionId && selectedSpace
+    ? { target: { session_id: state.sessionId, space_id: selectedSpace.id }, label: selectedSpace.label, live: state.sync === "live" } : null;
+  const setupParent = setupParentFor(selectedSpace, snapshot?.panes ?? [], snapshot?.focused_pane_id ?? null);
   const spaceGit = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
-  // While the Library view covers the work area no pane renderer is polled or mounted (D13).
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const renderers = usePaneRenderers(client, state.sessionId, libraryOpen ? [] : visiblePaneIds, (snapshot?.panes ?? []).map((pane) => pane.id), state.sync === "live", state.epoch, onReconnect);
-  // Keep incoming panes mounted for fitting and first-frame rendering, but out
-  // of the painted frame until each visible pane reports readiness.
-  // Herdr still owns selection and layout.
-  // Inspection binding IDs include volatile foreground-process identity. They
-  // authorize renderer requests, but must not reset a live terminal renderer.
-  const rendererKey = visiblePaneIds.map((paneId) => {
-    const renderer = renderers.panes[paneId];
-    const graphical = renderer && (isGraphicalContext(renderer) || isGraphicalReview(renderer));
-    return `${paneId}:${graphical ? `${renderer.presentation.renderer}:${renderer.choice ?? ""}` : "terminal"}`;
-  }).join("\0");
-  const paneRenderKey = selectedTab && visiblePanes.length > 0 ? `${selectedTab.id}\0${visiblePaneIds.join("\0")}\0${rendererKey}` : null;
-  const paneProjection: PaneCanvasProjection = { key: paneRenderKey, panes: visiblePanes, layout, visiblePaneIds, selectedPaneId: selection.paneId && visiblePaneIds.includes(selection.paneId) ? selection.paneId : null };
-  const committedProjection = useRef<PaneCanvasProjection | null>(null);
-  // Terminals attached at the last commit stay attached while the session
-  // resyncs after a mutation, so a split drag or rename does not reattach them.
-  const attachedTerminals = useRef<{ epoch: number; paneIds: ReadonlySet<string> }>({ epoch: -1, paneIds: new Set() });
-  const nextAttachedTerminals = new Set<string>();
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [area, setArea] = useState<Rect>({ x: 0, y: 0, width: 800, height: 600 });
   useLayoutEffect(() => {
-    attachedTerminals.current = { epoch: state.epoch, paneIds: nextAttachedTerminals };
-  });
-  const sessionResyncing = state.sync === "loading" && state.snapshot !== null && attachedTerminals.current.epoch === state.epoch;
-  const [paneReadiness, setPaneReadiness] = useState<{ key: string | null; paneIds: ReadonlySet<string> }>({ key: null, paneIds: new Set() });
+    const element = Array.from(canvasRef.current?.querySelectorAll<HTMLElement>(".tab-canvas") ?? []).find(node => node.closest<HTMLElement>("[data-tab-id]")?.dataset.tabId === selection.tabId);
+    if (!element || libraryOpen) return;
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) setArea(current => current.width === rect.width && current.height === rect.height ? current : { x: 0, y: 0, width: rect.width, height: rect.height });
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(element);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, [libraryOpen, selection.tabId, tabLayout?.zoomLeafId]);
+  const streamRegistry = useRef(new Set<TerminalStream>());
+  const attachedPaneIds = useRef(new Set<string>());
+  const registerStream = useCallback((stream: TerminalStream, active: boolean) => { if (active) streamRegistry.current.add(stream); else streamRegistry.current.delete(stream); }, []);
+  useEffect(() => () => { streamRegistry.current.forEach(stream => stream.close()); streamRegistry.current.clear(); }, []);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const [, setBrowserLifecycleRevision] = useState(0);
+  useEffect(() => subscribeBrowserLifecycle(() => setBrowserLifecycleRevision(value => value + 1)), []);
+  const browserOpen = Boolean(tabLayout?.viewers.browser);
+  const browserInputActive = selectedLeaf?.kind === "browser" && !libraryOpen;
+  const browserReason = !selectedTab ? "Select a tab first" : state.sync !== "live" ? "Herdr is not live" : browserOpenDisabledReason(ctx, selectedTab.id);
+  const perform = (operation: Promise<void>) => { setLifecycleError(null); void operation.catch(error => setLifecycleError(describeError(error, "Could not change this pane").message)); };
+  const openBrowser = (dir: "row" | "col" = "row") => { if (selectedTab && !browserReason) { setLibraryOpen(false); setAttachFocusSuppressed(false); perform(openBrowserLeaf(ctx, selectedTab.id, dir)); } };
+  const toggleBrowser = () => { if (!selectedTab) return; setLibraryOpen(false); setAttachFocusSuppressed(false); if (browserOpen) perform(closeBrowserLeaf(ctx, selectedTab.id)); else openBrowser(); };
+  const [viewerSources, setViewerSources] = useState<ViewerSourceOptions | null>(null);
+  const [viewerSourcesError, setViewerSourcesError] = useState<string | null>(null);
+  const [paintedTab, setPaintedTab] = useState<TabLayoutState | null>(tabLayout);
+  const switching = Boolean(paintedTab && tabLayout && paintedTab.tabId !== tabLayout.tabId);
   useLayoutEffect(() => {
-    setPaneReadiness({ key: paneRenderKey, paneIds: new Set() });
-  }, [paneRenderKey]);
-  const markPaneReady = useCallback((paneId: string) => {
-    setPaneReadiness((current) => {
-      if (current.key !== paneRenderKey || current.paneIds.has(paneId)) return current;
-      const paneIds = new Set(current.paneIds);
-      paneIds.add(paneId);
-      return { key: current.key, paneIds };
-    });
-  }, [paneRenderKey]);
-  const paneCanvasReady = paneRenderKey === null
-    || (paneReadiness.key === paneRenderKey && visiblePaneIds.every((paneId) => paneReadiness.paneIds.has(paneId)));
-  useLayoutEffect(() => {
-    if (paneCanvasReady) committedProjection.current = paneProjection;
-  });
-  const retainedProjection = !paneCanvasReady ? committedProjection.current : null;
-  const currentPaneIds = new Set(paneProjection.visiblePaneIds);
-  const outgoingProjection = retainedProjection
-    && retainedProjection.key !== paneProjection.key
-    && !retainedProjection.visiblePaneIds.some((paneId) => currentPaneIds.has(paneId))
-    ? retainedProjection
-    : null;
-  const paneCanvasVisible = paneCanvasReady || outgoingProjection !== null || committedProjection.current === null;
+    if (!tabLayout || !switching || state.focusPending?.kind !== "tab") { setPaintedTab(tabLayout); return; }
+    const focused = tabLayout.focusedPaneId;
+    if (!focused || (tabLayout.zoomLeafId && tabLayout.zoomLeafId !== focused)) { setPaintedTab(tabLayout); return; }
+    const timeout = window.setTimeout(() => setPaintedTab(tabLayout), 300);
+    return () => window.clearTimeout(timeout);
+  }, [tabLayout, switching, state.focusPending?.kind]);
+  const canvasTabs = switching && paintedTab ? [paintedTab, tabLayout!] : tabLayout ? [tabLayout] : [];
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [editing, setEditing] = useState<ContextTarget | null>(null);
   const [dialog, setDialog] = useState<PaneDialog | null>(null);
@@ -717,7 +494,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const openLibrary = useCallback((command?: { kind: "refresh" } | { kind: "tokens" } | { kind: "open"; itemId: string }) => {
     const active = document.activeElement;
     libraryOrigin.current = active instanceof HTMLElement && active.closest(".pane-view") && selectedPaneIdRef.current
-      ? { paneId: selectedPaneIdRef.current, graphical: Boolean(active.closest(".graphical-pane")) }
+      ? { paneId: selectedPaneIdRef.current, graphical: active.closest<HTMLElement>("[data-kind]")?.dataset.kind !== "terminal" }
       : null;
     setLibraryOpen(true);
     // A command belongs to this opening only; reopening must not replay it.
@@ -737,7 +514,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     setAttachFocusSuppressed(!returnToPane);
     if (returnToPane && origin.graphical) {
       const focusDocument = (attempts: number) => {
-        const document_ = document.querySelector<HTMLElement>(".pane-view.is-selected .context-document, .pane-view.is-selected .review-diff");
+        const document_ = document.querySelector<HTMLElement>(".pane-view.is-selected .context-document, .pane-view.is-selected .review-diff, .pane-view.is-selected .browser-surface");
         if (document_) document_.focus({ preventScroll: true });
         else if (attempts > 0) requestAnimationFrame(() => focusDocument(attempts - 1));
       };
@@ -753,15 +530,12 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   }, [prefixHint]);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
-  const browserSizeKey = `${state.sessionId}:${selection.spaceId}`;
-  const [browserSplitRatio, setBrowserSplitRatio] = useState(() => readBrowserSplitRatio(browserSizeKey));
-  useEffect(() => setBrowserSplitRatio(readBrowserSplitRatio(browserSizeKey)), [browserSizeKey]);
   const [narrowViewport, setNarrowViewport] = useState(isNarrowViewport);
   const [drawerOpen, setDrawerOpen] = useState(() => !isNarrowViewport());
   const sidebarReturnFocus = useRef<HTMLElement | null>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement | null>(null);
   const drawerFocusTarget = useRef<{ spaceId: string; paneId: string | null } | null>(null);
-  const mutationBusy = mutations.pending !== null || renderers.busy;
+  const mutationBusy = mutations.pending !== null;
   const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
   const sidebarSession = sessions.find((session) => session.id === state.sessionId);
   const openSessionChooser = useCallback(() => {
@@ -787,11 +561,6 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     setSidebarWidth(width);
     try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* local preferences are optional */ }
   }, []);
-  const updateBrowserSplitRatio = useCallback((next: number) => {
-    const ratio = boundedBrowserSplitRatio(next);
-    setBrowserSplitRatio(ratio);
-    try { window.sessionStorage.setItem(`${BROWSER_SPLIT_KEY}:${browserSizeKey}`, String(ratio)); } catch { /* local preferences are optional */ }
-  }, [browserSizeKey]);
   const toggleSidebarCollapsed = useCallback(() => {
     setSidebarCollapsed((collapsed) => {
       const next = !collapsed;
@@ -836,235 +605,17 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     if (target.paneId && selection.paneId !== target.paneId) return;
     closeDrawer();
   }, [closeDrawer, drawerOpen, narrowViewport, selection.paneId, selection.spaceId, state.focusError, state.focusPending]);
-  const [browserError, setBrowserError] = useState<(StatusError & { action: string }) | null>(null);
-  const [browserBusy, setBrowserBusy] = useState(false);
-  const [browserInputActive, setBrowserInputActive] = useState(false);
-  const [browserPresentation, setBrowserPresentation] = useState<Record<string, BrowserPresentationState>>({});
-  const [browserViewport, setBrowserViewport] = useState<BrowserViewViewportRequest>(BROWSER_FALLBACK_VIEWPORT);
-  const browserRegionRef = useRef<HTMLDivElement | null>(null);
-  const browserTarget: BrowserTarget | null = state.sessionId && selection.spaceId ? {
-    session_id: state.sessionId,
-    space_id: selection.spaceId,
-    pane_id: null,
-    endpoint_path: null,
-  } : null;
-  const browserKey = state.sessionId && selection.spaceId ? `${state.sessionId}:${selection.spaceId}` : null;
-  const selectedBrowserPresentation = browserKey ? browserPresentation[browserKey] : undefined;
-  const previousBrowserKeyRef = useRef<string | null>(browserKey);
-  const browserKeyChanged = previousBrowserKeyRef.current !== browserKey;
-  const browserPresentationRef = useRef(browserPresentation);
-  browserPresentationRef.current = browserPresentation;
-  const browserClientIdRef = useRef<string | null>(null);
-  if (browserClientIdRef.current === null) {
-    browserClientIdRef.current = `cockpit-browser-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
-  }
-  const browserClientId = browserClientIdRef.current;
-  const browserCloseGuardRef = browserHandoff;
-  const settleBrowserOutgoing = useCallback((outgoing: BrowserGuardEntry): void => {
-    const settle = () => {
-      if (browserCloseGuardRef.outgoing !== outgoing) return;
-      browserCloseGuardRef.outgoing = null;
-      const incoming = browserCloseGuardRef.incoming;
-      browserCloseGuardRef.incoming = null;
-      if (incoming) browserCloseGuardRef.current = incoming;
-      browserCloseGuardRef.notify?.();
-    };
-    const settling = outgoing.recovery.guard().then(settle);
-    outgoing.settling = settling;
-    void settling.catch(() => {
-      if (browserCloseGuardRef.outgoing === outgoing) {
-        outgoing.settling = undefined;
-        browserCloseGuardRef.notify?.();
-      }
-    });
-  }, [browserCloseGuardRef]);
-  const registerBrowserCloseGuard = useCallback((recovery: BrowserPaneRecoveryRegistration | null) => {
-    if (!browserKey) return;
-    if (recovery) {
-      if (browserCloseGuardRef.outgoing) {
-        browserCloseGuardRef.incoming = { key: browserKey, recovery };
-        browserCloseGuardRef.notify?.();
-        return;
-      }
-      browserCloseGuardRef.current = { key: browserKey, recovery };
-    } else if (browserCloseGuardRef.current?.key === browserKey) {
-      const outgoing = browserCloseGuardRef.current;
-      browserCloseGuardRef.outgoing = outgoing;
-      browserCloseGuardRef.current = null;
-      settleBrowserOutgoing(outgoing);
-    } else if (browserCloseGuardRef.incoming?.key === browserKey) {
-      browserCloseGuardRef.incoming = null;
-      browserCloseGuardRef.notify?.();
-    }
-  }, [browserCloseGuardRef, browserKey, settleBrowserOutgoing]);
-  const browserBlockedByOutgoing = Boolean(browserHandoff.outgoing);
-  const retryBrowserHandoff = useCallback(() => {
-    const outgoing = browserHandoff.outgoing;
-    if (!outgoing || outgoing.settling) return;
-    const settling = outgoing.recovery.retry().then(() => outgoing.recovery.guard()).then(() => {
-      if (browserHandoff.outgoing === outgoing) {
-        browserHandoff.outgoing = null;
-        const incoming = browserHandoff.incoming;
-        browserHandoff.incoming = null;
-        if (incoming) browserHandoff.current = incoming;
-        browserHandoff.notify?.();
-      }
-    });
-    outgoing.settling = settling;
-    void settling.catch(() => {
-      if (browserHandoff.outgoing === outgoing) {
-        outgoing.settling = undefined;
-        browserHandoff.notify?.();
-      }
-    });
-  }, [browserHandoff]);
-  const discardBrowserHandoff = useCallback(() => {
-    const outgoing = browserHandoff.outgoing;
-    if (!outgoing || outgoing.settling) return;
-    const settling = outgoing.recovery.discard().then(() => outgoing.recovery.guard()).then(() => {
-      if (browserHandoff.outgoing === outgoing) {
-        browserHandoff.outgoing = null;
-        const incoming = browserHandoff.incoming;
-        browserHandoff.incoming = null;
-        if (incoming) browserHandoff.current = incoming;
-        browserHandoff.notify?.();
-      }
-    });
-    outgoing.settling = settling;
-    void settling.catch(() => {
-      if (browserHandoff.outgoing === outgoing) {
-        outgoing.settling = undefined;
-        browserHandoff.notify?.();
-      }
-    });
-  }, [browserHandoff]);
-  // Presentation state is intentionally independent from Herdr sync. A stale
-  // session can still safely display the last browser frame for this exact
-  // session/Space, while browser actions remain live-state guarded below.
-  const browserOnly = !browserKeyChanged && selectedBrowserPresentation?.presentation === "browser_only";
-  const browserAssociationOpen = Boolean(browserTarget && selectedBrowserPresentation?.associationOpen) && !browserBlockedByOutgoing;
-  const browserVisible = Boolean(browserAssociationOpen && selectedBrowserPresentation?.visible);
-  const browserSyncUnavailable = state.sync !== "live";
-  const browserSyncMessage = state.sync === "disconnected"
-    ? "Herdr session disconnected; showing the last confirmed browser frame."
-    : state.sync === "stale"
-      ? "Herdr session is stale; showing the last confirmed browser frame."
-      : "Herdr session is resyncing; showing the last confirmed browser frame.";
   useEffect(() => {
-    const previousKey = previousBrowserKeyRef.current;
-    previousBrowserKeyRef.current = browserKey;
-    if (previousKey === browserKey) return;
-    setBrowserInputActive(false);
-    setBrowserPresentation((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const key of [previousKey, browserKey]) {
-        if (key && next[key]?.presentation === "browser_only") {
-          next[key] = { ...next[key], presentation: "split" };
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [browserKey]);
-  const setBrowserOnlyPresentation = useCallback((presentation: BrowserViewPresentation) => {
-    if (!browserKey) return;
-    setBrowserPresentation((current) => {
-      const existing = current[browserKey];
-      if (!existing || existing.presentation === presentation) return current;
-      return { ...current, [browserKey]: { ...existing, presentation } };
-    });
-  }, [browserKey]);
-  const enterBrowserOnly = useCallback(() => {
-    if (!browserVisible) return;
-    setBrowserOnlyPresentation("browser_only");
-  }, [browserVisible, setBrowserOnlyPresentation]);
-  const backToTerminals = useCallback(() => {
-    setBrowserInputActive(false);
-    setBrowserOnlyPresentation("split");
-  }, [setBrowserOnlyPresentation]);
-  const hideBrowser = useCallback(() => {
-    setBrowserInputActive(false);
-    if (!browserKey) return;
-    setBrowserPresentation((current) => {
-      const existing = current[browserKey];
-      return existing && !existing.visible && existing.presentation === "split" ? current : {
-        ...current,
-        [browserKey]: { associationOpen: existing?.associationOpen ?? false, visible: false, presentation: "split" },
-      };
-    });
-  }, [browserKey]);
-  useEffect(() => {
-    if (!browserVisible) return;
-    const region = browserRegionRef.current;
-    if (!region) return;
-    const updateViewport = () => {
-      const surface = region.querySelector<HTMLElement>(".browser-surface");
-      if (!surface) return;
-      const bounds = surface.getBoundingClientRect();
-      if (!(bounds.width > 0 && bounds.height > 0)) return;
-      setBrowserViewport(boundedBrowserViewport(bounds.width, bounds.height, window.devicePixelRatio));
-    };
-    updateViewport();
-    window.addEventListener("resize", updateViewport);
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateViewport);
-    observer?.observe(region);
-    const surface = region.querySelector<HTMLElement>(".browser-surface");
-    if (surface) observer?.observe(surface);
-    return () => {
-      window.removeEventListener("resize", updateViewport);
-      observer?.disconnect();
-    };
-  }, [browserVisible, browserKey, browserSplitRatio, narrowViewport, browserSyncUnavailable]);
-  const browserSplitterKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Home") {
-      event.preventDefault();
-      updateBrowserSplitRatio(BROWSER_SPLIT_MIN_RATIO);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      updateBrowserSplitRatio(BROWSER_SPLIT_MAX_RATIO);
-    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      event.preventDefault();
-      updateBrowserSplitRatio(browserSplitRatio + 0.02);
-    } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      event.preventDefault();
-      updateBrowserSplitRatio(browserSplitRatio - 0.02);
-    }
-  }, [browserSplitRatio, updateBrowserSplitRatio]);
-  const browserSplitterPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    const content = event.currentTarget.parentElement;
-    if (!content) return;
-    event.preventDefault();
-    const bounds = content.getBoundingClientRect();
-    const size = narrowViewport ? bounds.height : bounds.width;
-    if (!(size > 0)) return;
-    const move = (next: PointerEvent) => {
-      const coordinate = narrowViewport ? next.clientY : next.clientX;
-      const ratio = narrowViewport ? (bounds.bottom - coordinate) / size : (bounds.right - coordinate) / size;
-      updateBrowserSplitRatio(ratio);
-    };
-    const stop = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", stop);
-  }, [narrowViewport, updateBrowserSplitRatio]);
-  const browserBusyRef = useRef(false);
-  const browserRequest = useRef(0);
-  const browserTargetRef = useRef<{ sessionId: string; spaceId: string } | null>(null);
-  browserTargetRef.current = state.sessionId && selection.spaceId ? { sessionId: state.sessionId, spaceId: selection.spaceId } : null;
-  const streamRegistry = useRef(new Set<TerminalStream>());
-  const registerStream = useCallback((stream: TerminalStream, active: boolean) => { if (active) streamRegistry.current.add(stream); else streamRegistry.current.delete(stream); }, []);
-  useEffect(() => () => { streamRegistry.current.forEach((stream) => stream.close()); streamRegistry.current.clear(); }, []);
+    if ((!menu && !commandsOpen) || !sourcePaneId || !state.sessionId || state.sync !== "live") { setViewerSources(null); return; }
+    let active = true;
+    setViewerSources(null); setViewerSourcesError(null);
+    void client.viewerSources(state.sessionId, sourcePaneId).then(value => { if (active) setViewerSources(value); }, error => { if (active) setViewerSourcesError(describeError(error, "Could not inspect viewer sources").message); });
+    return () => { active = false; };
+  }, [client, menu, commandsOpen, sourcePaneId, state.sessionId, state.sync]);
   // Selecting a Space keeps the Library open; selecting a tab, pane or agent closes it to show that pane.
   const focusSpace = (space: Space) => {
     if (modalOpen) return;
     setAttachFocusSuppressed(false);
-    setBrowserInputActive(false);
     const tabId = allTabs.find((tab) => tab.space_id === space.id && tab.focused)?.id ?? null;
     const paneId = snapshot?.panes.find((pane) => pane.space_id === space.id && pane.focused)?.id ?? null;
     if (narrowViewport) drawerFocusTarget.current = { spaceId: space.id, paneId };
@@ -1072,26 +623,22 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   };
   const focusTab = (tab: Tab) => {
     if (modalOpen) return;
-    setLibraryOpen(false);
-    setAttachFocusSuppressed(false);
-    setBrowserInputActive(false);
-    const paneId = snapshot?.panes.find((pane) => pane.tab_id === tab.id && pane.focused)?.id
-      ?? snapshot?.layouts.find((candidate) => candidate.tab_id === tab.id)?.focused_pane_id ?? null;
-    // A terminal pane attaches at Cockpit's grid before Herdr shows its tab, so
-    // its resize is done by the time other Herdr clients see the tab.
-    const paneRenderer = paneId ? renderers.panes[paneId] : undefined;
-    const prepare = paneId && state.sync === "live" && snapshot?.focused_tab_id !== tab.id
-      && !attachedTerminals.current.paneIds.has(paneId)
-      && !(paneRenderer && (isGraphicalContext(paneRenderer) || isGraphicalReview(paneRenderer)))
-      ? { paneId } : undefined;
+    setLibraryOpen(false); setAttachFocusSuppressed(false);
+    const remembered = ctx.getState().tabs[tab.id];
+    const paneId = remembered?.selectedLeafId ?? tab.focused_pane_id ?? null;
+    const focusedTerminal = tab.focused_pane_id;
+    const painted = remembered?.zoomLeafId ? remembered.zoomLeafId === focusedTerminal : true;
+    const prepare = focusedTerminal && painted && state.sync === "live" && snapshot?.focused_tab_id !== tab.id && !attachedPaneIds.current.has(focusedTerminal) ? { paneId: focusedTerminal } : undefined;
     onFocus({ kind: "tab", target_id: tab.id }, { spaceId: tab.space_id, tabId: tab.id, paneId }, prepare);
   };
-  const focusPane = (pane: Pane) => { if (!modalOpen) { setLibraryOpen(false); setAttachFocusSuppressed(false); setBrowserInputActive(false); onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id }); } };
+  const selectLeaf = (leafId: string) => {
+    if (modalOpen || !tabLayout) return;
+    setLibraryOpen(false); setAttachFocusSuppressed(false);
+    onSelectLeaf(tabLayout.tabId, leafId);
+  };
   const focusAgent = (agent: Agent) => {
     if (modalOpen) return;
-    setLibraryOpen(false);
-    setAttachFocusSuppressed(false);
-    setBrowserInputActive(false);
+    setLibraryOpen(false); setAttachFocusSuppressed(false);
     if (narrowViewport) drawerFocusTarget.current = { spaceId: agent.space_id, paneId: agent.pane_id };
     onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id });
   };
@@ -1103,114 +650,55 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   };
   const closeSpace = (space: Space | undefined): boolean => Boolean(space && window.confirm(`Close Space "${space.label}" and all of its tabs and panes?`) && onMutate(`space:${space.id}`, { type: "space_close", space_id: space.id }));
   const closeTab = (tab: Tab | undefined): boolean => Boolean(tab && window.confirm(`Close tab "${tab.label}" and all of its panes?`) && onMutate(`tab:${tab.id}`, { type: "tab_close", tab_id: tab.id }));
-  const closePane = (pane: Pane | undefined): boolean => {
-    if (!pane) return false;
-    const label = pane.title ?? `Pane ${panes.findIndex((candidate) => candidate.id === pane.id) + 1}`;
-    return Boolean(window.confirm(`Close ${label}?`) && onMutate(`pane:${pane.id}`, { type: "pane_close", pane_id: pane.id }));
+  const lastTerminalMessage = (pane: Pane, operation: "Closing" | "Moving") => {
+    const tab = ctx.getState().tabs[pane.tab_id];
+    if (!tab || Object.keys(tab.terminals).length !== 1 || !Object.values(tab.viewers).some(Boolean)) return null;
+    const browser = tab.viewers.browser ? ", and deletes the browser's profile (cookies, logins, site data)" : "";
+    const label = allTabs.find(candidate => candidate.id === pane.tab_id)?.label || pane.tab_id;
+    return `This is the last terminal in ${label}. ${operation} it also closes Files, Review and Browser in this tab${browser}. Drafts and comments you saved stay.`;
   };
-  const browserAction = useCallback(async (spaceId: string, action: "open" | "show" | "close" | "reconnect", url?: string) => {
-    const sessionId = state.sessionId;
-    const key = sessionId ? `${sessionId}:${spaceId}` : null;
-    if (!sessionId || !key || state.sync !== "live" || browserBusyRef.current || browserTargetRef.current?.sessionId !== sessionId || browserTargetRef.current.spaceId !== spaceId) return;
-    const existing = browserPresentationRef.current[key];
-    if ((action === "open" || action === "show") && existing?.associationOpen && !url) {
-      setBrowserPresentation((current) => ({ ...current, [key]: { associationOpen: true, visible: true, presentation: "split" } }));
-      setBrowserError(null);
-      setCommandsOpen(false);
-      return;
-    }
-    const token = ++browserRequest.current;
-    browserBusyRef.current = true;
-    setBrowserBusy(true);
-    if (action === "close") {
-      const registered = browserCloseGuardRef.current?.key === key ? browserCloseGuardRef.current : browserCloseGuardRef.outgoing;
-      if (registered) {
-        try { await (registered.settling ?? registered.recovery.guard()); 
-        } catch (error) {
-          browserBusyRef.current = false;
-          setBrowserBusy(false);
-          const described = describeError(error, "Browser close was refused because draft work is not durable yet");
-          setBrowserError({ ...described, action });
-          setCommandsOpen(true);
-          return;
-        }
-      }
-      if (browserRequest.current !== token || browserTargetRef.current?.sessionId !== sessionId || browserTargetRef.current.spaceId !== spaceId) { browserBusyRef.current = false; setBrowserBusy(false); return; }
-      // A browser-only view hides the pane canvas. Restore it before awaiting
-      // the remote close so closing the browser never leaves an empty workarea.
-      setBrowserInputActive(false);
-      setBrowserPresentation((currentState) => {
-        const presentation = currentState[key];
-        return presentation?.presentation === "browser_only"
-          ? { ...currentState, [key]: { ...presentation, presentation: "split" } }
-          : currentState;
-      });
-    }
-    setBrowserError(null);
-    const target: BrowserTarget = { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null };
-    const current = () => browserRequest.current === token && browserTargetRef.current?.sessionId === sessionId && browserTargetRef.current.spaceId === spaceId;
-    try {
-      const response = await client.browserAction({ target, action: action === "close" ? { kind: "close" } : { kind: "open", url: url ?? null } });
-      if (!current()) return;
-      if (response.association && (response.association.session_id !== sessionId || response.association.space_id !== spaceId)) throw new Error("Browser response belongs to another Space");
-      if (action === "open" || action === "show" || action === "reconnect") {
-        if (response.connection !== "open" && response.association?.connection !== "open") throw new Error(response.message || "Browser association did not open");
-        setBrowserPresentation((currentState) => ({ ...currentState, [key]: { associationOpen: true, visible: true, presentation: "split" } }));
-      } else {
-        setBrowserPresentation((currentState) => ({ ...currentState, [key]: { associationOpen: false, visible: false, presentation: "split" } }));
-        const focusedPane = panes.find((pane) => pane.id === selection.paneId && pane.space_id === spaceId)
-          ?? snapshot?.panes.find((pane) => pane.space_id === spaceId && pane.focused);
-        if (focusedPane) focusPane(focusedPane);
-      }
-      setBrowserError(null);
-      setCommandsOpen(false);
-    } catch (error) {
-      if (!current()) return;
-      setBrowserError({ ...describeError(error, "Browser action failed"), action });
-      setCommandsOpen(true);
-    } finally {
-      if (current()) {
-        browserBusyRef.current = false;
-        setBrowserBusy(false);
-      }
-    }
-  }, [client, state.sessionId, state.sync, panes, selection.paneId, snapshot, focusPane]);
-  useEffect(() => {
-    browserRequest.current += 1;
-    setBrowserError(null);
-    setBrowserBusy(false);
-    browserBusyRef.current = false;
-    return () => { browserRequest.current += 1; };
-  // A transient Herdr sync loss does not change the selected association: keep
-  // its in-flight open response, then render the view read-only until sync resumes.
-  }, [selection.spaceId, state.sessionId, state.epoch]);
-  const feedbackBusyRef = useRef(false);
-  const feedbackRequest = useRef(0);
-  const sendFeedback = useCallback(async (ids: string[], operationId: string, acknowledgeDuplicateRisk: boolean) => {
-    const sessionId = state.sessionId; const spaceId = selection.spaceId;
-    if (!sessionId || !spaceId || ids.length === 0 || state.sync !== "live") throw new Error("Annotation delivery is unavailable for this Space.");
-    if (feedbackBusyRef.current) throw new Error("Annotation delivery is already in progress.");
-    const token = ++feedbackRequest.current;
-    feedbackBusyRef.current = true;
-    try {
-      const response = await client.sendBrowserFeedback({
-        target: { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null },
-        ids, operation_id: operationId,
-        acknowledge_duplicate_risk: acknowledgeDuplicateRisk,
-      });
-      if (feedbackRequest.current !== token) throw new Error("Annotation delivery was superseded.");
-      if (response.operation_id !== operationId) throw new Error("Annotation delivery response did not match the retained operation.");
-      return response;
-    } finally {
-      if (feedbackRequest.current === token) feedbackBusyRef.current = false;
-    }
-  }, [client, selection.spaceId, state.sessionId, state.sync]);
-  const sendCapturedFeedback = useCallback((ids: string[], operationId: string, acknowledgeDuplicateRisk: boolean) => sendFeedback(ids, operationId, acknowledgeDuplicateRisk), [sendFeedback]);
-  useEffect(() => {
-    feedbackRequest.current += 1; feedbackBusyRef.current = false;
-  }, [selection.spaceId, state.sessionId, state.sync]);
+  const closeLeaf = (leafId: string): boolean => {
+    if (!tabLayout) return false;
+    const leaf = localLeaves.find(candidate => candidate.id === leafId);
+    if (!leaf) return false;
+    if (leaf.kind === "browser") { perform(closeBrowserLeaf(ctx, tabLayout.tabId)); return true; }
+    if (leaf.kind !== "terminal") { perform(closeViewerLeaf(ctx, tabLayout.tabId, leaf.kind)); return true; }
+    const pane = byId(panes, leafId);
+    if (!pane) return false;
+    const message = lastTerminalMessage(pane, "Closing") ?? `Close ${pane.title || "Terminal"}?`;
+    return window.confirm(message) && onMutate(`pane:${pane.id}`, { type: "pane_close", pane_id: pane.id });
+  };
+  const swap = (source: string, target: string) => {
+    if (!tabLayout?.root) return;
+    const rect = solveLayout(tabLayout.root, area).leaves.get(target);
+    if (rect) ctx.dispatch({ type: "drop", tabId: tabLayout.tabId, src: source, target: { kind: "swap", target, rect, label: "Swap" }, revision: tabLayout.revision });
+  };
+  const zoom = (leafId: string) => { if (tabLayout) ctx.dispatch({ type: "zoom-toggle", tabId: tabLayout.tabId, leafId }); };
+  const neighbour = (direction: PaneFocusDirection) => {
+    if (!tabLayout?.root || !selection.paneId) return null;
+    const solved = solveLayout(tabLayout.root, area).leaves;
+    const current = solved.get(selection.paneId);
+    if (!current) return null;
+    const cx = current.x + current.width / 2, cy = current.y + current.height / 2;
+    const candidates = localLeaves.flatMap(leaf => {
+      const rect = solved.get(leaf.id);
+      if (!rect || leaf.id === selection.paneId) return [];
+      const dx = rect.x + rect.width / 2 - cx, dy = rect.y + rect.height / 2 - cy;
+      const primary = direction === "left" ? -dx : direction === "right" ? dx : direction === "up" ? -dy : dy;
+      const secondary = direction === "left" || direction === "right" ? Math.abs(dy) : Math.abs(dx);
+      return primary > 0 ? [{ id: leaf.id, score: primary + secondary * 2 }] : [];
+    });
+    candidates.sort((a, b) => a.score - b.score);
+    return candidates[0]?.id ?? null;
+  };
+  const viewerCapability = (kind: RendererActionDefinition["kind"]) => kind === "review" ? Boolean(viewerSources?.review_repository_ids.length) : kind === "files" ? Boolean(viewerSources?.files_folder_root_id) : Boolean(viewerSources?.files_context_root_id);
+  const openViewer = (kind: RendererActionDefinition["kind"], direction: "right" | "down") => {
+    if (!tabLayout || !sourcePaneId || !viewerCapability(kind) || mutationBusy || state.sync !== "live") return;
+    const selector = kind === "review" ? { kind: "review" as const, repositoryId: viewerSources!.review_repository_ids[0] } : { kind: kind === "files" ? "files_folder" as const : "files_context" as const };
+    setLibraryOpen(false); setAttachFocusSuppressed(false);
+    perform(openViewerLeaf(ctx, tabLayout.tabId, kind === "review" ? "review" : "files", selector, direction === "right" ? "row" : "col", sourcePaneId));
+  };
   const runCommand = useCallback((command: PrefixCommand) => {
-    setBrowserInputActive(false);
     setPrefixHint(null);
     const space = byId(spaces, selection.spaceId);
     const tab = byId(tabs, selection.tabId);
@@ -1223,30 +711,32 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       if (command === "new-tab" && selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true);
       if (command === "rename-tab" && tab) beginRename({ kind: "tab", id: tab.id });
       if (command === "close-tab") closeTab(tab);
+      if (command === "split-right" && tabLayout && selectedLeaf) onSplit(tabLayout.tabId, selectedLeaf.id, "right");
+      if (command === "split-down" && tabLayout && selectedLeaf) onSplit(tabLayout.tabId, selectedLeaf.id, "down");
+      if (command === "close-pane" && selectedLeaf) closeLeaf(selectedLeaf.id);
+      if (command === "zoom-pane" && selectedLeaf) zoom(selectedLeaf.id);
       if (command === "rename-pane" && pane) beginRename({ kind: "pane", id: pane.id });
-      if (command === "split-right" && pane) onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true);
-      if (command === "split-down" && pane) onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true);
-      if (command === "close-pane") closePane(pane);
-      if (command === "zoom-pane" && pane) onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" });
       if (command === "previous-tab" && tab) { const index = tabs.indexOf(tab); if (index > 0) focusTab(tabs[index - 1]); }
       if (command === "next-tab" && tab) { const index = tabs.indexOf(tab); if (index >= 0 && index < tabs.length - 1) focusTab(tabs[index + 1]); }
       if (command.startsWith("select-tab-")) { const target = tabs[Number(command.slice("select-tab-".length)) - 1]; if (target) focusTab(target); }
-      if (command === "previous-pane" && pane) { const index = panes.indexOf(pane); focusPane(panes[(index - 1 + panes.length) % panes.length]); }
-      if (command === "next-pane" && pane) { const index = panes.indexOf(pane); focusPane(panes[(index + 1) % panes.length]); }
+      if ((command === "previous-pane" || command === "next-pane") && selectedLeaf) {
+        const index = localLeaves.findIndex(leaf => leaf.id === selectedLeaf.id);
+        const offset = command === "next-pane" ? 1 : -1;
+        selectLeaf(localLeaves[(index + offset + localLeaves.length) % localLeaves.length].id);
+      }
       if (["focus-left", "focus-right", "focus-up", "focus-down"].includes(command)) {
-        const direction = command.slice("focus-".length) as PaneFocusDirection;
-        const target = byId(panes, paneIdInDirection(layout, selection.paneId, direction));
-        if (target) focusPane(target);
+        const target = neighbour(command.slice("focus-".length) as PaneFocusDirection);
+        if (target) selectLeaf(target);
       }
-      if (["swap-left", "swap-right", "swap-up", "swap-down"].includes(command) && pane) {
-        const target = byId(panes, paneIdInDirection(layout, pane.id, command.slice("swap-".length) as PaneFocusDirection));
-        if (target) onMutate(`pane:${pane.id}`, { type: "pane_swap", source_pane_id: pane.id, target_pane_id: target.id });
+      if (["swap-left", "swap-right", "swap-up", "swap-down"].includes(command) && selectedLeaf) {
+        const target = neighbour(command.slice("swap-".length) as PaneFocusDirection);
+        if (target) swap(selectedLeaf.id, target);
       }
+      if (command === "resize" && !mutationBusy && canvasRef.current && selection.paneId) focusSelectedDivider(canvasRef.current, selection.paneId);
       if (command === "open-file-picker") dispatchFileNavigation("open-picker");
-      if (command === "resize" && !mutationBusy) document.querySelector<HTMLElement>(".resize-handle")?.focus();
       if (command === "switch-session") openSessionChooser();
+      if (command === "toggle-browser") toggleBrowser();
       if (command === "toggle-library") { if (libraryOpen) closeLibraryToOrigin(); else openLibrary(); }
-      if (command === "toggle-browser" && selection.spaceId) void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open");
       if (command === "toggle-sidebar") {
         const visible = narrowViewport ? drawerOpen : !sidebarCollapsed;
         if (narrowViewport) { if (drawerOpen) closeDrawer(); else openDrawer(); } else toggleSidebarCollapsed();
@@ -1279,7 +769,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       return;
     }
     execute();
-  }, [spaces, tabs, panes, layout, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, browserAction, selectedBrowserPresentation?.associationOpen, closeLibraryToOrigin, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed]);
+  }, [spaces, tabs, panes, tabLayout, area, localLeaves, selectedLeaf, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, browserOpen, browserReason, closeLibraryToOrigin, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       routeWorkbenchKeydown(event, { modalOpen, prefixActive, runCommand, setPrefixActive, setCommandsOpen, onUnboundPrefixKey: setPrefixHint });
@@ -1296,15 +786,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     if (menu.target.kind === "space") {
       const space = spaces.find((candidate) => candidate.id === menu.target.id);
       if (!space) return null;
-      const browserReason = space.id === selection.spaceId ? undefined : "Select this Space first";
-      const spaceBrowser = state.sessionId ? browserPresentation[`${state.sessionId}:${space.id}`] : undefined;
       return <ContextMenu menu={menu} onDismiss={dismissMenu}>
         <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button>
         <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}><UiIcon name="close" />Close</button>
-        <button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "open"); })}><UiIcon name="grid" />Open browser</button>
-        <button role="menuitem" type="button" disabled={disabled || browserBusy || !spaceBrowser?.associationOpen || spaceBrowser.visible || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "show"); })}><UiIcon name="grid" />Show browser</button>
-        <button role="menuitem" type="button" disabled={disabled || !spaceBrowser?.visible || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(hideBrowser)}><UiIcon name="grid" />Hide browser</button>
-        <button role="menuitem" type="button" disabled={disabled || browserBusy || !spaceBrowser?.associationOpen || Boolean(browserReason)} className="destructive" title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "close"); })}><UiIcon name="close" />Close browser</button>
         <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}><UiIcon name="trash" />Review task cleanup…</button>
       </ContextMenu>;
     }
@@ -1313,110 +797,97 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       if (!tab) return null;
       return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeTab(tab))}><UiIcon name="close" />Close</button></ContextMenu>;
     }
-    const pane = snapshot?.panes.find((candidate) => candidate.id === menu.target.id);
-    if (!pane) return null;
-    const renderer = renderers.panes[pane.id];
+    const leaf = localLeaves.find(candidate => candidate.id === menu.target.id);
+    if (!leaf || !tabLayout) return null;
+    const pane = byId(panes, leaf.id);
     return <ContextMenu menu={menu} onDismiss={dismissMenu}>
-      <p className="context-menu-heading" role="presentation">Selected pane · {isGraphicalReview(renderer) ? "Review" : isGraphicalContext(renderer) ? "Files" : "Terminal"}</p>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}><UiIcon name="expand" />Expand / restore pane</button>
-      {isGraphicalContext(renderer) || isGraphicalReview(renderer) ? <button role="menuitem" type="button" onClick={() => menuAction(() => { document.querySelector<HTMLElement>(".pane-view.is-selected .context-document, .pane-view.is-selected .review-diff")?.focus({ preventScroll: true }); dispatchFileNavigation("open-picker"); })}><UiIcon name="search" />Go to file…</button> : null}
+      <p className="context-menu-heading" role="presentation">Selected pane · {leaf.kind}</p>
+      <button role="menuitem" type="button" onClick={() => menuAction(() => zoom(leaf.id))}><UiIcon name="expand" />Expand / restore pane</button>
+      {(leaf.kind === "files" || leaf.kind === "review") ? <button role="menuitem" type="button" onClick={() => menuAction(() => dispatchFileNavigation("open-picker"))}><UiIcon name="search" />Go to file…</button> : null}
       <p className="context-menu-heading" role="presentation">Open view</p>
-      {rendererActionDefinitions.filter(action => action.direction === "right").map(({ id, label, direction, kind }) => {
-        const capability = kind === "review" ? renderer?.presentation.can_open_review : kind === "files" ? renderer?.presentation.can_open_files : renderer?.presentation.can_open_context;
-        return <button key={id} role="menuitem" type="button" disabled={disabled || !capability} title={renderer?.presentation.reason ?? label} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}><UiIcon name="file" />{kind === "review" ? "Review" : kind === "files" ? "Files" : "Context"}</button>;
-      })}
+      {rendererActionDefinitions.map(({ id, label, direction, kind }) => <button key={id} role="menuitem" type="button" disabled={disabled || !viewerCapability(kind) || state.sync !== "live"} title={viewerSources?.reason ?? viewerSourcesError ?? "Loading viewer sources"} onClick={() => menuAction(() => openViewer(kind, direction))}><UiIcon name="file" />{label}</button>)}
+      {(["row", "col"] as const).map(dir => <button key={dir} role="menuitem" type="button" disabled={Boolean(browserReason)} title={browserReason ?? undefined} onClick={() => menuAction(() => openBrowser(dir))}><UiIcon name="grid" />Open Browser {dir === "row" ? "right" : "below"}</button>)}
       <details className="context-menu-advanced"><summary>Advanced</summary>
-        <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename pane</button>
-        {(["right", "down"] as const).map(direction => <button key={direction} role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction, ratio: null }, true))}><UiIcon name="sidebar" />Split {direction}</button>)}
-        {rendererActionDefinitions.filter(action => action.direction === "down").map(({ id, label, direction, kind }) => <button key={id} role="menuitem" type="button" disabled={disabled || !(kind === "review" ? renderer?.presentation.can_open_review : kind === "files" ? renderer?.presentation.can_open_files : renderer?.presentation.can_open_context)} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}><UiIcon name="file" />{label}</button>)}
-        <button role="menuitem" type="button" disabled={!renderer?.presentation.renderer} onClick={() => menuAction(() => renderers.choose(pane.id, (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? "terminal" : renderer?.presentation.renderer ?? "context"))}><UiIcon name="terminal" />{isGraphicalContext(renderer) || isGraphicalReview(renderer) ? "Show terminal view" : "Render document"}</button>
-        <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}><UiIcon name="refresh" />Refresh renderer detection</button>
-        <button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); })}><UiIcon name="right" />Swap…</button>
-        <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); })}><UiIcon name="right" />Move…</button>
+        {pane ? <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename pane</button> : null}
+        {(["right", "down"] as const).map(direction => <button key={direction} role="menuitem" type="button" disabled={disabled || !sourcePaneId || state.sync !== "live"} onClick={() => menuAction(() => onSplit(tabLayout.tabId, leaf.id, direction))}><UiIcon name="sidebar" />Split {direction}</button>)}
+        <button role="menuitem" type="button" disabled={localLeaves.length < 2} onClick={() => menuAction(() => setDialog({ kind: "swap", paneId: leaf.id }))}><UiIcon name="right" />Swap…</button>
+        {pane ? <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setDialog({ kind: "move", paneId: pane.id }))}><UiIcon name="right" />Move…</button> : null}
       </details>
       <div className="context-menu-separator" role="presentation" />
-      <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}><UiIcon name="close" />Close pane</button>
+      <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeLeaf(leaf.id))}><UiIcon name="close" />Close pane</button>
     </ContextMenu>;
   };
-  const selectedRenderer = selection.paneId ? renderers.panes[selection.paneId] : undefined;
-  const selectedPane = byId(panes, selection.paneId);
   const commandActionRows: CommandAction[] = [
     ...SHORTCUTS.filter((entry) => entry.prefix && entry.palette !== false).map((entry): CommandAction => {
       const command = entry.id as PrefixCommand;
       const reason = entry.needs === "space" && !selectedSpace ? "Select a Space first"
         : entry.needs === "tab" && !selectedTab ? "Select a tab first"
-        : entry.needs === "pane" && !selectedPane ? "Select a pane first"
-        : command === "setup-space" && state.sync !== "live" ? "Herdr is not live"
-        : undefined;
+        : entry.needs === "pane" && !selectedLeaf ? "Select a pane first"
+        : command === "rename-pane" && !selectedPane ? "Terminals only"
+        : (command === "setup-space" || command === "split-right" || command === "split-down") && state.sync !== "live" ? "Herdr is not live"
+        : (command === "split-right" || command === "split-down") && !sourcePaneId ? "No terminal in this tab"
+        : command === "toggle-browser" ? browserOpen ? undefined : browserReason ?? undefined : undefined;
       return {
         id: `prefix:${command}`, label: command === "toggle-library" && libraryOpen ? "Close Library" : entry.label, shortcut: formatShortcut(command), group: entry.group,
         disabled: reason !== undefined, reason, run: () => runCommand(command),
       };
     }),
     { id: "recovery:cleanup", label: "Recover task cleanup…", group: "Navigate", run: () => setRecoveryOpen(true) },
-    { id: "browser:open", label: "Open browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "open"); } },
-    { id: "browser:show", label: "Show browser view", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || Boolean(selectedBrowserPresentation.visible) || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "show"); } },
-    { id: "browser:hide", label: "Hide browser view", group: "Browser", disabled: !browserVisible, reason: !browserVisible ? "Open the browser view first" : undefined, run: hideBrowser },
-    { id: "browser:close", label: "Close browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "close"); } },
+    { id: "browser:open", label: "Open Browser right", group: "Browser", disabled: Boolean(browserReason), reason: browserReason ?? undefined, run: () => openBrowser("row") },
+    { id: "browser:open-below", label: "Open Browser below", group: "Browser", disabled: Boolean(browserReason), reason: browserReason ?? undefined, run: () => openBrowser("col") },
+    { id: "browser:close", label: "Close browser", group: "Browser", disabled: !browserOpen, reason: !browserOpen ? "No browser in this tab" : undefined, run: () => { if (selectedTab) perform(closeBrowserLeaf(ctx, selectedTab.id)); } },
+    { id: "browser:cleanup", label: "Retry browser cleanup", group: "Browser", run: () => perform(retryBrowserCleanup(ctx)) },
     { id: "library:add", label: "Add to Library…", group: "Library", run: () => setLibraryAddOpen(true) },
     { id: "library:refresh", label: "Refresh Library", group: "Library", run: () => openLibrary({ kind: "refresh" }) },
     { id: "library:tokens", label: "Provider tokens…", group: "Library", run: () => openLibrary({ kind: "tokens" }) },
     ...rendererActionDefinitions.map(({ id, label, direction, kind }) => {
-      const capability = kind === "review" ? selectedRenderer?.presentation.can_open_review : kind === "files" ? selectedRenderer?.presentation.can_open_files : selectedRenderer?.presentation.can_open_context;
-      const fallback = kind === "context" ? "Context requires a configured companion directory" : "Select a pane with a configured repository";
-      const detail = selectedRenderer?.presentation.reason;
-      const reason = detail ? rendererReasonFor(kind, detail) ?? fallback : fallback;
-      return { id: `renderer:${id}`, label, group: "Pane" as const, disabled: mutationBusy || !capability, reason, reasonDetail: detail, run: () => { if (selection.paneId) void renderers.open(selection.paneId, direction, kind === "context" ? undefined : kind); } };
+      const capability = viewerCapability(kind);
+      const fallback = kind === "context" ? "Context requires a configured companion directory" : "Select a terminal with a configured repository";
+      const detail = viewerSources?.reason ?? viewerSourcesError ?? (sourcePaneId ? "Loading viewer sources" : "No terminal in this tab");
+      const reason = state.sync !== "live" ? "Herdr is not live" : rendererReasonFor(kind, detail) ?? detail ?? fallback;
+      return { id: `renderer:${id}`, label, group: "Pane" as const, disabled: mutationBusy || !capability || state.sync !== "live", reason, reasonDetail: detail, run: () => openViewer(kind, direction) };
     }),
   ];
   const browserToggleShortcut = formatShortcut("toggle-browser");
   const commandActions: CommandAction[] = commandActionRows.map((action) => action.id === "browser:open" || action.id === "browser:close" ? { ...action, shortcut: browserToggleShortcut } : action);
-  const commandStatus = <>{browserBusy ? <p role="status">Working on the Space browser…</p> : null}{browserError ? <p role="alert">{browserError.message}</p> : null}</>;
-  const renderPaneLayer = (projection: PaneCanvasProjection, incoming: boolean, painted: boolean) => projection.visiblePaneIds.map((paneId, index) => {
-    const pane = projection.panes.find((candidate) => candidate.id === paneId);
-    if (!pane) return null;
-    const rectangle = projectedPaneRect(projection.layout, pane.id);
-    const area = projection.layout?.area;
-    const bounds = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / projection.visiblePaneIds.length * 100}%`, top: "0%", width: `${100 / projection.visiblePaneIds.length}%`, height: "100%" };
-    const style = { ...bounds, visibility: painted ? "visible" as const : "hidden" as const, pointerEvents: painted && incoming ? "auto" as const : "none" as const };
-    const renderer = renderers.panes[pane.id];
-    const paneRendererKey = renderer && (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? `${renderer.presentation.renderer}:${renderer.choice ?? ""}` : "terminal";
-    const paintedSelected = painted && pane.id === projection.selectedPaneId;
-    const controlPendingForPane = incoming && state.focusPending !== null
-      && (state.focusPending.kind === "pane" || state.focusPending.kind === "agent"
-        ? state.focusPending.target_id === pane.id
-        : state.focusPending.kind === "tab"
-          ? state.focusPending.target_id === pane.tab_id
-          : state.focusPending.kind === "space" && state.focusPending.target_id === pane.space_id);
-    const currentPaneStatus = incoming && pane.id === selection.paneId && state.focusPending !== null && !controlPendingForPane;
-    const paneFocusError = incoming && state.focusError && (pane.id === controlPaneId || pane.id === selection.paneId) ? state.focusError : null;
-    const sessionAttachable = state.sync === "live" || (sessionResyncing && attachedTerminals.current.paneIds.has(pane.id));
-    // A tab switch attaches the target's terminals while Herdr still shows the old
-    // tab, and the old tab's terminals stay attached until the swap is painted, so
-    // the old pane's size only reverts after Herdr's focus has moved on.
-    const preparingTab = state.focusPending?.kind === "tab" && state.focusPending.target_id === pane.tab_id;
-    const deferTerminal = incoming
-      ? !sessionAttachable || (snapshot?.focused_tab_id !== pane.tab_id && !preparingTab)
-        || (state.focusPending?.kind === "tab" && !preparingTab) || state.focusPending?.kind === "space"
-      : !(sessionAttachable && attachedTerminals.current.paneIds.has(pane.id));
-    if (!deferTerminal) nextAttachedTerminals.add(pane.id);
-    const paneSpace = state.sessionId ? spaces.find((space) => space.id === pane.space_id) : undefined;
-    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} space={state.sessionId && paneSpace ? { target: { session_id: state.sessionId, space_id: paneSpace.id }, label: paneSpace.label, live: state.sync === "live" } : null} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} solo={projection.panes.length === 1} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} onPrepared={() => onPanePrepared(pane.id)} focusOnAttach={!attachFocusSuppressed} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setAttachFocusSuppressed(false); setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
-  });
-  const workbenchStyle: CSSProperties & { "--sidebar-width": string; "--browser-ratio": string } = {
-    "--sidebar-width": `${sidebarWidth}px`,
-    "--browser-ratio": `${browserSplitRatio * 100}%`,
+  const commandStatus = lifecycleError ? <p role="alert">{lifecycleError}</p> : null;
+  const dispatchCanvas = (action: LayoutAction) => {
+    if (action.type === "select-leaf") { onSelectLeaf(action.tabId, action.leafId); return; }
+    if (action.type === "zoom-toggle") {
+      const id = action.leafId ?? ctx.getState().tabs[action.tabId]?.selectedLeafId;
+      if (id) onSelectLeaf(action.tabId, id);
+    }
+    ctx.dispatch(action);
   };
+  const renderLeaf = (hostTab: TabLayoutState, leaf: Leaf, rect: Rect) => {
+    const active = hostTab.tabId === tabLayout?.tabId;
+    const pane = snapshot?.panes.find(candidate => candidate.id === leaf.id && candidate.tab_id === hostTab.tabId);
+    const selected = active && hostTab.selectedLeafId === leaf.id;
+    const pending = selected && state.focusPending !== null;
+    const focusError = selected ? state.focusError : null;
+    return <LeafHost ctx={ctx} tab={hostTab} leaf={leaf} rect={rect} pane={pane} selected={selected}
+      browserInputActive={browserInputActive && active && !modalOpen && state.sync === "live"} browserLiveInputEnabled={active && !modalOpen && state.sync === "live"} focusStatus={pending ? "pending" : focusError ? "error" : null} focusError={focusError?.message}
+      splitDisabled={mutationBusy || !sourcePaneId || state.sync !== "live"} closeDisabled={mutationBusy}
+      onSelect={() => selectLeaf(leaf.id)} onSplit={direction => { selectLeaf(leaf.id); onSplit(hostTab.tabId, leaf.id, direction); }}
+      onZoom={() => { selectLeaf(leaf.id); zoom(leaf.id); }} onClose={() => { selectLeaf(leaf.id); closeLeaf(leaf.id); }} onRetryFocus={onRetry}
+      onMenu={event => { selectLeaf(leaf.id); openContext(event, { kind: "pane", id: leaf.id }); }}
+      terminal={pane ? {
+        client, request: { session_id: state.sessionId!, pane_id: pane.id }, selected, presented: selected,
+        controlAllowed: selected && !browserInputActive && !modalOpen && state.sync === "live" && snapshot?.focused_pane_id === pane.id && !state.focusPending && !state.focusError,
+        controlPending: pending, focusEpoch: state.epoch, focusToken: state.focusToken, terminalMouseInput,
+        deferAttachment: state.sync !== "live" && !(state.sync === "loading" && attachedPaneIds.current.has(pane.id)), focusOnAttach: active && !attachFocusSuppressed,
+        onRequestControl: () => selectLeaf(pane.id), onSelect: () => selectLeaf(pane.id), onPrepared: () => {
+          onPanePrepared(pane.id);
+          if (active && switching && pane.id === hostTab.focusedPaneId) setPaintedTab(hostTab);
+        },
+        onResync: onReconnect, onClosed: onReconnect, onClosePane: () => closeLeaf(pane.id), registerStream: (stream, attached) => {
+          registerStream(stream, attached);
+          if (attached) attachedPaneIds.current.add(pane.id); else attachedPaneIds.current.delete(pane.id);
+        },
+      } : null} />;
+  };
+  const workbenchStyle: CSSProperties & { "--sidebar-width": string } = { "--sidebar-width": `${sidebarWidth}px` };
   const sidebarClass = "sidebar";
-  const projections = paneProjection.key === null
-    ? []
-    : paneCanvasReady || outgoingProjection === null
-      ? [paneProjection]
-      : [outgoingProjection, paneProjection];
-  const paintedProjectionKey = paneCanvasReady ? paneProjection.key : outgoingProjection?.key ?? paneProjection.key;
-  const paneInstances = libraryOpen ? [] : projections.flatMap((projection) => renderPaneLayer(projection, projection.key === paneProjection.key, projection.key === paintedProjectionKey));
-  // The inline browser stays associated but hidden while the Library covers the work area.
-  const browserPresented = browserVisible && !libraryOpen;
   // Selection chrome follows Herdr's acknowledgement: while a focus request is in flight the sidebar keeps the confirmed row and marks the target as pending.
   const pendingSpaceId = state.focusPending?.kind === "space" ? state.focusPending.target_id : null;
   const pendingPaneId = state.focusPending?.kind === "pane" || state.focusPending?.kind === "agent" ? state.focusPending.target_id : null;
@@ -1434,26 +905,18 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
-      {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={Boolean(selectedBrowserPresentation?.associationOpen)} libraryOpen={libraryOpen} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={() => {
-        if (!selection.spaceId) return;
-        if (libraryOpen) { closeLibrary(); void browserAction(selection.spaceId, "open"); return; }
-        void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open");
-      }} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
+      {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
+      <BrowserCleanupStrip ctx={ctx} activeTabId={selection.tabId} />
+      {lifecycleError ? <div className="notice notice-error" role="alert">{lifecycleError}</div> : null}
       <div className="workarea-content">
-        {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} space={librarySpace} /> : <div className="pane-canvas" style={{ visibility: !browserVisible || paneCanvasVisible ? "visible" : "hidden", display: browserVisible && browserOnly ? "none" : undefined }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}>
-          {paneProjection.panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : paneInstances}
-          {outgoingProjection || mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}
+        {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
+          onContextMenu={event => { const pane = (event.target as HTMLElement).closest<HTMLElement>("[data-leaf-id]"); if (pane?.dataset.leafId) { selectLeaf(pane.dataset.leafId); openContext(event, { kind: "pane", id: pane.dataset.leafId }); } }}>
+          {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
         </div>}
-        {browserPresented && !browserOnly ? <div className={`browser-splitter${narrowViewport ? " is-horizontal" : ""}`} role="separator" tabIndex={0} aria-label="Resize browser region" aria-orientation={narrowViewport ? "horizontal" : "vertical"} aria-valuemin={BROWSER_SPLIT_MIN_RATIO * 100} aria-valuemax={BROWSER_SPLIT_MAX_RATIO * 100} aria-valuenow={Math.round(browserSplitRatio * 100)} aria-valuetext={`${Math.round(browserSplitRatio * 100)}% browser region`} onKeyDown={browserSplitterKeyDown} onPointerDown={browserSplitterPointerDown} onDoubleClick={() => updateBrowserSplitRatio(BROWSER_SPLIT_DEFAULT_RATIO)} /> : null}
-        {browserBlockedByOutgoing && browserHandoff.outgoing ? <div className="browser-recovery-strip" role="status"><details><summary>Review retained browser work</summary><p>{browserHandoff.outgoing.recovery.describe()}</p><p>Discard only clears the local retry intent; an in-flight or unknown remote write is not undone.</p></details><button type="button" onClick={retryBrowserHandoff}>Retry retained work</button><button type="button" onClick={discardBrowserHandoff}>Discard retry intent</button></div> : null}
-        {browserAssociationOpen && browserTarget ? <div ref={browserRegionRef} className={`browser-region${browserSyncUnavailable ? " is-session-stale" : ""}`} aria-label="Inline browser region" style={!browserPresented ? { display: "none" } : browserOnly ? { flex: "1 1 0", minHeight: 0 } : undefined}>
-          {browserPresented && browserSyncUnavailable ? <div className="browser-recovery-strip" role="status"><span>{browserSyncMessage}</span><button type="button" onClick={onReconnect} aria-label="Resync Herdr session for browser view">{state.sync === "disconnected" ? "Reconnect" : "Resync"}</button></div> : null}
-          <BrowserPane key={browserKey ?? "browser-none"} client={client} target={browserTarget} viewport={browserViewport} visible={browserPresented} presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserPresented && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => selection.spaceId ? browserAction(selection.spaceId, "reconnect") : undefined} onCloseBrowser={() => selection.spaceId ? browserAction(selection.spaceId, "close") : undefined} onFeedback={sendCapturedFeedback} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} registerCloseGuard={registerBrowserCloseGuard} />
-        </div> : null}
       </div>
     </main>
     {renderMenu()}
-    {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} /> : null}
+    {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} leafChoices={localLeaves.map(leaf => ({ id: leaf.id, title: byId(panes, leaf.id)?.title || leaf.kind }))} onSwap={swap} confirmMove={pane => { const message = lastTerminalMessage(pane, "Moving"); return !message || window.confirm(message); }} /> : null}
     {commandsOpen ? <CommandOverlay actions={commandActions.map((action) => ({ ...action, run: () => { setCommandsOpen(false); action.run(); } }))} statusContent={commandStatus} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} /> : null}
     {libraryAddOpen ? <AddContextDialog client={client} onClose={() => setLibraryAddOpen(false)} onOpenItem={(itemId) => openLibrary({ kind: "open", itemId })} space={librarySpace} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
@@ -1465,9 +928,6 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   </div>;
 }
 export function App({ client }: { client: CockpitClient }) {
-  const browserHandoffRef = useRef<BrowserGuardHandoff>({ current: null, outgoing: null, incoming: null });
-  const [, setBrowserHandoffRevision] = useState(0);
-  browserHandoffRef.current.notify = () => setBrowserHandoffRevision((revision) => revision + 1);
   const [status, setStatus] = useState<CockpitStatus | null>(null);
   const [statusError, setStatusError] = useState<StatusError | null>(null);
   const [statusAttempt, setStatusAttempt] = useState(0);
@@ -1476,36 +936,47 @@ export function App({ client }: { client: CockpitClient }) {
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [sessionsError, setSessionsError] = useState<StatusError | null>(null);
   const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
-  const [selection, setSelection] = useState<Selection>({ spaceId: null, tabId: null, paneId: null });
-  const [controlPaneId, setControlPaneId] = useState<string | null>(null);
-  useEffect(() => {
-    const outgoing = browserHandoffRef.current.outgoing;
-    if (!outgoing) return;
-    const settling = outgoing.settling ?? outgoing.recovery.guard().then(() => {
-      if (browserHandoffRef.current.outgoing === outgoing) {
-        browserHandoffRef.current.outgoing = null;
-        const incoming = browserHandoffRef.current.incoming;
-        browserHandoffRef.current.incoming = null;
-        if (incoming) browserHandoffRef.current.current = incoming;
-        browserHandoffRef.current.notify?.();
-      }
-    });
-    outgoing.settling = settling;
-    void settling.catch(() => {
-      if (browserHandoffRef.current.outgoing === outgoing) {
-        outgoing.settling = undefined;
-        browserHandoffRef.current.notify?.();
-      }
-    });
-  }, [selection.spaceId, state.epoch, state.sessionId]);
+  const layouts = useTabLayouts(state.sessionId ?? "");
+  const tabLayout = layouts.state.activeTabId ? layouts.state.tabs[layouts.state.activeTabId] ?? null : null;
+  const selection: Selection = { spaceId: layouts.state.activeSpaceId, tabId: layouts.state.activeTabId, paneId: tabLayout?.selectedLeafId ?? null };
+  const ctx: LeafCtx = { client, sessionId: state.sessionId ?? "", serverInstance: layouts.state.serverInstance, clientId: getViewerClientId(), getState: layouts.getState, dispatch: layouts.dispatch };
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+  const transientCallbacks = useRef(new Set<() => void>());
+  const registerTransient = useCallback((cancel: () => void) => { transientCallbacks.current.add(cancel); return () => { transientCallbacks.current.delete(cancel); }; }, []);
+  const [announcement, setAnnouncement] = useState("");
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const echoAccess = useRef<{ get(): FocusEcho[]; consume(token: number): void; supersede(): void }>({ get: () => [], consume: () => undefined, supersede: () => undefined });
+  const splitPlacement = useRef<Omit<PendingCreation, "token"> | null>(null);
   const sessionStream = useRef<{ close(): void } | null>(null);
-  const controlInitializedEpoch = useRef<number | null>(null);
   const [resyncAttempt, setResyncAttempt] = useState(0);
   const recoveryResyncRef = useRef(false);
   const sessionObservation = useRef(0);
   const sessionListRequest = useRef(0);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const drainLayoutEffects = useCallback(() => {
+    const viewerTabs = new Set<string>();
+    for (const effect of layouts.takeEffects()) {
+      if (effect.type === "cancel-transient") { transientCallbacks.current.forEach(cancel => cancel()); if (effect.reason === "external-focus") echoAccess.current.supersede(); }
+      if (effect.type === "consume-echo") echoAccess.current.consume(effect.token);
+      if (effect.type === "announce") setAnnouncement(effect.text);
+      if (effect.type === "viewer-release") viewerTabs.add(effect.tabId);
+      if (effect.type === "browser-retire") void retireTabBrowser(ctxRef.current, effect.tabId, effect.associationKey, effect.serverInstance).catch(error => setLifecycleError(describeError(error, "Could not retire browser").message));
+    }
+    if (viewerTabs.size) void releaseViewers(ctxRef.current, [...viewerTabs]).catch(error => setLifecycleError(describeError(error, "Could not release viewers").message));
+  }, [layouts.takeEffects]);
+  const dispatchOrdered = useCallback((action: SessionAction) => {
+    const previous = stateRef.current;
+    const next = sessionReducer(previous, action);
+    stateRef.current = next;
+    dispatch(action);
+    if (next.snapshot && next.snapshot !== previous.snapshot
+      && (next.sync === "live" || action.type === "snapshot/authoritative")) {
+      layouts.dispatch({ type: "snapshot", snapshot: next.snapshot, echoes: echoAccess.current.get(), sync: "live" });
+      drainLayoutEffects();
+    }
+  }, [layouts.dispatch, drainLayoutEffects]);
   const autoResyncTimer = useRef<number | null>(null);
   const autoResyncAttempts = useRef(0);
   const healthyLiveTimer = useRef<number | null>(null);
@@ -1520,30 +991,71 @@ export function App({ client }: { client: CockpitClient }) {
     recoveryResyncRef.current = true;
     setResyncAttempt((value) => value + 1);
   }, []);
-  const { focus, panePrepared, reconcile: reconcileFocus, reset: resetFocus, retryFocus, tokenRef: focusTokenRef } = useFocusCoordinator({
-    client,
-    stateRef,
-    mountedRef,
-    dispatch,
-    describeError,
-    onTimeout: requestResync,
+  const { focus, panePrepared, reconcile: reconcileFocus, reset: resetFocus, retryFocus, tokenRef: focusTokenRef, getEchoes, consumeEcho, supersedeSelection } = useFocusCoordinator({
+    client, stateRef, mountedRef, dispatch: dispatchOrdered, describeError, onTimeout: requestResync,
+    onIntent: echo => layouts.dispatch({ type: "focus/register", ...echo }),
   });
+  echoAccess.current = { get: getEchoes, consume: consumeEcho, supersede: supersedeSelection };
   const focusAndSelect = useCallback((request: FocusRequest, location: Selection, prepare?: { paneId: string }) => {
-    setSelection(location);
-    setControlPaneId(location.paneId);
+    if (location.tabId) {
+      layouts.dispatch({ type: "activate-tab", tabId: location.tabId });
+      if ((request.kind === "pane" || request.kind === "agent") && location.paneId) layouts.dispatch({ type: "select-leaf", tabId: location.tabId, leafId: location.paneId });
+    }
     focus(request, location, prepare);
-  }, [focus]);
-  const { consumeFocusedPane, mutate, reset: resetMutations, retry: retryMutation, state: mutations, tokenRef: mutationTokenRef } = useMutationCoordinator({
-    client,
-    stateRef,
-    mountedRef,
-    sessionObservationRef: sessionObservation,
-    focusTokenRef,
-    dispatchSession: dispatch,
-    describeError,
-    mutationSnapshot: authoritativeMutationSnapshot,
-    onResync: requestResync,
+  }, [focus, layouts.dispatch]);
+  const selectLeaf = useCallback((tabId: string, leafId: string) => {
+    const tab = layouts.getState().tabs[tabId];
+    if (!tab) return;
+    if (tab.selectedLeafId !== leafId) layouts.dispatch({ type: "select-leaf", tabId, leafId });
+    if (tab.terminals[leafId]) {
+      const pending = stateRef.current.focusPending;
+      if (!pending || ((pending.kind !== "pane" && pending.kind !== "agent") || pending.target_id !== leafId)) focus({ kind: "pane", target_id: leafId }, { spaceId: tab.spaceId, tabId, paneId: leafId });
+    } else {
+      const pending = stateRef.current.focusPending;
+      // A remembered viewer can take DOM focus while its tab is preparing.
+      // Reasserting that existing selection must not cancel the tab request.
+      if (tab.selectedLeafId !== leafId || pending?.kind !== "tab" || pending.target_id !== tabId) supersedeSelection();
+      requestAnimationFrame(() => {
+        const host = Array.from(document.querySelectorAll<HTMLElement>("[data-leaf-id]")).find(element => element.dataset.leafId === leafId);
+        if (!host || host.contains(document.activeElement) || layouts.getState().tabs[tabId]?.selectedLeafId !== leafId) return;
+        (host.querySelector<HTMLElement>('.context-document, .review-diff, .browser-surface, input, [tabindex="0"]') ?? host).focus({ preventScroll: true });
+      });
+    }
+  }, [focus, supersedeSelection, layouts.dispatch, layouts.getState]);
+  const priorSelection = useRef<{ tabId: string | null; leafId: string | null; terminal: boolean }>({ tabId: null, leafId: null, terminal: false });
+  useLayoutEffect(() => {
+    const terminal = Boolean(selection.paneId && tabLayout?.terminals[selection.paneId]);
+    const prior = priorSelection.current;
+    priorSelection.current = { tabId: selection.tabId, leafId: selection.paneId, terminal };
+    if (selection.tabId === prior.tabId && selection.paneId !== prior.leafId) {
+      if (!terminal) supersedeSelection();
+      else if (!prior.terminal && selection.paneId && tabLayout) focus({ kind: "pane", target_id: selection.paneId }, { spaceId: tabLayout.spaceId, tabId: tabLayout.tabId, paneId: selection.paneId });
+    }
+  }, [selection.tabId, selection.paneId, tabLayout, focus, supersedeSelection]);
+  const { mutate, reset: resetMutations, retry: retryMutation, state: mutations, tokenRef: mutationTokenRef } = useMutationCoordinator({
+    client, stateRef, mountedRef, sessionObservationRef: sessionObservation, dispatchSession: dispatchOrdered,
+    describeError, mutationSnapshot: authoritativeMutationSnapshot, onResync: requestResync,
+    onBegin: operation => {
+      if (operation.request.type !== "pane_split") return;
+      const placement = splitPlacement.current;
+      splitPlacement.current = null;
+      if (placement) layouts.dispatch({ type: "creation/begin", creation: { ...placement, token: operation.token } });
+    },
+    onSettled: (operation, created, snapshot, responseIsCurrent) => {
+      if (operation.epoch !== stateRef.current.epoch || operation.request.type !== "pane_split") return;
+      if (snapshot && responseIsCurrent) layouts.dispatch({ type: "snapshot", snapshot, echoes: getEchoes(), sync: "live" });
+      layouts.dispatch({ type: "creation/settled", token: operation.token, created });
+      drainLayoutEffects();
+    },
   });
+  const split = useCallback((tabId: string, leafId: string, direction: "right" | "down") => {
+    const tab = layouts.getState().tabs[tabId];
+    const sourcePaneId = tab ? runtimeSource(tab, leafId, stateRef.current.snapshot?.focused_pane_id) : null;
+    if (!tab || !sourcePaneId || stateRef.current.sync !== "live") return;
+    splitPlacement.current = { tabId, placeBeside: leafId, dir: direction === "right" ? "row" : "col", sourcePaneId };
+    if (!mutate(`pane:${sourcePaneId}`, { type: "pane_split", pane_id: sourcePaneId, direction, ratio: null }, true)) splitPlacement.current = null;
+  }, [layouts.getState, mutate]);
+  useLayoutEffect(drainLayoutEffects, [layouts.state, drainLayoutEffects]);
   const resetSessionRuntime = useCallback(() => {
     sessionObservation.current += 1;
     sessionStream.current?.close();
@@ -1553,14 +1065,13 @@ export function App({ client }: { client: CockpitClient }) {
     autoResyncAttempts.current = 0;
     recoveryResyncRef.current = false;
     resetMutations();
-    setSelection({ spaceId: null, tabId: null, paneId: null });
-    setControlPaneId(null);
-    controlInitializedEpoch.current = null;
   }, [clearRecoveryTimers, resetFocus, resetMutations]);
   const switchSession = useCallback((id: string) => {
     resetSessionRuntime();
-    dispatch({ type: "switch", sessionId: id });
-  }, [resetSessionRuntime]);
+    const outgoing = ctxRef.current;
+    void releaseViewers(outgoing, "all").catch(error => setLifecycleError(describeError(error, "Could not release viewers").message));
+    dispatchOrdered({ type: "switch", sessionId: id });
+  }, [resetSessionRuntime, dispatchOrdered]);
   const refreshSessions = useCallback(async () => {
     const request = ++sessionListRequest.current;
     setSessionsError(null);
@@ -1607,12 +1118,12 @@ export function App({ client }: { client: CockpitClient }) {
     let active = true;
     sessionStream.current?.close();
     sessionStream.current = null;
-    dispatch({ type: "snapshot/request", epoch, sessionId });
+    dispatchOrdered({ type: "snapshot/request", epoch, sessionId });
     void (async () => {
       try {
         const snapshot = await client.sessionSnapshot(sessionId, controller.signal);
         if (!active || controller.signal.aborted || sessionObservation.current !== observation) return;
-        dispatch({ type: "snapshot/received", epoch, sessionId, snapshot });
+        dispatchOrdered({ type: "snapshot/received", epoch, sessionId, snapshot });
         const stream = await client.subscribeSession(sessionId, (message: SessionStreamMessage) => {
           if (!active || controller.signal.aborted || sessionObservation.current !== observation) return;
           if (recovering && message.type === "snapshot" && message.sequence === 1 && recoveryFocusToken === focusTokenRef.current && stateRef.current.focusError) {
@@ -1620,27 +1131,21 @@ export function App({ client }: { client: CockpitClient }) {
             // is a stale observation and must not become a new user request.
             retryFocus();
           }
-          dispatch({ type: "stream/message", epoch, sessionId, message });
+          dispatchOrdered({ type: "stream/message", epoch, sessionId, message });
           if (message.type !== "snapshot" || message.sequence !== 1) return;
-          if (controlInitializedEpoch.current !== epoch) {
-            controlInitializedEpoch.current = epoch;
-            setControlPaneId(message.snapshot.focused_pane_id);
-          }
-          const mutationFocusPane = consumeFocusedPane(epoch, message.snapshot.focused_pane_id);
-          if (mutationFocusPane) setControlPaneId(mutationFocusPane);
           if (recovering && recoveryMutationToken === mutationTokenRef.current) {
             recoveryResyncRef.current = false;
           }
         }, (error: unknown) => {
           if (!active || controller.signal.aborted || sessionObservation.current !== observation) return;
           const described = describeError(error, "Session stream disconnected");
-          dispatch({ type: "stream/error", epoch, sessionId, code: described.code ?? "stream_disconnected", message: described.message });
+          dispatchOrdered({ type: "stream/error", epoch, sessionId, code: described.code ?? "stream_disconnected", message: described.message });
         }, controller.signal);
         if (active && !controller.signal.aborted && sessionObservation.current === observation) sessionStream.current = stream; else stream.close();
       } catch (error: unknown) {
         if (!active || controller.signal.aborted || sessionObservation.current !== observation) return;
         const described = describeError(error, "Could not read the session snapshot");
-        dispatch({ type: "stream/error", epoch, sessionId, code: described.code ?? "snapshot_error", message: described.message });
+        dispatchOrdered({ type: "stream/error", epoch, sessionId, code: described.code ?? "snapshot_error", message: described.message });
       }
     })();
     return () => {
@@ -1697,12 +1202,8 @@ export function App({ client }: { client: CockpitClient }) {
     };
   }, [state.sync, state.epoch]);
   useEffect(() => {
-    if (!state.snapshot) return;
-    const next = authoritativeSelection(state.snapshot);
-    if (!state.focusPending) setSelection(next);
-    const nextControlPaneId = reconcileFocus(state, next, controlPaneId);
-    if (nextControlPaneId !== undefined) setControlPaneId(nextControlPaneId);
-  }, [state.snapshot, state.sync, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId, reconcileFocus]);
+    reconcileFocus(state, selection, selection.paneId && tabLayout?.terminals[selection.paneId] ? selection.paneId : null);
+  }, [state.snapshot, state.sync, state.epoch, state.focusPending, state.focusToken, state.focusError, selection.paneId, tabLayout, reconcileFocus]);
 
   // With no session the Library opens full-screen in place of the notice screens.
   const [noSessionLibraryOpen, setNoSessionLibraryOpen] = useState(false);
@@ -1727,5 +1228,5 @@ export function App({ client }: { client: CockpitClient }) {
   if (((sessionsError && sessions.length === 0) || (sessionsLoaded && sessions.length === 0)) && noSessionLibrary) return noSessionLibrary;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} onOpenLibrary={openNoSessionLibrary} /></div>;
   if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><div className="notice-actions"><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button><OpenLibraryButton onOpen={openNoSessionLibrary} /></div></section></main></div>;
-  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} browserHandoff={browserHandoffRef.current} onSession={switchSession} onFocus={focusAndSelect} onPanePrepared={panePrepared} onRequestControl={setControlPaneId} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onOpenSession={() => { void refreshSessions(); }} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
+  return <div className="app-shell"><div className="sr-only" role="status" aria-live="polite">{announcement}</div>{lifecycleError ? <div role="alert" className="notice notice-error">{lifecycleError}</div> : null}<Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} ctx={ctx} tabLayout={tabLayout} registerTransient={registerTransient} onSession={switchSession} onFocus={focusAndSelect} onSelectLeaf={selectLeaf} onSplit={split} onPanePrepared={panePrepared} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onOpenSession={() => { void refreshSessions(); }} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
 }

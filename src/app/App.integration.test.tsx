@@ -1,14 +1,20 @@
 // @vitest-environment jsdom
 import "./input/viewerTestLayout";
 
-import { act } from "react";
+import { act, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CockpitClient } from "../client/CockpitClient";
+import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
+import type { TerminalPaneProps } from "./TerminalPane";
+import type * as ContextViewerModule from "./context/ContextViewer";
+import type { ContextViewerProps } from "./context/ContextViewer";
 import type {
+  BrowserAssociation,
   ResourceMutationRequest,
   ResourceMutationResponse,
-  PanePresentation,
+  ViewerContext,
+  ViewerSourceOptions,
+  ViewerOpenRequest,
   SessionSnapshotResponse,
   SessionStreamMessage,
   SessionSummary,
@@ -18,10 +24,46 @@ import { App } from "./App";
 
 const terminalReadyCallbacks = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("./TerminalPane", () => ({
-  TerminalPane: ({ request, deferAttachment, focusOnAttach = true, onSelect, onReady }: { request: { pane_id: string }; deferAttachment?: boolean; focusOnAttach?: boolean; onSelect?: () => void; onReady?: () => void }) => {
+  TerminalPane: ({ client, request, deferAttachment, focusOnAttach = true, onSelect, onReady, registerStream }: TerminalPaneProps) => {
     if (onReady) terminalReadyCallbacks.set(request.pane_id, onReady);
+    const registration = useRef(registerStream);
+    registration.current = registerStream;
+    useEffect(() => {
+      if (deferAttachment) return;
+      let disposed = false;
+      let stream: TerminalStream | undefined;
+      void client.openTerminal({ ...request, mode: "control", takeover: false, cols: 80, rows: 24, cell_width_px: 8, cell_height_px: 16 }, () => undefined, () => undefined).then(next => {
+        if (disposed) next.close();
+        else {
+          stream = next;
+          registration.current?.(next, true);
+        }
+      });
+      return () => {
+        disposed = true;
+        if (stream) registration.current?.(stream, false);
+        stream?.close();
+      };
+    }, [client, request.session_id, request.pane_id, deferAttachment]);
     return <button type="button" data-testid={`terminal-${request.pane_id}`} data-deferred={String(Boolean(deferAttachment))} data-focus-on-attach={String(focusOnAttach)} onClick={onSelect}>terminal</button>;
   },
+}));
+
+vi.mock("./context/ContextViewer", async importOriginal => {
+  const actual = await importOriginal<typeof ContextViewerModule>();
+  return {
+    ...actual,
+    ContextViewer: (props: ContextViewerProps) => props.context
+      ? <button type="button" data-testid="files-content">Files content</button>
+      : <actual.ContextViewer {...props} />,
+  };
+});
+vi.mock("./review/ReviewViewer", () => ({
+  ReviewViewer: () => <button type="button" data-testid="review-content">Review content</button>,
+}));
+vi.mock("./browser/BrowserPane", () => ({
+  BrowserPane: ({ target, onInteractionFocus }: { target: { tab_id: string | null }; onInteractionFocus?: () => void }) =>
+    <button type="button" data-testid={`browser-${target.tab_id}`} onFocus={onInteractionFocus} onClick={onInteractionFocus}>Browser content</button>,
 }));
 
 type Deferred<T> = {
@@ -59,6 +101,7 @@ function snapshot(sessionId: string, focusedTabId = "tab-1", focusedPaneId = "pa
   const secondTabFocused = focusedTabId === "tab-2";
   return {
     session_id: sessionId,
+    server_instance: "0123456789abcdef",
     version: "0.8.2",
     protocol: 20,
     focused_space_id: "space-1",
@@ -66,63 +109,53 @@ function snapshot(sessionId: string, focusedTabId = "tab-1", focusedPaneId = "pa
     focused_pane_id: focusedPaneId,
     spaces: [{ id: "space-1", label: sessionId === "session-1" ? "Alpha space" : "Beta space", number: 1, tab_count: 2, pane_count: 2, focused: true, agent_status: "idle", git: null }],
     tabs: [
-      { id: "tab-1", space_id: "space-1", label: sessionId === "session-1" ? "Alpha tab" : "Beta tab", number: 1, pane_count: 1, focused: !secondTabFocused },
-      { id: "tab-2", space_id: "space-1", label: "Second tab", number: 2, pane_count: 1, focused: secondTabFocused },
+      { id: "tab-1", space_id: "space-1", label: sessionId === "session-1" ? "Alpha tab" : "Beta tab", number: 1, pane_count: 1, focused: !secondTabFocused, focused_pane_id: "pane-1" },
+      { id: "tab-2", space_id: "space-1", label: "Second tab", number: 2, pane_count: 1, focused: secondTabFocused, focused_pane_id: "pane-2" },
     ],
     panes: [
       { id: "pane-1", terminal_id: "terminal-1", space_id: "space-1", tab_id: "tab-1", title: "Alpha pane", focused: focusedPaneId === "pane-1", agent: null, agent_status: "idle", revision: 1 },
       { id: "pane-2", terminal_id: "terminal-2", space_id: "space-1", tab_id: "tab-2", title: "Second pane", focused: focusedPaneId === "pane-2", agent: null, agent_status: "idle", revision: 1 },
     ],
-    layouts: [],
     agents: [],
   };
 }
-function manyTabsSnapshot(sessionId: string, focusedTabId = "tab-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
-  const base = snapshot(sessionId, focusedTabId, focusedPaneId);
+function twoTerminalSnapshot(sessionId: string, focusedPaneId = "pane-1"): SessionSnapshotResponse {
+  const base = snapshot(sessionId, "tab-1", focusedPaneId);
   return {
     ...base,
-    focused_tab_id: focusedTabId,
-    focused_pane_id: focusedPaneId,
-    spaces: [{ ...base.spaces[0], tab_count: 10, pane_count: 10 }],
-    tabs: Array.from({ length: 10 }, (_, index) => ({
-      id: `tab-${index + 1}`,
-      space_id: "space-1",
-      label: index === 0 ? "Alpha tab" : `Tab ${index + 1}`,
-      number: index + 1,
-      pane_count: 1,
-      focused: focusedTabId === `tab-${index + 1}`,
-    })),
-    panes: Array.from({ length: 10 }, (_, index) => ({
-      id: `pane-${index + 1}`,
-      terminal_id: `terminal-${index + 1}`,
-      space_id: "space-1",
-      tab_id: `tab-${index + 1}`,
-      title: index === 0 ? "Alpha pane" : `Pane ${index + 1}`,
-      focused: focusedPaneId === `pane-${index + 1}`,
-      agent: null,
-      agent_status: "idle",
-      revision: 1,
-    })),
+    spaces: [{ ...base.spaces[0], pane_count: 3 }],
+    tabs: base.tabs.map(tab => tab.id === "tab-1" ? { ...tab, pane_count: 2, focused_pane_id: focusedPaneId } : tab),
+    panes: [...base.panes, { ...base.panes[0], id: "pane-3", terminal_id: "terminal-3", title: "Third pane", focused: focusedPaneId === "pane-3" }],
   };
 }
 
-function panePresentation(sessionId: string, paneId: string, canOpenReview = false): PanePresentation {
+function viewerSources(sessionId: string, paneId: string): ViewerSourceOptions {
   return {
-    session_id: sessionId,
-    pane_id: paneId,
-    terminal_id: `terminal-${paneId}`,
-    binding_id: `binding-${paneId}`,
-    extension: null,
-    renderer: null,
-    confidence: "none",
-    reason: canOpenReview ? "" : "Review requires a configured repository",
-    roots: [{ root_id: "repository", kind: "repository", label: "Repository", path: "/repository", repository_id: "repository", checkout_path: "/repository", companion_id: null }],
-    default_root_id: "repository",
-    can_open_context: false,
-    can_open_files: false,
-    files_root_id: null,
-    can_open_review: canOpenReview,
-    diagnostics: [],
+    session_id: sessionId, pane_id: paneId, tab_id: paneId === "pane-2" ? "tab-2" : "tab-1", space_id: "space-1",
+    files_context_root_id: null, files_folder_root_id: "folder", review_repository_ids: ["repository"],
+    roots: [{ root_id: "repository", kind: "repository", label: "Repository", path: "/repository", repository_id: "repository", checkout_path: "/repository", companion_id: null },
+      { root_id: "folder", kind: "folder", label: "Files", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }],
+    reason: "Context requires a configured companion directory", diagnostics: [],
+  };
+}
+
+function viewerContext(sessionId: string, request: ViewerOpenRequest): ViewerContext {
+  const roots = viewerSources(sessionId, request.source_pane_id).roots;
+  return {
+    session_id: sessionId, viewer_id: `${request.tab_id}:${request.kind}`, binding_id: `binding-${request.source_pane_id}`,
+    tab_id: request.tab_id, space_id: "space-1", kind: request.kind,
+    source_kind: request.kind === "review" ? "review" : "context", source_id: request.source_pane_id,
+    roots, default_root_id: request.kind === "review" ? "repository" : "folder", diagnostics: [],
+  };
+}
+
+function browserAssociation(tabId: string): BrowserAssociation {
+  return {
+    association_key: `fixture-${tabId}`, owner_id: "fixture", session_id: "session-1",
+    space_id: "space-1", space_label: "Alpha space", tab_id: tabId, tab_label: tabId,
+    playwright_session: `cockpit-${tabId}`, working_directory: `/browser/${tabId}`,
+    profile_path: `/browser/${tabId}/profile`, invocation: "fixture",
+    connection: "open", incarnation: `incarnation-${tabId}`, opened_tab: null,
   };
 }
 
@@ -130,7 +163,7 @@ function createdSnapshot(sessionId: string): SessionSnapshotResponse {
   const base = snapshot(sessionId);
   return {
     ...base,
-    tabs: [...base.tabs, { id: "tab-3", space_id: "space-1", label: "Created tab", number: 3, pane_count: 0, focused: true }],
+    tabs: [...base.tabs, { id: "tab-3", space_id: "space-1", label: "Created tab", number: 3, pane_count: 0, focused: true, focused_pane_id: null }],
     spaces: [{ ...base.spaces[0], tab_count: 3 }],
     focused_tab_id: "tab-3",
     focused_pane_id: null,
@@ -149,8 +182,8 @@ class AppFixture {
   readonly mutateCalls = vi.fn<(sessionId: string, request: ResourceMutationRequest) => Promise<ResourceMutationResponse>>();
   readonly focusCalls = vi.fn<CockpitClient["focus"]>();
   readonly sessionsCalls = vi.fn<() => Promise<{ sessions: SessionSummary[] }>>();
-  readonly inspectPane = vi.fn<CockpitClient["inspectPane"]>();
-  readonly openReview = vi.fn<CockpitClient["openReview"]>();
+  readonly viewerSources = vi.fn<CockpitClient["viewerSources"]>();
+  readonly viewerOpen = vi.fn<CockpitClient["viewerOpen"]>();
   readonly subscriptions: Subscription[] = [];
   readonly mutationResponses: Array<Deferred<ResourceMutationResponse>> = [];
   private readonly snapshotQueues = new Map<string, Array<Promise<SessionSnapshotResponse>>>();
@@ -158,7 +191,13 @@ class AppFixture {
 
   readonly client: CockpitClient = {
     status: vi.fn(async () => status),
-    browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this Space" })),
+    browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this tab", cleanup: "none" as const, cleanup_reason: null })),
+    browserCleanupStatus: vi.fn(async () => ({ cutover: "not_needed" as const, failures: [], saved_tabs: [] })),
+    browserCleanupRetry: vi.fn(async () => ({ cutover: "done" as const, failures: [], saved_tabs: [] })),
+    browserLegacyList: vi.fn(async () => ({ archives: [] })),
+    browserLegacyRemove: vi.fn(async () => ({ archives: [] })),
+    browserLegacyKeep: vi.fn(async () => ({ archives: [] })),
+    browserLegacyRecipients: vi.fn(async () => []),
     browserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback in fixture"); }),
     browserDraftRecovery: vi.fn(async () => ({ type: "none" as const })),
     acknowledgeBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback acknowledgement in fixture"); }),
@@ -179,7 +218,9 @@ class AppFixture {
     workspaceTeardownPreview: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
     workspaceTeardownExecute: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
     workspaceTeardownRecoveries: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
-    inspectPane: this.inspectPane,
+    viewerSources: this.viewerSources,
+    viewerOpen: this.viewerOpen,
+    viewerRelease: vi.fn(async () => undefined),
     contextDirectory: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
     contextFileIndex: vi.fn(async () => { throw new Error("Unexpected Context file index in terminal fixture"); }),
     contextDocument: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
@@ -189,7 +230,7 @@ class AppFixture {
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
     contextMedia: vi.fn(),
     librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, companion: { status: "available" as const, companion_root_id: "companion:fixture", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
-    librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(), openReview: this.openReview, openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
+    librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -224,7 +265,7 @@ class AppFixture {
       this.subscriptions.push(subscription);
       return { close: () => { subscription.closed = true; } };
     }),
-    openTerminal: vi.fn(),
+    openTerminal: vi.fn(async () => ({ close: vi.fn(), send: vi.fn() })),
     openBrowserView: vi.fn(),
   };
 
@@ -239,12 +280,8 @@ class AppFixture {
       return response.promise;
     });
     this.focusCalls.mockImplementation(async (sessionId, request) => ({ session_id: sessionId, kind: request.kind, target_id: request.target_id, accepted: true }));
-    this.inspectPane.mockImplementation(async (sessionId, paneId) => panePresentation(sessionId, paneId));
-    this.openReview.mockImplementation(async (sessionId, request) => panePresentation(sessionId, request.pane_id, true));
-  }
-
-  setPanePresentation(value: PanePresentation): void {
-    this.inspectPane.mockImplementation(async () => value);
+    this.viewerSources.mockImplementation(async (sessionId, paneId) => viewerSources(sessionId, paneId));
+    this.viewerOpen.mockImplementation(async (sessionId, request) => viewerContext(sessionId, request));
   }
 
   queueSnapshot(sessionId: string, result: Promise<SessionSnapshotResponse>): void {
@@ -328,7 +365,7 @@ function click(element: HTMLElement): void {
 }
 
 function openLocalPaneMenu(): void {
-  const pane = container.querySelector<HTMLElement>(".pane-view:not([inert])");
+  const pane = container.querySelector<HTMLElement>('[data-leaf-id][data-selected="true"]');
   if (!pane) throw new Error("No visible pane");
   act(() => pane.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 24, clientY: 24 })));
 }
@@ -338,6 +375,32 @@ function selectedTab(): string {
   if (!selected) throw new Error("No selected tab");
   return selected.getAttribute("aria-label") ?? "";
 }
+
+function leaf(id: string): HTMLElement {
+  const host = container.querySelector<HTMLElement>(`[data-leaf-id="${id}"]`);
+  if (!host) throw new Error(`Missing leaf ${id}`);
+  return host;
+}
+
+function selectedLeaf(): string {
+  const host = container.querySelector<HTMLElement>('[data-leaf-id][data-selected="true"]');
+  if (!host?.dataset.leafId) throw new Error("No selected leaf");
+  return host.dataset.leafId;
+}
+
+function leafButton(id: string, label: string): HTMLButtonElement {
+  const match = leaf(id).querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  if (!match) throw new Error(`Missing ${label} in ${id}`);
+  return match;
+}
+
+async function openCommand(label: string): Promise<void> {
+  click(button("Commands"));
+  await settle();
+  click(button("All commands"));
+  click(button(label));
+  await settle();
+}
 function readyTerminal(paneId: string): void {
   const ready = terminalReadyCallbacks.get(paneId);
   if (!ready) throw new Error(`Missing terminal readiness callback for ${paneId}`);
@@ -345,7 +408,7 @@ function readyTerminal(paneId: string): void {
 }
 
 function mutationResponse(sessionId: string, next = snapshot(sessionId)): ResourceMutationResponse {
-  return { session_id: sessionId, snapshot: next };
+  return { session_id: sessionId, snapshot: next, created: null };
 }
 
 function selectSession(sessionId: string): void {
@@ -383,53 +446,46 @@ describe("mounted App mutation and session ordering", () => {
     expect(line?.closest("button")?.getAttribute("aria-label")).toBe("Alpha space, Idle, branch main, 2 ahead, 1 behind");
   });
 
-  it("opens Review from the command overlay for the selected single pane", async () => {
+  it("opens Review as a local tab viewer from the command overlay", async () => {
     const fixture = new AppFixture();
-    const presentation = panePresentation("session-1", "pane-1", true);
-    presentation.roots.unshift({ ...presentation.roots[0], root_id: "ancestor", kind: "folder", repository_id: "ancestor" });
-    fixture.setPanePresentation(presentation);
     await mount(fixture);
-    await settle();
+    await openCommand("Open Review right");
 
-    expect(container.querySelector(".pane-border-label")).toBeNull();
-    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true })));
-    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true, cancelable: true })));
+    expect(selectedLeaf()).toBe("tab-1:review");
+    expect(container.querySelector('[data-testid="review-content"]')).not.toBeNull();
+    expect(terminal("pane-1")).not.toBeNull();
+    expect(fixture.viewerOpen).toHaveBeenCalledWith("session-1", {
+      tab_id: "tab-1", kind: "review", source_pane_id: "pane-1",
+      source: { kind: "review", repository_id: "repository" }, client_id: expect.any(String),
+    });
+    click(leafButton("tab-1:review", "Close Review"));
     await settle();
-
-    expect(button("Open Review right").disabled).toBe(false);
-    click(button("All commands"));
-    const rows = [...container.querySelectorAll(".command-row")];
-    expect(container.querySelector(".command-row.is-active")).toBe(rows[0]);
-    act(() => container.querySelector(".command-overlay")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
-    expect(container.querySelector(".command-row.is-active")).toBe(rows[1]);
-    expect(button("Open Review below").disabled).toBe(false);
-    click(button("Open Review right"));
-    await settle();
-    expect(fixture.openReview).toHaveBeenCalledWith("session-1", { pane_id: "pane-1", binding_id: "binding-pane-1", repository_id: "repository", direction: "right" });
+    expect(container.querySelector('[data-leaf-id="tab-1:review"]')).toBeNull();
+    expect(selectedLeaf()).toBe("pane-1");
+    expect(fixture.client.viewerRelease).toHaveBeenCalledWith("session-1", "tab-1:review");
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
   });
 
   it("opens files from the local pane menu without a task companion", async () => {
     const fixture = new AppFixture();
-    const presentation = panePresentation("session-1", "pane-1");
-    presentation.can_open_files = true;
-    presentation.files_root_id = "folder";
-    presentation.roots.push({ root_id: "folder", kind: "folder", label: "Files", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null });
-    fixture.setPanePresentation(presentation);
-    vi.mocked(fixture.client.openContext).mockResolvedValue(presentation);
     await mount(fixture);
     openLocalPaneMenu();
-    expect(button("Files").disabled).toBe(false);
-    expect(button("Context").disabled).toBe(true);
-    click(button("Files"));
     await settle();
-    expect(fixture.client.openContext).toHaveBeenCalledWith("session-1", { pane_id: "pane-1", binding_id: "binding-pane-1", root_id: "folder", direction: "right" });
+    expect(button("Open files right").disabled).toBe(false);
+    expect(button("Open Context right").disabled).toBe(true);
+    click(button("Open files right"));
+    await settle();
+
+    expect(selectedLeaf()).toBe("tab-1:files");
+    expect(container.querySelector('[data-testid="files-content"]')).not.toBeNull();
+    expect(terminal("pane-1")).not.toBeNull();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
   });
 
   it("keeps local pane actions and Commands available for the selected single pane", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
 
-    expect(container.querySelector(".pane-border-label")).toBeNull();
     expect(button("Set up a task Space").closest(".spaces-section .sidebar-section-heading")).not.toBeNull();
     expect(container.querySelector(".sidebar-divider")).toBeNull();
     expect(button("Commands").closest(".tab-strip")).toBeNull();
@@ -460,123 +516,10 @@ describe("mounted App mutation and session ordering", () => {
     click(tab);
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
-    expect(container.querySelector(".pane-header.is-hidden")).not.toBeNull();
-    expect(container.querySelector('[aria-label="Waiting for Herdr focus confirmation"]')?.closest(".pane-focus-overlay")).not.toBeNull();
 
     fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
-  });
-  it("retains an inert painted frame until the newly selected terminal hydrates", async () => {
-    const fixture = new AppFixture();
-    await mount(fixture);
-
-    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
-    const tab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 2: Second tab"]');
-    if (!tab) throw new Error("Missing second tab");
-    click(tab);
-    fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
-    await settle();
-    expect(selectedTab()).toBe("Tab 2: Second tab");
-    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("hidden");
-    const retained = container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')!;
-    expect(retained.hasAttribute("inert")).toBe(true);
-    click(retained.querySelector<HTMLButtonElement>(".pane-header-select")!);
-    expect(selectedTab()).toBe("Tab 2: Second tab");
-
-    readyTerminal("pane-2");
-    await settle();
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')).toBeNull();
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("visible");
-
-    const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
-    if (!firstTab) throw new Error("Missing first tab");
-    click(firstTab);
-    fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1", "tab-1", "pane-1"));
-    await settle();
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("visible");
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("hidden");
-    readyTerminal("pane-1");
-    await settle();
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')).toBeNull();
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
-  });
-  it("reuses mounted panes through a rapid tab reversal", async () => {
-    const fixture = new AppFixture();
-    await mount(fixture);
-
-    const secondTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 2: Second tab"]');
-    if (!secondTab) throw new Error("Missing second tab");
-    click(secondTab);
-    fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
-    await settle();
-    const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
-    if (!firstTab) throw new Error("Missing first tab");
-    click(firstTab);
-    fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1", "tab-1", "pane-1"));
-    await settle();
-
-    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
-    const alphaPanes = [...container.querySelectorAll<HTMLElement>('[aria-label="Alpha pane"]')];
-    expect(alphaPanes).toHaveLength(1);
-    expect(alphaPanes[0]?.style.visibility).toBe("visible");
-
-    readyTerminal("pane-1");
-    await settle();
-    expect(container.querySelectorAll('[aria-label="Alpha pane"]')).toHaveLength(1);
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
-  });
-  it("bounds outgoing terminal hosts while switching through many tabs and reattaches on revisit", async () => {
-    const fixture = new AppFixture();
-    await mount(fixture);
-    const tenTabs = manyTabsSnapshot("session-1");
-    fixture.emitSnapshot("session-1", 1, 2, tenTabs);
-    await settle();
-
-    for (let index = 2; index <= 10; index += 1) {
-      const tab = container.querySelector<HTMLButtonElement>(`[role="tab"][aria-label="Tab ${index}: Tab ${index}"]`);
-      if (!tab) throw new Error(`Missing tab ${index}`);
-      click(tab);
-      fixture.emitSnapshot("session-1", 1, index + 1, manyTabsSnapshot("session-1", `tab-${index}`, `pane-${index}`));
-      await settle();
-      expect(container.querySelectorAll('[data-testid^="terminal-"]')).toHaveLength(2);
-    }
-
-    readyTerminal("pane-10");
-    await settle();
-    expect(container.querySelectorAll('[data-testid^="terminal-"]')).toHaveLength(1);
-
-    const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
-    if (!firstTab) throw new Error("Missing first tab on revisit");
-    click(firstTab);
-    fixture.emitSnapshot("session-1", 1, 12, manyTabsSnapshot("session-1", "tab-1", "pane-1"));
-    await settle();
-    expect(container.querySelectorAll('[data-testid^="terminal-"]')).toHaveLength(2);
-    readyTerminal("pane-1");
-    await settle();
-    expect(container.querySelectorAll('[data-testid^="terminal-"]')).toHaveLength(1);
-  });
-
-  it("keeps a terminal mounted when inspection binding identity changes", async () => {
-    vi.useFakeTimers();
-    try {
-      const fixture = new AppFixture();
-      await mount(fixture);
-      const terminal = container.querySelector<HTMLElement>('[data-testid="terminal-pane-1"]');
-      expect(terminal).not.toBeNull();
-
-      const changed = panePresentation("session-1", "pane-1");
-      changed.binding_id = "binding-pane-1-after-process-churn";
-      fixture.setPanePresentation(changed);
-      await advanceTimers(2500);
-      await settle();
-
-      expect(container.querySelector<HTMLElement>('[data-testid="terminal-pane-1"]')).toBe(terminal);
-    } finally {
-      vi.useRealTimers();
-    }
   });
   it("retries the retained focus intent after a recovery snapshot", async () => {
     vi.useFakeTimers();
@@ -588,6 +531,8 @@ describe("mounted App mutation and session ordering", () => {
       if (!tab) throw new Error("Missing second tab");
       click(tab);
       await settle();
+      readyTerminal("pane-2");
+      await settle();
       expect(fixture.focusCalls).toHaveBeenLastCalledWith("session-1", { kind: "tab", target_id: "tab-2" });
 
       await advanceTimers(500);
@@ -597,7 +542,7 @@ describe("mounted App mutation and session ordering", () => {
 
       expect(fixture.focusCalls).toHaveBeenCalledTimes(2);
       expect(fixture.focusCalls).toHaveBeenLastCalledWith("session-1", { kind: "tab", target_id: "tab-2" });
-      expect(selectedTab()).toBe("Tab 1: Alpha tab");
+      expect(selectedTab()).toBe("Tab 2: Second tab");
     } finally {
       vi.useRealTimers();
     }
@@ -688,6 +633,9 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
     act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true })));
     act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", bubbles: true, cancelable: true })));
+    await settle();
+    readyTerminal("pane-1");
+    await settle();
     expect(fixture.focusCalls).toHaveBeenCalledWith("session-1", { kind: "tab", target_id: "tab-1" });
     fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1", "tab-1", "pane-1"));
     await settle();
@@ -911,43 +859,6 @@ describe("mounted App mutation and session ordering", () => {
     }
   });
 
-  it("retains a terminal renderer choice across refresh, stale state, and ordered recovery", async () => {
-    vi.useFakeTimers();
-    try {
-      const fixture = new AppFixture();
-      const graphical = { ...panePresentation("session-1", "pane-1", true), extension: "review", renderer: "review", confidence: "verified_launch" } as PanePresentation;
-      fixture.setPanePresentation(graphical);
-      await mount(fixture);
-      const paneMenuItem = (label: string): HTMLButtonElement => {
-        const item = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === label);
-        if (!item) throw new Error(`Missing pane menu item ${label}`);
-        return item;
-      };
-      openLocalPaneMenu();
-      expect(paneMenuItem("Show terminal view")).toBeTruthy();
-      click(paneMenuItem("Show terminal view"));
-      openLocalPaneMenu();
-      click(paneMenuItem("Refresh renderer detection"));
-      await settle();
-      openLocalPaneMenu();
-      expect(paneMenuItem("Render document")).toBeTruthy();
-      click(paneMenuItem("Render document"));
-
-      fixture.emitError("session-1");
-      await settle();
-      openLocalPaneMenu();
-      expect(paneMenuItem("Show terminal view")).toBeTruthy();
-      click(paneMenuItem("Refresh renderer detection"));
-      fixture.queueSnapshot("session-1", Promise.resolve(snapshot("session-1")));
-      await advanceTimers(250);
-      fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
-      await settle();
-      openLocalPaneMenu();
-      expect(paneMenuItem("Show terminal view")).toBeTruthy();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
 
 function emptyLibrary(fixture: AppFixture): void {
@@ -971,7 +882,7 @@ function terminal(paneId: string): HTMLElement | null {
 }
 
 describe("Library view presentation lifecycle", () => {
-  it("unmounts pane renderers while open and returns focus to the still-mounted sidebar invoker without terminal focus", async () => {
+  it("unmounts leaf content while open and returns focus to the still-mounted sidebar invoker without terminal focus", async () => {
     const fixture = new AppFixture();
     emptyLibrary(fixture);
     await mount(fixture);
@@ -1088,20 +999,6 @@ describe("keyboard prefix in the workbench", () => {
     expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("true");
   });
 
-  it("closes the Library first, then acts, for a pane-scoped command", async () => {
-    const fixture = new AppFixture();
-    emptyLibrary(fixture);
-    await mount(fixture);
-    act(() => terminal("pane-1")!.focus());
-    prefix(terminal("pane-1")!, "i");
-    await settle();
-    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
-
-    prefix(document.activeElement!, "z");
-    expect(container.querySelector('section[aria-label="Library"]')).toBeNull();
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)); });
-    expect(fixture.mutateCalls).toHaveBeenCalledWith("session-1", { type: "pane_zoom", pane_id: "pane-1", mode: "toggle" });
-  });
 
   it("shows a not-bound hint for a key after the prefix that Cockpit does not use", async () => {
     const fixture = new AppFixture();
@@ -1178,5 +1075,224 @@ describe("pane-scoped prefix commands over the Library", () => {
     } finally {
       confirm.mockRestore();
     }
+  });
+});
+
+describe("tab-local viewers, focus and placement", () => {
+  it("keeps a viewer selected through unchanged ordered snapshots without requesting Herdr focus", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    fixture.focusCalls.mockClear();
+    await openCommand("Open files right");
+    const content = container.querySelector('[data-testid="files-content"]');
+    expect(selectedLeaf()).toBe("tab-1:files");
+
+    fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1"));
+    await settle();
+    fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1"));
+    await settle();
+
+    expect(selectedLeaf()).toBe("tab-1:files");
+    expect(container.querySelector('[data-testid="files-content"]')).toBe(content);
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+  });
+
+  it("follows external terminal focus and restores a viewer's local zoom", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    fixture.emitSnapshot("session-1", 1, 2, twoTerminalSnapshot("session-1"));
+    await settle();
+    await openCommand("Open files right");
+    click(leafButton("tab-1:files", "Zoom this pane"));
+    expect(terminal("pane-3")).toBeNull();
+
+    fixture.emitSnapshot("session-1", 1, 3, twoTerminalSnapshot("session-1", "pane-3"));
+    await settle();
+
+    expect(selectedLeaf()).toBe("pane-3");
+    expect(terminal("pane-1")).not.toBeNull();
+    expect(terminal("pane-3")).not.toBeNull();
+    expect(container.querySelector(".pane-zoom-bar")).toBeNull();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a later viewer selection with an already-issued terminal focus echo", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    fixture.emitSnapshot("session-1", 1, 2, twoTerminalSnapshot("session-1"));
+    await settle();
+    click(terminal("pane-3")!);
+    await settle();
+    expect(fixture.focusCalls).toHaveBeenCalledWith("session-1", { kind: "pane", target_id: "pane-3" });
+    await openCommand("Open files right");
+
+    fixture.emitSnapshot("session-1", 1, 3, twoTerminalSnapshot("session-1", "pane-3"));
+    await settle();
+
+    expect(selectedLeaf()).toBe("tab-1:files");
+    expect(container.querySelector('[data-testid="files-content"]')).not.toBeNull();
+  });
+
+  it("splits from a viewer using the last real terminal and places only the receipted pane beside that viewer", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    fixture.emitSnapshot("session-1", 1, 2, twoTerminalSnapshot("session-1"));
+    await settle();
+    click(terminal("pane-3")!);
+    await settle();
+    await openCommand("Open files right");
+    expect(fixture.viewerOpen).toHaveBeenLastCalledWith("session-1", expect.objectContaining({ source_pane_id: "pane-3" }));
+    click(leafButton("tab-1:files", "Split down: new terminal"));
+    expect(fixture.mutateCalls).toHaveBeenCalledWith("session-1", { type: "pane_split", pane_id: "pane-3", direction: "down", ratio: null });
+
+    const base = twoTerminalSnapshot("session-1");
+    const next: SessionSnapshotResponse = {
+      ...base, focused_pane_id: "pane-4",
+      spaces: [{ ...base.spaces[0], pane_count: 5 }],
+      tabs: base.tabs.map(tab => tab.id === "tab-1" ? { ...tab, pane_count: 4, focused_pane_id: "pane-4" } : tab),
+      panes: [...base.panes.map(pane => ({ ...pane, focused: false })),
+        { ...base.panes[0], id: "pane-4", terminal_id: "terminal-4", title: "Created pane", focused: true },
+        { ...base.panes[0], id: "pane-5", terminal_id: "terminal-5", title: "External pane", focused: false }],
+    };
+    fixture.emitSnapshot("session-1", 1, 3, next);
+    await settle();
+    expect(container.querySelector('[data-leaf-id="pane-4"]')).toBeNull();
+    expect(selectedLeaf()).toBe("tab-1:files");
+    fixture.queueSnapshot("session-1", deferred<SessionSnapshotResponse>().promise);
+    fixture.resolveMutation(0, {
+      session_id: "session-1", snapshot: next,
+      created: { pane_id: "pane-4", terminal_id: "terminal-4", space_id: "space-1", tab_id: "tab-1" },
+    });
+    await settle();
+
+    expect(selectedLeaf()).toBe("pane-4");
+    const viewer = leaf("tab-1:files");
+    const created = leaf("pane-4");
+    expect(created.style.left).toBe(viewer.style.left);
+    expect(created.style.width).toBe(viewer.style.width);
+    expect(Number.parseFloat(created.style.top)).toBeGreaterThan(Number.parseFloat(viewer.style.top));
+    expect(Number.parseFloat(leaf("pane-5").style.left)).toBeGreaterThan(Number.parseFloat(created.style.left));
+  });
+
+  it("applies swap, divider resize and zoom locally while selection keeps painted control streams attached", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    fixture.emitSnapshot("session-1", 1, 2, twoTerminalSnapshot("session-1"));
+    await settle();
+    await openCommand("Open files right");
+    const first = terminal("pane-1");
+    const third = terminal("pane-3");
+    const streams = vi.mocked(fixture.client.openTerminal).mock.results.map(result => result.value);
+    const attachmentCount = vi.mocked(fixture.client.openTerminal).mock.calls.length;
+    const before = leaf("tab-1:files").style.left;
+
+    prefix(window, "H", { shiftKey: true });
+    await settle();
+    expect(leaf("tab-1:files").style.left).not.toBe(before);
+    const divider = container.querySelector<HTMLElement>("[data-layout-divider]")!;
+    const sizes = [leaf("pane-1").style.width, leaf("pane-3").style.width, leaf("tab-1:files").style.width];
+    press(divider, "ArrowRight");
+    await settle();
+    expect([leaf("pane-1").style.width, leaf("pane-3").style.width, leaf("tab-1:files").style.width]).not.toEqual(sizes);
+    click(terminal("pane-1")!);
+    await settle();
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="files-content"]')!.focus());
+    await settle();
+    expect(selectedLeaf()).toBe("tab-1:files");
+    expect(terminal("pane-1")).toBe(first);
+    expect(terminal("pane-3")).toBe(third);
+    expect(fixture.client.openTerminal).toHaveBeenCalledTimes(attachmentCount);
+    for (const stream of await Promise.all(streams)) expect(stream.close).not.toHaveBeenCalled();
+
+    click(leafButton("tab-1:files", "Zoom this pane"));
+    expect(container.querySelector(".pane-zoom-bar")).not.toBeNull();
+    click(leafButton("tab-1:files", "Restore layout"));
+    await settle();
+    expect(terminal("pane-1")).not.toBeNull();
+    expect(terminal("pane-3")).not.toBeNull();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+  });
+});
+
+describe("tab-local Browser flow", () => {
+  it("keeps separate browsers in two tabs and closes only the selected tab's browser", async () => {
+    const fixture = new AppFixture();
+    vi.mocked(fixture.client.browserAction).mockImplementation(async request => ({
+      association: browserAssociation(request.target.tab_id!), connection: request.action.kind === "close" ? "closed" : "open",
+      message: "", cleanup: request.action.kind === "close" ? "done" : "none", cleanup_reason: null,
+    }));
+    await mount(fixture);
+    click(button("Browser"));
+    await settle();
+    expect(selectedLeaf()).toBe("tab-1:browser");
+    expect(container.querySelector('[data-testid="browser-tab-1"]')).not.toBeNull();
+    expect(terminal("pane-1")).not.toBeNull();
+
+    click(button("Tab 2: Second tab"));
+    await settle();
+    readyTerminal("pane-2");
+    fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
+    await settle();
+    click(button("Browser"));
+    await settle();
+    expect(selectedLeaf()).toBe("tab-2:browser");
+    expect(container.querySelector('[data-testid="browser-tab-2"]')).not.toBeNull();
+
+    click(button("Tab 1: Alpha tab"));
+    await settle();
+    readyTerminal("pane-1");
+    fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1"));
+    await settle();
+    expect(selectedLeaf()).toBe("tab-1:browser");
+    click(button("Browser"));
+    await settle();
+    expect(container.querySelector('[data-leaf-id="tab-1:browser"]')).toBeNull();
+    expect(selectedLeaf()).toBe("pane-1");
+    expect(fixture.client.browserAction).toHaveBeenCalledWith({ target: { session_id: "session-1", tab_id: "tab-1", pane_id: null, endpoint_path: null }, action: { kind: "close" } });
+    expect(vi.mocked(fixture.client.browserAction).mock.calls.filter(([request]) => request.action.kind === "open_fresh").map(([request]) => request.target.tab_id)).toEqual(["tab-1", "tab-2"]);
+
+    click(button("Tab 2: Second tab"));
+    await settle();
+    readyTerminal("pane-2");
+    fixture.emitSnapshot("session-1", 1, 4, snapshot("session-1", "tab-2", "pane-2"));
+    await settle();
+    expect(selectedLeaf()).toBe("tab-2:browser");
+    expect(container.querySelector('[data-testid="browser-tab-2"]')).not.toBeNull();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+  });
+});
+
+describe("external focus during local terminal creation", () => {
+  it("follows an existing terminal immediately and does not let the created receipt steal that later selection", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    fixture.emitSnapshot("session-1", 1, 2, twoTerminalSnapshot("session-1"));
+    await settle();
+    await openCommand("Open files right");
+    click(leafButton("tab-1:files", "Split down: new terminal"));
+
+    fixture.emitSnapshot("session-1", 1, 3, twoTerminalSnapshot("session-1", "pane-3"));
+    await settle();
+    expect(selectedLeaf()).toBe("pane-3");
+
+    const base = twoTerminalSnapshot("session-1", "pane-3");
+    const next: SessionSnapshotResponse = {
+      ...base,
+      spaces: [{ ...base.spaces[0], pane_count: 4 }],
+      tabs: base.tabs.map(tab => tab.id === "tab-1" ? { ...tab, pane_count: 3 } : tab),
+      panes: [...base.panes, { ...base.panes[0], id: "pane-4", terminal_id: "terminal-4", title: "Created pane", focused: false }],
+    };
+    fixture.emitSnapshot("session-1", 1, 4, next);
+    await settle();
+    fixture.queueSnapshot("session-1", deferred<SessionSnapshotResponse>().promise);
+    fixture.resolveMutation(0, {
+      session_id: "session-1", snapshot: next,
+      created: { pane_id: "pane-4", terminal_id: "terminal-4", space_id: "space-1", tab_id: "tab-1" },
+    });
+    await settle();
+
+    expect(selectedLeaf()).toBe("pane-3");
+    expect(leaf("pane-4").style.left).toBe(leaf("tab-1:files").style.left);
+    expect(Number.parseFloat(leaf("pane-4").style.top)).toBeGreaterThan(Number.parseFloat(leaf("tab-1:files").style.top));
   });
 });

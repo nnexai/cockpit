@@ -4,7 +4,7 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
-import type { ContextDirectory, ContextFileIndex, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow, SpaceUpdateRequest } from "../../protocol/generated/v1";
+import type { ContextDirectory, ContextFileIndex, LibraryItemSummary, LibraryListing, LibraryOperation, ViewerContext, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow, SpaceUpdateRequest } from "../../protocol/generated/v1";
 import { ContextViewer, createContextViewState, SourceLines, type ContextViewState } from "./ContextViewer";
 
 /** The item header's Space status as `context | pill word`; states that need no context read just the word. */
@@ -67,10 +67,10 @@ it("opens only requested directories, compresses loaded single-child paths, and 
   });
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r3", content_hash: null, bytes: 12, media_type: "text/html", text: "<p>ok</p>", truncated: false, diagnostics: [] }));
   const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn() });
+    return createElement(ContextViewer, { client, context, value: view, onChange: setView });
   }
   const press = async (button: HTMLButtonElement, key: string) => {
     await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key })));
@@ -95,7 +95,7 @@ it("opens only requested directories, compresses loaded single-child paths, and 
     expect(directory).toHaveBeenCalledTimes(3);
     expect(host.querySelector('[data-context-path="src/deep"]')?.textContent).toContain("src/deep");
     await press(row("src/deep/example.html"), "Enter");
-    expect(documentRead).toHaveBeenCalledWith("session", "pane", expect.objectContaining({ path: "src/deep/example.html" }), expect.any(AbortSignal));
+    expect(documentRead).toHaveBeenCalledWith("session", "viewer", expect.objectContaining({ path: "src/deep/example.html" }), expect.any(AbortSignal));
     await settle();
     expect(host.querySelector("iframe[title='src/deep/example.html preview']")).not.toBeNull();
     expect(host.textContent).not.toContain("Read-only");
@@ -118,10 +118,10 @@ it("does not reclaim tree focus after async expansion when the user focuses cont
     return new Promise((resolve) => { resolveSrc = resolve; });
   });
   const client = { contextDirectory: directory } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -156,10 +156,10 @@ it("indexes unopened nested files for the picker and opens the selected result",
   }));
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r2", content_hash: null, bytes: 12, media_type: "text/markdown", text: "# Target", truncated: false, diagnostics: [] }));
   const client = { contextDirectory: directory, contextFileIndex: index, contextDocument: documentRead } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -176,7 +176,7 @@ it("indexes unopened nested files for the picker and opens the selected result",
     expect(result).toBeDefined();
     await act(async () => result?.click());
     await settle();
-    expect(documentRead).toHaveBeenCalledWith("session", "pane", expect.objectContaining({ path: "nested/target.md" }), expect.any(AbortSignal));
+    expect(documentRead).toHaveBeenCalledWith("session", "viewer", expect.objectContaining({ path: "nested/target.md" }), expect.any(AbortSignal));
     await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
     expect(document.activeElement).toBe(host.querySelector(".context-document"));
   } finally {
@@ -200,10 +200,10 @@ it("cancels fresh picker indexing when the picker is dismissed", async () => {
     return new Promise<ContextFileIndex>(() => undefined);
   });
   const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -241,10 +241,10 @@ it("recovers a stale or failed picker list on its own, without reopening", async
     return { ...base, files: [{ path: "new.md", bytes: null }], state: "fresh" };
   });
   const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "heal-binding", default_root_id: "heal-folder", roots: [{ root_id: "heal-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "heal-binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "heal-folder", roots: [{ root_id: "heal-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -280,10 +280,10 @@ it("keeps a late cached picker list visible after fresh indexing fails", async (
     return new Promise((resolve) => { resolveCached = resolve; });
   });
   const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "late-cache-binding", default_root_id: "late-cache-folder", roots: [{ root_id: "late-cache-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "late-cache-binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "late-cache-folder", roots: [{ root_id: "late-cache-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -316,10 +316,10 @@ it("shows the incomplete file-index status for a capped index", async () => {
     binding_id: "binding", root_id: "folder", files, truncated: true, source: "walk", state: request.mode === "cached" ? "cached" : "fresh", diagnostics: [],
   }));
   const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -348,11 +348,11 @@ it("renders a PNG from a verified Folder root through the safe media command", a
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r1", content_hash: null, bytes: 68, media_type: "application/octet-stream", text: null, truncated: false, diagnostics: [] }));
   const mediaRead = vi.fn(async () => ({ binding_id: "binding", root_id: "folder", path: "palette.png", revision: "r1", content_hash: "sha256:fixture", bytes: 68, mime_type: "image/png", width: 1, height: 1, data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLq9wAAAABJRU5ErkJggg==" }));
   const client = { contextDirectory: directory, contextDocument: documentRead, contextMedia: mediaRead } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:folder-png"), revokeObjectURL: vi.fn() });
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn() });
+    return createElement(ContextViewer, { client, context, value: view, onChange: setView });
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -361,7 +361,7 @@ it("renders a PNG from a verified Folder root through the safe media command", a
     await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
     await settle();
     await settle();
-    expect(mediaRead).toHaveBeenCalledWith("session", "pane", { binding_id: "binding", root_id: "folder", path: "palette.png", expected_revision: "r1" }, expect.any(AbortSignal));
+    expect(mediaRead).toHaveBeenCalledWith("session", "viewer", { binding_id: "binding", root_id: "folder", path: "palette.png", expected_revision: "r1" }, expect.any(AbortSignal));
     expect(host.querySelector<HTMLImageElement>('img[alt="palette.png"]')?.src).toBe("blob:folder-png");
   } finally {
     await act(async () => mounted.unmount());
@@ -382,10 +382,10 @@ it("retains the visible source when a continuation crosses a revision change", a
     .mockResolvedValueOnce({ binding_id: "binding", root_id: "folder", path: "large.txt", revision: "r1", content_hash: null, bytes: 6, media_type: "text/plain", text: "old\n", truncated: true, offset: 0, next_offset: 4, total_bytes: 6, line_offset: 0, diagnostics: [] })
     .mockResolvedValueOnce({ binding_id: "binding", root_id: "folder", path: "large.txt", revision: "r2", content_hash: null, bytes: 6, media_type: "text/plain", text: "new\n", truncated: false, offset: 4, next_offset: undefined, total_bytes: 6, line_offset: undefined, diagnostics: [] });
   const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -399,7 +399,7 @@ it("retains the visible source when a continuation crosses a revision change", a
     await settle();
     expect(host.textContent).toContain("old");
     expect(host.textContent).toContain("Stale source");
-    expect(documentRead).toHaveBeenLastCalledWith("session", "pane", expect.objectContaining({ path: "large.txt", offset: 4, expected_revision: "r1" }), expect.any(AbortSignal));
+    expect(documentRead).toHaveBeenLastCalledWith("session", "viewer", expect.objectContaining({ path: "large.txt", offset: 4, expected_revision: "r1" }), expect.any(AbortSignal));
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
@@ -428,10 +428,10 @@ it("releases continuation loading when navigation aborts the pending page", asyn
     return { binding_id: "binding", root_id: "folder", path, revision: path === "one.txt" ? "r1" : "r2", content_hash: null, bytes: 6, media_type: "text/plain", text: path === "one.txt" ? "head" : "two", truncated: true, offset: 0, next_offset: 4, total_bytes: 6, line_offset: 0, diagnostics: [] };
   });
   const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -453,31 +453,6 @@ it("releases continuation loading when navigation aborts the pending page", asyn
   }
 });
 
-it("explains an empty root instead of asking for a file selection", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
-    binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: [],
-  }));
-  const client = { contextDirectory: directory } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
-  function Harness() {
-    const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn() });
-  }
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await settle();
-    expect(host.querySelector(".context-tree-status")?.textContent).toBe("Empty");
-    expect(host.querySelector(".context-empty-message")?.textContent).toContain("This directory is empty.");
-    expect(host.textContent).not.toContain("Select a file to inspect its source.");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
 
 it("shows the Library as a pane root with Add… and Refresh all instead of Resources, keeping file reread distinct from provider refresh", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -501,10 +476,10 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: documentText, truncated: false, diagnostics: [] })),
     libraryRefresh: vi.fn(async () => operation),
   } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "companion", roots: [{ root_id: "companion", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "companion", roots: [{ root_id: "companion", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn() });
+    return createElement(ContextViewer, { client, context, value: view, onChange: setView });
   }
   const flush = async () => { for (let index = 0; index < 6; index += 1) await settle(); };
   const toolbarButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent === label || candidate.getAttribute("aria-label") === label);
@@ -601,7 +576,7 @@ it("opens any file a folder copy captured, not only its first file", async () =>
   } as unknown as CockpitClient;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn() });
+    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView });
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   try {
@@ -654,11 +629,11 @@ it("lists this Space's Library context in Resources, failed adds first, and retr
       return copied;
     }),
   } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] }
   const space = { target, label: "api-review", live: true };
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn(), space });
+    return createElement(ContextViewer, { client, context, value: view, onChange: setView, space });
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   try {
@@ -706,11 +681,11 @@ function spaceResourcesFixture(initialRows: SpaceCopyRow[]) {
     librarySpaceUpdate: vi.fn(),
     librarySpaceRemove: vi.fn(),
   } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] }
   const space = { target, label: "api-review", live: true };
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn(), space });
+    return createElement(ContextViewer, { client, context, value: view, onChange: setView, space });
   }
   return { target, state, client, Harness };
 }
@@ -1086,7 +1061,7 @@ it("adds a Library item to the Space and rereads its standing after provider ref
   } as unknown as CockpitClient;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), space: { target, label: "api-review", live: true } });
+    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   try {
@@ -1142,10 +1117,10 @@ it("rereads the Space's copies when Context files are refreshed and when Resourc
     repositories: vi.fn(async () => ({ repositories: [], diagnostics: [] })),
     librarySpaceList: vi.fn(async () => ({ ...listing })),
   } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn(), space: { target, label: "api-review", live: true } });
+    return createElement(ContextViewer, { client, context, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   const toolbarButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith(label) || candidate.getAttribute("aria-label") === label);
@@ -1204,7 +1179,7 @@ it("keeps a failed Add to <Space> visible with its retry when no durable attempt
   } as unknown as CockpitClient;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), space: { target, label: "api-review", live: true } });
+    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   const headerButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".library-item-header button")].find((button) => button.textContent === label);
@@ -1257,7 +1232,7 @@ it("clears a header's failed Add to <Space> once another surface copies the item
   } as unknown as CockpitClient;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), space: { target, label: "api-review", live: true } });
+    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   const headerButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".library-item-header button")].find((button) => button.textContent === label);
@@ -1321,7 +1296,7 @@ it("offers the copy's Update, Replace and Remove for the target Space in the Lib
   } as unknown as CockpitClient;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), space: { target, label: "api-review", live: true } });
+    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   const header = () => host.querySelector<HTMLElement>(".library-item-header")!;
@@ -1378,11 +1353,11 @@ it("keeps the rendered Markdown while scrolling and records the position once sc
     })),
     contextDocument: vi.fn(async () => ({ binding_id: "binding", root_id: "folder", path: "notes.md", revision: "r1", content_hash: null, bytes: text.length, media_type: "text/markdown", text, truncated: false, offset: 0, next_offset: undefined, total_bytes: text.length, line_offset: 0, diagnostics: [] })),
   } as unknown as CockpitClient;
-  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
   const changes: ContextViewState[] = [];
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return <ContextViewer client={client} presentation={presentation} value={view} onChange={(next) => { changes.push(next); setView(next); }} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+    return <ContextViewer client={client} context={context} value={view} onChange={(next) => { changes.push(next); setView(next); }} />;
   }
   try {
     await act(async () => mounted.render(<Harness />));
@@ -1402,6 +1377,35 @@ it("keeps the rendered Markdown while scrolling and records the position once sc
     expect(changes.length).toBe(before + 1);
     expect(changes.at(-1)?.files["folder\u0000notes.md"]?.scrollTop).toBe(120);
     expect(scroller.querySelector("p[data-source-start]")).toBe(paragraph);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("reports an expired reader to its owning leaf without replacing the selected source state", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const missing = new CockpitClientError("http_error", "Viewer expired", { operationCode: "viewer_not_found" });
+  const context: ViewerContext = {
+    session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space",
+    kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder",
+    roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "repo", checkout_path: "/folder", companion_id: null }],
+    diagnostics: [],
+  };
+  const client = { contextDirectory: vi.fn().mockRejectedValue(missing) } as unknown as CockpitClient;
+  const value: ContextViewState = { ...createContextViewState(), rootId: "folder" };
+  const onChange = vi.fn();
+  const onViewerError = vi.fn();
+  try {
+    await act(async () => mounted.render(<ContextViewer client={client} context={context} value={value} onChange={onChange} onViewerError={onViewerError} />));
+    await settle();
+    expect(onViewerError).toHaveBeenCalledWith(missing);
+    expect(host.querySelector(".context-tree-error")?.textContent).toContain("Viewer expired");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(client.contextDirectory).toHaveBeenCalledOnce();
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

@@ -1,15 +1,17 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
 
-export function useFileOverview(ref: RefObject<HTMLElement | null>) {
+export function useFileOverview(ref: RefObject<HTMLElement | null>, controlledChoice?: boolean | null, onChoiceChange?: (choice: boolean | null) => void) {
   const [narrow, setNarrow] = useState(false);
-  const [choice, setChoice] = useState<boolean | null>(null);
+  const [localChoice, setLocalChoice] = useState<boolean | null>(null);
+  const choice = onChoiceChange ? controlledChoice ?? null : localChoice;
+  const setChoice = onChoiceChange ?? setLocalChoice;
   useLayoutEffect(() => {
-    const pane = ref.current;
-    if (!pane) return;
-    const resize = () => { const width = pane.getBoundingClientRect().width; if (width > 0) setNarrow(width <= 520); };
+    const surface = ref.current;
+    if (!surface) return;
+    const resize = () => { const width = surface.getBoundingClientRect().width; if (width > 0) setNarrow(width <= 520); };
     resize();
     const observer = new ResizeObserver(resize);
-    observer.observe(pane);
+    observer.observe(surface);
     return () => observer.disconnect();
   }, [ref]);
   const open = choice ?? !narrow;

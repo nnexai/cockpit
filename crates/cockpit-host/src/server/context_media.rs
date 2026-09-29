@@ -17,7 +17,7 @@ use super::{
 pub(super) fn routes() -> Router<CockpitService> {
     Router::new()
         .route(
-            "/api/v1/sessions/{session_id}/panes/{pane_id}/context/media",
+            "/api/v1/sessions/{session_id}/viewers/{viewer_id}/context/media",
             post(media),
         )
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
@@ -35,13 +35,13 @@ fn request<T: DeserializeOwned>(body: Result<Json<T>, JsonRejection>) -> Result<
 
 async fn media(
     State(service): State<CockpitService>,
-    Path((session, pane)): Path<(String, String)>,
+    Path((session, viewer)): Path<(String, String)>,
     body: Result<Json<ContextMediaRequest>, JsonRejection>,
 ) -> Response {
-    if !valid_session_id(&session) || !valid_resource_id(&pane) {
+    if !valid_session_id(&session) || !valid_resource_id(&viewer) {
         return bad_request(
             "invalid_context_media_request",
-            "Session or pane ID is invalid",
+            "Session or viewer ID is invalid",
         );
     }
     let request = match request(body) {
@@ -52,7 +52,7 @@ async fn media(
         Ok(contexts) => contexts,
         Err(error) => return inspection_error(error),
     };
-    match contexts.media(&session, &pane, &request).await {
+    match contexts.media(&session, &viewer, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }

@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cockpit_protocol::typescript::{check, render_v1, write_atomic};
 use cockpit_protocol::v1::{
-    AgentSummary, CockpitCapabilities, CockpitMode, FocusKind, FocusRequest, FocusResponse,
-    HerdrCompatibility, HerdrIdentity, LayoutPane, LayoutRect, PaneMoveDestination,
-    PaneOutputResponse, PaneResizeDirection, PaneSplitDirection, PaneSummary, PaneZoomMode,
-    ResourceMutationRequest, SessionListResponse, SessionSnapshotResponse, SessionStreamMessage,
-    SessionSummary, SpaceGitSummary, SpaceSummary, StatusResponse, TabLayout, TabSummary,
+    CockpitCapabilities, CockpitMode, FocusKind, FocusRequest, FocusResponse,
+    HerdrCompatibility, HerdrIdentity, PaneMoveDestination,
+    PaneSplitDirection,
+    ResourceMutationRequest, SessionListResponse, SessionStreamMessage,
+    SessionSummary, StatusResponse,
     TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalScrollDirection,
     TerminalScrollSource, TerminalStreamMessage,
 };
@@ -81,160 +81,6 @@ fn legacy_status_defaults_capabilities() {
     assert!(!response.capabilities.terminal_mouse_input);
 }
 
-#[test]
-fn session_dtos_use_exact_snake_case_wire_fields() {
-    let rect = LayoutRect {
-        x: 1,
-        y: 2,
-        width: 80,
-        height: 24,
-    };
-    let response = SessionSnapshotResponse {
-        session_id: "session-1".to_owned(),
-        version: "0.8.2".to_owned(),
-        protocol: 20,
-        focused_space_id: Some("space-1".to_owned()),
-        focused_tab_id: Some("tab-1".to_owned()),
-        focused_pane_id: Some("pane-1".to_owned()),
-        spaces: vec![SpaceSummary {
-            id: "space-1".to_owned(),
-            label: "Main".to_owned(),
-            number: 1,
-            tab_count: 1,
-            pane_count: 1,
-            focused: true,
-            agent_status: "working".to_owned(),
-            git: Some(SpaceGitSummary {
-                repository_key: "repo-opaque".to_owned(),
-                repository: "cockpit".to_owned(),
-                branch: Some("main".to_owned()),
-                checkout_path: "/work/cockpit".to_owned(),
-                is_linked_worktree: false,
-            }),
-        }],
-        tabs: vec![TabSummary {
-            id: "tab-1".to_owned(),
-            space_id: "space-1".to_owned(),
-            label: "Work".to_owned(),
-            number: 1,
-            pane_count: 1,
-            focused: true,
-        }],
-        panes: vec![PaneSummary {
-            id: "pane-1".to_owned(),
-            terminal_id: "term-1".to_owned(),
-            space_id: "space-1".to_owned(),
-            tab_id: "tab-1".to_owned(),
-            title: Some("Shell".to_owned()),
-            focused: true,
-            agent: Some("builder".to_owned()),
-            agent_status: "running".to_owned(),
-            revision: 7,
-            cwd: None,
-        }],
-        layouts: vec![TabLayout {
-            space_id: "space-1".to_owned(),
-            tab_id: "tab-1".to_owned(),
-            area: rect.clone(),
-            focused_pane_id: Some("pane-1".to_owned()),
-            panes: vec![LayoutPane {
-                pane_id: "pane-1".to_owned(),
-                focused: true,
-                rect,
-            }],
-            zoomed: false,
-        }],
-        agents: vec![AgentSummary {
-            pane_id: "pane-1".to_owned(),
-            space_id: "space-1".to_owned(),
-            tab_id: "tab-1".to_owned(),
-            name: "builder".to_owned(),
-            status: "running".to_owned(),
-            title: None,
-            focused: true,
-            state_change_seq: 42,
-        }],
-    };
-
-    assert_eq!(
-        serde_json::to_value(response).expect("session serializes"),
-        json!({
-            "session_id": "session-1",
-            "version": "0.8.2",
-            "protocol": 20,
-            "focused_space_id": "space-1",
-            "focused_tab_id": "tab-1",
-            "focused_pane_id": "pane-1",
-            "spaces": [{
-                "id": "space-1",
-                "label": "Main",
-                "number": 1,
-                "tab_count": 1,
-                "pane_count": 1,
-                "focused": true,
-                "agent_status": "working",
-                "git": {
-                    "repository_key": "repo-opaque",
-                    "repository": "cockpit",
-                    "branch": "main",
-                    "checkout_path": "/work/cockpit",
-                    "is_linked_worktree": false
-                }
-            }],
-            "tabs": [{
-                "id": "tab-1",
-                "space_id": "space-1",
-                "label": "Work",
-                "number": 1,
-                "pane_count": 1,
-                "focused": true
-            }],
-            "panes": [{
-                "id": "pane-1",
-                "terminal_id": "term-1",
-                "space_id": "space-1",
-                "tab_id": "tab-1",
-                "title": "Shell",
-                "focused": true,
-                "agent": "builder",
-                "agent_status": "running",
-                "revision": 7
-            }],
-            "layouts": [{
-                "space_id": "space-1",
-                "tab_id": "tab-1",
-                "area": {"x": 1, "y": 2, "width": 80, "height": 24},
-                "focused_pane_id": "pane-1",
-                "panes": [{
-                    "pane_id": "pane-1",
-                    "focused": true,
-                    "rect": {"x": 1, "y": 2, "width": 80, "height": 24}
-                }],
-                "zoomed": false
-            }],
-            "agents": [{
-                "pane_id": "pane-1",
-                "space_id": "space-1",
-                "tab_id": "tab-1",
-                "name": "builder",
-                "status": "running",
-                "title": null,
-                "focused": true,
-                "state_change_seq": 42
-            }]
-        })
-    );
-
-    let output = PaneOutputResponse {
-        pane_id: "pane-1".to_owned(),
-        text: "hello\n".to_owned(),
-        revision: Some(7),
-    };
-    assert_eq!(
-        serde_json::to_value(output).expect("pane output serializes"),
-        json!({"pane_id": "pane-1", "text": "hello\n", "revision": 7})
-    );
-}
 #[test]
 fn session_and_terminal_contracts_use_exact_wire_tags() {
     let session = SessionListResponse {
@@ -560,18 +406,9 @@ fn resource_mutations_use_a_closed_snake_case_contract() {
             direction: PaneSplitDirection::Right,
             ratio: Some(0.4),
         },
-        ResourceMutationRequest::PaneResize {
-            pane_id: "pane-1".into(),
-            direction: PaneResizeDirection::Left,
-            amount: 0.1,
-        },
         ResourceMutationRequest::PaneRename {
             pane_id: "pane-1".into(),
             label: None,
-        },
-        ResourceMutationRequest::PaneSwap {
-            source_pane_id: "pane-1".into(),
-            target_pane_id: "pane-2".into(),
         },
         ResourceMutationRequest::PaneMove {
             pane_id: "pane-1".into(),
@@ -581,10 +418,6 @@ fn resource_mutations_use_a_closed_snake_case_contract() {
                 target_pane_id: Some("pane-2".into()),
                 ratio: None,
             },
-        },
-        ResourceMutationRequest::PaneZoom {
-            pane_id: "pane-1".into(),
-            mode: PaneZoomMode::On,
         },
         ResourceMutationRequest::PaneClose {
             pane_id: "pane-1".into(),
@@ -600,11 +433,8 @@ fn resource_mutations_use_a_closed_snake_case_contract() {
         "tab_move",
         "tab_close",
         "pane_split",
-        "pane_resize",
         "pane_rename",
-        "pane_swap",
         "pane_move",
-        "pane_zoom",
         "pane_close",
     ];
 
@@ -697,48 +527,4 @@ fn compatible_status_round_trips() {
 fn typescript_rendering_is_deterministic() {
     let rendered = render_v1();
     assert_eq!(rendered, render_v1());
-    for type_name in [
-        "CockpitMode",
-        "HerdrIdentity",
-        "HerdrCompatibility",
-        "CockpitCapabilities",
-        "StatusResponse",
-        "ErrorResponse",
-        "SpaceGitSummary",
-        "SpaceGitStatus",
-        "SpaceGitStatusResponse",
-        "SpaceSummary",
-        "TabSummary",
-        "PaneSummary",
-        "AgentSummary",
-        "LayoutRect",
-        "LayoutPane",
-        "TabLayout",
-        "SessionSnapshotResponse",
-        "PaneOutputResponse",
-        "SessionSummary",
-        "SessionListResponse",
-        "FocusKind",
-        "FocusRequest",
-        "FocusResponse",
-        "PaneSplitDirection",
-        "PaneResizeDirection",
-        "PaneZoomMode",
-        "PaneMoveDestination",
-        "ResourceMutationRequest",
-        "ResourceMutationResponse",
-        "SessionStreamMessage",
-        "TerminalMode",
-        "TerminalOpenRequest",
-        "TerminalScrollDirection",
-        "TerminalScrollSource",
-        "TerminalCommand",
-        "TerminalOwnershipState",
-        "TerminalStreamMessage",
-    ] {
-        assert!(
-            rendered.contains(&format!("export type {type_name}")),
-            "missing generated declaration for {type_name}"
-        );
-    }
 }

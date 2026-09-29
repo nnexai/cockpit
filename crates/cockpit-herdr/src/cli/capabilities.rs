@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-pub(crate) const REQUIRED_METHODS: [&str; 24] = [
+pub(crate) const REQUIRED_METHODS: [&str; 21] = [
     "ping",
     "session.snapshot",
     "events.subscribe",
@@ -19,11 +19,8 @@ pub(crate) const REQUIRED_METHODS: [&str; 24] = [
     "tab.move",
     "tab.close",
     "pane.split",
-    "pane.resize",
     "pane.rename",
-    "pane.swap",
     "pane.move",
-    "pane.zoom",
     "pane.close",
 ];
 

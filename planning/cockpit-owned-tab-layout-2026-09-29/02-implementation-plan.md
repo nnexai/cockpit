@@ -1,6 +1,6 @@
 # Cockpit-owned tab layout: implementation plan
 
-Status: planning only; nothing here is implemented or verified in product. Authorities, in order: [`00-contract.md`](00-contract.md) (user decisions C1–C19), [`03-contract-evidence.md`](03-contract-evidence.md) (live Herdr split/identity probe), [`01-design.md`](01-design.md) (interaction, focus, lifecycle, copy; wins on interaction detail), this plan (files, interfaces, backend contracts, order, acceptance). The approved demo [`mocks/tab-layout/demo.html`](mocks/tab-layout/demo.html) (commit `6aa0331`) is the mandatory reference for header dragging, centre-swap / edge / outer-rim previews, live divider resizing, pane chrome, selected state and control icons (01-design §2.1, §4.2–4.6). Illustrative shapes: [`examples/tab-layout-model.example.ts`](examples/tab-layout-model.example.ts), [`examples/transitions.example.md`](examples/transitions.example.md), design's [`examples/first-load-grids.md`](examples/first-load-grids.md) — design artifacts, not product code.
+Status: implemented. Authorities, in order: [`00-contract.md`](00-contract.md) (user decisions C1–C19), [`01-design.md`](01-design.md) (interaction and lifecycle), this plan (interfaces and implementation slices). [`03-contract-evidence.md`](03-contract-evidence.md) records actual verification, not blanket acceptance of every proposed scenario. The approved demo [`mocks/tab-layout/demo.html`](mocks/tab-layout/demo.html) (commit `6aa0331`) remains the interaction/appearance reference.
 
 ## Outcome
 
@@ -68,6 +68,16 @@ Each Herdr tab renders an in-memory, Cockpit-owned split tree of mixed leaves: r
 
 None. Runtime verification tasks from 01-design §8 are assigned to slices (V-Q1…V-Q8 below).
 
+### Implementation safety amendments
+
+The single combined safety review produced three corrections without changing the agreed ownership model:
+
+- Retirement carries the outgoing `association_key` and `server_instance`; it cleans up that exact receipt rather than resolving a potentially reused tab on a replacement Herdr server.
+- Immutable `saved-tab-associations/` provenance authorizes `SavedTab` draft/feedback recovery after tab removal or live receipt cleanup. `BrowserCleanupStatus.saved_tabs` makes that work discoverable after reload; delivery requires an explicitly selected, freshly validated agent.
+- Legacy archive publication syncs its directory before removing the old receipt, then syncs the old receipt directory. A crash cannot retire the only durable provenance before its replacement is committed.
+
+Native verification also exposed oversized await-held Review paging state. Offset skipping now reuses the existing `BufReader` buffer; no extra allocation or increased runtime thread stack is needed.
+
 ## Shared interfaces (fixed up front)
 
 Rust protocol, exported via `crates/cockpit-protocol/src/typescript.rs` into `src/protocol/generated/v1.ts` (regenerate, never hand-edit):
@@ -108,11 +118,13 @@ pub struct BrowserAssociation { /* existing minus nothing */ pub tab_id: String,
 pub enum BrowserCutoverState { NotNeeded, Running, Done, Failed }
 pub enum BrowserCleanupScope { LegacySpace { space_id: String }, Tab { session_id: String, tab_id: String } }
 pub struct BrowserCleanupFailure { pub association_key: String, pub scope: BrowserCleanupScope, pub reason: String, pub unproven_paths: Vec<String> }
-pub struct BrowserCleanupStatus { pub cutover: BrowserCutoverState, pub failures: Vec<BrowserCleanupFailure> }
+pub struct BrowserCleanupStatus { pub cutover: BrowserCutoverState, pub failures: Vec<BrowserCleanupFailure>, pub saved_tabs: Vec<BrowserSavedTabWork> }
+pub struct BrowserSavedTabWork { pub association_key: String, pub session_id: String, pub tab_id: String, pub tab_label: String,
+  pub space_id: String, pub space_label: String, pub saved_capture_count: u32, pub draft_count: u32, pub pending_capture: bool }
 pub struct BrowserCleanupRetryRequest { pub association_key: String }
 
 // legacy saved work and operator-scoped removal (D16, D21)
-pub enum BrowserWorkScope { Tab { target: BrowserTarget }, LegacyArchive { association_key: String } }
+pub enum BrowserWorkScope { Tab { target: BrowserTarget }, LegacyArchive { association_key: String }, SavedTab { association_key: String } }
 // BrowserFeedbackRequest, BrowserFeedbackAckRequest, BrowserFeedbackImageRequest, BrowserFeedbackSendRequest and
 // BrowserDraftRecoveryRequest replace `target: BrowserTarget` with `scope: BrowserWorkScope`.
 // BrowserFeedbackSendRequest gains `recipient: Option<CommentPasteTarget>` (required for LegacyArchive, rejected for Tab).

@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ContextDocument, ContextRoot, PanePresentation, ReviewComparison, ReviewFileDiff, ReviewFileRequest, ReviewSnapshotRequest } from "../../protocol/generated/v1";
+import type { ContextDocument, ContextRoot, ViewerContext, ReviewComparison, ReviewFileDiff, ReviewFileRequest, ReviewSnapshotRequest } from "../../protocol/generated/v1";
 import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "../context/CommentDrafts";
 import { createReviewViewState, retainReviewScrollPosition, SourceLines, type ContextViewState, type ReviewViewState } from "../context/ContextViewer";
 import { ReviewPane, reviewScrollIdentity } from "./ReviewPane";
@@ -10,18 +10,18 @@ type CommentStatus = { count: number | null; canCreateLines: boolean; canCreateW
 type SourcePageLoad = { key: string; token: number };
 
 /** CommentDrafts keys its batch by this source identity; comparison scopes its review load. */
-export function reviewCommentBatchIdentity(presentation: Pick<PanePresentation, "session_id" | "pane_id" | "binding_id">, sourceId: string, comparison: ReviewComparison): string {
-  const draftsIdentity = `${presentation.session_id}\u0000${presentation.pane_id}\u0000${presentation.binding_id}\u0000${sourceId}\u0000${sourceId}`;
+export function reviewCommentBatchIdentity(context: Pick<ViewerContext, "session_id" | "viewer_id" | "binding_id">, sourceId: string, comparison: ReviewComparison): string {
+  const draftsIdentity = `${context.session_id}\u0000${context.viewer_id}\u0000${context.binding_id}\u0000${sourceId}\u0000${sourceId}`;
   return `${draftsIdentity}\u0000${comparison}`;
 }
-export function reviewRepositoryId(presentation: Pick<PanePresentation, "roots" | "default_root_id">): string | undefined {
-  return (presentation.roots.find(root => root.root_id === presentation.default_root_id && root.kind === "repository")
-    ?? presentation.roots.find(root => root.kind === "repository"))?.repository_id;
+export function reviewRepositoryId(context: Pick<ViewerContext, "roots" | "default_root_id">): string | undefined {
+  return (context.roots.find(root => root.root_id === context.default_root_id && root.kind === "repository")
+    ?? context.roots.find(root => root.kind === "repository"))?.repository_id;
 }
 
-export function ReviewViewer({ client, presentation, value, onChange, onTerminalView: _onTerminalView, onRequestControl }: {
-  client: CockpitClient; presentation: PanePresentation; value: ContextViewState;
-  onChange: (next: ContextViewState) => void; onTerminalView: () => void; onRequestControl: () => void;
+export function ReviewViewer({ client, context, value, onChange, onViewerError }: {
+  client: CockpitClient; context: ViewerContext; value: ContextViewState;
+  onChange: (next: ContextViewState) => void; onViewerError?: (error: unknown) => void;
 }) {
   const reviewView = value.review ?? createReviewViewState();
   const [selection, setSelection] = useState<Selection>(() => reviewView.fileId && reviewView.side && reviewView.selectionStart !== null && reviewView.selectionEnd !== null
@@ -53,7 +53,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
   const appendSourcePage = useCallback((sourceKey: string, side: "old" | "new", requestedOffset: number, expectedRevision: string | null, token: number, next: ReviewFileDiff) => {
     const metadata = activeSourceMetadataRef.current;
     if (sourceLoadRef.current?.token !== token || activeSourceKeyRef.current !== sourceKey || !metadata
-      || next.session_id !== presentation.session_id || next.pane_id !== presentation.pane_id || next.binding_id !== presentation.binding_id
+      || next.session_id !== context.session_id || next.viewer_id !== context.viewer_id || next.binding_id !== context.binding_id
       || next.review_id !== metadata.reviewId || next.generation !== metadata.generation || next.file.file_id !== metadata.fileId) return;
     const chunk = side === "old" ? next.old_source : next.new_source;
     const offset = side === "old" ? next.old_source_offset : next.new_source_offset;
@@ -72,7 +72,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
         },
       };
     });
-  }, [presentation.binding_id, presentation.pane_id, presentation.session_id]);
+  }, [context.binding_id, context.viewer_id, context.session_id]);
   const handleReviewViewChange = useCallback((next: ReviewViewState) => {
     const comparisonChanged = activeComparisonRef.current !== next.comparison;
     activeComparisonRef.current = next.comparison;
@@ -114,17 +114,17 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
     if (reviewViewRef.current.commentCount !== next.count) updateReviewView({ commentCount: next.count });
   }, [updateReviewView]);
   const restoreDiffFocus = useCallback(() => requestAnimationFrame(() => viewerRef.current?.querySelector<HTMLElement>(".review-diff")?.focus({ preventScroll: true })), []);
-  const { session_id: session, pane_id: pane, binding_id: binding } = presentation;
+  const { session_id: session, viewer_id: viewer, binding_id: binding } = context;
   const snapshot = useCallback(async (request: ReviewSnapshotRequest, signal: AbortSignal) => {
-    const result = await client.reviewSnapshot(session, pane, request, signal);
+    const result = await client.reviewSnapshot(session, viewer, request, signal);
     if (!signal.aborted) setInvalidation(number => number + 1);
     return result;
-  }, [client, session, pane]);
-  const file = useCallback((request: ReviewFileRequest, signal: AbortSignal) => client.reviewFile(session, pane, request, signal), [client, session, pane]);
-  const repositoryId = reviewRepositoryId(presentation);
+  }, [client, session, viewer]);
+  const file = useCallback((request: ReviewFileRequest, signal: AbortSignal) => client.reviewFile(session, viewer, request, signal), [client, session, viewer]);
+  const repositoryId = reviewRepositoryId(context);
   if (!repositoryId) return <div className="review-empty">No Git checkout could be resolved for this Review pane.</div>;
-  return <div className="review-viewer" ref={viewerRef} onPointerDown={onRequestControl}>
-    <ReviewPane identity={`${session}\0${pane}\0${binding}`} sessionId={session} paneId={pane} bindingId={binding} repositoryId={repositoryId} snapshot={snapshot} file={file} selectedLines={selection}
+  return <div className="review-viewer" ref={viewerRef}>
+    <ReviewPane identity={`${session}\0${viewer}\0${binding}`} sessionId={session} viewerId={viewer} bindingId={binding} repositoryId={repositoryId} snapshot={snapshot} file={file} selectedLines={selection} onViewerError={onViewerError}
       viewState={reviewView.mode === mode ? reviewView : { ...reviewView, mode }} onViewStateChange={handleReviewViewChange}
       onOpenSource={() => setMode("source")}
       onCreateLineComment={() => commentActionsRef.current?.createLines()} onCreateFileComment={() => commentActionsRef.current?.createWholeFile()} onOpenCommentOverview={() => commentActionsRef.current?.openOverview()}
@@ -136,7 +136,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
         const side = selection?.fileId === diff.file.file_id ? selection.side : diff.new_source === null && diff.old_source !== null ? "old" : "new";
         const path = (side === "old" ? diff.file.old_path : diff.file.new_path) ?? "";
         const revision = side === "old" ? diff.file.old_revision ?? null : diff.file.new_revision ?? null;
-        const sourceKey = reviewScrollIdentity(session, pane, binding, review.review_id, review.generation, review.comparison, "source", diff.file.file_id, side, revision);
+        const sourceKey = reviewScrollIdentity(session, viewer, binding, review.review_id, review.generation, review.comparison, "source", diff.file.file_id, side, revision);
         activeSourceKeyRef.current = sourceKey;
         activeSourceMetadataRef.current = { reviewId: review.review_id, generation: review.generation, fileId: diff.file.file_id };
         const page = sourcePages[sourceKey];
@@ -149,8 +149,8 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
         const root: ContextRoot = { root_id: review.source_id, kind: "repository", label: "Review", path: review.checkout_path, repository_id: repositoryId, checkout_path: review.checkout_path, companion_id: null };
         const document: ContextDocument = { binding_id: binding, root_id: root.root_id, path, revision: documentRevision, content_hash: side === "old" ? diff.old_source_hash : diff.new_source_hash, bytes: new TextEncoder().encode(text ?? "").length, media_type: "text/plain", text, truncated: sourceTruncated, diagnostics: diff.diagnostics };
         const reference = { review_id: review.review_id, generation: review.generation, file_id: diff.file.file_id, side };
-        const commentIdentity = reviewCommentBatchIdentity(presentation, review.source_id, review.comparison);
-        return <CommentDrafts key={commentIdentity} client={client} presentation={presentation} root={root} sourceIdentity={review.source_id} sourceKind="review" reviewCapture={reference} path={path} document={document} selection={range} mode="source" editorState={value.commentEditor} onEditorStateChange={editorChange} invalidationGeneration={invalidation} inlineEditor showToolbar={false} onCommentStatusChange={(next) => updateCommentStatus(commentIdentity, review.comparison, next)} onEditorDismissed={restoreDiffFocus}>
+        const commentIdentity = reviewCommentBatchIdentity(context, review.source_id, review.comparison);
+        return <CommentDrafts key={commentIdentity} client={client} context={context} root={root} sourceIdentity={review.source_id} sourceKind="review" reviewCapture={reference} path={path} document={document} selection={range} mode="source" editorState={value.commentEditor} onEditorStateChange={editorChange} invalidationGeneration={invalidation} inlineEditor showToolbar={false} onCommentStatusChange={(next) => updateCommentStatus(commentIdentity, review.comparison, next)} onEditorDismissed={restoreDiffFocus} onViewerError={onViewerError}>
           {(drafts, actions, renderInlineEditor) => {
             commentActionsRef.current = actions;
             return <>

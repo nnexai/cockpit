@@ -78,7 +78,7 @@ pub struct ReviewChangedFile {
 pub struct ReviewSnapshot {
     pub binding_id: String,
     pub session_id: String,
-    pub pane_id: String,
+    pub viewer_id: String,
     pub review_id: String,
     pub generation: u32,
     pub repository_id: String,
@@ -136,7 +136,7 @@ pub struct ReviewHunk {
 pub struct ReviewFileDiff {
     pub binding_id: String,
     pub session_id: String,
-    pub pane_id: String,
+    pub viewer_id: String,
     pub review_id: String,
     pub generation: u32,
     pub file: ReviewChangedFile,

@@ -1,6 +1,6 @@
 # Code guide
 
-Herdr owns live sessions, Spaces, tabs, panes, focus and layout. Cockpit projects that state and owns task setup, Context assets, local Review snapshots and comment batches. An HTTP response arriving later does not make it newer than an ordered stream event.
+Herdr owns live sessions, Spaces, tabs, real terminal existence/membership, focus identity and PTYs. Cockpit owns in-memory tab placement and local Files/Review/Browser leaves, task setup, Context assets, local Review snapshots and comment batches. An HTTP response arriving later does not make it newer than an ordered stream event.
 
 ## Where to change behavior
 
@@ -8,13 +8,13 @@ Herdr owns live sessions, Spaces, tabs, panes, focus and layout. Cockpit project
 | --- | --- | --- |
 | Public request/response shape | `crates/cockpit-protocol/src/` and its TypeScript exporter | Protocol tests and generated-file check |
 | Session ordering | `src/client/streamOrder.ts`, `src/app/session/sessionStore.ts` | Ordering corpus and reducer tests |
-| Focus, commands and layout projection | `src/app/session/focusCoordinator.ts`, `mutationCoordinator.ts`, `src/app/layout/` and `src/app/input/` | App integration tests and an owned runtime smoke |
+| Local placement, membership and focus | `src/app/layout/{tabLayoutStore,reconcile,splitTree,solveLayout}.ts`, `TabCanvas.tsx`, `src/app/session/{focusCoordinator,mutationCoordinator}.ts`, `src/app/input/` | Tree/focus/creation transitions, live membership changes and a disposable-runtime smoke |
 | Sidebar presentation, status badges and row navigation | `src/app/sidebar/`, `src/app/sidebar.css` | Herdr ordering, state shapes, roving focus and disposable-session screenshots |
 | Shared keyboard bindings and discoverability | `src/app/input/shortcuts.ts`, `keymap.ts`, `modal.ts` | Prefix routing, terminal Tab passthrough, modal Escape and Library focus return |
 | Terminal lifecycle and input | `src/app/TerminalPane.tsx`, `crates/cockpit-herdr/src/terminal_wire.rs` | Lifecycle/race tests and successive runtime frames |
-| Herdr methods and process evidence | `crates/cockpit-herdr/src/cli/` | Adapter fixtures against the supported schema |
+| Herdr methods, server identity and creation receipts | `crates/cockpit-herdr/src/cli/`, `crates/cockpit-protocol/src/v1.rs` | Adapter fixtures against the supported schema and real split/move receipts |
 | Task setup and recovery | `crates/cockpit-core/src/projects.rs`, `project_store.rs`, `project_teardown.rs` | Ownership, idempotency and uncertain-outcome fixtures |
-| Context path authorization | `crates/cockpit-core/src/context.rs` | Traversal, replacement and companion tests |
+| Virtual viewer source binding and path authorization | `crates/cockpit-core/src/{viewer,context}.rs`, `crates/cockpit-protocol/src/viewer.rs`, `src/app/layout/{FilesLeaf,ReviewLeaf}.tsx`, `viewerLifecycle.ts` | Same-tab source checks, stale bindings/root replacement, pluginless Files/Review and source-state retention |
 | Repository discovery cache and setup freshness | `crates/cockpit-core/src/repository_cache.rs`, `projects.rs`, `context.rs` | Mutation-generation invalidation, stale-while-refill, and disposable gateway request counts |
 | Context/Library file index and picker ranking | `crates/cockpit-core/src/context.rs`, `file_index_cache.rs`, `config.rs`, `library/reader.rs`, `src/app/input/fileIndexCache.ts`, `fileNavigation.ts` | Git ignore/symlink/cap fixture, persisted restart smoke, mixed Unicode ranking parity |
 | Library read-path recovery and index cache | `crates/cockpit-core/src/library/store.rs`, `library/space.rs`, `library.rs` | Journal recovery, cross-Store identity invalidation, and bounded reader latency |
@@ -31,6 +31,7 @@ Herdr owns live sessions, Spaces, tabs, panes, focus and layout. Cockpit project
 | Markdown and media display | `src/app/context/`, `context_media.rs` | Source mapping, hostile input, byte/pixel caps and browser/native rendering |
 | Host request decoding and composition | `crates/cockpit-host/src/server/`, `src-tauri/src/` | Equivalent browser/native DTOs and real native startup |
 | Library view, Space copies and Context resources | `src/app/library/`, `src/app/context/ContextViewer.tsx`, `src/app/context/ContextResources.tsx` | Library and Space-copy actions, refresh state, and Context viewer tests |
+| Per-tab Browser lifecycle and cleanup | `crates/cockpit-core/src/browser.rs`, `browser/{cleanup,legacy,saved_tab}.rs`, `src/app/layout/{BrowserLeaf,BrowserCleanupStrip}.tsx`, `browserLifecycle.ts` | Independent tabs, fresh open, profile disposal, reviewed legacy identities and retained-work recovery |
 
 The core depends on narrow adapter traits. Hosts compose concrete adapters; provider behavior belongs in the provider crate. Keep stable error codes with a useful message at the module owning the failure. Clients decode and match response identities before frontend state accepts them.
 
@@ -146,7 +147,7 @@ Setup passes `Arc<LibraryService>` and validated fetch results through `ProjectS
 
 - Keep application mouse/terminal capability claims tied to the supported Herdr runtime. An unavailable capability is inconclusive.
 - Keep source views canonical. Rendered Markdown and diagrams map back to physical source lines; HTML, SVG and remote assets do not execute in the host.
-- Keep Reviewr's TUI state independent of Cockpit's durable Review comments.
+- Keep Files/Review independent of addon TUIs. Existing addon panes are ordinary terminals, not renderer replacements; durable comment batches retain immutable source identity.
 - Paste only after the exact preview and target have been revalidated. An ambiguous dispatch requires receipt reconciliation, not an automatic retry.
 - Use path-limited staging and inspect the staged diff before committing. Live installation, publication and user-session changes are separate actions.
 
@@ -156,6 +157,22 @@ Run `bun run quality:probe` to inspect the pinned metric tools, then `bun run qu
 
 ## Inline browser implementation
 
-`browser-runtime/browser-helper.mjs` attaches to the Space's CLI-managed Chromium and owns CDP input, metadata, inspection, and binary frames. `crates/cockpit-host/src/browser_helper.rs` supervises it. `browser_runtime.rs` forwards observer requests to the one owner. `browser_view.rs` provides the web routes and bounded binary relay; native commands use the same runtime.
+`browser-runtime/browser-helper.mjs` attaches to the tab's CLI-managed Chromium session and owns CDP input, metadata, inspection, and binary frames. `crates/cockpit-host/src/browser_helper.rs` supervises it. `browser_runtime.rs` routes requests through the single runtime owner; `browser_view.rs` provides web routes and bounded binary relay, and native commands use the same runtime. Core `BrowserTarget` selects a tab, or resolves a real pane to its tab; association keys include endpoint identity, session and tab, never Space-only identity.
 
-`src/app/browser/` owns presentation, input mapping, annotations, and PNG composition through `CockpitClient`. Rust protocol DTOs in `crates/cockpit-protocol/src/browser_view.rs` generate the shared frontend contract. Core browser draft and feedback modules own durable data. The no-migration inline cutover is implemented; focused browser and Linux-native startup verification passed on 2026-09-13. See `planning/inline-space-browser-2026-09-13/` for the exact evidence and unclaimed A01–A25/security/performance matrix.
+`src/app/browser/` owns presentation, input mapping, annotations, and PNG composition through `CockpitClient`. Rust protocol DTOs in `crates/cockpit-protocol/src/{browser,browser_view}.rs` generate the shared frontend contract. `src/app/layout/BrowserLeaf.tsx` integrates one Browser leaf per tab with layout lifecycle; core browser draft, feedback and delivery modules own durable data. Hiding a leaf releases view/capture resources, not its browser session.
+
+Leaf creation uses `BrowserAction::OpenFresh`: stop/clean a surviving session before starting at `[browser] default_url` or `COCKPIT_BROWSER_DEFAULT_URL`, validated at load and defaulting to `about:blank`. An existing leaf's Reconnect and CLI `Open` retain attach/new-page semantics. Close, tab/final-terminal retirement and owning-runtime shutdown confirm the process stopped before removing only derived, no-follow, identity-proven profile/workspace/config artifacts. Cookie/login/site storage is disposable; failures remain visible/retryable, and cleanup excludes durable work, Library, vault and comments.
+
+`BrowserWorkScope` separates live `Tab` work from retained `SavedTab` (`saved_tab`) and `LegacyArchive` (`legacy_archive`) work. `browser/saved_tab.rs` durably publishes immutable `browser/saved-tab-associations/<key>.json` source provenance before a live receipt can be removed; authorization checks its filename, original endpoint/session/tab-derived key and no-follow file identity without consulting the current tab/endpoint. `BrowserCleanupStatus.saved_tabs` lists nonempty retained feedback/captures/drafts/pending captures after reload. Offline read, acknowledgement and draft recovery keep original source identity. Delivery from either retained scope requires an explicit current focused-tab recipient with fresh fingerprint/focus checks; live Tab scope uses automatic recipient resolution.
+
+Legacy Space receipt retirement stops the session, durably publishes its original `browser/legacy-archive/<key>.json` before unlinking the old receipt, and lists proven candidates without deleting them. `Remove selected` revalidates the exact reviewed identity; `Keep files` leaves artifacts intact. Unproven/changed candidates are not removed. Saved work remains at its original association key; no Space-to-tab guess or browser navigation adoption is allowed.
+
+CLI addressing is `cockpit browser open|status|close|feedback --herdr-session <session> --herdr-socket <socket> --tab <tab-id>`, or `--current` inside the caller's Herdr pane. `cockpit browser feedback --legacy <association-key>` and `feedback ack --legacy <association-key> --id <id>` access archived legacy work without a live tab. `--legacy` is mutually exclusive with `--tab`/`--current` and cannot open a browser; the obsolete `--space` target is removed.
+
+## Tab layout and viewer cutover
+
+`tabLayoutStore.ts` holds run-local state above the workbench, keyed by session/server instance/tab. `reconcile.ts` consumes authoritative live membership and changed focus, not Herdr rectangles. `splitTree.ts` owns first-load balanced grids, local split/swap/edge placement and prune rules; `solveLayout.ts` computes local bounds and nested minimums. `TabCanvas.tsx` keeps leaf DOM identity stable across movement, while divider styles update live and weights commit on release. Do not persist layouts or reintroduce Herdr resize/swap/zoom operations. Local fitting of a painted terminal still resizes its control-attached PTY.
+
+Every painted terminal attaches control-only. Input remains gated separately by DOM focus, confirmed Herdr focus and owned control. Hidden tabs, zoom-hidden leaves and the Library detach terminal renderers without stopping processes. Viewer selection sends no Herdr focus request; only a changed external focus selects a real terminal. A repeated snapshot must not steal selection. Cockpit-created terminals are attributed by the validated creation receipt and placed beside the acted-on leaf; unrelated terminals insert at the right edge. Confirmed final-terminal/tab loss releases viewers and retires Browser, never durable work.
+
+Files/Review call `ViewerService` with a real same-tab source terminal, then authorize by `viewer_id`/`binding_id` and the pinned selected root. A source close or `cd` must not retarget the context; each request still checks fresh tab/Space/endpoint, binding and filesystem identity. Source switches retain per-source frontend view state. No plugin launch, process-based renderer detection or terminal-view toggle remains. Comments use tagged viewer owners; old pane owners migrate once to detached `legacy_pane` Saved batches and require explicit authorized Reattach.

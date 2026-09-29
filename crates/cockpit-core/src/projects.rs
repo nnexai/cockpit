@@ -2990,12 +2990,13 @@ mod tests {
             }
             Ok(SessionSnapshotResponse {
                 session_id: session.into(), version: "test".into(), protocol: 1,
+                server_instance: "0123456789abcdef".into(),
                 focused_space_id: None, focused_tab_id: None, focused_pane_id: None,
                 spaces: vec![cockpit_protocol::v1::SpaceSummary {
                     id: "workspace".into(), label: "Setup".into(), number: 1,
                     tab_count: 0, pane_count: 0, focused: false, agent_status: "none".into(), git: None,
                 }],
-                tabs: vec![], panes: vec![], layouts: vec![], agents: vec![],
+                tabs: vec![], panes: vec![], agents: vec![],
             })
         }
 
