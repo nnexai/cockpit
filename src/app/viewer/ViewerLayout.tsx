@@ -63,13 +63,25 @@ export function useTreeWidth(layout: TreeLayout = VIEWER_TREE) {
 /** Splitter left edge, in step with the grid column in viewer.css. */
 const splitterLeft = (width: number) => `calc(min(${width}px, 60%) - 3px)`;
 
+/** The width the list actually has: the grid column caps a stored width at 60% of a narrow viewer, so the splitter's own centre is the truth. */
+function shownWidth(layout: TreeLayout, splitter: HTMLElement, stored: number): number {
+  return splitter.offsetWidth > 0 ? clampWidth(layout, splitter.offsetLeft + splitter.offsetWidth / 2) : stored;
+}
+
+function applyWidth(splitter: HTMLElement, width: number) {
+  splitter.parentElement?.style.setProperty("--viewer-tree-width", `${width}px`);
+  splitter.style.left = splitterLeft(width);
+  splitter.setAttribute("aria-valuenow", String(width));
+}
+
 export function TreeSplitter({ width, onChange, layout = VIEWER_TREE }: { width: number; onChange: (width: number, persist?: boolean) => void; layout?: TreeLayout }) {
   const drag = useRef<{ pointer: number; startX: number; startWidth: number; width: number; frame: number } | null>(null);
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { pointer: event.pointerId, startX: event.clientX, startWidth: width, width, frame: 0 };
+    const startWidth = shownWidth(layout, event.currentTarget, width);
+    drag.current = { pointer: event.pointerId, startX: event.clientX, startWidth, width: startWidth, frame: 0 };
   };
   // While dragging, write the width straight to the layout, once per frame: re-rendering the
   // viewer (and a tree of thousands of rows) on every pointer move made resizing lag.
@@ -81,9 +93,7 @@ export function TreeSplitter({ width, onChange, layout = VIEWER_TREE }: { width:
     const splitter = event.currentTarget;
     current.frame = requestAnimationFrame(() => {
       current.frame = 0;
-      splitter.parentElement?.style.setProperty("--viewer-tree-width", `${current.width}px`);
-      splitter.style.left = splitterLeft(current.width);
-      splitter.setAttribute("aria-valuenow", String(current.width));
+      applyWidth(splitter, current.width);
     });
   };
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
@@ -91,13 +101,15 @@ export function TreeSplitter({ width, onChange, layout = VIEWER_TREE }: { width:
     if (!current || current.pointer !== event.pointerId) return;
     cancelAnimationFrame(current.frame);
     drag.current = null;
+    // The pending frame is dropped, so write the final width now: React sees no change when the drag ends where the stored width already was.
+    applyWidth(event.currentTarget, current.width);
     onChange(current.width);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? 48 : 16;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
-      onChange(clampWidth(layout, width + (event.key === "ArrowRight" ? step : -step)));
+      onChange(clampWidth(layout, shownWidth(layout, event.currentTarget, width) + (event.key === "ArrowRight" ? step : -step)));
     } else if (event.key === "Home") {
       event.preventDefault();
       onChange(layout.fallback);
