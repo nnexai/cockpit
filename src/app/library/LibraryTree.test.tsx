@@ -492,9 +492,9 @@ async function renderTree(items: LibraryItemSummary[], selectedItemId: string | 
 it("shows a Jira follow's query in full as its label with the state on its own line, and nests subtasks under their parent issue", async () => {
   const tree = await renderTree(issues);
   try {
-    // Subtasks sit under their parent (newest first among siblings, like every issue list); an orphaned subtask stays a top-level row.
+    // Subtasks sit under their parent, oldest key first while top-level issues run newest first; an orphaned subtask stays a top-level row.
     const jql = "project = SCRUM AND resolution = Unresolved ORDER BY created DESC";
-    expect(tree.labels()).toEqual(["Jira · nnexai.atlassian.net", jql, "SCRUM-5 Issue 5", "SCRUM-2 Issue 2", "SCRUM-4 Issue 4", "SCRUM-3 Issue 3", "SCRUM-1 Issue 1"]);
+    expect(tree.labels()).toEqual(["Jira · nnexai.atlassian.net", jql, "SCRUM-5 Issue 5", "SCRUM-2 Issue 2", "SCRUM-3 Issue 3", "SCRUM-4 Issue 4", "SCRUM-1 Issue 1"]);
     const depths = tree.rows().map((row) => row.closest<HTMLElement>(".context-tree-node")!.style.getPropertyValue("--depth"));
     expect(depths).toEqual(["0", "1", "2", "2", "3", "3", "2"]);
     expect(tree.row("SCRUM-2 Issue 2").classList.contains("is-page")).toBe(true);
@@ -520,8 +520,8 @@ it("moves focus with the arrow, Home and End keys, and Left and Right walk to th
     await tree.key(tree.row("SCRUM-5 Issue 5"), "ArrowDown");
     expect(focused()).toBe("SCRUM-2 Issue 2");
     await tree.key(tree.row("SCRUM-2 Issue 2"), "ArrowDown");
-    expect(focused()).toBe("SCRUM-4 Issue 4");
-    await tree.key(tree.row("SCRUM-4 Issue 4"), "ArrowUp");
+    expect(focused()).toBe("SCRUM-3 Issue 3");
+    await tree.key(tree.row("SCRUM-3 Issue 3"), "ArrowUp");
     expect(focused()).toBe("SCRUM-2 Issue 2");
     await tree.key(tree.row("SCRUM-2 Issue 2"), "End");
     expect(focused()).toBe("SCRUM-1 Issue 1");
@@ -532,13 +532,13 @@ it("moves focus with the arrow, Home and End keys, and Left and Right walk to th
     await tree.key(tree.row("SCRUM-1 Issue 1"), "ArrowUp");
     // Right on an open parent enters its first child; Left goes back to the parent, then collapses it, then walks up.
     await tree.key(tree.row("SCRUM-2 Issue 2"), "ArrowRight");
-    expect(focused()).toBe("SCRUM-4 Issue 4");
-    await tree.key(tree.row("SCRUM-4 Issue 4"), "ArrowLeft");
+    expect(focused()).toBe("SCRUM-3 Issue 3");
+    await tree.key(tree.row("SCRUM-3 Issue 3"), "ArrowLeft");
     expect(focused()).toBe("SCRUM-2 Issue 2");
     await tree.key(tree.row("SCRUM-2 Issue 2"), "ArrowLeft");
-    expect(tree.labels()).not.toContain("SCRUM-4 Issue 4");
+    expect(tree.labels()).not.toContain("SCRUM-3 Issue 3");
     await tree.key(tree.row("SCRUM-2 Issue 2"), "ArrowRight");
-    expect(tree.labels()).toContain("SCRUM-4 Issue 4");
+    expect(tree.labels()).toContain("SCRUM-3 Issue 3");
     await tree.key(tree.row("SCRUM-5 Issue 5"), "ArrowLeft");
     expect(focused()).toBe("project = SCRUM AND resolution = Unresolved ORDER BY created DESC");
     // Enter opens an issue but folds a group; Shift+F10 and the Menu key open the row menu with keyboard focus inside it.
@@ -603,5 +603,26 @@ it("takes a navigation key pressed with focus lost on the page back into the tre
     vi.restoreAllMocks();
     outside.remove();
     await tree.dispose();
+  }
+});
+
+it("lists a parent's subtasks before its Attachments group and leaves a parent whose subtasks are absent as a plain row", async () => {
+  const file = { attachment_id: "source:SCRUM-2#attachment:1", original_name: "log.txt", stored_name: "log.txt", media_type: null, bytes: null, version: "1", state: "not_downloaded" as const, relative_path: null };
+  const withFiles = issue(2, { attachments: [file] });
+  const tree = await renderTree([issue(1), withFiles, issue(3, { parent_item_id: withFiles.item_id }), issue(4, { parent_item_id: withFiles.item_id })]);
+  try {
+    expect(tree.labels().slice(2)).toEqual(["SCRUM-2 Issue 2", "SCRUM-3 Issue 3", "SCRUM-4 Issue 4", "Attachments", "SCRUM-1 Issue 1"]);
+    // Indented one step below the parent, with the parent's chevron; the leaf issue has none.
+    expect(tree.rows().slice(2).map((row) => row.closest<HTMLElement>(".context-tree-node")!.style.getPropertyValue("--depth"))).toEqual(["2", "3", "3", "3", "2"]);
+    expect(tree.host.querySelectorAll(".library-page-disclosure")).toHaveLength(1);
+  } finally {
+    await tree.dispose();
+  }
+  const alone = await renderTree([issue(1), issue(2)]);
+  try {
+    expect(alone.labels().slice(2)).toEqual(["SCRUM-2 Issue 2", "SCRUM-1 Issue 1"]);
+    expect(alone.host.querySelectorAll(".library-page-disclosure")).toHaveLength(0);
+  } finally {
+    await alone.dispose();
   }
 });

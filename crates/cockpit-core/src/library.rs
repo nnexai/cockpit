@@ -1067,6 +1067,7 @@ impl LibraryService {
         entry.references = self
             .is_jira_provider(&asset.source.provider_id)
             .then(|| asset_references(&self.configuration, &asset));
+        entry.relations_captured = entry.references.is_some();
         entry.canonical_url = Some(canonical_url);
         if let Some(row) = issue_row {
             entry.summary.issue = Some(LibraryIssueMeta {
@@ -1314,6 +1315,7 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
     LibraryIndexEntry {
         inventory: old.map(|e| e.inventory.clone()).unwrap_or_default(),
         references: None,
+        relations_captured: false,
         canonical_url: asset.source_url.clone(),
         summary: LibraryItemSummary {
             item_id: id,

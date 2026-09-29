@@ -505,12 +505,13 @@ function compareItems(left: LibraryItemSummary, right: LibraryItemSummary): numb
 export type LibraryItemNode = { item: LibraryItemSummary; children: LibraryItemNode[] };
 
 /**
- * Items nested under the item their `parent_item_id` names (a Jira subtask under its parent issue), in the
- * order given, which is also every level's sibling order. Only a parent in the same list nests a child: a child
+ * Items nested under the item their `parent_item_id` names (a Jira subtask under its parent issue). Top-level
+ * nodes keep the order given; a Jira issue's subtasks read oldest key first (`SCRUM-4` before `SCRUM-5`),
+ * unlike the newest-first list around them. Other providers retain list order. Only a parent in the same list nests a child: a child
  * whose parent is elsewhere, or not in the Library, stays a top-level node. A parent chain that loops back to
  * the child (never produced by a provider) leaves that child top-level rather than dropping the cycle.
  */
-export function nestUnderParents(items: readonly LibraryItemSummary[]): LibraryItemNode[] {
+export function nestUnderParents(items: readonly LibraryItemSummary[], providers: readonly ProjectProvider[] = []): LibraryItemNode[] {
   const nodes = new Map<string, LibraryItemNode>(items.map((item) => [item.item_id, { item, children: [] }]));
   const parentOf = (item: LibraryItemSummary) => item.parent_item_id === null || item.parent_item_id === item.item_id ? undefined : nodes.get(item.parent_item_id);
   const loops = (item: LibraryItemSummary) => {
@@ -526,6 +527,17 @@ export function nestUnderParents(items: readonly LibraryItemSummary[]): LibraryI
     const node = nodes.get(item.item_id)!;
     const parent = parentOf(item);
     if (parent && !loops(item)) parent.children.push(node); else roots.push(node);
+  }
+  const oldestFirst = (left: LibraryItemNode, right: LibraryItemNode) => {
+    const leftNumber = trailingNumber(left.item.canonical_id);
+    const rightNumber = trailingNumber(right.item.canonical_id);
+    return leftNumber !== null && rightNumber !== null && leftNumber !== rightNumber ? leftNumber - rightNumber : 0;
+  };
+  for (const node of nodes.values()) {
+    const parent = node.item;
+    if (parent.kind === "provider_snapshot" && parent.resource_type === "issue" && providerFamily(providers, parent.provider_id).key === "jira"
+      && node.children.every(({ item }) => item.kind === "provider_snapshot" && item.resource_type === "issue"
+        && item.provider_id === parent.provider_id && item.provider_instance === parent.provider_instance)) node.children.sort(oldestFirst);
   }
   return roots;
 }

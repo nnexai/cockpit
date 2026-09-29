@@ -294,6 +294,29 @@ describe("nesting items under their parent", () => {
       .toEqual([["p", [["c2", ["grandchild"]], "c1"]], "orphan", "solo"]);
   });
 
+  it("lists a parent's children oldest key first while top-level issues stay newest first", () => {
+    const keyed = (key: string, parent: string | null) => item({ item_id: key, canonical_id: key, parent_item_id: parent, title: key, provider_id: "jira" });
+    // The list is in tree order already: newest key first.
+    expect(shape(nestUnderParents([keyed("OPS-9", null), keyed("OPS-7", "OPS-2"), keyed("OPS-4", "OPS-2"), keyed("OPS-10", "OPS-2"), keyed("OPS-2", null), keyed("OPS-1", null)], providers)))
+      .toEqual(["OPS-9", ["OPS-2", ["OPS-4", "OPS-7", "OPS-10"]], "OPS-1"]);
+  });
+
+  it("keeps other providers' child order, including numeric Confluence page ids", () => {
+    const configured = [...providers, { id: "confluence", base_url: "https://wiki.test", executable: "confluence" }];
+    for (const [provider_id, resource_type] of [["gitlab", "issue"], ["confluence", "page"]]) {
+      const keyed = (key: string, parent: string | null) => item({ item_id: key, canonical_id: key, parent_item_id: parent, provider_id, resource_type });
+      expect(shape(nestUnderParents([keyed("2", null), keyed("10", "2"), keyed("4", "2")], configured)))
+        .toEqual([["2", ["10", "4"]]]);
+    }
+  });
+
+  it("recognizes Jira through its executable when the provider has a custom id", () => {
+    const keyed = (key: string, parent: string | null) => item({ item_id: key, canonical_id: key, parent_item_id: parent, provider_id: "company" });
+    expect(shape(nestUnderParents([keyed("OPS-2", null), keyed("OPS-10", "OPS-2"), keyed("OPS-4", "OPS-2")],
+      [{ id: "company", base_url: "https://jira.test", executable: "/usr/bin/jira" }])))
+      .toEqual([["OPS-2", ["OPS-4", "OPS-10"]]]);
+  });
+
   it("does not lose items in a parent loop or a self-parent", () => {
     expect(shape(nestUnderParents([node("a", "b"), node("b", "a"), node("self", "self"), node("tail", "a")]))).toEqual([["a", ["tail"]], "b", "self"]);
   });

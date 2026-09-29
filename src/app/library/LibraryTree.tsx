@@ -320,11 +320,11 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
         if (!containerOpen) continue;
         if (container.items.every(isConfluencePage)) pushPages(pageForest(container), 2, container.key);
         // Other issues nest under their parent (a Jira subtask); one with attachments or subtasks gets a page row, the rest are leaves.
-        else pushPages(nestUnderParents(container.items).map(issueNode), 2, container.key);
+        else pushPages(nestUnderParents(container.items, providers).map(issueNode), 2, container.key);
       }
     }
     return visible;
-  }, [collapsed, tree]);
+  }, [collapsed, tree, providers]);
   const rowElement = (key: string) => [...(listRef.current?.querySelectorAll<HTMLElement>("[data-library-row]") ?? [])].find((element) => element.dataset.libraryRow === key);
   const focusRow = (key: string) => rowElement(key)?.focus();
   const tabStopKey = (activeKey !== null && rows.some((row) => row.key === activeKey) ? activeKey : null)

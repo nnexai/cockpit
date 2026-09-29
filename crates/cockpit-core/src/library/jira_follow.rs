@@ -62,7 +62,8 @@ fn is_issue_of(entry: &LibraryIndexEntry, follow: &LibraryFollowSummary) -> bool
 
 /// D4: why a listed issue needs a fetch, or `None` when the stored item
 /// matches the row. Compares listing format with listing format. With a
-/// reference depth, an item saved before references were extracted is fetched once.
+/// reference depth, an item saved before references were extracted is fetched once;
+/// so is any item saved before the structured relations (its parent issue) were captured.
 fn change_reason(old: &LibraryIndexEntry, row: &IssueRow, depth: u32) -> Option<&'static str> {
     if matches!(
         old.summary.state,
@@ -73,7 +74,7 @@ fn change_reason(old: &LibraryIndexEntry, row: &IssueRow, depth: u32) -> Option<
         != Some(row.updated.as_str())
     {
         Some("changed")
-    } else if depth > 0 && old.references.is_none() {
+    } else if (depth > 0 && old.references.is_none()) || !old.relations_captured {
         Some("rechecked")
     } else {
         None
@@ -391,7 +392,13 @@ impl LibraryService {
         // 2. Listing: everything for live (and for a follow with no members or
         // an unsettled last run), the changes since the watermark otherwise.
         let before = self.snapshot(store, &follow)?;
-        let since = (!live && !before.unsettled)
+        // A member saved before relations were captured needs its fetch, so the whole query is listed.
+        let legacy = before.items.values().any(|entry| {
+            is_issue_of(entry, &follow)
+                && refs::has_follow(&entry.summary, &follow.follow_id)
+                && !entry.relations_captured
+        });
+        let since = (!live && !before.unsettled && !legacy)
             .then(|| {
                 watermark(before.items.values().filter(|entry| {
                     is_issue_of(entry, &follow)
@@ -1277,6 +1284,31 @@ mod tests {
         assert_eq!(f.provider.take_fetched(), keys(&["OPS-2"]));
         let meta = issues(service).await["OPS-2"].issue.clone().unwrap();
         assert_eq!(meta.fetched_updated.as_deref(), Some(plain(20).as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_copy_saved_before_relations_were_captured_is_fetched_once() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1", "OPS-2", "OPS-3"]);
+        let (_, id) = follow(service, OPS, LibraryFollowMode::Accumulate).await;
+        f.provider.take_fetched();
+        // OPS-2 predates parent capture: the copy is unchanged at source, yet its next refresh fetches it.
+        service
+            .open()
+            .unwrap()
+            .mutate_index(|index| {
+                for entry in &mut index.items {
+                    entry.relations_captured = entry.summary.canonical_id.as_deref() != Some("OPS-2");
+                }
+                Ok(())
+            })
+            .unwrap();
+        refresh(service, &id).await;
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-2"]));
+        // Once fetched it is settled: nothing is fetched again.
+        refresh(service, &id).await;
+        assert!(f.provider.take_fetched().is_empty());
     }
 
     #[tokio::test]

@@ -257,7 +257,7 @@ impl LibraryService {
         let now = timestamp();
         let equal = old.as_ref().is_some_and(|e| e.summary.revision == revision);
         let partial = limited.then(|| LibraryPartial { unit: "files".into(), have: files.len() as u64, total: Some(total), reason: "Folder capture limits reached".into() });
-        let mut entry = LibraryIndexEntry { canonical_url: None, inventory: vec![], references: None, summary: LibraryItemSummary {
+        let mut entry = LibraryIndexEntry { canonical_url: None, inventory: vec![], references: None, relations_captured: false, summary: LibraryItemSummary {
             item_id: id.clone(), logical_id: id, kind: LibraryItemKind::FolderCopy, provider_id: None, provider_instance: None,
             resource_type: None, canonical_id: None, container: None, parent_item_id: None, ancestors: vec![], order: None,
             title, document_path: files.first().map(|file| format!("{path}/{}", file.path)), item_path: path, source_url: None, original_url: None, source_revision: None, revision,

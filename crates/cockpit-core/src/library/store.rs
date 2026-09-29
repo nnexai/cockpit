@@ -38,6 +38,11 @@ pub(crate) struct LibraryIndexEntry {
     /// legacy save that never extracted them.
     #[serde(default)]
     pub references: Option<Vec<crate::sources::SourceReference>>,
+    /// The saved Jira document carries the structured `parent`/`subtasks`/`links`
+    /// fields. Copies saved before those were captured read `false` and are
+    /// fetched once by the next follow refresh, so their parent becomes known.
+    #[serde(default)]
+    pub relations_captured: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

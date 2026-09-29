@@ -31,6 +31,27 @@ Checks after this increment:
 
 Native layout and scaling are not proven by these jsdom tests.
 
+## Increment 2 — Jira refresh and subtask ordering
+
+Commit subject: `fix(library): recheck legacy Jira relations and scope subtask order`
+
+- Include the previous workers' `relations_captured` index field and refresh logic: old copies default to false, trigger a full query listing instead of a watermark probe, and are re-fetched to capture relations. Successful Jira capture marks them settled. Folder/non-Jira entry constructors supply false.
+- Include the previous worker's ascending numeric subtask order and tree tests showing subtasks before Attachments.
+- Narrow ascending child sorting to Jira issue parents with issue children from the same provider and instance. Identify Jira by configured executable, including custom provider ids; other providers retain their supplied child order.
+- Pass providers into the nesting function and include providers in the tree-row memo dependencies.
+- Add regression coverage for unchanged GitLab/Confluence child ordering and custom Jira provider ids. Ascending numeric key order is a UI policy; it does not claim to reproduce a source-defined subtask order.
+
+Checks after this increment:
+
+- `bun run typecheck`: passed.
+- `bunx vitest run src/app/library --reporter=dot`: 95 tests passed across ten files.
+- After refining the new non-Jira test fixture, `bunx vitest run src/app/library/libraryState.test.ts --reporter=dot`: 26 tests passed; typecheck passed again.
+- `cargo test -p cockpit-core --lib -- library::`: 109 tests passed, including the one-time legacy refetch and existing cross-page Jira parent projection tests.
+- `git diff --check`: passed.
+- Non-fatal warnings: React `act(...)` warnings in two LibraryTree tests, Node localStorage experimental warning, and ts-rs warnings for `deny_unknown_fields`.
+
+These are fixture/unit checks. No refresh of the user's real Library was performed, and SCRUM-4's real parent remains unconfirmed.
+
 ## Remaining during execution
 
-Library sorting scope, legacy Jira refresh checks, deterministic tree focus styles, and final handoff will be recorded here before completion.
+Deterministic tree focus styles and final handoff will be recorded here before completion.
