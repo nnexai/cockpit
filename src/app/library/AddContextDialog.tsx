@@ -8,6 +8,7 @@ import { StatePill } from "./StatePill";
 import { JIRA_KEY, confluencePageInput, confluenceProviders, confluenceSite, confluenceSpaceInput, errorText, issueCount, jiraProviders, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryInputUrl, lookupFailure, pageCount, providerFamily, resolutionNote, resolutionSpaceName, type LibrarySpace, type LookupFailure } from "./libraryState";
 import { headerSpaceAction } from "./spaceCopyPresentation";
 import { useLibraryOperation, useSpaceContextListing } from "./useLibraryOperation";
+import { useProviderCredentialActions } from "./useProviderCredentials";
 import "../projects/setup.css";
 import "../projects/taskSetup.css";
 import "./library.css";
@@ -245,6 +246,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [destination, setDestination] = useState<"library" | "space">(spaceChoice && defaultDestination === "space" ? "space" : "library");
   const spaceListing = useSpaceContextListing(client, spaceChoice?.target ?? null, spaceChoice !== null);
   const add = useLibraryOperation(client);
+  const credentials = useProviderCredentialActions(client, providers);
   const resume = add.resume;
   useRestoreFocus();
   useEffect(() => {
@@ -333,10 +335,15 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const existingFollow = follow && !jiraFollow ? resolution?.existing_follow_id ?? null : null;
   const existingItem = follow ? null : resolution?.existing_item_id ?? null;
   const existing = existingItem ?? existingFollow;
-  // Attachment bytes are fetched only for a new page or followed space, and only when checked; a follow keeps the choice for its refreshes.
-  const attachmentsOffered = (resolution?.kind === "confluence_page" || spaceResolution) && !existing;
+  // Attachment bytes are fetched only for a new page, followed space, Jira issue or Jira query follow, and only when checked; a follow keeps the choice for its refreshes.
+  // A Jira download needs a token stored in Cockpit: without one the field offers the token dialog instead.
   const folder = resolution?.kind === "folder";
   const family = resolution && !folder ? providerFamily(providers, resolution.provider_id) : null;
+  const jiraDownloads = !existing && (jiraFollow || (resolution?.kind === "artifact" && family?.key === "jira"));
+  const jiraToken = jiraDownloads ? credentials.actions.statuses?.find((status) => status.provider_id === resolution?.provider_id)?.state === "stored" : false;
+  const ensureTokens = credentials.actions.ensure;
+  useEffect(() => { if (jiraDownloads) ensureTokens(); }, [jiraDownloads, ensureTokens]);
+  const attachmentsOffered = ((resolution?.kind === "confluence_page" || spaceResolution) && !existing) || (jiraDownloads && jiraToken);
   // One hop per step, from the ticket, page or query results through relations, descriptions and comments. Jira tickets default to 1, everything else to Off,
   // and an item or follow already in the Library offers the depth it was saved with. An existing item applies a depth only when refreshed.
   const depthOffered = jiraFollow || (resolution?.kind === "artifact" && (!existing || refreshExisting));
@@ -540,6 +547,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
               {failure ? <div id={failureId} className="library-refusal" role="alert">
                 <strong>{failure.title}</strong>
                 <span>{failure.detail}</span>
+                {failure.credentialProviderId ? <button type="button" className="task-setup-link" onClick={() => credentials.actions.open(failure.credentialProviderId!)}>Store a token…</button> : null}
                 {failure.retry ? <button type="button" className="task-setup-link" onClick={() => setLookupRetry((value) => value + 1)}>Retry lookup</button> : null}
               </div> : null}
               {providersLoaded && jira.length > 0 && (trimmed === "" || jiraQuery !== null) ? <div className="library-query-presets" role="group" aria-label="Jira query presets">
@@ -595,6 +603,10 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
           </div> : null}
           {resolution?.kind === "confluence_page" && resolution.existing_follow_id ? <p className="task-setup-check">{`${resolutionSpaceName(resolution)} is already followed; refreshing it keeps this page current.`}</p> : null}
           {attachmentsOffered ? <label className="task-setup-check"><input type="checkbox" checked={downloadAttachments} onChange={(event) => setDownloadAttachments(event.target.checked)} /> {`Download attachments${attachmentLimit !== null ? ` (up to ${Math.round(attachmentLimit / (1024 * 1024))} MB each)` : ""}`}</label> : null}
+          {jiraDownloads && credentials.actions.statuses !== null && !jiraToken && resolution?.provider_id ? <p className="task-setup-check">
+            <span>Downloading Jira attachments needs a token stored in Cockpit.</span>
+            <button type="button" className="task-setup-link" onClick={() => credentials.actions.open(resolution.provider_id!)}>Provider token…</button>
+          </p> : null}
           {depthOffered ? <div className="task-setup-row">
             <label htmlFor={`${fieldId}-depth`}>Follow references</label>
             <div>
@@ -642,5 +654,6 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
         </>}
       </footer>
     </section>
+    {credentials.dialog}
   </div>, document.body);
 }

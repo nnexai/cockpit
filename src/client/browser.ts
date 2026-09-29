@@ -28,6 +28,10 @@ import {
   parseCommentUpsert,
 } from "./commentProtocol";
 import {
+  matchProviderCredential, parseProviderCredentialClearRequest, parseProviderCredentialSetRequest,
+  parseProviderCredentialStatus, parseProviderCredentialStatusList,
+} from "./credentialProtocol";
+import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
   parseWorkspaceDefaults, parseWorkspaceDefaultsRequest,
   parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
@@ -650,6 +654,15 @@ export function createBrowserClient(
 ): CockpitClient {
   return {
     projectConfiguration() { return getJson(request, "/api/v1/project/configuration", "project configuration", parseProjectConfiguration); },
+    providerCredentials() { return getJson(request, "/api/v1/provider-credentials", "provider credentials", parseProviderCredentialStatusList); },
+    async setProviderCredential(value) {
+      const body = parseProviderCredentialSetRequest(value);
+      return matchProviderCredential(await getJson(request, "/api/v1/provider-credentials/set", "provider credential", parseProviderCredentialStatus, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), body);
+    },
+    async clearProviderCredential(value) {
+      const body = parseProviderCredentialClearRequest(value);
+      return matchProviderCredential(await getJson(request, "/api/v1/provider-credentials/clear", "provider credential", parseProviderCredentialStatus, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), body);
+    },
     repositories() { return getJson(request, "/api/v1/project/repositories", "repositories", parseRepositoryList); },
     async resolveWorkspaceDefaults(value) {
       const body = parseWorkspaceDefaultsRequest(value);

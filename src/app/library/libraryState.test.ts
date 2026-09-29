@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { LibraryFollowSummary, LibraryItemState, LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
-import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, parseLibraryTime, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
+import type { LibraryFollowSummary, LibraryItemState, LibraryItemSummary, ProjectProvider, ProviderCredentialStatus } from "../../protocol/generated/v1";
+import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraAttachmentAccess, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, lookupFailure, parseLibraryTime, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
 
 const providers: ProjectProvider[] = [
   { id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
@@ -224,5 +224,34 @@ describe("Jira query input", () => {
     expect(jiraQueryPresets("OPS").map((preset) => preset.jql)).toEqual(["project = OPS", "project = OPS AND statusCategory != Done", "project = OPS AND updated >= -14d", "assignee = currentUser() AND resolution = Unresolved"]);
     expect(jiraQueryPresets(null).map((preset) => preset.jql)).toEqual(["assignee = currentUser() AND resolution = Unresolved"]);
     expect([jiraQueryProject("OPS"), jiraQueryProject("project = OPS AND updated >= -14d"), jiraQueryProject("assignee = x")]).toEqual(["OPS", "OPS", null]);
+  });
+});
+
+describe("provider token entry points", () => {
+  const jiraIssue = item({ provider_id: "jira", provider_instance: "https://jira.test/jira", resource_type: "issue", canonical_id: "OPS-1" });
+  const status = (state: ProviderCredentialStatus["state"]): ProviderCredentialStatus => ({ provider_id: "jira", state, kind: state === "stored" ? "bearer" : null, supported_kinds: ["bearer", "basic"] });
+
+  it("gates a Jira issue's downloads on its provider's stored token, and leaves other items alone", () => {
+    expect(jiraAttachmentAccess(jiraIssue, providers, null)).toBe("loading");
+    expect(jiraAttachmentAccess(jiraIssue, providers, [status("stored")])).toBe("stored");
+    for (const state of ["not_stored", "vault_unavailable", "unsupported"] as const) expect(jiraAttachmentAccess(jiraIssue, providers, [status(state)])).toBe("needs_token");
+    expect(jiraAttachmentAccess(jiraIssue, providers, [])).toBe("needs_token");
+    expect(jiraAttachmentAccess(item({}), providers, null)).toBeNull();
+    expect(jiraAttachmentAccess({ ...jiraIssue, resource_type: "page" }, providers, null)).toBeNull();
+    expect(jiraAttachmentAccess({ ...jiraIssue, kind: "folder_copy" }, providers, null)).toBeNull();
+  });
+
+  it("offers the token dialog for Jira and Confluence credential failures only", () => {
+    const confluence: ProjectProvider = { id: "wiki", base_url: "https://wiki.test", executable: "confluence", login: "default" };
+    const all = [...providers, confluence];
+    const jira = providers[2]!;
+    const rejected = (code: string) => Object.assign(new Error("Refused by the host."), { code });
+    expect(lookupFailure(rejected("source_credential_required"), "OPS-1", all, jira)).toMatchObject({ title: "✕ A token is needed", detail: "Refused by the host.", credentialProviderId: "jira" });
+    expect(lookupFailure(rejected("source_auth_required"), "OPS-1", all, jira)).toMatchObject({ title: "✕ Jira sign-in required", credentialProviderId: "jira" });
+    expect(lookupFailure(rejected("source_auth_failed"), "12345", all, confluence)).toMatchObject({ title: "✕ Confluence sign-in failed", credentialProviderId: "wiki" });
+    // GitLab has no stored token: the failure points at the CLI and offers no dialog.
+    const gitlab = lookupFailure(rejected("source_auth_failed"), "https://gitlab.test/platform/api/-/issues/1", all);
+    expect(gitlab.credentialProviderId).toBeUndefined();
+    expect(gitlab.detail).toBe("gitlab.test rejected the glab CLI's credentials. Sign in with the CLI, then retry.");
   });
 });

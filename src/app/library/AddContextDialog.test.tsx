@@ -8,6 +8,8 @@ import { AddContextDialog } from "./AddContextDialog";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+/** Token states of a Jira provider with no token stored in Cockpit. */
+const jiraNotStored = { providers: [{ provider_id: "jira", state: "not_stored", kind: null, supported_kinds: ["bearer", "basic"] }] };
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -26,6 +28,7 @@ it("resolves a Jira key on the configured site, adds to the Library only, and of
   };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     libraryAdd: vi.fn(async () => saved),
   } as unknown as CockpitClient;
@@ -78,6 +81,7 @@ it("keeps focus trapped during add startup and exposes a retry for the same reje
   const firstStart = new Promise<LibraryOperation>((_resolve, reject) => { rejectStart = reject; });
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     libraryAdd: vi.fn().mockReturnValueOnce(firstStart).mockResolvedValueOnce(saved),
   } as unknown as CockpitClient;
@@ -226,6 +230,7 @@ it("offers only the Library when Herdr isn't live, and copies an already saved i
   };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => resolution),
     librarySpaceList: vi.fn(async () => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
     libraryAdd: vi.fn(),
@@ -470,6 +475,7 @@ it("retries an interrupted Space-only copy with the items it asked for, not the 
   };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: "source:ops-311", existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     librarySpaceList: vi.fn(async () => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
     libraryAdd: vi.fn(),
@@ -693,7 +699,7 @@ it("explains a Confluence sign-in failure and a missing confluence CLI without c
     await typeSource(DC_DISPLAY);
     const alert = () => document.body.querySelector("[role='alert']")!;
     expect(alert().querySelector("strong")?.textContent).toBe("✕ Confluence sign-in failed");
-    expect(alert().textContent).toContain("confluence.example.com rejected the confluence CLI's credentials. Cockpit doesn't store credentials: sign in with the CLI's read-only profile, then retry.");
+    expect(alert().textContent).toContain("confluence.example.com rejected the credentials for the confluence CLI. Store a token for this site in Cockpit, or sign in with the CLI's read-only profile, then retry.");
     await act(async () => dialogButton("Retry lookup")!.click());
     await advance(450);
     expect(alert().querySelector("strong")?.textContent).toBe("✕ confluence isn't installed");
@@ -883,6 +889,7 @@ it("follows a Jira query: a relative-date query preselects accumulate, shows the
   };
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => ({
       kind: "jira_query", provider_id: "jira", provider_instance: "https://jira.test/jira", title: jql, canonical_id: jql, container_label: null, existing_item_id: null, existing_follow_id: null,
       item_count: 100, item_count_exact: false, follow_mode: "accumulate", git_working_tree: null, file_count: null, diagnostics: [],
@@ -937,6 +944,7 @@ it("offers Follow references with per-source defaults, honors a stored depth, an
   const jiraIssue = (key: string, extra: Record<string, unknown> = {}) => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: key, canonical_id: key, container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [], ...extra });
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async ({ input }: { input: string }) => input.endsWith("OPS-2") ? jiraIssue("OPS-2", { reference_depth: 2 }) : input.includes("browse/OPS-3") ? jiraIssue("OPS-3", { existing_item_id: "source:ops-3", reference_depth: 3 }) : jiraIssue("OPS-1")),
     libraryAdd: vi.fn(async () => saved),
   } as unknown as CockpitClient;
@@ -972,5 +980,60 @@ it("offers Follow references with per-source defaults, honors a stored depth, an
     await act(async () => dialogButton("Refresh from source")!.click());
     await advance(0);
     expect(client.libraryAdd).toHaveBeenLastCalledWith(expect.objectContaining({ input: "https://jira.test/jira/browse/OPS-3", refresh_existing: true, reference_depth: 3 }));
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+const jiraProviderConfig = { providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] };
+const jiraResolution = { kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] };
+
+it("offers the provider token dialog from a credential failure, with the entry form open for the failing provider", async () => {
+  vi.useFakeTimers();
+  const client = {
+    projectConfiguration: vi.fn(async () => jiraProviderConfig),
+    providerCredentials: vi.fn(async () => jiraNotStored),
+    libraryResolve: vi.fn(async () => { throw Object.assign(new Error("Downloading needs a token stored in Cockpit."), { code: "source_credential_required" }); }),
+  } as unknown as CockpitClient;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} />));
+    await advance(0); await typeSource("OPS-311");
+    const alert = document.body.querySelector("[role='alert']")!;
+    expect(alert.querySelector("strong")?.textContent).toBe("✕ A token is needed");
+    expect(alert.textContent).toContain("Downloading needs a token stored in Cockpit.");
+    await act(async () => dialogButton("Store a token…")!.click());
+    await advance(0);
+    expect([...document.body.querySelectorAll("h2")].map((heading) => heading.textContent)).toContain("Provider tokens");
+    expect(document.body.querySelector("form[aria-label='Token for Jira · jira.test/jira'] input[type='password']")).not.toBeNull();
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it.each([
+  { stored: false, offered: false },
+  { stored: true, offered: true },
+])("offers Download attachments for a new Jira issue only with a stored token ($stored)", async ({ stored, offered }) => {
+  vi.useFakeTimers();
+  const saved: LibraryOperation = {
+    operation_id: "op-jira-attachments", kind: "add", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:ops-311"],
+    report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+  const client = {
+    projectConfiguration: vi.fn(async () => ({ ...jiraProviderConfig, limits: { library_attachment_bytes: 25 * 1024 * 1024 } })),
+    providerCredentials: vi.fn(async () => ({ providers: [{ provider_id: "jira", state: stored ? "stored" : "not_stored", kind: stored ? "bearer" : null, supported_kinds: ["bearer", "basic"] }] })),
+    libraryResolve: vi.fn(async () => jiraResolution),
+    libraryAdd: vi.fn(async () => saved),
+  } as unknown as CockpitClient;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} />));
+    await advance(0); await typeSource("OPS-311"); await advance(0);
+    const checkbox = [...document.body.querySelectorAll<HTMLLabelElement>("label.task-setup-check")].find((label) => label.textContent?.includes("Download attachments"));
+    expect(checkbox !== undefined).toBe(offered);
+    expect(document.body.textContent?.includes("Downloading Jira attachments needs a token stored in Cockpit.")).toBe(!offered);
+    if (checkbox) await act(async () => checkbox.querySelector("input")!.click());
+    await act(async () => dialogButton("Add to Library")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ download_attachments: offered }));
   } finally { await act(async () => root.unmount()); host.remove(); }
 });

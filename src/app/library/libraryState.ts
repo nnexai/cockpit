@@ -6,6 +6,7 @@ import type {
   LibraryReportOutcome,
   LibraryResolution,
   ProjectProvider,
+  ProviderCredentialStatus,
   SpaceTarget,
 } from "../../protocol/generated/v1";
 import type { UiIconName } from "../UiIcon";
@@ -32,7 +33,7 @@ const FAMILIES: Record<string, ProviderFamily> = {
   confluence: { key: "confluence", name: "Confluence", review: "page" },
 };
 
-function executableName(executable: string): string {
+export function executableName(executable: string): string {
   return executable.slice(Math.max(executable.lastIndexOf("/"), executable.lastIndexOf("\\")) + 1);
 }
 
@@ -53,6 +54,17 @@ export function confluenceProviders(providers: readonly ProjectProvider[]): Proj
 /** A Library item or lookup result that is a Confluence page. */
 export function isConfluencePage(item: Pick<LibraryItemSummary, "kind" | "resource_type">): boolean {
   return item.kind === "provider_snapshot" && item.resource_type === "page";
+}
+
+/**
+ * Whether Cockpit can fetch a Jira issue's attachment bytes, which it does only with a token stored in Cockpit
+ * (jira-cli has no download command). Null for anything that isn't a Jira issue; `loading` until the token
+ * states were read (`statuses` null).
+ */
+export function jiraAttachmentAccess(item: Pick<LibraryItemSummary, "kind" | "resource_type" | "provider_id">, providers: readonly ProjectProvider[], statuses: readonly ProviderCredentialStatus[] | null): "stored" | "needs_token" | "loading" | null {
+  if (item.kind !== "provider_snapshot" || item.resource_type !== "issue" || providerFamily(providers, item.provider_id).key !== "jira") return null;
+  if (statuses === null) return "loading";
+  return statuses.find((status) => status.provider_id === item.provider_id)?.state === "stored" ? "stored" : "needs_token";
 }
 
 /** `https://gitlab.test:9443/subfolder/` → `gitlab.test:9443/subfolder`. */
@@ -583,7 +595,8 @@ export function resolutionNote(resolution: LibraryResolution, providers: readonl
   return `${kind}${id ? ` ${id}` : ""} · ${resolution.title} · ${family.name} · ${host}`;
 }
 
-export type LookupFailure = { title: string; detail: string; retry: boolean };
+/** `credentialProviderId` names the provider whose token dialog can fix the failure. */
+export type LookupFailure = { title: string; detail: string; retry: boolean; credentialProviderId?: string };
 
 export function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null) return null;
@@ -612,6 +625,8 @@ export function lookupFailure(error: unknown, input: string, providers: readonly
   const family = provider ? providerFamily(providers, provider.id) : null;
   const executable = provider ? executableName(provider.executable) : "The provider CLI";
   const confluence = family?.key === "confluence";
+  // Only Jira and Confluence take a stored token; the host reports every other provider as unsupported.
+  const credentialProviderId = provider && (family?.key === "jira" || confluence) ? provider.id : undefined;
   switch (code) {
     case "unsupported_artifact":
     case "source_provider_unsupported":
@@ -630,7 +645,13 @@ export function lookupFailure(error: unknown, input: string, providers: readonly
         ? { title: `✕ ${executable} isn't installed`, detail: "Install it with brew install pchuri/tap/confluence-cli, configure a read-only profile, then retry.", retry: true }
         : { title: `✕ ${executable} isn't installed`, detail: `Install ${executable} and sign in with it, then retry.`, retry: true };
     case "source_auth_failed":
-      return { title: `✕ ${family?.name ?? "Provider"} sign-in failed`, detail: `${host} rejected the ${executable} CLI's credentials. Cockpit doesn't store credentials: sign in with the CLI${confluence ? "'s read-only profile" : ""}, then retry.`, retry: true };
+      return credentialProviderId
+        ? { title: `✕ ${family?.name} sign-in failed`, detail: `${host} rejected the credentials for the ${executable} CLI. Store a token for this site in Cockpit, or sign in with the CLI${confluence ? "'s read-only profile" : ""}, then retry.`, retry: true, credentialProviderId }
+        : { title: `✕ ${family?.name ?? "Provider"} sign-in failed`, detail: `${host} rejected the ${executable} CLI's credentials. Sign in with the CLI, then retry.`, retry: true };
+    case "source_auth_required":
+      return { title: `✕ ${family?.name ?? "Provider"} sign-in required`, detail: message, retry: true, credentialProviderId };
+    case "source_credential_required":
+      return { title: "✕ A token is needed", detail: message, retry: true, credentialProviderId };
     case "source_capability_unavailable":
       return { title: "✕ Not available on this Confluence Data Center instance", detail: message, retry: false };
     case "source_not_found":

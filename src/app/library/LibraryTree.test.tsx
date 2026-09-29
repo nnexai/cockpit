@@ -366,3 +366,57 @@ it("shows a followed Jira query as a container titled by its JQL, marks unrefere
     host.remove();
   }
 });
+
+it("offers Provider token… on a Jira or Confluence instance row, opens it for that provider, and reads token states only when an issue's menu opens", async () => {
+  const config: ProjectProvider[] = [
+    { id: "jira", base_url: "https://team.atlassian.net", executable: "jira" },
+    { id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence", login: "default" },
+    { id: "gitlab", base_url: "https://gitlab.test", executable: "glab" },
+  ];
+  const issue = page({
+    item_id: "source:ops-1", provider_id: "jira", provider_instance: "https://team.atlassian.net", resource_type: "issue", canonical_id: "OPS-1", container: null, title: "Crash",
+    attachments: [{ attachment_id: "1", original_name: "trace.log", stored_name: "trace.log", media_type: "text/plain", bytes: 10, version: null, state: "not_downloaded", relative_path: null }],
+  });
+  const wiki = page({ item_id: "source:wiki", canonical_id: "9", title: "Home" });
+  const repo = page({ item_id: "source:gl", provider_id: "gitlab", provider_instance: "https://gitlab.test", resource_type: "issue", canonical_id: "acme/api#7", container: null, title: "Bug" });
+  const credentials = { statuses: null, ensure: vi.fn(), open: vi.fn(), attachmentAccess: vi.fn((): "stored" | "needs_token" => "needs_token") };
+  const attachments = { start: vi.fn(), open: vi.fn(), busy: false, active: null };
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false, credentials, attachments };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const rows = () => [...host.querySelectorAll<HTMLButtonElement>("[data-library-row]")];
+  const rowNamed = (text: string) => rows().find((row) => row.querySelector(".context-tree-name")?.textContent === text)!;
+  const menuItem = (text: string) => [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent === text);
+  const menuItems = () => [...document.body.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent);
+  const rightClick = (row: HTMLElement) => act(async () => { row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 20, clientY: 20 })); });
+  try {
+    await act(async () => root.render(<LibraryTree items={[issue, wiki, repo]} providers={config} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    expect(credentials.ensure).not.toHaveBeenCalled();
+    await rightClick(rowNamed("Jira · team.atlassian.net"));
+    expect(menuItems()).toEqual(["Refresh all in Jira · team.atlassian.net", "Provider token…"]);
+    await act(async () => menuItem("Provider token…")!.click());
+    expect(credentials.open).toHaveBeenLastCalledWith("jira");
+    await rightClick(rowNamed("Confluence · nnexai.atlassian.net"));
+    await act(async () => menuItem("Provider token…")!.click());
+    expect(credentials.open).toHaveBeenLastCalledWith("cloud");
+    // A provider that can't store a token has no entry.
+    await rightClick(rowNamed("GitLab · gitlab.test"));
+    expect(menuItems()).toEqual(["Refresh all in GitLab · gitlab.test"]);
+    await act(async () => { document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })); });
+    expect(credentials.ensure).not.toHaveBeenCalled();
+    // A Jira issue's menu reads the token states, and without a token offers the dialog instead of a download.
+    await rightClick(rows().find((row) => row.dataset.libraryRow === "source:ops-1")!);
+    expect(credentials.ensure).toHaveBeenCalledTimes(1);
+    expect(menuItems()).toContain("Store a token to download attachments…");
+    expect(menuItems()).not.toContain("Download attachments");
+    await act(async () => menuItem("Store a token to download attachments…")!.click());
+    expect(credentials.open).toHaveBeenLastCalledWith("jira");
+    expect(attachments.start).not.toHaveBeenCalled();
+    // With a token stored the same menu downloads.
+    credentials.attachmentAccess.mockReturnValue("stored");
+    await rightClick(rows().find((row) => row.dataset.libraryRow === "source:ops-1")!);
+    await act(async () => menuItem("Download attachments")!.click());
+    expect(attachments.start).toHaveBeenCalledWith(issue, "download", ["1"]);
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});

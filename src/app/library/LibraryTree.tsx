@@ -6,6 +6,7 @@ import { FollowRemoveDialog, type FollowRemoveMode } from "./LibraryConfirmDialo
 import { attachmentTreeMeta, errorText, followCountText, followTitle, hasFollowRef, isConfluencePage, isKeepable, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, purgeNotice, type LibraryContainerNode, type LibraryInstanceNode, type StateShape, type StateTone } from "./libraryState";
 import { ProviderMark } from "./ProviderMark";
 import { PendingPill, StatePill } from "./StatePill";
+import type { ProviderCredentialActions } from "./useProviderCredentials";
 import "./library.css";
 
 export type LibraryMenuEntry = { label: string; onSelect: () => void; disabled?: boolean; destructive?: boolean; /** Shown right-aligned as a reminder; the shortcut itself is bound elsewhere. */ shortcut?: string } | "separator";
@@ -70,8 +71,12 @@ export type LibraryAttachmentActions = {
 };
 
 /** `Download attachments` / `Remove downloaded attachments` for a Confluence page's menus (design §4.3). */
-export function attachmentMenuEntries(item: LibraryItemSummary, attachments: LibraryAttachmentActions | undefined): LibraryMenuEntry[] {
-  if (!attachments || !isConfluencePage(item) || item.attachments.length === 0) return [];
+export function attachmentMenuEntries(item: LibraryItemSummary, attachments: LibraryAttachmentActions | undefined, credentials?: ProviderCredentialActions): LibraryMenuEntry[] {
+  if (!attachments || item.attachments.length === 0) return [];
+  // A Jira issue downloads only with a token stored in Cockpit; without one its menu says so and opens the token dialog.
+  const jira = credentials?.attachmentAccess(item) ?? null;
+  if (jira === "needs_token") return [{ label: "Store a token to download attachments…", onSelect: () => credentials?.open(item.provider_id ?? "") }];
+  if (!isConfluencePage(item) && jira !== "stored") return [];
   const downloadable = downloadableAttachments(item);
   const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded");
   return [
@@ -147,6 +152,8 @@ export type LibraryItemActions = {
   /** `Keep in Library`: gives the item its own reference, so no follow's drop or unfollow can purge it. */
   keep?: (item: LibraryItemSummary) => void;
   attachments?: LibraryAttachmentActions;
+  /** Provider tokens: the entry points that open the token dialog, and the Jira attachment gate. */
+  credentials?: ProviderCredentialActions;
 };
 
 /** The same entries appear in the row context menu and the item header `⋯` (design §5.3). */
@@ -157,7 +164,7 @@ export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemAc
     { label: item.folder ? `Re-copy from ${item.folder.origin_path}` : "Refresh from source", onSelect: () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]), disabled: actions.refreshBusy },
     ...(actions.keep && isKeepable(item) ? [{ label: "Keep in Library", onSelect: () => actions.keep?.(item), disabled: actions.refreshBusy || !item.source_url }] : []),
     ...space,
-    ...attachmentMenuEntries(item, actions.attachments),
+    ...attachmentMenuEntries(item, actions.attachments, actions.credentials),
     ...(actions.copyLibraryPath ? [{ label: "Copy Library path", onSelect: () => actions.copyLibraryPath?.(item), disabled: !actions.canCopyLibraryPath || !item.document_path }] : []),
     { label: "Copy source link", onSelect: () => actions.copyLink(item), disabled: !actions.canCopyLink || !(item.source_url ?? item.original_url) },
     "separator",
@@ -335,7 +342,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
   const attachmentActions = actions.attachments;
   const menuEntries = (row: Row): LibraryMenuEntry[] => {
     if (row.kind === "item" || row.kind === "page") return itemMenuEntries(row.item, actions, true);
-    if (row.kind === "attachments") return attachmentMenuEntries(row.item, attachmentActions);
+    if (row.kind === "attachments") return attachmentMenuEntries(row.item, attachmentActions, actions.credentials);
     if (row.kind === "attachment") {
       if (!attachmentActions) return [];
       const { item, attachment } = row;
@@ -364,10 +371,18 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
     const request: LibraryRefreshRequest = row.kind === "container" && row.node.instance && row.node.containerId
       ? { scope: "container", provider_instance: row.node.instance, container_id: row.node.containerId }
       : { scope: "items", item_ids: ids };
-    return [{ label: `Refresh all in ${rowLabel(row)}`, onSelect: () => actions.refresh(request, ids), disabled: actions.refreshBusy || ids.length === 0 }];
+    const refreshAll: LibraryMenuEntry = { label: `Refresh all in ${rowLabel(row)}`, onSelect: () => actions.refresh(request, ids), disabled: actions.refreshBusy || ids.length === 0 };
+    // A provider instance offers its token dialog where the provider can store one.
+    const tokenFamily = row.kind === "instance" && row.node.providerId ? providerFamily(providers, row.node.providerId).key : null;
+    return row.kind === "instance" && row.node.providerId && actions.credentials && (tokenFamily === "jira" || tokenFamily === "confluence")
+      ? [refreshAll, "separator", { label: "Provider token…", onSelect: () => actions.credentials?.open(row.node.providerId!) }]
+      : [refreshAll];
   };
   const openMenu = (row: Row, x: number, y: number) => {
-    if (menuEntries(row).length > 0) setMenu({ x, y, row });
+    if (menuEntries(row).length === 0) return;
+    // The token states are read when a row that depends on them is first acted on, not when the tree renders.
+    if (row.kind === "item" || row.kind === "page" || row.kind === "attachments") actions.credentials?.ensure();
+    setMenu({ x, y, row });
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-library-row]") : null;

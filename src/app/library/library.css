@@ -484,3 +484,17 @@
 /* Body (design §4.8): the header's left edge and column. The viewer's compact rules read a 12 px inset and a 16 px body padding; Library documents take the shared 24 px inset. */
 .context-viewer.is-library .context-markdown-body { max-width: calc(var(--library-column) + 2 * var(--viewer-document-inset)); padding: 20px var(--viewer-document-inset) 30px; }
 .context-viewer.is-library .context-frontmatter { max-width: var(--library-column); }
+
+/* Provider tokens dialog (design D12): one row per configured provider, with its entry form inline. */
+.library-credentials { width: min(560px, 100%); }
+.library-credentials-intro { margin: 0 0 10px; }
+.library-credentials-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.library-credentials-row { padding: 8px 0; border-top: 1px solid var(--border); }
+.library-credentials-row:first-child { border-top: 0; }
+.library-credentials-head { display: flex; min-height: 28px; align-items: center; gap: 8px; }
+.library-credentials-name { min-width: 0; overflow: hidden; color: var(--text-primary); font-size: var(--font-size-control); text-overflow: ellipsis; white-space: nowrap; }
+.library-credentials-actions { display: flex; gap: 6px; }
+.library-credentials-form { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 2px; }
+.library-credentials-form .task-setup-row { margin-bottom: 0; }
+.library-credentials-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.task-setup-check .task-setup-link { margin-left: 0; }

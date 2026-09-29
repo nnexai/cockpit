@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import type { LibraryAttachment, LibraryAttachmentRequest, LibraryItemSummary, LibraryOperation, ProjectProvider, SpaceAddAttempt, SpaceCopyRow } from "../../protocol/generated/v1";
 import type { ProviderFacts } from "../context/providerDocument";
 import { UiIcon } from "../UiIcon";
@@ -116,8 +116,12 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
     page && (version || editedDetail || updatedBy) ? [item.source_revision ? `Version ${item.source_revision}` : null, editedDetail ? `edited ${editedDetail.text}` : null, updatedBy ? `by ${updatedBy}` : null].filter(Boolean).join(" ") : null,
   ].filter(Boolean).join(" · ");
   const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded");
-  // Only Confluence pages can download; a Jira issue lists its attachments read-only (jira-cli has no download command).
-  const attachments = page ? actions.attachments : undefined;
+  // A Confluence page downloads through its CLI; a Jira issue only with a token stored in Cockpit (jira-cli has no download command).
+  const credentials = actions.credentials;
+  const jira = credentials?.attachmentAccess(item) ?? null;
+  const attachments = page || jira === "stored" ? actions.attachments : undefined;
+  const ensureCredentials = credentials?.ensure;
+  useEffect(() => { if (jira === "loading" && item.attachments.length > 0) ensureCredentials?.(); }, [jira, item.attachments.length, ensureCredentials]);
   const downloadable = downloadableAttachments(item);
   const progress = attachmentProgress(attachments?.active, item.item_id);
   // Chosen rows, for this item only; a row that stops being downloadable leaves the selection.
@@ -221,7 +225,9 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
       </div> : null}
       {item.attachments.length > 0 && attachmentsOpen ? <div className="library-attachments" id={attachmentListId}>
         <div className="library-attachments-head">
-          <span>{page ? `${downloaded.length} of ${item.attachments.length} downloaded` : "Listed from Jira; attachment files are not downloaded"}</span>
+          {jira === "needs_token" && credentials
+            ? <><span>Downloading Jira attachments needs a token stored in Cockpit</span><button type="button" className="library-button is-panel" onClick={() => credentials.open(item.provider_id ?? "")}>Provider token…</button></>
+            : <span>{page || jira === "stored" ? `${downloaded.length} of ${item.attachments.length} downloaded` : "Listed from Jira; attachment files are not downloaded"}</span>}
           <span className="context-toolbar-spacer" />
           {attachments && !narrow ? <>
             {selectedIds.length > 0 ? <button type="button" className="library-button is-panel" onClick={() => download(selectedIds)} disabled={attachments.busy}>{`Download selected (${selectedIds.length})`}</button> : null}

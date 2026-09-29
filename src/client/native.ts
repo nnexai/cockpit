@@ -28,6 +28,10 @@ import {
   parseCommentUpsert,
 } from "./commentProtocol";
 import {
+  matchProviderCredential, parseProviderCredentialClearRequest, parseProviderCredentialSetRequest,
+  parseProviderCredentialStatus, parseProviderCredentialStatusList,
+} from "./credentialProtocol";
+import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
   parseWorkspaceDefaults, parseWorkspaceDefaultsRequest,
   parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
@@ -593,6 +597,15 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
 export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channelFactory: NativeChannelFactory = defaultChannel): CockpitClient {
   return {
     projectConfiguration() { return invokeAndParse(invoke, "cockpit_project_configuration", undefined, "project configuration", parseProjectConfiguration); },
+    providerCredentials() { return invokeAndParse(invoke, "cockpit_provider_credentials", undefined, "provider credentials", parseProviderCredentialStatusList); },
+    async setProviderCredential(value) {
+      const request = parseProviderCredentialSetRequest(value);
+      return matchProviderCredential(await invokeAndParse(invoke, "cockpit_provider_credential_set", { request }, "provider credential", parseProviderCredentialStatus), request);
+    },
+    async clearProviderCredential(value) {
+      const request = parseProviderCredentialClearRequest(value);
+      return matchProviderCredential(await invokeAndParse(invoke, "cockpit_provider_credential_clear", { request }, "provider credential", parseProviderCredentialStatus), request);
+    },
     repositories() { return invokeAndParse(invoke, "cockpit_repositories", undefined, "repositories", parseRepositoryList); },
     resolveWorkspaceDefaults(value) {
       const request = parseWorkspaceDefaultsRequest(value);

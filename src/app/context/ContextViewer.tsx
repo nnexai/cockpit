@@ -57,6 +57,7 @@ import { headerSpaceAction, spaceCopyChip, type SpaceCopyActionKind } from "../l
 import { PendingPill } from "../library/StatePill";
 import { spaceAddFailure, spaceCopyActions, spaceUpdateOutcome, spaceUpdateUnconfirmed, useSpaceUpdate } from "../library/SpaceContextList";
 import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryListingState } from "../library/useLibraryOperation";
+import { useProviderCredentialActions } from "../library/useProviderCredentials";
 import { resolveContextLink } from "./linkResolver";
 import { copyText } from "../library/clipboard";
 import "./context.css";
@@ -729,6 +730,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const needsLibraryLookup = libraryChosen || Boolean(value.path && presentation?.roots.some((candidate) => candidate.root_id === rootId && candidate.kind === "companion"));
   const paneLibrary = useLibraryListing(client, viewLibrary === undefined && needsLibraryLookup);
   const library = viewLibrary ?? paneLibrary;
+  const providerCredentials = useProviderCredentialActions(client, library.providers);
   const serverLibraryRoot = library.listing?.root ?? null;
   const libraryPath = serverLibraryRoot?.path ?? "";
   const libraryRoot = useMemo<ContextRoot>(() => ({ root_id: LIBRARY_ROOT_ID, kind: "library", label: "Library", path: libraryPath, repository_id: "", checkout_path: "", companion_id: null }), [libraryPath]);
@@ -1446,6 +1448,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   };
   const libraryActions: LibraryItemActions = {
     attachments: attachmentActions,
+    credentials: providerCredentials.actions,
     open: openLibraryItem,
     refresh: startLibraryRefresh,
     remove: (item) => setLibraryConfirm({ kind: "remove", item }),
@@ -1824,6 +1827,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       </div>
       {resourcesOpen && presentation ? <ContextResources client={client} root={root} space={space} spaceListing={spaceListing} onAdd={() => setLibraryAdd("space")} onClose={() => setResourcesOpen(false)} /> : null}
       {libraryToolbarMenu ? <LibraryMenu x={libraryToolbarMenu.x} y={libraryToolbarMenu.y} label="Library actions" onDismiss={() => setLibraryToolbarMenu(null)} entries={libraryMenuEntries} /> : null}
+      {providerCredentials.dialog}
       {libraryAdd ? <AddContextDialog client={client} onClose={() => setLibraryAdd(null)} space={space}
         onOpenItem={(itemId) => { setLibraryOpenRequest(itemId); if (!isLibrary) chooseRoot(libraryRoot); }} defaultDestination={libraryAdd}
         openInSpace={companionRoot ? { companionRootId: companionRoot.root_id, open: (path) => { setResourcesOpen(false); openFile(path, null); } } : null} /> : null}

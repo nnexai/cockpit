@@ -69,6 +69,37 @@ it("lists a Jira issue's attachments read-only, with no download controls", asyn
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
+it.each(["loading", "needs_token", "stored"] as const)("gates a Jira issue's attachment downloads on the stored token (%s)", async (access) => {
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const attachments = { start: vi.fn(), open: vi.fn(), busy: false, active: null };
+  const credentials = { statuses: null, ensure: vi.fn(), open: vi.fn(), attachmentAccess: vi.fn(() => access) };
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false, attachments, credentials };
+  const issue: LibraryItemSummary = { ...page, item_id: "issue:ops1", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue", canonical_id: "OPS-1", container: { container_id: "OPS", label: "OPS" }, title: "Crash", document_path: "jira/jira.test/OPS/OPS-1/Crash.md", item_path: "jira/jira.test/OPS/OPS-1", attachments: [{ attachment_id: "10100", original_name: "trace.log", stored_name: "trace.log", media_type: "text/plain", bytes: 2048, version: null, state: "not_downloaded", relative_path: null }] };
+  const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".library-attachments button")].find((node) => node.textContent === name);
+  try {
+    await act(async () => root.render(<LibraryItemHeader item={issue} providers={[{ id: "jira", base_url: "https://jira.test", executable: "jira" }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
+    // Token states are read once the item's attachments are in view, only while they are unknown.
+    expect(credentials.ensure).toHaveBeenCalledTimes(access === "loading" ? 1 : 0);
+    await act(async () => host.querySelector<HTMLButtonElement>(".library-attachments-toggle")!.click());
+    if (access === "stored") {
+      expect(host.querySelector(".library-attachments-head")?.textContent).toContain("0 of 1 downloaded");
+      await act(async () => button("Download all")!.click());
+      expect(attachments.start).toHaveBeenCalledWith(issue, "download", ["10100"]);
+    } else {
+      expect(button("Download all")).toBeUndefined();
+      expect(host.querySelector('[aria-label="Select trace.log"]')).toBeNull();
+    }
+    if (access === "needs_token") {
+      expect(host.querySelector(".library-attachments-head")?.textContent).toContain("Downloading Jira attachments needs a token stored in Cockpit");
+      await act(async () => button("Provider token…")!.click());
+      expect(credentials.open).toHaveBeenCalledWith("jira");
+    } else {
+      expect(button("Provider token…")).toBeUndefined();
+    }
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
 it("keeps metadata-only selection local, polls an explicit download, then opens only saved bytes through SafeImage", async () => {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);

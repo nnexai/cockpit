@@ -118,6 +118,10 @@ import type {
   TerminalOwnershipState,
   TerminalStreamMessage,
   ProjectConfiguration,
+  ProviderCredentialClearRequest,
+  ProviderCredentialSetRequest,
+  ProviderCredentialStatus,
+  ProviderCredentialStatusList,
   RepositoryListResponse,
   WorkspaceDefaults, WorkspaceDefaultsRequest,
   WorkspaceSetupRequest,
@@ -290,6 +294,11 @@ export interface CockpitClient {
   browserFeedbackImage(request: BrowserFeedbackImageRequest): Promise<BrowserFeedbackImage>;
   sendBrowserFeedback(request: BrowserFeedbackSendRequest): Promise<BrowserFeedbackSendResponse>;
   projectConfiguration(): Promise<ProjectConfiguration>;
+  /** Whether a token is stored for each configured provider. Write-only: no method returns a token or username. */
+  providerCredentials(): Promise<ProviderCredentialStatusList>;
+  /** Stores or replaces a provider's token in the OS vault; resolves with the provider's new status. */
+  setProviderCredential(request: ProviderCredentialSetRequest): Promise<ProviderCredentialStatus>;
+  clearProviderCredential(request: ProviderCredentialClearRequest): Promise<ProviderCredentialStatus>;
   resolveWorkspaceDefaults(request: WorkspaceDefaultsRequest): Promise<WorkspaceDefaults>;
   repositories(): Promise<RepositoryListResponse>;
   planWorkspace(sessionId: string, request: WorkspaceSetupRequest): Promise<WorkspaceSetupPlan>;
