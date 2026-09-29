@@ -1037,3 +1037,35 @@ it.each([
     expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ download_attachments: offered }));
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
+
+it("sends the opt-in when following a Jira query with a stored token and hides it without one", async () => {
+  vi.useFakeTimers();
+  const jql = "project = OPS";
+  const saved: LibraryOperation = {
+    operation_id: "op-query-attachments", kind: "add", phases: [{ phase: "library", state: "done", done: 2, total: 2, message: null, error: null }], item_ids: ["source:ops-1"],
+    report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+  for (const stored of [false, true]) {
+    const client = {
+      projectConfiguration: vi.fn(async () => ({ ...jiraProviderConfig, limits: { library_attachment_bytes: 25 * 1024 * 1024 } })),
+      providerCredentials: vi.fn(async () => ({ providers: [{ provider_id: "jira", state: stored ? "stored" : "not_stored", kind: stored ? "bearer" : null, supported_kinds: ["bearer", "basic"] }] })),
+      libraryResolve: vi.fn(async () => ({
+        kind: "jira_query", provider_id: "jira", provider_instance: "https://jira.test/jira", title: jql, canonical_id: jql, container_label: null, existing_item_id: null, existing_follow_id: null,
+        item_count: 2, item_count_exact: true, follow_mode: "live", git_working_tree: null, file_count: null, diagnostics: [],
+      })),
+      libraryAdd: vi.fn(async () => saved),
+    } as unknown as CockpitClient;
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} />));
+      await advance(0); await typeSource(jql); await advance(450);
+      const checkbox = [...document.body.querySelectorAll<HTMLLabelElement>("label.task-setup-check")].find((label) => label.textContent?.includes("Download attachments"));
+      expect(checkbox !== undefined).toBe(stored);
+      if (checkbox) await act(async () => checkbox.querySelector("input")!.click());
+      await act(async () => dialogButton("Follow query")!.click());
+      await advance(0);
+      expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: jql, follow: true, download_attachments: stored }));
+    } finally { await act(async () => root.unmount()); host.remove(); }
+  }
+});

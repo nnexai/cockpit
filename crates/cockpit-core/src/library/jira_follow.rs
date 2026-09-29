@@ -229,11 +229,16 @@ impl LibraryService {
         query: JiraQueryInput,
         provider_id: String,
     ) -> Result<LibraryOperation, InspectionError> {
-        if request.target.is_some() || request.download_attachments {
+        if request.target.is_some() {
             return Err(error(
                 "source_capability_unavailable",
-                "A Jira query follow supports neither a Space target nor attachment downloads (jira-cli cannot download attachments)",
+                "A Jira query follow can't be added to a Space",
             ));
+        }
+        // Before any state or operation: an opt-in the provider can't honor
+        // (no stored token, unavailable vault) refuses the whole add.
+        if request.download_attachments {
+            self.sources.attachment_downloads(&provider_id, "issue").await?;
         }
         let site = self.jira_site(&provider_id)?;
         let mode = request
@@ -244,7 +249,7 @@ impl LibraryService {
             provider_id,
             provider_instance: site.provider_instance,
             source: LibraryFollowSource::JiraQuery { jql: query.jql, mode },
-            include_attachments: false,
+            include_attachments: request.download_attachments,
             item_count: 0,
             partial: None,
             excluded_ids: vec![],
@@ -409,6 +414,7 @@ impl LibraryService {
                         record.excluded_ids.clear();
                         record.source = created.source.clone();
                         record.reference_depth = created.reference_depth;
+                        record.include_attachments = created.include_attachments;
                     }
                     None => index.follows.push(created),
                 }
@@ -456,6 +462,32 @@ impl LibraryService {
             }
         }
 
+        // Attachments stay with a follow that asked for them, for as long as the
+        // provider can download them (a token stored in Cockpit). Otherwise the
+        // text still refreshes and the report says why the files did not.
+        let mut download = false;
+        if follow.include_attachments {
+            match self.sources.attachment_downloads(&follow.provider_id, "issue").await {
+                Ok(()) => download = true,
+                Err(failure) => {
+                    let why = match failure.code.as_str() {
+                        "source_credential_required" => "attachments need a token stored in Cockpit for this Jira site",
+                        "credential_vault_unavailable" | "credential_vault_timeout" => {
+                            "the credential vault is unavailable"
+                        }
+                        _ => "the provider cannot download attachments",
+                    };
+                    operations::follow_row(
+                        store,
+                        operation,
+                        &follow,
+                        LibraryReportOutcome::Partial,
+                        Some(format!("Attachments were not downloaded: {why}")),
+                    )?;
+                }
+            }
+        }
+
         // 4. Pending work.
         let mut unchanged = 0;
         let mut pending = Vec::new();
@@ -465,6 +497,13 @@ impl LibraryService {
                 None => None,
                 Some(old) => match change_reason(old, row, snapshot.depth) {
                     Some(reason) => Some(reason.to_owned()),
+                    None if download
+                        && old.summary.attachments.iter().any(|a| {
+                            matches!(a.state, LibraryAttachmentState::NotDownloaded | LibraryAttachmentState::Failed)
+                        }) =>
+                    {
+                        Some("attachments requested".to_owned())
+                    }
                     None => {
                         unchanged += 1;
                         continue;
@@ -531,7 +570,7 @@ impl LibraryService {
                     cancelled = true;
                     break;
                 }
-                if self.save_issue_result(store, operation, &follow, job, result).await? {
+                if self.save_issue_result(store, operation, &follow, job, result, download).await? {
                     failures += 1;
                 }
             }
@@ -841,6 +880,7 @@ impl LibraryService {
         follow: &LibraryFollowSummary,
         job: &FetchWork<Pending>,
         result: Result<crate::sources::SourceAsset, InspectionError>,
+        download: bool,
     ) -> Result<bool, InspectionError> {
         let pending = &job.tag;
         if operations::cancelled(store, operation)? {
@@ -858,6 +898,7 @@ impl LibraryService {
                         reference: Some(LibraryItemRef::Follow { follow_id: follow.follow_id.clone() }),
                         reason: pending.reason.clone(),
                         issue_row: pending.row.as_ref(),
+                        download_all: download,
                         ..SaveOptions::default()
                     },
                 )
@@ -1477,6 +1518,198 @@ mod tests {
         assert_eq!(items["OPS-1"].attachments[0].state, LibraryAttachmentState::Downloaded);
         assert_eq!(items["OPS-2"].attachments[0].state, LibraryAttachmentState::NotDownloaded);
         assert_eq!(f.provider.site().downloads, [("OPS-1".to_owned(), "10100".to_owned(), 6, 1, 0)]);
+    }
+
+    fn follow_request(jql: &str, download: bool) -> LibraryAddRequest {
+        LibraryAddRequest {
+            input: jql.into(),
+            provider_id: Some("jira".into()),
+            reference_depth: 0,
+            follow: true,
+            follow_mode: Some(LibraryFollowMode::Live),
+            download_attachments: download,
+            refresh_existing: false,
+            label: None,
+            target: None,
+        }
+    }
+    async fn follow_downloading(service: &LibraryService, jql: &str) -> String {
+        let operation = finished(service, service.start_add(follow_request(jql, true)).await.unwrap()).await;
+        assert!(matches!(operation.phases[0].state, LibraryPhaseState::Done | LibraryPhaseState::Partial), "{operation:?}");
+        let listing = service.listing(None).await.unwrap();
+        listing.follows.into_iter().find(|follow| refs::follow_title(follow) == jql).unwrap().follow_id
+    }
+    fn stored(service: &LibraryService, item: &LibraryItemSummary, index: usize) -> Option<Vec<u8>> {
+        let root = std::path::Path::new(&service.configuration.library_root);
+        let path = item.attachments[index].relative_path.as_deref()?;
+        std::fs::read(root.join(&item.item_path).join(path)).ok()
+    }
+    fn downloaded(f: &Fixture) -> Vec<(String, String)> {
+        std::mem::take(&mut f.provider.site().downloads).into_iter().map(|d| (d.0, d.1)).collect()
+    }
+
+    #[tokio::test]
+    async fn a_follow_that_opts_in_persists_it_and_downloads_new_issues_within_the_budget() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1", "OPS-2"]);
+        f.provider.attach("OPS-1", 1, "10100", "trace.log", 6);
+        f.provider.attach("OPS-2", 2, "20200", "big.bin", 26 * 1024 * 1024);
+        let id = follow_downloading(service, OPS).await;
+
+        assert!(record(service, &id).await.include_attachments);
+        let items = issues(service).await;
+        assert_eq!(items["OPS-1"].attachments[0].state, LibraryAttachmentState::Downloaded);
+        assert_eq!(stored(service, &items["OPS-1"], 0).as_deref(), Some(&b"xxxxxx"[..]));
+        // Over the per-file budget: recorded, never requested from the provider.
+        assert_eq!(items["OPS-2"].attachments[0].state, LibraryAttachmentState::OverLimit);
+        // One exact file per request: its own size, no siblings.
+        assert_eq!(f.provider.site().downloads, [("OPS-1".to_owned(), "10100".to_owned(), 6, 1, 0)]);
+
+        // Following without the opt-in keeps the default and downloads nothing.
+        f.provider.set("status = Open", &["OPS-3"]);
+        f.provider.attach("OPS-3", 3, "30300", "plain.log", 6);
+        let (_, plain) = follow(service, "status = Open", LibraryFollowMode::Live).await;
+        assert!(!record(service, &plain).await.include_attachments);
+        assert_eq!(issues(service).await["OPS-3"].attachments[0].state, LibraryAttachmentState::NotDownloaded);
+        assert_eq!(f.provider.site().downloads.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_downloads_only_new_or_changed_attachments() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1", "OPS-2"]);
+        f.provider.attach("OPS-1", 1, "10100", "trace.log", 6);
+        let id = follow_downloading(service, OPS).await;
+        assert_eq!(downloaded(&f), [("OPS-1".to_owned(), "10100".to_owned())]);
+
+        // Nothing moved: nothing is fetched or downloaded again.
+        f.provider.take_fetched();
+        let report = refresh(service, &id).await;
+        assert_eq!((report.updated, report.new, report.unchanged), (0, 0, 2), "{report:?}");
+        assert!(f.provider.take_fetched().is_empty() && downloaded(&f).is_empty());
+
+        // A new attachment on OPS-1 and one on an issue that had none: only those two download.
+        f.provider.attach("OPS-1", 5, "10101", "more.log", 6);
+        f.provider.attach("OPS-2", 6, "20200", "shot.log", 6);
+        let report = refresh(service, &id).await;
+        assert_eq!(report.updated, 2, "{report:?}");
+        assert_eq!(
+            downloaded(&f),
+            [("OPS-1".to_owned(), "10101".to_owned()), ("OPS-2".to_owned(), "20200".to_owned())]
+        );
+        let items = issues(service).await;
+        assert!(items["OPS-1"].attachments.iter().all(|a| a.state == LibraryAttachmentState::Downloaded));
+        assert_eq!(stored(service, &items["OPS-1"], 0).as_deref(), Some(&b"xxxxxx"[..]));
+
+        // A changed attachment (new size) downloads again; its neighbor is copied, not fetched.
+        {
+            let mut site = f.provider.site();
+            let issue = site.issues.get_mut("OPS-1").unwrap();
+            issue.minute = 7;
+            issue.attachments[1].size = Some(8);
+        }
+        refresh(service, &id).await;
+        assert_eq!(downloaded(&f), [("OPS-1".to_owned(), "10101".to_owned())]);
+        let items = issues(service).await;
+        assert_eq!(stored(service, &items["OPS-1"], 1).as_deref(), Some(&b"xxxxxxxx"[..]));
+        assert_eq!(stored(service, &items["OPS-1"], 0).as_deref(), Some(&b"xxxxxx"[..]));
+    }
+
+    #[tokio::test]
+    async fn attachments_pending_on_unchanged_issues_download_once_the_provider_allows_it() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1"]);
+        f.provider.attach("OPS-1", 1, "10100", "trace.log", 6);
+        // The plain follow saved the issue with its attachment not downloaded.
+        follow(service, OPS, LibraryFollowMode::Live).await;
+        assert!(downloaded(&f).is_empty());
+
+        // Following the same query again with the opt-in updates the record and
+        // downloads for the issue although it did not change at the source.
+        f.provider.site().download_gate = Some("source_credential_required");
+        assert_eq!(
+            service.start_add(follow_request(OPS, true)).await.unwrap_err().code,
+            "source_credential_required"
+        );
+        f.provider.site().download_gate = None;
+        let id = follow_downloading(service, OPS).await;
+        assert!(record(service, &id).await.include_attachments);
+        assert_eq!(downloaded(&f), [("OPS-1".to_owned(), "10100".to_owned())]);
+        assert_eq!(issues(service).await["OPS-1"].attachments[0].state, LibraryAttachmentState::Downloaded);
+
+        // The token goes away: the text still refreshes, the report says why the
+        // file did not, and nothing is lost.
+        f.provider.site().download_gate = Some("source_credential_required");
+        f.provider.attach("OPS-1", 5, "10101", "more.log", 6);
+        let report = refresh(service, &id).await;
+        assert_eq!((report.updated, report.partial), (1, 1), "{report:?}");
+        let note = report.rows.iter().find_map(|row| row.reason.clone().filter(|r| r.starts_with("Attachments were not downloaded"))).unwrap();
+        assert!(note.contains("token stored in Cockpit"), "{note}");
+        assert!(downloaded(&f).is_empty());
+        let items = issues(service).await;
+        assert_eq!(items["OPS-1"].attachments[0].state, LibraryAttachmentState::Downloaded);
+        assert_eq!(items["OPS-1"].attachments[1].state, LibraryAttachmentState::NotDownloaded);
+
+        // Once the token is back, the next refresh downloads what was pending although the issue is unchanged.
+        f.provider.site().download_gate = None;
+        f.provider.take_fetched();
+        refresh(service, &id).await;
+        assert_eq!(downloaded(&f), [("OPS-1".to_owned(), "10101".to_owned())]);
+        assert!(issues(service).await["OPS-1"].attachments.iter().all(|a| a.state == LibraryAttachmentState::Downloaded));
+    }
+
+    #[tokio::test]
+    async fn a_refused_opt_in_leaves_no_follow_item_or_operation() {
+        for code in ["source_credential_required", "credential_vault_unavailable", "source_capability_unavailable"] {
+            let f = fixture();
+            let service = &f.base.service;
+            f.provider.set(OPS, &["OPS-1"]);
+            f.provider.attach("OPS-1", 1, "10100", "trace.log", 6);
+            f.provider.site().download_gate = Some(code);
+
+            assert_eq!(service.start_add(follow_request(OPS, true)).await.unwrap_err().code, code);
+            let listing = service.listing(None).await.unwrap();
+            assert!(listing.follows.is_empty() && listing.items.is_empty());
+            let operations = std::fs::read_dir(std::path::Path::new(&service.configuration.library_root).join(".cockpit/operations"));
+            assert!(operations.map_or(true, |mut entries| entries.next().is_none()));
+            let site = f.provider.site();
+            assert!(site.downloads.is_empty() && site.fetched.is_empty() && site.log.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_shared_issue_keeps_its_files_for_a_follow_that_does_not_download_and_they_go_with_the_item() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1"]);
+        f.provider.set("status = Open", &["OPS-1"]);
+        f.provider.attach("OPS-1", 1, "10100", "trace.log", 6);
+        let a = follow_downloading(service, OPS).await;
+        let (_, b) = follow(service, "status = Open", LibraryFollowMode::Live).await;
+        assert!(!record(service, &b).await.include_attachments);
+        let item = issues(service).await["OPS-1"].clone();
+        let root = std::path::Path::new(&service.configuration.library_root);
+        let file = root.join(&item.item_path).join(item.attachments[0].relative_path.as_deref().unwrap());
+        assert!(file.exists());
+
+        // The issue changes; the non-downloading follow saves the new revision and keeps the file.
+        f.provider.touch("OPS-1", 5);
+        let report = refresh(service, &b).await;
+        assert_eq!(report.updated, 1, "{report:?}");
+        let item = issues(service).await["OPS-1"].clone();
+        assert_eq!(item.attachments[0].state, LibraryAttachmentState::Downloaded);
+        assert!(file.exists());
+        assert!(downloaded(&f).len() == 1);
+
+        // Stopping one follow keeps the item and its file; removing the last one removes both.
+        service.remove(LibraryRemoveRequest::Follow { follow_id: a }).await.unwrap();
+        assert!(file.exists() && issues(service).await.contains_key("OPS-1"));
+        service.remove(LibraryRemoveRequest::Follow { follow_id: b }).await.unwrap();
+        assert!(issues(service).await.is_empty());
+        assert!(!file.exists() && !root.join(&item.item_path).exists());
     }
 
     fn reason_of(item: &LibraryItemSummary, follow_id: &str) -> Option<(String, String, u32)> {
