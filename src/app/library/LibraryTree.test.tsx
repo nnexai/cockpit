@@ -418,5 +418,34 @@ it("offers Provider token… on a Jira or Confluence instance row, opens it for 
     await rightClick(rows().find((row) => row.dataset.libraryRow === "source:ops-1")!);
     await act(async () => menuItem("Download attachments")!.click());
     expect(attachments.start).toHaveBeenCalledWith(issue, "download", ["1"]);
+    // While the token states are still loading, the menu still opens (asking for them) with the download disabled.
+    await act(async () => { document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })); });
+    credentials.attachmentAccess.mockReturnValue("loading" as never);
+    credentials.ensure.mockClear();
+    await rightClick(rows().find((row) => row.dataset.libraryRow === "source:ops-1")!);
+    expect(credentials.ensure).toHaveBeenCalledTimes(1);
+    expect(menuItem("Download attachments")?.disabled).toBe(true);
   } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it("lists a Jira issue's attachments under an Attachments group, and leaves an issue without attachments a plain row", async () => {
+  const jira: ProjectProvider[] = [{ id: "jira", base_url: "https://jira.test", executable: "jira" }];
+  const issue = (key: string, attachments: LibraryItemSummary["attachments"]) => page({
+    item_id: `issue:${key}`, provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue", canonical_id: key, container: { container_id: "OPS", label: "OPS" },
+    title: key, document_path: `jira/jira.test/OPS/${key}/${key}.md`, item_path: `jira/jira.test/OPS/${key}`, attachments,
+  });
+  const file = { attachment_id: "1", original_name: "trace.log", stored_name: "trace.log", media_type: null, bytes: 2048, version: null, state: "not_downloaded" as const, relative_path: null };
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const labels = () => [...host.querySelectorAll<HTMLElement>("[data-library-row]")].map((row) => row.querySelector(".context-tree-name")?.textContent);
+  try {
+    await act(async () => root.render(<LibraryTree items={[issue("OPS-2", []), issue("OPS-1", [file])]} providers={jira} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    // The issue with attachments gets its group right after it; the other stays a leaf.
+    expect(labels().slice(2)).toEqual(["OPS-2", "OPS-1", "Attachments"]);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
 });

@@ -76,6 +76,8 @@ export function attachmentMenuEntries(item: LibraryItemSummary, attachments: Lib
   // A Jira issue downloads only with a token stored in Cockpit; without one its menu says so and opens the token dialog.
   const jira = credentials?.attachmentAccess(item) ?? null;
   if (jira === "needs_token") return [{ label: "Store a token to download attachments…", onSelect: () => credentials?.open(item.provider_id ?? "") }];
+  // Token states are still being read (openMenu asks for them): show the entry disabled until they arrive.
+  if (jira === "loading") return [{ label: "Download attachments", onSelect: () => {}, disabled: true }];
   if (!isConfluencePage(item) && jira !== "stored") return [];
   const downloadable = downloadableAttachments(item);
   const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded");
@@ -310,7 +312,8 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
         visible.push({ kind: "container", key: container.key, depth: 1, parent: instance.key, node: container, open: containerOpen });
         if (!containerOpen) continue;
         if (container.items.every(isConfluencePage)) pushPages(pageForest(container), 2, container.key);
-        else for (const item of container.items) visible.push({ kind: "item", key: item.item_id, depth: 2, parent: container.key, item });
+        // Other issues are leaf rows, but one with attachments gets the same `Attachments (N)` group as a page.
+        else pushPages(container.items.map((item) => ({ key: item.item_id, title: item.title, item, folder: false, children: [] })), 2, container.key);
       }
     }
     return visible;
@@ -379,9 +382,9 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
       : [refreshAll];
   };
   const openMenu = (row: Row, x: number, y: number) => {
-    if (menuEntries(row).length === 0) return;
     // The token states are read when a row that depends on them is first acted on, not when the tree renders.
     if (row.kind === "item" || row.kind === "page" || row.kind === "attachments") actions.credentials?.ensure();
+    if (menuEntries(row).length === 0) return;
     setMenu({ x, y, row });
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
