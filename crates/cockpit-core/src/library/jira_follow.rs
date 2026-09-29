@@ -891,7 +891,7 @@ impl LibraryService {
 mod tests {
     use super::super::tests::{self as base, finished};
     use super::*;
-    use crate::sources::{SourceAsset, SourceContainer, SourceFetchRequest, SourceProvider, SourceService};
+    use crate::sources::{AttachmentRef, DownloadedAttachment, SourceAsset, SourceContainer, SourceFetchRequest, SourceProvider, SourceService};
     use async_trait::async_trait;
     use cockpit_protocol::{projects::ProjectProvider, sources::SourceCapability};
     use std::sync::Mutex;
@@ -918,6 +918,10 @@ mod tests {
         broken: BTreeSet<String>,
         log: Vec<String>,
         fetched: Vec<String>,
+        /// The error code `attachment_downloads` answers; `None` answers Ok.
+        download_gate: Option<&'static str>,
+        /// (issue key, attachment id, budget bytes, budget max_files, sibling count) per download.
+        downloads: Vec<(String, String, u64, usize, usize)>,
     }
     struct FakeIssues(Mutex<Site>);
     impl FakeIssues {
@@ -1046,6 +1050,27 @@ mod tests {
                 fields: vec![],
                 attachments: issue.attachments,
             }])
+        }
+        async fn attachment_downloads(&self, resource_type: &str) -> Result<(), InspectionError> {
+            assert_eq!(resource_type, "issue");
+            match self.site().download_gate {
+                None => Ok(()),
+                Some(code) => Err(error(code, "attachment downloads are not available")),
+            }
+        }
+        async fn download_attachment(
+            &self,
+            canonical_id: &str,
+            attachment: &AttachmentRef,
+            siblings: &[AttachmentRef],
+            dest: &cap_std::fs::Dir,
+            _dest_path: &std::path::Path,
+            budget: crate::process::StagingBudget,
+        ) -> Result<DownloadedAttachment, InspectionError> {
+            let size = attachment.bytes.unwrap();
+            self.site().downloads.push((canonical_id.into(), attachment.id.clone(), budget.bytes, budget.max_files, siblings.len()));
+            dest.write("download", vec![b'x'; size as usize]).unwrap();
+            Ok(DownloadedAttachment { attachment_id: attachment.id.clone(), file_name: "download".into() })
         }
     }
 
@@ -1368,10 +1393,90 @@ mod tests {
         assert_eq!(report.updated, 1, "{report:?}");
         let names: Vec<_> = issues(service).await["OPS-1"].attachments.iter().map(|a| a.original_name.clone()).collect();
         assert_eq!(names, ["trace.log", "shot.png"]);
+    }
 
-        // jira-cli cannot fetch attachment bytes, so a download request is refused, never faked.
-        let request = LibraryAttachmentRequest { item_id: item.item_id.clone(), attachment_ids: vec!["10100".into()], action: LibraryAttachmentAction::Download };
-        assert_eq!(service.start_attachments(request).await.unwrap_err().code, "source_capability_unavailable");
+    async fn download_one(service: &LibraryService, item: &LibraryItemSummary, id: &str) -> Result<LibraryOperation, InspectionError> {
+        let request = LibraryAttachmentRequest { item_id: item.item_id.clone(), attachment_ids: vec![id.into()], action: LibraryAttachmentAction::Download };
+        Ok(finished(service, service.start_attachments(request).await?).await)
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_allows_downloads_stores_exactly_the_requested_issue_attachment() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1"]);
+        f.provider.attach("OPS-1", 1, "10100", "trace.log", 6);
+        f.provider.attach("OPS-1", 1, "10101", "trace-2.log", 6);
+        follow(service, OPS, LibraryFollowMode::Live).await;
+        let item = issues(service).await["OPS-1"].clone();
+
+        let operation = download_one(service, &item, "10100").await.unwrap();
+        assert_eq!(operation.phases[0].state, LibraryPhaseState::Done, "{operation:?}");
+        let item = issues(service).await["OPS-1"].clone();
+        assert_eq!(item.attachments[0].state, LibraryAttachmentState::Downloaded);
+        assert_eq!(item.attachments[1].state, LibraryAttachmentState::NotDownloaded);
+        let root = std::path::Path::new(&service.configuration.library_root);
+        let stored = root.join(&item.item_path).join(item.attachments[0].relative_path.as_deref().unwrap());
+        assert_eq!(std::fs::read(stored).unwrap(), b"xxxxxx");
+        // The prediction is exactly that attachment: one file, its own size, no siblings.
+        assert_eq!(f.provider.site().downloads, [("OPS-1".to_owned(), "10100".to_owned(), 6, 1, 0)]);
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_refuses_downloads_is_refused_before_any_operation_or_download() {
+        for code in ["source_credential_required", "credential_vault_unavailable", "source_capability_unavailable"] {
+            let f = fixture();
+            let service = &f.base.service;
+            f.provider.set(OPS, &["OPS-1"]);
+            f.provider.attach("OPS-1", 1, "10100", "trace.log", 6);
+            follow(service, OPS, LibraryFollowMode::Live).await;
+            let item = issues(service).await["OPS-1"].clone();
+            f.provider.site().download_gate = Some(code);
+
+            assert_eq!(download_one(service, &item, "10100").await.unwrap_err().code, code);
+            let add = LibraryAddRequest {
+                input: format!("{BASE}/browse/OPS-1"),
+                provider_id: Some("jira".into()),
+                reference_depth: 0,
+                follow: false,
+                follow_mode: None,
+                download_attachments: true,
+                refresh_existing: false,
+                label: None,
+                target: None,
+            };
+            assert_eq!(service.start_add(add).await.unwrap_err().code, code);
+            assert!(f.provider.site().downloads.is_empty());
+            let item = issues(service).await["OPS-1"].clone();
+            assert_eq!(item.attachments[0].state, LibraryAttachmentState::NotDownloaded);
+        }
+    }
+
+    #[tokio::test]
+    async fn add_with_downloads_downloads_the_primary_issue_only() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.mention("OPS-1", 1, "See OPS-2 for details");
+        f.provider.attach("OPS-1", 1, "10100", "trace.log", 6);
+        f.provider.attach("OPS-2", 2, "20200", "other.log", 6);
+        let add = LibraryAddRequest {
+            input: format!("{BASE}/browse/OPS-1"),
+            provider_id: Some("jira".into()),
+            reference_depth: 1,
+            follow: false,
+            follow_mode: None,
+            download_attachments: true,
+            refresh_existing: false,
+            label: None,
+            target: None,
+        };
+        let operation = finished(service, service.start_add(add).await.unwrap()).await;
+        assert_eq!(operation.phases[0].state, LibraryPhaseState::Done, "{operation:?}");
+        let items = issues(service).await;
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert_eq!(items["OPS-1"].attachments[0].state, LibraryAttachmentState::Downloaded);
+        assert_eq!(items["OPS-2"].attachments[0].state, LibraryAttachmentState::NotDownloaded);
+        assert_eq!(f.provider.site().downloads, [("OPS-1".to_owned(), "10100".to_owned(), 6, 1, 0)]);
     }
 
     fn reason_of(item: &LibraryItemSummary, follow_id: &str) -> Option<(String, String, u32)> {

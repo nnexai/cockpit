@@ -9,7 +9,7 @@ use std::{collections::BTreeSet, io::{Read, Write}, path::Path, sync::Arc};
 
 fn io(e: std::io::Error) -> InspectionError { error("library_unavailable", e.to_string()) }
 fn unsafe_download() -> InspectionError {
-    error("source_capability_unavailable", "this confluence-cli version cannot download attachments safely")
+    error("source_capability_unavailable", "the provider cannot download attachments safely")
 }
 fn single(name: &str) -> bool {
     !name.is_empty() && name.len() <= 255 && !name.contains(['/', '\\'])
@@ -90,9 +90,8 @@ impl LibraryService {
         let lease = store.lease(&request.item_id)?;
         let old = self.entry(&store, &request.item_id)?.ok_or_else(|| error("library_item_not_found", "Library item does not exist"))?;
         let provider = old.summary.provider_id.as_deref().unwrap_or_default();
-        if old.summary.resource_type.as_deref() != Some("page") || !self.configuration.providers.iter().any(|p| p.id == provider && crate::repositories::is_confluence_executable(&p.executable)) {
-            return Err(error("source_capability_unavailable", "Only Confluence pages support attachment downloads"));
-        }
+        let resource_type = old.summary.resource_type.as_deref().unwrap_or_default();
+        self.sources.attachment_downloads(provider, resource_type).await?;
         let mut selected = BTreeSet::new();
         if request.attachment_ids.is_empty() || request.attachment_ids.len() > 256 || request.attachment_ids.iter().any(|id| !selected.insert(id) || !old.summary.attachments.iter().any(|a| &a.attachment_id == id)) {
             return Err(error("source_provider_contract", "Select existing, distinct attachment ids"));
@@ -195,12 +194,19 @@ impl LibraryService {
                 failures.push(format!("{}: over limit", a.title));
                 continue;
             }
-            let pattern = confluence_attachment_pattern(&a.title);
-            let mut matches = refs.iter().filter(|r| confluence_glob_matches(&pattern, &r.title));
+            // Only Confluence pages have filename-glob siblings; any other
+            // download is exactly this one attachment.
+            let page = asset.source.resource_type == "page";
+            let matched: Vec<&AttachmentRef> = if page {
+                let pattern = confluence_attachment_pattern(&a.title);
+                refs.iter().filter(|r| confluence_glob_matches(&pattern, &r.title)).collect()
+            } else {
+                vec![&refs[index]]
+            };
             // Unknown sizes reserve the full per-file allowance. Checked
             // addition refuses overflowing match sets rather than truncating
             // the allowance passed to the in-flight monitor.
-            let budget = matches.try_fold(crate::process::StagingBudget { bytes: 0, max_files: 0 }, |budget, r| {
+            let budget = matched.into_iter().try_fold(crate::process::StagingBudget { bytes: 0, max_files: 0 }, |budget, r| {
                 Some(crate::process::StagingBudget {
                     bytes: budget.bytes.checked_add(r.bytes.unwrap_or(per_file))?,
                     max_files: budget.max_files + 1,
@@ -221,7 +227,7 @@ impl LibraryService {
             rustix::fs::mkdirat(&downloads.dir, &dl, rustix::fs::Mode::from_raw_mode(0o700)).map_err(|e| io(e.into()))?;
             let dest = downloads.dir.open_dir_nofollow(&dl).map_err(io)?;
             let dest_path = store.path.join(".cockpit/staging").join(&downloads.name).join(&dl);
-            let siblings: Vec<_> = refs.iter().filter(|r| r.id != a.id).cloned().collect();
+            let siblings: Vec<_> = refs.iter().filter(|r| page && r.id != a.id).cloned().collect();
             let result = tokio::select! {
                 biased;
                 cancelled = wait_for_cancellation(store, operation) => {

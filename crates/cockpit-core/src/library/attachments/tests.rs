@@ -54,6 +54,9 @@ impl SourceProvider for Provider {
         Ok(SpacePageListing { space_name: "Software Development".into(), homepage_id: Some(self.page_id.clone()), total: Some(1), complete: true,
             pages: vec![SpacePage { page_id: self.page_id.clone(), title: "Release checklist".into(), version: self.version.load(Ordering::SeqCst) as u64, ancestors: vec![], position: None }] })
     }
+    async fn attachment_downloads(&self, resource_type: &str) -> Result<(), InspectionError> {
+        if resource_type == "page" { Ok(()) } else { Err(error("source_capability_unavailable", "not a page")) }
+    }
     async fn download_attachment(&self, _: &str, a: &AttachmentRef, _: &[AttachmentRef], dest: &Dir, dest_path: &Path, _budget: crate::process::StagingBudget) -> Result<DownloadedAttachment, InspectionError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         assert!(dest_path.is_absolute());

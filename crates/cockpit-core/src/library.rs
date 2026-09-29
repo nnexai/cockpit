@@ -416,15 +416,15 @@ impl LibraryService {
         }
         if folder::recognizes(&request.input) {
             if request.download_attachments {
-                return Err(error("source_capability_unavailable", "Only Confluence pages support attachment downloads"));
+                return Err(error("source_capability_unavailable", "Folders do not support attachment downloads"));
             }
             return self.start_folder_add(request).await;
         }
         let page_request = self
             .confluence_request(&request.input, request.provider_id.as_deref())
             .await?;
-        if request.download_attachments && page_request.is_none() {
-            return Err(error("source_capability_unavailable", "Only Confluence pages support attachment downloads"));
+        if let Some((_, fetch)) = page_request.as_ref().filter(|_| request.download_attachments) {
+            self.sources.attachment_downloads(&fetch.provider_id, "page").await?;
         }
         if page_request.is_some() && request.reference_depth > 0 {
             return Err(error(
@@ -445,6 +445,9 @@ impl LibraryService {
         } else {
             let fetch = self.request(&request.input, request.provider_id.as_deref())?;
             let artifact = resolve_artifact(&self.configuration, &fetch.artifact_url)?;
+            if request.download_attachments {
+                self.sources.attachment_downloads(&fetch.provider_id, &artifact.kind).await?;
+            }
             let primary_id = item_id(&SourceRef {
                 provider_id: fetch.provider_id.clone(),
                 provider_instance: fetch.authority.provider_instance.clone(),
@@ -518,7 +521,7 @@ impl LibraryService {
                 service.save_asset_with(&worker_store, &id, asset, old, SaveOptions {
                     target: request.target.as_ref(),
                     reference: Some(LibraryItemRef::Manual),
-                    download_all: request.download_attachments,
+                    download_all: request.download_attachments && asset_id == primary_id,
                     ..SaveOptions::default()
                 }).await?;
             }
@@ -1052,7 +1055,9 @@ impl LibraryService {
                 return self.record_conflict(store, operation, old.clone(), e.message);
             }
         }
-        let prepared = if is_confluence {
+        // Any provider's attachments go through the same staging; the download
+        // gate (`SourceService::attachment_downloads`) decides who may download.
+        let prepared = if is_confluence || !asset.attachments.is_empty() {
             let Some(prepared) = self.prepare_attachments(store, operation, &mut asset, old.as_ref(), download_all, attachment_request, confirmed).await? else {
                 return Ok(());
             };
