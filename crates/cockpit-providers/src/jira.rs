@@ -12,11 +12,12 @@ use cockpit_core::credentials::{ProviderCredential, ProviderCredentials};
 use cockpit_core::jira_query::{
     format_wall_minute, instant_seconds, is_normalized_jql, wall_minute,
 };
-use cockpit_core::process::run_bounded_command;
+use cockpit_core::process::{StagingBudget, run_bounded_command};
 use cockpit_core::repositories::{is_jira_key, resolve_jira_url};
 use cockpit_core::sources::{
-    FrontmatterField, FrontmatterValue, IssueListing, IssueQuery, IssueRow, SourceAsset,
-    SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    AttachmentRef, DownloadedAttachment, FrontmatterField, FrontmatterValue, IssueListing,
+    IssueQuery, IssueRow, SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata,
+    SourceProvider, SourceRef,
 };
 use cockpit_protocol::credentials::ProviderAuthKind;
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, ProjectProvider};
@@ -26,7 +27,10 @@ use tokio::process::Command;
 use url::Url;
 
 use crate::CredentialHandle;
-use crate::jira_attachments::{issue_attachments, partial_diagnostic};
+use crate::jira_attachments::{
+    AttachmentDownloader, DOWNLOADED_NAME, issue_attachments, partial_diagnostic,
+    valid_attachment_id,
+};
 use crate::jira_wiki::wiki_to_markdown;
 
 const MAX_ISSUE_BYTES: usize = 1024 * 1024;
@@ -52,6 +56,7 @@ pub struct JiraSourceProvider {
     base_url: Url,
     limits: (usize, Duration),
     credentials: CredentialHandle,
+    downloader: AttachmentDownloader,
 }
 
 impl JiraSourceProvider {
@@ -84,13 +89,15 @@ impl JiraSourceProvider {
                 "Jira site URL must be credential-free HTTP(S)",
             ));
         }
+        let limits = (
+            (configuration.limits.git_output_bytes as usize).max(64 * 1024),
+            Duration::from_millis(configuration.limits.operation_timeout_ms as u64),
+        );
         Ok(Self {
             provider: provider.clone(),
+            downloader: AttachmentDownloader::new(base_url.clone(), limits.1),
             base_url,
-            limits: (
-                (configuration.limits.git_output_bytes as usize).max(64 * 1024),
-                Duration::from_millis(configuration.limits.operation_timeout_ms as u64),
-            ),
+            limits,
             credentials: CredentialHandle::none(),
         })
     }
@@ -454,6 +461,42 @@ impl SourceProvider for JiraSourceProvider {
             }
             IssueQuery::Keys(keys) => self.list_keys(keys, max, cancel).await,
         }
+    }
+
+    async fn attachment_downloads(&self, resource_type: &str) -> Result<(), InspectionError> {
+        if resource_type != "issue" {
+            return Err(InspectionError::new(
+                "source_capability_unavailable",
+                "selected source provider does not support this operation",
+            ));
+        }
+        // No CLI login can fetch bytes, so a missing token or vault is final.
+        self.credentials.0.required(&self.provider.id).await.map(|_| ())
+    }
+
+    async fn download_attachment(
+        &self,
+        canonical_id: &str,
+        attachment: &AttachmentRef,
+        _siblings: &[AttachmentRef],
+        dest: &cap_std::fs::Dir,
+        _dest_path: &Path,
+        budget: StagingBudget,
+    ) -> Result<DownloadedAttachment, InspectionError> {
+        if !is_jira_key(canonical_id) || !valid_attachment_id(&attachment.id) {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "Jira attachment download needs a valid issue key and attachment id",
+            ));
+        }
+        let credential = self.credentials.0.required(&self.provider.id).await?;
+        self.downloader
+            .download(&credential.authorization(), attachment, budget.bytes, dest)
+            .await?;
+        Ok(DownloadedAttachment {
+            attachment_id: attachment.id.clone(),
+            file_name: DOWNLOADED_NAME.into(),
+        })
     }
 }
 

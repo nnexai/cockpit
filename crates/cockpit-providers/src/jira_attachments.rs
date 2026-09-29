@@ -1,8 +1,15 @@
-//! Attachment metadata from a Jira work item's raw API record.
+//! Attachments of a Jira work item: metadata from its raw API record, and
+//! bytes fetched natively.
 //!
-//! jira-cli 1.7.0 has no attachment command, so Cockpit lists what
-//! `fields.attachment[]` reports (name, size, media type, content link) and
-//! never downloads the bytes.
+//! jira-cli 1.7.0 has no attachment command, so the listing is what
+//! `fields.attachment[]` reports (name, size, media type, content link).
+//! Bytes are downloaded only on request, by Cockpit's own HTTP client with
+//! the token stored in its OS vault (`download`); with no stored token they
+//! stay "not requested".
+
+mod download;
+
+pub(crate) use download::{AttachmentDownloader, DOWNLOADED_NAME};
 
 use cockpit_core::sources::SourceAttachment;
 use cockpit_protocol::projects::ProjectDiagnostic;
@@ -41,13 +48,18 @@ pub(crate) fn partial_diagnostic() -> ProjectDiagnostic {
     }
 }
 
+/// Ids are interpolated into a request path, so only short alphanumerics pass.
+pub(crate) fn valid_attachment_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
 fn attachment(item: &Value, site: &Url) -> Option<SourceAttachment> {
     let id = match item.get("id")? {
         Value::String(id) => id.clone(),
         Value::Number(id) => id.to_string(),
         _ => return None,
     };
-    if id.is_empty() || id.len() > 64 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+    if !valid_attachment_id(&id) {
         return None;
     }
     let title = item.get("filename")?.as_str()?;
