@@ -1,0 +1,20 @@
+[package]
+name = "cockpit-secrets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cockpit-core = { path = "../cockpit-core" }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+keyring-core.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[lints]
+workspace = true
