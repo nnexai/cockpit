@@ -1,10 +1,13 @@
+use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
+use cockpit_core::credentials::ProviderCredentials;
 use cockpit_core::sources::{SourceAsset, SourceFetchRequest, SourceProvider};
-use cockpit_protocol::projects::ProjectConfiguration;
+use cockpit_protocol::credentials::ProviderAuthKind;
+use cockpit_protocol::projects::{ProjectConfiguration, ProjectProvider};
 use cockpit_protocol::sources::SourceCapability;
 
 pub mod confluence;
@@ -20,8 +23,38 @@ fn glab_executable(executable: &str) -> bool {
         .file_name()
         .is_some_and(|name| name == "glab")
 }
+
+/// The credential kinds a configured provider can hold in the OS vault.
+/// Jira and Confluence take a bearer token (personal access token) or a
+/// username with an API token; the other CLIs keep their own login.
+pub fn credential_kinds(provider: &ProjectProvider) -> &'static [ProviderAuthKind] {
+    if jira::executable(&provider.executable) || confluence::executable(&provider.executable) {
+        &[ProviderAuthKind::Bearer, ProviderAuthKind::Basic]
+    } else {
+        &[]
+    }
+}
+
+/// Provider structs derive `Debug`; the handle keeps the vault out of it.
+#[derive(Clone)]
+pub(crate) struct CredentialHandle(pub(crate) Arc<ProviderCredentials>);
+
+impl CredentialHandle {
+    /// Nothing stored, so a provider runs on its CLI's own login.
+    pub(crate) fn none() -> Self {
+        Self(ProviderCredentials::disabled())
+    }
+}
+
+impl fmt::Debug for CredentialHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CredentialHandle")
+    }
+}
+
 pub fn configured_providers(
     configuration: &ProjectConfiguration,
+    credentials: Arc<ProviderCredentials>,
 ) -> Result<Vec<Arc<dyn SourceProvider>>, InspectionError> {
     configuration
         .providers
@@ -47,7 +80,10 @@ pub fn configured_providers(
             } else if jira::executable(&provider.executable) {
                 Some(
                     jira::JiraSourceProvider::configured(configuration, &provider.id)
-                        .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
+                        .map(|provider| {
+                            Arc::new(provider.with_credentials(credentials.clone()))
+                                as Arc<dyn SourceProvider>
+                        }),
                 )
             } else if github::executable(&provider.executable) {
                 Some(
@@ -57,7 +93,10 @@ pub fn configured_providers(
             } else if confluence::executable(&provider.executable) {
                 Some(
                     confluence::ConfluenceSourceProvider::configured(configuration, &provider.id)
-                        .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
+                        .map(|provider| {
+                            Arc::new(provider.with_credentials(credentials.clone()))
+                                as Arc<dyn SourceProvider>
+                        }),
                 )
             } else {
                 None
@@ -104,9 +143,27 @@ impl SourceProvider for UnconfiguredTeaProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::{configured_providers, github, glab_executable, tea_executable};
+    use super::{configured_providers, credential_kinds, github, glab_executable, tea_executable};
+    use cockpit_core::credentials::ProviderCredentials;
     use cockpit_core::sources::{SourceAuthority, SourceFetchRequest};
+    use cockpit_protocol::credentials::ProviderAuthKind;
     use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
+
+    #[test]
+    fn only_jira_and_confluence_can_hold_a_vault_credential() {
+        let provider = |executable: &str| ProjectProvider {
+            id: "p".into(),
+            base_url: "https://x.test".into(),
+            executable: executable.into(),
+            login: None,
+        };
+        let both = [ProviderAuthKind::Bearer, ProviderAuthKind::Basic];
+        assert_eq!(credential_kinds(&provider("jira")), both);
+        assert_eq!(credential_kinds(&provider("/opt/bin/confluence")), both);
+        for other in ["glab", "gh", "tea", "confluence-cli", "/x/unknown"] {
+            assert!(credential_kinds(&provider(other)).is_empty(), "{other}");
+        }
+    }
 
     #[test]
     fn detects_tea_by_executable_basename() {
@@ -175,7 +232,7 @@ mod tests {
             },
             origins: Default::default(),
         };
-        let providers = configured_providers(&configuration).unwrap();
+        let providers = configured_providers(&configuration, ProviderCredentials::disabled()).unwrap();
         let error = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(providers[0].fetch(&SourceFetchRequest {

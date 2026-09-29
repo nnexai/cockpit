@@ -145,7 +145,10 @@ fn make_service(
             let sources = Arc::new(
                 cockpit_core::sources::SourceService::new(
                     &config,
-                    cockpit_providers::configured_providers(&config)
+                    cockpit_providers::configured_providers(
+                        &config,
+                        cockpit_core::credentials::ProviderCredentials::disabled(),
+                    )
                         .map_err(|error| error.to_string())?,
                 )
                 .map_err(|error| error.to_string())?,

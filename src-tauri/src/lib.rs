@@ -1658,7 +1658,10 @@ pub fn run() {
     let sources = Arc::new(
         cockpit_core::sources::SourceService::new(
             &project_config,
-            cockpit_providers::configured_providers(&project_config)
+            cockpit_providers::configured_providers(
+                &project_config,
+                cockpit_core::credentials::ProviderCredentials::disabled(),
+            )
                 .expect("invalid configured source providers"),
         )
         .expect("failed to initialize source providers"),

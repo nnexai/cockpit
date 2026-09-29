@@ -10,6 +10,7 @@
 mod fake_confluence;
 
 use std::ffi::OsString;
+use std::sync::Arc;
 use std::fs;
 use std::path::PathBuf;
 
@@ -19,10 +20,12 @@ use cockpit_core::sources::{
     AttachmentRef, FrontmatterValue, ProviderResolution, SourceAuthority, SourceFetchRequest,
     SourceService,
 };
+use cockpit_core::credentials::{MemoryVault, ProviderCredentials};
+use cockpit_protocol::credentials::{ProviderAuthKind, ProviderCredentialSetRequest};
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
 use cockpit_providers::confluence::allowlisted_argv;
 use fake_confluence::{
-    FakeConfluence, Mode, PROFILE, Page, attachment_payload,
+    FakeConfluence, Mode, PROFILE, Page, TOKEN, attachment_payload,
 };
 
 fn cli() -> Option<PathBuf> {
@@ -90,7 +93,7 @@ fn configuration(server: &FakeConfluence, login: &str) -> ProjectConfiguration {
 
 fn service(server: &FakeConfluence, login: &str) -> SourceService {
     let configuration = configuration(server, login);
-    let providers = cockpit_providers::configured_providers(&configuration).unwrap();
+    let providers = cockpit_providers::configured_providers(&configuration, ProviderCredentials::disabled()).unwrap();
     SourceService::new(&configuration, providers).unwrap()
 }
 
@@ -260,6 +263,143 @@ async fn cloud_and_dc_pages_fetch_and_refresh_through_the_real_cli() {
     }
 }
 
+/// A service whose provider holds a stored credential and names a profile
+/// that does not exist: only the injected environment can authenticate it.
+async fn stored_service(
+    server: &FakeConfluence,
+    kind: ProviderAuthKind,
+    username: Option<&str>,
+) -> (SourceService, String) {
+    let configuration = configuration(server, "no-such-profile");
+    let credentials = Arc::new(ProviderCredentials::new(
+        &configuration,
+        Arc::new(MemoryVault::new()),
+        cockpit_providers::credential_kinds,
+    ));
+    credentials
+        .set(ProviderCredentialSetRequest {
+            provider_id: "wiki".into(),
+            kind,
+            username: username.map(str::to_owned),
+            token: TOKEN.into(),
+        })
+        .await
+        .unwrap();
+    let authorization = credentials.for_cli("wiki").await.unwrap().authorization();
+    let providers =
+        cockpit_providers::configured_providers(&configuration, credentials).unwrap();
+    (
+        SourceService::new(&configuration, providers).unwrap(),
+        authorization,
+    )
+}
+
+#[tokio::test]
+async fn stored_token_authenticates_the_real_cli_without_a_profile_and_matches_profile_output() {
+    let Some(cli) = cli() else { return };
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        for (kind, username) in [
+            (ProviderAuthKind::Bearer, None),
+            (ProviderAuthKind::Basic, Some("me@example.test")),
+        ] {
+            let server = FakeConfluence::start(mode, &cli);
+            server.add_page(page("123456789", "Release Checklist", "SD", 7));
+
+            // The profile login, as before: anonymous fixture, no credential variables.
+            let profile = service(&server, PROFILE);
+            let ProviderResolution::ConfluencePage(expected) =
+                profile.resolve_input("wiki", "123456789").await.unwrap()
+            else {
+                panic!("expected a page");
+            };
+            let expected_assets = profile
+                .fetch_assets(request(&server, &expected.canonical_url))
+                .await
+                .unwrap()
+                .assets;
+            let profile_requests = server.requests().len();
+            let profile_calls = server.argv().len();
+            assert!(profile_requests > 0 && profile_calls > 0);
+
+            // Same fixture, token only: the site now insists on the credential.
+            let (stored, authorization) = stored_service(&server, kind, username).await;
+            server.state.lock().unwrap().required_authorization = Some(authorization.clone());
+            let ProviderResolution::ConfluencePage(found) =
+                stored.resolve_input("wiki", "123456789").await.unwrap()
+            else {
+                panic!("expected a page");
+            };
+            let assets = stored
+                .fetch_assets(request(&server, &found.canonical_url))
+                .await
+                .unwrap()
+                .assets;
+
+            // Same page identity, same web links (context path kept) and body.
+            assert_eq!(found.canonical_url, expected.canonical_url, "{mode:?}");
+            assert_eq!(found.source_url, expected.source_url, "{mode:?}");
+            assert_eq!(
+                serde_json::to_value(&assets).unwrap(),
+                serde_json::to_value(&expected_assets).unwrap(),
+                "{mode:?} {kind:?}"
+            );
+            assert!(assets[0].body.contains("Freeze the branch"));
+
+            // Every profile request was anonymous; every token request sent
+            // exactly the stored credential to the fixture site.
+            let authorizations = server.state.lock().unwrap().authorizations.clone();
+            assert!(authorizations[..profile_requests].iter().all(Option::is_none));
+            assert!(authorizations.len() > profile_requests);
+            for header in &authorizations[profile_requests..] {
+                assert_eq!(header.as_ref(), Some(&authorization), "{mode:?} {kind:?}");
+            }
+
+            // Cockpit's credential variables reached only the token calls,
+            // by name; the profile prefix stayed in argv.
+            let names = server.env_names();
+            let argv = server.argv();
+            assert_eq!(names.len(), argv.len());
+            assert!(names[..profile_calls].iter().all(Vec::is_empty));
+            let mut want = vec![
+                "CONFLUENCE_API_PATH",
+                "CONFLUENCE_API_TOKEN",
+                "CONFLUENCE_AUTH_TYPE",
+                "CONFLUENCE_DOMAIN",
+                "CONFLUENCE_PROTOCOL",
+            ];
+            if kind == ProviderAuthKind::Basic {
+                want.insert(4, "CONFLUENCE_EMAIL");
+            }
+            assert!(names.len() > profile_calls);
+            for call in &names[profile_calls..] {
+                assert_eq!(call, &want, "{mode:?} {kind:?}");
+            }
+            for call in &argv[profile_calls..] {
+                assert_eq!(call[..2], ["--profile", "no-such-profile"]);
+            }
+            assert!(
+                argv.iter().flatten().all(|arg| !arg.contains(TOKEN)),
+                "the token must never appear in argv"
+            );
+            for request in server.requests() {
+                assert!(request.starts_with("GET "), "{request}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_rejected_stored_token_maps_to_an_auth_failure() {
+    let Some(cli) = cli() else { return };
+    let server = FakeConfluence::start(Mode::Cloud, &cli);
+    server.add_page(page("123456789", "Release Checklist", "SD", 7));
+    let (stored, _) = stored_service(&server, ProviderAuthKind::Bearer, None).await;
+    server.state.lock().unwrap().required_authorization = Some("Bearer another-token".into());
+    let error = stored.resolve_input("wiki", "123456789").await.unwrap_err();
+    assert_eq!(error.code, "source_auth_failed");
+    assert!(!error.message.contains(TOKEN));
+}
+
 
 #[tokio::test]
 async fn cloud_and_dc_attachment_downloads_are_id_mapped_and_confined() {
@@ -285,7 +425,7 @@ async fn cloud_and_dc_attachment_downloads_are_id_mapped_and_confined() {
             .collect();
         server.add_page(fixture);
         let config = configuration(&server, PROFILE);
-        let providers = cockpit_providers::configured_providers(&config).unwrap();
+        let providers = cockpit_providers::configured_providers(&config, ProviderCredentials::disabled()).unwrap();
         let provider = providers.iter().find(|provider| provider.provider_id() == "wiki").unwrap();
         let download_root = server.root.join("private-staging");
         fs::create_dir_all(&download_root).unwrap();
@@ -415,7 +555,7 @@ async fn cloud_and_dc_space_enumeration_and_paged_listing_use_only_gets() {
         server.add_page(other);
 
         let configuration = configuration(&server, PROFILE);
-        let providers = cockpit_providers::configured_providers(&configuration).unwrap();
+        let providers = cockpit_providers::configured_providers(&configuration, ProviderCredentials::disabled()).unwrap();
         let provider = providers.iter().find(|provider| provider.provider_id() == "wiki").unwrap();
         let spaces = provider.list_spaces().await.unwrap();
         assert!(spaces.iter().any(|space| space.key == "SD" && space.name == "SD Space"), "{spaces:?}");

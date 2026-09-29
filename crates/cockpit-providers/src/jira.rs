@@ -2,11 +2,13 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::Output;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
+use cockpit_core::credentials::{ProviderCredential, ProviderCredentials};
 use cockpit_core::jira_query::{
     format_wall_minute, instant_seconds, is_normalized_jql, wall_minute,
 };
@@ -16,12 +18,14 @@ use cockpit_core::sources::{
     FrontmatterField, FrontmatterValue, IssueListing, IssueQuery, IssueRow, SourceAsset,
     SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
 };
+use cockpit_protocol::credentials::ProviderAuthKind;
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, ProjectProvider};
 use cockpit_protocol::sources::SourceCapability;
 use serde_json::Value;
 use tokio::process::Command;
 use url::Url;
 
+use crate::CredentialHandle;
 use crate::jira_attachments::{issue_attachments, partial_diagnostic};
 use crate::jira_wiki::wiki_to_markdown;
 
@@ -35,14 +39,19 @@ pub(crate) fn executable(value: &str) -> bool {
 }
 
 /// Read-only Jira work items through the owner's configured `jira` CLI
-/// (ankitpokhrel/jira-cli). The CLI owns the site login and token; Cockpit
-/// only asks for one work item's raw API record and checks that the answer
-/// came from the configured site.
+/// (ankitpokhrel/jira-cli). By default the CLI owns the site login and token.
+/// When a token is stored in Cockpit's OS vault for this provider, Cockpit
+/// hands it to the CLI through the child environment, pinned to the
+/// configured site (`JIRA_SERVER`); the CLI still needs its `jira init`
+/// config file for the installation type. Cockpit only asks for one work
+/// item's raw API record and checks that the answer came from the
+/// configured site.
 #[derive(Debug)]
 pub struct JiraSourceProvider {
     provider: ProjectProvider,
     base_url: Url,
     limits: (usize, Duration),
+    credentials: CredentialHandle,
 }
 
 impl JiraSourceProvider {
@@ -82,7 +91,14 @@ impl JiraSourceProvider {
                 (configuration.limits.git_output_bytes as usize).max(64 * 1024),
                 Duration::from_millis(configuration.limits.operation_timeout_ms as u64),
             ),
+            credentials: CredentialHandle::none(),
         })
+    }
+
+    /// Use the token stored in Cockpit for this provider, when there is one.
+    pub fn with_credentials(mut self, credentials: Arc<ProviderCredentials>) -> Self {
+        self.credentials = CredentialHandle(credentials);
+        self
     }
 
     fn key(&self, request: &SourceFetchRequest) -> Result<String, InspectionError> {
@@ -106,13 +122,19 @@ impl JiraSourceProvider {
         Ok(resolve_jira_url(&self.provider, &request.artifact_url)?.canonical_id)
     }
 
-    async fn run(&self, call: &JiraCall<'_>) -> Result<Output, InspectionError> {
+    async fn run(&self, call: &JiraCall<'_>) -> Result<CliRun, InspectionError> {
         let mut command = Command::new(&self.provider.executable);
         command
             .args(jira_args(call)?)
             .env("NO_COLOR", "1")
             .env("TERM", "dumb");
-        run_bounded_command(
+        let credential = self.credentials.0.for_cli(&self.provider.id).await;
+        if let Some(credential) = &credential {
+            for (name, value) in credential_env(&self.base_url, credential) {
+                command.env(name, value);
+            }
+        }
+        let output = run_bounded_command(
             command,
             self.limits.0,
             self.limits.0,
@@ -133,20 +155,25 @@ impl JiraSourceProvider {
                 InspectionError::new("source_cli_unavailable", "Jira CLI could not be started")
             }
             _ => InspectionError::new("source_provider_failed", "Jira CLI request failed"),
+        })?;
+        Ok(CliRun {
+            output,
+            injected: credential.is_some(),
         })
     }
 
     /// One `issue list` call: at most `limit` rows, newest first. The CLI's
     /// "No result found" failure is an empty answer, not an error.
     async fn run_list(&self, jql: &str, limit: u32) -> Result<Vec<IssueRow>, ListFailure> {
-        let output = self.run(&JiraCall::List { jql, limit }).await?;
+        let run = self.run(&JiraCall::List { jql, limit }).await?;
+        let output = &run.output;
         if output.status.success() {
             return Ok(parse_issue_rows(&output.stdout, limit)?);
         }
         if String::from_utf8_lossy(&output.stderr).contains(NO_RESULT) {
             return Ok(Vec::new());
         }
-        let error = classify_failure(&output.stderr);
+        let error = run.failure();
         let rejected = error.code == "source_not_found"
             || String::from_utf8_lossy(&output.stderr).contains("400 Bad Request");
         Err(ListFailure { error, rejected })
@@ -271,10 +298,11 @@ impl JiraSourceProvider {
     }
 
     async fn issue(&self, key: &str) -> Result<Value, InspectionError> {
-        let output = self.run(&JiraCall::View { key }).await?;
-        if !output.status.success() {
-            return Err(classify_failure(&output.stderr));
+        let run = self.run(&JiraCall::View { key }).await?;
+        if !run.output.status.success() {
+            return Err(run.failure());
         }
+        let output = run.output;
         let value: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
             InspectionError::new(
                 "source_provider_contract",
@@ -429,9 +457,56 @@ impl SourceProvider for JiraSourceProvider {
     }
 }
 
-fn classify_failure(stderr: &[u8]) -> InspectionError {
+/// A finished `jira` process and whether Cockpit passed it a stored token.
+struct CliRun {
+    output: Output,
+    injected: bool,
+}
+
+impl CliRun {
+    fn failure(&self) -> InspectionError {
+        classify_failure(&self.output.stderr, self.injected)
+    }
+}
+
+/// The child environment for a stored credential. `JIRA_SERVER` pins the CLI
+/// to the configured site whatever its config file names; every variable is
+/// set explicitly so an inherited `JIRA_*` value cannot change the auth.
+fn credential_env(base_url: &Url, credential: &ProviderCredential) -> Vec<(&'static str, String)> {
+    let mut env = vec![
+        ("JIRA_SERVER", base_url.as_str().trim_end_matches('/').to_owned()),
+        (
+            "JIRA_AUTH_TYPE",
+            match credential.kind() {
+                ProviderAuthKind::Bearer => "bearer",
+                ProviderAuthKind::Basic => "basic",
+            }
+            .to_owned(),
+        ),
+    ];
+    if credential.kind() == ProviderAuthKind::Basic {
+        env.push((
+            "JIRA_LOGIN",
+            credential.username().unwrap_or_default().to_owned(),
+        ));
+    }
+    env.push(("JIRA_API_TOKEN", credential.token().to_owned()));
+    env
+}
+
+/// `injected` is true when Cockpit passed a stored token: a rejection is then
+/// about that token, and a missing config file needs `jira init` even so.
+fn classify_failure(stderr: &[u8], injected: bool) -> InspectionError {
     let text = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-    if text.contains("400 bad request") {
+    let config_missing = || {
+        InspectionError::new(
+            "source_auth_required",
+            "jira-cli needs its configuration file (`jira init`) even with a Cockpit token",
+        )
+    };
+    if injected && text.contains("missing configuration file") {
+        config_missing()
+    } else if text.contains("400 bad request") {
         InspectionError::new(
             "source_provider_failed",
             "Jira rejected the request (400); check the query",
@@ -441,6 +516,18 @@ fn classify_failure(stderr: &[u8]) -> InspectionError {
             "source_not_found",
             "Jira work item does not exist or is not visible to the configured login",
         )
+    } else if injected
+        && (text.contains("401")
+            || text.contains("403")
+            || text.contains("unauthorized")
+            || text.contains("token"))
+    {
+        InspectionError::new(
+            "source_auth_failed",
+            "Jira rejected the token stored in Cockpit for this site",
+        )
+    } else if injected && text.contains("config") {
+        config_missing()
     } else if text.contains("401")
         || text.contains("403")
         || text.contains("unauthorized")
@@ -1231,14 +1318,24 @@ mod tests {
     #[test]
     fn classifies_missing_items_and_logins() {
         assert_eq!(
-            classify_failure(b"Issue does not exist ... 404 Not Found").code,
+            classify_failure(b"Issue does not exist ... 404 Not Found", false).code,
             "source_not_found"
         );
         assert_eq!(
-            classify_failure(b"401 Unauthorized").code,
+            classify_failure(b"401 Unauthorized", false).code,
             "source_auth_required"
         );
-        assert_eq!(classify_failure(b"boom").code, "source_provider_failed");
+        assert_eq!(classify_failure(b"boom", false).code, "source_provider_failed");
+        let injected = |stderr: &[u8]| classify_failure(stderr, true);
+        assert_eq!(injected(b"401 Unauthorized").code, "source_auth_failed");
+        assert_eq!(injected(b"403 Forbidden").code, "source_auth_failed");
+        assert_eq!(
+            injected(b"Missing configuration file. Run 'jira init'").code,
+            "source_auth_required"
+        );
+        assert!(injected(b"Missing configuration file.").message.contains("jira init"));
+        assert_eq!(injected(b"404 Not Found").code, "source_not_found");
+        assert_eq!(injected(b"boom").code, "source_provider_failed");
     }
 
     fn argv(items: &[&str]) -> Vec<std::ffi::OsString> {

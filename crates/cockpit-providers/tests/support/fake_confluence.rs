@@ -2,10 +2,12 @@
 //!
 //! Binds `127.0.0.1:0`, serves synthetic pages only, and writes a private
 //! temporary CLI configuration (`authType: none`, `readOnly: true`). The
-//! `confluence` wrapper it creates logs argv only, drops every inherited
+//! `confluence` wrapper it creates logs argv only and drops every inherited
 //! `CONFLUENCE_*` variable except the two read-only settings Cockpit must
-//! pass, and points `CONFLUENCE_CONFIG_DIR`, `HOME` and `NETRC` at the
-//! temporary directory so no real profile, token or netrc is read.
+//! pass, and the credential variables Cockpit sets when it injects [`TOKEN`]
+//! (whose names, never values, it logs to `envnames.jsonl`). It points
+//! `CONFLUENCE_CONFIG_DIR`, `HOME` and `NETRC` at the temporary directory so
+//! no real profile, token or netrc is read.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -21,6 +23,8 @@ use serde_json::{Value, json};
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 pub const PROFILE: &str = "cockpit-fake";
+/// The token the harness stores in Cockpit for the fixture site.
+pub const TOKEN: &str = "cockpit-fixture-token-7f3a";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -53,6 +57,10 @@ pub struct State {
     pub requests: Vec<String>,
     /// Answer every request with HTTP 401.
     pub unauthorized: bool,
+    /// Every request line's `Authorization` header, parallel to `requests`.
+    pub authorizations: Vec<Option<String>>,
+    /// Answer HTTP 401 unless the request carries exactly this `Authorization`.
+    pub required_authorization: Option<String>,
     /// Report this `_links.base` instead of the server's own origin.
     pub links_base: Option<String>,
 }
@@ -131,6 +139,13 @@ if os.environ.get('CONFLUENCE_READ_ONLY') != 'true' or os.environ.get('CONFLUENC
     sys.stderr.write('Cockpit did not pass the read-only environment\n')
     sys.exit(97)
 env = {{key: value for key, value in os.environ.items() if not key.startswith('CONFLUENCE_')}}
+injected = {{key: value for key, value in os.environ.items()
+            if key in ('CONFLUENCE_DOMAIN', 'CONFLUENCE_PROTOCOL', 'CONFLUENCE_API_PATH',
+                       'CONFLUENCE_AUTH_TYPE', 'CONFLUENCE_EMAIL', 'CONFLUENCE_API_TOKEN')
+            and os.environ.get('CONFLUENCE_API_TOKEN') == {token:?}}}
+with open({names:?}, 'a') as log:
+    log.write(json.dumps(sorted(injected)) + '\n')
+env.update(injected)
 env.update({{
     'CONFLUENCE_READ_ONLY': 'true',
     'CONFLUENCE_CLI_ANALYTICS': 'false',
@@ -145,6 +160,8 @@ os.execve({cli:?}, [{cli:?}] + sys.argv[1:], env)
                 config = root.join("config").to_str().unwrap(),
                 home = root.join("home").to_str().unwrap(),
                 cli = cli.to_str().unwrap(),
+                token = TOKEN,
+                names = root.join("envnames.jsonl").to_str().unwrap(),
             ),
         )
         .unwrap();
@@ -186,6 +203,15 @@ os.execve({cli:?}, [{cli:?}] + sys.argv[1:], env)
     /// Logged argv, one call per entry; never the environment.
     pub fn argv(&self) -> Vec<Vec<String>> {
         std::fs::read_to_string(self.root.join("argv.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// Names of the credential variables each call received from Cockpit.
+    pub fn env_names(&self) -> Vec<Vec<String>> {
+        std::fs::read_to_string(self.root.join("envnames.jsonl"))
             .unwrap_or_default()
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
@@ -319,12 +345,19 @@ fn serve(mut stream: TcpStream, mode: Mode, port: u16, state: &Mutex<State>) {
     if reader.read_line(&mut request_line).is_err() {
         return;
     }
+    let mut authorization = None;
     loop {
         let mut header = String::new();
         match reader.read_line(&mut header) {
             Ok(0) | Err(_) => break,
             Ok(_) if header == "\r\n" => break,
-            Ok(_) => {}
+            Ok(_) => {
+                if let Some((name, value)) = header.split_once(':')
+                    && name.eq_ignore_ascii_case("authorization")
+                {
+                    authorization = Some(value.trim().to_owned());
+                }
+            }
         }
     }
     let mut parts = request_line.split_whitespace();
@@ -334,7 +367,13 @@ fn serve(mut stream: TcpStream, mode: Mode, port: u16, state: &Mutex<State>) {
     let query: BTreeMap<String, String> = url.query_pairs().into_owned().collect();
     let mut state = state.lock().unwrap();
     state.requests.push(format!("{method} {target}"));
-    if state.unauthorized {
+    state.authorizations.push(authorization.clone());
+    if state.unauthorized
+        || state
+            .required_authorization
+            .as_ref()
+            .is_some_and(|required| authorization.as_ref() != Some(required))
+    {
         respond(
             &mut stream,
             401,

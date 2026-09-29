@@ -1,21 +1,27 @@
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use cockpit_core::credentials::{MemoryVault, ProviderCredential, ProviderCredentials};
 use cockpit_core::sources::{
     FrontmatterValue, ProviderResolution, SourceAuthority, SourceFetchRequest, SourceProvider,
     confluence_attachment_pattern, confluence_glob_matches,
 };
+use cockpit_protocol::credentials::{ProviderAuthKind, ProviderCredentialSetRequest};
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
 use serde_json::{Value, json};
 use url::Url;
 
 use super::{
     ConfluenceApi, ConfluenceCall, ConfluenceInput, ConfluenceSourceProvider, ContentExpand,
-    SearchPage, allowlisted_argv, classify_failure, confluence_args, parse_confluence_input,
+    SearchPage, allowlisted_argv, classify_failure, confluence_args, inject_credential,
+    parse_confluence_input,
 };
 const CLOUD: &str = "https://nnexai.atlassian.net/wiki";
+/// The stored fixture token; the shim reports only whether it received it.
+const TOKEN: &str = "cockpit-fixture-token-7f3a";
 const DC: &str = "https://confluence.example.com/confluence";
 
 macro_rules! fixture {
@@ -856,6 +862,13 @@ root = pathlib.Path(__file__).parent
 args = sys.argv[1:]
 with (root / 'argv.jsonl').open('a') as log:
     log.write(json.dumps(args) + '\n')
+token = os.environ.get('CONFLUENCE_API_TOKEN')
+with (root / 'env.jsonl').open('a') as log:
+    log.write(json.dumps({
+        'token': None if token is None else 'stored' if token == '__TOKEN__' else 'other',
+        **{name: os.environ.get('CONFLUENCE_' + name) for name in
+           ('DOMAIN', 'PROTOCOL', 'API_PATH', 'AUTH_TYPE', 'EMAIL')},
+    }) + '\n')
 if os.environ.get('CONFLUENCE_READ_ONLY') != 'true' or os.environ.get('CONFLUENCE_CLI_ANALYTICS') != 'false':
     sys.stderr.write('read-only environment missing')
     sys.exit(97)
@@ -867,7 +880,8 @@ if answer is None:
 sys.stdout.write(answer.get('stdout', ''))
 sys.stderr.write(answer.get('stderr', ''))
 sys.exit(answer.get('code', 0))
-"#,
+"#
+            .replace("__TOKEN__", TOKEN),
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1527,7 +1541,7 @@ async fn auth_failure_missing_cli_and_missing_login_map_to_stable_codes() {
 #[tokio::test]
 async fn selected_provider_resolution_and_fetch_pass_the_source_service_page_proof() {
     let shim = page_shim(DC, "524301", "dc");
-    let providers = crate::configured_providers(&shim.config).unwrap();
+    let providers = crate::configured_providers(&shim.config, ProviderCredentials::disabled()).unwrap();
     let service = cockpit_core::sources::SourceService::new(&shim.config, providers).unwrap();
     assert!(
         cockpit_core::repositories::resolve_artifact(
@@ -1585,4 +1599,180 @@ fn search_continuations_validate_endpoint_and_preserve_only_typed_cursors() {
         provider.search_continuation(&next, "SD", 100, "version,ancestors,space").unwrap(),
         Some(SearchPage::Start(2))
     );
+}
+
+async fn store(
+    credentials: &ProviderCredentials,
+    kind: ProviderAuthKind,
+    username: Option<&str>,
+) {
+    credentials
+        .set(ProviderCredentialSetRequest {
+            provider_id: "wiki".into(),
+            kind,
+            username: username.map(str::to_owned),
+            token: TOKEN.into(),
+        })
+        .await
+        .unwrap();
+}
+
+impl Shim {
+    /// The provider composed with a credential service over `vault`.
+    fn credentialed(&self, vault: &Arc<MemoryVault>) -> (ConfluenceSourceProvider, Arc<ProviderCredentials>) {
+        let credentials = Arc::new(ProviderCredentials::new(
+            &self.config,
+            vault.clone(),
+            crate::credential_kinds,
+        ));
+        (self.provider().with_credentials(credentials.clone()), credentials)
+    }
+
+    /// One call that reaches the CLI, whatever it answers.
+    async fn touch(provider: &ConfluenceSourceProvider) {
+        let _ = provider.resolve_input("1").await;
+    }
+
+    /// What each call's environment looked like (names and classes only).
+    fn envs(&self) -> Vec<Value> {
+        std::fs::read_to_string(self.root.join("env.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn stored_credentials_name_the_configured_site_in_the_child_environment() {
+    // (base_url, kind, username, domain, api path)
+    let cases = [
+        (CLOUD, ProviderAuthKind::Bearer, None, "nnexai.atlassian.net", "/wiki/rest/api", "https"),
+        (
+            "https://x.atlassian.net/wiki/",
+            ProviderAuthKind::Basic,
+            Some("me@example.test"),
+            "x.atlassian.net",
+            "/wiki/rest/api",
+            "https",
+        ),
+        (DC, ProviderAuthKind::Bearer, None, "confluence.example.com/confluence", "/rest/api", "https"),
+        (
+            "https://H.example.com:8443/confluence",
+            ProviderAuthKind::Basic,
+            Some("svc"),
+            "h.example.com:8443/confluence",
+            "/rest/api",
+            "https",
+        ),
+        ("http://127.0.0.1:8090", ProviderAuthKind::Bearer, None, "127.0.0.1:8090", "/rest/api", "http"),
+    ];
+    for (base, kind, username, domain, api_path, protocol) in cases {
+        let shim = Shim::new(base);
+        let (provider, credentials) = shim.credentialed(&Arc::new(MemoryVault::new()));
+        store(&credentials, kind, username).await;
+        Shim::touch(&provider).await;
+
+        let auth_type = if kind == ProviderAuthKind::Bearer { "bearer" } else { "basic" };
+        assert_eq!(
+            shim.envs(),
+            [json!({"token": "stored", "DOMAIN": domain, "PROTOCOL": protocol,
+                    "API_PATH": api_path, "AUTH_TYPE": auth_type, "EMAIL": username})],
+            "{base}"
+        );
+        // The profile prefix stays (ignored by the CLI in env mode) and no
+        // argv entry carries the token.
+        assert_eq!(shim.calls().len(), 1);
+        let argv = std::fs::read_to_string(shim.root.join("argv.jsonl")).unwrap();
+        assert!(!argv.contains(TOKEN), "{argv}");
+    }
+}
+
+#[tokio::test]
+async fn stored_credentials_replace_inherited_cookie_tls_and_identity_settings() {
+    let url = Url::parse(CLOUD).unwrap();
+    let inherited = [
+        "CONFLUENCE_COOKIE",
+        "CONFLUENCE_TLS_CLIENT_CERT",
+        "CONFLUENCE_TLS_CLIENT_KEY",
+        "CONFLUENCE_TLS_CA_CERT",
+    ];
+    let credential = |kind, username: Option<&'static str>| async move {
+        let shim = Shim::new(CLOUD);
+        let (_, credentials) = shim.credentialed(&Arc::new(MemoryVault::new()));
+        store(&credentials, kind, username).await;
+        credentials.for_cli("wiki").await.unwrap()
+    };
+    let envs = |credential: &ProviderCredential| {
+        let mut command = tokio::process::Command::new("confluence");
+        inject_credential(&mut command, &url, credential);
+        command
+            .as_std()
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_str().unwrap().to_owned(),
+                    value.map(|value| value.to_str().unwrap().to_owned()),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+
+    let bearer = envs(&*credential(ProviderAuthKind::Bearer, None).await);
+    for name in inherited.into_iter().chain(["CONFLUENCE_EMAIL", "CONFLUENCE_USERNAME"]) {
+        assert_eq!(bearer.get(name), Some(&None), "{name} must be removed for bearer");
+    }
+    let basic = envs(&*credential(ProviderAuthKind::Basic, Some("me@example.test")).await);
+    for name in inherited {
+        assert_eq!(basic.get(name), Some(&None), "{name} must be removed for basic");
+    }
+    assert_eq!(basic["CONFLUENCE_EMAIL"].as_deref(), Some("me@example.test"));
+    // `CONFLUENCE_USERNAME` only applies when no email is set, so it is left alone.
+    assert!(!basic.contains_key("CONFLUENCE_USERNAME"));
+    // Read-only stays in the caller's hands; injection never touches it.
+    for map in [&bearer, &basic] {
+        assert!(!map.contains_key("CONFLUENCE_READ_ONLY"));
+        assert_eq!(map["CONFLUENCE_API_TOKEN"].as_deref(), Some(TOKEN));
+    }
+}
+
+#[tokio::test]
+async fn confluence_without_a_stored_token_keeps_the_profile_login_and_recovers_with_the_vault() {
+    let ambient = |name: &str| std::env::var(name).map_or(Value::Null, Value::String);
+    let vault = Arc::new(MemoryVault::new());
+    let shim = Shim::new(CLOUD);
+    let (provider, earlier) = shim.credentialed(&vault);
+
+    // Not stored: the inherited environment passes through.
+    Shim::touch(&provider).await;
+    let untouched = json!({"token": ambient("CONFLUENCE_API_TOKEN"), "DOMAIN": ambient("CONFLUENCE_DOMAIN"),
+        "PROTOCOL": ambient("CONFLUENCE_PROTOCOL"), "API_PATH": ambient("CONFLUENCE_API_PATH"),
+        "AUTH_TYPE": ambient("CONFLUENCE_AUTH_TYPE"), "EMAIL": ambient("CONFLUENCE_EMAIL")});
+    assert_eq!(shim.envs(), [untouched.clone()]);
+
+    // Stored by an earlier process; this one starts cold while the vault is down.
+    store(&earlier, ProviderAuthKind::Bearer, None).await;
+    let (provider, _) = shim.credentialed(&vault);
+    vault.set_failing(true);
+    Shim::touch(&provider).await;
+    assert_eq!(shim.envs()[1], untouched);
+
+    vault.set_failing(false);
+    Shim::touch(&provider).await;
+    assert_eq!(shim.envs()[2]["token"], "stored");
+    assert_eq!(shim.envs()[2]["DOMAIN"], "nnexai.atlassian.net");
+    // Every call kept the profile prefix.
+    assert_eq!(shim.calls().len(), 3);
+}
+
+#[tokio::test]
+async fn confluence_allows_attachment_downloads_for_pages_only() {
+    let provider = Shim::new(CLOUD).provider();
+    provider.attachment_downloads("page").await.unwrap();
+    for other in ["issue", "space", ""] {
+        assert_eq!(
+            provider.attachment_downloads(other).await.unwrap_err().code,
+            "source_capability_unavailable"
+        );
+    }
 }

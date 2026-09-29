@@ -1,10 +1,14 @@
 //! Read-only Confluence pages through the owner's configured `confluence`
-//! CLI (pchuri/confluence-cli). The CLI owns the site login and credential,
-//! selected by `ProjectProvider.login` as its profile name. Every process is
-//! built by [`confluence_args`] from a typed [`ConfluenceCall`] and checked by
+//! CLI (pchuri/confluence-cli). By default the CLI owns the site login and
+//! credential, selected by `ProjectProvider.login` as its profile name. When
+//! a token is stored in Cockpit's OS vault for this provider, Cockpit gives
+//! it to the CLI through the child environment instead (the CLI then ignores
+//! the profile), pinned to the configured site. Every process is built by
+//! [`confluence_args`] from a typed [`ConfluenceCall`] and checked by
 //! [`allowlisted_argv`] immediately before spawn; nothing else is ever run.
 
 use std::ffi::OsString;
+use std::sync::Arc;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -12,6 +16,7 @@ use async_trait::async_trait;
 use cap_fs_ext::{FollowSymlinks, MetadataExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, OpenOptions};
 use cockpit_core::InspectionError;
+use cockpit_core::credentials::{ProviderCredential, ProviderCredentials};
 use cockpit_core::process::{run_bounded_command, run_bounded_staging_command, StagingBudget};
 use cockpit_core::repositories::is_confluence_executable;
 use cockpit_core::sources::{
@@ -20,12 +25,15 @@ use cockpit_core::sources::{
     SourceMetadata, SourceProvider, SourceRef, SpacePage, SpacePageListing, SpaceSummary,
     confluence_attachment_pattern, confluence_page_url,
 };
+use cockpit_protocol::credentials::ProviderAuthKind;
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
 use cockpit_protocol::sources::SourceCapability;
 use serde_json::Value;
 use tokio::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use url::Url;
+
+use crate::CredentialHandle;
 
 
 
@@ -714,6 +722,55 @@ pub struct ConfluenceSourceProvider {
     port: Option<u16>,
     base_path: String,
     timeout: Duration,
+    credentials: CredentialHandle,
+}
+
+/// Inherited settings that would add to or replace a stored token's auth.
+const INHERITED_AUTH: [&str; 4] = [
+    "CONFLUENCE_COOKIE",
+    "CONFLUENCE_TLS_CLIENT_CERT",
+    "CONFLUENCE_TLS_CLIENT_KEY",
+    "CONFLUENCE_TLS_CA_CERT",
+];
+
+/// Give `command` a stored credential through its environment: the site is
+/// named explicitly (`CONFLUENCE_DOMAIN` selects env-only mode, so no profile
+/// is read). Cloud's `/wiki` is the API prefix; any other base path is a
+/// context path that belongs to the domain. Inherited cookie and TLS settings
+/// are removed so they cannot add to the token's auth.
+fn inject_credential(command: &mut Command, base_url: &Url, credential: &ProviderCredential) {
+    let host = base_url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let authority = match base_url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    };
+    let path = base_url.path().trim_end_matches('/');
+    let (domain, api_path) = if path == "/wiki" {
+        (authority, "/wiki/rest/api")
+    } else {
+        (format!("{authority}{path}"), "/rest/api")
+    };
+    for name in INHERITED_AUTH {
+        command.env_remove(name);
+    }
+    command
+        .env("CONFLUENCE_DOMAIN", domain)
+        .env("CONFLUENCE_PROTOCOL", base_url.scheme())
+        .env("CONFLUENCE_API_PATH", api_path);
+    match credential.kind() {
+        ProviderAuthKind::Bearer => {
+            command
+                .env("CONFLUENCE_AUTH_TYPE", "bearer")
+                .env_remove("CONFLUENCE_EMAIL")
+                .env_remove("CONFLUENCE_USERNAME");
+        }
+        ProviderAuthKind::Basic => {
+            command
+                .env("CONFLUENCE_AUTH_TYPE", "basic")
+                .env("CONFLUENCE_EMAIL", credential.username().unwrap_or_default());
+        }
+    }
+    command.env("CONFLUENCE_API_TOKEN", credential.token());
 }
 
 impl ConfluenceSourceProvider {
@@ -767,7 +824,14 @@ impl ConfluenceSourceProvider {
             port,
             base_path,
             timeout: Duration::from_millis(configuration.limits.operation_timeout_ms.into()),
+            credentials: CredentialHandle::none(),
         })
+    }
+
+    /// Use the token stored in Cockpit for this provider, when there is one.
+    pub fn with_credentials(mut self, credentials: Arc<ProviderCredentials>) -> Self {
+        self.credentials = CredentialHandle(credentials);
+        self
     }
 
     fn url_in_instance(&self, input: &str) -> bool {
@@ -803,6 +867,9 @@ impl ConfluenceSourceProvider {
             .args(&argv)
             .env("CONFLUENCE_READ_ONLY", "true")
             .env("CONFLUENCE_CLI_ANALYTICS", "false");
+        if let Some(credential) = self.credentials.0.for_cli(&self.provider_id).await {
+            inject_credential(&mut command, &self.base_url, &credential);
+        }
         let output = match staging {
             Some((dir, budget)) => run_bounded_staging_command(
                 command, stdout_limit, MAX_STDERR_BYTES, self.timeout, "Confluence CLI", dir, budget,
@@ -1648,6 +1715,17 @@ impl SourceProvider for ConfluenceSourceProvider {
             fields,
             attachments,
         }])
+    }
+
+    async fn attachment_downloads(&self, resource_type: &str) -> Result<(), InspectionError> {
+        if resource_type == "page" {
+            Ok(())
+        } else {
+            Err(InspectionError::new(
+                "source_capability_unavailable",
+                "selected source provider does not support this operation",
+            ))
+        }
     }
 
     async fn download_attachment(
