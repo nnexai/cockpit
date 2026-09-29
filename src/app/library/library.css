@@ -374,11 +374,13 @@
 .library-destination { margin: 7px 0 0; color: var(--text-primary); font-size: var(--font-size-control); }
 .library-select {
   width: 100%;
-  min-height: 30px;
+  min-height: 32px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
   color: var(--text-primary);
+  font-size: var(--font-size-control);
 }
 .library-confirm-body p { margin: 0; color: var(--text-secondary); font-size: var(--font-size-control); line-height: 1.5; }
 .task-setup .library-destructive { border-color: color-mix(in srgb, var(--blocked) 60%, var(--border)) !important; color: var(--blocked); }
@@ -435,14 +437,14 @@
 .library-attachments-toggle:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
 .library-attachments-toggle .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); }
 .library-attachments { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
-.library-attachments-head { display: flex; min-height: 32px; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.library-attachments-head { display: flex; flex-wrap: wrap; min-height: 32px; align-items: center; gap: 4px 8px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
 .library-attachments-scroll { max-height: min(240px, 35vh); overflow: auto; }
 .library-attachments table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .library-attachments col.is-select { width: 28px; }
 .library-attachments col.is-size { width: 72px; }
-.library-attachments col.is-type { width: 120px; }
-.library-attachments col.is-state { width: 112px; }
-.library-attachments col.is-action { width: 72px; }
+.library-attachments col.is-type { width: 104px; }
+.library-attachments col.is-state { width: 168px; }
+.library-attachments col.is-action { width: 88px; }
 .library-attachments th { height: 24px; padding: 0 8px; color: var(--text-muted); font-weight: 400; text-align: left; }
 .library-attachments td { height: 28px; padding: 0 8px; overflow: hidden; border-top: 1px solid var(--border); text-overflow: ellipsis; white-space: nowrap; }
 .library-attachments th.is-numeric,
@@ -451,8 +453,9 @@
 .library-attachments td.library-attachment-type { color: var(--text-muted); }
 .library-attachments td.library-attachment-action { text-align: right; }
 .library-attachments td .library-pill { max-width: 100%; }
-.library-attachments ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 8px 12px; list-style: none; }
+.library-attachments ul { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px 12px; list-style: none; }
 .library-attachments li { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.library-attachments li + li { padding-top: 8px; border-top: 1px solid var(--border); }
 .library-attachments li > span:first-child { color: var(--text-primary); overflow-wrap: anywhere; }
 .library-attachment-detail { color: var(--text-muted); }
 .library-attachment-notice { flex-wrap: wrap; }
@@ -470,7 +473,7 @@
 .task-setup-row .library-browse-toggle { display: inline-flex; align-items: center; gap: 4px; margin: 6px 0 0; font-size: var(--font-size-2xs); }
 .library-browse-toggle .ui-icon { width: 12px; height: 12px; }
 .library-query-presets { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 6px 0 0; }
-.task-setup-row .library-query-presets .task-setup-link { font-size: var(--font-size-2xs); }
+.task-setup-row .library-query-presets .task-setup-link { margin-left: 0; font-size: var(--font-size-2xs); }
 .library-browse { display: flex; flex-direction: column; gap: 8px; max-height: 260px; margin-top: 6px; overflow: auto; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
 .library-browse-provider h3 { margin: 0 0 4px; color: var(--text-secondary); font-size: var(--font-size-2xs); font-weight: 600; }
 .library-browse-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }

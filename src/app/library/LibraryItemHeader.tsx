@@ -76,9 +76,9 @@ function breadcrumb(segments: readonly string[]): string {
  * explicitly downloads (`Download all`, `Download selected` or a row's
  * `Download`); `Remove downloaded` drops the bytes and keeps the rows. An issue
  * or review adds its provider facts under the title.
- * At pane width ≤ 520 px `Refresh`, the Space actions and the attachment bulk actions move into `⋯`.
+ * `⋯` takes `Refresh`, the Space actions and the attachment bulk actions, and the attachments list stacks, when the pane is ≤ 520 px wide or the header itself is ≤ 640 px (the tree beside an item can leave it that narrow in a wider pane; the attachments table needs about 590 px).
  */
-export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending, actions, onReplace, details, space = null, pageUpdate = null, facts = null }: {
+export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCrumb, pending, actions, onReplace, details, space = null, pageUpdate = null, facts = null }: {
   item: LibraryItemSummary;
   providers: readonly ProjectProvider[];
   narrow: boolean;
@@ -94,6 +94,18 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   facts?: ProviderFacts | null;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [cramped, setCramped] = useState(false);
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (!header || typeof ResizeObserver === "undefined") return;
+    const measure = () => { const width = header.getBoundingClientRect().width; if (width > 0) setCramped(width <= 640); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+  const narrow = paneNarrow || cramped;
   const now = Date.now();
   const chip = libraryStateChip(item.state);
   const freshness = libraryFreshness(item, now);
@@ -172,7 +184,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   useLayoutEffect(() => {
     if (spaceFocused.current && (document.activeElement === null || document.activeElement === document.body)) spaceSlotRef.current?.focus({ preventScroll: true });
   });
-  return <div className="library-item-header">
+  return <div className="library-item-header" ref={headerRef}>
     <div className="library-item-column">
       <div className="library-item-identity">
         <ProviderMark family={family} size="header" folder={folder !== null} />
@@ -261,7 +273,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
                 <td className="library-attachment-name" title={attachment.original_name !== attachment.stored_name ? attachment.original_name : attachment.stored_name}>{attachment.stored_name}</td>
                 <td className="is-numeric">{byteSize(attachment.bytes)}</td>
                 <td className="library-attachment-type" title={attachment.media_type ?? undefined}>{attachment.media_type ?? "—"}</td>
-                <td className="library-attachment-state">{attachmentState(attachment, running)}</td>
+                <td className="library-attachment-state" title={running ?? ATTACHMENT_STATE[attachment.state]}>{attachmentState(attachment, running)}</td>
                 {attachments ? <td className="library-attachment-action">{rowAction(attachment)}</td> : null}
               </tr>)}
             </tbody>

@@ -157,7 +157,21 @@ it("reports a failed status read with a retry instead of an empty list", async (
   read.mockRejectedValueOnce(Object.assign(new Error("Provider tokens are not available in this build"), { code: "credentials_unavailable" }));
   await render(client);
   expect(document.body.querySelector("[role='alert']")?.textContent).toContain("Provider tokens are not available in this build");
+  // Focus stays inside the dialog, or Esc and Tab would act on the page behind it.
+  expect(document.activeElement).toBe(button("Retry"));
   await act(async () => button("Retry")!.click());
   await flush();
   expect(document.body.textContent).toContain("Using the jira login");
+});
+
+it("opens a replacement in the kind that is stored", async () => {
+  const { client } = fakeClient([status("jira", "stored", "basic"), status("wiki", "stored", "bearer"), status("gitlab", "unsupported")]);
+  await render(client);
+  await act(async () => button("Replace token for Jira · team.atlassian.net")!.click());
+  expect(usernameInput()).not.toBeNull();
+  expect(document.activeElement).toBe(usernameInput());
+  await act(async () => button("Cancel")!.click());
+  await act(async () => button("Replace token for Confluence · team.atlassian.net")!.click());
+  expect(usernameInput()).toBeNull();
+  expect(document.activeElement).toBe(tokenInput());
 });

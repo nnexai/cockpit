@@ -57,7 +57,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
   const formId = useId();
   const tokenRef = useRef<HTMLInputElement>(null);
   const usernameRef = useRef<HTMLInputElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const mounted = useRef(true);
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [reload, setReload] = useState(0);
@@ -82,13 +82,17 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
     });
     return () => { current = false; };
   }, [client, focusProviderId, reload]);
-  const ready = load.status === "ready";
   const editingId = editing?.providerId;
-  // Focus lands where the user acts next: the open form's first field, else the first row action.
+  // Focus lands where the user acts next and always inside the dialog, so Esc and Tab reach it: the open form's first field, else the first row action, else (while reading, after a read failure, or with nothing to act on) the Retry, Close or Done button.
   useEffect(() => {
-    if (!ready) return;
-    (editingId ? (usernameRef.current ?? tokenRef.current) : bodyRef.current?.querySelector<HTMLElement>(".library-credentials-actions button"))?.focus();
-  }, [ready, editingId]);
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const first = (selector: string) => dialog.querySelector<HTMLElement>(selector);
+    const target = load.status === "loading" ? first(".task-setup-close")
+      : load.status === "error" ? first(".library-refusal button")
+      : editingId ? (usernameRef.current ?? tokenRef.current) : (first(".library-credentials-actions button") ?? first(".task-setup-footer button"));
+    target?.focus();
+  }, [load.status, editingId]);
   const accept = (status: ProviderCredentialStatus) => {
     setLoad((current) => current.status === "ready"
       ? { ...current, statuses: [...current.statuses.filter((existing) => existing.provider_id !== status.provider_id), status] }
@@ -99,7 +103,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
     setNotice(null);
     setFormError(null);
     setHasToken(false);
-    setEditing({ providerId: status.provider_id, kind: status.supported_kinds.includes("bearer") ? "bearer" : status.supported_kinds[0]!, username: "" });
+    setEditing({ providerId: status.provider_id, kind: status.kind && status.supported_kinds.includes(status.kind) ? status.kind : status.supported_kinds.includes("bearer") ? "bearer" : status.supported_kinds[0]!, username: "" });
   };
   const cancel = () => {
     if (tokenRef.current) tokenRef.current.value = "";
@@ -140,9 +144,9 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
   const canSave = hasToken && !saving && editing !== null && (editing.kind === "bearer" || editing.username.trim().length > 0);
   // On the body: a Context viewer is a size container and would clip a fixed overlay to its pane.
   return createPortal(<div className="setup-overlay library-dialog-overlay" role="presentation">
-    <section className="setup-dialog task-setup library-credentials" role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={(event) => trapDialogKeys(event, onClose)}>
+    <section ref={dialogRef} className="setup-dialog task-setup library-credentials" role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={(event) => trapDialogKeys(event, onClose)}>
       <header className="task-setup-header"><h2 id={titleId}>Provider tokens</h2><button type="button" className="task-setup-close" onClick={onClose} aria-label="Close provider tokens"><UiIcon name="close" /></button></header>
-      <div className="task-setup-body" ref={bodyRef}>
+      <div className="task-setup-body">
         <p className="task-setup-note library-credentials-intro">A stored token is kept in this computer's keyring and can't be read back, only replaced or removed. Without one, Cockpit uses each provider CLI's own login.</p>
         {load.status === "loading" ? <p className="task-setup-note" role="status">Reading provider tokens…</p> : null}
         {load.status === "error" ? <div className="library-refusal" role="alert">
