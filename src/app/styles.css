@@ -77,6 +77,7 @@
   --z-modal: 50;
   --z-modal-panel: 55;
   --z-context-menu: 60;
+  --z-server-modal: 65;
   --z-indicator: 70;
   --compact-control-size: 28px;
   --control-height: 32px;
@@ -136,7 +137,7 @@ summary:focus-visible {
   min-height: 0;
 }
 
-.workbench > .main-workarea {
+.workbench-underlay > .main-workarea {
   width: 0;
   height: 100%;
   flex: 1 1 0;
@@ -1204,6 +1205,16 @@ body.is-resizing-panes * {
   background: rgb(3 5 8 / 62%);
   backdrop-filter: blur(2px);
 }
+
+.workbench-underlay { display: contents; }
+.server-popup-scrim { position: fixed; inset: 0; z-index: var(--z-server-modal); background: var(--scrim); }
+.server-popup { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--accent); background: var(--terminal-bg); box-shadow: 0 12px 48px rgb(0 0 0 / 45%); }
+.server-popup .pane-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); }
+.server-popup-status { margin-left: auto; font-size: var(--font-size-control); white-space: nowrap; }
+.server-popup-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
+.server-popup-body .terminal-host { flex: 1; }
+.server-popup.is-disconnected .xterm { opacity: 0.55; }
+.server-popup-message { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; padding: 16px; background: rgb(12 16 22 / 88%); color: var(--text-secondary); text-align: center; }
 
 .command-overlay,
 .chooser-overlay {

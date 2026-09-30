@@ -35,6 +35,7 @@ mod extensions;
 mod operations;
 mod projects;
 mod transport;
+mod shell;
 
 use capabilities::missing_required_methods;
 #[cfg(test)]
@@ -374,6 +375,7 @@ fn parse_snapshot(
         tabs,
         panes,
         agents,
+        herdr_shell: None,
     };
     validate_snapshot(&response)?;
     Ok(response)
@@ -605,6 +607,7 @@ pub struct HerdrCliAdapter {
     config: HerdrCliConfig,
     autostart_server: bool,
     server_start: Arc<Mutex<()>>,
+    shell_states: Arc<Mutex<BTreeMap<String, shell::CachedShell>>>,
 }
 
 fn valid_pane_id(pane_id: &str) -> bool {
@@ -654,6 +657,7 @@ impl HerdrCliAdapter {
             config,
             autostart_server: false,
             server_start: Arc::new(Mutex::new(())),
+            shell_states: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -808,7 +812,7 @@ impl HerdrCliAdapter {
         Ok(parent.join(format!("{stem}-client.sock")))
     }
 
-    fn process_start_identity(pid: Option<i32>) -> Option<u64> {
+    pub(crate) fn process_start_identity(pid: Option<i32>) -> Option<u64> {
         #[cfg(target_os = "linux")]
         {
             let pid = pid?;
@@ -847,7 +851,7 @@ impl HerdrCliAdapter {
         }
     }
 
-    fn socket_peer_identity(path: &Path, stream: &UnixStream) -> Result<String, InspectionError> {
+    pub(crate) fn socket_peer_identity(path: &Path, stream: &UnixStream) -> Result<String, InspectionError> {
         let credentials = stream.peer_cred().map_err(|error| {
             InspectionError::new(
                 "endpoint_identity_unavailable",
@@ -1264,8 +1268,9 @@ impl HerdrCliAdapter {
         session_id: &str,
         expected_identity: Option<&str>,
     ) -> Result<SessionSnapshotResponse, InspectionError> {
-        self.read_structure_with_identity(session_id, expected_identity)
-            .await
+        let mut snapshot = self.read_structure_with_identity(session_id, expected_identity).await?;
+        snapshot.herdr_shell = Some(self.shell_snapshot(session_id, &snapshot.server_instance).await);
+        Ok(snapshot)
     }
 
     /// Extension validation uses the authoritative structure snapshot without
@@ -1293,6 +1298,7 @@ impl HerdrCliAdapter {
         request: &ResourceMutationRequest,
     ) -> Result<ResourceMutationResponse, InspectionError> {
         self.selected_session(session_id)?;
+        let command_identity = self.validate_command_target(session_id, request).await?;
         let (method, mut params) = mutation_call(request);
         // Herdr opens a new tab in the focused pane's folder, which may be a
         // viewer plugin's install directory. Start it in the Space's folder.
@@ -1303,10 +1309,10 @@ impl HerdrCliAdapter {
             params["cwd"] = json!(cwd);
         }
         let (result, identity) = self
-            .socket_request_with_identity(session_id, method, params, None)
+            .socket_request_with_identity(session_id, method, params, command_identity.as_deref())
             .await?;
         let created = validate_mutation_result(request, result)?;
-        let snapshot = self.read_structure_with_identity(session_id, Some(&identity)).await.map_err(|error| {
+        let snapshot = self.read_snapshot_with_identity(session_id, Some(&identity)).await.map_err(|error| {
             InspectionError::new(
                 "mutation_applied_snapshot_failed",
                 format!(
@@ -1338,6 +1344,10 @@ impl HerdrCliAdapter {
         let expected_identity = EventIdentity::from_snapshot(&snapshot);
         let (sender, receiver) = mpsc::channel(32);
         let (ready_sender, mut ready_receiver) = mpsc::channel(1);
+        let shell_sender = sender.clone();
+        let shell_session_id = session_id.clone();
+        let shell_server_instance = snapshot.server_instance.clone();
+        let has_shell_metadata = snapshot.herdr_shell.is_some();
         let adapter = self.clone();
         tokio::spawn(async move {
             let mut delay_ms = 100_u64;
@@ -1478,7 +1488,12 @@ impl HerdrCliAdapter {
             }
         });
         match ready_receiver.recv().await {
-            Some(Ok(())) => Ok(SessionSubscription { messages: receiver }),
+            Some(Ok(())) => {
+                if has_shell_metadata {
+                    self.subscribe_shell(shell_session_id, shell_server_instance, shell_sender);
+                }
+                Ok(SessionSubscription { messages: receiver })
+            },
             Some(Err(error)) => Err(error),
             None => Err(InspectionError::new(
                 "subscription_setup_failed",
@@ -1814,12 +1829,19 @@ impl HerdrCliAdapter {
         request
             .validate()
             .map_err(|message| InspectionError::new("invalid_terminal_dimensions", message))?;
+        let popup_identity = if request.target_kind == cockpit_protocol::v1::TerminalTargetKind::Popup {
+            Some(self.validate_popup_target(request).await?)
+        } else {
+            None
+        };
         let stream_id = format!(
             "terminal-{}",
             NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)
         );
         let socket_path = self.client_socket_path(&request.session_id)?;
-        crate::terminal_wire::open_terminal(&socket_path, request, stream_id).await
+        crate::terminal_wire::open_terminal_identity(
+            &socket_path, request, stream_id, popup_identity.as_deref(),
+        ).await
     }
 }
 
@@ -2250,6 +2272,7 @@ mod tests {
             focused_space_id: None,
             focused_tab_id: None,
             focused_pane_id: None,
+            herdr_shell: None,
             spaces: Vec::new(),
             tabs: Vec::new(),
             panes: panes

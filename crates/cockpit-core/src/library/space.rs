@@ -1201,6 +1201,7 @@ pub(in crate::library) mod tests {
                 protocol: 1,
                 focused_space_id: None,
                 focused_tab_id: None,
+                herdr_shell: None,
                 focused_pane_id: None,
                 spaces: if self.space_present.load(Ordering::SeqCst) {
                     vec![SpaceSummary {

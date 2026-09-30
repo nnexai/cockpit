@@ -26,6 +26,7 @@ pub(crate) fn request_is_mutating(method: &str) -> bool {
             | "pane.focus"
             | "agent.focus"
             | "pane.send_text"
+            | "command.invoke"
     )
 }
 
@@ -117,6 +118,15 @@ pub(crate) fn pane_move_destination(destination: &PaneMoveDestination) -> Value 
 
 pub(crate) fn mutation_call(request: &ResourceMutationRequest) -> (&'static str, Value) {
     match request {
+        ResourceMutationRequest::CommandInvoke { command_id, space_id, tab_id, pane_id } => {
+            let mut params = serde_json::Map::from_iter([
+                ("command_id".to_owned(), json!(command_id)),
+                ("workspace_id".to_owned(), json!(space_id)),
+                ("tab_id".to_owned(), json!(tab_id)),
+            ]);
+            insert_optional(&mut params, "pane_id", pane_id);
+            ("command.invoke", Value::Object(params))
+        }
         ResourceMutationRequest::SpaceCreate { cwd, label } => {
             let mut params = serde_json::Map::from_iter([("focus".to_owned(), json!(true))]);
             insert_optional(&mut params, "cwd", cwd);

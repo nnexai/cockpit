@@ -38,6 +38,7 @@ use cockpit_protocol::{
         ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
         SessionSnapshotResponse, SessionStreamMessage, TerminalCommand, TerminalMode,
         TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
+        TerminalTargetKind,
     },
 };
 use percent_encoding::percent_decode_str;
@@ -463,6 +464,8 @@ const MAX_TERMINAL_COMMAND_BYTES: usize = 96 * 1024;
 #[serde(deny_unknown_fields)]
 struct TerminalQuery {
     mode: TerminalMode,
+    #[serde(default)]
+    target_kind: TerminalTargetKind,
     takeover: bool,
     cols: u16,
     rows: u16,
@@ -498,6 +501,7 @@ async fn terminal_ws(
         session_id,
         pane_id,
         mode: query.mode,
+        target_kind: query.target_kind,
         takeover: query.takeover,
         cols: query.cols,
         rows: query.rows,

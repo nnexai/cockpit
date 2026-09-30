@@ -8,6 +8,7 @@ import {
 } from "../client/CockpitClient";
 import type {
   FocusRequest,
+  HerdrCommand,
   ResourceMutationRequest,
   SessionSnapshotResponse,
   SessionStreamMessage,
@@ -29,6 +30,8 @@ import { openViewerLeaf, closeViewerLeaf, releaseViewers, getViewerClientId } fr
 import { openBrowserLeaf, closeBrowserLeaf, retireTabBrowser, browserOpenDisabledReason, retryBrowserCleanup, subscribeBrowserLifecycle } from "./layout/browserLifecycle";
 import { BrowserCleanupNotices } from "./layout/BrowserCleanupNotices";
 import { routeWorkbenchKeydown } from "./input/keymap";
+import { herdrBindings, herdrPrefixes, herdrCommandShortcut, setEffectiveHerdrBindings } from "./input/herdrBindings";
+import { ServerPopup } from "./ServerPopup";
 import { SHORTCUTS, SHORTCUT_SEPARATOR, armedPrefixHint, focusSidebarList, formatShortcut, shortcutEntry, withShortcut, type PrefixCommand } from "./input/shortcuts";
 import { trapModalTab, useModalFocus } from "./input/modal";
 import { flushSync } from "react-dom";
@@ -219,7 +222,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDi
 }
 
 
-type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser" | "Library"; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
+type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser" | "Library" | "Herdr"; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
 
 /** Picks the clause of a renderer diagnostic chain that explains one action, e.g. "Requires a safe source pane directory". */
 export function rendererReasonFor(kind: RendererActionDefinition["kind"], reason: string): string | undefined {
@@ -263,12 +266,12 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const ranked = normalized
     ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group}`)
     : actions.map((action, index) => ({ ...action, score: index, matchedIndices: [] as number[] }));
-  const groups = ["Navigate", "Space", "Tab", "Pane", "Browser", "Library"] as const;
+  const groups = ["Herdr", "Navigate", "Space", "Tab", "Pane", "Browser", "Library"] as const;
   // Rows render grouped, so keep `filtered` in that order for the highlight and arrow keys. With a query, groups follow their best match.
   const groupOrder: readonly CommandAction["group"][] = normalized ? [...new Set(ranked.map((action) => action.group))] : groups;
   const filtered = normalized || showAll
     ? groupOrder.flatMap((group) => ranked.filter((action) => action.group === group))
-    : primaryIds.flatMap((id) => ranked.filter((action) => action.id === id));
+    : [...ranked.filter(action => action.group === "Herdr"), ...primaryIds.flatMap((id) => ranked.filter((action) => action.id === id))];
   useEffect(() => setActive((current) => Math.min(current, Math.max(0, filtered.length - 1))), [filtered.length]);
   useEffect(() => { searchRef.current?.focus(); }, []);
   useEffect(() => { activeRowRef.current?.scrollIntoView?.({ block: "nearest" }); }, [active, normalized]);
@@ -282,7 +285,7 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     if (event.key === "Enter" && document.activeElement instanceof HTMLInputElement) { event.preventDefault(); runActive(); return; }
     trapModalTab(event, ref.current);
   }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands"><UiIcon name="close" /></button></header><div className="command-search-box"><UiIcon name="search" /><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groupOrder.map((group) => {
-    const groupActions = !normalized && !showAll ? (group === "Navigate" ? filtered : []) : filtered.filter((action) => action.group === group);
+    const groupActions = !normalized && !showAll ? (group === "Navigate" ? filtered.filter(action => action.group !== "Herdr") : group === "Herdr" ? filtered.filter(action => action.group === "Herdr") : []) : filtered.filter((action) => action.group === group);
     if (groupActions.length === 0) return null;
     return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => {
       const index = filtered.indexOf(action);
@@ -419,6 +422,14 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   onPanePrepared(paneId: string): void; onReconnect(): void; onRetry(): void; onRefreshSessions(): Promise<void>; onOpenSession(): void; onMutate: Mutate; onRetryMutation(operation: MutationOperation): void;
 }) {
   const snapshot = state.snapshot;
+  const shell = snapshot?.herdr_shell ?? null;
+  const popup = shell?.popup ?? null;
+  const customBindings = herdrBindings(shell?.commands ?? []);
+  const customPrefixes = herdrPrefixes(shell?.prefix_bindings ?? []);
+  setEffectiveHerdrBindings(customBindings, customPrefixes);
+  useEffect(() => () => setEffectiveHerdrBindings([]), []);
+  const [popupPending, setPopupPending] = useState<string | null>(null);
+  const [commandNotice, setCommandNotice] = useState<string | null>(null);
   const spaces = snapshot?.spaces ?? [];
   const allTabs = snapshot?.tabs ?? [];
   const tabs = tabsForSpace(allTabs, selection.spaceId);
@@ -522,6 +533,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     }
   }, []);
   const [prefixActive, setPrefixActive] = useState(false);
+  const [armedPrefix, setArmedPrefix] = useState<{ origin: "cockpit" | "herdr"; label: string }>({ origin: "cockpit", label: "Ctrl+B" });
   const [prefixHint, setPrefixHint] = useState<string | null>(null);
   useEffect(() => {
     if (prefixHint === null) return;
@@ -536,7 +548,17 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const sidebarCloseRef = useRef<HTMLButtonElement | null>(null);
   const drawerFocusTarget = useRef<{ spaceId: string; paneId: string | null } | null>(null);
   const mutationBusy = mutations.pending !== null;
-  const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
+  const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
+  useEffect(() => {
+    if (popup || state.sync !== "live" || shell?.status !== "live") setPopupPending(null);
+    if (popup) { setPrefixActive(false); setMenu(null); }
+  }, [popup, state.sync, shell?.status]);
+  useEffect(() => {
+    if (!popupPending || mutations.pending) return;
+    if (mutations.errors[`command:${popupPending}`]) { setPopupPending(null); return; }
+    const timer = window.setTimeout(() => setPopupPending(null), 1000);
+    return () => window.clearTimeout(timer);
+  }, [popupPending, mutations.pending, mutations.errors]);
   const sidebarSession = sessions.find((session) => session.id === state.sessionId);
   const openSessionChooser = useCallback(() => {
     setSessionChooserOpen(true);
@@ -582,6 +604,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   useEffect(() => {
     if (!narrowViewport || !drawerOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector("[data-server-modal]")) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeDrawer();
@@ -770,13 +793,26 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     }
     execute();
   }, [spaces, tabs, panes, tabLayout, area, localLeaves, selectedLeaf, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, browserOpen, browserReason, closeLibraryToOrigin, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed]);
+  const customCommandReason = state.sync !== "live" || shell?.status !== "live" ? shell?.error ?? "Herdr commands are not live"
+    : state.focusPending || state.focusError || !snapshot?.focused_space_id || !snapshot.focused_tab_id ? "Waiting for Herdr focus"
+    : mutationBusy ? "Another Herdr action is pending" : undefined;
+  const runHerdrCommand = useCallback((command: HerdrCommand) => {
+    setPrefixHint(null);
+    if (customCommandReason || popup) { setCommandNotice(customCommandReason ?? "The popup owns keyboard input"); return; }
+    if (!shell?.commands.some(candidate => candidate.command_id === command.command_id)) { setCommandNotice("Custom command is not available on this endpoint; reload configuration"); return; }
+    const accepted = onMutate(`command:${command.command_id}`, { type: "command_invoke", command_id: command.command_id, space_id: snapshot!.focused_space_id!, tab_id: snapshot!.focused_tab_id!, pane_id: snapshot!.focused_pane_id }, false);
+    if (accepted) {
+      setCommandNotice(null);
+      if (command.action === "popup") setPopupPending(command.command_id);
+    }
+  }, [customCommandReason, popup, shell, snapshot, onMutate]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      routeWorkbenchKeydown(event, { modalOpen, prefixActive, runCommand, setPrefixActive, setCommandsOpen, onUnboundPrefixKey: setPrefixHint });
+      routeWorkbenchKeydown(event, { modalOpen, serverModalOpen: Boolean(popup), popupPending: Boolean(popupPending), prefixActive, prefixOrigin: armedPrefix.origin, herdrPrefixes: customPrefixes, onPrefixArm: (origin, label) => setArmedPrefix({ origin, label }), runCommand, herdrBindings: customBindings, runHerdrCommand, setPrefixActive, setCommandsOpen, onUnboundPrefixKey: setPrefixHint });
     };
     window.addEventListener("keydown", keydown, true);
     return () => window.removeEventListener("keydown", keydown, true);
-  }, [prefixActive, runCommand, modalOpen]);
+  }, [prefixActive, armedPrefix, runCommand, modalOpen, popup, popupPending, shell, runHerdrCommand]);
   const openContext = (event: ContextAnchor, target: ContextTarget) => { event.preventDefault(); event.stopPropagation(); if (!mutationBusy && !modalOpen) setMenu({ target, x: event.clientX, y: event.clientY }); };
   const dismissMenu = useCallback(() => setMenu(null), []);
   const menuAction = (action: () => boolean | void) => { if (action() !== false) dismissMenu(); };
@@ -818,6 +854,10 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     </ContextMenu>;
   };
   const commandActionRows: CommandAction[] = [
+    ...(shell?.commands ?? []).filter(command => command.action !== "unknown").map((command): CommandAction => ({
+      id: `herdr:${command.command_id}`, label: command.description || "Custom command", shortcut: herdrCommandShortcut(command, customPrefixes), group: "Herdr",
+      disabled: Boolean(customCommandReason || popup), reason: customCommandReason, run: () => runHerdrCommand(command),
+    })),
     ...SHORTCUTS.filter((entry) => entry.prefix && entry.palette !== false).map((entry): CommandAction => {
       const command = entry.id as PrefixCommand;
       const reason = entry.needs === "space" && !selectedSpace ? "Select a Space first"
@@ -850,7 +890,9 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   ];
   const browserToggleShortcut = formatShortcut("toggle-browser");
   const commandActions: CommandAction[] = commandActionRows.map((action) => action.id === "browser:open" || action.id === "browser:close" ? { ...action, shortcut: browserToggleShortcut } : action);
-  const commandStatus = lifecycleError ? <p role="alert">{lifecycleError}</p> : null;
+  const commandFailures = Object.values(mutations.errors).filter(failure => failure.operation.request.type === "command_invoke");
+  const commandFailureMessage = commandFailures.map(failure => `${failure.code === "request_outcome_unknown" ? "Herdr did not confirm this command. Check the session before running it again." : "Could not run Herdr command:"} ${failure.message}`).join(" ");
+  const commandStatus = commandNotice || commandFailureMessage || lifecycleError ? <p role="alert">{commandNotice || commandFailureMessage || lifecycleError}</p> : null;
   const dispatchCanvas = (action: LayoutAction) => {
     if (action.type === "select-leaf") { onSelectLeaf(action.tabId, action.leafId); return; }
     if (action.type === "zoom-toggle") {
@@ -894,6 +936,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const sidebarSelectedSpaceId = state.focusPending ? snapshot?.focused_space_id ?? null : selection.spaceId;
   const sidebarSelectedPaneId = state.focusPending ? snapshot?.focused_pane_id ?? null : selection.paneId;
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
+    <div className="workbench-underlay" inert={Boolean(popup)}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
       <Sidebar session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} hasSession={state.sessionId !== null} hasSnapshot={snapshot !== null}
@@ -911,7 +954,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       <div className="workarea-content">
         {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
           onContextMenu={event => { const pane = (event.target as HTMLElement).closest<HTMLElement>("[data-leaf-id]"); if (pane?.dataset.leafId) { selectLeaf(pane.dataset.leafId); openContext(event, { kind: "pane", id: pane.dataset.leafId }); } }}>
-          {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
+          {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
         </div>}
       </div>
     </main>
@@ -923,8 +966,10 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} parentSpaceId={selection.spaceId} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
-    {prefixActive ? <div className="prefix-indicator" role="status"><span>Ctrl+B · {armedPrefixHint()}</span></div> : prefixHint ? <div className="prefix-indicator is-notice" role="status">{prefixHint}</div> : null}
+    {prefixActive ? <div className="prefix-indicator" role="status"><span>{armedPrefix.label} · {armedPrefix.origin === "herdr" ? "Herdr commands · Esc cancels" : armedPrefixHint()}</span></div> : commandNotice || commandFailureMessage ? <div className="prefix-indicator is-notice" role="alert">{commandNotice || commandFailureMessage}</div> : popupPending ? <div className="prefix-indicator" role="status">Opening Herdr popup…</div> : prefixHint ? <div className="prefix-indicator is-notice" role="status">{prefixHint}</div> : null}
     <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetryMutation={onRetryMutation} />
+    </div>
+    {popup && state.sessionId ? <ServerPopup key={`${state.sessionId}:${popup.terminal_id}`} client={client} sessionId={state.sessionId} popup={popup} live={state.sync === "live" && shell?.status === "live"} error={shell?.error ?? state.syncError?.message ?? null} focusEpoch={state.epoch} terminalMouseInput={terminalMouseInput} onReconnect={onReconnect} /> : null}
   </div>;
 }
 export function App({ client }: { client: CockpitClient }) {

@@ -25,7 +25,7 @@
 
 .sidebar[hidden] { display: none; }
 
-.workbench > .sidebar { flex: 0 0 var(--sidebar-width, 240px); }
+.workbench-underlay > .sidebar { flex: 0 0 var(--sidebar-width, 240px); }
 
 /* ---- session header: the same 41px band as the tab bar ---- */
 .sidebar-header {
@@ -568,7 +568,7 @@
 
 /* ---- narrow viewport: the sidebar becomes a drawer ---- */
 @media (max-width: 800px) {
-  .workbench > .sidebar {
+  .workbench-underlay > .sidebar {
     position: fixed;
     top: 0;
     bottom: 0;

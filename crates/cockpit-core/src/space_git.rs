@@ -216,6 +216,7 @@ mod tests {
             protocol: 22,
             focused_space_id: None,
             focused_tab_id: None,
+            herdr_shell: None,
             focused_pane_id: None,
             spaces,
             tabs: Vec::new(),

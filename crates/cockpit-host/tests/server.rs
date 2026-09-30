@@ -183,6 +183,7 @@ fn snapshot() -> SessionSnapshotResponse {
         protocol: 20,
         focused_space_id: Some("space-1".to_owned()),
         focused_tab_id: Some("tab-1".to_owned()),
+        herdr_shell: None,
         focused_pane_id: Some("pane-1".to_owned()),
         spaces: vec![SpaceSummary {
             id: "space-1".to_owned(),

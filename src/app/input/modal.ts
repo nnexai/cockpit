@@ -22,6 +22,7 @@ export function useModalFocus<T extends HTMLElement>(onDismiss: () => void): Ref
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     ref.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
     const escape = (event: KeyboardEvent) => {
+      if (document.querySelector("[data-server-modal]")) return;
       if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
         dismissRef.current();
@@ -30,7 +31,7 @@ export function useModalFocus<T extends HTMLElement>(onDismiss: () => void): Ref
     window.addEventListener("keydown", escape);
     return () => {
       window.removeEventListener("keydown", escape);
-      opener.current?.focus();
+      if (opener.current?.isConnected && !opener.current.closest("[inert]")) opener.current.focus();
     };
   }, []);
   return ref;

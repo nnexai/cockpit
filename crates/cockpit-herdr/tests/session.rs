@@ -608,6 +608,7 @@ async fn propagates_subscription_setup_error_without_id() {
         spaces: Vec::new(),
         tabs: Vec::new(),
         panes: Vec::new(),
+        herdr_shell: None,
         agents: Vec::new(),
     };
     let error = HerdrCliAdapter::new(config)
@@ -654,6 +655,7 @@ async fn event_subscription_rejects_identity_mismatch_before_live() {
         spaces: Vec::new(),
         tabs: Vec::new(),
         panes: Vec::new(),
+        herdr_shell: None,
         agents: Vec::new(),
     };
     let error = HerdrCliAdapter::new(config)
@@ -779,6 +781,7 @@ async fn event_subscription_terminates_on_identity_replacement_without_changed()
         spaces: Vec::new(),
         tabs: Vec::new(),
         panes: Vec::new(),
+        herdr_shell: None,
         agents: Vec::new(),
     };
     let mut subscription = HerdrCliAdapter::new(config)
@@ -904,6 +907,7 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
         focused_tab_id: None,
         focused_pane_id: None,
         spaces: Vec::new(),
+        herdr_shell: None,
         tabs: Vec::new(),
         panes: vec![PaneSummary {
             id: "stale-pane".into(),
@@ -945,6 +949,7 @@ async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
     let request = cockpit_protocol::v1::TerminalOpenRequest {
         session_id: "default".into(),
         pane_id: "bad/id".into(),
+        target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
         mode: cockpit_protocol::v1::TerminalMode::Control,
         takeover: false,
         cols: 80,
@@ -1075,6 +1080,7 @@ async fn subscription_receiver_drop_closes_idle_peer_socket() {
         focused_pane_id: None,
         spaces: Vec::new(),
         tabs: Vec::new(),
+        herdr_shell: None,
         panes: Vec::new(),
         agents: Vec::new(),
     };

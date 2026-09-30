@@ -588,6 +588,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, pa
     const frame = window.requestAnimationFrame(focusFirst);
     // Escape still closes setup when focus is outside the dialog.
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (document.querySelector("[data-server-modal]")) return;
       if (event.key !== "Escape" || event.defaultPrevented || dialogRef.current?.contains(event.target as Node)) return;
       event.preventDefault();
       handleClose();

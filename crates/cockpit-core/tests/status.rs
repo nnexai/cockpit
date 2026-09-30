@@ -181,6 +181,7 @@ fn snapshot(session_id: &str) -> SessionSnapshotResponse {
         protocol: 20,
         focused_space_id: Some("space-1".into()),
         focused_tab_id: Some("tab-1".into()),
+        herdr_shell: None,
         focused_pane_id: Some("pane-1".into()),
         spaces: vec![],
         tabs: vec![TabSummary {
@@ -681,6 +682,7 @@ async fn subscription_and_terminal_are_delegated() {
     let terminal = service
         .open_terminal(&TerminalOpenRequest {
             session_id: "session-a".into(),
+            target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
             pane_id: "pane-1".into(),
             mode: TerminalMode::Control,
             takeover: false,
@@ -714,6 +716,7 @@ async fn terminal_attaches_to_a_pane_in_an_unfocused_tab() {
     service
         .open_terminal(&TerminalOpenRequest {
             session_id: "session-a".into(),
+            target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
             pane_id: "pane-1".into(),
             mode: TerminalMode::Control,
             takeover: false,
@@ -729,6 +732,144 @@ async fn terminal_attaches_to_a_pane_in_an_unfocused_tab() {
 }
 
 #[tokio::test]
+async fn terminal_attaches_to_live_popup_without_pane_membership() {
+    let adapter = fake();
+    let snapshots = adapter.snapshots.clone();
+    let terminals = adapter.terminal_calls.clone();
+    let mut live = snapshot("session-a");
+    live.panes.clear();
+    live.herdr_shell = Some(cockpit_protocol::herdr_shell::HerdrShellState {
+        status: cockpit_protocol::herdr_shell::HerdrShellStatus::Live,
+        commands: vec![],
+        popup: Some(cockpit_protocol::herdr_shell::HerdrPopup {
+            terminal_id: "popup-terminal".into(),
+            title: "Popup".into(),
+            width: None,
+            height: None,
+        }),
+        prefix_bindings: Vec::new(),
+        error: None,
+    });
+    *snapshots.lock().await = Ok(live);
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+
+    service
+        .open_terminal(&TerminalOpenRequest {
+            session_id: "session-a".into(),
+            pane_id: "popup-terminal".into(),
+            target_kind: cockpit_protocol::v1::TerminalTargetKind::Popup,
+            mode: TerminalMode::Control,
+            takeover: false,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(terminals.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn terminal_rejects_popup_when_disconnected_or_terminal_differs() {
+    for shell in [
+        cockpit_protocol::herdr_shell::HerdrShellState {
+            status: cockpit_protocol::herdr_shell::HerdrShellStatus::Disconnected,
+            commands: vec![],
+            popup: Some(cockpit_protocol::herdr_shell::HerdrPopup {
+                terminal_id: "popup-terminal".into(),
+                title: "Popup".into(),
+                width: None,
+                height: None,
+            }),
+            prefix_bindings: Vec::new(),
+            error: Some("Herdr disconnected".into()),
+        },
+        cockpit_protocol::herdr_shell::HerdrShellState {
+            status: cockpit_protocol::herdr_shell::HerdrShellStatus::Live,
+            commands: vec![],
+            popup: Some(cockpit_protocol::herdr_shell::HerdrPopup {
+                terminal_id: "other-terminal".into(),
+                title: "Popup".into(),
+                width: None,
+                height: None,
+            }),
+            prefix_bindings: Vec::new(),
+            error: None,
+        },
+    ] {
+        let adapter = fake();
+        let snapshots = adapter.snapshots.clone();
+        let terminals = adapter.terminal_calls.clone();
+        let mut state = snapshot("session-a");
+        state.herdr_shell = Some(shell);
+        *snapshots.lock().await = Ok(state);
+        let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+
+        let error = service
+            .open_terminal(&TerminalOpenRequest {
+                session_id: "session-a".into(),
+                pane_id: "popup-terminal".into(),
+                target_kind: cockpit_protocol::v1::TerminalTargetKind::Popup,
+                mode: TerminalMode::Control,
+                takeover: false,
+                cols: 80,
+                rows: 24,
+                cell_width_px: 8,
+                cell_height_px: 16,
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "popup_not_open");
+        assert!(terminals.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn terminal_pane_target_rejects_popup_terminal_without_pane_membership() {
+    let adapter = fake();
+    let snapshots = adapter.snapshots.clone();
+    let terminals = adapter.terminal_calls.clone();
+    let mut live = snapshot("session-a");
+    live.panes.clear();
+    live.herdr_shell = Some(cockpit_protocol::herdr_shell::HerdrShellState {
+        status: cockpit_protocol::herdr_shell::HerdrShellStatus::Live,
+        commands: vec![],
+        popup: Some(cockpit_protocol::herdr_shell::HerdrPopup {
+            terminal_id: "popup-terminal".into(),
+            title: "Popup".into(),
+            width: None,
+            height: None,
+        }),
+        error: None,
+        prefix_bindings: Vec::new(),
+    });
+    *snapshots.lock().await = Ok(live);
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+
+    let error = service
+        .open_terminal(&TerminalOpenRequest {
+            session_id: "session-a".into(),
+            pane_id: "popup-terminal".into(),
+            target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
+            mode: TerminalMode::Control,
+            takeover: false,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "pane_not_in_tab");
+    assert!(terminals.lock().await.is_empty());
+}
+
+
+#[tokio::test]
 async fn terminal_rejects_pane_in_an_absent_tab() {
     let adapter = fake();
     let snapshots = adapter.snapshots.clone();
@@ -742,6 +883,7 @@ async fn terminal_rejects_pane_in_an_absent_tab() {
         .open_terminal(&TerminalOpenRequest {
             session_id: "session-a".into(),
             pane_id: "pane-1".into(),
+            target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
             mode: TerminalMode::Control,
             takeover: false,
             cols: 80,
@@ -770,6 +912,7 @@ async fn terminal_rejects_missing_pane_before_adapter_launch() {
         .open_terminal(&TerminalOpenRequest {
             session_id: "session-a".into(),
             pane_id: "pane-1".into(),
+            target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
             mode: TerminalMode::Control,
             takeover: false,
             cols: 80,
@@ -819,6 +962,7 @@ async fn invalid_requests_are_rejected_before_adapter_calls() {
             .open_terminal(&TerminalOpenRequest {
                 session_id: "session-a".into(),
                 pane_id: "pane-1".into(),
+                target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
                 mode: TerminalMode::Control,
                 takeover: false,
                 cols: 0,

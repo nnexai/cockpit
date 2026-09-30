@@ -38,6 +38,7 @@ export function BrowserColorPicker({ color, onChange }: { color: string; onChang
       close(false);
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (globalThis.document.querySelector("[data-server-modal]")) return;
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();

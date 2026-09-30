@@ -161,6 +161,10 @@ pub struct SessionSnapshotResponse {
     pub tabs: Vec<TabSummary>,
     pub panes: Vec<PaneSummary>,
     pub agents: Vec<AgentSummary>,
+    #[serde(default)]
+    #[ts(optional)]
+    #[ts(type = "HerdrShellState | null")]
+    pub herdr_shell: Option<crate::herdr_shell::HerdrShellState>,
 }
 
 /// Read-only terminal output for a pane.
@@ -244,6 +248,12 @@ pub enum PaneMoveDestination {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResourceMutationRequest {
+    CommandInvoke {
+        command_id: String,
+        space_id: String,
+        tab_id: String,
+        pane_id: Option<String>,
+    },
     SpaceCreate {
         cwd: Option<String>,
         label: Option<String>,
@@ -342,12 +352,24 @@ pub enum TerminalMode {
     Control,
 }
 
+/// Popup targets are terminal IDs, never members of a tab's pane collection.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalTargetKind {
+    #[default]
+    Pane,
+    Popup,
+}
+
 /// A request to attach to a pane's terminal stream.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct TerminalOpenRequest {
     pub session_id: String,
     pub pane_id: String,
+    #[serde(default)]
+    #[ts(as = "Option<TerminalTargetKind>", optional)]
+    pub target_kind: TerminalTargetKind,
     pub mode: TerminalMode,
     pub takeover: bool,
     pub cols: u16,

@@ -1,3 +1,5 @@
+import { herdrShadowsPrefix, herdrShadowsChord } from "./herdrBindings";
+
 /**
  * The keyboard shortcut registry: the single source of truth for every Cockpit
  * shortcut. The prefix router (`keymap.ts`), the Commands list, tooltips
@@ -176,8 +178,13 @@ export function formatChord(chord: Chord, platform: Platform = detectPlatform())
 export function shortcutForms(id: ShortcutId, platform: Platform = detectPlatform()): string[] {
   const entry = shortcutEntry(id);
   const forms: string[] = [];
-  if (entry.prefix) forms.push(`Ctrl+B ${entry.prefix.display}`);
-  for (const chord of entry.chords ?? []) if (!chord.platform || chord.platform === platform) forms.push(formatChord(chord, platform));
+  if (entry.prefix && !herdrShadowsPrefix(entry.prefix.key, entry.prefix.shift)) forms.push(`Ctrl+B ${entry.prefix.display}`);
+  for (const chord of entry.chords ?? []) {
+    if (chord.platform && chord.platform !== platform) continue;
+    const key = chord.key ?? chord.code?.replace(/^(Key|Digit)/, "") ?? chord.display;
+    if (herdrShadowsChord({ key, code: chord.code, ctrlKey: Boolean(chord.ctrl || (chord.mod && platform !== "mac")), metaKey: Boolean(chord.mod && platform === "mac"), altKey: Boolean(chord.alt), shiftKey: Boolean(chord.shift) })) continue;
+    forms.push(formatChord(chord, platform));
+  }
   return forms;
 }
 
@@ -188,7 +195,7 @@ export function shortcutForms(id: ShortcutId, platform: Platform = detectPlatfor
 export function formatShortcut(id: ShortcutId, platform: Platform = detectPlatform(), only?: "prefix" | "chord"): string {
   const entry = shortcutEntry(id);
   const forms = shortcutForms(id, platform);
-  const prefixCount = entry.prefix ? 1 : 0;
+  const prefixCount = entry.prefix && !herdrShadowsPrefix(entry.prefix.key, entry.prefix.shift) ? 1 : 0;
   const picked = only === "prefix" ? forms.slice(0, prefixCount) : only === "chord" ? forms.slice(prefixCount) : forms;
   return picked.join(SHORTCUT_SEPARATOR);
 }
@@ -201,7 +208,11 @@ export function withShortcut(label: string, id: ShortcutId, platform?: Platform,
 
 /** For `aria-keyshortcuts`: single chords only, a prefix sequence cannot be expressed. */
 export function ariaKeyShortcuts(id: ShortcutId, platform: Platform = detectPlatform()): string | undefined {
-  const chords = (shortcutEntry(id).chords ?? []).filter((chord) => (!chord.platform || chord.platform === platform) && (chord.code || chord.key));
+  const chords = (shortcutEntry(id).chords ?? []).filter((chord) => {
+    if ((chord.platform && chord.platform !== platform) || (!chord.code && !chord.key)) return false;
+    const key = chord.key ?? chord.code?.replace(/^(Key|Digit)/, "") ?? chord.display;
+    return !herdrShadowsChord({ key, code: chord.code, ctrlKey: Boolean(chord.ctrl || (chord.mod && platform !== "mac")), metaKey: Boolean(chord.mod && platform === "mac"), altKey: Boolean(chord.alt), shiftKey: Boolean(chord.shift) });
+  });
   if (chords.length === 0) return undefined;
   return chords.map((chord) => {
     const parts: string[] = [];
@@ -237,8 +248,8 @@ export function unboundPrefixMessage(key: string, shiftKey: boolean): string {
 
 /** The chip text while the prefix is armed, built from the same keys as the table above. */
 export function armedPrefixHint(): string {
-  const key = (id: PrefixCommand) => shortcutEntry(id).prefix!.display;
-  return `${key("help")} commands · ${key("new-tab")} tab · ${key("split-right")} ${key("split-down")} split · ${key("focus-spaces")} spaces · ${key("toggle-library")} library`;
+  const hints: Array<[PrefixCommand, string]> = [["help", "commands"], ["new-tab", "tab"], ["split-right", "split"], ["split-down", "split"], ["focus-spaces", "spaces"], ["toggle-library", "library"]];
+  return hints.flatMap(([id, label]) => { const prefix = shortcutEntry(id).prefix!; return herdrShadowsPrefix(prefix.key, prefix.shift) ? [] : [`${prefix.display} ${label}`]; }).join(" · ");
 }
 
 export type ShortcutKeyEvent = Pick<KeyboardEvent, "key" | "code" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey"> & { target?: EventTarget | null };

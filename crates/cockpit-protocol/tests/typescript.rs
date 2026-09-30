@@ -178,6 +178,7 @@ fn session_and_terminal_contracts_use_exact_wire_tags() {
     let open = TerminalOpenRequest {
         session_id: "session-1".to_owned(),
         pane_id: "pane-1".to_owned(),
+        target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
         mode: TerminalMode::Control,
         takeover: true,
         cols: 120,
@@ -190,6 +191,7 @@ fn session_and_terminal_contracts_use_exact_wire_tags() {
         json!({
             "session_id": "session-1",
             "pane_id": "pane-1",
+            "target_kind": "pane",
             "mode": "control",
             "takeover": true,
             "cols": 120,

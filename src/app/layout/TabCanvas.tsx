@@ -12,6 +12,7 @@ export interface TabCanvasProps {
   dispatch: (action: LayoutAction) => void;
   registerTransient: (cancel: () => void) => () => void;
   announce: (text: string) => void;
+  inputBlocked?: boolean;
 }
 
 const dividerKey = (divider: DividerHandle) => `${divider.splitId}:${divider.index}`;
@@ -70,7 +71,7 @@ export function TabCanvas(props: TabCanvasProps) {
   }, [registerTransient, tab.tabId]);
   useLayoutEffect(() => {
     cancelTransient.current?.();
-  }, [tab.tabId, tab.revision, tab.zoomLeafId, area.width, area.height]);
+  }, [tab.tabId, tab.revision, tab.zoomLeafId, area.width, area.height, props.inputBlocked]);
   useLayoutEffect(() => {
     for (const leaf of members) {
       const host = hosts.current.get(leaf.id);

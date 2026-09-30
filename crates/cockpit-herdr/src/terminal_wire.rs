@@ -136,12 +136,13 @@ enum ServerMessage {
     Parked,
 }
 
-pub(crate) async fn open_terminal(
+pub(crate) async fn open_terminal_identity(
     socket_path: &Path,
     request: &TerminalOpenRequest,
     stream_id: String,
+    expected_identity: Option<&str>,
 ) -> Result<TerminalSession, InspectionError> {
-    open_terminal_within(socket_path, request, stream_id, TERMINAL_HANDSHAKE_TIMEOUT).await
+    open_terminal_within(socket_path, request, stream_id, TERMINAL_HANDSHAKE_TIMEOUT, expected_identity).await
 }
 
 async fn open_terminal_within(
@@ -149,6 +150,7 @@ async fn open_terminal_within(
     request: &TerminalOpenRequest,
     stream_id: String,
     deadline: Duration,
+    expected_identity: Option<&str>,
 ) -> Result<TerminalSession, InspectionError> {
     request
         .validate()
@@ -168,6 +170,14 @@ async fn open_terminal_within(
                 format!("Herdr terminal protocol connection failed: {error}"),
             )
         })?;
+    if let Some(expected) = expected_identity {
+        let actual = crate::cli::HerdrCliAdapter::socket_peer_identity(socket_path, &socket)?;
+        if actual.rsplit_once(":pid=").map(|(_, peer)| peer)
+            != expected.rsplit_once(":pid=").map(|(_, peer)| peer)
+        {
+            return Err(InspectionError::new("session_identity_mismatch", "popup terminal endpoint changed before attach"));
+        }
+    }
     timeout(
         deadline,
         send_message(
@@ -1067,6 +1077,7 @@ mod tests {
         let request = TerminalOpenRequest {
             session_id: "session".to_owned(),
             pane_id: "pane".to_owned(),
+            target_kind: cockpit_protocol::v1::TerminalTargetKind::Pane,
             mode: TerminalMode::Control,
             takeover: false,
             cols: 80,
@@ -1079,7 +1090,8 @@ mod tests {
                 &path,
                 &request,
                 "stream".to_owned(),
-                Duration::from_millis(200)
+                Duration::from_millis(200),
+                None,
             )
             .await
             .expect_err("timeout")

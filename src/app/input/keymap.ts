@@ -1,10 +1,12 @@
 import { type PrefixCommand, prefixCommandForKey, unboundPrefixMessage } from "./shortcuts";
+import { matchingHerdrCommand, herdrBindingMatches, type HerdrBindingEvent, type HerdrBinding, type HerdrChord } from "./herdrBindings";
+import type { HerdrCommand } from "../../protocol/generated/v1";
 
 function editableTarget(target: EventTarget | null): boolean {
   return target !== null && target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 }
 
-export type WorkbenchKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey" | "target" | "isComposing" | "preventDefault" | "stopPropagation">;
+export type WorkbenchKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey" | "target" | "isComposing" | "preventDefault" | "stopPropagation"> & Partial<Pick<KeyboardEvent, "code" | "repeat">>;
 export type WorkbenchKeyRouting = {
   modalOpen: boolean;
   prefixActive: boolean;
@@ -13,6 +15,13 @@ export type WorkbenchKeyRouting = {
   setCommandsOpen: (open: boolean) => void;
   /** A key that follows the prefix but has no binding. The key is swallowed; say so. */
   onUnboundPrefixKey?: (message: string) => void;
+  herdrBindings?: readonly HerdrBinding[];
+  runHerdrCommand?: (command: HerdrCommand) => void;
+  serverModalOpen?: boolean;
+  popupPending?: boolean;
+  herdrPrefixes?: readonly HerdrChord[];
+  prefixOrigin?: "cockpit" | "herdr";
+  onPrefixArm?: (origin: "cockpit" | "herdr", label: string) => void;
 };
 
 function modifierOnlyKey(key: string): boolean {
@@ -35,6 +44,8 @@ const MODAL_DIALOG = 'dialog[open], [role="dialog"][aria-modal="true"]:not(#cock
  */
 export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: WorkbenchKeyRouting): void {
   if (event.isComposing) return;
+  if (routing.serverModalOpen) return;
+  if (routing.popupPending) { event.preventDefault(); event.stopPropagation(); return; }
   const target = typeof HTMLElement !== "undefined" && event.target instanceof HTMLElement ? event.target : null;
   const modalOpen = routing.modalOpen || Boolean(target?.closest(MODAL_DIALOG));
   const browserFocused = Boolean(target?.closest(".browser-pane"));
@@ -49,12 +60,24 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
     return;
   }
   if (modalOpen) return;
+  if (prefixSafe && !routing.prefixActive) {
+    const custom = matchingHerdrCommand(routing.herdrBindings ?? [], event as HerdrBindingEvent, false);
+    if (custom) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) routing.runHerdrCommand?.(custom);
+      return;
+    }
+  }
   const plainCtrlB = event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b";
+  const serverPrefix = routing.herdrPrefixes?.find(prefix => herdrBindingMatches(prefix, event));
+  const sharedPrefix = routing.herdrPrefixes?.some(prefix => herdrBindingMatches(prefix, { key: "b", ctrlKey: true, shiftKey: false, altKey: false, metaKey: false })) ?? false;
   if (!routing.prefixActive) {
-    if (plainCtrlB && prefixSafe) {
+    if ((plainCtrlB || serverPrefix) && prefixSafe) {
       event.preventDefault();
       event.stopPropagation();
       routing.setPrefixActive(true);
+      routing.onPrefixArm?.(serverPrefix ? "herdr" : "cockpit", serverPrefix?.display ?? "Ctrl+B");
       return;
     }
     if (event.key === "?" && !event.ctrlKey && !event.altKey && !event.metaKey && !editableTarget(target) && !browserFocused) {
@@ -66,15 +89,23 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
   if (!prefixSafe) return;
   if (modifierOnlyKey(event.key)) return;
   // `Ctrl+B Ctrl+B`: disarm and let this key through, so the terminal or page receives a literal Ctrl+B.
-  if (plainCtrlB) {
+  if ((routing.prefixOrigin === "herdr" && serverPrefix) || plainCtrlB) {
     routing.setPrefixActive(false);
+    return;
+  }
+  const custom = routing.prefixOrigin === "herdr" || sharedPrefix ? matchingHerdrCommand(routing.herdrBindings ?? [], event as HerdrBindingEvent, true) : null;
+  if (custom) {
+    event.preventDefault();
+    event.stopPropagation();
+    routing.setPrefixActive(false);
+    if (!event.repeat) routing.runHerdrCommand?.(custom);
     return;
   }
   if (event.ctrlKey || event.altKey || event.metaKey) {
     routing.setPrefixActive(false);
     return;
   }
-  const command = prefixCommandForKey(event.key, event.shiftKey);
+  const command = routing.prefixOrigin === "herdr" && !sharedPrefix ? null : prefixCommandForKey(event.key, event.shiftKey);
   if (command) {
     event.preventDefault();
     event.stopPropagation();

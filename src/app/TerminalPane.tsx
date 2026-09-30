@@ -42,6 +42,9 @@ export type TerminalPaneProps = {
   onClosed?: () => void;
   onClosePane?: () => void;
   registerStream?: (stream: TerminalStream, active: boolean) => void;
+  accessibleLabel?: string;
+  onStateChange?: (state: { ready: boolean; error: string | null }) => void;
+  onCellGeometry?: (geometry: { cell_width_px: number; cell_height_px: number }) => void;
 };
 
 type PaneError = { code: string; message: string };
@@ -231,7 +234,7 @@ function validTerminalGrid(cols: number, rows: number): boolean {
     && cols > 0 && rows > 0 && cols <= 65535 && rows <= 65535;
 }
 
-export function TerminalPane({ client, request, selected, presented = true, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, focusOnAttach = true, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, presented = true, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, focusOnAttach = true, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream, accessibleLabel, onStateChange, onCellGeometry }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -244,7 +247,13 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   const [attempt, setAttempt] = useState(0);
   const [closed, setClosed] = useState(false);
   const [terminalReady, setTerminalReady] = useState(false);
+  const [framePainted, setFramePainted] = useState(false);
   const [clipboardError, setClipboardError] = useState<{ operation: "copy" | "paste"; message: string } | null>(null);
+  const onCellGeometryRef = useRef(onCellGeometry);
+  onCellGeometryRef.current = onCellGeometry;
+  useEffect(() => {
+    onStateChange?.({ ready: framePainted && ownership === "owned" && !closed && !error, error: error?.message ?? (closed ? "The popup terminal process has closed; waiting for Herdr state." : ownership === "lost" || ownership === "conflict" ? "Control taken by another client" : null) });
+  }, [framePainted, ownership, closed, error, onStateChange]);
   const [clipboardBusy, setClipboardBusy] = useState(false);
   const [terminalContextOpen, setTerminalContextOpen] = useState(false);
   const [terminalContextPosition, setTerminalContextPosition] = useState<{ x: number; y: number } | null>(null);
@@ -360,6 +369,8 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   };
   const sendInput = (command: TerminalCommand) => {
     if (!selectedRef.current || ownershipRef.current === "lost" || ownershipRef.current === "conflict") return;
+    // Popup input is never buffered while attaching or reconnecting.
+    if (request.target_kind === "popup" && (!controlAllowedRef.current || ownershipRef.current !== "owned" || !streamRef.current)) return;
     const hasSelectedFocusIntent = selectedRef.current && focusTokenRef.current > 0;
     if (!controlAllowedRef.current && !controlRequestPendingRef.current && !controlPendingRef.current && !hasSelectedFocusIntent) return;
     if (controlAllowedRef.current && ownershipRef.current === "owned" && streamRef.current) sendStreamCommand(streamRef.current, command);
@@ -478,6 +489,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       if (!contextMenuRef.current?.contains(event.target as Node)) setTerminalContextOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLElement && event.target.closest("[data-server-modal]") && request.target_kind !== "popup") return;
       if (event.key === "Escape") setTerminalContextOpen(false);
     };
     window.addEventListener("pointerdown", dismiss);
@@ -508,11 +520,13 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     let resizeFrame: number | null = null;
     let disposed = false;
     terminal.open(host);
+    if (accessibleLabel && terminal.textarea) terminal.textarea.setAttribute("aria-label", accessibleLabel);
     terminal.loadAddon(fit);
     loadGpuRenderer(terminal);
     fitRef.current = fit;
     terminalRef.current = terminal;
     fit.fit();
+    onCellGeometryRef.current?.(terminalCellGeometry(terminal));
     const initialGrid = { cols: terminal.cols, rows: terminal.rows };
     desiredViewportGridRef.current = initialGrid;
     renderedGridRef.current = initialGrid;
@@ -604,6 +618,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     const resize = terminal.onResize(({ cols, rows }) => {
       if (suppressFrameResizeRef.current) return;
       desiredViewportGridRef.current = { cols, rows };
+      onCellGeometryRef.current?.(terminalCellGeometry(terminal, { cols, rows }));
       renderedGridRef.current = { cols, rows };
       const stream = streamRef.current;
       if (!stream || ownershipRef.current !== "owned") return;
@@ -682,6 +697,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal || !terminalReady || deferAttachment) return;
+    setFramePainted(false);
     const viewportGrid = desiredViewportGridRef.current ?? {
       cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
@@ -793,7 +809,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
             readinessRender = terminal.onRender(() => {
               readinessRender?.dispose();
               readinessRender = null;
-              if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal) onReadyRef.current?.();
+              if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal) { setFramePainted(true); onReadyRef.current?.(); }
             });
             terminal.refresh(0, terminal.rows - 1);
           }
@@ -1004,7 +1020,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       if (stream) registerAttachment?.(stream, false);
       stream?.close();
     };
-  }, [client, deferAttachment, request.session_id, request.pane_id, terminalReady, attempt]);
+  }, [client, deferAttachment, request.session_id, request.pane_id, request.target_kind, terminalReady, attempt]);
 
   const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
     const terminal = terminalRef.current;
@@ -1018,7 +1034,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     <div
       className="terminal-host"
       ref={hostRef}
-      aria-label={`Terminal ${request.pane_id}`}
+      aria-label={accessibleLabel ?? `Terminal ${request.pane_id}`}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();

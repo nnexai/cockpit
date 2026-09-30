@@ -6,6 +6,7 @@ pub mod comment_paste;
 pub mod comments;
 pub mod context;
 pub mod credentials;
+pub mod herdr_shell;
 pub mod library;
 pub mod context_media;
 pub mod context_search;
@@ -34,6 +35,6 @@ pub use v1::{
     ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
     SessionSnapshotResponse, SessionStreamMessage, SessionSummary, SpaceGitStatus,
     SpaceGitStatusResponse, SpaceGitSummary, SpaceSummary, StatusResponse, TabSummary,
-    TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalOwnershipState,
+    TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalOwnershipState, TerminalTargetKind,
     TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };

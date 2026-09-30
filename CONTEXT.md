@@ -184,6 +184,12 @@ Only live authoritative membership can prune leaves. Loss of a tab or its final 
 
 Commands act on the selected leaf; terminal creation and cross-tab terminal moves remain Herdr operations, while cycle, directional focus, swap, resize and zoom use local geometry. Header controls and Commands make actions discoverable. `Ctrl+B` routing is shared across native and browser clients; Esc belongs to content surfaces except when cancelling a drag or restoring zoom from layout chrome.
 
+Herdr-advertised custom commands are discovered from the identity-checked client-shell projection, not from plugin-specific integrations or Cockpit's configuration. Opaque command IDs, direct and `prefix+` binding aliases, descriptions and configured Herdr prefix chords update with the server projection, including config reloads. Supported actions are shell, pane, popup and plugin action; unknown actions are not invokable. Commands lists these runtime actions alongside Cockpit's static registry. Invocation uses `command.invoke` with the confirmed Herdr Space/tab/pane context, revalidating membership and the current advertisement before dispatch.
+
+Cockpit keeps its own `Ctrl+B` prefix. A different configured Herdr prefix routes advertised custom bindings without replacing Cockpit's shortcuts; when Herdr also uses `Ctrl+B`, advertised custom bindings take precedence over colliding Cockpit bindings. Direct custom chords similarly precede local viewer chords, outside text editors and local dialogs. Literal double-prefix passthrough is reserved: `Ctrl+B Ctrl+B` sends a literal `Ctrl+B`, and a Herdr-armed prefix followed by a configured Herdr prefix passes that chord to the focused surface.
+
+Herdr's singleton popup is a centered floating terminal above the unchanged Cockpit split layout, not a pane inserted into that tree. Its server title and cell/percentage size hints determine presentation within the work area. The underlay is inert, underlying terminal input is gated (also while a popup command is pending), and painted panes keep their attachments and geometry. The popup program receives Esc, Enter, Tab and prefix chords; Cockpit does not force-close it or run workbench shortcuts behind it. Authoritative server closure restores DOM focus to the opener if still available, otherwise selected-tab chrome, without a Herdr focus mutation. Disconnection retains the last open popup with disabled input, status and retry rather than interpreting stale state as closure.
+
 ### 5.4 Terminal attachment and scalability
 
 Herdr owns every PTY, process, terminal model, and terminal stream. xterm.js owns rendering and input capture only.
@@ -203,6 +209,10 @@ Herdr owns every PTY, process, terminal model, and terminal stream. xterm.js own
 - Attach failure leaves the pane visible with stale/disconnected state, retry, and resync. It never silently closes the Herdr process.
 
 The client loads hierarchy metadata for all resources. It does not require an xterm.js DOM instance or live output subscription for every pane.
+
+Command/popup metadata and invocation share the native/browser `CockpitClient` session-stream and resource-mutation contract; popup rendering uses the same direct terminal stream with an explicit popup target. Tauri IPC/channels and browser HTTP/WebSocket hosts compose the same core and Herdr adapter. The client-shell decoder targets Herdr 0.9.2's generation-1 surface (`shell.snapshot.v1`, `shell.surface.v1`) in addition to the protocol/schema requirements above; unsupported generation/codecs produce `shell_unsupported`, endpoint identity mismatch fails closed, and connection/handshake failures remain explicit shell status errors. Invocation and popup attach reject retired advertisements or targets with `command_not_available` or `popup_not_open`.
+
+The existing client-shell API requires an active surface subscription at 120×40 cells to obtain popup metadata. This is not a passive metadata observer: it can resize unattached Herdr panes, including a concurrently visible Herdr TUI. That side effect is an accepted constraint of the chosen API, not a claim that Cockpit leaves every Herdr PTY untouched. Direct control-attached Cockpit panes retain their own fitted PTY sizes; Cockpit's split rectangles remain unchanged.
 
 ### 5.5 Virtual Files, Review and Browser viewers
 
@@ -365,7 +375,7 @@ Verification uses the actual changed surface:
 - Cockpit-driven provider sign-in flows (OAuth, passkeys) and glab/gh/tea token injection;
 - remote browser access, TLS, and multi-user authorization;
 - a Cockpit settings screen;
-- arbitrary shell execution from the UI;
+- arbitrary user-entered shell execution from the UI (server-advertised configured commands are supported);
 - raw socket forwarding to browsers;
 - unbounded file previews;
 - formal WCAG 2.2 AA release compliance.

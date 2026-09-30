@@ -185,6 +185,17 @@ describe("client DTO parsers", () => {
     expect(() => parseTerminalStreamMessage({ type: "graphics", session_id: "session-1", pane_id: "pane-1", stream_id: "stream-1", revision: "7", bytes: "bad" })).toThrow(/unknown type/);
     expect(() => parseTerminalCommand({ type: "terminal.mouse", kind: "moved", button: "left", column: 12, row: 7, modifiers: 0 })).toThrow(CockpitClientError);
   });
+  it("retains authoritative command and popup metadata, including stale open popups", () => {
+    const shell = { status: "live", prefix_bindings: ["ctrl+b"], commands: [{ command_id: "opaque/reloaded", binding_labels: ["prefix+alt+a"], action: "plugin_action", description: null }], popup: { terminal_id: "popup-1", title: "Task actions", width: { kind: "percent", value: 80 }, height: { kind: "cells", value: 24 } }, error: null };
+    expect(parseSessionSnapshotResponse({ ...snapshot, herdr_shell: shell }).herdr_shell).toEqual(shell);
+    const disconnected = { ...shell, status: "disconnected", error: "Connection lost" };
+    expect(parseSessionSnapshotResponse({ ...snapshot, herdr_shell: disconnected }).herdr_shell?.popup).toEqual(shell.popup);
+    expect(parseSessionSnapshotResponse({ ...snapshot, herdr_shell: { ...shell, popup: null } }).herdr_shell?.popup).toBeNull();
+    expect(() => parseSessionSnapshotResponse({ ...snapshot, herdr_shell: { ...shell, popup: undefined } })).toThrow(CockpitClientError);
+    expect(() => parseSessionSnapshotResponse({ ...snapshot, herdr_shell: { ...shell, popup: { ...shell.popup, width: { kind: "percent", value: -1 } } } })).toThrow(CockpitClientError);
+    expect(parseTerminalOpenRequest({ ...terminalRequest, pane_id: "popup-1", target_kind: "popup" }).target_kind).toBe("popup");
+    expect(() => parseTerminalOpenRequest({ ...terminalRequest, target_kind: "raw" })).toThrow(CockpitClientError);
+  });
   it("validates every resource mutation discriminant and required nullable field", () => {
     const mutations: ResourceMutationRequest[] = [
       { type: "space_create", cwd: null, label: null },
@@ -203,10 +214,12 @@ describe("client DTO parsers", () => {
         destination: { type: "existing_tab", tab_id: "tab-2", direction: "down", target_pane_id: null, ratio: null },
       },
       { type: "pane_close", pane_id: "pane-1" },
+      { type: "command_invoke", command_id: "opaque:17", space_id: "space-1", tab_id: "tab-1", pane_id: null },
     ];
     for (const mutation of mutations) expect(parseResourceMutationRequest(mutation)).toEqual(mutation);
     expect(() => parseResourceMutationRequest({ type: "space_create", label: null })).toThrow(CockpitClientError);
     expect(() => parseResourceMutationRequest({ type: "pane_split", pane_id: "pane-1", direction: "right", ratio: 1 })).toThrow(CockpitClientError);
+    expect(() => parseResourceMutationRequest({ type: "command_invoke", command_id: "opaque:17", space_id: "space-1", tab_id: "tab-1" })).toThrow(CockpitClientError);
 
     expect(() => parseResourceMutationRequest({ type: "pane_move", pane_id: "pane-1", destination: { type: "raw", method: "pane.move" } })).toThrow(CockpitClientError);
     expect(() => parseResourceMutationRequest({ type: "raw", method: "layout.apply", params: {} })).toThrow(CockpitClientError);

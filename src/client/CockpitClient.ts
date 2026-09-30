@@ -1494,6 +1494,26 @@ export function parseBrowserFeedbackAck(value: unknown): BrowserFeedbackAck {
   return { acknowledged_ids: value.acknowledged_ids, remaining: value.remaining };
 }
 
+function parseHerdrShell(value: unknown): NonNullable<SessionSnapshotResponse["herdr_shell"]> {
+  if (!isRecord(value) || !isOneOf(value.status, ["live", "connecting", "disconnected", "unsupported"] as const) || !Array.isArray(value.commands) || !Array.isArray(value.prefix_bindings) || !value.prefix_bindings.every(isString) || !isNullableString(value.error)) return malformed("Herdr shell state is malformed");
+  const commands = value.commands.map(command => {
+    if (!isRecord(command) || !isString(command.command_id) || !Array.isArray(command.binding_labels) || !command.binding_labels.every(isString) || !isOneOf(command.action, ["shell", "pane", "popup", "plugin_action", "unknown"] as const) || !isNullableString(command.description)) return malformed("Herdr command is malformed");
+    return { command_id: command.command_id, binding_labels: command.binding_labels, action: command.action, description: command.description };
+  });
+  let popup: NonNullable<SessionSnapshotResponse["herdr_shell"]>["popup"] = null;
+  if (value.popup !== null) {
+    const source = value.popup;
+    if (!isRecord(source) || !isString(source.terminal_id) || !isString(source.title)) return malformed("Herdr popup is malformed");
+    const size = (hint: unknown) => {
+      if (hint === null || hint === undefined) return null;
+      if (!isRecord(hint) || !isOneOf(hint.kind, ["cells", "percent"] as const) || !isU16(hint.value)) return malformed("Herdr popup size is malformed");
+      return { kind: hint.kind, value: hint.value };
+    };
+    popup = { terminal_id: source.terminal_id, title: source.title, width: size(source.width), height: size(source.height) };
+  }
+  return { status: value.status, commands, prefix_bindings: value.prefix_bindings, popup, error: value.error };
+}
+
 export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotResponse {
   if (
     !isRecord(value) || !isString(value.session_id) || !isString(value.server_instance) || !/^[0-9a-f]{16}$/.test(value.server_instance) || !isString(value.version) || !isU32(value.protocol) ||
@@ -1507,6 +1527,7 @@ export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotRes
     focused_space_id: value.focused_space_id, focused_tab_id: value.focused_tab_id, focused_pane_id: value.focused_pane_id,
     spaces: value.spaces, tabs: value.tabs, panes: value.panes,
     agents: value.agents.map((agent) => ({ ...agent, state_change_seq: agent.state_change_seq ?? 0 })),
+    ...(value.herdr_shell === undefined ? {} : { herdr_shell: value.herdr_shell === null ? null : parseHerdrShell(value.herdr_shell) }),
   };
 }
 
@@ -1630,6 +1651,9 @@ export function parseResourceMutationRequest(value: unknown): ResourceMutationRe
     case "pane_close":
       if (isString(value.pane_id)) return { type: value.type, pane_id: value.pane_id };
       break;
+    case "command_invoke":
+      if (isString(value.command_id) && isString(value.space_id) && isString(value.tab_id) && isNullableString(value.pane_id)) return { type: value.type, command_id: value.command_id, space_id: value.space_id, tab_id: value.tab_id, pane_id: value.pane_id };
+      break;
     default:
       return malformed(`Unknown resource mutation type: ${value.type}`);
   }
@@ -1690,6 +1714,7 @@ export function parseTerminalOpenRequest(value: unknown): TerminalOpenRequest {
     !isRecord(value) ||
     !isString(value.session_id) ||
     !isString(value.pane_id) ||
+    (value.target_kind !== undefined && value.target_kind !== "pane" && value.target_kind !== "popup") ||
     value.mode !== "control" ||
     !isBoolean(value.takeover) ||
     !isU16(value.cols) ||
@@ -1710,6 +1735,7 @@ export function parseTerminalOpenRequest(value: unknown): TerminalOpenRequest {
   return {
     session_id: value.session_id,
     pane_id: value.pane_id,
+    ...(value.target_kind === undefined ? {} : { target_kind: value.target_kind }),
     mode: value.mode,
     takeover: value.takeover,
     cols: value.cols,

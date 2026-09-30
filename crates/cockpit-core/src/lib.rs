@@ -490,11 +490,13 @@ impl CockpitService {
                 self.adapter.session_snapshot(&request.session_id).await,
             )
             .await?;
-        self.session_result(
-            &request.session_id,
-            validate_terminal_pane_membership(&request.session_id, &request.pane_id, &snapshot),
-        )
-        .await?;
+        let eligibility = match request.target_kind {
+            cockpit_protocol::v1::TerminalTargetKind::Pane =>
+                validate_terminal_pane_membership(&request.session_id, &request.pane_id, &snapshot),
+            cockpit_protocol::v1::TerminalTargetKind::Popup =>
+                validate_terminal_popup(&request.session_id, &request.pane_id, &snapshot),
+        };
+        self.session_result(&request.session_id, eligibility).await?;
         self.session_result(
             &request.session_id,
             self.adapter.open_terminal(request).await,
@@ -693,6 +695,15 @@ const MAX_MOVE_BLOCK_IDS: usize = 128;
 
 fn validate_mutation(request: &ResourceMutationRequest) -> Result<(), InspectionError> {
     match request {
+        ResourceMutationRequest::CommandInvoke { command_id, space_id, tab_id, pane_id } => {
+            validate_text(command_id, "command_id", 512)?;
+            validate_resource_id(space_id, "space")?;
+            validate_resource_id(tab_id, "tab")?;
+            if let Some(pane_id) = pane_id {
+                validate_resource_id(pane_id, "pane")?;
+            }
+            Ok(())
+        }
         ResourceMutationRequest::SpaceCreate { cwd, label } => {
             validate_optional_text(cwd.as_deref(), "cwd", MAX_PATH_BYTES)?;
             validate_optional_text(label.as_deref(), "label", MAX_LABEL_BYTES)
@@ -856,6 +867,22 @@ fn validate_terminal_pane_membership(
         Ok(())
     } else {
         Err(InspectionError::new("pane_not_in_tab", "terminal pane is not a member of an existing tab"))
+    }
+}
+
+fn validate_terminal_popup(
+    session_id: &str,
+    terminal_id: &str,
+    snapshot: &SessionSnapshotResponse,
+) -> Result<(), InspectionError> {
+    validate_snapshot_session(session_id, snapshot)?;
+    if snapshot.herdr_shell.as_ref().is_some_and(|shell|
+        shell.status == cockpit_protocol::herdr_shell::HerdrShellStatus::Live
+            && shell.popup.as_ref().is_some_and(|popup| popup.terminal_id == terminal_id))
+    {
+        Ok(())
+    } else {
+        Err(InspectionError::new("popup_not_open", "terminal target is not the live Herdr popup"))
     }
 }
 

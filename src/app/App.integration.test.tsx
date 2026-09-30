@@ -996,6 +996,24 @@ describe("keyboard prefix in the workbench", () => {
   });
 
 
+  it("invokes advertised commands with confirmed Herdr focus while keeping the Library open", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    await mount(fixture);
+    const next = snapshot("session-1");
+    next.herdr_shell = { status: "live", prefix_bindings: ["ctrl+b"], commands: [{ command_id: "opaque-command", binding_labels: ["prefix+alt+a"], action: "plugin_action", description: "Configured action" }], popup: null, error: null };
+    act(() => fixture.emitSnapshot("session-1", 1, 2, next));
+    await settle();
+    prefix(window, "i");
+    await settle();
+    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
+    prefix(window, "å", { altKey: true, code: "KeyA" });
+    await settle();
+    expect(fixture.mutateCalls).toHaveBeenCalledExactlyOnceWith("session-1", { type: "command_invoke", command_id: "opaque-command", space_id: "space-1", tab_id: "tab-1", pane_id: "pane-1" });
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
+  });
+
   it("shows a not-bound hint for a key after the prefix that Cockpit does not use", async () => {
     const fixture = new AppFixture();
     await mount(fixture);

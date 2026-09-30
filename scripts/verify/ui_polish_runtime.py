@@ -52,10 +52,11 @@ def launch(root, name, argv, env):
 
 
 VIEWER_PLUGINS = ("herdr-file-viewer", "persiyanov.reviewr")
+ACTION_LAUNCHER_PLUGIN = "nnex.action-launcher"
 
 
-def copy_viewer_plugins(root):
-    """Copy the owner's installed Files/Reviewr plugins into the fixture's own registry.
+def copy_plugins(root, plugin_ids):
+    """Copy selected installed plugins into the fixture's own registry.
 
     Writes only under the fixture root and never runs `herdr plugin`, which may reach
     the owner's registry. The owner's registry is only read.
@@ -64,7 +65,7 @@ def copy_viewer_plugins(root):
     registry = json.loads((owner_config / "plugins.json").read_text())
     copied = []
     for entry in registry:
-        if entry["plugin_id"] not in VIEWER_PLUGINS:
+        if entry["plugin_id"] not in plugin_ids:
             continue
         source = Path(entry["plugin_root"])
         target = root / "plugins" / source.name
@@ -72,20 +73,46 @@ def copy_viewer_plugins(root):
         entry = json.loads(json.dumps(entry).replace(str(source), str(target)))
         entry["source"] = {"kind": "local"}
         copied.append(entry)
-    missing = set(VIEWER_PLUGINS) - {entry["plugin_id"] for entry in copied}
+    missing = set(plugin_ids) - {entry["plugin_id"] for entry in copied}
     if missing:
         raise SystemExit(f"owner registry lacks plugins: {sorted(missing)}")
     (root / "config/herdr/plugins.json").write_text(json.dumps(copied, indent=2))
 
 
-def start(with_plugins=False):
+def configure_action_launcher(root):
+    """Install harmless custom command acceptance data only in this fixture."""
+    config_dir = root / "config/herdr/plugins/config" / ACTION_LAUNCHER_PLUGIN
+    config_dir.mkdir(parents=True)
+    actions = {"actions": [{
+        "id": "fixture-proof",
+        "title": "Fixture proof writes disposable marker",
+        "command": ["sh", "-c", f"printf selected > {root}/evidence/launcher-selected"],
+        "mode": "run",
+        "cwd": "workspace",
+    }]}
+    (config_dir / "actions.json").write_text(json.dumps(actions, indent=2))
+    (root / "config/herdr/config.toml").write_text(
+        '[[keys.command]]\nkey = "prefix+alt+a"\ntype = "plugin_action"\n'
+        f'command = "{ACTION_LAUNCHER_PLUGIN}.open"\n'
+        'description = "Fixture launcher"\n\n'
+        '[[keys.command]]\nkey = "alt+z"\ntype = "shell"\n'
+        f'command = "printf direct > {root}/evidence/direct-selected"\n'
+        'description = "Fixture direct binding"\n')
+
+
+def start(with_plugins=False, with_action_launcher=False):
     root = Path(tempfile.mkdtemp(prefix="cpol-", dir="/tmp"))
     session = "polish-" + root.name[5:]
     for folder in ["config/herdr", "state", "cache", "data", "repositories/sample", "plain/nested", "evidence", "www"]:
         (root / folder).mkdir(parents=True)
     (root / "config/herdr/config.toml").write_text('')
-    if with_plugins:
-        copy_viewer_plugins(root)
+    plugin_ids = list(VIEWER_PLUGINS) if with_plugins else []
+    if with_action_launcher:
+        plugin_ids.append(ACTION_LAUNCHER_PLUGIN)
+    if plugin_ids:
+        copy_plugins(root, plugin_ids)
+    if with_action_launcher:
+        configure_action_launcher(root)
     (root / "cockpit.toml").write_text(
         f'version = 1\nrepository_roots = ["{root}/repositories"]\n'
         f'worktree_root = "{root}/worktrees"\ncompanion_root = "{root}/companions"\n'
@@ -152,9 +179,11 @@ if __name__ == "__main__":
     parser.add_argument("params", nargs="?", default="{}")
     parser.add_argument("--with-plugins", action="store_true",
                         help="copy the owner's Files and Reviewr plugins into the fixture")
+    parser.add_argument("--with-action-launcher", action="store_true",
+                        help="copy the owner's action launcher and configure harmless custom binding acceptance actions")
     args = parser.parse_args()
     if args.action == "start":
-        start(args.with_plugins)
+        start(args.with_plugins, args.with_action_launcher)
     elif args.action == "stop":
         stop(args.root)
     else:

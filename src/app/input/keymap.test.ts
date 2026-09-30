@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { routeWorkbenchKeydown, type WorkbenchKeyRouting } from "./keymap";
+import { herdrBindings, herdrPrefixes, herdrCommandShortcut } from "./herdrBindings";
 
 afterEach(() => document.body.replaceChildren());
 
-type EventOverrides = Partial<{ key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; target: EventTarget | null; isComposing: boolean }>;
+type EventOverrides = Partial<{ key: string; code: string; repeat: boolean; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; target: EventTarget | null; isComposing: boolean }>;
 
 function keyEvent(overrides: EventOverrides = {}): KeyboardEvent {
   return {
@@ -14,14 +15,15 @@ function keyEvent(overrides: EventOverrides = {}): KeyboardEvent {
   } as unknown as KeyboardEvent;
 }
 
-function harness(modalOpen = false) {
+function harness(modalOpen = false, custom: Partial<WorkbenchKeyRouting> = {}) {
   const runCommand = vi.fn();
   const setCommandsOpen = vi.fn();
   const onUnboundPrefixKey = vi.fn();
   let prefixActive = false;
+  let prefixOrigin: "cockpit" | "herdr" = "cockpit";
   const setPrefixActive = vi.fn((active: boolean) => { prefixActive = active; });
   const route = (event: KeyboardEvent) => {
-    const routing: WorkbenchKeyRouting = { modalOpen, prefixActive, runCommand, setPrefixActive, setCommandsOpen, onUnboundPrefixKey };
+    const routing: WorkbenchKeyRouting = { modalOpen, prefixActive, prefixOrigin, herdrPrefixes: herdrPrefixes(custom.herdrBindings ? ["ctrl+b"] : []), onPrefixArm: origin => { prefixOrigin = origin; }, runCommand, setPrefixActive, setCommandsOpen, onUnboundPrefixKey, ...custom };
     routeWorkbenchKeydown(event, routing);
   };
   return { route, runCommand, setCommandsOpen, setPrefixActive, onUnboundPrefixKey, armed: () => prefixActive };
@@ -205,5 +207,73 @@ describe("dialogs", () => {
     const drawerRoute = harness();
     drawerRoute.route(keyEvent({ key: "b", ctrlKey: true, target: inDrawer }));
     expect(drawerRoute.armed()).toBe(true);
+  });
+});
+
+describe("advertised Herdr command routing", () => {
+  const command = { command_id: "opaque:17", binding_labels: ["prefix+alt+a", "prefix+f", "alt+z"], action: "plugin_action" as const, description: "Configured action" };
+  it("uses every advertised prefix alias without moving Cockpit commands onto that prefix", () => {
+    const runHerdrCommand = vi.fn();
+    const prefixes = herdrPrefixes(["ctrl+a", "alt+space"]);
+    const routed = harness(false, { herdrBindings: herdrBindings([command]), herdrPrefixes: prefixes, runHerdrCommand });
+    routed.route(ctrlB());
+    routed.route(keyEvent({ key: "f" }));
+    expect(routed.runCommand).toHaveBeenCalledExactlyOnceWith("open-file-picker");
+    expect(runHerdrCommand).not.toHaveBeenCalled();
+    routed.route(keyEvent({ key: "a", ctrlKey: true }));
+    routed.route(keyEvent({ key: "å", code: "KeyA", altKey: true }));
+    routed.route(keyEvent({ key: " ", altKey: true }));
+    routed.route(keyEvent({ key: "f" }));
+    expect(runHerdrCommand.mock.calls).toEqual([[command], [command]]);
+    routed.route(keyEvent({ key: "a", ctrlKey: true }));
+    const literal = keyEvent({ key: "a", ctrlKey: true });
+    routed.route(literal);
+    expect(literal.preventDefault).not.toHaveBeenCalled();
+    expect(routed.armed()).toBe(false);
+    expect(herdrCommandShortcut(command, prefixes)).toContain("Ctrl+A Alt+A");
+    expect(herdrCommandShortcut(command, prefixes)).toContain("Alt+Space F");
+  });
+  it("uses physical Alt letters and overrides Cockpit prefix actions", () => {
+    const runHerdrCommand = vi.fn();
+    const routed = harness(false, { herdrBindings: herdrBindings([command]), runHerdrCommand });
+    routed.route(ctrlB());
+    const option = keyEvent({ key: "å", code: "KeyA", altKey: true });
+    routed.route(option);
+    expect(option.preventDefault).toHaveBeenCalledOnce();
+    expect(routed.armed()).toBe(false);
+    routed.route(ctrlB());
+    routed.route(keyEvent({ key: "f" }));
+    expect(runHerdrCommand.mock.calls).toEqual([[command], [command]]);
+    expect(routed.runCommand).not.toHaveBeenCalled();
+  });
+  it("claims direct chords only on prefix-safe targets and never invokes repeats", () => {
+    const runHerdrCommand = vi.fn();
+    const routed = harness(false, { herdrBindings: herdrBindings([command]), runHerdrCommand });
+    const terminal = mount('<div class="terminal-host"><textarea></textarea></div>', "textarea");
+    const editor = mount("<input />", "input");
+    routed.route(keyEvent({ key: "z", code: "KeyZ", altKey: true, target: editor }));
+    routed.route(keyEvent({ key: "z", code: "KeyZ", altKey: true, target: terminal, isComposing: true }));
+    routed.route(keyEvent({ key: "z", code: "KeyZ", altKey: true, target: terminal, repeat: true }));
+    expect(runHerdrCommand).not.toHaveBeenCalled();
+    routed.route(keyEvent({ key: "z", code: "KeyZ", altKey: true, target: terminal }));
+    expect(runHerdrCommand).toHaveBeenCalledExactlyOnceWith(command);
+  });
+  it("does not claim unknown actions, nonmatching modifiers or keys owned by server popups", () => {
+    const runHerdrCommand = vi.fn();
+    const routed = harness(false, { herdrBindings: herdrBindings([{ ...command, action: "unknown" }]), runHerdrCommand });
+    const ignored = keyEvent({ key: "z", altKey: true });
+    routed.route(ignored);
+    expect(ignored.preventDefault).not.toHaveBeenCalled();
+    const popup = harness(false, { serverModalOpen: true, prefixActive: true, herdrBindings: herdrBindings([command]), runHerdrCommand });
+    for (const event of [keyEvent({ key: "Escape" }), keyEvent({ key: "Tab" }), ctrlB(), keyEvent({ key: "z", altKey: true })]) {
+      popup.route(event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(runHerdrCommand).not.toHaveBeenCalled();
+    const pending = harness(false, { popupPending: true });
+    const text = keyEvent({ key: "x" });
+    pending.route(text);
+    expect(text.preventDefault).toHaveBeenCalledOnce();
+    expect(text.stopPropagation).toHaveBeenCalledOnce();
   });
 });

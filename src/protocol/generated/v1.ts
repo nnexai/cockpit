@@ -241,7 +241,19 @@ cwd?: string, };
 
 export type AgentSummary = { pane_id: string, space_id: string, tab_id: string, name: string, status: string, title: string | null, focused: boolean, state_change_seq: number, };
 
-export type SessionSnapshotResponse = { session_id: string, server_instance: string, version: string, protocol: number, focused_space_id: string | null, focused_tab_id: string | null, focused_pane_id: string | null, spaces: Array<SpaceSummary>, tabs: Array<TabSummary>, panes: Array<PaneSummary>, agents: Array<AgentSummary>, };
+export type HerdrShellStatus = "live" | "connecting" | "disconnected" | "unsupported";
+
+export type HerdrCommandAction = "shell" | "pane" | "popup" | "plugin_action" | "unknown";
+
+export type HerdrCommand = { command_id: string, binding_labels: Array<string>, action: HerdrCommandAction, description: string | null, };
+
+export type HerdrPopupSize = { "kind": "cells", value: number, } | { "kind": "percent", value: number, };
+
+export type HerdrPopup = { terminal_id: string, title: string, width: HerdrPopupSize | null, height: HerdrPopupSize | null, };
+
+export type HerdrShellState = { prefix_bindings: Array<string>, status: HerdrShellStatus, commands: Array<HerdrCommand>, popup: HerdrPopup | null, error: string | null, };
+
+export type SessionSnapshotResponse = { session_id: string, server_instance: string, version: string, protocol: number, focused_space_id: string | null, focused_tab_id: string | null, focused_pane_id: string | null, spaces: Array<SpaceSummary>, tabs: Array<TabSummary>, panes: Array<PaneSummary>, agents: Array<AgentSummary>, herdr_shell?: HerdrShellState | null, };
 
 export type PaneOutputResponse = { pane_id: string, text: string, revision: number | null, };
 
@@ -259,7 +271,7 @@ export type PaneSplitDirection = "right" | "down";
 
 export type PaneMoveDestination = { "type": "existing_tab", tab_id: string, direction: PaneSplitDirection, target_pane_id: string | null, ratio: number | null, } | { "type": "new_tab", space_id: string | null, label: string | null, } | { "type": "new_space", label: string | null, tab_label: string | null, };
 
-export type ResourceMutationRequest = { "type": "space_create", cwd: string | null, label: string | null, } | { "type": "space_rename", space_id: string, label: string, } | { "type": "space_move_block", space_ids: Array<string>, before_space_id: string | null, } | { "type": "space_close", space_id: string, } | { "type": "tab_create", space_id: string, label: string | null, } | { "type": "tab_rename", tab_id: string, label: string, } | { "type": "tab_move", tab_id: string, insert_index: number, } | { "type": "tab_close", tab_id: string, } | { "type": "pane_split", pane_id: string, direction: PaneSplitDirection, ratio: number | null, } | { "type": "pane_rename", pane_id: string, label: string | null, } | { "type": "pane_move", pane_id: string, destination: PaneMoveDestination, } | { "type": "pane_close", pane_id: string, };
+export type ResourceMutationRequest = { "type": "command_invoke", command_id: string, space_id: string, tab_id: string, pane_id: string | null, } | { "type": "space_create", cwd: string | null, label: string | null, } | { "type": "space_rename", space_id: string, label: string, } | { "type": "space_move_block", space_ids: Array<string>, before_space_id: string | null, } | { "type": "space_close", space_id: string, } | { "type": "tab_create", space_id: string, label: string | null, } | { "type": "tab_rename", tab_id: string, label: string, } | { "type": "tab_move", tab_id: string, insert_index: number, } | { "type": "tab_close", tab_id: string, } | { "type": "pane_split", pane_id: string, direction: PaneSplitDirection, ratio: number | null, } | { "type": "pane_rename", pane_id: string, label: string | null, } | { "type": "pane_move", pane_id: string, destination: PaneMoveDestination, } | { "type": "pane_close", pane_id: string, };
 
 export type CreatedPane = { pane_id: string, terminal_id: string, space_id: string, tab_id: string, };
 
@@ -269,7 +281,9 @@ export type SessionStreamMessage = { "type": "snapshot", session_id: string, gen
 
 export type TerminalMode = "control";
 
-export type TerminalOpenRequest = { session_id: string, pane_id: string, mode: TerminalMode, takeover: boolean, cols: number, rows: number, cell_width_px: number, cell_height_px: number, };
+export type TerminalTargetKind = "pane" | "popup";
+
+export type TerminalOpenRequest = { session_id: string, pane_id: string, target_kind?: TerminalTargetKind, mode: TerminalMode, takeover: boolean, cols: number, rows: number, cell_width_px: number, cell_height_px: number, };
 
 export type TerminalScrollDirection = "up" | "down";
 
