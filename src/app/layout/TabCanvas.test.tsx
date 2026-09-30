@@ -123,7 +123,7 @@ it("keeps hidden leaf hosts through zoom and restores only from chrome Escape", 
   dispatch({ type: "zoom-toggle", tabId: "tab", leafId: "a" });
   expect(hostB.hidden).toBe(true); expect(hostB.querySelector("textarea")).toBeNull();
   expect(hostA.querySelector("textarea")).toBe(editorA);
-  expect(body.querySelector(".pane-zoom-bar")!.textContent).toContain("Zoomed: Terminal a.");
+  expect(body.querySelector(".pane-zoom-bar")).toBeNull();
   key(editorA, "Escape"); expect(getTab().zoomLeafId).toBe("a");
   key(hostA.querySelector("button")!, "Escape"); expect(getTab().zoomLeafId).toBeNull();
   expect(body.querySelector('[data-leaf-id="b"]')).toBe(hostB); expect(hostB.hidden).toBe(false);

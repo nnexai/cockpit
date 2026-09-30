@@ -1218,7 +1218,7 @@ describe("tab-local viewers, focus and placement", () => {
     for (const stream of await Promise.all(streams)) expect(stream.close).not.toHaveBeenCalled();
 
     click(leafButton("tab-1:files", "Zoom this pane"));
-    expect(container.querySelector(".pane-zoom-bar")).not.toBeNull();
+    expect(container.querySelector(".pane-zoom-bar")).toBeNull();
     click(leafButton("tab-1:files", "Restore layout"));
     await settle();
     expect(terminal("pane-1")).not.toBeNull();

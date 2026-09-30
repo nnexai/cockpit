@@ -48,7 +48,6 @@ export function focusSelectedDivider(canvas: HTMLElement, selectedLeafId: string
 export function TabCanvas(props: TabCanvasProps) {
   const { tab, area, renderLeaf, dispatch, registerTransient, announce } = props;
   const canvas = useRef<HTMLDivElement>(null);
-  const zoomSummary = useRef<HTMLSpanElement>(null);
   const hosts = useRef(new Map<string, HTMLElement>());
   const dividerNodes = useRef(new Map<string, HTMLElement>());
   const cancelTransient = useRef<(() => void) | null>(null);
@@ -77,9 +76,6 @@ export function TabCanvas(props: TabCanvasProps) {
       const host = hosts.current.get(leaf.id);
       const title = host?.querySelector("[data-pane-title]")?.textContent;
       if (title) host!.setAttribute("aria-label", `${leaf.kind} pane: ${title}`);
-    }
-    if (tab.zoomLeafId && zoomSummary.current) {
-      zoomSummary.current.textContent = `Zoomed: ${titleFor(tab.zoomLeafId)}. ${members.length - 1} other ${members.length === 2 ? "pane is" : "panes are"} hidden, not closed.`;
     }
   });
 
@@ -242,14 +238,10 @@ export function TabCanvas(props: TabCanvasProps) {
   const zoomed = memberMap.get(tab.zoomLeafId ?? "");
   return <div className="tab-canvas-layout" data-tab-id={tab.tabId} onKeyDown={event => {
     const target = event.target as HTMLElement;
-    if (event.key === "Escape" && tab.zoomLeafId && (target.closest("[data-pane-header]") || target.closest(".pane-zoom-bar"))) {
+    if (event.key === "Escape" && tab.zoomLeafId && target.closest("[data-pane-header]")) {
       event.preventDefault(); event.stopPropagation(); dispatch({ type: "zoom-toggle", tabId: tab.tabId });
     }
   }}>
-    {zoomed && <div className="pane-layout-strip pane-zoom-bar" role="status">
-      <span ref={zoomSummary}>Zoomed: {titleFor(zoomed.id)}. {members.length - 1} other {members.length === 2 ? "pane is" : "panes are"} hidden, not closed.</span>
-      <button type="button" title="Restore layout (Ctrl+B z)" onClick={() => dispatch({ type: "zoom-toggle", tabId: tab.tabId })}>Restore layout</button>
-    </div>}
     {solved.degraded && !zoomed && <div className="pane-layout-strip pane-degraded-strip" role="status">Panes are smaller than their usual minimum in this window. Zoom a pane or enlarge the window.</div>}
     <div className="pane-canvas tab-canvas" ref={canvas}>
       {order.current.map(id => {
