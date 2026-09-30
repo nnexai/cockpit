@@ -40,7 +40,7 @@ enum Command {
     Serve(ServeArgs),
     /// Inspect effective non-secret project configuration.
     Configuration(ProjectArgs),
-    /// Control the browser associated with a Herdr tab, or recover legacy saved feedback.
+    /// Control the browser associated with a Herdr tab.
     Browser(BrowserArgs),
 }
 #[derive(Debug, Clone, Args)]
@@ -73,13 +73,10 @@ struct BrowserArgs {
     action: BrowserActionName,
     #[arg(value_enum)]
     feedback_action: Option<BrowserFeedbackActionName>,
-    #[arg(long, conflicts_with_all = ["tab", "legacy"])]
+    #[arg(long, conflicts_with = "tab")]
     current: bool,
-    #[arg(long, conflicts_with = "legacy")]
-    tab: Option<String>,
-    /// Original association key for feedback saved before tab-scoped browsers.
     #[arg(long)]
-    legacy: Option<String>,
+    tab: Option<String>,
     #[arg(long)]
     url: Option<String>,
     #[arg(long)]
@@ -312,12 +309,7 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
         });
     let effective_socket = args.herdr.herdr_socket.clone().or(inherited_socket);
     let effective_session = args.herdr.herdr_session.clone().or(inherited_session);
-    if args.legacy.is_some() && !matches!(args.action, BrowserActionName::Feedback) {
-        return Err("--legacy is only valid for browser feedback or feedback ack".to_owned());
-    }
-    let target = if args.legacy.is_some() {
-        None
-    } else if args.current {
+    let target = if args.current {
         if std::env::var("HERDR_ENV").ok().as_deref() != Some("1") {
             return Err(
                 "browser --current requires HERDR_ENV=1 in the inherited Herdr caller environment"
@@ -352,7 +344,7 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
             .get("pane_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Herdr current-pane response has no pane_id".to_owned())?;
-        Some(BrowserTarget {
+        BrowserTarget {
             session_id,
             tab_id: None,
             pane_id: Some(pane_id.to_owned()),
@@ -360,7 +352,7 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
                 .as_ref()
                 .and_then(|path| path.to_str())
                 .map(str::to_owned),
-        })
+        }
     } else {
         let session_id = args.herdr.herdr_session.clone().ok_or_else(|| {
             "explicit browser targets require --herdr-session, --herdr-socket, and --tab"
@@ -374,12 +366,12 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
             "explicit browser targets require --herdr-session, --herdr-socket, and --tab"
                 .to_owned()
         })?;
-        Some(BrowserTarget {
+        BrowserTarget {
             session_id,
             tab_id: Some(tab_id),
             pane_id: None,
             endpoint_path: None,
-        })
+        }
     };
     let herdr_config =
         HerdrCliConfig::from_options(Some(herdr_executable), effective_session, effective_socket)
@@ -399,15 +391,9 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
     let runtime = BrowserRuntime::connect(state_root, service)
         .await
         .map_err(|error| error.to_string())?;
-    let scope = if let Some(association_key) = args.legacy {
-        BrowserWorkScope::LegacyArchive { association_key }
-    } else {
-        BrowserWorkScope::Tab {
-            target: target.clone().expect("non-legacy browser target"),
-        }
-    };
     match args.action {
         BrowserActionName::Feedback => {
+            let scope = BrowserWorkScope::Tab { target };
             let response = match args.feedback_action {
                 None => {
                     if !args.ids.is_empty() {
@@ -454,7 +440,7 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
             };
             let response = runtime
                 .execute(BrowserRequest {
-                    target: target.expect("browser lifecycle requires a tab target"),
+                    target,
                     action,
                 })
                 .await
@@ -486,28 +472,17 @@ mod tests {
 
     #[test]
     fn browser_targets_are_mutually_exclusive() {
-        for flags in [
-            vec!["--current", "--tab", "w1:t1"],
-            vec!["--current", "--legacy", "0123456789abcdef01234567"],
-            vec!["--tab", "w1:t1", "--legacy", "0123456789abcdef01234567"],
-        ] {
-            let mut args = vec!["cockpit", "browser", "feedback"];
-            args.extend(flags);
-            assert!(Cli::try_parse_from(args).is_err());
-        }
+        assert!(Cli::try_parse_from([
+            "cockpit", "browser", "feedback", "--current", "--tab", "w1:t1",
+        ]).is_err());
         assert!(Cli::try_parse_from(["cockpit", "browser", "open", "--space", "w1"]).is_err());
     }
 
     #[test]
-    fn legacy_feedback_is_addressable_without_live_herdr_arguments() {
-        let cli = Cli::try_parse_from([
+    fn detached_legacy_feedback_is_not_addressable() {
+        assert!(Cli::try_parse_from([
             "cockpit", "browser", "feedback", "ack",
             "--legacy", "0123456789abcdef01234567", "--id", "capture-one",
-        ]).expect("legacy saved feedback must not require a live tab");
-        let Command::Browser(args) = cli.command else { panic!("expected browser command"); };
-        assert_eq!(args.legacy.as_deref(), Some("0123456789abcdef01234567"));
-        assert!(args.herdr.herdr_session.is_none());
-        assert!(matches!(args.feedback_action, Some(BrowserFeedbackActionName::Ack)));
-        assert_eq!(args.ids, ["capture-one"]);
+        ]).is_err());
     }
 }

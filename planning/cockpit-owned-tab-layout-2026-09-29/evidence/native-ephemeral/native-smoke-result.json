@@ -1,0 +1,168 @@
+{
+  "fixture_root": "/tmp/cpol-j1ijfd2n",
+  "session": "polish-j1ijfd2n",
+  "surface": "actual Tauri/WebKitWebDriver on private nested Niri",
+  "binary_mtimes": {
+    "target/debug/cockpit": 1790744710.37807,
+    "target/debug/cockpit-tauri": 1790744890.1768115,
+    "dist/index.html": 1790744522.7019136
+  },
+  "checks": {
+    "main_no_retention_panels": "polish-j1ijfd2n\nspaces\n1\nPolish sample\nagents\n0\n\nNo agents detected\n\n1\nCommands\nT\nTerminal\nHerdr terminal\n\u22ef",
+    "review_changed_lines": "polish-j1ijfd2n\nspaces\n1\nPolish sample\nagents\n0\n\nNo agents detected\n\n1\nCommands\nT\nTerminal\nHerdr terminal\n\u22ef\nR\nReview\nsample\nlocal to this tab\n\u22ef\nComparison\nFiles\n1\nDiff\nFull source\nWrap\nsample.txt\n+2\n\u22121\nsample.txt\nmodified \u00b7 unstaged\n@@ -2 +2 @@\n2\n2\n Original line 2\n3\n3\n Original line 3\n4\n4\n Original line 4\n5\n-Original line 5\n5\n+Changed line five\n6\n+Added review line\n6\n7\n Original line 6\n7\n8\n Original line 7\n8\n9\n Original line 8\nC\ncomment\nShift+C\nfile\n0 comments",
+    "files_readme": "polish-j1ijfd2n\nspaces\n1\nPolish sample\nagents\n0\n\nNo agents detected\n\n1\nCommands\nT\nTerminal\nHerdr terminal\n\u22ef\nR\nReview\nsample\n\u22ef\nComparison\n1\nDiff\nFull source\nsample.txt\n@@ -2 +2 @@\n2\n2\n Original line 2\n3\n3\n Original line 3\n4\n4\n Original line 4\n5\n-Original line 5\n5\n+Changed line five\n6\n+Added review line\n6\n7\n Original line 6\n7\n8\n Original line 7\n8\n9\n Original line 8\nC\ncomment\nShift+C\nfile\n0 comments\nF\nFiles\nsample\n\u22ef\nContext rootsample\nLibrary\nFiles\nPreview\nSource\nREADME.md\nSample project\nSummary\n\nOriginal source coordinates survive rendered Markdown.\n\nDetail\n\nSelect this text to leave a comment.\n\nC\ncomment\nShift+C\nfile\n0 comments\n\nRefreshing\u2026\n\nREADME.md\n164 B\nsample.txt\n1371 B\n\n\u2191\u2193 or Ctrl+N/P to choose \u00b7 Enter to open \u00b7 Esc to close",
+    "browser_navigation": "polish-j1ijfd2n\nspaces\n1\nPolish sample\nagents\n0\n\nNo agents detected\n\n1\nCommands\nT\nTerminal\nHerdr terminal\n\u22ef\nB\nBrowser\n\u22ef\nPolish annotation fixture\nLive browser view\n\n0",
+    "browser_current_draft": {
+      "gesture": {
+        "x": 353,
+        "y": 221.84375
+      },
+      "drafts": [
+        {
+          "format_version": 1,
+          "identity": {
+            "association_key": "98c563d64aa1bd66c9f774ec",
+            "browser_incarnation": "pid=2984641:start=85322847:receipt=192a7b242f8a2295124603014ddcdcb2a657f78a7de071b963508be17b2fdcad",
+            "target_id": "18972684D4948859934E9D2865B8BBBC",
+            "document_generation": 1790745453136
+          },
+          "draft_id": "33f41a2e-713d-4f1c-9fc9-8f417e717a89",
+          "revision": 2,
+          "annotations": [
+            {
+              "id": "d186d716-7afe-43b7-8334-0fac0a0f2c3e",
+              "kind": "region",
+              "color": "#d62828",
+              "points": [
+                {
+                  "x": 100.0,
+                  "y": 34.9964698525407
+                },
+                {
+                  "x": 220.0,
+                  "y": 89.9909224779618
+                }
+              ],
+              "bounds": {
+                "x": 100.0,
+                "y": 34.9964698525407,
+                "width": 120.0,
+                "height": 54.994452625421104
+              },
+              "evidence": null,
+              "comment": null
+            }
+          ],
+          "freshness": "fresh",
+          "stale": false,
+          "editor": {
+            "selected_annotation_id": null,
+            "notes_open": false,
+            "note_annotation_id": null,
+            "note_text": ""
+          },
+          "consumed_annotation_ids": [],
+          "tombstoned": false
+        }
+      ],
+      "ui": {
+        "notes": "Notes 0",
+        "marks": 0,
+        "retryText": null,
+        "body": "Zoomed: w1:t1:browser. Other panes are hidden, not closed.\npolish-j1ijfd2n\nspaces\n1\nPolish sample\nagents\n0\n\nNo agents detected\n\n1\nCommands\nZoomed: Browser. 1 other pane is hidden, not closed.\nRestore layout\nB\nBrowser\nlocal to this tab\n\u22ef\nPolish annotation fixture\nLive browser view\n\n0\nRetained annotation changes need review; unknown delivery is not replayed automatically.\nRetry saves\nDiscard retry intent"
+      }
+    },
+    "browser_ordinary_close": {
+      "status": "failed-native-return-timeout",
+      "elapsed_seconds_observed": 346.8559047229937,
+      "profile_exists": false,
+      "association_exists": false,
+      "remaining_drafts": [],
+      "body_after": "Zoomed: w1:t1:browser. Other panes are hidden, not closed.\npolish-j1ijfd2n\nspaces\n1\nPolish sample\nagents\n0\n\nNo agents detected\n\n1\nCommands\nZoomed: Browser. 1 other pane is hidden, not closed.\nRestore layout\nB\nBrowser\nlocal to this tab\n\u22ef\nClosing browser\u2026\nPolish annotation fixture\nLive browser view\n\n0\nRetained annotation changes need review; unknown delivery is not replayed automatically.\nRetry saves\nDiscard retry intent",
+      "guard_appeared": false,
+      "return_to_main_verified": false,
+      "owned_processes": [
+        {
+          "pid": 2946129,
+          "cmd": "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14 -u -c from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler; from functools import partial; import sys; server=ThreadingHTTPServer(('127.0.0.1',0),partial(SimpleHTTPRequestHandler,directory=sys.argv[1])); print(server.server_port,flush=True); server.serve_forever() /tmp/cpol-j",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t3709"
+        },
+        {
+          "pid": 2946139,
+          "cmd": "/home/linuxbrew/.linuxbrew/bin/herdr --session polish-j1ijfd2n server ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t3709"
+        },
+        {
+          "pid": 2946185,
+          "cmd": "/bin/sh ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t2946139"
+        },
+        {
+          "pid": 2946188,
+          "cmd": "/home/nnex/dev/prj/cockpit/target/debug/cockpit serve --herdr-session polish-j1ijfd2n --herdr-socket /tmp/cpol-j1ijfd2n/config/herdr/sessions/polish-j1ijfd2n/herdr.sock --config /tmp/cpol-j1ijfd2n/cockpit.toml --static-dir /home/nnex/dev/prj/cockpit/dist ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t3709"
+        },
+        {
+          "pid": 2970307,
+          "cmd": "niri -c /tmp/cpol-j1ijfd2n/niri.kdl ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t2961778"
+        },
+        {
+          "pid": 2970373,
+          "cmd": "/usr/bin/WebKitWebDriver --port=40115 --host=127.0.0.1 ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t2961778"
+        },
+        {
+          "pid": 2970396,
+          "cmd": "/home/nnex/dev/prj/cockpit/target/debug/cockpit-tauri ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t2970373"
+        },
+        {
+          "pid": 2970442,
+          "cmd": "/usr/libexec/webkit2gtk-4.1/WebKitNetworkProcess 1 29 ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t2970396"
+        },
+        {
+          "pid": 2970479,
+          "cmd": "/usr/libexec/webkit2gtk-4.1/WebKitWebProcess 4 36 ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t2970396"
+        },
+        {
+          "pid": 2984986,
+          "cmd": "/home/linuxbrew/.linuxbrew/Cellar/node/26.10.0_1/bin/node /tmp/cpol-j1ijfd2n/cockpit-state/browser/helpers/browser-helper.mjs ",
+          "state": "State:\tS (sleeping)",
+          "ppid": "PPid:\t2946188"
+        }
+      ]
+    }
+  },
+  "screenshots": [
+    "planning/cockpit-owned-tab-layout-2026-09-29/evidence/native-ephemeral/01-main-no-retention.png",
+    "planning/cockpit-owned-tab-layout-2026-09-29/evidence/native-ephemeral/02-review-actual-diff.png",
+    "planning/cockpit-owned-tab-layout-2026-09-29/evidence/native-ephemeral/03-files-readme.png",
+    "planning/cockpit-owned-tab-layout-2026-09-29/evidence/native-ephemeral/04-browser-navigation-observed.png",
+    "planning/cockpit-owned-tab-layout-2026-09-29/evidence/native-ephemeral/04-browser-owned-fixture.png",
+    "planning/cockpit-owned-tab-layout-2026-09-29/evidence/native-ephemeral/05-browser-draft-retained-ui.png",
+    "planning/cockpit-owned-tab-layout-2026-09-29/evidence/native-ephemeral/06-browser-close-still-pending.png",
+    "planning/cockpit-owned-tab-layout-2026-09-29/evidence/native-ephemeral/07-final-close-pending.png"
+  ],
+  "annotation_ui_observation": "Region persisted revision-2 draft but native rendered no mark and retained annotation retry UI",
+  "ok": false,
+  "failure": "Native ordinary Browser close removed profile/receipt/draft but remained Closing browser beyond 305 seconds",
+  "cleanup": {
+    "driver_compositor_terminated": true,
+    "fixture_stop": true,
+    "remaining_fixture_processes": [],
+    "port5173_closed": true,
+    "user_plugin_registry_mtime": 1790744574.2856095
+  }
+}

@@ -24,37 +24,17 @@ export type BrowserAssociation = { association_key: string, owner_id: string, se
 
 export type BrowserResponse = { association: BrowserAssociation | null, connection: BrowserConnectionState, message: string, cleanup: BrowserCleanupState, cleanup_reason: string | null, };
 
-export type BrowserWorkScope = { "kind": "tab", target: BrowserTarget, } | { "kind": "legacy_archive", association_key: string, } | { "kind": "saved_tab", association_key: string, };
+export type BrowserWorkScope = { "kind": "tab", target: BrowserTarget, };
 
 export type BrowserCleanupState = "none" | "pending" | "done" | "failed";
 
-export type BrowserCleanupScope = { "kind": "legacy_space", space_id: string, } | { "kind": "tab", session_id: string, tab_id: string, };
+export type BrowserCleanupScope = { "kind": "tab", session_id: string, tab_id: string, };
 
 export type BrowserCleanupFailure = { association_key: string, scope: BrowserCleanupScope, reason: string, unproven_paths: Array<string>, };
 
-export type BrowserCleanupStatus = { cutover: BrowserCutoverState, failures: Array<BrowserCleanupFailure>, saved_tabs: Array<BrowserSavedTabWork>, };
-
-export type BrowserSavedTabWork = { association_key: string, session_id: string, tab_id: string, tab_label: string, space_id: string, space_label: string, saved_capture_count: number, draft_count: number, pending_capture: boolean, };
+export type BrowserCleanupStatus = { failures: Array<BrowserCleanupFailure>, };
 
 export type BrowserCleanupRetryRequest = { association_key: string, };
-
-export type BrowserCutoverState = "not_needed" | "running" | "done" | "failed";
-
-export type BrowserLegacyCandidateKind = "directory" | "file";
-
-export type BrowserLegacyCandidateState = "pending" | "kept" | "removed" | "changed";
-
-export type BrowserLegacyArtifactCandidate = { path: string, kind: BrowserLegacyCandidateKind, dev: string, inode: string, entry_count: number, total_bytes: number, captured_at: string, state: BrowserLegacyCandidateState, };
-
-export type BrowserLegacyArchive = { association_key: string, session_id: string, space_id: string, space_label: string, archived_at: string, session_stopped: boolean, saved_capture_count: number, draft_count: number, pending_capture: boolean, candidates: Array<BrowserLegacyArtifactCandidate>, not_candidates: Array<string>, };
-
-export type BrowserLegacyArchiveList = { archives: Array<BrowserLegacyArchive>, };
-
-export type BrowserLegacyRemovalRequest = { association_key: string, candidates: Array<BrowserLegacyArtifactCandidate>, };
-
-export type BrowserLegacyKeepRequest = { association_key: string, };
-
-export type BrowserLegacyRecipientsRequest = { session_id: string, };
 
 export type BrowserFeedbackRequest = { scope: BrowserWorkScope, };
 
@@ -68,7 +48,7 @@ export type BrowserFeedbackImageRequest = { scope: BrowserWorkScope, capture_id:
 
 export type BrowserFeedbackImage = { mime_type: string, data_base64: string, };
 
-export type BrowserFeedbackSendRequest = { scope: BrowserWorkScope, ids: Array<string>, operation_id: string, acknowledge_duplicate_risk: boolean, recipient: CommentPasteTarget | null, };
+export type BrowserFeedbackSendRequest = { scope: BrowserWorkScope, ids: Array<string>, operation_id: string, acknowledge_duplicate_risk: boolean, };
 
 export type BrowserFeedbackSendResponse = { operation_id: string, state: CommentPasteState, target: CommentPasteTarget | null, acknowledged_ids: Array<string>, pending_count: number, message: string, };
 

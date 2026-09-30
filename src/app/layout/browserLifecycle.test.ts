@@ -3,7 +3,7 @@ import type { BrowserAssociation, BrowserCleanupStatus, BrowserRequest, BrowserR
 import type { CockpitClient } from "../../client/CockpitClient";
 import { createSessionLayoutState, layoutReducer, type LeafCtx, type TabLayoutState } from "./tabLayoutStore";
 import { leaves } from "./splitTree";
-import { applyBrowserCleanupStatus, browserOpenDisabledReason, closeBrowserLeaf, dismissBrowserCleanup, openBrowserLeaf, reconnectBrowserLeaf, recoverRetainedBrowserWork, registerBrowserCloseGuard, retireTabBrowser, retainedBrowserWork } from "./browserLifecycle";
+import { applyBrowserCleanupStatus, browserOpenDisabledReason, closeBrowserLeaf, dismissBrowserCleanup, openBrowserLeaf, reconnectBrowserLeaf, retireTabBrowser } from "./browserLifecycle";
 
 function association(tabId: string): BrowserAssociation {
   return { association_key: `browser:${tabId}`, owner_id: "owner", session_id: "session", tab_id: tabId, tab_label: tabId, space_id: "space", space_label: "Space", playwright_session: tabId, working_directory: "/fixture", profile_path: `/fixture/${tabId}`, invocation: "browser", connection: "open", incarnation: "incarnation", opened_tab: null };
@@ -15,7 +15,7 @@ function fixture(run: (request: BrowserRequest) => Promise<BrowserResponse>) {
     state.tabs[tabId] = tab;
   }
   const browserAction = vi.fn(run);
-  const cleanupStatus: BrowserCleanupStatus = { cutover: "done", failures: [], saved_tabs: [] };
+  const cleanupStatus: BrowserCleanupStatus = { failures: [] };
   const browserCleanupRetry = vi.fn(async (_request: { association_key: string }) => cleanupStatus);
   const client = { browserAction, browserCleanupRetry, browserCleanupStatus: vi.fn(async (): Promise<BrowserCleanupStatus> => cleanupStatus) } as unknown as CockpitClient;
   const ctx: LeafCtx = { client, sessionId: "session", serverInstance: "server", clientId: "window", getState: () => state, dispatch: (action) => { state = layoutReducer(state, action).state; } };
@@ -43,18 +43,6 @@ describe("tab browser lifecycle", () => {
     expect(f.browserAction.mock.calls.at(-1)?.[0].target).toEqual({ session_id: "session", tab_id: "a", pane_id: null, endpoint_path: null });
   });
 
-  it("refuses destructive close until retained annotation work is durable", async () => {
-    const f = fixture(async (request) => response(request.target.tab_id!, request.action.kind === "close" ? "closed" : "open"));
-    await openBrowserLeaf(f.ctx, "a", "row"); let durable = false;
-    const guard = vi.fn(async () => { if (!durable) throw new Error("Annotation intent is not acknowledged"); });
-    registerBrowserCloseGuard(f.ctx, "a", { guard, retry: async () => { durable = true; }, discard: vi.fn(), describe: () => "Retained annotation" });
-    await closeBrowserLeaf(f.ctx, "a");
-    expect(f.state().tabs.a.viewers.browser?.status).toBe("close_failed");
-    expect(f.browserAction.mock.calls.map(([request]) => request.action.kind)).toEqual(["open_fresh"]);
-    await recoverRetainedBrowserWork(f.ctx, "a"); await closeBrowserLeaf(f.ctx, "a");
-    expect(f.browserAction.mock.calls.map(([request]) => request.action.kind)).toEqual(["open_fresh", "status", "close"]);
-    expect(f.state().tabs.a.viewers.browser).toBeUndefined();
-  });
 
   it("inspects an unknown close before any repeat and gates only a stopped tab's incomplete cleanup", async () => {
     let closeCount = 0;
@@ -73,17 +61,14 @@ describe("tab browser lifecycle", () => {
     expect(browserOpenDisabledReason(f.ctx, "a")).toBeNull();
   });
 
-  it("retains a failed outgoing guard after tab retirement and completes the absent-tab close after recovery", async () => {
-    const f = fixture(async (request) => response(request.target.tab_id!, request.action.kind === "close" ? "closed" : "open"));
-    await openBrowserLeaf(f.ctx, "a", "row"); let durable = false;
-    registerBrowserCloseGuard(f.ctx, "a", { guard: async () => { if (!durable) throw new Error("Draft not saved"); }, retry: async () => { durable = true; }, discard: vi.fn(), describe: () => "draft" });
-    registerBrowserCloseGuard(f.ctx, "a", null); f.removeTab("a"); await retireTabBrowser(f.ctx, "a");
-    expect(retainedBrowserWork(f.ctx)).toHaveLength(1);
-    expect(f.browserAction.mock.calls.map(([request]) => request.action.kind)).toEqual(["open_fresh"]);
-    await recoverRetainedBrowserWork(f.ctx, "a");
-    expect(f.browserAction.mock.calls.map(([request]) => request.action.kind)).toEqual(["open_fresh"]);
+  it("retires the outgoing browser receipt immediately after its tab disappears", async () => {
+    const f = fixture(async (request) => response(request.target.tab_id!));
+    await openBrowserLeaf(f.ctx, "a", "row");
+    f.removeTab("a");
+    await retireTabBrowser(f.ctx, "a");
     expect(f.browserCleanupRetry).toHaveBeenCalledExactlyOnceWith({ association_key: "browser:a" });
-    expect(retainedBrowserWork(f.ctx)).toEqual([]);
+    expect(f.state().tabs.a).toBeUndefined();
+    expect(f.state().tabs.b.viewers.browser).toBeUndefined();
   });
 
   it("retires only the outgoing receipt when a replacement server reuses the same tab ID", async () => {

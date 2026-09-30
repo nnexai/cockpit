@@ -1,0 +1,22 @@
+{
+  "startup_reset": "passed",
+  "owner_lock_inode_preserved": 5887234,
+  "cleared": [
+    "old browser profile/receipt/draft",
+    "legacy archive",
+    "comment sentinel",
+    "review sentinel"
+  ],
+  "protected": [
+    "Library content",
+    "project-operation state",
+    "external symlink target",
+    "Herdr pane w1:p1"
+  ],
+  "observer_status": "ready without clearing current-run comment sentinel",
+  "git_review": "Changed line five and Added review line rendered; pre-viewer cache removed; v2 snapshot/file caches created",
+  "files": "actual README Markdown rendered",
+  "browser_close": "leaf/profile/receipt/drafts removed without retained-work guard",
+  "native_close": "revision-2 Region draft close returned in 823ms with software rendering; original private-compositor main thread blocked in Wayland GL swap",
+  "native_evidence": "evidence/native-ephemeral/software-native-close.json"
+}

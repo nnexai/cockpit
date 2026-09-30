@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import type { BrowserViewViewportRequest } from "../../protocol/generated/v1";
-import { BrowserPane, type BrowserPaneRecoveryRegistration } from "../browser/BrowserPane";
+import { BrowserPane } from "../browser/BrowserPane";
 import type { BrowserSlot, LeafCtx } from "./tabLayoutStore";
 import type { Rect } from "./solveLayout";
-import { browserClosePending, browserTarget, browserWorkHandoffPending, closeBrowserLeaf, dismissBrowserLeaf, reconnectBrowserLeaf, registerBrowserCloseGuard, retryBrowserOpen, subscribeBrowserLifecycle } from "./browserLifecycle";
+import { browserClosePending, browserTarget, closeBrowserLeaf, dismissBrowserLeaf, reconnectBrowserLeaf, retryBrowserOpen, subscribeBrowserLifecycle } from "./browserLifecycle";
 
 export function boundedBrowserViewport(width: number, height: number, devicePixelRatio: number): BrowserViewViewportRequest {
   return {
@@ -30,7 +30,6 @@ export function BrowserLeaf({ ctx, tabId, slot, rect, selected, inputActive, liv
   const target = useMemo(() => browserTarget(ctx, tabId), [ctx.sessionId, tabId]);
   const dpr = window.devicePixelRatio;
   const viewport = useMemo(() => boundedBrowserViewport(rect.width, rect.height, dpr), [rect.width, rect.height, dpr]);
-  const registerGuard = useCallback((registration: BrowserPaneRecoveryRegistration | null) => registerBrowserCloseGuard(ctx, tabId, registration), [ctx.client, ctx.sessionId, tabId]);
   const failedClose = slot.status === "close_failed" || (slot.status === "outcome_unknown" && browserClosePending(ctx, tabId));
   const pending = slot.status === "opening" || slot.status === "closing";
   const run = async (action: () => Promise<void>): Promise<void> => { setActionError(null); try { await action(); } catch (error) { setActionError(error instanceof Error ? error.message : String(error)); } };
@@ -44,8 +43,8 @@ export function BrowserLeaf({ ctx, tabId, slot, rect, selected, inputActive, liv
       </> : null}
     </div> : null}
     {slot.association ? <BrowserPane client={ctx.client} target={target} viewport={viewport} clientId={ctx.clientId}
-      inputActive={inputActive} liveInputEnabled={liveInputEnabled && slot.status === "open" && !browserWorkHandoffPending(ctx, tabId)} onInteractionFocus={onSelect}
-      onReconnect={() => reconnectBrowserLeaf(ctx, tabId)} onCloseBrowser={() => closeBrowserLeaf(ctx, tabId)} registerCloseGuard={registerGuard}
-      onFeedback={(ids, operationId, acknowledgeDuplicateRisk) => ctx.client.sendBrowserFeedback({ scope: { kind: "tab", target }, ids, operation_id: operationId, acknowledge_duplicate_risk: acknowledgeDuplicateRisk, recipient: null })} /> : null}
+      inputActive={inputActive} liveInputEnabled={liveInputEnabled && slot.status === "open"} onInteractionFocus={onSelect}
+      onReconnect={() => reconnectBrowserLeaf(ctx, tabId)} onCloseBrowser={() => closeBrowserLeaf(ctx, tabId)}
+      onFeedback={(ids, operationId, acknowledgeDuplicateRisk) => ctx.client.sendBrowserFeedback({ scope: { kind: "tab", target }, ids, operation_id: operationId, acknowledge_duplicate_risk: acknowledgeDuplicateRisk })} /> : null}
   </div>;
 }

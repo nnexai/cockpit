@@ -34,35 +34,6 @@ impl OpenArtifact {
     pub(super) fn identity(&self) -> io::Result<ArtifactIdentity> {
         match self { Self::Directory(dir) => dir.dir_metadata().map(|m| identity(&m)), Self::File(file) => file.metadata().map(|m| identity(&m)) }
     }
-    pub(super) fn stats(&self) -> io::Result<(u64, u64)> {
-        match self {
-            Self::File(file) => Ok((1, file.metadata()?.len())),
-            Self::Directory(dir) => {
-                let mut remaining = 10_000usize;
-                bounded_stats(dir, &mut remaining, 0)
-            }
-        }
-    }
-}
-fn bounded_stats(dir: &Dir, remaining: &mut usize, depth: usize) -> io::Result<(u64, u64)> {
-    if depth >= 64 || *remaining == 0 { return Ok((0, 0)); }
-    let mut count = 0u64;
-    let mut bytes = 0u64;
-    for entry in dir.entries()? {
-        if *remaining == 0 { break; }
-        *remaining -= 1;
-        let name = entry?.file_name();
-        let metadata = dir.symlink_metadata(&name)?;
-        count += 1;
-        bytes = bytes.saturating_add(metadata.len());
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            let child = dir.open_dir_nofollow(&name)?;
-            let (n, b) = bounded_stats(&child, remaining, depth + 1)?;
-            count = count.saturating_add(n);
-            bytes = bytes.saturating_add(b);
-        }
-    }
-    Ok((count, bytes))
 }
 pub(super) fn open_artifact(parent: &Dir, name: &std::ffi::OsStr, directory: bool) -> io::Result<OpenArtifact> {
     let metadata = parent.symlink_metadata(Path::new(name))?;
@@ -96,31 +67,12 @@ fn same_entry(parent: &Dir, name: &std::ffi::OsStr, expected: &ArtifactIdentity,
     }
     Ok(())
 }
-fn empty_directory(dir: &Dir, dev: u64, depth: usize) -> io::Result<()> {
-    if depth >= 128 { return Err(io::Error::new(io::ErrorKind::InvalidInput, "artifact nesting exceeds cleanup bound")); }
-    for entry in dir.entries()? {
-        let name = entry?.file_name();
-        let metadata = dir.symlink_metadata(&name)?;
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            let child = dir.open_dir_nofollow(&name)?;
-            let expected = identity(&child.dir_metadata()?);
-            if expected.dev != dev { return Err(io::Error::new(io::ErrorKind::InvalidInput, "cleanup refuses filesystem mount")); }
-            empty_directory(&child, dev, depth + 1)?;
-            same_entry(dir, &name, &expected, true)?;
-            dir.remove_dir(&name)?;
-        } else {
-            // remove_file unlinks symlinks themselves, never their targets.
-            dir.remove_file(&name)?;
-        }
-    }
-    Ok(())
-}
 pub(super) fn remove_opened(parent: &Dir, name: &std::ffi::OsStr, opened: &OpenArtifact, expected: &ArtifactIdentity) -> io::Result<()> {
     if opened.identity()? != *expected { return Err(io::Error::new(io::ErrorKind::InvalidInput, "artifact identity changed")); }
     match opened {
         OpenArtifact::Directory(dir) => {
             same_entry(parent, name, expected, true)?;
-            empty_directory(dir, expected.dev, 0)?;
+            crate::ephemeral::empty_dir_contents(dir, &[])?;
             same_entry(parent, name, expected, true)?;
             parent.remove_dir(Path::new(name))
         }
@@ -227,6 +179,13 @@ impl BrowserService {
             self.record_cleanup_failure(receipt, &reason, unproven)?;
             return Ok(self.response(receipt, BrowserConnectionState::Closed, &reason));
         }
+        let discard = self.feedback.discard_association(&receipt.association_key)
+            .and_then(|_| self.draft_store()?.discard_association(&receipt.association_key));
+        if let Err(error) = discard {
+            let reason = format!("Cannot discard browser work: {}", error.message);
+            self.record_cleanup_failure(receipt, &reason, Vec::new())?;
+            return Ok(self.response(receipt, BrowserConnectionState::Closed, &reason));
+        }
         let removal = crate::project_store::open_dir_nofollow_absolute(&self.root.join("tab-associations"))
             .and_then(|parent| parent.remove_file(format!("{}.json", receipt.association_key)));
         if let Err(error) = removal {
@@ -242,7 +201,6 @@ impl BrowserService {
         Ok(response)
     }
     pub async fn cleanup_status(&self) -> Result<BrowserCleanupStatus, InspectionError> {
-        let cutover = *self.cutover.lock().await;
         let receipts = self.load_all()?;
         let mut failures = self.cleanup_failures.lock().clone();
         for receipt in receipts {
@@ -250,13 +208,12 @@ impl BrowserService {
                 failures.push(BrowserCleanupFailure { association_key: receipt.association_key, scope: BrowserCleanupScope::Tab { session_id: receipt.session_id, tab_id: receipt.tab_id }, reason, unproven_paths: receipt.unproven_paths });
             }
         }
-        Ok(BrowserCleanupStatus { cutover, failures, saved_tabs: self.saved_tab_work()? })
+        Ok(BrowserCleanupStatus { failures })
     }
     pub async fn retry_cleanup(&self, request: BrowserCleanupRetryRequest) -> Result<BrowserCleanupStatus, InspectionError> {
         {
             let _operation = self.operation_lock.lock().await;
             if let Some(mut receipt) = self.load(&request.association_key)? { self.close(&mut receipt).await?; }
-            else { self.retry_legacy_cleanup(&request.association_key).await?; }
         }
         self.cleanup_status().await
     }

@@ -595,39 +595,19 @@
   min-height: 0;
 }
 
-.browser-cleanup-strip {
+.browser-cleanup-notices {
   flex: 0 0 auto;
   max-height: 45vh;
   overflow: auto;
 }
 
-.browser-legacy-archives {
-  margin: 4px 12px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-primary);
-  font-size: var(--font-size-sm);
-}
-
-.browser-legacy-archives section {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-
-.browser-legacy-archives code {
-  overflow-wrap: anywhere;
-}
-
-.browser-saved-work:empty { display: none; }
-.browser-saved-work {
+.browser-feedback-panel:empty { display: none; }
+.browser-feedback-panel {
   flex: 0 1 auto;
   max-height: 180px;
   overflow: auto;
   padding: 0 8px;
   min-height: 0;
 }
-.browser-saved-work details { margin: 4px 0; }
-.browser-saved-work p { margin: 4px 0; }
-.browser-saved-work select { max-width: 100%; }
+.browser-feedback-panel details { margin: 4px 0; }
+.browser-feedback-panel p { margin: 4px 0; }

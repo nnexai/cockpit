@@ -82,8 +82,7 @@ import {
   parseBrowserFeedbackSendResponse,
   parseBrowserRequest,
   parseBrowserResponse,
-  parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseBrowserLegacyArchiveList,
-  parseBrowserLegacyRemovalRequest, parseBrowserLegacyKeepRequest, parseBrowserLegacyRecipientsRequest, parseBrowserLegacyRecipients,
+  parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest,
   parseErrorEnvelope,
   parseFocusRequest,
   parseFocusResponse,
@@ -925,23 +924,6 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     browserCleanupRetry(value) {
       const request = parseBrowserCleanupRetryRequest(value);
       return invokeAndParse(invoke, "cockpit_browser_cleanup_retry", { request }, "browser cleanup retry", parseBrowserCleanupStatus);
-    },
-    browserLegacyList() {
-      return invokeAndParse(invoke, "cockpit_browser_legacy_list", undefined, "browser legacy archives", parseBrowserLegacyArchiveList);
-    },
-    browserLegacyRemove(value) {
-      const request = parseBrowserLegacyRemovalRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_legacy_remove", { request }, "browser legacy removal", parseBrowserLegacyArchiveList);
-    },
-    browserLegacyKeep(value) {
-      const request = parseBrowserLegacyKeepRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_legacy_keep", { request }, "browser legacy keep", parseBrowserLegacyArchiveList);
-    },
-    async browserLegacyRecipients(value) {
-      const request = parseBrowserLegacyRecipientsRequest(value);
-      const recipients = await invokeAndParse(invoke, "cockpit_browser_legacy_recipients", { request }, "browser legacy recipients", parseBrowserLegacyRecipients);
-      if (recipients.some((recipient) => recipient.session_id !== request.session_id)) throw new CockpitClientError("malformed_response", "Browser recipient belongs to another session");
-      return recipients;
     },
     browserAction(value) {
       const request = parseBrowserRequest(value);

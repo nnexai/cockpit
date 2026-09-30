@@ -14,7 +14,7 @@ import {
   parseTerminalStreamMessage,
   parseSessionStreamMessage,
   parseBrowserRequest, parseBrowserWorkScope, parseBrowserFeedbackSendRequest, parseBrowserDraftRecoveryRequest,
-  parseBrowserCleanupStatus, parseBrowserLegacyArchiveList, parseBrowserLegacyRemovalRequest,
+  parseBrowserCleanupStatus,
   type CockpitClient,
   type CockpitSessionSnapshot,
   type ResourceMutationRequest,
@@ -83,12 +83,8 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
   const base: CockpitClient = {
     status: vi.fn(async () => status),
     browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this tab", cleanup: "none" as const, cleanup_reason: null })),
-    browserCleanupStatus: vi.fn(async () => ({ cutover: "not_needed" as const, failures: [], saved_tabs: [] })),
-    browserCleanupRetry: vi.fn(async () => ({ cutover: "done" as const, failures: [], saved_tabs: [] })),
-    browserLegacyList: vi.fn(async () => ({ archives: [] })),
-    browserLegacyRemove: vi.fn(async () => ({ archives: [] })),
-    browserLegacyKeep: vi.fn(async () => ({ archives: [] })),
-    browserLegacyRecipients: vi.fn(async () => []),
+    browserCleanupStatus: vi.fn(async () => ({ failures: [] })),
+    browserCleanupRetry: vi.fn(async () => ({ failures: [] })),
     browserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback in terminal fixture"); }),
     browserDraftRecovery: vi.fn(async () => ({ type: "none" as const })),
     acknowledgeBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback acknowledgement in terminal fixture"); }),
@@ -837,11 +833,6 @@ describe("owned-tab client identity boundaries", () => {
     kind: "files", source_kind: "context", source_id: "source", roots: [folder], default_root_id: "folder", diagnostics: [],
   };
   const open = { tab_id: "tab-1", kind: "files", source_pane_id: "pane-1", source: { kind: "files_folder" }, client_id: "client" } as const;
-  const candidate = {
-    path: "/browser/profiles/legacy", kind: "directory", dev: "1", inode: "9007199254740993",
-    entry_count: 2, total_bytes: 8, captured_at: "now", state: "pending",
-  };
-
   it("requires the server incarnation and nullable tab focus fact", () => {
     for (const server_instance of [undefined, "", "0123456789abcdeg", "0123456789abcdef0"]) {
       expect(() => parseSessionSnapshotResponse({ ...snapshot, server_instance })).toThrow(CockpitClientError);
@@ -877,41 +868,47 @@ describe("owned-tab client identity boundaries", () => {
     await expect(createNativeClient(vi.fn(async () => response)).viewerOpen("session-1", open)).rejects.toThrow(CockpitClientError);
   });
 
-  it("resolves tab browser targets exclusively and requires explicit legacy recipients", () => {
+  it("resolves browser targets exclusively through owned tabs", () => {
     expect(parseBrowserRequest({ target, action: { kind: "open_fresh", url: null } }).target).toEqual(target);
     expect(() => parseBrowserRequest({ target: { ...target, pane_id: "pane-1" }, action: { kind: "status" } })).toThrow(CockpitClientError);
     expect(() => parseBrowserRequest({ target: { ...target, tab_id: null }, action: { kind: "status" } })).toThrow(CockpitClientError);
-    expect(() => parseBrowserWorkScope({ kind: "legacy_archive", association_key: "../receipt" })).toThrow(CockpitClientError);
-    expect(() => parseBrowserWorkScope({ kind: "saved_tab", association_key: "../receipt" })).toThrow(CockpitClientError);
-    const send = { ids: ["capture"], operation_id: "operation", acknowledge_duplicate_risk: false };
-    expect(() => parseBrowserFeedbackSendRequest({ ...send, scope: { kind: "legacy_archive", association_key: key } })).toThrow(CockpitClientError);
-    expect(() => parseBrowserFeedbackSendRequest({ ...send, scope: { kind: "saved_tab", association_key: key } })).toThrow(CockpitClientError);
-    const recipient = { endpoint_identity: "endpoint", session_id: "session-1", workspace_id: "space-1", tab_id: "tab-1", pane_id: "agent", terminal_id: "terminal", agent_fingerprint: "fingerprint", agent_label: "Agent" };
-    expect(parseBrowserFeedbackSendRequest({ ...send, recipient, scope: { kind: "legacy_archive", association_key: key } }).recipient).toEqual(recipient);
-    expect(parseBrowserFeedbackSendRequest({ ...send, recipient, scope: { kind: "saved_tab", association_key: key } }).recipient).toEqual(recipient);
-    expect(parseBrowserDraftRecoveryRequest({ scope: { kind: "saved_tab", association_key: key }, action: { type: "discard_pending" } }).scope).toEqual({ kind: "saved_tab", association_key: key });
-    expect(() => parseBrowserFeedbackSendRequest({ ...send, recipient, scope: { kind: "tab", target } })).toThrow(CockpitClientError);
   });
 
-  it("preserves exact reviewed inode strings and rejects malformed cleanup manifests", () => {
-    expect(parseBrowserLegacyRemovalRequest({ association_key: key, candidates: [candidate] }).candidates[0]?.inode).toBe("9007199254740993");
-    expect(() => parseBrowserLegacyRemovalRequest({ association_key: key, candidates: [candidate, candidate] })).toThrow(CockpitClientError);
-    expect(() => parseBrowserLegacyRemovalRequest({ association_key: key, candidates: [{ ...candidate, inode: 1 }] })).toThrow(CockpitClientError);
-    expect(() => parseBrowserCleanupStatus({ cutover: "done", saved_tabs: [], failures: [{ association_key: key, scope: { kind: "tab", session_id: "session-1" }, reason: "blocked", unproven_paths: [] }] })).toThrow(CockpitClientError);
-    const archive = { association_key: key, session_id: "session-1", space_id: "space-1", space_label: "Main", archived_at: "now", session_stopped: true, saved_capture_count: 0, draft_count: 0, pending_capture: false, candidates: [candidate], not_candidates: [] };
-    expect(() => parseBrowserLegacyArchiveList({ archives: [archive, archive] })).toThrow(CockpitClientError);
+  it.each(["saved_tab", "legacy_archive"])("rejects the removed %s browser work scope", (kind) => {
+    const scope = { kind, association_key: key };
+    expect(() => parseBrowserWorkScope(scope)).toThrow(CockpitClientError);
+    expect(() => parseBrowserFeedbackSendRequest({
+      scope, ids: ["capture"], operation_id: "operation", acknowledge_duplicate_risk: false,
+    })).toThrow(CockpitClientError);
+    expect(() => parseBrowserDraftRecoveryRequest({
+      scope, action: { type: "discard_pending" },
+    })).toThrow(CockpitClientError);
   });
 
-  it("preserves saved tab provenance and validates saved-work counts and identities", () => {
-    const savedTab = {
-      association_key: key, session_id: "session-1", tab_id: "retired-tab", tab_label: "Retired tab",
-      space_id: "space-1", space_label: "Main", saved_capture_count: 1, draft_count: 2, pending_capture: true,
+  it("rejects detached cleanup scopes and obsolete cleanup status fields", () => {
+    const failure = {
+      association_key: key, scope: { kind: "tab", session_id: "session-1", tab_id: "tab-1" },
+      reason: "blocked", unproven_paths: ["/profile"],
     };
-    const status = { cutover: "done", failures: [], saved_tabs: [savedTab] };
-    expect(parseBrowserCleanupStatus(status).saved_tabs).toEqual([savedTab]);
-    expect(() => parseBrowserCleanupStatus({ ...status, saved_tabs: undefined })).toThrow(CockpitClientError);
-    expect(() => parseBrowserCleanupStatus({ ...status, saved_tabs: [savedTab, savedTab] })).toThrow(CockpitClientError);
-    expect(() => parseBrowserCleanupStatus({ ...status, saved_tabs: [{ ...savedTab, draft_count: -1 }] })).toThrow(CockpitClientError);
-    expect(() => parseBrowserCleanupStatus({ ...status, saved_tabs: [{ ...savedTab, pending_capture: undefined }] })).toThrow(CockpitClientError);
+    expect(parseBrowserCleanupStatus({ failures: [failure] }).failures[0]?.scope).toEqual(failure.scope);
+    expect(() => parseBrowserCleanupStatus({
+      failures: [{ ...failure, scope: { kind: "legacy_space", space_id: "space-1" } }],
+    })).toThrow(CockpitClientError);
+    expect(() => parseBrowserCleanupStatus({
+      failures: [{ ...failure, scope: { kind: "tab", session_id: "session-1" } }],
+    })).toThrow(CockpitClientError);
+    expect(() => parseBrowserCleanupStatus({ failures: [], cutover: "done" })).toThrow(CockpitClientError);
+    expect(() => parseBrowserCleanupStatus({ failures: [], saved_tabs: [] })).toThrow(CockpitClientError);
+  });
+
+  it("rejects explicit feedback recipients for current-run tab delivery", () => {
+    const send = {
+      scope: { kind: "tab", target }, ids: ["capture"], operation_id: "operation", acknowledge_duplicate_risk: false,
+    };
+    expect(() => parseBrowserFeedbackSendRequest({ ...send, recipient: null })).toThrow(CockpitClientError);
+    expect(() => parseBrowserFeedbackSendRequest({
+      ...send,
+      recipient: { endpoint_identity: "endpoint", session_id: "session-1", workspace_id: "space-1", tab_id: "tab-1", pane_id: "agent", terminal_id: "terminal", agent_fingerprint: "fingerprint", agent_label: "Agent" },
+    })).toThrow(CockpitClientError);
   });
 });

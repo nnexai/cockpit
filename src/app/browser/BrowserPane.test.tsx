@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserDraftRecoveryRequest, BrowserViewCommandOutcome, BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewDraftState, BrowserViewEvent, BrowserViewFrameDescriptor, BrowserViewPendingCapture, BrowserViewSnapshot, BrowserViewViewportState } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, CockpitClient } from "../../client/CockpitClient";
 import { BrowserColorPicker } from "./AnnotationControls";
-import { BrowserPane, type BrowserPaneRecoveryRegistration } from "./BrowserPane";
+import { BrowserPane } from "./BrowserPane";
 
 const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x03, 0x00, 0x04, 0x01, 0x01, 0xff, 0xd9]);
 
@@ -641,72 +641,21 @@ describe("BrowserPane wheel recovery", () => {
     expect(host.querySelector('[aria-label="Saved feedback recovery"]')?.textContent).toContain("No eligible agent.");
     expect(client.browserFeedback).toHaveBeenCalled();
   });
-  it("preserves outgoing editor work through its pinned saved-tab association after the tab disappears", async () => {
+  it("allows ordinary close with an unsaved capture instead of saving or handing it off", async () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-    let tabPresent = true;
-    let registration: BrowserPaneRecoveryRegistration | null = null;
-    let retained: BrowserViewDraftState = {
-      draft_id: "outgoing", target_id: "target", document_generation: 1, revision: 4,
-      annotations: [{ id: "region", kind: "region", color: "#d62828", points: [], bounds: { x: 10, y: 10, width: 30, height: 30 }, evidence: null, comment: "Original note" }],
-      freshness: "fresh", stale: false,
-      editor: { selected_annotation_id: "region", note_annotation_id: "region", note_text: "Original note", notes_open: true },
-    };
-    const recovery = vi.fn(async (request: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome> => {
-      if (!tabPresent && request.scope.kind === "tab") throw new Error("Tab no longer exists");
-      if (request.scope.kind !== "saved_tab" || request.scope.association_key !== "association") throw new Error("Wrong original association");
-      if (request.action.type !== "set_editor") throw new Error("Unexpected recovery action");
-      retained = { ...retained, revision: retained.revision + 1, editor: request.action.editor };
-      return { type: "draft", draft: retained };
-    });
-    const client = {
-      browserDraftRecovery: recovery,
-      openBrowserView: vi.fn(async (_request, onEvent) => {
-        onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: snapshot() });
-        return { command: async (request: BrowserViewCommandRequest) => {
-          if (request.command.type !== "draft") return accepted(request);
-          if (request.command.command.type === "list") return accepted(request, { type: "draft_inventory", inventory: { drafts: [retained], active_draft_limit: 8, pending_capture: null } });
-          return accepted(request, { type: "draft", draft: retained });
-        }, close: vi.fn() };
-      }),
-    } as unknown as CockpitClient;
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn() } as unknown as CanvasRenderingContext2D);
-    host = document.createElement("div"); document.body.append(host);
-    await act(async () => {
-      root = createRoot(host!);
-      root.render(<BrowserPane client={client} target={{ session_id: "session", tab_id: "gone-tab", pane_id: null, endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} registerCloseGuard={(value) => { if (value) registration = value; }} />);
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
-    await act(async () => {
-      const editor = host!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Annotation note"]')!;
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(editor, "Retained after tab removal");
-      editor.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    tabPresent = false;
-    const outgoing = registration as BrowserPaneRecoveryRegistration | null;
-    await act(async () => { await outgoing!.guard(); });
-    expect(retained.editor.note_text).toBe("Retained after tab removal");
-    expect(retained.draft_id).toBe("outgoing");
-    expect(retained.target_id).toBe("target");
-  });
-  it("makes an outgoing pending capture durable without automatically sending it", async () => {
-    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-    let registration: BrowserPaneRecoveryRegistration | null = null;
-    let pending: BrowserViewPendingCapture | null = {
+    const pending: BrowserViewPendingCapture = {
       association_key: "association", browser_incarnation: "incarnation", capture_id: "capture", draft_id: "draft", draft_revision: 4, annotation_ids: ["annotation"], last_error: "Save failed",
     };
-    const recovery = vi.fn(async (request: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome> => {
-      if (request.scope.kind !== "saved_tab" || request.scope.association_key !== "association") throw new Error("Original tab is no longer available");
-      if (request.action.type !== "retry_pending") throw new Error("Unexpected recovery");
-      pending = null;
-      return { type: "capture", capture: { state: "saved", saved: { capture_id: "capture", annotation_ids: ["annotation"], image_path: "saved.png", pending_count: 1 } } };
-    });
-    const send = vi.fn();
+    const inventory = { drafts: [], active_draft_limit: 8, pending_capture: pending };
+    const recovery = vi.fn();
+    const closeBrowser = vi.fn();
     const client = {
-      browserDraftRecovery: recovery, sendBrowserFeedback: send,
+      browserDraftRecovery: recovery,
+      browserFeedback: vi.fn(async () => ({ feedback: { captures: [] }, deliveries: [], drafts: inventory })),
       openBrowserView: vi.fn(async (_request, onEvent) => {
         onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: snapshot() });
         return { command: async (request: BrowserViewCommandRequest) => request.command.type === "draft"
-          ? accepted(request, { type: "draft_inventory", inventory: { drafts: [], active_draft_limit: 8, pending_capture: pending } })
+          ? accepted(request, { type: "draft_inventory", inventory })
           : accepted(request), close: vi.fn() };
       }),
     } as unknown as CockpitClient;
@@ -714,14 +663,13 @@ describe("BrowserPane wheel recovery", () => {
     host = document.createElement("div"); document.body.append(host);
     await act(async () => {
       root = createRoot(host!);
-      root.render(<BrowserPane client={client} target={{ session_id: "session", tab_id: "gone-tab", pane_id: null, endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} registerCloseGuard={(value) => { if (value) registration = value; }} />);
+      root.render(<BrowserPane client={client} target={{ session_id: "session", tab_id: "tab", pane_id: null, endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} onCloseBrowser={closeBrowser} />);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
-    const outgoing = registration as BrowserPaneRecoveryRegistration | null;
-    await expect(outgoing!.guard()).rejects.toThrow("not durably saved");
-    await act(async () => { await outgoing!.retry(); await outgoing!.guard(); });
-    expect(pending).toBeNull();
-    expect(send).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Save failed");
+    await act(async () => host!.querySelector<HTMLButtonElement>('[aria-label="Close Fixture"]')!.click());
+    expect(closeBrowser).toHaveBeenCalledOnce();
+    expect(recovery).not.toHaveBeenCalled();
   });
 });
 

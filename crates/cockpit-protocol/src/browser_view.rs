@@ -706,7 +706,7 @@ pub struct BrowserViewCaptureCommand {
     pub capture_as_shown: bool,
 }
 
-/// A draft annotation uses only public evidence; live inspection handles never enter durable DTOs.
+/// A draft annotation uses only public evidence; live inspection handles never enter stored DTOs.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserViewDraftAnnotation {
@@ -809,8 +809,8 @@ pub enum BrowserViewDraftCommand {
     DiscardPending,
 }
 
-/// Recovery is available without an attached inline view. Tab scopes resolve
-/// through fresh Herdr authority; legacy scopes require an immutable archive.
+/// Draft recovery is available without an attached inline view during the owner run.
+/// The tab scope resolves through fresh Herdr authority.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserDraftRecoveryAction {

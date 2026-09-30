@@ -13,6 +13,7 @@ use cockpit_protocol::v1::{
     TerminalScrollSource, TerminalStreamMessage,
 };
 use serde_json::json;
+use cockpit_protocol::browser::{BrowserCleanupScope, BrowserCleanupStatus, BrowserFeedbackSendRequest, BrowserWorkScope};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -29,6 +30,34 @@ fn temporary_target() -> (PathBuf, PathBuf) {
 
 fn remove_temporary_directory(directory: PathBuf) {
     fs::remove_dir_all(directory).expect("temporary directory removed");
+}
+
+#[test]
+fn browser_work_rejects_retired_scopes_and_retention_fields() {
+    for kind in ["saved_tab", "legacy_archive"] {
+        let scope = json!({
+            "kind": kind,
+            "association_key": "0123456789abcdef01234567"
+        });
+        assert!(serde_json::from_value::<BrowserWorkScope>(scope).is_err());
+    }
+    assert!(serde_json::from_value::<BrowserCleanupScope>(json!({
+        "kind": "legacy_space", "space_id": "space-1"
+    })).is_err());
+    for field in ["saved_tabs", "cutover"] {
+        let mut status = json!({ "failures": [] });
+        status[field] = if field == "saved_tabs" { json!([]) } else { json!("done") };
+        assert!(serde_json::from_value::<BrowserCleanupStatus>(status).is_err());
+    }
+    let scope = json!({
+        "kind": "tab",
+        "target": { "session_id": "session-1", "tab_id": "tab-1", "pane_id": null, "endpoint_path": null }
+    });
+    let mut send = json!({
+        "scope": scope, "ids": ["capture"], "operation_id": "operation", "acknowledge_duplicate_risk": false
+    });
+    send["recipient"] = json!(null);
+    assert!(serde_json::from_value::<BrowserFeedbackSendRequest>(send).is_err());
 }
 
 #[test]

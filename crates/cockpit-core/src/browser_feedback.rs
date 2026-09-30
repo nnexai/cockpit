@@ -453,6 +453,69 @@ impl BrowserFeedbackStore {
         })
     }
 
+    pub(crate) fn discard_association(
+        &self,
+        association_key: &str,
+    ) -> Result<(), InspectionError> {
+        validate_association_key(association_key)?;
+        let _guard = self.lock_mutation()?;
+        let feedback = self.feedback_dir()?;
+        let artifacts = self.artifacts_dir()?;
+        for (index, entry) in feedback
+            .entries()
+            .map_err(|error| InspectionError::new("browser_feedback_read", error.to_string()))?
+            .enumerate()
+        {
+            if index >= MAX_ENTRIES {
+                return Err(InspectionError::new(
+                    "browser_feedback_bounded",
+                    "feedback directory exceeded its entry limit",
+                ));
+            }
+            let entry = entry.map_err(|error| {
+                InspectionError::new("browser_feedback_read", error.to_string())
+            })?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if let Some(id) = name
+                .strip_prefix("capture-")
+                .and_then(|value| value.strip_suffix(".json"))
+            {
+                validate_uuid(id, "capture ID")?;
+                let stored: StoredCapture = read_json_bounded(&feedback, name, MAX_RECORD_BYTES)?;
+                validate_stored(id, &stored)?;
+                if stored.context.association_key == association_key {
+                    // Keep the record until its image is gone so a failed removal
+                    // remains retryable, including when the image is already absent.
+                    remove_regular_file(
+                        &artifacts,
+                        &stored.image_name,
+                        "browser_feedback_discard",
+                    )?;
+                    remove_regular_file(&feedback, name, "browser_feedback_discard")?;
+                }
+            } else if let Some(operation_id) = name
+                .strip_prefix("delivery-")
+                .and_then(|value| value.strip_suffix(".json"))
+            {
+                validate_operation_id(operation_id)?;
+                let receipt: BrowserDeliveryReceipt =
+                    read_json_bounded(&feedback, name, MAX_DELIVERY_BYTES)?;
+                validate_delivery(&receipt)?;
+                if receipt.operation_id != operation_id {
+                    return Err(InspectionError::new(
+                        "browser_feedback_corrupt",
+                        "delivery receipt identity is invalid",
+                    ));
+                }
+                if receipt.association_key == association_key {
+                    remove_regular_file(&feedback, name, "browser_feedback_discard")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn prune(&self) -> Result<(), InspectionError> {
         let _guard = self.lock_mutation()?;
         self.prune_locked()
@@ -1539,50 +1602,6 @@ mod tests {
         assert_eq!(first[0].message, "OutcomeUnknown");
     }
 
-    #[test]
-    fn unknown_delivery_survives_acknowledgement_and_retention() {
-        let root =
-            std::env::temp_dir().join(format!("cockpit-feedback-retention-{}", Uuid::new_v4()));
-        let store =
-            BrowserFeedbackStore::new(root.clone(), BrowserFeedbackOptions::default()).unwrap();
-        let key = "0123456789abcdef01234567";
-        let id = Uuid::new_v4().to_string();
-        let receipt = store
-            .save_delivery(BrowserDeliveryReceipt {
-                operation_id: Uuid::new_v4().to_string(),
-                association_key: key.into(),
-                selected_ids: vec![id.clone()],
-                state: CommentPasteState::OutcomeUnknown,
-                target: Some(CommentPasteTarget {
-                    endpoint_identity: "disposable-endpoint".into(),
-                    session_id: "disposable-session".into(),
-                    workspace_id: "w1".into(),
-                    tab_id: "w1:t1".into(),
-                    pane_id: "w1:p1".into(),
-                    terminal_id: "disposable-terminal".into(),
-                    agent_label: "omp".into(),
-                    agent_fingerprint: "disposable-agent".into(),
-                }),
-                acknowledged_ids: vec![],
-                message: "Dispatch outcome unknown".into(),
-                created_at: 0,
-                updated_at: 0,
-            })
-            .unwrap();
-        store.ack(key, &[id]).unwrap();
-        store
-            .prune_delivery_locked(
-                &store.feedback_dir().unwrap(),
-                receipt.updated_at + store.options.retention_seconds + 1,
-            )
-            .unwrap();
-        let retained = store.load_delivery(&receipt.operation_id).unwrap();
-        std::fs::remove_dir_all(root).unwrap();
-        assert_eq!(
-            retained.map(|receipt| receipt.state),
-            Some(CommentPasteState::OutcomeUnknown)
-        );
-    }
 
     #[test]
     fn pending_capture_capacity_preserves_existing_evidence() {

@@ -16,10 +16,8 @@ use cockpit_protocol::browser::{
     BrowserCleanupRetryRequest, BrowserCleanupStatus, BrowserFeedbackAckRequest,
     BrowserFeedbackImage, BrowserFeedbackImageRequest, BrowserFeedbackLookup,
     BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserFeedbackSendResponse,
-    BrowserLegacyArchiveList, BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest,
-    BrowserLegacyRemovalRequest, BrowserRequest, BrowserResponse,
+    BrowserRequest, BrowserResponse,
 };
-use cockpit_protocol::comment_paste::CommentPasteTarget;
 use cockpit_protocol::browser_feedback::BrowserFeedbackAck;
 use cockpit_protocol::browser_view::{
     BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewDraftCommand, BrowserViewFrameGrant,
@@ -57,9 +55,7 @@ const VIEW_EVENT_QUEUE: usize = 64;
 
 fn response_read_timeout(request: &WireRequest) -> Duration {
     match request {
-        WireRequest::Action(_)
-        | WireRequest::CleanupRetry(_)
-        | WireRequest::LegacyRemove(_) => BROWSER_ACTION_RESPONSE_TIMEOUT,
+        WireRequest::Action(_) | WireRequest::CleanupRetry(_) => BROWSER_ACTION_RESPONSE_TIMEOUT,
         WireRequest::BrowserViewOpen(_) => INLINE_VIEW_OPEN_RESPONSE_TIMEOUT,
         WireRequest::BrowserViewCommand(_) => INLINE_VIEW_COMMAND_RESPONSE_TIMEOUT,
         _ => IO_TIMEOUT,
@@ -93,10 +89,6 @@ enum WireRequest {
     SendFeedback(BrowserFeedbackSendRequest),
     CleanupStatus,
     CleanupRetry(BrowserCleanupRetryRequest),
-    LegacyList,
-    LegacyRemove(BrowserLegacyRemovalRequest),
-    LegacyKeep(BrowserLegacyKeepRequest),
-    LegacyRecipients(BrowserLegacyRecipientsRequest),
     BrowserViewOpen(BrowserViewOpenRequest),
     BrowserViewCommand(BrowserViewCommandRequest),
     BrowserViewEvents(String),
@@ -114,8 +106,6 @@ enum WireResponse {
     FeedbackImage(BrowserFeedbackImage),
     FeedbackSent(BrowserFeedbackSendResponse),
     CleanupStatus(BrowserCleanupStatus),
-    LegacyList(BrowserLegacyArchiveList),
-    LegacyRecipients(Vec<CommentPasteTarget>),
     BrowserViewOpen(WireBrowserViewOpen),
     BrowserViewCommand(BrowserViewCommandResponse),
     BrowserViewEvent(cockpit_protocol::browser_view::BrowserViewEvent),
@@ -189,7 +179,8 @@ impl BrowserRuntime {
         state_root: PathBuf,
         service: Arc<BrowserService>,
     ) -> Result<Self, InspectionError> {
-        let state_root = state_root.join("browser");
+        let owner_state_root = state_root;
+        let state_root = owner_state_root.join("browser");
         ensure_private_state_root(&state_root)?;
         fs::set_permissions(&state_root, fs::Permissions::from_mode(0o700))
             .map_err(|error| io_error("browser_state_unavailable", error))?;
@@ -206,6 +197,7 @@ impl BrowserRuntime {
         verify_lock(&lock)?;
         match lock.try_lock_exclusive() {
             Ok(()) => {
+                cockpit_core::ephemeral::reset_owner_state(&owner_state_root, &service).await?;
                 match fs::symlink_metadata(&socket) {
                     Ok(metadata)
                         if metadata.file_type().is_socket()
@@ -241,30 +233,20 @@ impl BrowserRuntime {
                 let cleanup_socket = socket.clone();
                 let cleanup_device = socket_device;
                 let cleanup_inode = socket_inode;
-                let mut reconcile = tokio::time::interval(Duration::from_secs(15));
+                let mut reconcile = tokio::time::interval_at(
+                    tokio::time::Instant::now() + Duration::from_secs(15),
+                    Duration::from_secs(15),
+                );
                 let mut endpoint_probe = tokio::time::interval(Duration::from_millis(250));
                 endpoint_probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 let helper = Arc::new(BrowserHelperSupervisor::new(state_root.clone()));
                 let mut retired = helper.take_retired_receiver().await.expect("retirement receiver available");
                 let task_helper = Arc::clone(&helper);
                 let task = tokio::spawn(async move {
-                    // The owner alone reconciles and retires old Space receipts.
-                    // Keep accepting IPC while cutover runs so other windows can
-                    // observe its status without starting another cutover.
-                    let startup = async {
-                        let _ = owner_service.reconcile().await;
-                        let _ = owner_service.retire_legacy_space_associations().await;
-                    };
-                    tokio::pin!(startup);
-                    let mut initialized = false;
                     loop {
                         tokio::select! {
                             _ = &mut stop_rx => break,
-                            _ = &mut startup, if !initialized => {
-                                initialized = true;
-                                reconcile.reset();
-                            }
-                            _ = reconcile.tick(), if initialized => {
+                            _ = reconcile.tick() => {
                                 let _ = owner_service.reconcile().await;
                                 let _ = owner_service.prune_feedback();
                             }
@@ -346,43 +328,6 @@ impl BrowserRuntime {
     ) -> Result<BrowserCleanupStatus, InspectionError> {
         match self.request(WireRequest::CleanupRetry(request)).await? {
             WireResponse::CleanupStatus(response) => Ok(response),
-            _ => Err(invalid_response()),
-        }
-    }
-
-    pub async fn legacy_list(&self) -> Result<BrowserLegacyArchiveList, InspectionError> {
-        match self.request(WireRequest::LegacyList).await? {
-            WireResponse::LegacyList(response) => Ok(response),
-            _ => Err(invalid_response()),
-        }
-    }
-
-    pub async fn legacy_remove(
-        &self,
-        request: BrowserLegacyRemovalRequest,
-    ) -> Result<BrowserLegacyArchiveList, InspectionError> {
-        match self.request(WireRequest::LegacyRemove(request)).await? {
-            WireResponse::LegacyList(response) => Ok(response),
-            _ => Err(invalid_response()),
-        }
-    }
-
-    pub async fn legacy_keep(
-        &self,
-        request: BrowserLegacyKeepRequest,
-    ) -> Result<BrowserLegacyArchiveList, InspectionError> {
-        match self.request(WireRequest::LegacyKeep(request)).await? {
-            WireResponse::LegacyList(response) => Ok(response),
-            _ => Err(invalid_response()),
-        }
-    }
-
-    pub async fn legacy_recipients(
-        &self,
-        request: BrowserLegacyRecipientsRequest,
-    ) -> Result<Vec<CommentPasteTarget>, InspectionError> {
-        match self.request(WireRequest::LegacyRecipients(request)).await? {
-            WireResponse::LegacyRecipients(response) => Ok(response),
             _ => Err(invalid_response()),
         }
     }
@@ -709,19 +654,6 @@ async fn dispatch(
             .retry_cleanup(request)
             .await
             .map(WireResponse::CleanupStatus),
-        WireRequest::LegacyList => service.legacy_list().await.map(WireResponse::LegacyList),
-        WireRequest::LegacyRemove(request) => service
-            .legacy_remove(request)
-            .await
-            .map(WireResponse::LegacyList),
-        WireRequest::LegacyKeep(request) => service
-            .legacy_keep(request)
-            .await
-            .map(WireResponse::LegacyList),
-        WireRequest::LegacyRecipients(request) => service
-            .legacy_recipients(request)
-            .await
-            .map(WireResponse::LegacyRecipients),
         WireRequest::Feedback(request) => service
             .feedback(&request.scope)
             .await
@@ -1417,29 +1349,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn observer_shutdown_preserves_owner_and_owner_shutdown_allows_replacement() {
+    async fn owner_start_resets_work_but_observers_preserve_it_until_replacement() {
         let fixture = RuntimeFixture::new();
-        let owner = BrowserRuntime::start(fixture.0.clone(), fixture.service()).await.unwrap();
-        let observer = BrowserRuntime::connect(fixture.0.clone(), fixture.service()).await.unwrap();
+        let service = fixture.service();
+        let work_dirs = ["browser", "comments", "review"];
+        for dir in work_dirs {
+            fs::create_dir_all(fixture.0.join(dir)).unwrap();
+            fs::write(fixture.0.join(dir).join("previous-run"), b"old work").unwrap();
+        }
+        let project = fixture.0.join("project.json");
+        fs::write(&project, b"project state").unwrap();
+        let owner = BrowserRuntime::start(fixture.0.clone(), service).await.unwrap();
+        let lock_inode = fs::metadata(fixture.0.join("browser/owner.lock")).unwrap().ino();
         assert!(owner.is_owner().await);
-        assert!(!observer.is_owner().await);
+        for dir in work_dirs {
+            assert!(!fixture.0.join(dir).join("previous-run").exists());
+            fs::write(fixture.0.join(dir).join("current-run"), b"live work").unwrap();
+        }
 
+        let observer = BrowserRuntime::connect(fixture.0.clone(), fixture.service()).await.unwrap();
+        assert!(!observer.is_owner().await);
+        for dir in work_dirs {
+            assert_eq!(fs::read(fixture.0.join(dir).join("current-run")).unwrap(), b"live work");
+        }
         observer.shutdown().await.unwrap();
-        // Closing a CLI/window observer must not relinquish ownership or stop
-        // the host: other windows still need cleanup and legacy saved work.
+        // Closing an observer must not relinquish ownership or discard in-run work.
         let next_window = BrowserRuntime::start(fixture.0.clone(), fixture.service()).await.unwrap();
         assert!(!next_window.is_owner().await);
-        let error = next_window.feedback(BrowserFeedbackRequest {
-            scope: cockpit_protocol::browser::BrowserWorkScope::LegacyArchive {
-                association_key: "1234567890abcdef12345678".into(),
-            },
-        }).await.unwrap_err();
-        assert_eq!(error.code, "browser_legacy_archive_absent");
+        assert!(next_window.cleanup_status().await.unwrap().failures.is_empty());
+        for dir in work_dirs {
+            assert_eq!(fs::read(fixture.0.join(dir).join("current-run")).unwrap(), b"live work");
+        }
         next_window.shutdown().await.unwrap();
 
         owner.shutdown().await.unwrap();
         let replacement = BrowserRuntime::start(fixture.0.clone(), fixture.service()).await.unwrap();
         assert!(replacement.is_owner().await);
+        for dir in work_dirs {
+            assert!(!fixture.0.join(dir).join("current-run").exists());
+        }
+        assert_eq!(fs::metadata(fixture.0.join("browser/owner.lock")).unwrap().ino(), lock_inode);
+        assert_eq!(fs::read(project).unwrap(), b"project state");
         replacement.shutdown().await.unwrap();
     }
 }

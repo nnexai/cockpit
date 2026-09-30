@@ -66,8 +66,7 @@ import {
   parseBrowserFeedbackSendResponse,
   parseBrowserRequest,
   parseBrowserResponse,
-  parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseBrowserLegacyArchiveList,
-  parseBrowserLegacyRemovalRequest, parseBrowserLegacyKeepRequest, parseBrowserLegacyRecipientsRequest, parseBrowserLegacyRecipients,
+  parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest,
   parseErrorEnvelope,
   parseFocusRequest,
   parseFocusResponse,
@@ -1020,23 +1019,6 @@ export function createBrowserClient(
     async browserCleanupRetry(value) {
       const body = parseBrowserCleanupRetryRequest(value);
       return getJson(request, "/api/v1/browser/cleanup/retry", "browser cleanup retry", parseBrowserCleanupStatus, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    browserLegacyList() {
-      return getJson(request, "/api/v1/browser/legacy", "browser legacy archives", parseBrowserLegacyArchiveList);
-    },
-    async browserLegacyRemove(value) {
-      const body = parseBrowserLegacyRemovalRequest(value);
-      return getJson(request, "/api/v1/browser/legacy/remove", "browser legacy removal", parseBrowserLegacyArchiveList, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async browserLegacyKeep(value) {
-      const body = parseBrowserLegacyKeepRequest(value);
-      return getJson(request, "/api/v1/browser/legacy/keep", "browser legacy keep", parseBrowserLegacyArchiveList, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async browserLegacyRecipients(value) {
-      const body = parseBrowserLegacyRecipientsRequest(value);
-      const recipients = await getJson(request, "/api/v1/browser/legacy/recipients", "browser legacy recipients", parseBrowserLegacyRecipients, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (recipients.some((recipient) => recipient.session_id !== body.session_id)) throw new CockpitClientError("malformed_response", "Browser recipient belongs to another session");
-      return recipients;
     },
     async browserAction(value) {
       const body = parseBrowserRequest(value);

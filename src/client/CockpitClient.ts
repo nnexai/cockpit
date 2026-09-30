@@ -9,9 +9,7 @@ import type {
 } from "../protocol/generated/v1";
 import type {
   BrowserCleanupState, BrowserCleanupScope, BrowserCleanupFailure, BrowserCleanupStatus, BrowserCleanupRetryRequest,
-  BrowserCutoverState, BrowserWorkScope, BrowserSavedTabWork, BrowserLegacyCandidateKind, BrowserLegacyCandidateState,
-  BrowserLegacyArtifactCandidate, BrowserLegacyArchive, BrowserLegacyArchiveList, BrowserLegacyRemovalRequest,
-  BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest, CreatedPane,
+  BrowserWorkScope, CreatedPane,
   ViewerKind, ViewerSourceKind, ViewerSourceSelector, ViewerSourceOptions, ViewerOpenRequest, ViewerContext,
   AgentSummary,
   BrowserAction,
@@ -240,9 +238,7 @@ export type CockpitHerdrIdentity = Extract<
 export type CockpitSessionSnapshot = SessionSnapshotResponse;
 export type {
   BrowserCleanupState, BrowserCleanupScope, BrowserCleanupFailure, BrowserCleanupStatus, BrowserCleanupRetryRequest,
-  BrowserCutoverState, BrowserWorkScope, BrowserSavedTabWork, BrowserLegacyCandidateKind, BrowserLegacyCandidateState,
-  BrowserLegacyArtifactCandidate, BrowserLegacyArchive, BrowserLegacyArchiveList, BrowserLegacyRemovalRequest,
-  BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest, CreatedPane,
+  BrowserWorkScope, CreatedPane,
   ViewerKind, ViewerSourceKind, ViewerSourceSelector, ViewerSourceOptions, ViewerOpenRequest, ViewerContext,
   AgentSummary,
   ContextDirectory,
@@ -294,10 +290,6 @@ export interface CockpitClient {
   browserAction(request: BrowserRequest): Promise<BrowserResponse>;
   browserCleanupStatus(): Promise<BrowserCleanupStatus>;
   browserCleanupRetry(request: BrowserCleanupRetryRequest): Promise<BrowserCleanupStatus>;
-  browserLegacyList(): Promise<BrowserLegacyArchiveList>;
-  browserLegacyRemove(request: BrowserLegacyRemovalRequest): Promise<BrowserLegacyArchiveList>;
-  browserLegacyKeep(request: BrowserLegacyKeepRequest): Promise<BrowserLegacyArchiveList>;
-  browserLegacyRecipients(request: BrowserLegacyRecipientsRequest): Promise<CommentPasteTarget[]>;
   browserFeedback(request: BrowserFeedbackRequest): Promise<BrowserFeedbackLookup>;
   browserDraftRecovery(request: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome>;
   acknowledgeBrowserFeedback(request: BrowserFeedbackAckRequest): Promise<BrowserFeedbackAck>;
@@ -611,15 +603,11 @@ export function parseBrowserResponse(value: unknown): BrowserResponse {
 export function parseBrowserWorkScope(value: unknown): BrowserWorkScope {
   if (!isRecord(value)) return malformed("Browser work scope is malformed");
   if (value.kind === "tab") return { kind: "tab", target: parseBrowserTarget(value.target) };
-  if ((value.kind === "legacy_archive" || value.kind === "saved_tab") && isString(value.association_key) && /^[0-9a-f]{24}$/.test(value.association_key)) {
-    return { kind: value.kind, association_key: value.association_key };
-  }
   return malformed("Browser work scope is malformed");
 }
 
 export function parseBrowserCleanupScope(value: unknown): BrowserCleanupScope {
   if (!isRecord(value)) return malformed("Browser cleanup scope is malformed");
-  if (value.kind === "legacy_space" && isBoundedId(value.space_id)) return { kind: "legacy_space", space_id: value.space_id };
   if (value.kind === "tab" && isBoundedId(value.session_id) && isBoundedId(value.tab_id)) {
     return { kind: "tab", session_id: value.session_id, tab_id: value.tab_id };
   }
@@ -634,24 +622,10 @@ export function parseBrowserCleanupFailure(value: unknown): BrowserCleanupFailur
   return { association_key: value.association_key, scope: parseBrowserCleanupScope(value.scope), reason: value.reason, unproven_paths: value.unproven_paths };
 }
 
-export function parseBrowserSavedTabWork(value: unknown): BrowserSavedTabWork {
-  if (!isRecord(value) || !isString(value.association_key) || !/^[0-9a-f]{24}$/.test(value.association_key)
-    || !isBoundedId(value.session_id) || !isBoundedId(value.tab_id) || !isString(value.tab_label)
-    || !isBoundedId(value.space_id) || !isString(value.space_label) || !isU32(value.saved_capture_count)
-    || !isU32(value.draft_count) || !isBoolean(value.pending_capture)) return malformed("Saved tab browser work is malformed");
-  return {
-    association_key: value.association_key, session_id: value.session_id, tab_id: value.tab_id, tab_label: value.tab_label,
-    space_id: value.space_id, space_label: value.space_label, saved_capture_count: value.saved_capture_count,
-    draft_count: value.draft_count, pending_capture: value.pending_capture,
-  };
-}
-
 export function parseBrowserCleanupStatus(value: unknown): BrowserCleanupStatus {
-  if (!isRecord(value) || !isOneOf(value.cutover, ["not_needed", "running", "done", "failed"] as const)
-    || !Array.isArray(value.failures) || !Array.isArray(value.saved_tabs)) return malformed("Browser cleanup status is malformed");
-  const savedTabs = value.saved_tabs.map(parseBrowserSavedTabWork);
-  if (new Set(savedTabs.map((tab) => tab.association_key)).size !== savedTabs.length) return malformed("Duplicate saved tab browser work identities");
-  return { cutover: value.cutover, failures: value.failures.map(parseBrowserCleanupFailure), saved_tabs: savedTabs };
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "failures")
+    || !Array.isArray(value.failures)) return malformed("Browser cleanup status is malformed");
+  return { failures: value.failures.map(parseBrowserCleanupFailure) };
 }
 
 export function parseBrowserCleanupRetryRequest(value: unknown): BrowserCleanupRetryRequest {
@@ -659,65 +633,6 @@ export function parseBrowserCleanupRetryRequest(value: unknown): BrowserCleanupR
     return malformed("Browser cleanup retry request is malformed");
   }
   return { association_key: value.association_key };
-}
-
-export function parseBrowserLegacyArtifactCandidate(value: unknown): BrowserLegacyArtifactCandidate {
-  if (!isRecord(value) || !isString(value.path) || value.path.length === 0 || value.path.includes("\0")
-    || !isOneOf(value.kind, ["directory", "file"] as const)
-    || !isString(value.dev) || !/^[0-9]+$/.test(value.dev) || !isString(value.inode) || !/^[0-9]+$/.test(value.inode)
-    || !isU64(value.entry_count) || !isU64(value.total_bytes) || !isString(value.captured_at)
-    || !isOneOf(value.state, ["pending", "kept", "removed", "changed"] as const)) return malformed("Browser legacy artifact candidate is malformed");
-  return {
-    path: value.path, kind: value.kind, dev: value.dev, inode: value.inode, entry_count: value.entry_count,
-    total_bytes: value.total_bytes, captured_at: value.captured_at, state: value.state,
-  };
-}
-
-export function parseBrowserLegacyArchive(value: unknown): BrowserLegacyArchive {
-  if (!isRecord(value) || !isString(value.association_key) || !/^[0-9a-f]{24}$/.test(value.association_key)
-    || !isBoundedId(value.session_id) || !isBoundedId(value.space_id) || !isString(value.space_label)
-    || !isString(value.archived_at) || !isBoolean(value.session_stopped) || !isU32(value.saved_capture_count)
-    || !isU32(value.draft_count) || !isBoolean(value.pending_capture) || !Array.isArray(value.candidates)
-    || !Array.isArray(value.not_candidates) || !value.not_candidates.every(isString)) return malformed("Browser legacy archive is malformed");
-  const candidates = value.candidates.map(parseBrowserLegacyArtifactCandidate);
-  if (new Set(candidates.map((candidate) => candidate.path)).size !== candidates.length) return malformed("Duplicate browser legacy artifact paths");
-  return {
-    association_key: value.association_key, session_id: value.session_id, space_id: value.space_id,
-    space_label: value.space_label, archived_at: value.archived_at, session_stopped: value.session_stopped,
-    saved_capture_count: value.saved_capture_count, draft_count: value.draft_count, pending_capture: value.pending_capture,
-    candidates, not_candidates: value.not_candidates,
-  };
-}
-
-export function parseBrowserLegacyArchiveList(value: unknown): BrowserLegacyArchiveList {
-  if (!isRecord(value) || !Array.isArray(value.archives)) return malformed("Browser legacy archive list is malformed");
-  const archives = value.archives.map(parseBrowserLegacyArchive);
-  if (new Set(archives.map((archive) => archive.association_key)).size !== archives.length) return malformed("Duplicate browser legacy archive identities");
-  return { archives };
-}
-
-export function parseBrowserLegacyRemovalRequest(value: unknown): BrowserLegacyRemovalRequest {
-  const { association_key } = parseBrowserCleanupRetryRequest(value);
-  if (!isRecord(value) || !Array.isArray(value.candidates) || value.candidates.length === 0) return malformed("Browser legacy removal manifest is malformed");
-  const candidates = value.candidates.map(parseBrowserLegacyArtifactCandidate);
-  if (new Set(candidates.map((candidate) => candidate.path)).size !== candidates.length
-    || candidates.some((candidate) => candidate.state !== "pending")) return malformed("Browser legacy removal manifest is not pending or has duplicate paths");
-  return { association_key, candidates };
-}
-
-export function parseBrowserLegacyKeepRequest(value: unknown): BrowserLegacyKeepRequest {
-  return parseBrowserCleanupRetryRequest(value);
-}
-
-export function parseBrowserLegacyRecipientsRequest(value: unknown): BrowserLegacyRecipientsRequest {
-  if (!isRecord(value) || !isBoundedId(value.session_id)) return malformed("Browser legacy recipients request is malformed");
-  validateSessionId(value.session_id);
-  return { session_id: value.session_id };
-}
-
-export function parseBrowserLegacyRecipients(value: unknown): CommentPasteTarget[] {
-  if (!Array.isArray(value)) return malformed("Browser legacy recipients are malformed");
-  return value.map(parseCommentPasteTargetForFeedback);
 }
 
 const browserViewMaxId = 512;
@@ -1512,13 +1427,11 @@ export function parseBrowserFeedbackImageRequest(value: unknown): BrowserFeedbac
   return { scope: parseBrowserWorkScope(value.scope), capture_id: value.capture_id };
 }
 export function parseBrowserFeedbackSendRequest(value: unknown): BrowserFeedbackSendRequest {
-  if (!isRecord(value) || !Array.isArray(value.ids) || value.ids.length > 10000
+  if (!isRecord(value) || "recipient" in value || !Array.isArray(value.ids) || value.ids.length > 10000
     || !value.ids.every((id) => isString(id) && id.length > 0) || !isString(value.operation_id)
     || value.operation_id.length === 0 || !isBoolean(value.acknowledge_duplicate_risk)) return malformed("Browser feedback send request is malformed");
   const scope = parseBrowserWorkScope(value.scope);
-  const recipient = value.recipient === undefined || value.recipient === null ? null : parseCommentPasteTargetForFeedback(value.recipient);
-  if ((scope.kind !== "tab") !== (recipient !== null)) return malformed("Browser feedback recipient does not match work scope");
-  return { scope, recipient, ids: value.ids, operation_id: value.operation_id, acknowledge_duplicate_risk: value.acknowledge_duplicate_risk };
+  return { scope, ids: value.ids, operation_id: value.operation_id, acknowledge_duplicate_risk: value.acknowledge_duplicate_risk };
 }
 function parseBrowserFeedbackDeliveryStatus(value: unknown): BrowserFeedbackDeliveryStatus {
   if (!isRecord(value) || !isString(value.capture_id) || value.capture_id.length === 0

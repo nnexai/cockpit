@@ -33,8 +33,7 @@ use cockpit_protocol::{
         BrowserCleanupRetryRequest, BrowserCleanupStatus, BrowserFeedbackAckRequest,
         BrowserFeedbackImage, BrowserFeedbackImageRequest, BrowserFeedbackLookup,
         BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserFeedbackSendResponse,
-        BrowserLegacyArchiveList, BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest,
-        BrowserLegacyRemovalRequest, BrowserRequest, BrowserResponse,
+        BrowserRequest, BrowserResponse,
     },
     browser_view::{
         BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewEvent,
@@ -670,36 +669,6 @@ async fn cockpit_browser_cleanup_retry(
     runtime.retry_cleanup(request).await.map_err(inspection_error_response)
 }
 
-#[tauri::command]
-async fn cockpit_browser_legacy_list(
-    runtime: State<'_, Arc<BrowserRuntime>>,
-) -> Result<BrowserLegacyArchiveList, ErrorResponse> {
-    runtime.legacy_list().await.map_err(inspection_error_response)
-}
-
-#[tauri::command]
-async fn cockpit_browser_legacy_remove(
-    request: BrowserLegacyRemovalRequest,
-    runtime: State<'_, Arc<BrowserRuntime>>,
-) -> Result<BrowserLegacyArchiveList, ErrorResponse> {
-    runtime.legacy_remove(request).await.map_err(inspection_error_response)
-}
-
-#[tauri::command]
-async fn cockpit_browser_legacy_keep(
-    request: BrowserLegacyKeepRequest,
-    runtime: State<'_, Arc<BrowserRuntime>>,
-) -> Result<BrowserLegacyArchiveList, ErrorResponse> {
-    runtime.legacy_keep(request).await.map_err(inspection_error_response)
-}
-
-#[tauri::command]
-async fn cockpit_browser_legacy_recipients(
-    request: BrowserLegacyRecipientsRequest,
-    runtime: State<'_, Arc<BrowserRuntime>>,
-) -> Result<Vec<cockpit_protocol::comment_paste::CommentPasteTarget>, ErrorResponse> {
-    runtime.legacy_recipients(request).await.map_err(inspection_error_response)
-}
 #[derive(Clone, Debug, Serialize)]
 struct BrowserViewSubscribeResponse {
     stream_id: String,
@@ -1880,10 +1849,6 @@ pub fn run() {
             cockpit_browser_feedback_send,
             cockpit_browser_cleanup_status,
             cockpit_browser_cleanup_retry,
-            cockpit_browser_legacy_list,
-            cockpit_browser_legacy_remove,
-            cockpit_browser_legacy_keep,
-            cockpit_browser_legacy_recipients,
             cockpit_sessions,
             cockpit_session_snapshot,
             cockpit_space_git_status,

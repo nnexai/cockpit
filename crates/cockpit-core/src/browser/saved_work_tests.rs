@@ -5,15 +5,11 @@ use async_trait::async_trait;
 use crate::browser::{BrowserHerdrAdapter, BrowserHerdrSnapshot};
 use crate::config::BrowserConfiguration;
 use crate::paste_adapter::CommentPasteAdapter;
-use cockpit_protocol::browser::{BrowserFeedbackAckRequest, BrowserTarget};
-use cockpit_protocol::browser_view::{BrowserDraftRecoveryAction, BrowserDraftRecoveryRequest,
-    BrowserViewCommandOutcome, BrowserViewDraftEditorState};
+use cockpit_protocol::browser::{BrowserTarget, BrowserWorkScope};
 use uuid::Uuid;
 
-const KEY: &str = "0123456789abcdef01234567";
 struct FixtureAdapter {
     snapshot: Mutex<BrowserHerdrSnapshot>,
-    offline: std::sync::atomic::AtomicBool,
     targets: Mutex<Vec<CommentPasteTarget>>,
     writes: Mutex<Vec<String>>,
     change_on_focus: std::sync::atomic::AtomicBool,
@@ -21,7 +17,6 @@ struct FixtureAdapter {
 #[async_trait]
 impl BrowserHerdrAdapter for FixtureAdapter {
     async fn browser_snapshot(&self, _: &str) -> Result<BrowserHerdrSnapshot, InspectionError> {
-        assert!(!self.offline.load(std::sync::atomic::Ordering::SeqCst), "saved-work recovery contacted Herdr");
         Ok(self.snapshot.lock().await.clone())
     }
 }
@@ -68,7 +63,7 @@ fn fixture() -> (BrowserService, Arc<FixtureAdapter>, PathBuf) {
     let adapter = Arc::new(FixtureAdapter {
         snapshot: Mutex::new(BrowserHerdrSnapshot {
             endpoint_identity: "endpoint".into(), endpoint_path: "/fixture/socket".into(), snapshot,
-        }), offline: false.into(),
+        }),
         targets: Mutex::new(vec![recipient("w1:p2","w1:t2","term2"), recipient("w1:p1","w1:t1","term1")]),
         writes: Mutex::new(Vec::new()), change_on_focus: false.into(),
     });
@@ -82,14 +77,6 @@ fn service_for(root: PathBuf, adapter: Arc<FixtureAdapter>) -> BrowserService {
         playwright_core: None, feedback_retention_seconds: 3600,
         feedback_max_store_bytes: 256 * 1024 * 1024,
     }, root, adapter.clone()).unwrap().with_paste_adapter(adapter)
-}
-fn archive(service: &BrowserService) -> BrowserWorkScope {
-    std::fs::write(service.root.join("legacy-archive").join(format!("{KEY}.json")),
-        serde_json::to_vec(&json!({"association_key":KEY,"endpoint_identity":"old-endpoint",
-            "endpoint_path":"/old/socket","session_id":"original-session","space_id":"old-space",
-            "space_label":"Original Space","archived_at":"2026-09-29T00:00:00Z",
-            "session_stopped":true,"candidates":[],"not_candidates":[]})).unwrap()).unwrap();
-    BrowserWorkScope::LegacyArchive { association_key: KEY.into() }
 }
 fn seed_capture(service: &BrowserService, key: &str) -> (String, String, String) {
     seed_capture_for(service, key, "original-session", "old-space", "Original Space")
@@ -124,347 +111,143 @@ fn tab_scope(tab_id: &str) -> BrowserWorkScope {
         session_id: "session".into(), tab_id: Some(tab_id.into()), pane_id: None, endpoint_path: None,
     }}
 }
-fn saved_tab_target(endpoint_identity: &str) -> crate::browser::ResolvedTarget {
-    crate::browser::ResolvedTarget {
-        endpoint_identity: endpoint_identity.into(), endpoint_path: "/fixture/socket".into(),
-        session_id: "session".into(), space_id: "w1".into(), space_label: "Original Space".into(),
-        tab_id: "w1:t1".into(), tab_label: "One".into(), tab_present: true,
-    }
-}
-fn send(scope: BrowserWorkScope, id: String, recipient: Option<CommentPasteTarget>) -> BrowserFeedbackSendRequest {
-    BrowserFeedbackSendRequest { scope, recipient, operation_id: Uuid::new_v4().to_string(), ids: vec![id], acknowledge_duplicate_risk: false }
+fn send(scope: BrowserWorkScope, id: String) -> BrowserFeedbackSendRequest {
+    BrowserFeedbackSendRequest { scope, operation_id: Uuid::new_v4().to_string(), ids: vec![id], acknowledge_duplicate_risk: false }
 }
 #[tokio::test]
 async fn tab_delivery_requires_its_focused_tab_not_merely_the_same_space() {
     let (service, adapter, root) = fixture();
     let key = crate::browser::association_key("endpoint", "session", "w1:t2");
     let (_, id, _) = seed_capture(&service, &key);
-    let error = service.send_feedback(send(tab_scope("w1:t2"), id.clone(), None)).await.unwrap_err();
+    let error = service.send_feedback(send(tab_scope("w1:t2"), id)).await.unwrap_err();
     assert_eq!(error.code, "browser_feedback_tab_inactive");
     assert!(adapter.writes.lock().await.is_empty());
-    let recipient = adapter.targets.lock().await[1].clone();
-    let error = service.send_feedback(send(tab_scope("w1:t2"), id, Some(recipient))).await.unwrap_err();
-    assert_eq!(error.code, "browser_feedback_recipient_invalid");
     assert_eq!(service.feedback.list(&key).unwrap().pending_count, 1);
     std::fs::remove_dir_all(root).unwrap();
 }
+
 #[tokio::test]
-async fn legacy_recipients_are_focused_tab_agents_with_matching_terminals() {
+async fn tab_delivery_rechecks_focus_and_requires_duplicate_risk_acknowledgement() {
     let (service, adapter, root) = fixture();
-    let listed = service.legacy_recipients(BrowserLegacyRecipientsRequest { session_id: "session".into() }).await.unwrap();
-    assert_eq!(listed, vec![adapter.targets.lock().await[1].clone()]);
-    adapter.targets.lock().await[1].terminal_id = "replaced".into();
-    assert!(service.legacy_recipients(BrowserLegacyRecipientsRequest { session_id: "session".into() }).await.unwrap().is_empty());
-    std::fs::remove_dir_all(root).unwrap();
-}
-#[tokio::test]
-async fn archive_work_is_recoverable_offline_and_retains_original_source() {
-    let (service, adapter, root) = fixture();
-    let scope = archive(&service);
-    let (capture_id, id, png) = seed_capture(&service, KEY);
-    let identity = crate::browser::drafts::BrowserDraftIdentity {
-        association_key: KEY.into(), browser_incarnation: Uuid::new_v4().to_string(),
-        target_id: "old-target".into(), document_generation: 1,
-    };
-    let draft = service.draft_store().unwrap().open(&identity, None).unwrap();
-    adapter.offline.store(true, std::sync::atomic::Ordering::SeqCst);
-    let lookup = service.feedback(&scope).await.unwrap();
-    assert_eq!(lookup.feedback.captures[0].context.space_id, "old-space");
-    assert_eq!(lookup.drafts.unwrap().drafts[0].draft_id, draft.draft_id);
-    let image = service.feedback_image(BrowserFeedbackImageRequest { scope: scope.clone(), capture_id }).await.unwrap();
-    assert_eq!(image.data_base64, png);
-    let annotation_id = Uuid::new_v4().to_string();
-    let annotated = service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-        scope: scope.clone(), action: BrowserDraftRecoveryAction::UpsertAnnotation {
-            draft_id: draft.draft_id.clone(), expected_revision: draft.revision,
-            annotation: serde_json::from_value(json!({
-                "id":annotation_id,"kind":"region","color":"#ff0000","points":[],
-                "bounds":{"x":0.0,"y":0.0,"width":1.0,"height":1.0},
-                "evidence":null,"comment":"Recovered annotation"
-            })).unwrap(),
-        },
-    }).await.unwrap();
-    let BrowserViewCommandOutcome::Draft { draft } = annotated else { panic!("expected recovered annotation") };
-    let edited = service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-        scope: scope.clone(), action: BrowserDraftRecoveryAction::SetEditor {
-            draft_id: draft.draft_id.clone(), expected_revision: draft.revision,
-            editor: BrowserViewDraftEditorState { selected_annotation_id: Some(annotation_id.clone()), notes_open: true,
-                note_annotation_id: Some(annotation_id), note_text: "Recovered note".into() },
-        },
-    }).await.unwrap();
-    let BrowserViewCommandOutcome::Draft { draft: edited } = edited else { panic!("expected edited draft") };
-    assert_eq!(edited.editor.note_text, "Recovered note");
-    assert_eq!(edited.target_id, identity.target_id);
-    assert_eq!(edited.document_generation, identity.document_generation);
-    let ack = service.acknowledge_feedback(BrowserFeedbackAckRequest { scope: scope.clone(), ids: vec![id.clone()] }).await.unwrap();
-    assert_eq!(ack.acknowledged_ids, vec![id]);
-    let discarded = service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-        scope, action: BrowserDraftRecoveryAction::DiscardDraft {
-            draft_id: edited.draft_id, expected_revision: edited.revision,
-        },
-    }).await.unwrap();
-    let BrowserViewCommandOutcome::DraftInventory { inventory } = discarded else { panic!("expected inventory") };
-    assert!(inventory.drafts.is_empty());
-    std::fs::remove_dir_all(root).unwrap();
-}
-#[tokio::test]
-async fn legacy_send_requires_explicit_unchanged_recipient_and_preserves_duplicate_risk() {
-    let (service, adapter, root) = fixture();
-    let scope = archive(&service);
-    let (_, id, _) = seed_capture(&service, KEY);
-    let error = service.send_feedback(send(scope.clone(), id.clone(), None)).await.unwrap_err();
-    assert_eq!(error.code, "browser_feedback_recipient_required");
-    let recipient = adapter.targets.lock().await[1].clone();
-    let mut changed = recipient.clone();
-    changed.agent_fingerprint = "other-agent".into();
-    let error = service.send_feedback(send(scope.clone(), id.clone(), Some(changed))).await.unwrap_err();
-    assert_eq!(error.code, "browser_feedback_recipient_changed");
+    let key = crate::browser::association_key("endpoint", "session", "w1:t1");
+    let (_, id, _) = seed_capture(&service, &key);
     adapter.change_on_focus.store(true, std::sync::atomic::Ordering::SeqCst);
-    let error = service.send_feedback(send(scope.clone(), id.clone(), Some(recipient.clone()))).await.unwrap_err();
-    assert_eq!(error.code, "browser_feedback_recipient_changed");
+    let rejected = service.send_feedback(send(tab_scope("w1:t1"), id.clone())).await.unwrap();
+    assert_eq!(rejected.state, CommentPasteState::Rejected);
     assert!(adapter.writes.lock().await.is_empty());
-    assert_eq!(service.feedback.list(KEY).unwrap().pending_count, 1);
+    assert_eq!(service.feedback.list(&key).unwrap().pending_count, 1);
     adapter.change_on_focus.store(false, std::sync::atomic::Ordering::SeqCst);
     adapter.snapshot.lock().await.snapshot.focused_tab_id = Some("w1:t1".into());
-    service.persist_outcome("unknown-operation", KEY, &[id.clone()], Some(recipient.clone()),
+    let target = adapter.targets.lock().await[1].clone();
+    service.persist_outcome("unknown-operation", &key, &[id.clone()], Some(target.clone()),
         CommentPasteState::OutcomeUnknown, "unknown").unwrap();
-    let mut retry = send(scope, id, Some(recipient));
-    let error = service.send_feedback(retry.clone()).await.unwrap_err();
+    let mut request = send(tab_scope("w1:t1"), id.clone());
+    let error = service.send_feedback(request.clone()).await.unwrap_err();
     assert_eq!(error.code, "browser_feedback_duplicate_risk");
-    retry.acknowledge_duplicate_risk = true;
-    let accepted = service.send_feedback(retry).await.unwrap();
+    request.acknowledge_duplicate_risk = true;
+    let accepted = service.send_feedback(request.clone()).await.unwrap();
     assert_eq!(accepted.state, CommentPasteState::Accepted);
+    assert_eq!(accepted.target, Some(target));
+    assert_eq!(accepted.acknowledged_ids, vec![id]);
+    assert_eq!(accepted.pending_count, 0);
+    let repeated = service.send_feedback(request).await.unwrap();
+    assert_eq!(repeated.state, CommentPasteState::Accepted);
     let writes = adapter.writes.lock().await;
     assert_eq!(writes.len(), 1);
-    assert!(writes[0].starts_with(PASTE_PREFIX));
-    assert!(writes[0].ends_with(PASTE_SUFFIX));
-    let payload: Value = serde_json::from_str(writes[0].strip_prefix(PASTE_PREFIX).unwrap().strip_suffix(PASTE_SUFFIX).unwrap()).unwrap();
+    let payload: Value = serde_json::from_str(writes[0].strip_prefix(PASTE_PREFIX).unwrap()
+        .strip_suffix(PASTE_SUFFIX).unwrap()).unwrap();
+    assert_eq!(payload["addressing"]["tab_id"], "w1:t1");
     assert_eq!(payload["captures"][0]["context"]["space_id"], "old-space");
     drop(writes);
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
-async fn pending_legacy_capture_retry_and_discard_need_no_herdr() {
+async fn cleanup_retries_failed_discard_and_removes_only_its_association_work() {
     let (service, adapter, root) = fixture();
-    let scope = archive(&service);
-    let (capture_id, id, png) = seed_capture(&service, KEY);
-    let capture = service.feedback.list(KEY).unwrap().captures.remove(0);
-    // Frozen save reached the feedback store before the old process exited,
-    // but its draft-consumption receipt did not finish.
-    let pending = json!({
-        "format_version":1,"association_key":KEY,"browser_incarnation":capture.context.browser_instance,
-        "draft_id":Uuid::new_v4().to_string(),"draft_revision":1,"annotation_ids":[id],
+    let target = crate::browser::ResolvedTarget {
+        endpoint_identity: "endpoint".into(), endpoint_path: "/fixture/socket".into(),
+        session_id: "session".into(), space_id: "w1".into(), space_label: "Space".into(),
+        tab_id: "w1:t1".into(), tab_label: "One".into(), tab_present: true,
+    };
+    let mut receipt = service.load_or_create(&target).unwrap();
+    let key = receipt.association_key.clone();
+    let other_key = crate::browser::association_key("endpoint", "session", "w1:t2");
+    let (capture_id, id, png) = seed_capture(&service, &key);
+    let capture = service.feedback.list(&key).unwrap().captures.remove(0);
+    let (acknowledged_capture, acknowledged_id, _) = seed_capture(&service, &key);
+    service.feedback.ack(&key, &[acknowledged_id]).unwrap();
+    let (other_capture, other_id, _) = seed_capture(&service, &other_key);
+    let paste_targets = adapter.targets.lock().await;
+    for (association, annotation, paste_target) in [
+        (&key, &id, &paste_targets[1]),
+        (&other_key, &other_id, &paste_targets[0]),
+    ] {
+        service.persist_outcome(association, association, &[annotation.clone()],
+            Some(paste_target.clone()), CommentPasteState::OutcomeUnknown, "unknown").unwrap();
+    }
+    drop(paste_targets);
+    let store = service.draft_store().unwrap();
+    let identity = crate::browser::drafts::BrowserDraftIdentity {
+        association_key: key.clone(), browser_incarnation: capture.context.browser_instance.clone(),
+        target_id: "first-document".into(), document_generation: 1,
+    };
+    let draft = store.open(&identity, None).unwrap();
+    let second = store.open(&crate::browser::drafts::BrowserDraftIdentity {
+        target_id: "second-document".into(), ..identity.clone()
+    }, None).unwrap();
+    let other = store.open(&crate::browser::drafts::BrowserDraftIdentity {
+        association_key: other_key.clone(), ..identity
+    }, None).unwrap();
+    let pending_path = service.root.join("drafts").join(format!("pending-{key}.json"));
+    let preparation_path = service.root.join("drafts").join(format!("preparation-{key}.json"));
+    std::fs::write(&pending_path, serde_json::to_vec(&json!({
+        "format_version":1,"association_key":key,"browser_incarnation":capture.context.browser_instance,
+        "draft_id":draft.draft_id,"draft_revision":1,"annotation_ids":[id],
         "original_annotation_digests":[],"context":capture.context,
-        "submission":{"association_key":KEY,"browser_instance":capture.context.browser_instance,
+        "submission":{"association_key":key,"browser_instance":capture.context.browser_instance,
             "capture_id":capture_id,"page":capture.page,"annotations":capture.annotations,"png_base64":png},
         "last_error":"interrupted"
-    });
-    // A legacy pending receipt lives in the durable draft store initialized
-    // by the browser before capture; seed that store through its real API.
-    service.draft_store().unwrap();
-    let pending_path = service.root.join("drafts").join(format!("pending-{KEY}.json"));
-    std::fs::write(&pending_path, serde_json::to_vec(&pending).unwrap()).unwrap();
-    adapter.offline.store(true, std::sync::atomic::Ordering::SeqCst);
-    assert!(service.feedback(&scope).await.unwrap().drafts.unwrap().pending_capture.is_some());
-    let outcome = service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-        scope: scope.clone(), action: BrowserDraftRecoveryAction::RetryPending,
+    })).unwrap()).unwrap();
+    std::fs::write(&preparation_path, serde_json::to_vec(&json!({
+        "format_version":1,"association_key":key,"browser_incarnation":capture.context.browser_instance,
+        "capture_id":capture_id,"draft_id":second.draft_id,"draft_revision":1,
+        "annotation_ids":[id],"original_annotation_digests":[],"context":capture.context
+    })).unwrap()).unwrap();
+    // A failed artifact removal must keep both its capture record and the
+    // browser receipt. Retry must work even when the image is now absent.
+    let image_path = PathBuf::from(&capture.image_path);
+    std::fs::remove_file(&image_path).unwrap();
+    std::fs::create_dir(&image_path).unwrap();
+    let failed = service.finish_cleanup(&mut receipt).await.unwrap();
+    assert_eq!(failed.cleanup, cockpit_protocol::browser::BrowserCleanupState::Failed);
+    let failure_status = service.cleanup_status().await.unwrap();
+    let failure = failure_status.failures.iter().find(|failure| failure.association_key == key)
+        .expect("failed discard must expose an actionable, exact-association cleanup failure");
+    assert!(matches!(&failure.scope, cockpit_protocol::browser::BrowserCleanupScope::Tab { session_id, tab_id }
+        if session_id == "session" && tab_id == "w1:t1"));
+    assert!(service.load(&key).unwrap().is_some(), "failed discard must retain the receipt for Retry");
+    assert!(service.root.join("feedback").join(format!("capture-{capture_id}.json")).exists());
+    std::fs::remove_dir(&image_path).unwrap();
+    let cleaned = service.retry_cleanup(cockpit_protocol::browser::BrowserCleanupRetryRequest {
+        association_key: key.clone(),
     }).await.unwrap();
-    let BrowserViewCommandOutcome::Capture {
-        capture: cockpit_protocol::browser_view::BrowserViewCaptureOutcome::Saved { saved },
-    } = outcome else { panic!("expected frozen capture recovery") };
-    assert_eq!(saved.capture_id, capture_id);
-    let recovered = service.feedback(&scope).await.unwrap();
-    assert!(recovered.drafts.unwrap().pending_capture.is_none());
-    assert_eq!(recovered.feedback.captures.len(), 1);
-    assert_eq!(recovered.feedback.pending_count, 1);
-    std::fs::write(&pending_path, serde_json::to_vec(&pending).unwrap()).unwrap();
-    service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-        scope: scope.clone(), action: BrowserDraftRecoveryAction::DiscardPending,
-    }).await.unwrap();
-    let discarded = service.feedback(&scope).await.unwrap();
-    assert!(discarded.drafts.unwrap().pending_capture.is_none());
-    assert_eq!(discarded.feedback.captures[0].id, capture_id);
-    assert_eq!(discarded.feedback.pending_count, 1);
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
-async fn archive_key_cannot_authorize_unarchived_or_mismatched_saved_work() {
-    let (service, adapter, root) = fixture();
-    seed_capture(&service, KEY);
-    adapter.offline.store(true, std::sync::atomic::Ordering::SeqCst);
-    let scope = BrowserWorkScope::LegacyArchive { association_key: KEY.into() };
-    assert!(service.feedback(&scope).await.is_err());
-    let authorized = archive(&service);
-    let path = service.root.join("legacy-archive").join(format!("{KEY}.json"));
-    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    record["association_key"] = json!("89abcdef0123456701234567");
-    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
-    assert!(service.feedback(&authorized).await.is_err());
-    assert_eq!(service.feedback.list(KEY).unwrap().pending_count, 1);
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
-async fn saved_tab_dirty_editor_recovers_after_tab_retirement_cleanup_and_endpoint_reuse() {
-    for absent in [false, true] {
-        let (service, adapter, root) = fixture();
-        let mut receipt = service.load_or_create(&saved_tab_target("endpoint")).unwrap();
-        let key = receipt.association_key.clone();
-        let scope = BrowserWorkScope::SavedTab { association_key: key.clone() };
-        let (capture_id, id, png) = seed_capture_for(&service, &key, "session", "w1", "Original Space");
-        let identity = crate::browser::drafts::BrowserDraftIdentity {
-            association_key: key.clone(), browser_incarnation: Uuid::new_v4().to_string(),
-            target_id: "retired-target".into(), document_generation: 7,
-        };
-        let store = service.draft_store().unwrap();
-        let draft = store.open(&identity, None).unwrap();
-        let annotation_id = Uuid::new_v4().to_string();
-        let draft = store.upsert_annotation_recovery(&key, &draft.draft_id, draft.revision,
-            serde_json::from_value(json!({
-                "id":annotation_id,"kind":"region","color":"#ff0000","points":[],
-                "bounds":{"x":0.0,"y":0.0,"width":1.0,"height":1.0},
-                "evidence":null,"comment":"Original note"
-            })).unwrap()).unwrap();
-        {
-            let mut snapshot = adapter.snapshot.lock().await;
-            snapshot.snapshot.panes.retain(|pane| pane.tab_id != "w1:t1");
-            snapshot.snapshot.focused_tab_id = Some("w1:t2".into());
-            snapshot.snapshot.focused_pane_id = Some("w1:p2".into());
-            if absent {
-                snapshot.snapshot.tabs.retain(|tab| tab.id != "w1:t1");
-            } else {
-                let tab = snapshot.snapshot.tabs.iter_mut().find(|tab| tab.id == "w1:t1").unwrap();
-                tab.pane_count = 0;
-                tab.focused_pane_id = None;
-                tab.focused = false;
-            }
-        }
-        let editor = BrowserViewDraftEditorState {
-            selected_annotation_id: Some(annotation_id.clone()), notes_open: true,
-            note_annotation_id: Some(annotation_id), note_text: "Dirty note saved after retirement".into(),
-        };
-        let edited = service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-            scope: scope.clone(), action: BrowserDraftRecoveryAction::SetEditor {
-                draft_id: draft.draft_id.clone(), expected_revision: draft.revision, editor: editor.clone(),
-            },
-        }).await.unwrap();
-        let BrowserViewCommandOutcome::Draft { draft: edited } = edited else { panic!("expected retired draft") };
-        assert_eq!(edited.editor.note_text, editor.note_text);
-        assert_eq!(edited.target_id, identity.target_id);
-        assert_eq!(edited.document_generation, identity.document_generation);
-
-        service.finish_cleanup(&mut receipt).await.unwrap();
-        assert!(service.load(&key).unwrap().is_none());
-        let mut replacement_target = saved_tab_target("replacement-endpoint");
-        replacement_target.space_label = "Replacement Space".into();
-        let replacement = service.load_or_create(&replacement_target).unwrap();
-        assert_ne!(replacement.association_key, key);
-        let (replacement_capture, _, _) = seed_capture_for(
-            &service, &replacement.association_key, "session", "w1", "Replacement Space",
-        );
-        let replacement_identity = crate::browser::drafts::BrowserDraftIdentity {
-            association_key: replacement.association_key.clone(), ..identity.clone()
-        };
-        let replacement_draft = store.open(&replacement_identity, None).unwrap();
-        adapter.snapshot.lock().await.endpoint_identity = "replacement-endpoint".into();
-        drop(store);
-        drop(service);
-        let service = service_for(root.clone(), adapter.clone());
-        adapter.offline.store(true, std::sync::atomic::Ordering::SeqCst);
-        let lookup = service.feedback(&scope).await.unwrap();
-        assert_eq!(lookup.feedback.captures.iter().map(|capture| &capture.id).collect::<Vec<_>>(), vec![&capture_id]);
-        assert_eq!(lookup.feedback.captures[0].context.space_label, "Original Space");
-        let inventory = lookup.drafts.unwrap();
-        assert_eq!(inventory.drafts.iter().map(|draft| &draft.draft_id).collect::<Vec<_>>(), vec![&edited.draft_id]);
-        assert_eq!(inventory.drafts[0].editor.note_text, editor.note_text);
-        let mut restarted_editor = editor.clone();
-        restarted_editor.note_text = "Dirty note saved after owner restart".into();
-        let recovered = service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-            scope: scope.clone(), action: BrowserDraftRecoveryAction::SetEditor {
-                draft_id: edited.draft_id.clone(), expected_revision: edited.revision,
-                editor: restarted_editor.clone(),
-            },
-        }).await.unwrap();
-        let BrowserViewCommandOutcome::Draft { draft: edited } = recovered else { panic!("expected restarted draft") };
-        assert_eq!(edited.editor.note_text, restarted_editor.note_text);
-        let image = service.feedback_image(BrowserFeedbackImageRequest {
-            scope: scope.clone(), capture_id: capture_id.clone(),
-        }).await.unwrap();
-        assert_eq!(image.data_base64, png);
-        assert!(service.feedback_image(BrowserFeedbackImageRequest {
-            scope: scope.clone(), capture_id: replacement_capture.clone(),
-        }).await.is_err());
-        for action in [
-            BrowserDraftRecoveryAction::SetEditor {
-                draft_id: replacement_draft.draft_id.clone(), expected_revision: replacement_draft.revision,
-                editor: editor.clone(),
-            },
-            BrowserDraftRecoveryAction::DiscardDraft {
-                draft_id: replacement_draft.draft_id.clone(), expected_revision: replacement_draft.revision,
-            },
-        ] {
-            let error = service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-                scope: scope.clone(), action,
-            }).await.unwrap_err();
-            assert_eq!(error.code, "browser_draft_identity");
-        }
-        service.acknowledge_feedback(BrowserFeedbackAckRequest {
-            scope: scope.clone(), ids: vec![id],
-        }).await.unwrap();
-        let discarded = service.browser_draft_recovery(BrowserDraftRecoveryRequest {
-            scope: scope.clone(), action: BrowserDraftRecoveryAction::DiscardDraft {
-                draft_id: edited.draft_id, expected_revision: edited.revision,
-            },
-        }).await.unwrap();
-        let BrowserViewCommandOutcome::DraftInventory { inventory } = discarded else { panic!("expected inventory") };
-        assert!(inventory.drafts.is_empty());
-        let replacement_scope = BrowserWorkScope::SavedTab { association_key: replacement.association_key };
-        let replacement_lookup = service.feedback(&replacement_scope).await.unwrap();
-        assert_eq!(replacement_lookup.feedback.captures[0].id, replacement_capture);
-        assert_eq!(replacement_lookup.feedback.pending_count, 1);
-        assert_eq!(replacement_lookup.drafts.unwrap().drafts[0].draft_id, replacement_draft.draft_id);
-        std::fs::remove_dir_all(root).unwrap();
+    assert!(cleaned.failures.iter().all(|failure| failure.association_key != key));
+    assert!(service.load(&key).unwrap().is_none());
+    assert!(service.feedback.list(&key).unwrap().captures.is_empty());
+    assert!(service.feedback.load_delivery(&key).unwrap().is_none());
+    for id in [&capture_id, &acknowledged_capture] {
+        assert!(!service.root.join("feedback").join(format!("capture-{id}.json")).exists());
+        assert!(!service.root.join("artifacts").join(format!("capture-{id}.png")).exists());
     }
-}
-
-#[tokio::test]
-async fn saved_tab_feedback_requires_an_explicit_current_focused_recipient() {
-    let (service, adapter, root) = fixture();
-    let mut receipt = service.load_or_create(&saved_tab_target("endpoint")).unwrap();
-    let key = receipt.association_key.clone();
-    let scope = BrowserWorkScope::SavedTab { association_key: key.clone() };
-    let (_, id, _) = seed_capture_for(&service, &key, "session", "w1", "Original Space");
-    service.finish_cleanup(&mut receipt).await.unwrap();
-    let error = service.send_feedback(send(scope.clone(), id.clone(), None)).await.unwrap_err();
-    assert_eq!(error.code, "browser_feedback_recipient_required");
-    let recipient = adapter.targets.lock().await[0].clone();
-    let error = service.send_feedback(send(scope.clone(), id.clone(), Some(recipient))).await.unwrap_err();
-    assert_eq!(error.code, "browser_feedback_recipient_changed");
-    let recipient = adapter.targets.lock().await[1].clone();
-    let mut changed = recipient.clone();
-    changed.agent_fingerprint = "replacement-agent".into();
-    let error = service.send_feedback(send(scope.clone(), id.clone(), Some(changed))).await.unwrap_err();
-    assert_eq!(error.code, "browser_feedback_recipient_changed");
-    adapter.change_on_focus.store(true, std::sync::atomic::Ordering::SeqCst);
-    let error = service.send_feedback(send(scope.clone(), id.clone(), Some(recipient.clone()))).await.unwrap_err();
-    assert_eq!(error.code, "browser_feedback_recipient_changed");
-    assert!(adapter.writes.lock().await.is_empty());
-    assert_eq!(service.feedback.list(&key).unwrap().pending_count, 1);
-    adapter.change_on_focus.store(false, std::sync::atomic::Ordering::SeqCst);
-    // Saved work belongs to One, but only the explicitly chosen agent of the
-    // currently focused Two is authorized to receive it.
-    let recipient = adapter.targets.lock().await[0].clone();
-    let accepted = service.send_feedback(send(scope.clone(), id, Some(recipient))).await.unwrap();
-    assert_eq!(accepted.state, CommentPasteState::Accepted);
-    assert_eq!(accepted.pending_count, 0);
-    let payloads = adapter.writes.lock().await;
-    assert_eq!(payloads.len(), 1);
-    let payload: Value = serde_json::from_str(payloads[0].strip_prefix(PASTE_PREFIX).unwrap().strip_suffix(PASTE_SUFFIX).unwrap()).unwrap();
-    assert_eq!(payload["captures"][0]["context"]["space_label"], "Original Space");
-    drop(payloads);
-    adapter.offline.store(true, std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(service.feedback(&scope).await.unwrap().feedback.pending_count, 0);
+    assert!(store.list(&key).unwrap().drafts.is_empty());
+    assert!(!pending_path.exists());
+    assert!(!preparation_path.exists());
+    assert_eq!(service.feedback.list(&other_key).unwrap().captures[0].id, other_capture);
+    assert_eq!(service.feedback.list(&other_key).unwrap().captures[0].pending_ids, vec![other_id]);
+    assert!(service.feedback.load_delivery(&other_key).unwrap().is_some());
+    assert_eq!(store.list(&other_key).unwrap().drafts[0].draft_id, other.draft_id);
+    service.feedback.discard_association(&key).unwrap();
+    store.discard_association(&key).unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

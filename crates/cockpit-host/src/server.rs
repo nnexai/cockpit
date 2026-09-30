@@ -32,8 +32,7 @@ use cockpit_core::{
 use cockpit_protocol::{
     browser::{
         BrowserCleanupRetryRequest, BrowserFeedbackAckRequest, BrowserFeedbackImageRequest,
-        BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserLegacyKeepRequest,
-        BrowserLegacyRecipientsRequest, BrowserLegacyRemovalRequest, BrowserRequest,
+        BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserRequest,
     },
     v1::{
         ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
@@ -181,19 +180,6 @@ fn build_router_with_validated_root(
         .route(
             "/api/v1/browser/cleanup/retry",
             post(browser_cleanup_retry).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route("/api/v1/browser/legacy", get(browser_legacy_list))
-        .route(
-            "/api/v1/browser/legacy/remove",
-            post(browser_legacy_remove).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route(
-            "/api/v1/browser/legacy/keep",
-            post(browser_legacy_keep).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route(
-            "/api/v1/browser/legacy/recipients",
-            post(browser_legacy_recipients).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
         )
         .route(
             "/api/v1/browser/feedback",
@@ -407,57 +393,6 @@ async fn browser_cleanup_retry(
         return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
     };
     match runtime.retry_cleanup(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_legacy_list(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
-    };
-    match runtime.legacy_list().await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_legacy_remove(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserLegacyRemovalRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
-    };
-    match runtime.legacy_remove(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_legacy_keep(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserLegacyKeepRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
-    };
-    match runtime.legacy_keep(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_legacy_recipients(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserLegacyRecipientsRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
-    };
-    match runtime.legacy_recipients(request).await {
         Ok(response) => Json(response).into_response(),
         Err(error) => inspection_error(error),
     }

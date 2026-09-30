@@ -1,0 +1,45 @@
+{
+  "environment": {
+    "WEBKIT_DISABLE_COMPOSITING_MODE": "1",
+    "GDK_GL": "disable"
+  },
+  "fixture": "/tmp/cpol-i_e9msdm",
+  "draft_revision": 2,
+  "annotations": 1,
+  "result": {
+    "reply": {
+      "id": 3622807900,
+      "fulfilled": 67212,
+      "value": [
+        {
+          "connection": "closed",
+          "cleanup": "done",
+          "association": {
+            "tab_id": "w1:t1",
+            "owner_id": "f8a4b8be-810d-4d25-925d-70baf938c5bd",
+            "space_label": "Polish sample",
+            "connection": "closed",
+            "invocation": "cd -- '/tmp/cpol-i_e9msdm/cockpit-state/browser/workspaces/94852ae3fbd42e18d7ac12a6' && 'playwright-cli' -s='cockpit-94852ae3fbd42e18d7ac12a6' <command>",
+            "profile_path": "/tmp/cpol-i_e9msdm/cockpit-state/browser/profiles/94852ae3fbd42e18d7ac12a6",
+            "opened_tab": null,
+            "session_id": "polish-i_e9msdm",
+            "space_id": "w1",
+            "incarnation": null,
+            "association_key": "94852ae3fbd42e18d7ac12a6",
+            "tab_label": "1",
+            "playwright_session": "cockpit-94852ae3fbd42e18d7ac12a6",
+            "working_directory": "/tmp/cpol-i_e9msdm/cockpit-state/browser/workspaces/94852ae3fbd42e18d7ac12a6"
+          },
+          "cleanup_reason": null,
+          "message": "browser stopped and managed artifacts removed"
+        }
+      ],
+      "created": 66393
+    },
+    "body": "Zoomed: w1:t1:browser. Other panes are hidden, not closed.\n1\nCommands\nT\nTerminal\nHerdr terminal\n\u22ef",
+    "elapsed_ms": 823
+  },
+  "profile_exists": false,
+  "receipt_exists": false,
+  "drafts_remaining": 0
+}

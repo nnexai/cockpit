@@ -1,6 +1,6 @@
 use super::*;
 use crate::credentials::{CredentialVault, MemoryVault};
-use cockpit_protocol::browser::{BrowserCleanupRetryRequest, BrowserLegacyCandidateState, BrowserLegacyKeepRequest, BrowserLegacyRemovalRequest};
+use cockpit_protocol::browser::BrowserCleanupRetryRequest;
 use serde_json::json;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use tokio::net::UnixListener;
@@ -39,24 +39,17 @@ impl Fixture {
     }
     async fn close(&self, tab: &str) -> BrowserResponse { self.service.execute(BrowserRequest { target: self.target(tab), action: BrowserAction::Close }).await.unwrap() }
     fn protected(&self) -> Vec<(PathBuf, Vec<u8>)> {
-        ["Library/page.md", "comments/batch.json", "browser/feedback/preserved.txt", "browser/artifacts/preserved.png", "browser/drafts/preserved.txt", "browser/legacy-archive/preserved.txt"].iter().map(|name| {
+        ["Library/page.md", "comments/batch.json", "browser/feedback/preserved.txt", "browser/artifacts/preserved.png", "browser/drafts/preserved.txt"].iter().map(|name| {
             let path = self.root.join(name); fs::create_dir_all(path.parent().unwrap()).unwrap();
             let bytes = format!("protected {name}").into_bytes(); fs::write(&path, &bytes).unwrap(); (path, bytes)
         }).collect()
-    }
-    fn legacy(&self, receipt: &BrowserReceipt) {
-        let mut value = serde_json::to_value(receipt).unwrap();
-        for name in ["tab_id", "tab_label", "artifacts", "cleanup_reason", "unproven_paths"] { value.as_object_mut().unwrap().remove(name); }
-        fs::create_dir_all(self.service.root.join("associations")).unwrap();
-        atomic_write_json(&self.service.root.join("associations").join(format!("{}.json", receipt.association_key)), &value).unwrap();
-        fs::remove_file(self.service.tab_association_path(&receipt.association_key)).unwrap();
     }
 }
 impl Drop for Fixture { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.root); } }
 fn assert_protected(items: &[(PathBuf, Vec<u8>)]) { for (path, bytes) in items { assert_eq!(&fs::read(path).unwrap(), bytes, "{}", path.display()); } }
 
 #[tokio::test]
-async fn close_disposes_only_its_tab_and_preserves_saved_stores_and_vault() {
+async fn close_disposes_only_its_tab_and_preserves_other_stores_and_vault() {
     let f = Fixture::new();
     let a = f.receipt("w1:t1").await;
     let b = f.receipt("w1:t2").await;
@@ -148,42 +141,6 @@ async fn unreceipted_existing_profile_cannot_become_owned_by_open() {
     assert!(!f.service.root.join("workspaces").join(key).exists());
 }
 
-#[tokio::test]
-async fn legacy_cutover_archives_without_deletion_and_operator_revalidates_reviewed_objects() {
-    let f = Fixture::new(); let a = f.receipt("w1:t1").await; let b = f.receipt("w1:t2").await;
-    fs::write(Path::new(&a.profile_path).join("legacy-data"), b"original").unwrap();
-    let protected = f.protected(); f.legacy(&a);
-    f.service.retire_legacy_space_associations().await.unwrap();
-    let list = f.service.legacy_list().await.unwrap(); let archive = &list.archives[0];
-    assert!(archive.session_stopped); assert_eq!(archive.candidates.len(), 3);
-    assert!(!f.service.root.join("associations").join(format!("{}.json", a.association_key)).exists());
-    assert_eq!(fs::read(Path::new(&a.profile_path).join("legacy-data")).unwrap(), b"original");
-    let archive_path = f.service.root.join("legacy-archive").join(format!("{}.json", a.association_key)); let provenance = fs::read(&archive_path).unwrap();
-    let restarted = BrowserService::new(
-        f.service.configuration.clone(), f.root.clone(), f.adapter.clone(),
-    ).unwrap();
-    f.adapter.failed.store(true, Ordering::Relaxed);
-    assert_eq!(restarted.legacy_list().await.unwrap(), list);
-    assert_eq!(
-        restarted.resolve_work_scope(&BrowserWorkScope::LegacyArchive {
-            association_key: a.association_key.clone(),
-        }).await.unwrap().association_key,
-        a.association_key,
-    );
-    f.adapter.failed.store(false, Ordering::Relaxed);
-    let reviewed = archive.candidates.iter().find(|c| c.path == a.profile_path).unwrap().clone();
-    fs::rename(&a.profile_path, f.root.join("legacy-held")).unwrap(); fs::create_dir(&a.profile_path).unwrap(); fs::write(Path::new(&a.profile_path).join("replacement"), b"not owned").unwrap();
-    let changed = f.service.legacy_remove(BrowserLegacyRemovalRequest { association_key: a.association_key.clone(), candidates: vec![reviewed] }).await.unwrap();
-    assert_eq!(changed.archives[0].candidates.iter().find(|c| c.path == a.profile_path).unwrap().state, BrowserLegacyCandidateState::Changed);
-    assert_eq!(fs::read(Path::new(&a.profile_path).join("replacement")).unwrap(), b"not owned");
-    assert_eq!(fs::read(&archive_path).unwrap(), provenance);
-    let config = changed.archives[0].candidates.iter().find(|c| c.path == a.config_path).unwrap().clone();
-    f.service.legacy_remove(BrowserLegacyRemovalRequest { association_key: a.association_key.clone(), candidates: vec![config] }).await.unwrap(); assert!(!Path::new(&a.config_path).exists());
-    f.service.legacy_keep(BrowserLegacyKeepRequest { association_key: a.association_key.clone() }).await.unwrap();
-    assert!(Path::new(&a.profile_path).exists()); assert!(Path::new(&a.working_directory).exists());
-    assert!(Path::new(&b.profile_path).exists()); assert_protected(&protected);
-    assert!(f.service.resolve_work_scope(&BrowserWorkScope::LegacyArchive { association_key: a.association_key }).await.is_err(), "fully resolved empty archive is retired");
-}
 
 #[tokio::test]
 async fn shutdown_closes_only_this_runtime_receipts() {
@@ -243,16 +200,6 @@ async fn open_fresh_stops_live_incarnation_discards_cookies_and_starts_at_defaul
     assert_eq!(fs::read_to_string(f.root.join(format!("{}-url", a.association_key))).unwrap(), "https://default.test/start");
 }
 
-#[tokio::test]
-async fn legacy_cutover_stops_seeded_live_session_but_preserves_every_artifact() {
-    let f = Fixture::new(); let mut a = f.receipt("w1:t1").await; let _live = seed_live(&f, &mut a).await;
-    fs::write(Path::new(&a.profile_path).join("cookies"), b"legacy-login").unwrap(); let protected = f.protected(); f.legacy(&a);
-    f.service.retire_legacy_space_associations().await.unwrap();
-    assert!(f.service.inspect_live(&a).await.as_ref().is_err_and(may_launch_after_inspection_failure));
-    assert_eq!(fs::read(Path::new(&a.profile_path).join("cookies")).unwrap(), b"legacy-login");
-    assert!(Path::new(&a.working_directory).exists()); assert!(Path::new(&a.config_path).exists()); assert_protected(&protected);
-    assert_eq!(f.service.legacy_list().await.unwrap().archives[0].session_stopped, true);
-}
 
 #[tokio::test]
 async fn closing_one_of_two_live_tab_sessions_keeps_the_other_open_and_byte_identical() {
@@ -267,4 +214,184 @@ async fn closing_one_of_two_live_tab_sessions_keeps_the_other_open_and_byte_iden
     assert_eq!(status.connection, BrowserConnectionState::Open);
     assert_eq!(status.association.unwrap().incarnation, b.incarnation);
     assert_eq!(fs::read(Path::new(&b.profile_path).join("cookies")).unwrap(), b"tab b login");
+}
+
+/// A separate test process owns this listener, so startup stop must prove that
+/// daemon generation exited rather than mistake the test runner for a daemon.
+struct StartupDaemonFixture {
+    child: std::process::Child,
+    daemon_dir: PathBuf,
+    daemon_path: PathBuf,
+    socket_path: PathBuf,
+    ready_path: PathBuf,
+    stop_path: PathBuf,
+}
+impl Drop for StartupDaemonFixture {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+        let _ = fs::remove_file(&self.socket_path);
+        let _ = fs::remove_file(&self.ready_path);
+        let _ = fs::remove_file(&self.stop_path);
+        let _ = fs::remove_dir_all(&self.daemon_dir);
+    }
+}
+impl StartupDaemonFixture {
+    async fn assert_running(&mut self) {
+        assert!(self.child.try_wait().unwrap().is_none(), "daemon child exited unexpectedly");
+        let stream = tokio::net::UnixStream::connect(&self.socket_path).await.unwrap();
+        assert_eq!(stream.peer_cred().unwrap().pid(), Some(self.child.id() as i32));
+    }
+    fn assert_stopped(&mut self) {
+        assert!(self.child.try_wait().unwrap().is_some(), "daemon child did not exit");
+        assert!(!self.socket_path.exists(), "close must remove the daemon socket");
+    }
+}
+async fn seed_startup_daemon(f: &Fixture, receipt: &mut BrowserReceipt) -> StartupDaemonFixture {
+    let daemon_path = daemon_session_path(Path::new(&receipt.working_directory), &receipt.playwright_session).unwrap();
+    let daemon_dir = daemon_path.parent().unwrap().to_path_buf();
+    fs::create_dir_all(daemon_dir.parent().unwrap()).unwrap();
+    fs::create_dir(&daemon_dir).unwrap();
+    let socket_path = f.root.join(format!("startup-{}.sock", receipt.association_key));
+    let ready_path = socket_path.with_extension("ready");
+    let stop_path = socket_path.with_extension("stop");
+    let child = std::process::Command::new(env::current_exe().unwrap())
+        .args(["--exact", "browser::lifecycle_tests::owner_reset_stops_recorded_managed_session_before_discarding_profile"])
+        .env("COCKPIT_TEST_STARTUP_DAEMON_SOCKET", &socket_path)
+        .current_dir(&receipt.working_directory)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .spawn().unwrap();
+    let mut live = StartupDaemonFixture { child, daemon_dir, daemon_path, socket_path, ready_path, stop_path };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !live.ready_path.exists() {
+        assert!(live.child.try_wait().unwrap().is_none(), "daemon child exited before readiness");
+        assert!(tokio::time::Instant::now() < deadline, "daemon child readiness timed out");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    live.assert_running().await;
+    let daemon = json!({"workspaceDir":receipt.working_directory,"socketPath":live.socket_path,"browser":{"userDataDir":receipt.profile_path}});
+    let bytes = serde_json::to_vec(&daemon).unwrap();
+    fs::write(&live.daemon_path, &bytes).unwrap();
+    receipt.incarnation = Some(format!("pid={}:start={}:receipt={:x}", live.child.id(), process_start_identity(live.child.id() as i32).unwrap(), Sha256::digest(&bytes)));
+    receipt.state = ReceiptState::Open;
+    f.service.store(receipt).unwrap();
+    let commands = f.root.join("startup-commands");
+    fs::create_dir_all(&commands).unwrap();
+    fs::write(commands.join(format!("{}.sh", receipt.association_key)), format!(
+        "#!/bin/sh\n[ \"$2\" = close ] || exit 1\nprintf stop > {}\necho closed\n",
+        shell_quote(&live.stop_path.display().to_string()),
+    )).unwrap();
+    fs::write(&f.service.configuration.playwright_cli, format!(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 0.1.5; exit; fi\nkey=\"${{1#-s=cockpit-}}\"\nexec sh {}/\"$key.sh\" \"$@\"\n",
+        shell_quote(&commands.display().to_string()),
+    )).unwrap();
+    live
+}
+
+#[tokio::test]
+async fn owner_reset_stops_recorded_managed_session_before_discarding_profile() {
+    // Re-enter this real test in an isolated child instead of adding an ignored
+    // helper test or depending on an external daemon executable.
+    if let Some(socket_path) = env::var_os("COCKPIT_TEST_STARTUP_DAEMON_SOCKET") {
+        let socket_path = PathBuf::from(socket_path);
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        fs::write(socket_path.with_extension("ready"), b"ready").unwrap();
+        let stop_path = socket_path.with_extension("stop");
+        while !stop_path.exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(listener);
+        fs::remove_file(socket_path).unwrap();
+        return;
+    }
+    let f = Fixture::new();
+    let mut receipt = f.receipt("w1:t1").await;
+    let mut live = seed_startup_daemon(&f, &mut receipt).await;
+    let metadata = fs::read(&live.daemon_path).unwrap();
+    crate::ephemeral::reset_owner_state(&f.root, &f.service).await.unwrap();
+    live.assert_stopped();
+    assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata, "Playwright close retains session metadata");
+    assert!(!Path::new(&receipt.profile_path).exists());
+    assert!(!f.service.tab_association_path(&receipt.association_key).exists());
+}
+
+#[tokio::test]
+async fn owner_reset_retained_metadata_requires_profile_cdp_port_to_be_closed() {
+    let f = Fixture::new();
+    let mut receipt = f.receipt("w1:t1").await;
+    let mut live = seed_startup_daemon(&f, &mut receipt).await;
+    let metadata = fs::read(&live.daemon_path).unwrap();
+    f.service.stop_previous_sessions().await.unwrap();
+    live.assert_stopped();
+    assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    fs::write(Path::new(&receipt.profile_path).join("DevToolsActivePort"), format!("{port}\n/devtools/browser/fixture\n")).unwrap();
+    fs::write(Path::new(&receipt.profile_path).join("cookies"), b"still active").unwrap();
+    let before = fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap();
+    let error = crate::ephemeral::reset_owner_state(&f.root, &f.service).await.unwrap_err();
+    assert_eq!(error.code, "ephemeral_reset_failed");
+    assert_eq!(fs::read(Path::new(&receipt.profile_path).join("cookies")).unwrap(), b"still active");
+    assert_eq!(fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap(), before);
+    assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
+
+    drop(listener);
+    crate::ephemeral::reset_owner_state(&f.root, &f.service).await.unwrap();
+    assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
+    assert!(!Path::new(&receipt.profile_path).exists());
+    assert!(!f.service.tab_association_path(&receipt.association_key).exists());
+}
+
+#[tokio::test]
+async fn unconfirmed_startup_stop_preserves_all_scratch_and_fails_reset() {
+    let f = Fixture::new();
+    let mut receipt = f.receipt("w1:t1").await;
+    let mut live = seed_startup_daemon(&f, &mut receipt).await;
+    let metadata = fs::read(&live.daemon_path).unwrap();
+    fs::write(&f.service.configuration.playwright_cli, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::write(Path::new(&receipt.profile_path).join("cookies"), b"still active").unwrap();
+    for name in ["comments/batch.json", "review/snapshot-old.json"] {
+        let path = f.root.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"not wiped").unwrap();
+    }
+    let before = fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap();
+    let error = crate::ephemeral::reset_owner_state(&f.root, &f.service).await.unwrap_err();
+    assert_eq!(error.code, "ephemeral_reset_failed");
+    live.assert_running().await;
+    assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
+    assert_eq!(fs::read(Path::new(&receipt.profile_path).join("cookies")).unwrap(), b"still active");
+    assert_eq!(fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap(), before);
+    for name in ["comments/batch.json", "review/snapshot-old.json"] {
+        assert_eq!(fs::read(f.root.join(name)).unwrap(), b"not wiped");
+    }
+}
+
+#[tokio::test]
+async fn startup_stop_uses_recorded_keys_not_receipt_paths_or_unrecorded_sessions() {
+    let f = Fixture::new();
+    let mut a = f.receipt("w1:t1").await;
+    let mut live_a = seed_startup_daemon(&f, &mut a).await;
+    let metadata_a = fs::read(&live_a.daemon_path).unwrap();
+    let mut b = f.receipt("w1:t2").await;
+    let mut live_b = seed_startup_daemon(&f, &mut b).await;
+    let metadata_b = fs::read(&live_b.daemon_path).unwrap();
+    fs::remove_file(f.service.tab_association_path(&b.association_key)).unwrap();
+    // Neither malformed receipt contents nor an unrelated filename supplies a
+    // stop command or cwd: only the regular, valid key stem is used.
+    fs::write(f.service.tab_association_path(&a.association_key), br#"{"working_directory":"/","playwright_session":"user-session"}"#).unwrap();
+    fs::write(f.service.root.join("tab-associations/user-session.json"), b"unrelated").unwrap();
+    let linked_key = "111111111111111111111111";
+    symlink(f.service.tab_association_path(&a.association_key), f.service.tab_association_path(linked_key)).unwrap();
+    f.service.stop_previous_sessions().await.unwrap();
+    live_a.assert_stopped();
+    assert_eq!(fs::read(&live_a.daemon_path).unwrap(), metadata_a);
+    live_b.assert_running().await;
+    assert_eq!(fs::read(&live_b.daemon_path).unwrap(), metadata_b);
+    assert!(Path::new(&a.profile_path).exists(), "stopping alone never deletes profiles");
+    assert!(Path::new(&b.profile_path).exists());
 }

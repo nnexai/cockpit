@@ -1,6 +1,7 @@
 pub mod browser;
 mod file_index_cache;
 pub mod browser_feedback;
+pub mod ephemeral;
 
 pub mod comments;
 pub mod config;

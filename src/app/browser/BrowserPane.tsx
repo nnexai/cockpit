@@ -6,7 +6,7 @@ import { createBrowserTransform } from "./transform";
 import { MAX_INPUT_JOBS, MAX_ANNOTATION_POINTS, errorMessage, newId, annotationId, statusFor, statusText, DelayedNotice, FRAME_BEHIND_MESSAGE, button, modifiers, isLocalBrowserChrome, addressBarUrl, navigationUrl, rectFrom, kindFor, sameDraftAnnotation, simplify, context, location, retiredDraft, retiredDocumentKey, ownsBrowserControl, type PaneStatus, type Tool, type Gesture, type WheelIntent, type InputJob, type PointerIntent, type ElementInspectionIntent, type DraftAssociationOwner, type CaptureIdentity } from "./browserPaneModel";
 import { AnnotationIcon, AnnotationToolButtons, BrowserColorPicker, COLORS } from "./AnnotationControls";
 import { AnnotationLayer, BrowserNavigationBar, BrowserTabStrip } from "./BrowserChrome";
-import { SavedBrowserWork, type SavedBrowserWorkHandle } from "./SavedBrowserWork";
+import { BrowserFeedbackPanel, type BrowserFeedbackPanelHandle } from "./BrowserFeedbackPanel";
 import "./browser.css";
 
 // WebKitGTK composites GPU-backed canvases as separate layers and can show a
@@ -20,31 +20,16 @@ const viewportFits = (current: BrowserViewViewportState, requested: BrowserViewV
   && Math.abs(current.device_pixel_ratio - requested.device_pixel_ratio) <= 0.01;
 const frameContext = (canvas: HTMLCanvasElement | null | undefined): CanvasRenderingContext2D | null =>
   canvas?.getContext("2d", { alpha: false, willReadFrequently: true }) ?? null;
-const savedAssociationKeys = new WeakMap<DraftAssociationOwner, string>();
-const savedDraftScope = (owner: DraftAssociationOwner): BrowserWorkScope => {
-  const associationKey = savedAssociationKeys.get(owner);
-  if (!associationKey) throw new Error("The browser draft has no confirmed original association; no recovery request was sent.");
-  return { kind: "saved_tab", association_key: associationKey };
-};
-
-
-export type BrowserPaneRecoveryRegistration = {
-  guard: () => Promise<void>;
-  retry: () => Promise<void>;
-  discard: () => Promise<void>;
-  describe: () => string;
-};
 export interface BrowserPaneProps {
   client: CockpitClient; target: BrowserTarget; viewport: BrowserViewViewportRequest;
   visible?: boolean; clientId?: string;
   inputActive?: boolean; liveInputEnabled?: boolean; onInteractionFocus?: () => void; onFeedback?: (captureIds: string[], operationId: string, acknowledgeDuplicateRisk: boolean) => Promise<BrowserFeedbackSendResponse>;
   onReconnect?: () => void | Promise<void>;
   onCloseBrowser?: () => void | Promise<void>;
-  registerCloseGuard?: (registration: BrowserPaneRecoveryRegistration | null) => void;
   className?: string;
 }
 
-export function BrowserPane({ client, target, viewport, visible = true, clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onReconnect, onCloseBrowser, registerCloseGuard, className }: BrowserPaneProps) {
+export function BrowserPane({ client, target, viewport, visible = true, clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onReconnect, onCloseBrowser, className }: BrowserPaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<BrowserViewStream | null>(null);
@@ -53,7 +38,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
   const presenterRef = useRef<FramePresenter | null>(null);
   const snapshotRef = useRef<BrowserViewSnapshot | null>(null);
   const pendingDeliveryIdsRef = useRef<string[] | null>(null);
-  const savedWorkRef = useRef<SavedBrowserWorkHandle | null>(null);
+  const feedbackPanelRef = useRef<BrowserFeedbackPanelHandle | null>(null);
   const inputOverloadedRef = useRef(false);
   const releaseOverloadedInputRef = useRef<(() => void) | null>(null);
   const draftRef = useRef<BrowserViewDraftState | null>(null);
@@ -146,7 +131,6 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
   associationOwner.editorGeneration = editorRevisionRef.current;
 
   const applySnapshot = useCallback((next: BrowserViewSnapshot) => {
-    if (!savedAssociationKeys.has(associationOwner)) savedAssociationKeys.set(associationOwner, next.identity.association_key);
     snapshotRef.current = next;
     setSnapshot(next);
     if (!urlEditing.current) setUrl(addressBarUrl(next.navigation?.url));
@@ -462,8 +446,8 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
     const draftId = currentDraft?.draft_id ?? null;
     await command({ type: "draft", context: latestContext, draft_id: draftId, expected_revision: null, command: { type: "open", draft_id: draftId } });
   }, [associationOwner, command, setPendingCaptureState]);
-  const refreshSavedFeedback = useCallback(async (owner = associationOwner): Promise<void> => {
-    if (associationOwnerRef.current === owner && !owner.sealed) await savedWorkRef.current?.refresh();
+  const refreshBrowserFeedback = useCallback(async (owner = associationOwner): Promise<void> => {
+    if (associationOwnerRef.current === owner && !owner.sealed) await feedbackPanelRef.current?.refresh();
   }, [associationOwner]);
   const queueDraftMutation = useCallback(<T,>(run: () => Promise<T>): Promise<T> => {
     const next = associationOwner.mutationTail.catch(() => undefined).then(run);
@@ -481,7 +465,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((mutation) => mutation.draftId !== draftId);
     }
     void queueDraftMutation(async () => {
-      const listed = await client.browserDraftRecovery({ scope: savedDraftScope(owner), action: { type: "list" } });
+      const listed = await client.browserDraftRecovery({ scope: workScope, action: { type: "list" } });
       if (listed.type !== "draft_inventory") return;
       if (associationOwnerRef.current === owner && !owner.sealed) setPendingCaptureState(listed.inventory.pending_capture);
       const drafts = listed.inventory.drafts.filter((draft) => draft.target_id === targetId
@@ -492,7 +476,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       let complete = true;
       for (const draft of drafts) {
         try {
-          await client.browserDraftRecovery({ scope: savedDraftScope(owner), action: { type: "discard_draft", draft_id: draft.draft_id, expected_revision: draft.revision } });
+          await client.browserDraftRecovery({ scope: workScope, action: { type: "discard_draft", draft_id: draft.draft_id, expected_revision: draft.revision } });
         } catch {
           complete = false;
         }
@@ -524,7 +508,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
         expected_revision: currentDraft.revision,
         editor,
       };
-      const response = await client.browserDraftRecovery({ scope: savedDraftScope(owner), action });
+      const response = await client.browserDraftRecovery({ scope: workScope, action });
       if (response.type === "draft" && !retiredDraft(owner, response.draft)) {
         owner.draft = response.draft;
         owner.localDraftRevision = response.draft.revision;
@@ -532,27 +516,17 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       }
       return response;
     });
-    if (result.type !== "draft" || !owner.draft || result.draft.draft_id !== owner.draft.draft_id) throw new Error("The browser draft editor save was not acknowledged; retry Close.");
+    if (result.type !== "draft" || !owner.draft || result.draft.draft_id !== owner.draft.draft_id) throw new Error("The browser draft editor save was not acknowledged; retry saving.");
     owner.draft = result.draft;
     owner.localDraftRevision = result.draft.revision;
     const acknowledged = result.draft.editor;
-    if ((acknowledged.note_annotation_id ?? acknowledged.selected_annotation_id) !== savedNoteId || (acknowledged.note_text ?? "") !== savedNoteText || Boolean(acknowledged.notes_open) !== savedNotesOpen) throw new Error("The browser draft editor save is still pending; retry Close.");
+    if ((acknowledged.note_annotation_id ?? acknowledged.selected_annotation_id) !== savedNoteId || (acknowledged.note_text ?? "") !== savedNoteText || Boolean(acknowledged.notes_open) !== savedNotesOpen) throw new Error("The browser draft editor save is still pending; retry saving.");
     if (owner.editorGeneration === requestedGeneration && owner.noteId === savedNoteId && owner.noteText.slice(0, 4000) === savedNoteText && owner.notesOpen === savedNotesOpen) {
       editorDirtyRef.current = false;
     } else {
       editorDirtyRef.current = true;
     }
   }, [applyDraft, associationOwner, client, queueDraftMutation]);
-  const closeGuard = useCallback(async (): Promise<void> => {
-    await associationOwner.mutationTail;
-    if (editorDirtyRef.current) {
-      editorPersistRef.current = persistEditor();
-      try { await editorPersistRef.current; } finally { editorPersistRef.current = null; }
-      if (editorDirtyRef.current) throw new Error("A newer browser editor change is still saving; retry Close.");
-    }
-    if (associationOwner.pendingAnnotationMutations.length > 0) throw new Error("Annotation changes are not acknowledged; retry the annotation action before closing.");
-    if (pendingCaptureRef.current) throw new Error("A browser capture is not durably saved; retry or discard it before closing.");
-  }, [persistEditor, associationOwner]);
   const [editorTick, setEditorTick] = useState(0);
   useEffect(() => {
     if (!editorDirtyRef.current || !draftRef.current) return;
@@ -659,7 +633,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       if (closed) return;
       if (incoming.type === "attached") {
         if (identityRef.current) return;
-        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(() => { void openDraft(); void refreshSavedFeedback(); }); return;
+        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(() => { void openDraft(); void refreshBrowserFeedback(); }); return;
       }
       const identity = identityRef.current;
       if (!identity || incoming.metadata.view_id !== identity.id || incoming.metadata.stream_epoch !== identity.epoch) return;
@@ -775,10 +749,10 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
     void client.openBrowserView(request, event, (packet) => presenter?.push(packet), (error) => { if (!closed) { setStatus("error"); setMessage(errorMessage(error)); } }, controller.signal).then((opened) => {
       stream = opened;
       if (closed) opened.close();
-      else { streamRef.current = opened; if (frameRef.current && !errorRef.current) setStatus("ready"); void openDraft(); void refreshSavedFeedback(); }
+      else { streamRef.current = opened; if (frameRef.current && !errorRef.current) setStatus("ready"); void openDraft(); void refreshBrowserFeedback(); }
     }).catch((error: unknown) => { if (!closed && !controller.signal.aborted) { setStatus("error"); setMessage(errorMessage(error)); } });
     return close;
-  }, [applySnapshot, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, refreshSavedFeedback, releaseRemotePointer, retireDraftsFor, retry, target.endpoint_path, target.pane_id, target.session_id, target.tab_id, visible]);
+  }, [applySnapshot, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, refreshBrowserFeedback, releaseRemotePointer, retireDraftsFor, retry, target.endpoint_path, target.pane_id, target.session_id, target.tab_id, visible]);
   useEffect(() => {
     if (!liveInputEnabled) {
       ++inputGenerationRef.current;
@@ -896,7 +870,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       if (mutation) mutation.expectedRevision = expectedRevision;
       let accepted = sameContext && acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => sameDraftAnnotation(candidate, annotation));
       if (!accepted && !owner.retiredDraftIds.has(draftAtIntent.draft_id)) {
-        const recovery = await queueDraftMutation(() => client.browserDraftRecovery({ scope: savedDraftScope(owner), action: { type: "upsert_annotation", draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, annotation } }));
+        const recovery = await queueDraftMutation(() => client.browserDraftRecovery({ scope: workScope, action: { type: "upsert_annotation", draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, annotation } }));
         acknowledgedResult = recovery.type === "draft" ? recovery : null;
         if (acknowledgedResult?.type === "draft" && !retiredDraft(owner, acknowledgedResult.draft)) {
           owner.draft = acknowledgedResult.draft;
@@ -927,10 +901,10 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
             setMessage("Annotation saved; newer editor work was retained.");
           }
         }
-      } else setMessage("Annotation save was not acknowledged; retry it before closing.");
+      } else setMessage("Annotation save was not acknowledged; retry saving.");
       return accepted;
     } catch (error) {
-      if (!owner.retiredDraftIds.has(draftAtIntent.draft_id)) setMessage(`Annotation save failed; retry it before closing: ${errorMessage(error)}`);
+      if (!owner.retiredDraftIds.has(draftAtIntent.draft_id)) setMessage(`Annotation save failed; retry saving: ${errorMessage(error)}`);
       else owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutationKey);
       return false;
     }
@@ -971,7 +945,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       const latest = snapshotRef.current;
       let acknowledged = Boolean(latest && JSON.stringify(context(latest)) === JSON.stringify(documentContext) && acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && !acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => candidate.id === annotationId));
       if (!acknowledged) {
-        const recovery = await queueDraftMutation(() => client.browserDraftRecovery({ scope: savedDraftScope(owner), action: { type: "remove_annotation", draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, annotation_id: annotationId } }));
+        const recovery = await queueDraftMutation(() => client.browserDraftRecovery({ scope: workScope, action: { type: "remove_annotation", draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, annotation_id: annotationId } }));
         acknowledgedResult = recovery.type === "draft" ? recovery : null;
         if (acknowledgedResult?.type === "draft" && !retiredDraft(owner, acknowledgedResult.draft)) {
           owner.draft = acknowledgedResult.draft;
@@ -987,9 +961,9 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       if (acknowledged) {
         owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((mutation) => mutation.key !== mutationKey);
       }
-      else setMessage("Annotation removal was not acknowledged; retry it before closing.");
+      else setMessage("Annotation removal was not acknowledged; retry removing it.");
     })().catch((error) => {
-      if (!owner.retiredDraftIds.has(draftAtIntent.draft_id)) setMessage(`Annotation removal failed; retry it before closing: ${errorMessage(error)}`);
+      if (!owner.retiredDraftIds.has(draftAtIntent.draft_id)) setMessage(`Annotation removal failed; retry removing it: ${errorMessage(error)}`);
       else owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutationKey);
     });
     if (noteIdRef.current === annotationId) {
@@ -1014,7 +988,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       try {
         const resolution = await queueDraftMutation(async () => {
           if (owner.retiredDraftIds.has(mutation.draftId)) throw new Error("Browser draft was retired during navigation.");
-          const inventory = await client.browserDraftRecovery({ scope: savedDraftScope(owner), action: { type: "list" } });
+          const inventory = await client.browserDraftRecovery({ scope: workScope, action: { type: "list" } });
           if (owner.retiredDraftIds.has(mutation.draftId)) throw new Error("Browser draft was retired during navigation.");
           if (inventory.type !== "draft_inventory") throw new Error("The retained annotation inventory could not be read.");
           const current = inventory.inventory.drafts.find((candidate) => candidate.draft_id === mutation.draftId);
@@ -1035,7 +1009,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
           const action: BrowserDraftRecoveryAction = mutation.kind === "upsert"
             ? { type: "upsert_annotation", draft_id: mutation.draftId, expected_revision: expectedRevision, annotation: mutation.annotation! }
             : { type: "remove_annotation", draft_id: mutation.draftId, expected_revision: expectedRevision, annotation_id: mutation.annotationId };
-          const response = await client.browserDraftRecovery({ scope: savedDraftScope(owner), action });
+          const response = await client.browserDraftRecovery({ scope: workScope, action });
           const nextDraft = response.type === "draft" ? response.draft : null;
           const acknowledged = Boolean(nextDraft && (mutation.kind === "upsert"
             ? nextDraft.annotations.some((candidate) => sameDraftAnnotation(candidate, mutation.annotation!))
@@ -1528,10 +1502,10 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
           throw new Error("The browser draft changed before discard; the current draft was retained.");
         }
         await client.browserDraftRecovery({
-          scope: savedDraftScope(owner),
+          scope: workScope,
           action: { type: "discard_draft", draft_id: draftAtIntent.draft_id, expected_revision: latestDraft.revision },
         });
-        const listed = await client.browserDraftRecovery({ scope: savedDraftScope(owner), action: { type: "list" } });
+        const listed = await client.browserDraftRecovery({ scope: workScope, action: { type: "list" } });
         if (listed.type === "draft_inventory" && !listed.inventory.drafts.some((candidate) => candidate.draft_id === draftAtIntent.draft_id)) {
           // Block late, already accepted draft-open responses before the next queued mutation.
           owner.retiredDraftIds.add(draftAtIntent.draft_id);
@@ -1638,10 +1612,10 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
     const pending = pendingCaptureRef.current;
     const current = snapshotRef.current;
     if (pending) {
-      const recovered = await savedWorkRef.current?.recoverPending("retry_pending");
+      const recovered = await feedbackPanelRef.current?.recoverPending("retry_pending");
       if (recovered?.type === "capture" && recovered.capture.state === "saved"
         && associationOwnerRef.current === captureOwner && !captureOwner.sealed) {
-        await savedWorkRef.current?.sendCapture(recovered.capture.saved.capture_id, recovered.capture.saved.annotation_ids);
+        await feedbackPanelRef.current?.sendCapture(recovered.capture.saved.capture_id, recovered.capture.saved.annotation_ids);
       }
       return;
     }
@@ -1706,9 +1680,9 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
         quarantineConsumedDraft(captureIdentity);
         await openDraft();
         if (associationOwnerRef.current !== captureOwner || captureOwner.sealed) return;
-        await savedWorkRef.current?.sendCapture(saved.capture.saved.capture_id, ids);
+        await feedbackPanelRef.current?.sendCapture(saved.capture.saved.capture_id, ids);
         await openDraft();
-        if (associationOwnerRef.current === captureOwner && !captureOwner.sealed) await refreshSavedFeedback(captureOwner);
+        if (associationOwnerRef.current === captureOwner && !captureOwner.sealed) await refreshBrowserFeedback(captureOwner);
       }
     } catch (error) {
       setStatus("error"); setMessage(`Could not capture browser image: ${errorMessage(error)}`);
@@ -1723,40 +1697,6 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
       captureInFlightRef.current = false;
     }
   };
-  useEffect(() => {
-    if (!registerCloseGuard) return;
-    const recovery: BrowserPaneRecoveryRegistration = {
-      guard: closeGuard,
-      retry: async () => {
-        await retryAnnotationMutations();
-        if (editorDirtyRef.current && associationOwner.draft) await persistEditor();
-        const pending = pendingCaptureRef.current;
-        if (pending) {
-          const scope = savedDraftScope(associationOwner);
-          if (scope.kind !== "saved_tab" || scope.association_key !== pending.association_key) throw new Error("The retained capture belongs to a different original browser association.");
-          // The outgoing tab may already be gone. Make pixels durable only;
-          // delivery belongs to the explicit-recipient saved-work surface.
-          const outcome = await client.browserDraftRecovery({ scope, action: { type: "retry_pending" } });
-          if (outcome.type !== "capture" || outcome.capture.state === "pending") throw new Error("The retained browser capture could not be saved.");
-          pendingCaptureRef.current = null;
-          if (associationOwnerRef.current === associationOwner && !associationOwner.sealed) {
-            setPendingCaptureState(null);
-            await refreshSavedFeedback(associationOwner);
-          }
-        }
-        if (pendingDeliveryIdsRef.current) setMessage("Feedback delivery outcome is unresolved; review or explicitly discard it before retrying.");
-      },
-      discard: discardAnnotationMutations,
-      describe: () => {
-        const draftLabel = associationOwner.draft ? `draft ${associationOwner.draft.draft_id} revision ${associationOwner.draft.revision}` : "browser draft";
-        const pending = associationOwner.pendingAnnotationMutations;
-        const ids = pending.map((mutation) => mutation.annotationId).join(", ");
-        return `${draftLabel}; ${pending.length} retained annotation ${pending.length === 1 ? "intent" : "intents"}${ids ? ` (${ids})` : ""}; ${pendingDeliveryIdsRef.current ? "feedback delivery pending" : "no feedback delivery pending"}`;
-      },
-    };
-    registerCloseGuard(recovery);
-    return () => registerCloseGuard(null);
-  }, [associationOwner, client, closeGuard, discardAnnotationMutations, persistEditor, refreshSavedFeedback, registerCloseGuard, retryAnnotationMutations, setPendingCaptureState]);
   const draftMatchesSnapshot = Boolean(draft && snapshot?.displayed_target_id === draft.target_id && snapshot.document?.document_generation === draft.document_generation);
   const annotations = draftMatchesSnapshot ? (draft?.annotations ?? []) : [];
   const descriptor = frame?.descriptor;
@@ -1908,8 +1848,7 @@ export function BrowserPane({ client, target, viewport, visible = true, clientId
         {!pendingCapture ? <button type="button" className="browser-send-annotations" disabled={!draft || !frame || annotations.length === 0} aria-label="Send annotations" title="Send annotations" onClick={() => void capture(false)}><AnnotationIcon name="feedback" /></button> : null}
       </div>
     </div>
-    <SavedBrowserWork key={ownerKey} ref={savedWorkRef} client={client} scope={workScope} onSend={onFeedback} pendingCapture={pendingCapture}
-      durableScope={savedAssociationKeys.has(associationOwner) ? savedDraftScope(associationOwner) : undefined}
+    <BrowserFeedbackPanel key={ownerKey} ref={feedbackPanelRef} client={client} scope={workScope} onSend={onFeedback} pendingCapture={pendingCapture}
       onPendingFeedbackChange={(ids) => { pendingDeliveryIdsRef.current = ids; }}
       onPendingCaptureChange={setPendingCaptureState}
       onMessage={setMessage}

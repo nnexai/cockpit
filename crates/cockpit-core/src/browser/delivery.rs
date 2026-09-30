@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use cockpit_protocol::browser::{
     BrowserFeedbackImage, BrowserFeedbackImageRequest, BrowserFeedbackSendRequest,
-    BrowserFeedbackSendResponse, BrowserLegacyRecipientsRequest, BrowserWorkScope,
+    BrowserFeedbackSendResponse,
 };
 use cockpit_protocol::browser_feedback::BrowserFeedbackCapture;
 use cockpit_protocol::comment_paste::{CommentPasteState, CommentPasteTarget};
@@ -60,22 +60,18 @@ impl BrowserService {
         let ids = normalized_ids(&request.ids)?;
         let resolved = self.resolve_work_scope(&request.scope).await?;
         let association = resolved.association_key;
-        validate_recipient_mode(&request.scope, request.recipient.as_ref())?;
-        let target = resolved.tab.as_ref();
+        let target = &resolved.tab;
 
         if let Some(existing) = self.feedback.load_delivery(&request.operation_id)? {
             if existing.association_key != association
                 || existing.selected_ids != ids
-                || request.recipient.as_ref().is_some_and(|recipient| {
-                    existing.target.as_ref().is_some_and(|prior| !same_paste_target(prior, recipient))
-                })
             {
                 return Err(InspectionError::new(
                     "browser_feedback_operation_conflict",
-                    "operation ID was already used for another source, recipient or annotation selection",
+                    "operation ID was already used for another source or annotation selection",
                 ));
             }
-            return self.recover_delivery(&request.scope, &association, existing).await;
+            return self.recover_delivery(&association, existing).await;
         }
 
         if self.feedback.has_delivery_overlap(&association, &ids)?
@@ -87,7 +83,7 @@ impl BrowserService {
             ));
         }
 
-        let browser = target.map(|_| self.load(&association)).transpose()?.flatten();
+        let browser = self.load(&association)?;
         let browser = browser.as_ref().map(|receipt| {
             self.association(
                 receipt,
@@ -107,7 +103,7 @@ impl BrowserService {
                 CommentPasteState::Rejected,
                 "browser feedback payload exceeds the 64 KiB framed paste limit",
             )?;
-            return self.delivery_response(&request.scope, &association, receipt);
+            return self.delivery_response(&association, receipt);
         }
 
         let adapter = self
@@ -120,15 +116,7 @@ impl BrowserService {
                 )
             })?
             .clone();
-        let selected_target = if let Some(recipient) = request.recipient.as_ref() {
-            let candidates = self.eligible_targets(&recipient.session_id, None).await?;
-            if !candidates.iter().any(|candidate| same_paste_target(candidate, recipient)) {
-                return Err(recipient_changed("the selected agent is no longer eligible in the focused tab"));
-            }
-            Ok(Some(recipient.clone()))
-        } else {
-            self.select_target(target.expect("tab scope has a resolved target")).await
-        };
+        let selected_target = self.select_target(target).await;
         let paste_target = match selected_target {
             Ok(Some(value)) => value,
             Ok(None) => {
@@ -140,7 +128,7 @@ impl BrowserService {
                     CommentPasteState::Rejected,
                     "no eligible agent target is available in this tab",
                 )?;
-                return self.delivery_response(&request.scope, &association, receipt);
+                return self.delivery_response(&association, receipt);
             }
             Err(error) => {
                 if error.code == "browser_feedback_tab_inactive" || error.code == "stale_identity" {
@@ -157,7 +145,7 @@ impl BrowserService {
                         error.message
                     ),
                 )?;
-                return self.delivery_response(&request.scope, &association, receipt);
+                return self.delivery_response(&association, receipt);
             }
         };
 
@@ -179,10 +167,7 @@ impl BrowserService {
                 CommentPasteState::Rejected,
                 &format!("Herdr did not acknowledge target focus: {}", error.message),
             )?;
-            if target.is_none() {
-                return Err(recipient_changed(&error.message));
-            }
-            return self.delivery_response(&request.scope, &association, receipt);
+            return self.delivery_response(&association, receipt);
         }
         if let Err(error) = adapter
             .confirm_comment_paste_target_focus(&paste_target)
@@ -196,10 +181,7 @@ impl BrowserService {
                 CommentPasteState::Rejected,
                 &format!("paste target lost confirmed focus: {}", error.message),
             )?;
-            if target.is_none() {
-                return Err(recipient_changed(&error.message));
-            }
-            return self.delivery_response(&request.scope, &association, receipt);
+            return self.delivery_response(&association, receipt);
         }
         // Revalidate the focused tab, pane, and agent fingerprint before dispatch.
         if let Err(error) = self
@@ -214,10 +196,7 @@ impl BrowserService {
                 CommentPasteState::Rejected,
                 &format!("paste target changed before dispatch: {}", error.message),
             )?;
-            if target.is_none() {
-                return Err(recipient_changed(&error.message));
-            }
-            return self.delivery_response(&request.scope, &association, receipt);
+            return self.delivery_response(&association, receipt);
         }
 
         match adapter.send_comment_paste(&paste_target, &framed).await {
@@ -234,7 +213,7 @@ impl BrowserService {
                 let mut accepted = accepted;
                 accepted.acknowledged_ids = ack.acknowledged_ids;
                 let accepted = self.feedback.save_delivery(accepted)?;
-                self.delivery_response(&request.scope, &association, accepted)
+                self.delivery_response(&association, accepted)
             }
             Err(error) if error.code == "comments_paste_rejected" => {
                 let receipt = self.persist_outcome(
@@ -248,7 +227,7 @@ impl BrowserService {
                         error.message
                     ),
                 )?;
-                self.delivery_response(&request.scope, &association, receipt)
+                self.delivery_response(&association, receipt)
             }
             Err(error) => {
                 let receipt = self.persist_outcome(
@@ -259,36 +238,28 @@ impl BrowserService {
                     CommentPasteState::OutcomeUnknown,
                     &format!("paste dispatch outcome is unknown: {}", error.message),
                 )?;
-                self.delivery_response(&request.scope, &association, receipt)
+                self.delivery_response(&association, receipt)
             }
         }
     }
 
-    pub async fn legacy_recipients(
-        &self,
-        request: BrowserLegacyRecipientsRequest,
-    ) -> Result<Vec<CommentPasteTarget>, InspectionError> {
-        self.eligible_targets(&request.session_id, None).await
-    }
 
     async fn select_target(
         &self,
         target: &super::ResolvedTarget,
     ) -> Result<Option<CommentPasteTarget>, InspectionError> {
-        Ok(self.eligible_targets(&target.session_id, Some(target)).await?.into_iter().next())
+        Ok(self.eligible_targets(target).await?.into_iter().next())
     }
 
     async fn eligible_targets(
         &self,
-        session_id: &str,
-        target: Option<&super::ResolvedTarget>,
+        target: &super::ResolvedTarget,
     ) -> Result<Vec<CommentPasteTarget>, InspectionError> {
+        let session_id = &target.session_id;
         let snapshot = self.adapter.browser_snapshot(session_id).await?;
-        if snapshot.snapshot.session_id != session_id
-            || target.is_some_and(|target| {
-                snapshot.endpoint_identity != target.endpoint_identity
-                    || snapshot.endpoint_path != target.endpoint_path
-            })
+        if snapshot.snapshot.session_id != *session_id
+            || snapshot.endpoint_identity != target.endpoint_identity
+            || snapshot.endpoint_path != target.endpoint_path
         {
             return Err(InspectionError::new(
                 "stale_identity",
@@ -296,15 +267,12 @@ impl BrowserService {
             ));
         }
         let Some(active_tab) = snapshot.snapshot.focused_tab_id.as_deref() else {
-            if target.is_some() {
-                return Err(InspectionError::new(
-                    "browser_feedback_tab_inactive",
-                    "browser feedback can only be sent to its focused tab",
-                ));
-            }
-            return Ok(Vec::new());
+            return Err(InspectionError::new(
+                "browser_feedback_tab_inactive",
+                "browser feedback can only be sent to its focused tab",
+            ));
         };
-        if target.is_some_and(|target| target.tab_id != active_tab) {
+        if target.tab_id != active_tab {
             return Err(InspectionError::new(
                 "browser_feedback_tab_inactive",
                 "browser feedback can only be sent to its focused tab",
@@ -320,7 +288,7 @@ impl BrowserService {
             .into_iter()
             .filter(|candidate| {
                 candidate.endpoint_identity == snapshot.endpoint_identity
-                    && candidate.session_id == session_id
+                    && candidate.session_id == *session_id
                     && candidate.tab_id == active_tab
                     && snapshot.snapshot.tabs.iter().any(|tab| {
                         tab.id == active_tab && tab.space_id == candidate.workspace_id
@@ -342,23 +310,21 @@ impl BrowserService {
 
     async fn revalidate_paste_target(
         &self,
-        target: Option<&super::ResolvedTarget>,
+        target: &super::ResolvedTarget,
         paste_target: &CommentPasteTarget,
         adapter: &dyn crate::paste_adapter::CommentPasteAdapter,
     ) -> Result<(), InspectionError> {
         let snapshot = self.adapter.browser_snapshot(&paste_target.session_id).await?;
         if snapshot.endpoint_identity != paste_target.endpoint_identity
             || snapshot.snapshot.session_id != paste_target.session_id
-            || target.is_some_and(|target| {
-                snapshot.endpoint_identity != target.endpoint_identity
-                    || snapshot.endpoint_path != target.endpoint_path
-                    || paste_target.session_id != target.session_id
-            })
+            || snapshot.endpoint_identity != target.endpoint_identity
+            || snapshot.endpoint_path != target.endpoint_path
+            || paste_target.session_id != target.session_id
         {
             return Err(recipient_changed("Herdr endpoint or session changed before paste dispatch"));
         }
         if snapshot.snapshot.focused_tab_id.as_deref() != Some(paste_target.tab_id.as_str())
-            || target.is_some_and(|target| target.tab_id != paste_target.tab_id)
+            || target.tab_id != paste_target.tab_id
         {
             return Err(InspectionError::new(
                 "browser_feedback_tab_inactive",
@@ -417,7 +383,6 @@ impl BrowserService {
 
     async fn recover_delivery(
         &self,
-        scope: &BrowserWorkScope,
         association: &str,
         mut receipt: BrowserDeliveryReceipt,
     ) -> Result<BrowserFeedbackSendResponse, InspectionError> {
@@ -433,7 +398,7 @@ impl BrowserService {
             receipt.acknowledged_ids = merge_ids(&receipt.acknowledged_ids, &ack.acknowledged_ids);
             receipt = self.feedback.save_delivery(receipt)?;
         }
-        self.delivery_response(scope, association, receipt)
+        self.delivery_response(association, receipt)
     }
 
     fn persist_outcome(
@@ -460,16 +425,10 @@ impl BrowserService {
 
     fn delivery_response(
         &self,
-        scope: &BrowserWorkScope,
         association: &str,
         receipt: BrowserDeliveryReceipt,
     ) -> Result<BrowserFeedbackSendResponse, InspectionError> {
         let pending_count = self.feedback.list(association)?.pending_count;
-        if receipt.state == CommentPasteState::Accepted
-            && matches!(scope, BrowserWorkScope::LegacyArchive { .. })
-        {
-            self.prune_legacy_archive(association)?;
-        }
         Ok(BrowserFeedbackSendResponse {
             operation_id: receipt.operation_id,
             state: receipt.state,
@@ -481,22 +440,6 @@ impl BrowserService {
     }
 }
 
-fn validate_recipient_mode(
-    scope: &BrowserWorkScope,
-    recipient: Option<&CommentPasteTarget>,
-) -> Result<(), InspectionError> {
-    match (scope, recipient) {
-        (BrowserWorkScope::LegacyArchive { .. } | BrowserWorkScope::SavedTab { .. }, None) => Err(InspectionError::new(
-            "browser_feedback_recipient_required",
-            "choose an eligible agent of the focused tab to receive saved browser feedback",
-        )),
-        (BrowserWorkScope::Tab { .. }, Some(_)) => Err(InspectionError::new(
-            "browser_feedback_recipient_invalid",
-            "tab feedback does not accept an explicit recipient",
-        )),
-        _ => Ok(()),
-    }
-}
 
 fn recipient_changed(message: &str) -> InspectionError {
     InspectionError::new("browser_feedback_recipient_changed", message)
@@ -599,7 +542,7 @@ fn select_pending<'a>(
 
 fn feedback_payload(
     association: &str,
-    target: Option<&super::ResolvedTarget>,
+    target: &super::ResolvedTarget,
     browser: Option<&cockpit_protocol::browser::BrowserAssociation>,
     captures: &[(&BrowserFeedbackCapture, Vec<Value>)],
     ids: &[String],
@@ -620,28 +563,20 @@ fn feedback_payload(
         "kind": "browser_feedback",
         "addressing": {
             "association_key": association,
-            "session_id": target.map(|target| target.session_id.as_str()),
-            "tab_id": target.map(|target| target.tab_id.as_str()),
-            "space_id": target.map(|target| target.space_id.as_str()),
-            "space_label": target.map(|target| target.space_label.as_str()),
-            "endpoint_identity": target.map(|target| target.endpoint_identity.as_str()),
-            "legacy_archive": target.is_none(),
+            "session_id": target.session_id,
+            "tab_id": target.tab_id,
+            "space_id": target.space_id,
+            "space_label": target.space_label,
+            "endpoint_identity": target.endpoint_identity,
             "playwright_session": browser.map(|value| value.playwright_session.as_str()).unwrap_or(""),
             "working_directory": browser.map(|value| value.working_directory.as_str()).unwrap_or(""),
             "invocation": browser.map(|value| value.invocation.as_str()).unwrap_or(""),
         },
-        "instructions": if target.is_some() {
-            vec![
-                "Open Cockpit's Browser feedback view to review, acknowledge, and send these annotations.".to_owned(),
-                "Use `cockpit-cli browser status --current` to refresh browser addressing.".to_owned(),
-                "Use `cockpit-cli browser feedback --current` to read pending feedback; after reviewing images, run `cockpit-cli browser feedback ack --current --id <annotation-id>` for the exact reviewed IDs.".to_owned(),
-            ]
-        } else {
-            vec![
-                "These saved annotations retain their original pre-tab source in each capture context.".to_owned(),
-                format!("Use `cockpit-cli browser feedback --legacy {association}` to read this archive, and `cockpit-cli browser feedback ack --legacy {association} --id <annotation-id>` for exact reviewed IDs."),
-            ]
-        },
+        "instructions": [
+            "Open Cockpit's Browser feedback view to review, acknowledge, and send these annotations.",
+            "Use `cockpit-cli browser status --current` to refresh browser addressing.",
+            "Use `cockpit-cli browser feedback --current` to read pending feedback; after reviewing images, run `cockpit-cli browser feedback ack --current --id <annotation-id>` for the exact reviewed IDs.",
+        ],
         "requested_annotation_ids": ids,
         "captures": captures,
     }))

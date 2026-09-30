@@ -27,7 +27,7 @@ import { TabCanvas, focusSelectedDivider } from "./layout/TabCanvas";
 import { LeafHost } from "./layout/LeafHost";
 import { openViewerLeaf, closeViewerLeaf, releaseViewers, getViewerClientId } from "./layout/viewerLifecycle";
 import { openBrowserLeaf, closeBrowserLeaf, retireTabBrowser, browserOpenDisabledReason, retryBrowserCleanup, subscribeBrowserLifecycle } from "./layout/browserLifecycle";
-import { BrowserCleanupStrip } from "./layout/BrowserCleanupStrip";
+import { BrowserCleanupNotices } from "./layout/BrowserCleanupNotices";
 import { routeWorkbenchKeydown } from "./input/keymap";
 import { SHORTCUTS, SHORTCUT_SEPARATOR, armedPrefixHint, focusSidebarList, formatShortcut, shortcutEntry, withShortcut, type PrefixCommand } from "./input/shortcuts";
 import { trapModalTab, useModalFocus } from "./input/modal";
@@ -906,7 +906,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
       {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
-      <BrowserCleanupStrip ctx={ctx} activeTabId={selection.tabId} />
+      <BrowserCleanupNotices ctx={ctx} activeTabId={selection.tabId} />
       {lifecycleError ? <div className="notice notice-error" role="alert">{lifecycleError}</div> : null}
       <div className="workarea-content">
         {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}

@@ -1,8 +1,9 @@
 use async_trait::async_trait;
+use cap_fs_ext::DirExt;
+use cap_std::fs::MetadataExt;
 use cockpit_protocol::browser::{
     BrowserAction, BrowserAssociation, BrowserConnectionState, BrowserRequest, BrowserResponse,
-    BrowserTarget, BrowserWorkScope, BrowserCleanupState, BrowserCutoverState,
-    BrowserCleanupFailure,
+    BrowserTarget, BrowserWorkScope, BrowserCleanupState, BrowserCleanupFailure,
 };
 use cockpit_protocol::browser_view::BrowserViewOpenRequest;
 use cockpit_protocol::v1::SessionSnapshotResponse;
@@ -34,10 +35,6 @@ use crate::process::run_bounded_command;
 mod delivery;
 pub mod drafts;
 mod cleanup;
-mod legacy;
-mod saved_tab;
-#[cfg(all(test, unix))]
-mod saved_tab_tests;
 #[cfg(all(test, unix))]
 mod lifecycle_tests;
 
@@ -47,6 +44,9 @@ const CLI_OUTPUT_LIMIT: usize = 64 * 1024;
 const CLI_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUIRED_PLAYWRIGHT_CLI_VERSION: &str = "0.1.5";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const STATE_DIRS: &[&str] = &[
+    "tab-associations", "profiles", "workspaces", "configs", "feedback", "artifacts", "drafts",
+];
 
 /// A snapshot pinned to the exact Herdr endpoint that served it.
 #[derive(Clone, Debug)]
@@ -87,9 +87,7 @@ pub struct BrowserService {
     shutting_down: Arc<AtomicBool>,
     feedback: Arc<crate::browser_feedback::BrowserFeedbackStore>,
     paste_adapter: Option<Arc<dyn crate::paste_adapter::CommentPasteAdapter>>,
-    cutover: Arc<Mutex<BrowserCutoverState>>,
     cleanup_failures: Arc<parking_lot::Mutex<Vec<BrowserCleanupFailure>>>,
-    legacy_started: Arc<AtomicBool>,
 }
 
 /// A host-only capability for attaching the private inline helper. This type is
@@ -185,15 +183,7 @@ impl BrowserService {
                 "cannot resolve browser state directory",
             )
         })?;
-        for name in [
-            "tab-associations",
-            "saved-tab-associations",
-            "legacy-archive",
-            "legacy-decisions",
-            "profiles",
-            "workspaces",
-            "configs",
-        ] {
+        for name in STATE_DIRS {
             prepare_root(&root.join(name))?;
         }
         let feedback = crate::browser_feedback::BrowserFeedbackStore::new(
@@ -213,10 +203,112 @@ impl BrowserService {
             shutting_down: Arc::new(AtomicBool::new(false)),
             feedback: Arc::new(feedback),
             paste_adapter: None,
-            cutover: Arc::new(Mutex::new(BrowserCutoverState::NotNeeded)),
             cleanup_failures: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            legacy_started: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    pub(crate) fn prepare_state_dirs(&self) -> Result<(), InspectionError> {
+        for name in STATE_DIRS { prepare_root(&self.root.join(name))?; }
+        Ok(())
+    }
+
+    /// Recorded Cockpit keys authorize only their derived session name and cwd.
+    /// Confirm daemon process exit and browser closure; uncertainty fails reset.
+    pub(crate) async fn stop_previous_sessions(&self) -> Result<(), InspectionError> {
+        let _operation = self.operation_lock.lock().await;
+        let io_error = |error: std::io::Error| InspectionError::new("browser_startup_stop_failed", error.to_string());
+        let root = crate::project_store::open_dir_nofollow_absolute(&self.root).map_err(io_error)?;
+        let device = root.dir_metadata().map_err(io_error)?.dev();
+        let mut keys = std::collections::BTreeSet::new();
+        let mut inspected = 0usize;
+        for name in ["tab-associations", "associations"] {
+            let metadata = match root.symlink_metadata(name) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(io_error(error)),
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_dir() { continue; }
+            if metadata.dev() != device { return Err(InspectionError::new("browser_startup_stop_failed", "recorded browser directory crosses filesystem device")); }
+            let dir = root.open_dir_nofollow(name).map_err(io_error)?;
+            let opened = dir.dir_metadata().map_err(io_error)?;
+            if opened.dev() != device || opened.ino() != metadata.ino() {
+                return Err(InspectionError::new("browser_startup_stop_failed", "recorded browser directory identity changed"));
+            }
+            for entry in dir.entries().map_err(io_error)? {
+                inspected += 1;
+                if inspected > MAX_ASSOCIATIONS * 2 {
+                    return Err(InspectionError::new("browser_startup_stop_failed", "too many recorded browser entries"));
+                }
+                let filename = entry.map_err(io_error)?.file_name();
+                let path = Path::new(&filename);
+                if path.extension().and_then(|name| name.to_str()) != Some("json") { continue; }
+                let Some(key) = path.file_stem().and_then(|name| name.to_str()).filter(|key| cleanup::valid_key(key)) else { continue; };
+                let metadata = dir.symlink_metadata(&filename).map_err(io_error)?;
+                if !metadata.file_type().is_symlink() && metadata.dev() != device {
+                    return Err(InspectionError::new("browser_startup_stop_failed", "recorded browser entry crosses filesystem device"));
+                }
+                if metadata.is_file() && !metadata.file_type().is_symlink() { keys.insert(key.to_owned()); }
+            }
+        }
+        let mut tasks = JoinSet::new();
+        let mut first_error = None;
+        for key in keys {
+            let service = self.clone();
+            tasks.spawn(async move { service.stop_previous_session(&key).await });
+            if tasks.len() >= 4 {
+                match tasks.join_next().await.expect("pending browser stop") {
+                    Ok(Ok(())) => {},
+                    Ok(Err(error)) => { first_error.get_or_insert(error); },
+                    Err(error) => { first_error.get_or_insert(InspectionError::new("browser_startup_stop_failed", error.to_string())); },
+                }
+            }
+        }
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok(())) => {},
+                Ok(Err(error)) => { first_error.get_or_insert(error); },
+                Err(error) => { first_error.get_or_insert(InspectionError::new("browser_startup_stop_failed", error.to_string())); },
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    async fn stop_previous_session(&self, key: &str) -> Result<(), InspectionError> {
+        let workspace = self.root.join("workspaces").join(key);
+        let session = format!("cockpit-{key}");
+        let profile = self.root.join("profiles").join(key);
+        let daemon = previous_daemon(&workspace, &profile, &session).await?;
+        if daemon.is_none() {
+            if previous_browser_closed(&profile).await? { return Ok(()); }
+            return Err(InspectionError::new("browser_startup_stop_failed", format!("{session}: browser is live without a reachable managed daemon")));
+        }
+        let daemon = daemon.expect("reachable daemon");
+        let _cwd = crate::project_store::open_dir_nofollow_absolute(&workspace).map_err(|error| {
+            InspectionError::new("browser_startup_stop_failed", format!("{}: {error}", workspace.display()))
+        })?;
+        let browser_dir = crate::project_store::open_dir_nofollow_absolute(&self.root)
+            .map_err(|error| InspectionError::new("browser_startup_stop_failed", error.to_string()))?;
+        if _cwd.dir_metadata().map_err(|error| InspectionError::new("browser_startup_stop_failed", error.to_string()))?.dev()
+            != browser_dir.dir_metadata().map_err(|error| InspectionError::new("browser_startup_stop_failed", error.to_string()))?.dev() {
+            return Err(InspectionError::new("browser_startup_stop_failed", format!("{}: workspace crosses filesystem device", workspace.display())));
+        }
+        let executable = resolve_executable(&self.configuration.playwright_cli, "Playwright CLI")?;
+        let mut command = tokio::process::Command::new(executable);
+        command.current_dir(&workspace).args([format!("-s={session}"), "close".into()]);
+        let result = run_bounded_command(command, CLI_OUTPUT_LIMIT, CLI_OUTPUT_LIMIT, CLI_TIMEOUT, "Playwright CLI").await;
+        for _ in 0..5 {
+            if !process_incarnation_running(daemon.pid, daemon.start)?
+                && previous_daemon(&workspace, &profile, &session).await?.is_none()
+                && previous_browser_closed(&profile).await? {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let detail = match result {
+            Err(error) => error.message,
+            Ok(output) => format!("Playwright close exited with {}; managed daemon or browser remains live", output.status),
+        };
+        Err(InspectionError::new("browser_startup_stop_failed", format!("{session}: stop was not confirmed; {detail}")))
     }
 
     pub fn with_paste_adapter(
@@ -567,15 +659,7 @@ impl BrowserService {
         match scope {
             BrowserWorkScope::Tab { target } => {
                 let tab = self.resolve_target(target).await?;
-                Ok(ResolvedWorkScope { association_key: association_key(&tab.endpoint_identity, &tab.session_id, &tab.tab_id), tab: Some(tab) })
-            }
-            BrowserWorkScope::SavedTab { association_key } => {
-                self.load_saved_tab(association_key)?.ok_or_else(|| InspectionError::new("browser_saved_tab_absent", "Saved tab provenance is absent"))?;
-                Ok(ResolvedWorkScope { association_key: association_key.clone(), tab: None })
-            }
-            BrowserWorkScope::LegacyArchive { association_key } => {
-                self.load_legacy_archive(association_key)?.ok_or_else(|| InspectionError::new("browser_legacy_archive_absent", "Legacy browser archive is absent"))?;
-                Ok(ResolvedWorkScope { association_key: association_key.clone(), tab: None })
+                Ok(ResolvedWorkScope { association_key: association_key(&tab.endpoint_identity, &tab.session_id, &tab.tab_id), tab })
             }
         }
     }
@@ -1163,7 +1247,6 @@ impl BrowserService {
         self.root.join("tab-associations").join(format!("{key}.json"))
     }
     fn store(&self, receipt: &BrowserReceipt) -> Result<(), InspectionError> {
-        self.preserve_saved_tab(receipt)?;
         atomic_write_json(&self.tab_association_path(&receipt.association_key), receipt)
     }
     fn load(&self, key: &str) -> Result<Option<BrowserReceipt>, InspectionError> {
@@ -1276,7 +1359,87 @@ pub(crate) struct ResolvedTarget {
 
 pub(crate) struct ResolvedWorkScope {
     pub(crate) association_key: String,
-    pub(crate) tab: Option<ResolvedTarget>,
+    pub(crate) tab: ResolvedTarget,
+}
+
+struct PreviousDaemon {
+    pid: i32,
+    start: u64,
+}
+
+/// Persistent Playwright sessions retain their .session configuration after
+/// shutdown. Prove liveness through the matching daemon socket, not that file.
+async fn previous_daemon(workspace: &Path, profile: &Path, session: &str) -> Result<Option<PreviousDaemon>, InspectionError> {
+    let failure = |message| InspectionError::new("browser_startup_stop_failed", message);
+    let path = daemon_session_path(workspace, session)?;
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(failure(error.to_string())),
+        Ok(_) => {},
+    }
+    let bytes = read_regular(&path, MAX_RECEIPT_BYTES)?;
+    let config: Value = serde_json::from_slice(&bytes).map_err(|error| failure(error.to_string()))?;
+    let workspace = workspace.to_str().ok_or_else(|| failure(format!("{session}: workspace path is not UTF-8")))?;
+    let profile = profile.to_str().ok_or_else(|| failure(format!("{session}: profile path is not UTF-8")))?;
+    if config.get("workspaceDir").and_then(Value::as_str) != Some(workspace)
+        || config.pointer("/browser/userDataDir").and_then(Value::as_str) != Some(profile) {
+        return Err(failure(format!("{session}: daemon configuration does not match derived workspace/profile")));
+    }
+    let socket = config.get("socketPath").and_then(Value::as_str)
+        .filter(|socket| Path::new(socket).is_absolute())
+        .ok_or_else(|| failure(format!("{session}: daemon configuration lacks an absolute socket path")))?;
+    let stream = match tokio::time::timeout(SOCKET_TIMEOUT, UnixStream::connect(socket)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(error)) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) => return Ok(None),
+        Ok(Err(error)) => return Err(failure(format!("{session}: daemon probe failed: {error}"))),
+        Err(_) => return Err(failure(format!("{session}: daemon probe timed out"))),
+    };
+    let peer = stream.peer_cred().map_err(|error| failure(error.to_string()))?;
+    if peer.uid() != current_uid() { return Err(failure(format!("{session}: daemon belongs to another user"))); }
+    let pid = peer.pid().ok_or_else(|| failure(format!("{session}: daemon has no process identity")))?;
+    let start = process_start_identity(pid).ok_or_else(|| failure(format!("{session}: daemon process generation is unavailable")))?;
+    Ok(Some(PreviousDaemon { pid, start }))
+}
+
+async fn previous_browser_closed(profile: &Path) -> Result<bool, InspectionError> {
+    match fs::symlink_metadata(profile.join("DevToolsActivePort")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(InspectionError::new("browser_startup_stop_failed", error.to_string())),
+        Ok(_) => {},
+    }
+    let (port, _) = cdp_record(profile)?;
+    match tokio::time::timeout(SOCKET_TIMEOUT, TcpStream::connect(("127.0.0.1", port))).await {
+        Ok(Ok(_)) => Ok(false),
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(true),
+        Ok(Err(error)) => Err(InspectionError::new("browser_startup_stop_failed", format!("browser closure probe failed: {error}"))),
+        Err(_) => Err(InspectionError::new("browser_startup_stop_failed", "browser closure probe timed out")),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn process_incarnation_running(pid: i32, start: u64) -> Result<bool, InspectionError> {
+    let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(InspectionError::new("browser_startup_stop_failed", error.to_string())),
+    };
+    let fields = stat.rfind(')').and_then(|close| stat.get(close + 2..))
+        .ok_or_else(|| InspectionError::new("browser_startup_stop_failed", "daemon process status is invalid"))?;
+    let mut fields = fields.split_whitespace();
+    let state = fields.next();
+    let current_start = fields.nth(18).and_then(|field| field.parse::<u64>().ok())
+        .ok_or_else(|| InspectionError::new("browser_startup_stop_failed", "daemon process generation is invalid"))?;
+    // Zombies have completed process exit; PID reuse is not the old daemon.
+    Ok(current_start == start && !matches!(state, Some("Z" | "X")))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_incarnation_running(pid: i32, start: u64) -> Result<bool, InspectionError> {
+    if let Some(current) = process_start_identity(pid) { return Ok(current == start); }
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
+        Err(nix::errno::Errno::ESRCH) => Ok(false),
+        _ => Err(InspectionError::new("browser_startup_stop_failed", "daemon process exit could not be verified")),
+    }
 }
 
 struct DaemonReceipt {
@@ -1284,8 +1447,7 @@ struct DaemonReceipt {
     hash: String,
 }
 
-fn daemon_receipt(receipt: &BrowserReceipt) -> Result<DaemonReceipt, InspectionError> {
-    let workspace = Path::new(&receipt.working_directory);
+fn daemon_session_path(workspace: &Path, session: &str) -> Result<PathBuf, InspectionError> {
     let daemon_dir = if let Some(path) =
         env::var_os("PLAYWRIGHT_DAEMON_SESSION_DIR").filter(|path| !path.is_empty())
     {
@@ -1307,9 +1469,12 @@ fn daemon_receipt(receipt: &BrowserReceipt) -> Result<DaemonReceipt, InspectionE
         cache.join("ms-playwright/daemon")
     };
     let hash = format!("{:x}", Sha1::digest(path_string(workspace)?.as_bytes()));
-    let path = daemon_dir
-        .join(&hash[..16])
-        .join(format!("{}.session", receipt.playwright_session));
+    Ok(daemon_dir.join(&hash[..16]).join(format!("{session}.session")))
+}
+
+fn daemon_receipt(receipt: &BrowserReceipt) -> Result<DaemonReceipt, InspectionError> {
+    let workspace = Path::new(&receipt.working_directory);
+    let path = daemon_session_path(workspace, &receipt.playwright_session)?;
     if fs::symlink_metadata(&path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     {
         return Err(InspectionError::new(
@@ -1460,7 +1625,7 @@ async fn wait_for_cdp_binding(profile: &Path) -> Result<CdpBinding, InspectionEr
     }
 }
 
-async fn cdp_binding(profile: &Path) -> Result<CdpBinding, InspectionError> {
+fn cdp_record(profile: &Path) -> Result<(u16, String), InspectionError> {
     let port_file = profile.join("DevToolsActivePort");
     let bytes = read_regular(&port_file, 512).map_err(|_| {
         InspectionError::new(
@@ -1501,6 +1666,11 @@ async fn cdp_binding(profile: &Path) -> Result<CdpBinding, InspectionError> {
             "Chromium DevToolsActivePort record has unexpected fields",
         ));
     }
+    Ok((port, browser_path))
+}
+
+async fn cdp_binding(profile: &Path) -> Result<CdpBinding, InspectionError> {
+    let (port, browser_path) = cdp_record(profile)?;
     let endpoint = format!("http://127.0.0.1:{port}");
     let mut stream = tokio::time::timeout(SOCKET_TIMEOUT, TcpStream::connect(("127.0.0.1", port)))
         .await

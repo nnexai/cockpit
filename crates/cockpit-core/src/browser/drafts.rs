@@ -599,9 +599,27 @@ impl BrowserDraftStore {
         self.save_pending_locked(association_key)
     }
 
+    pub(crate) fn discard_association(
+        &self,
+        association_key: &str,
+    ) -> Result<(), InspectionError> {
+        validate_association_key(association_key)?;
+        let _guard = self.lock()?;
+        for draft in self.load_all()? {
+            if draft.identity.association_key == association_key {
+                self.remove_draft(&draft.draft_id)?;
+            }
+        }
+        self.discard_pending_locked(association_key)
+    }
+
     pub fn discard_pending(&self, association_key: &str) -> Result<(), InspectionError> {
         let _guard = self.lock()?;
         validate_association_key(association_key)?;
+        self.discard_pending_locked(association_key)
+    }
+
+    fn discard_pending_locked(&self, association_key: &str) -> Result<(), InspectionError> {
         let dir = self.dir()?;
         let name = pending_name(association_key);
         match dir.remove_file(&name) {
@@ -1662,8 +1680,8 @@ impl BrowserService {
             capture_id.to_owned(),
         )
     }
-    /// Recovers persisted drafts and frozen captures without launching or
-    /// attaching a browser. Saved-tab and legacy archive authorization need no live Herdr.
+    /// Recovers drafts and frozen captures for a tab without launching or
+    /// attaching a browser.
     pub async fn browser_draft_recovery(
         &self,
         request: BrowserDraftRecoveryRequest,
@@ -1675,8 +1693,6 @@ impl BrowserService {
         let resolved = self.resolve_work_scope(&request.scope).await?;
         let association_key = resolved.association_key;
         let store = self.draft_store()?;
-        let prune_archive = matches!(&request.scope, BrowserWorkScope::LegacyArchive { .. })
-            && !matches!(&request.action, BrowserDraftRecoveryAction::List);
         let outcome: Result<BrowserViewCommandOutcome, InspectionError> = match request.action {
             BrowserDraftRecoveryAction::List => Ok(BrowserViewCommandOutcome::DraftInventory {
                 inventory: store.list(&association_key)?,
@@ -1737,14 +1753,10 @@ impl BrowserService {
             }
         };
         let outcome = outcome?;
-        if prune_archive {
-            self.prune_legacy_archive(&association_key)?;
-        }
         Ok(outcome)
     }
 
-    /// Saved work is addressed by its live tab or durable saved-association key.
-    /// Saved-tab and archive reads never inspect or launch a browser or contact Herdr.
+    /// Reads the tab's feedback and drafts without launching a browser.
     pub async fn feedback(
         &self,
         scope: &BrowserWorkScope,
@@ -1752,16 +1764,12 @@ impl BrowserService {
         let _operation = self.operation_lock.lock().await;
         let resolved = self.resolve_work_scope(scope).await?;
         let key = resolved.association_key;
-        let browser = match resolved.tab.as_ref().map(|_| self.load(&key)).transpose()?.flatten() {
+        let browser = match self.load(&key)? {
             Some(mut receipt) => self.status(&mut receipt).await?,
             None => BrowserResponse {
                 association: None,
                 connection: BrowserConnectionState::Absent,
-                message: match scope {
-                    BrowserWorkScope::Tab { .. } => "No browser association exists for this tab",
-                    BrowserWorkScope::SavedTab { .. } => "Saved browser work from this tab",
-                    BrowserWorkScope::LegacyArchive { .. } => "Saved browser work from before tabs",
-                }.into(),
+                message: "No browser association exists for this tab".into(),
                 cleanup: cockpit_protocol::browser::BrowserCleanupState::None,
                 cleanup_reason: None,
             },
@@ -1791,9 +1799,6 @@ impl BrowserService {
         let resolved = self.resolve_work_scope(&request.scope).await?;
         let key = resolved.association_key;
         let ack = self.feedback.ack(&key, &request.ids)?;
-        if matches!(request.scope, BrowserWorkScope::LegacyArchive { .. }) {
-            self.prune_legacy_archive(&key)?;
-        }
         Ok(ack)
     }
 

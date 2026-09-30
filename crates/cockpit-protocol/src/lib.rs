@@ -24,10 +24,7 @@ pub use comments::CommentOwner;
 pub use browser::{
     BrowserAction, BrowserAssociation, BrowserResponse, BrowserTarget,
     BrowserCleanupFailure, BrowserCleanupRetryRequest, BrowserCleanupScope, BrowserCleanupState,
-    BrowserCleanupStatus, BrowserCutoverState, BrowserLegacyArchive, BrowserLegacyArchiveList,
-    BrowserLegacyArtifactCandidate, BrowserLegacyCandidateKind, BrowserLegacyCandidateState,
-    BrowserLegacyKeepRequest, BrowserLegacyRecipientsRequest, BrowserLegacyRemovalRequest, BrowserWorkScope,
-    BrowserSavedTabWork,
+    BrowserCleanupStatus, BrowserWorkScope,
 };
 
 pub use v1::{
