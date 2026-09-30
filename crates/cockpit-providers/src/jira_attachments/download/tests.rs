@@ -390,6 +390,54 @@ async fn data_center_sends_bearer_to_both_requests_and_keeps_the_context_path() 
 }
 
 #[tokio::test]
+async fn omitted_metadata_id_downloads_matching_attachment_paths() {
+    for (base, path) in [
+        ("/jira", "/jira/secure/attachment/10001/trace.log"),
+        ("/jira", "/jira/rest/api/2/attachment/content/10001"),
+        ("/jira", "/jira/rest/api/3/attachment/content/10001"),
+        ("/jira/", "/jira/rest/api/latest/attachment/content/10001"),
+        ("", "/secure/attachment/10001/trace.log"),
+        ("", "/rest/api/2/attachment/content/10001"),
+    ] {
+        let server = Server::start(move |request, own| {
+            if request.path == format!("{}/rest/api/2/attachment/10001", base.trim_end_matches('/'))
+            {
+                Reply::json(json!({
+                    "filename": "trace.log", "size": 5,
+                    "content": format!("http://{own}{path}"),
+                }))
+            } else if request.path == path {
+                Reply::bytes(b"hello")
+            } else {
+                Reply::status(404)
+            }
+        });
+        let (provider, _vault) =
+            jira_at(&format!("http://{}{base}", server.addr), Stored::Bearer).await;
+        let dest = Dest::new();
+        let done = download(&provider, &attachment(Some(5)), &dest, 1024)
+            .await
+            .unwrap();
+        assert_eq!(done.attachment_id, "10001");
+        assert_eq!(file(&dest), b"hello");
+        let seen = server.seen();
+        assert_eq!(
+            seen.iter()
+                .map(|request| request.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                format!("{}/rest/api/2/attachment/10001", base.trim_end_matches('/')).as_str(),
+                path,
+            ]
+        );
+        assert!(
+            seen.iter().all(|request| request.authorization.as_deref()
+                == Some(format!("Bearer {BEARER}").as_str()))
+        );
+    }
+}
+
+#[tokio::test]
 async fn cloud_media_redirect_leaves_the_site_without_authorization() {
     let media = Server::start(|_, _| Reply::bytes(b"cloud bytes"));
     let media_addr = media.addr;
@@ -491,7 +539,9 @@ async fn an_off_site_metadata_link_is_refused_without_a_second_request() {
 #[tokio::test]
 async fn metadata_for_another_attachment_is_refused() {
     let server = Server::start(|_, own| {
-        Reply::json(json!({"id": "99999", "content": format!("http://{own}/jira/x")}))
+        Reply::json(
+            json!({"id": "99999", "content": format!("http://{own}/jira/secure/attachment/10001/trace.log")}),
+        )
     });
     let (provider, _vault) = jira_at(&format!("http://{}/jira", server.addr), Stored::Bearer).await;
     let dest = Dest::new();
@@ -501,6 +551,71 @@ async fn metadata_for_another_attachment_is_refused() {
         "source_provider_contract",
     );
     assert_eq!(server.seen().len(), 1);
+}
+
+#[tokio::test]
+async fn omitted_metadata_id_refuses_unrelated_or_ambiguous_content_paths() {
+    for path in [
+        "/jira/secure/attachment/99999/trace.log",
+        "/jira/secure/attachment/100010/trace.log",
+        "/jira/secure/attachment/10001",
+        "/jira/secure/attachment/10001/",
+        "/jira/not-secure/attachment/10001/trace.log",
+        "/jira/nested/secure/attachment/10001/trace.log",
+        "/jira/secure/attachment/%31%30%30%30%31/trace.log",
+        "/jira/rest/api/2/attachment/content/99999",
+        "/jira/rest/api/2/attachment/content/100010",
+        "/jira/rest/api/2/attachment/content/10001/extra",
+        "/jira/rest/api//attachment/content/10001",
+        "/jira/rest/api/2/nested/attachment/content/10001",
+        "/jira/rest/api/2/attachment/10001",
+        "/jira/unrelated?attachment=10001",
+        "/secure/attachment/10001/trace.log",
+        "/jira-other/secure/attachment/10001/trace.log",
+    ] {
+        let server = Server::start(move |_, own| {
+            Reply::json(json!({"content": format!("http://{own}{path}")}))
+        });
+        let (provider, _vault) =
+            jira_at(&format!("http://{}/jira", server.addr), Stored::Bearer).await;
+        let dest = Dest::new();
+        refused(
+            download(&provider, &attachment(None), &dest, 1024).await,
+            "source_provider_contract",
+        );
+        assert_eq!(server.seen().len(), 1, "{path}");
+        assert!(dest.entries().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn invalid_supplied_metadata_ids_do_not_fall_back_to_matching_paths() {
+    for id in [
+        json!(null),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!(""),
+        json!("../10001"),
+        json!("010001"),
+        json!(-10001),
+        json!(10001.5),
+    ] {
+        let server = Server::start(move |_, own| {
+            Reply::json(json!({
+                "id": id, "content": format!("http://{own}/jira/secure/attachment/10001/trace.log"),
+            }))
+        });
+        let (provider, _vault) =
+            jira_at(&format!("http://{}/jira", server.addr), Stored::Bearer).await;
+        let dest = Dest::new();
+        refused(
+            download(&provider, &attachment(None), &dest, 1024).await,
+            "source_provider_contract",
+        );
+        assert_eq!(server.seen().len(), 1);
+        assert!(dest.entries().is_empty());
+    }
 }
 
 #[test]

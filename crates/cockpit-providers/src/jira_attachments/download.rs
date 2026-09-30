@@ -3,8 +3,10 @@
 //! OS vault, and only for one attachment at a time.
 //!
 //! The rules (D10): metadata comes from `{site}/rest/api/2/attachment/{id}`;
-//! its `content` link must stay on the configured origin and base path; the
-//! `Authorization` header goes only to the configured origin, on every hop;
+//! a supplied metadata id must match exactly, while an omitted id requires
+//! the content path to identify the requested attachment. Its `content` link
+//! must stay on the configured origin and base path; the `Authorization`
+//! header goes only to the configured origin, on every hop;
 //! redirects are followed by hand, up to [`MAX_REDIRECTS`], never from https
 //! to http, and a cross-origin hop (Cloud's signed media host) carries no
 //! credential. Every error is a fixed message: `reqwest::Error` text holds the
@@ -162,14 +164,6 @@ impl AttachmentDownloader {
             body.extend_from_slice(&chunk);
         }
         let value: Value = serde_json::from_slice(&body).map_err(|_| contract())?;
-        let listed = match value.get("id") {
-            Some(Value::String(listed)) => listed.clone(),
-            Some(Value::Number(listed)) => listed.to_string(),
-            _ => return Err(contract()),
-        };
-        if listed != id {
-            return Err(contract());
-        }
         let content = value
             .get("content")
             .and_then(Value::as_str)
@@ -181,6 +175,17 @@ impl AttachmentDownloader {
                     "Jira's attachment link is not on the configured site",
                 )
             })?;
+        // Data Center may omit the id in this endpoint's response. An invalid
+        // or mismatched supplied id must never fall back to path matching.
+        let matches = match value.get("id") {
+            Some(Value::String(listed)) => listed == id,
+            Some(Value::Number(listed)) => listed.to_string() == id,
+            None => self.content_identifies_attachment(&content, id),
+            _ => false,
+        };
+        if !matches {
+            return Err(contract());
+        }
         Ok(Metadata {
             size: value.get("size").and_then(Value::as_u64),
             content,
@@ -194,6 +199,25 @@ impl AttachmentDownloader {
             && url.username().is_empty()
             && url.password().is_none()
             && (url.path() == base || url.path().starts_with(&format!("{base}/")))
+    }
+
+    /// Only Jira's attachment-byte paths provide identity when metadata omits it.
+    /// `content` has already passed the configured origin and base-path checks.
+    fn content_identifies_attachment(&self, content: &Url, id: &str) -> bool {
+        let base = self.site.path().trim_end_matches('/');
+        let Some(path) = content.path().strip_prefix(base) else {
+            return false;
+        };
+        if let Some(path) = path.strip_prefix("/secure/attachment/") {
+            return path
+                .split_once('/')
+                .is_some_and(|(listed, file)| listed == id && !file.is_empty());
+        }
+        path.strip_prefix("/rest/api/")
+            .and_then(|path| path.split_once('/'))
+            .is_some_and(|(version, path)| {
+                !version.is_empty() && path.strip_prefix("attachment/content/") == Some(id)
+            })
     }
 }
 

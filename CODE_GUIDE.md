@@ -136,6 +136,8 @@ A stored token is injected only into that provider's CLI child environment; with
 
 Confluence env mode ignores `--profile` (still passed) and removes inherited `CONFLUENCE_COOKIE` and `CONFLUENCE_TLS_*`; `CONFLUENCE_READ_ONLY` stays `true`. Cockpit's own HTTP (Jira attachments) sends `Authorization` only to the configured origin, follows at most three redirects, and drops the header on any cross-origin hop and refuses https to http. Verified: live Jira Cloud and Confluence Cloud through a private gnome-keyring in the browser build and native Tauri commands. Not verified: a live Jira attachment download (fake-server tests only), Jira Data Center Bearer, macOS Keychain.
 
+Jira attachment metadata from `rest/api/2/attachment/{id}` must identify the requested attachment: a supplied `id` must match exactly, including when the content link names the requested id. Data Center responses may omit `id`; only then can a same-site link below the configured base path establish identity through `/secure/attachment/{id}/…` (with a file path) or `/rest/api/{version}/attachment/content/{id}` (with no extra path suffix). Null, malformed and mismatched supplied ids are rejected rather than treated as missing. This does not change redirect, credential, byte-budget or private no-follow staging rules.
+
 The global Context Library is rooted at `library_root` (TOML or `COCKPIT_LIBRARY_ROOT`; default `$XDG_DATA_HOME/cockpit/library`, falling back to `~/.local/share/cockpit/library`). For example:
 
 ```toml
