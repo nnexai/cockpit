@@ -1,4 +1,5 @@
-import { UiIcon } from "./UiIcon";
+import { UiIcon, type UiIconName } from "./UiIcon";
+import { ErrorSlot } from "./ErrorSlot";
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
   parseResourceMutationResponse,
@@ -42,6 +43,7 @@ import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
 import type { LibraryCommand } from "./context/ContextViewer";
 import { AddContextDialog } from "./library/AddContextDialog";
 import { LibraryView } from "./library/LibraryView";
+import { LibraryProblems } from "./library/LibraryProblems";
 import type { LibrarySpace } from "./library/libraryState";
 import { InlineRename } from "./InlineRename";
 import { Sidebar } from "./sidebar/Sidebar";
@@ -214,15 +216,33 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDi
       onContextMenu={(event) => onContext(event, { kind: "tab", id: tab.id })}>
       {editingId === tab.id
         ? <InlineRename label={tab.label} ariaLabel={`Rename tab ${tab.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`tab:${tab.id}`, { type: "tab_rename", tab_id: tab.id, label }); if (accepted) onEdit(null); return accepted; }} />
-        : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={displayedNumber <= 9 ? withShortcut(redundantLabel ? `Tab ${displayedNumber}` : tab.label, `select-tab-${displayedNumber as 1}`) : redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
+        : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={displayedNumber <= 9 ? withShortcut(redundantLabel ? `Tab ${displayedNumber}` : tab.label, `select-tab-${displayedNumber as 1}`) : redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="n">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
   </nav>;
 }
 
 
-type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser" | "Library" | "Herdr"; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
+type CommandAction = { id: string; label: string; icon?: UiIconName; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser" | "Library" | "Herdr"; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
+
+const commandGroupIcons: Record<CommandAction["group"], UiIconName> = { Herdr: "terminal", Navigate: "forward", Space: "grid", Tab: "browser", Pane: "terminal", Browser: "browser", Library: "library" };
+
+function commandIcon(action: CommandAction): UiIconName {
+  if (action.icon) return action.icon;
+  if (action.id.endsWith("-left") || action.id.endsWith(":previous-tab")) return "back";
+  if (action.id.endsWith("-right") || action.id.endsWith(":next-tab")) return "forward";
+  if (action.id.endsWith("-up")) return "up";
+  if (action.id.endsWith("-down")) return "down";
+  if (action.id.includes("rename")) return "edit";
+  if (action.id.includes("close")) return "close";
+  if (action.id.includes("new-") || action.id.endsWith(":add")) return "plus";
+  if (action.id.includes("cleanup") || action.id.includes("refresh")) return "refresh";
+  if (action.id.endsWith(":zoom-pane")) return "expand";
+  if (action.id.endsWith(":open-file-picker")) return "search";
+  if (action.id.endsWith(":toggle-sidebar")) return "sidebar";
+  return commandGroupIcons[action.group];
+}
 
 /** Picks the clause of a renderer diagnostic chain that explains one action, e.g. "Requires a safe source pane directory". */
 export function rendererReasonFor(kind: RendererActionDefinition["kind"], reason: string): string | undefined {
@@ -232,15 +252,12 @@ export function rendererReasonFor(kind: RendererActionDefinition["kind"], reason
   const rest = clause.slice(prefix.length);
   return rest.charAt(0).toLocaleUpperCase() + rest.slice(1);
 }
-type RendererActionDefinition = { id: string; label: string; direction: "right" | "down"; kind: "review" | "files" | "context" };
+type RendererActionDefinition = { id: string; label: string; icon: UiIconName; kind: "review" | "files" | "context" };
 
 const rendererActionDefinitions: RendererActionDefinition[] = [
-  { id: "review-right", label: "Open Review right", direction: "right", kind: "review" },
-  { id: "review-down", label: "Open Review below", direction: "down", kind: "review" },
-  { id: "files-right", label: "Open files right", direction: "right", kind: "files" },
-  { id: "files-down", label: "Open files below", direction: "down", kind: "files" },
-  { id: "context-right", label: "Open Context right", direction: "right", kind: "context" },
-  { id: "context-down", label: "Open Context below", direction: "down", kind: "context" },
+  { id: "review", label: "Open Review", icon: "file", kind: "review" },
+  { id: "files", label: "Open Files", icon: "folder", kind: "files" },
+  { id: "context", label: "Open Context", icon: "library", kind: "context" },
 ];
 
 /** Prefix commands that only move focus or open a surface, so they stay available while a Herdr mutation is pending. */
@@ -262,16 +279,14 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const [active, setActive] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const normalized = query.trim().toLocaleLowerCase();
-  const primaryIds = ["prefix:zoom-pane", "prefix:toggle-library", "browser:open", "prefix:new-tab", "prefix:split-right", "prefix:switch-session", "renderer:review-right", "prefix:setup-space"];
+  const primaryIds = ["prefix:zoom-pane", "prefix:toggle-library", "browser:open", "prefix:new-tab", "prefix:switch-session", "renderer:review", "prefix:setup-space"];
   const ranked = normalized
     ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group}`)
     : actions.map((action, index) => ({ ...action, score: index, matchedIndices: [] as number[] }));
   const groups = ["Herdr", "Navigate", "Space", "Tab", "Pane", "Browser", "Library"] as const;
   // Rows render grouped, so keep `filtered` in that order for the highlight and arrow keys. With a query, groups follow their best match.
   const groupOrder: readonly CommandAction["group"][] = normalized ? [...new Set(ranked.map((action) => action.group))] : groups;
-  const filtered = normalized || showAll
-    ? groupOrder.flatMap((group) => ranked.filter((action) => action.group === group))
-    : [...ranked.filter(action => action.group === "Herdr"), ...primaryIds.flatMap((id) => ranked.filter((action) => action.id === id))];
+  const filtered = groupOrder.flatMap((group) => ranked.filter((action) => action.group === group && (normalized || showAll || group === "Herdr" || primaryIds.includes(action.id))));
   useEffect(() => setActive((current) => Math.min(current, Math.max(0, filtered.length - 1))), [filtered.length]);
   useEffect(() => { searchRef.current?.focus(); }, []);
   useEffect(() => { activeRowRef.current?.scrollIntoView?.({ block: "nearest" }); }, [active, normalized]);
@@ -285,11 +300,11 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     if (event.key === "Enter" && document.activeElement instanceof HTMLInputElement) { event.preventDefault(); runActive(); return; }
     trapModalTab(event, ref.current);
   }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands"><UiIcon name="close" /></button></header><div className="command-search-box"><UiIcon name="search" /><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groupOrder.map((group) => {
-    const groupActions = !normalized && !showAll ? (group === "Navigate" ? filtered.filter(action => action.group !== "Herdr") : group === "Herdr" ? filtered.filter(action => action.group === "Herdr") : []) : filtered.filter((action) => action.group === group);
+    const groupActions = filtered.filter((action) => action.group === group);
     if (groupActions.length === 0) return null;
     return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => {
       const index = filtered.indexOf(action);
-      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseMove={() => { if (index !== active) setActive(index); }} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.disabled && action.reason ? <small title={action.reasonDetail ?? action.reason}>{action.reason}</small> : null}</span>{action.shortcut ? <ShortcutKeys text={action.shortcut} /> : null}</button>;
+      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseMove={() => { if (index !== active) setActive(index); }} onClick={() => action.run()}><UiIcon name={commandIcon(action)} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.disabled && action.reason ? <small title={action.reasonDetail ?? action.reason}>{action.reason}</small> : null}</span>{action.shortcut ? <ShortcutKeys text={action.shortcut} /> : null}</button>;
     })}</section>;
   })}</div><footer className="command-footer"><span>↑↓ or Ctrl+N/P navigate · Enter choose · Esc close · type a name or a key</span><button type="button" onClick={() => { setShowAll((value) => !value); setActive(0); }}>{showAll ? "Quick commands" : "All commands"}</button></footer></section></div>;
 }
@@ -414,9 +429,10 @@ function readSidebarCollapsed(): boolean {
   }
 }
 
-function Workbench({ client, state, sessions, selection, terminalMouseInput, mutations, ctx, tabLayout, registerTransient, onSession, onFocus, onSelectLeaf, onSplit, onPanePrepared, onReconnect, onRetry, onRefreshSessions, onOpenSession, onMutate, onRetryMutation }: {
+function Workbench({ client, state, sessions, selection, terminalMouseInput, mutations, ctx, tabLayout, registerTransient, onSession, onFocus, onSelectLeaf, onSplit, onPanePrepared, onReconnect, onRetry, onRefreshSessions, onOpenSession, onMutate, onRetryMutation, layoutError, onDismissLayoutError }: {
   client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
   ctx: LeafCtx; tabLayout: TabLayoutState | null; registerTransient(cancel: () => void): () => void;
+  layoutError: string | null; onDismissLayoutError(): void;
   onSession(id: string): void; onFocus(request: FocusRequest, location: Selection, prepare?: { paneId: string }): void;
   onSelectLeaf(tabId: string, leafId: string): void; onSplit(tabId: string, leafId: string, direction: "right" | "down"): void;
   onPanePrepared(paneId: string): void; onReconnect(): void; onRetry(): void; onRefreshSessions(): Promise<void>; onOpenSession(): void; onMutate: Mutate; onRetryMutation(operation: MutationOperation): void;
@@ -471,7 +487,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const browserInputActive = selectedLeaf?.kind === "browser" && !libraryOpen;
   const browserReason = !selectedTab ? "Select a tab first" : state.sync !== "live" ? "Herdr is not live" : browserOpenDisabledReason(ctx, selectedTab.id);
   const perform = (operation: Promise<void>) => { setLifecycleError(null); void operation.catch(error => setLifecycleError(describeError(error, "Could not change this pane").message)); };
-  const openBrowser = (dir: "row" | "col" = "row") => { if (selectedTab && !browserReason) { setLibraryOpen(false); setAttachFocusSuppressed(false); perform(openBrowserLeaf(ctx, selectedTab.id, dir)); } };
+  const openBrowser = () => { if (selectedTab && !browserReason) { setLibraryOpen(false); setAttachFocusSuppressed(false); perform(openBrowserLeaf(ctx, selectedTab.id, "row")); } };
   const toggleBrowser = () => { if (!selectedTab) return; setLibraryOpen(false); setAttachFocusSuppressed(false); if (browserOpen) perform(closeBrowserLeaf(ctx, selectedTab.id)); else openBrowser(); };
   const [viewerSources, setViewerSources] = useState<ViewerSourceOptions | null>(null);
   const [viewerSourcesError, setViewerSourcesError] = useState<string | null>(null);
@@ -715,11 +731,11 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     return candidates[0]?.id ?? null;
   };
   const viewerCapability = (kind: RendererActionDefinition["kind"]) => kind === "review" ? Boolean(viewerSources?.review_repository_ids.length) : kind === "files" ? Boolean(viewerSources?.files_folder_root_id) : Boolean(viewerSources?.files_context_root_id);
-  const openViewer = (kind: RendererActionDefinition["kind"], direction: "right" | "down") => {
+  const openViewer = (kind: RendererActionDefinition["kind"]) => {
     if (!tabLayout || !sourcePaneId || !viewerCapability(kind) || mutationBusy || state.sync !== "live") return;
     const selector = kind === "review" ? { kind: "review" as const, repositoryId: viewerSources!.review_repository_ids[0] } : { kind: kind === "files" ? "files_folder" as const : "files_context" as const };
     setLibraryOpen(false); setAttachFocusSuppressed(false);
-    perform(openViewerLeaf(ctx, tabLayout.tabId, kind === "review" ? "review" : "files", selector, direction === "right" ? "row" : "col", sourcePaneId));
+    perform(openViewerLeaf(ctx, tabLayout.tabId, kind === "review" ? "review" : "files", selector, "row", sourcePaneId));
   };
   const runCommand = useCallback((command: PrefixCommand) => {
     setPrefixHint(null);
@@ -837,25 +853,24 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     if (!leaf || !tabLayout) return null;
     const pane = byId(panes, leaf.id);
     return <ContextMenu menu={menu} onDismiss={dismissMenu}>
-      <p className="context-menu-heading" role="presentation">Selected pane · {leaf.kind}</p>
+      <p className="context-menu-heading" role="presentation">Selected pane · {leaf.kind.charAt(0).toUpperCase() + leaf.kind.slice(1)}</p>
       <button role="menuitem" type="button" onClick={() => menuAction(() => zoom(leaf.id))}><UiIcon name="expand" />Expand / restore pane</button>
       {(leaf.kind === "files" || leaf.kind === "review") ? <button role="menuitem" type="button" onClick={() => menuAction(() => dispatchFileNavigation("open-picker"))}><UiIcon name="search" />Go to file…</button> : null}
+      <div className="context-menu-separator" role="presentation" />
       <p className="context-menu-heading" role="presentation">Open view</p>
-      {rendererActionDefinitions.map(({ id, label, direction, kind }) => <button key={id} role="menuitem" type="button" disabled={disabled || !viewerCapability(kind) || state.sync !== "live"} title={viewerSources?.reason ?? viewerSourcesError ?? "Loading viewer sources"} onClick={() => menuAction(() => openViewer(kind, direction))}><UiIcon name="file" />{label}</button>)}
-      {(["row", "col"] as const).map(dir => <button key={dir} role="menuitem" type="button" disabled={Boolean(browserReason)} title={browserReason ?? undefined} onClick={() => menuAction(() => openBrowser(dir))}><UiIcon name="grid" />Open Browser {dir === "row" ? "right" : "below"}</button>)}
-      <details className="context-menu-advanced"><summary>Advanced</summary>
-        {pane ? <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename pane</button> : null}
-        {(["right", "down"] as const).map(direction => <button key={direction} role="menuitem" type="button" disabled={disabled || !sourcePaneId || state.sync !== "live"} onClick={() => menuAction(() => onSplit(tabLayout.tabId, leaf.id, direction))}><UiIcon name="sidebar" />Split {direction}</button>)}
-        <button role="menuitem" type="button" disabled={localLeaves.length < 2} onClick={() => menuAction(() => setDialog({ kind: "swap", paneId: leaf.id }))}><UiIcon name="right" />Swap…</button>
-        {pane ? <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setDialog({ kind: "move", paneId: pane.id }))}><UiIcon name="right" />Move…</button> : null}
-      </details>
+      {rendererActionDefinitions.map(({ id, icon, kind }) => <button key={id} role="menuitem" type="button" disabled={disabled || !viewerCapability(kind) || state.sync !== "live"} title={viewerSources?.reason ?? viewerSourcesError ?? "Loading viewer sources"} onClick={() => menuAction(() => openViewer(kind))}><UiIcon name={icon} /><span>{kind === "review" ? "Review" : kind === "files" ? "Files" : "Context"}</span>{kind === "context" && !viewerCapability(kind) ? <small className="context-menu-reason">no Space context</small> : null}</button>)}
+      <button role="menuitem" type="button" disabled={Boolean(browserReason)} title={browserReason ?? undefined} onClick={() => menuAction(openBrowser)}><UiIcon name="browser" />Browser</button>
+      <div className="context-menu-separator" role="presentation" />
+      {pane ? <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename pane…</button> : null}
+      <button role="menuitem" type="button" aria-haspopup="dialog" disabled={localLeaves.length < 2} onClick={() => menuAction(() => setDialog({ kind: "swap", paneId: leaf.id }))}><UiIcon name="refresh" /><span>Swap with…</span><span className="context-menu-chevron"><UiIcon name="right" /></span></button>
+      {pane ? <button role="menuitem" type="button" aria-haspopup="dialog" disabled={disabled} onClick={() => menuAction(() => setDialog({ kind: "move", paneId: pane.id }))}><UiIcon name="forward" /><span>Move to…</span><span className="context-menu-chevron"><UiIcon name="right" /></span></button> : null}
       <div className="context-menu-separator" role="presentation" />
       <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeLeaf(leaf.id))}><UiIcon name="close" />Close pane</button>
     </ContextMenu>;
   };
   const commandActionRows: CommandAction[] = [
     ...(shell?.commands ?? []).filter(command => command.action !== "unknown").map((command): CommandAction => ({
-      id: `herdr:${command.command_id}`, label: command.description || "Custom command", shortcut: herdrCommandShortcut(command, customPrefixes), group: "Herdr",
+      id: `herdr:${command.command_id}`, label: command.description ? command.description.charAt(0).toUpperCase() + command.description.slice(1) : "Custom command", icon: command.action === "popup" ? "more" : command.action === "plugin_action" ? "file" : "terminal", shortcut: herdrCommandShortcut(command, customPrefixes), group: "Herdr",
       disabled: Boolean(customCommandReason || popup), reason: customCommandReason, run: () => runHerdrCommand(command),
     })),
     ...SHORTCUTS.filter((entry) => entry.prefix && entry.palette !== false).map((entry): CommandAction => {
@@ -864,8 +879,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
         : entry.needs === "tab" && !selectedTab ? "Select a tab first"
         : entry.needs === "pane" && !selectedLeaf ? "Select a pane first"
         : command === "rename-pane" && !selectedPane ? "Terminals only"
-        : (command === "setup-space" || command === "split-right" || command === "split-down") && state.sync !== "live" ? "Herdr is not live"
-        : (command === "split-right" || command === "split-down") && !sourcePaneId ? "No terminal in this tab"
+        : command === "setup-space" && state.sync !== "live" ? "Herdr is not live"
         : command === "toggle-browser" ? browserOpen ? undefined : browserReason ?? undefined : undefined;
       return {
         id: `prefix:${command}`, label: command === "toggle-library" && libraryOpen ? "Close Library" : entry.label, shortcut: formatShortcut(command), group: entry.group,
@@ -873,19 +887,18 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       };
     }),
     { id: "recovery:cleanup", label: "Recover task cleanup…", group: "Navigate", run: () => setRecoveryOpen(true) },
-    { id: "browser:open", label: "Open Browser right", group: "Browser", disabled: Boolean(browserReason), reason: browserReason ?? undefined, run: () => openBrowser("row") },
-    { id: "browser:open-below", label: "Open Browser below", group: "Browser", disabled: Boolean(browserReason), reason: browserReason ?? undefined, run: () => openBrowser("col") },
+    { id: "browser:open", label: "Open Browser", group: "Browser", disabled: Boolean(browserReason), reason: browserReason ?? undefined, run: openBrowser },
     { id: "browser:close", label: "Close browser", group: "Browser", disabled: !browserOpen, reason: !browserOpen ? "No browser in this tab" : undefined, run: () => { if (selectedTab) perform(closeBrowserLeaf(ctx, selectedTab.id)); } },
     { id: "browser:cleanup", label: "Retry browser cleanup", group: "Browser", run: () => perform(retryBrowserCleanup(ctx)) },
     { id: "library:add", label: "Add to Library…", group: "Library", run: () => setLibraryAddOpen(true) },
     { id: "library:refresh", label: "Refresh Library", group: "Library", run: () => openLibrary({ kind: "refresh" }) },
     { id: "library:tokens", label: "Provider tokens…", group: "Library", run: () => openLibrary({ kind: "tokens" }) },
-    ...rendererActionDefinitions.map(({ id, label, direction, kind }) => {
+    ...rendererActionDefinitions.map(({ id, label, icon, kind }) => {
       const capability = viewerCapability(kind);
       const fallback = kind === "context" ? "Context requires a configured companion directory" : "Select a terminal with a configured repository";
       const detail = viewerSources?.reason ?? viewerSourcesError ?? (sourcePaneId ? "Loading viewer sources" : "No terminal in this tab");
       const reason = state.sync !== "live" ? "Herdr is not live" : rendererReasonFor(kind, detail) ?? detail ?? fallback;
-      return { id: `renderer:${id}`, label, group: "Pane" as const, disabled: mutationBusy || !capability || state.sync !== "live", reason, reasonDetail: detail, run: () => openViewer(kind, direction) };
+      return { id: `renderer:${id}`, label, icon, group: "Pane" as const, disabled: mutationBusy || !capability || state.sync !== "live", reason: kind === "context" && !capability && state.sync === "live" ? "no Space context" : reason, reasonDetail: detail, run: () => openViewer(kind) };
     }),
   ];
   const browserToggleShortcut = formatShortcut("toggle-browser");
@@ -909,8 +922,8 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     const focusError = selected ? state.focusError : null;
     return <LeafHost ctx={ctx} tab={hostTab} leaf={leaf} rect={rect} pane={pane} selected={selected}
       browserInputActive={browserInputActive && active && !modalOpen && state.sync === "live"} browserLiveInputEnabled={active && !modalOpen && state.sync === "live"} focusStatus={pending ? "pending" : focusError ? "error" : null} focusError={focusError?.message}
-      splitDisabled={mutationBusy || !sourcePaneId || state.sync !== "live"} closeDisabled={mutationBusy}
-      onSelect={() => selectLeaf(leaf.id)} onSplit={direction => { selectLeaf(leaf.id); onSplit(hostTab.tabId, leaf.id, direction); }}
+      closeDisabled={mutationBusy}
+      onSelect={() => selectLeaf(leaf.id)}
       onZoom={() => { selectLeaf(leaf.id); zoom(leaf.id); }} onClose={() => { selectLeaf(leaf.id); closeLeaf(leaf.id); }} onRetryFocus={onRetry}
       onMenu={event => { selectLeaf(leaf.id); openContext(event, { kind: "pane", id: leaf.id }); }}
       terminal={pane ? {
@@ -949,14 +962,16 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
       {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
-      <BrowserCleanupNotices ctx={ctx} activeTabId={selection.tabId} />
-      {lifecycleError ? <div className="notice notice-error" role="alert">{lifecycleError}</div> : null}
       <div className="workarea-content">
         {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
           onContextMenu={event => { const pane = (event.target as HTMLElement).closest<HTMLElement>("[data-leaf-id]"); if (pane?.dataset.leafId) { selectLeaf(pane.dataset.leafId); openContext(event, { kind: "pane", id: pane.dataset.leafId }); } }}>
           {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
         </div>}
       </div>
+      <BrowserCleanupNotices ctx={ctx} activeTabId={selection.tabId} fallback={<ErrorSlot placement="pane" message={[lifecycleError, layoutError].filter(Boolean).join(" · ")} actions={lifecycleError || layoutError ? <>
+        <button type="button" onClick={onReconnect}>Resync</button>
+        <button type="button" onClick={() => { setLifecycleError(null); onDismissLayoutError(); }}>Dismiss</button>
+      </> : null} />} />
     </main>
     {renderMenu()}
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} leafChoices={localLeaves.map(leaf => ({ id: leaf.id, title: byId(panes, leaf.id)?.title || leaf.kind }))} onSwap={swap} confirmMove={pane => { const message = lastTerminalMessage(pane, "Moving"); return !message || window.confirm(message); }} /> : null}
@@ -1273,5 +1288,5 @@ export function App({ client }: { client: CockpitClient }) {
   if (((sessionsError && sessions.length === 0) || (sessionsLoaded && sessions.length === 0)) && noSessionLibrary) return noSessionLibrary;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} onOpenLibrary={openNoSessionLibrary} /></div>;
   if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><div className="notice-actions"><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button><OpenLibraryButton onOpen={openNoSessionLibrary} /></div></section></main></div>;
-  return <div className="app-shell"><div className="sr-only" role="status" aria-live="polite">{announcement}</div>{lifecycleError ? <div role="alert" className="notice notice-error">{lifecycleError}</div> : null}<Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} ctx={ctx} tabLayout={tabLayout} registerTransient={registerTransient} onSession={switchSession} onFocus={focusAndSelect} onSelectLeaf={selectLeaf} onSplit={split} onPanePrepared={panePrepared} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onOpenSession={() => { void refreshSessions(); }} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
+  return <div className="app-shell"><div className="sr-only" role="status" aria-live="polite">{announcement}</div><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} ctx={ctx} tabLayout={tabLayout} registerTransient={registerTransient} onSession={switchSession} onFocus={focusAndSelect} onSelectLeaf={selectLeaf} onSplit={split} onPanePrepared={panePrepared} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onOpenSession={() => { void refreshSessions(); }} onMutate={mutate} onRetryMutation={retryMutation} layoutError={lifecycleError} onDismissLayoutError={() => setLifecycleError(null)} /></div>;
 }

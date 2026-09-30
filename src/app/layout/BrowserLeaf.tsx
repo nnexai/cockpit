@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import type { BrowserViewViewportRequest } from "../../protocol/generated/v1";
 import { BrowserPane } from "../browser/BrowserPane";
+import { ErrorSlot } from "../ErrorSlot";
 import type { BrowserSlot, LeafCtx } from "./tabLayoutStore";
 import type { Rect } from "./solveLayout";
 import { browserClosePending, browserTarget, closeBrowserLeaf, dismissBrowserLeaf, reconnectBrowserLeaf, retryBrowserOpen, subscribeBrowserLifecycle } from "./browserLifecycle";
@@ -34,17 +35,15 @@ export function BrowserLeaf({ ctx, tabId, slot, rect, selected, inputActive, liv
   const pending = slot.status === "opening" || slot.status === "closing";
   const run = async (action: () => Promise<void>): Promise<void> => { setActionError(null); try { await action(); } catch (error) { setActionError(error instanceof Error ? error.message : String(error)); } };
   return <div ref={bodyRef} tabIndex={-1} className="browser-leaf" onFocusCapture={onSelect} onPointerDownCapture={onSelect} aria-current={selected ? "true" : undefined}>
-    {actionError ? <div className="browser-recovery-strip" role="alert">{actionError}</div> : null}
-    {slot.error || pending ? <div className="browser-recovery-strip" role={slot.error ? "alert" : "status"}>
-      <span>{slot.error ?? (slot.status === "opening" ? "Starting browser for this tab…" : "Closing browser…")}</span>
-      {!pending ? <>
-        <button type="button" onClick={() => void run(() => failedClose ? closeBrowserLeaf(ctx, tabId) : retryBrowserOpen(ctx, tabId))}>{failedClose ? "Retry close" : "Retry"}</button>
-        <button type="button" onClick={() => failedClose ? dismissBrowserLeaf(ctx, tabId) : void run(() => closeBrowserLeaf(ctx, tabId))}>{failedClose ? "Dismiss" : "Close"}</button>
-      </> : null}
-    </div> : null}
     {slot.association ? <BrowserPane client={ctx.client} target={target} viewport={viewport} clientId={ctx.clientId}
       inputActive={inputActive} liveInputEnabled={liveInputEnabled && slot.status === "open"} onInteractionFocus={onSelect}
       onReconnect={() => reconnectBrowserLeaf(ctx, tabId)} onCloseBrowser={() => closeBrowserLeaf(ctx, tabId)}
       onFeedback={(ids, operationId, acknowledgeDuplicateRisk) => ctx.client.sendBrowserFeedback({ scope: { kind: "tab", target }, ids, operation_id: operationId, acknowledge_duplicate_risk: acknowledgeDuplicateRisk })} /> : null}
+    <ErrorSlot placement="pane" error={Boolean(actionError || slot.error)}
+      message={actionError ?? slot.error ?? (pending ? slot.status === "opening" ? "Starting browser for this tab…" : "Closing browser…" : null)}
+      actions={!pending && (slot.error || actionError) ? <>
+        <button type="button" onClick={() => void run(() => failedClose ? closeBrowserLeaf(ctx, tabId) : retryBrowserOpen(ctx, tabId))}>{failedClose ? "Retry close" : "Retry"}</button>
+        <button type="button" onClick={() => actionError && !slot.error ? setActionError(null) : failedClose ? dismissBrowserLeaf(ctx, tabId) : void run(() => closeBrowserLeaf(ctx, tabId))}>{actionError && !slot.error || failedClose ? "Dismiss" : "Close"}</button>
+      </> : null} />
   </div>;
 }

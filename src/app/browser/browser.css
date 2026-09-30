@@ -595,11 +595,6 @@
   min-height: 0;
 }
 
-.browser-cleanup-notices {
-  flex: 0 0 auto;
-  max-height: 45vh;
-  overflow: auto;
-}
 
 .browser-feedback-panel:empty { display: none; }
 .browser-feedback-panel {

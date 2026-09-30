@@ -187,8 +187,9 @@
 .library-skeleton { display: flex; flex-direction: column; }
 .library-skeleton-row { display: block; height: 12px; margin: 8px 12px; border-radius: 3px; background: var(--surface-hover); }
 .library-tree-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px; color: var(--text-muted); font-size: var(--font-size-control); }
-.library-empty-select { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); }
-.library-empty-select .ui-icon { width: var(--icon-size); height: var(--icon-size); }
+.library-empty-select { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-muted); text-align: center; }
+.library-empty-select-badge { display: grid; width: 40px; height: 40px; flex: 0 0 40px; place-items: center; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.library-empty-select-badge .ui-icon { width: 18px; height: 18px; flex-basis: 18px; }
 
 /* Provider tile (design §4.1a): a monogram, not a logo; the header's is 32 px. */
 .library-tile {
@@ -369,14 +370,7 @@
 
 /* Refresh report strip (design §4.9). */
 .library-report-block { flex: 0 0 auto; }
-/* The refresh banner is one quiet line: state and summary at the left, ghost text actions at the right, all 24 px. */
-.context-notice.library-report { min-height: 32px; flex-wrap: wrap; background: var(--surface); font-size: var(--font-size-control); }
-.context-notice.library-report > strong { color: var(--text-primary); font-weight: 600; }
-.context-notice.library-report > button { height: 24px; min-height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
-.context-notice.library-report > button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
-.context-notice.library-report > button:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
 .library-report-note { color: var(--text-muted); }
-.library-report-error { color: var(--blocked); }
 .library-report-rows {
   max-height: 220px;
   overflow: auto;
@@ -452,11 +446,12 @@
 
 /* Two-phase progress and destination choices (design §4.5, §4.7). */
 .library-progress-steps { display: flex; flex-direction: column; gap: 6px; }
-.library-progress-actions { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
 .library-destination-choices { display: flex; flex-direction: column; gap: 2px; }
 .library-destination-choices .task-setup-check { margin: 0; }
 .task-setup-row .library-destination-choices input[type="radio"] { display: inline-block; width: auto; min-height: 0; flex: 0 0 auto; margin: 0; padding: 0; border: 0; background: none; accent-color: var(--accent); }
 .library-destination-choices .task-setup-check { min-height: 28px; }
+.library-destination-choices .task-setup-check.is-disabled { color: var(--text-muted); }
+.library-destination-reason { color: var(--text-muted); font-size: var(--font-size-control); white-space: nowrap; }
 .library-space-slot { display: inline-flex; min-width: 0; align-items: center; gap: 8px; }
 .library-space-slot:focus { outline: none; }
 .library-space-slot:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
@@ -504,10 +499,9 @@
 .library-report-limit { margin: 0; }
 .library-report-limit span:last-child { white-space: normal; overflow-wrap: anywhere; }
 .library-note-partial { color: var(--working); }
-.task-setup-row .library-browse-toggle { display: inline-flex; align-items: center; gap: 4px; margin: 6px 0 0; font-size: var(--font-size-2xs); }
-.library-browse-toggle .ui-icon { width: 12px; height: 12px; }
-.library-query-presets { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 6px 0 0; }
-.task-setup-row .library-query-presets .task-setup-link { margin-left: 0; font-size: var(--font-size-2xs); }
+.library-source-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: 7px; }
+.library-query-presets { display: contents; }
+.task-setup-row .library-source-links .task-setup-link { flex: 0 0 auto; margin: 0; font-size: var(--font-size-control); white-space: nowrap; }
 .library-browse { display: flex; flex-direction: column; gap: 8px; max-height: 260px; margin-top: 6px; overflow: auto; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
 .library-browse-provider h3 { margin: 0 0 4px; color: var(--text-secondary); font-size: var(--font-size-2xs); font-weight: 600; }
 .library-browse-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }

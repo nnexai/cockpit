@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type Rea
 import type { LibraryAttachment, LibraryAttachmentRequest, LibraryItemSummary, LibraryOperation, ProjectProvider, SpaceAddAttempt, SpaceCopyRow } from "../../protocol/generated/v1";
 import type { ProviderFacts } from "../context/providerDocument";
 import { UiIcon } from "../UiIcon";
+import { ErrorSlot } from "../ErrorSlot";
 import { attachmentSummary, instanceHost, isConfluencePage, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip, providerFamily, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
 import { ATTACHMENT_STATE, LibraryMenu, attachmentMark, attachmentPath, attachmentProgress, byteSize, downloadableAttachments, itemMenuEntries, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions, type LibraryMenuEntry } from "./LibraryTree";
 import { ProviderMark } from "./ProviderMark";
@@ -363,26 +364,19 @@ export function AttachmentReport({ request, operation, starting, error, item, se
   const title = item ? ` of “${item.title}”` : "";
   const dismiss = <button type="button" onClick={onDismiss}>Dismiss</button>;
   if (!operation) {
-    if (error) return <div className="context-notice context-notice-error library-report" role="alert">
-      <strong>{download ? "Download didn't start:" : "Removal didn't start:"}</strong><span>{error}</span>
-      <button type="button" onClick={() => onRetry(request.attachment_ids)}>Retry</button>{dismiss}
-    </div>;
-    return starting ? <div className="context-notice library-report" role="status"><span className="library-spinner" aria-hidden="true" /><span>{`${download ? "Downloading" : "Removing"} ${attachmentCount(count)}${title}…`}</span></div> : null;
+    if (error) return <ErrorSlot placement="pane" className="library-report" message={`${download ? "Download didn't start:" : "Removal didn't start:"} ${error}`}
+      actions={<><button type="button" onClick={() => onRetry(request.attachment_ids)}>Retry</button>{dismiss}</>} />;
+    return <ErrorSlot placement="pane" className="library-report" error={false} message={starting ? `${download ? "Downloading" : "Removing"} ${attachmentCount(count)}${title}…` : null} />;
   }
   const phase = operation.phases.find((candidate) => candidate.phase === "library");
   if (!operation.finished) {
-    return <div className="context-notice library-report" role="status">
-      <span className="library-spinner" aria-hidden="true" />
-      <span>{`${download ? "Downloading" : "Removing downloaded"} ${attachmentCount(phase?.total ?? count)}${title}… ${phase?.done ?? 0} done`}</span>
-      {operation.cancel_requested ? <span>Cancelling after the attachment in flight…</span> : <button type="button" onClick={onCancel}>Cancel</button>}
-    </div>;
+    return <ErrorSlot placement="pane" className="library-report" error={Boolean(error)}
+      message={error ?? `${download ? "Downloading" : "Removing downloaded"} ${attachmentCount(phase?.total ?? count)}${title}… ${phase?.done ?? 0} done`}
+      actions={operation.cancel_requested ? <span>Cancelling after the attachment in flight…</span> : <button type="button" onClick={onCancel}>Cancel</button>} />;
   }
   if (phase?.state === "failed") {
-    return <div className="context-notice context-notice-error library-report" role="alert">
-      <strong>{download ? "Download failed:" : "Removal failed:"}</strong>
-      <span>{`${phase.error?.message ?? "The attachment operation failed."} Reload to see the current Library state.`}</span>
-      <button type="button" onClick={() => onRetry(request.attachment_ids)}>Retry</button>{dismiss}
-    </div>;
+    return <ErrorSlot placement="pane" className="library-report" message={`${download ? "Download failed:" : "Removal failed:"} ${phase.error?.message ?? "The attachment operation failed."} Reload to see the current Library state.`}
+      actions={<><button type="button" onClick={() => onRetry(request.attachment_ids)}>Retry</button>{dismiss}</>} />;
   }
   const cancelled = phase?.state === "cancelled";
   const states = item && settled ? request.attachment_ids.map((id) => item.attachments.find((attachment) => attachment.attachment_id === id)?.state ?? null) : null;
@@ -398,12 +392,7 @@ export function AttachmentReport({ request, operation, starting, error, item, se
     const removed = states.filter((state) => state !== "downloaded").length;
     summary = `Removed ${removed} downloaded ${removed === 1 ? "attachment" : "attachments"}. Their details stay listed.`;
   }
-  return <div className={`context-notice library-report${failedIds.length ? " context-notice-warning" : ""}`} role="status">
-    <strong>{cancelled ? (download ? "Download cancelled:" : "Removal cancelled:") : (download ? "Download finished:" : "Removal finished:")}</strong>
-    <span>{summary}</span>
-    <span className="library-report-note">Spaces aren't changed.</span>
-    <span className="context-toolbar-spacer" />
-    {failedIds.length ? <button type="button" onClick={() => onRetry(failedIds)}>Retry failed</button> : null}
-    {dismiss}
-  </div>;
+  return <ErrorSlot placement="pane" className="library-report" error={failedIds.length > 0}
+    message={<><strong>{cancelled ? (download ? "Download cancelled:" : "Removal cancelled:") : (download ? "Download finished:" : "Removal finished:")}</strong> {summary} <span className="library-report-note">Spaces aren't changed.</span></>}
+    actions={<>{failedIds.length ? <button type="button" onClick={() => onRetry(failedIds)}>Retry failed</button> : null}{dismiss}</>} />;
 }

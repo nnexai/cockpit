@@ -21,6 +21,26 @@ const MAX_LISTING_PAGES = 200;
 type TrackedOperation = { operation: LibraryOperation; stop?: () => void };
 const tracked = new Map<string, TrackedOperation>();
 const trackerListeners = new Set<() => void>();
+const visibleOperations = new Map<string, number>();
+export type LibraryProblem = { id: string; label: string; message: string };
+const backgroundProblems = new Map<string, LibraryProblem>();
+let rejectedStartId = 0;
+
+export function dismissLibraryProblem(operationId: string): void {
+  backgroundProblems.delete(operationId);
+  notifyTracker();
+}
+
+export function useLibraryProblems(): LibraryProblem[] {
+  const [problems, setProblems] = useState(() => [...backgroundProblems.values()]);
+  useEffect(() => {
+    const update = () => setProblems([...backgroundProblems.values()]);
+    trackerListeners.add(update);
+    update();
+    return () => { trackerListeners.delete(update); };
+  }, []);
+  return problems;
+}
 
 function notifyTracker(): void {
   for (const listener of trackerListeners) listener();
@@ -31,11 +51,20 @@ function pendingLibraryItemIds(): Set<string> {
   return new Set([...tracked.values()].filter(({ operation }) => !operation.finished && operation.kind !== "space_add" && operation.kind !== "space_update").flatMap(({ operation }) => operation.item_ids));
 }
 
-function storeOperation(operation: LibraryOperation): void {
+function storeOperation(operation: LibraryOperation, foreground = false): void {
   const previous = tracked.get(operation.operation_id)?.operation;
   const entry = tracked.get(operation.operation_id) ?? { operation };
   entry.operation = operation;
   tracked.set(operation.operation_id, entry);
+  if (operation.finished && !previous?.finished && !foreground && !visibleOperations.has(operation.operation_id)
+    && (operation.phases.some((phase) => phase.state === "failed") || operation.report?.rows.some((row) => row.outcome === "failed"))) {
+    backgroundProblems.set(operation.operation_id, {
+      id: operation.operation_id,
+      label: `${operation.kind.replaceAll("_", " ")} failed`,
+      message: operation.phases.filter((phase) => phase.state === "failed").map((phase) => phase.error?.message ?? phase.message ?? `${phase.phase} step failed`).join(" ")
+        || operation.report?.rows.filter((row) => row.outcome === "failed").map((row) => `${row.title}: ${row.reason ?? "failed"}`).join("; ") || "The Library operation failed.",
+    });
+  }
   notifyTracker();
   if (operation.finished && !previous?.finished) announceLibraryChanged(operation);
   if (operation.finished) entry.stop?.();
@@ -47,8 +76,8 @@ function storeOperation(operation: LibraryOperation): void {
   }
 }
 
-function startTracking(client: CockpitClient, operation: LibraryOperation): void {
-  storeOperation(operation);
+function startTracking(client: CockpitClient, operation: LibraryOperation, foreground = false): void {
+  storeOperation(operation, foreground);
   if (operation.finished || tracked.get(operation.operation_id)?.stop) return;
   let timer: number | undefined;
   let stopped = false;
@@ -99,6 +128,11 @@ export function useLibraryOperation(client: CockpitClient, onFinished?: (operati
   const [starting, setStarting] = useState(false);
   const [pendingItemIds, setPendingItemIds] = useState<ReadonlySet<string>>(() => pendingLibraryItemIds());
   const generation = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
   const finishedNotified = useRef<string | null>(null);
@@ -111,6 +145,7 @@ export function useLibraryOperation(client: CockpitClient, onFinished?: (operati
   useEffect(() => {
     const operationId = operation?.operation_id;
     if (!operationId) return;
+    visibleOperations.set(operationId, (visibleOperations.get(operationId) ?? 0) + 1);
     const update = () => {
       const next = tracked.get(operationId)?.operation;
       if (!next) return;
@@ -122,7 +157,12 @@ export function useLibraryOperation(client: CockpitClient, onFinished?: (operati
     };
     trackerListeners.add(update);
     update();
-    return () => { trackerListeners.delete(update); };
+    return () => {
+      trackerListeners.delete(update);
+      const remaining = (visibleOperations.get(operationId) ?? 1) - 1;
+      if (remaining > 0) visibleOperations.set(operationId, remaining);
+      else visibleOperations.delete(operationId);
+    };
   }, [operation?.operation_id]);
   const start = useCallback(async (begin: () => Promise<LibraryOperation>) => {
     const token = ++generation.current;
@@ -132,12 +172,18 @@ export function useLibraryOperation(client: CockpitClient, onFinished?: (operati
     try {
       const next = await begin();
       // Cockpit accepted it: it is polled and announced even when a newer start now owns this surface.
-      startTracking(client, next);
+      startTracking(client, next, mounted.current && token === generation.current);
       if (token !== generation.current) return null;
       setOperation(next);
       return next;
     } catch (cause) {
-      if (token === generation.current) setError(errorText(cause, "The Library operation could not start."));
+      const message = errorText(cause, "The Library operation could not start.");
+      if (mounted.current && token === generation.current) setError(message);
+      else {
+        const id = `library-start:${++rejectedStartId}`;
+        backgroundProblems.set(id, { id, label: "Library operation failed", message });
+        notifyTracker();
+      }
       return null;
     } finally {
       if (token === generation.current) setStarting(false);

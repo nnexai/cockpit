@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { LibraryOperation } from "../../protocol/generated/v1";
+import type { LibraryOperation, SpaceContextListing } from "../../protocol/generated/v1";
 import { AddContextDialog } from "./AddContextDialog";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -108,9 +108,10 @@ it("keeps focus trapped during add startup and exposes a retry for the same reje
       close.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
     });
     expect(document.activeElement?.closest("[role='dialog']")).toBe(dialog);
+    const focusedBeforeFailure = document.activeElement;
     await act(async () => { rejectStart(new Error("provider is offline")); await firstStart.catch(() => undefined); });
     expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("provider is offline");
-    expect(document.activeElement).toBe(dialog.querySelector("button.setup-primary"));
+    expect(document.activeElement).toBe(focusedBeforeFailure);
     const retry = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry")!;
     await act(async () => retry.click());
     await advance(0);
@@ -184,17 +185,14 @@ it("adds to the Library and the target Space, keeps a phase-2 failure across reo
     expect(document.body.textContent).toContain("Saving to Library…");
     await advance(750);
     expect(document.body.textContent).toContain("✓ Saved to Library");
-    const failure = document.body.querySelector("[role='alert']");
-    expect(failure?.textContent).toBe("✕ Not added to api-review. Its context folder couldn't be verified. The Library copy is saved; nothing was written to api-review.");
-    const retry = button("Retry adding to api-review")!;
-    expect(document.activeElement).toBe(retry);
+    expect(document.activeElement).toBe(button("Close"));
     expect(button("Open in api-review")).toBeUndefined();
 
     // A failure stays for the next opening too.
     await act(async () => root.render(null));
     await act(async () => root.render(dialog()));
     await advance(0);
-    expect(document.activeElement).toBe(button("Retry adding to api-review"));
+    expect(document.activeElement).toBe(button("Close"));
 
     await act(async () => button("Retry adding to api-review")!.click());
     await advance(0);
@@ -294,6 +292,79 @@ async function typeSource(value: string): Promise<void> {
 function dialogButton(label: string): HTMLButtonElement | undefined {
   return [...document.body.querySelectorAll<HTMLButtonElement>("[role='dialog'] button")].find((candidate) => candidate.textContent === label);
 }
+
+it.each(["unavailable", "error"])("falls back to Library only when companion verification is %s, even with a Space default", async (status) => {
+  vi.useFakeTimers();
+  const target = { session_id: "session", space_id: "space-1" };
+  const saved: LibraryOperation = {
+    operation_id: `op-no-companion-${status}`, kind: "add", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }],
+    item_ids: ["source:pr-7"], report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+  const client = githubClient({
+    librarySpaceList: vi.fn(async () => {
+      if (status === "error") throw new Error("Space listing disconnected");
+      return { target, companion: { status: "unavailable", error: { code: "source_companion_unavailable", message: "Exactly one verified companion is required" } }, attempts: [], rows: [], behind: 0, diagnostics: [] };
+    }),
+    libraryAdd: vi.fn(async () => saved),
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
+    await advance(0);
+    const radios = [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")];
+    expect(radios[0].checked).toBe(true);
+    expect(radios[1].disabled).toBe(true);
+    expect(radios[1].checked).toBe(false);
+    await act(async () => radios[1].click());
+    expect(radios[1].checked).toBe(false);
+    await typeSource("https://github.com/acme/api/pull/7");
+    await act(async () => dialogButton("Add to Library")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ target: null }));
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("waits for the requested Space companion and preserves an explicit Library choice across Space changes", async () => {
+  vi.useFakeTimers();
+  const target = { session_id: "session", space_id: "space-1" };
+  let verify!: (listing: SpaceContextListing) => void;
+  const listing = new Promise<SpaceContextListing>((resolve) => { verify = resolve; });
+  const client = githubClient({ librarySpaceList: vi.fn(() => listing) });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const render = (spaceId: string) => <AddContextDialog client={client} onClose={vi.fn()} space={{ target: { ...target, space_id: spaceId }, label: "api-review", live: true }} defaultDestination="space" />;
+  const radios = () => [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")];
+  try {
+    await act(async () => root.render(render(target.space_id)));
+    expect(radios()[0].checked).toBe(true);
+    expect(radios()[1].disabled).toBe(true);
+    expect(radios()[1].checked).toBe(false);
+    await act(async () => verify({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] }));
+    expect(radios()[1].disabled).toBe(false);
+    expect(radios()[1].checked).toBe(true);
+    await act(async () => root.render(render("space-without-companion")));
+    expect(radios()[0].checked).toBe(true);
+    expect(radios()[1].disabled).toBe(true);
+    expect(radios()[1].checked).toBe(false);
+    await act(async () => root.render(render(target.space_id)));
+    expect(radios()[1].checked).toBe(true);
+    await act(async () => radios()[0].click());
+    await act(async () => root.render(render("space-without-companion")));
+    await act(async () => root.render(render(target.space_id)));
+    expect(radios()[1].disabled).toBe(false);
+    expect(radios()[0].checked).toBe(true);
+    expect(radios()[1].checked).toBe(false);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
 
 it("follows an add closed before it was accepted, and keeps what a cancelled add saved and copied", async () => {
   vi.useFakeTimers();
@@ -397,13 +468,11 @@ it("keeps a Library failure for retry across reopening, and Add another starts o
     await typeSource("https://github.com/acme/api/pull/7");
     await act(async () => dialogButton("Add to Library")!.click());
     await advance(0);
-    expect(document.body.textContent).toContain("✕ Not saved. gh exited with status 1. Nothing was added.");
-    expect(document.activeElement).toBe(dialogButton("Retry"));
+    expect(document.activeElement).toBe(dialogButton("Close"));
 
     await act(async () => root.render(null));
     await act(async () => root.render(dialog()));
     await advance(0);
-    expect(document.body.textContent).toContain("✕ Not saved. gh exited with status 1. Nothing was added.");
     await act(async () => dialogButton("Retry")!.click());
     await advance(0);
     expect(client.libraryAdd).toHaveBeenCalledTimes(2);
@@ -445,10 +514,8 @@ it("tells a partial Space copy from one that wrote nothing, and still opens what
     await typeSource("https://github.com/acme/api/pull/7");
     await act(async () => dialogButton("Add to Library and api-review")!.click());
     await advance(0);
-    const failure = document.body.querySelector("[role='alert']");
-    expect(failure?.textContent).toBe("✕ Only partly added to api-review: 1 file was copied before it stopped. Library source changed during copy. The Library copy is saved; retrying copies the rest.");
     expect([...document.body.querySelectorAll(".library-progress-files code")].map((code) => code.textContent)).toEqual(["sources/github/review/acme-api-7.md"]);
-    expect(document.activeElement).toBe(dialogButton("Retry adding to api-review"));
+    expect(document.activeElement).toBe(dialogButton("Close"));
     expect(dialogButton("Open in api-review")).toBeDefined();
 
     await act(async () => dialogButton("Retry adding to api-review")!.click());

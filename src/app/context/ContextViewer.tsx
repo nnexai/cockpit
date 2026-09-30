@@ -52,6 +52,7 @@ import { AttachmentReport, LibraryAttachmentNotice, LibraryItemHeader, ProviderF
 import { LibraryDetails } from "../library/LibraryDetails";
 import { LibraryMenu, LibraryTree, attachmentPath, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions, type LibraryMenuEntry } from "../library/LibraryTree";
 import { RefreshReport } from "../library/RefreshReport";
+import { ErrorSlot } from "../ErrorSlot";
 import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
 import { headerSpaceAction, spaceCopyChip, type SpaceCopyActionKind } from "../library/spaceCopyPresentation";
 import { PendingPill } from "../library/StatePill";
@@ -1207,6 +1208,10 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
   const [libraryPendingIds, setLibraryPendingIds] = useState<ReadonlySet<string>>(NO_PENDING_ITEMS);
   const [libraryReportVerb, setLibraryReportVerb] = useState<"Refresh" | "Replace" | "Keep">("Refresh");
   const [libraryReportDismissed, setLibraryReportDismissed] = useState(false);
+  const [dismissedLibraryError, setDismissedLibraryError] = useState<string | null>(null);
+  useEffect(() => {
+    if (library.status !== "error") setDismissedLibraryError(null);
+  }, [library.status]);
   const [libraryAdd, setLibraryAdd] = useState<"library" | "space" | null>(null);
   const [libraryConfirm, setLibraryConfirm] = useState<{ kind: "remove" | "replace"; item: LibraryItemSummary } | null>(null);
   const [libraryToolbarMenu, setLibraryToolbarMenu] = useState<{ x: number; y: number } | null>(null);
@@ -1215,7 +1220,18 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
   const libraryOperation = useLibraryOperation(client, () => {
     setRefreshGeneration((generation) => generation + 1);
   });
-  const startLibraryOperation = libraryOperation.start;
+  const lastLibraryBegin = useRef<(() => Promise<LibraryOperation>) | null>(null);
+  const beginLibraryOperation = libraryOperation.start;
+  const startLibraryOperation = useCallback((begin: () => Promise<LibraryOperation>) => {
+    lastLibraryBegin.current = begin;
+    return beginLibraryOperation(begin);
+  }, [beginLibraryOperation]);
+  const retryLibraryOperation = () => {
+    if (lastLibraryBegin.current) {
+      setLibraryReportDismissed(false);
+      void startLibraryOperation(lastLibraryBegin.current);
+    }
+  };
   const [attachmentRequest, setAttachmentRequest] = useState<LibraryAttachmentRequest | null>(null);
   const listingRef = useRef(library.listing);
   listingRef.current = library.listing;
@@ -1613,14 +1629,12 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
         ? <div className="context-notice library-attachment-notice"><span>Downloaded.</span><button type="button" onClick={() => attachmentActions.open(noticeItem, noticeAttachment)}>Open attachment</button></div>
         : <LibraryAttachmentNotice item={noticeItem} attachment={noticeAttachment} attachments={attachmentActions} />;
       if (isLibrary && !selectedPath) {
-        if (!library.listing && library.status === "error") {
-          return <div className="context-notice context-notice-error" role="alert"><strong>Library unavailable:</strong><span>{library.error}</span><span>Space context is unaffected.</span><button type="button" onClick={library.reload}>Retry</button></div>;
-        }
+        if (!library.listing && library.status === "error") return null;
         if (!library.listing) return <div className="context-empty">Loading…</div>;
         if (library.listing.items.length === 0) {
           return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request, Jira issue, Confluence page, or a folder. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAdd("library")}>Add…</button></div></div>;
         }
-        return <div className="context-empty library-empty-select"><UiIcon name="library" />Select a Library item to read it.</div>;
+        return <div className="context-empty library-empty-select"><span className="library-empty-select-badge"><UiIcon name="library" /></span><span>Select an item to read it</span></div>;
       }
       if (!selectedPath && rootEmpty) {
         return <div className="context-empty"><div className="context-empty-message"><strong>No files here yet</strong><span>{root.kind === "companion" ? "Add Library context from Resources." : "This directory is empty."}</span>{root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)}>Open Resources</button> : null}</div></div>;
@@ -1777,17 +1791,6 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
         <button type="button" onClick={refresh} aria-label="Refresh Context files" title="Refresh files"><UiIcon name="refresh" /></button>
         </>}
       </header>
-      {isLibrary && attachmentRequest ? <AttachmentReport request={attachmentRequest} operation={attachmentOperation.operation} starting={attachmentOperation.starting} error={attachmentOperation.error}
-        item={library.status === "error" ? null : libraryItems?.find((item) => item.item_id === attachmentRequest.item_id) ?? null}
-        settled={beforeAttachments !== undefined && (library.status === "error" || (library.status === "ready" && library.listing !== beforeAttachments))}
-        onCancel={attachmentOperation.cancel} onDismiss={() => setAttachmentRequest(null)}
-        onRetry={(ids) => { const item = libraryItems?.find((item) => item.item_id === attachmentRequest.item_id); if (item) attachmentActions.start(item, attachmentRequest.action, ids); }} /> : null}
-      {isLibrary && libraryOperation.operation && !libraryReportDismissed ? <RefreshReport operation={libraryOperation.operation} verb={libraryReportVerb} error={libraryOperation.error}
-        onCancel={libraryOperation.cancel} onDismiss={() => setLibraryReportDismissed(true)}
-        onOpenItem={(itemId) => { const item = libraryItems?.find((candidate) => candidate.item_id === itemId); if (item) openLibraryItem(item); }}
-        onRetry={(itemIds) => startLibraryRefresh({ scope: "items", item_ids: itemIds }, itemIds)}
-        onRetryFollow={(followId) => startLibraryRefresh({ scope: "follow", follow_id: followId }, [])} /> : null}
-      {isLibrary && !libraryOperation.operation && libraryOperation.error ? <div className="context-notice context-notice-error" role="alert"><strong>Library operation failed:</strong><span>{libraryOperation.error}</span></div> : null}
       {discoveryDiagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{discoveryDiagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
       {linkNotice ? <div className="context-notice context-notice-warning" role="status">{linkNotice}</div> : null}
       <div className={`context-body${overview.open ? " has-file-overview" : ""}`} style={tree.style}>
@@ -1805,10 +1808,6 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
         /></details> : null}
           {isLibrary ? <>
             {!library.listing && library.status !== "error" ? <div className="library-skeleton" role="status" aria-label="Loading Library">{[0, 1, 2, 3, 4, 5].map((index) => <span key={index} className="library-skeleton-row" style={{ width: `${[72, 58, 64, 48, 60, 52][index]}%` }} />)}</div> : null}
-            {library.status === "error" ? <div className="context-tree-error" role="alert">
-              <span>Library unavailable: {library.error}. Space context is unaffected.</span>
-              <button type="button" onClick={library.reload}>Retry</button>
-            </div> : null}
             {library.listing?.items.length === 0 ? <div className="library-tree-empty">
               <span>Nothing in the Library yet</span>
               <button type="button" className="library-button is-primary" onClick={() => setLibraryAdd("library")}><UiIcon name="plus" />Add…</button>
@@ -1833,6 +1832,26 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
           {renderDocument()}
         </main>
       </div>
+      {isLibrary ? <div className="library-status-area">
+        {library.status === "error" && library.error !== dismissedLibraryError ? <ErrorSlot placement="pane"
+          message={`Library unavailable: ${library.error}. Space context is unaffected.`}
+          actions={<><button type="button" onClick={library.reload}>Retry</button><button type="button" onClick={() => setDismissedLibraryError(library.error)}>Dismiss</button></>} />
+        : attachmentRequest ? <AttachmentReport request={attachmentRequest} operation={attachmentOperation.operation} starting={attachmentOperation.starting} error={attachmentOperation.error}
+          item={library.status === "error" ? null : libraryItems?.find((item) => item.item_id === attachmentRequest.item_id) ?? null}
+          settled={beforeAttachments !== undefined && (library.status === "error" || (library.status === "ready" && library.listing !== beforeAttachments))}
+          onCancel={attachmentOperation.cancel} onDismiss={() => setAttachmentRequest(null)}
+          onRetry={(ids) => { const item = libraryItems?.find((item) => item.item_id === attachmentRequest.item_id); if (item) attachmentActions.start(item, attachmentRequest.action, ids); }} />
+        : libraryOperation.operation && !libraryReportDismissed ? <RefreshReport operation={libraryOperation.operation} verb={libraryReportVerb} error={libraryOperation.error}
+          onCancel={libraryOperation.cancel} onDismiss={() => setLibraryReportDismissed(true)}
+          onOpenItem={(itemId) => { const item = libraryItems?.find((candidate) => candidate.item_id === itemId); if (item) openLibraryItem(item); }}
+          onRetry={(itemIds) => startLibraryRefresh({ scope: "items", item_ids: itemIds }, itemIds)}
+          onRetryOperation={retryLibraryOperation}
+          onRetryFollow={(followId) => startLibraryRefresh({ scope: "follow", follow_id: followId }, [])} />
+        : <ErrorSlot placement="pane" message={libraryOperation.error} actions={libraryOperation.error ? <>
+          <button type="button" onClick={retryLibraryOperation}>Retry</button>
+          <button type="button" onClick={libraryOperation.reset}>Dismiss</button>
+        </> : null} />}
+      </div> : null}
       {resourcesOpen && context ? <ContextResources client={client} root={root} space={space} spaceListing={spaceListing} onAdd={() => setLibraryAdd("space")} onClose={() => setResourcesOpen(false)} /> : null}
       {libraryToolbarMenu ? <LibraryMenu x={libraryToolbarMenu.x} y={libraryToolbarMenu.y} label="Library actions" onDismiss={() => setLibraryToolbarMenu(null)} entries={libraryMenuEntries} /> : null}
       {providerCredentials.dialog}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { LibraryOperation, LibraryReportRow } from "../../protocol/generated/v1";
 import { REPORT_OUTCOMES, reportOutcomeLabel, reportSummary } from "./libraryState";
 import { UiIcon } from "../UiIcon";
+import { ErrorSlot } from "../ErrorSlot";
 
 /**
  * Provider refresh report (design §4.9). It stays until dismissed or the next
@@ -9,7 +10,7 @@ import { UiIcon } from "../UiIcon";
  * that read only part of its source explains it: nothing is marked removed at
  * source or dropped until a refresh reads all of it.
  */
-export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onOpenItem, onRetry, onRetryFollow }: {
+export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onOpenItem, onRetry, onRetryOperation, onRetryFollow }: {
   operation: LibraryOperation;
   /** `Refresh` for provider refreshes, `Replace` for a confirmed edited-file replace, `Keep` for `Keep in Library`. */
   verb: "Refresh" | "Replace" | "Keep";
@@ -18,6 +19,7 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
   onDismiss: () => void;
   onOpenItem: (itemId: string) => void;
   onRetry: (itemIds: string[]) => void;
+  onRetryOperation?: () => void;
   /** Refreshes one followed space again; failed follow rows offer it when set. */
   onRetryFollow?: (followId: string) => void;
 }) {
@@ -26,14 +28,11 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
   const report = operation.report;
   if (!operation.finished) {
     const total = phase?.total ?? null;
-    return <div className="context-notice library-report" role="status">
-      <span className="library-spinner" aria-hidden="true" />
-      <span>{verb === "Refresh" ? `Refreshing${total !== null ? ` ${total} ${total === 1 ? "item" : "items"}` : ""}… ${phase?.done ?? 0} done` : verb === "Keep" ? "Keeping in Library…" : "Replacing with the source version…"}</span>
-      {operation.cancel_requested ? <span>Cancelling after the item in flight…</span> : <button type="button" onClick={onCancel}>Cancel</button>}
-      {error ? <span className="library-report-error">{error}</span> : null}
-    </div>;
+    return <ErrorSlot placement="pane" className="library-report" error={Boolean(error)}
+      message={error ?? (verb === "Refresh" ? `Refreshing${total !== null ? ` ${total} ${total === 1 ? "item" : "items"}` : ""}… ${phase?.done ?? 0} done` : verb === "Keep" ? "Keeping in Library…" : "Replacing with the source version…")}
+      actions={operation.cancel_requested ? <span>Cancelling after the item in flight…</span> : <button type="button" onClick={onCancel}>Cancel</button>} />;
   }
-  const failed = phase?.state === "failed" ? phase.error : null;
+  const failed = phase?.state === "failed" ? phase.error ?? { message: phase.message ?? "The operation failed." } : null;
   const rows = report?.rows ?? [];
   const retryIds = rows.filter((row) => row.outcome === "failed" && row.item_id).map((row) => row.item_id!);
   // One retry starts one operation: failed items, else the one followed space that failed; several failed spaces retry per row.
@@ -43,22 +42,20 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
     ? <button type="button" className="library-report-link" onClick={() => onOpenItem(row.item_id!)}>{row.title}</button>
     : <span>{row.title}</span>;
   return <div className="library-report-block">
-    <div className={`context-notice library-report${failed ? " context-notice-error" : ""}`} role="status">
-      <strong>{verb === "Keep" ? (phase?.state === "cancelled" ? "Keep cancelled:" : failed ? "Keep failed:" : "Kept in Library:") : `${verb} ${phase?.state === "cancelled" ? "cancelled" : failed ? "failed" : "finished"}:`}</strong>
-      <span>{failed ? failed.message : report ? reportSummary(report) : "done"}</span>
-      <span className="library-report-note">Spaces aren't changed.</span>
-      <span className="context-toolbar-spacer" />
-      {rows.length > 0 ? <button type="button" aria-expanded={shown} onClick={() => setShown((value) => !value)}>{shown ? "Hide" : "Show"}</button> : null}
-      {retryIds.length > 0 || failedFollowIds.length === 1 ? <button type="button" onClick={() => {
-        if (retryIds.length > 0) onRetry(retryIds); else onRetryFollow?.(failedFollowIds[0]!);
-      }}>Retry failed</button> : null}
-      <button type="button" onClick={onDismiss}>Dismiss</button>
-    </div>
-    {limitedFollows.map((row, index) => <p key={`${row.follow_id}:${index}`} className="context-notice context-notice-warning library-report-limit" role="status">
-      <UiIcon name="half-ring" />
-      <span>{`${row.title}: ${row.reason ?? "partial"}. Only part of the source was read, so nothing is marked removed at source or dropped until a refresh reads all of it.`}</span>
-    </p>)}
+    <ErrorSlot placement="pane" className="library-report" error={Boolean(failed || error || rows.some((row) => row.outcome === "failed"))}
+      message={<><strong>{verb === "Keep" ? (phase?.state === "cancelled" ? "Keep cancelled:" : failed ? "Keep failed:" : "Kept in Library:") : `${verb} ${phase?.state === "cancelled" ? "cancelled" : failed ? "failed" : "finished"}:`}</strong> {error ?? failed?.message ?? (report ? reportSummary(report) : "done")} <span className="library-report-note">Spaces aren't changed.</span></>}
+      actions={<>
+        {rows.length > 0 ? <button type="button" aria-expanded={shown} onClick={() => setShown((value) => !value)}>{shown ? "Hide" : "Show"}</button> : null}
+        {retryIds.length > 0 || failedFollowIds.length === 1 ? <button type="button" onClick={() => {
+          if (retryIds.length > 0) onRetry(retryIds); else onRetryFollow?.(failedFollowIds[0]!);
+        }}>Retry failed</button> : failed && onRetryOperation ? <button type="button" onClick={onRetryOperation}>Retry</button> : null}
+        <button type="button" onClick={onDismiss}>Dismiss</button>
+      </>} />
     {shown && rows.length > 0 ? <div className="library-report-rows">
+      {limitedFollows.map((row, index) => <p key={`${row.follow_id}:${index}`} className="context-notice context-notice-warning library-report-limit" role="status">
+        <UiIcon name="half-ring" />
+        <span>{`${row.title}: ${row.reason ?? "partial"}. Only part of the source was read, so nothing is marked removed at source or dropped until a refresh reads all of it.`}</span>
+      </p>)}
       {REPORT_OUTCOMES.map((outcome) => {
         const group = rows.filter((row) => row.outcome === outcome);
         if (group.length === 0) return null;

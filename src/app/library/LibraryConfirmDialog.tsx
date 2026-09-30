@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { LibraryFollowSummary, LibraryOperation, SpaceCopyRow } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
+import { ErrorSlot } from "../ErrorSlot";
 import { errorCode, errorText, followCountText, followTitle, type LibrarySpace } from "./libraryState";
 import { announceLibraryChanged } from "./useLibraryOperation";
 import "../projects/setup.css";
@@ -98,9 +99,9 @@ export function LibraryConfirmDialog({ title, body, safeLabel, confirmLabel, des
       <header className="task-setup-header"><h2 id={titleId}>{title}</h2><button type="button" className="task-setup-close" onClick={onClose} aria-label="Close" disabled={busy}><UiIcon name="close" /></button></header>
       <div className="task-setup-body">
         <div id={bodyId} className="library-confirm-body">{body}</div>
-        {error ? <p className="task-setup-note is-error" role="alert">{error}</p> : null}
       </div>
       <footer className="task-setup-footer">
+        <ErrorSlot placement="dialog" message={error ?? (busy ? "Working…" : null)} error={Boolean(error)} />
         <button ref={safeRef} type="button" onClick={onClose} disabled={busy}>{safeLabel}</button>
         {alternative ? <button type="button" onClick={() => void confirm(alternative.onConfirm)} disabled={busy}>{alternative.label}</button> : null}
         <button type="button" className={destructive ? "library-destructive" : "setup-primary"} onClick={() => void confirm(onConfirm)} disabled={busy}>{busy ? "Working…" : confirmLabel}</button>

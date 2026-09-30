@@ -84,7 +84,7 @@ export function LibraryView({ client, onClose, command = null, fullScreen = fals
     // Focus must land inside the viewer, or its keys (Ctrl+P, Alt+1…) don't reach it: a row, else the empty state's Add…, the error's Retry, or the tree itself.
     const view = rootRef.current;
     const target = view?.querySelector<HTMLElement>(".library-tree-row.is-selected") ?? view?.querySelector<HTMLElement>("[data-library-row]")
-      ?? view?.querySelector<HTMLElement>(".library-tree-empty button, .context-tree-error button") ?? view?.querySelector<HTMLElement>(".context-tree");
+      ?? view?.querySelector<HTMLElement>(".library-tree-empty button, .library-status-area button") ?? view?.querySelector<HTMLElement>(".context-tree");
     target?.focus({ preventScroll: true });
     if (document.activeElement === view) view?.querySelector<HTMLElement>(".context-document")?.focus({ preventScroll: true });
   }, [library.status]);

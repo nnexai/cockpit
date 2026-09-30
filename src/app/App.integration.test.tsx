@@ -445,7 +445,7 @@ describe("mounted App mutation and session ordering", () => {
   it("opens Review as a local tab viewer from the command overlay", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
-    await openCommand("Open Review right");
+    await openCommand("Open Review");
 
     expect(selectedLeaf()).toBe("tab-1:review");
     expect(container.querySelector('[data-testid="review-content"]')).not.toBeNull();
@@ -467,9 +467,9 @@ describe("mounted App mutation and session ordering", () => {
     await mount(fixture);
     openLocalPaneMenu();
     await settle();
-    expect(button("Open files right").disabled).toBe(false);
-    expect(button("Open Context right").disabled).toBe(true);
-    click(button("Open files right"));
+    expect(button("Files").disabled).toBe(false);
+    expect(container.querySelector<HTMLButtonElement>('.context-menu button:has(.context-menu-reason)')?.disabled).toBe(true);
+    click(button("Files"));
     await settle();
 
     expect(selectedLeaf()).toBe("tab-1:files");
@@ -498,9 +498,9 @@ describe("mounted App mutation and session ordering", () => {
     await mount(fixture);
 
     openLocalPaneMenu();
-    expect(button("Split right").disabled).toBe(false);
+    expect(button("Rename pane…").disabled).toBe(false);
     click(button("Create tab"));
-    expect(button("Split right").disabled).toBe(true);
+    expect(button("Rename pane…").disabled).toBe(true);
   });
 
   it("paints the requested tab while Herdr confirms focus", async () => {
@@ -1042,8 +1042,7 @@ describe("keyboard prefix in the workbench", () => {
     const fixture = new AppFixture();
     await mount(fixture);
     openLocalPaneMenu();
-    click(container.querySelector(".context-menu-advanced summary")!);
-    click(button("Move…"));
+    click(button("Move to…"));
     const destination = container.querySelector<HTMLSelectElement>('select[aria-label="Move destination"]')!;
     expect(destination.value).toBe("");
     press(destination, "n", { ctrlKey: true });
@@ -1097,7 +1096,7 @@ describe("tab-local viewers, focus and placement", () => {
     const fixture = new AppFixture();
     await mount(fixture);
     fixture.focusCalls.mockClear();
-    await openCommand("Open files right");
+    await openCommand("Open Files");
     const content = container.querySelector('[data-testid="files-content"]');
     expect(selectedLeaf()).toBe("tab-1:files");
 
@@ -1116,7 +1115,7 @@ describe("tab-local viewers, focus and placement", () => {
     await mount(fixture);
     fixture.emitSnapshot("session-1", 1, 2, twoTerminalSnapshot("session-1"));
     await settle();
-    await openCommand("Open files right");
+    await openCommand("Open Files");
     click(leafButton("tab-1:files", "Zoom this pane"));
     expect(terminal("pane-3")).toBeNull();
 
@@ -1138,7 +1137,7 @@ describe("tab-local viewers, focus and placement", () => {
     click(terminal("pane-3")!);
     await settle();
     expect(fixture.focusCalls).toHaveBeenCalledWith("session-1", { kind: "pane", target_id: "pane-3" });
-    await openCommand("Open files right");
+    await openCommand("Open Files");
 
     fixture.emitSnapshot("session-1", 1, 3, twoTerminalSnapshot("session-1", "pane-3"));
     await settle();
@@ -1154,9 +1153,9 @@ describe("tab-local viewers, focus and placement", () => {
     await settle();
     click(terminal("pane-3")!);
     await settle();
-    await openCommand("Open files right");
+    await openCommand("Open Files");
     expect(fixture.viewerOpen).toHaveBeenLastCalledWith("session-1", expect.objectContaining({ source_pane_id: "pane-3" }));
-    click(leafButton("tab-1:files", "Split down: new terminal"));
+    prefix(window, "-");
     expect(fixture.mutateCalls).toHaveBeenCalledWith("session-1", { type: "pane_split", pane_id: "pane-3", direction: "down", ratio: null });
 
     const base = twoTerminalSnapshot("session-1");
@@ -1193,7 +1192,7 @@ describe("tab-local viewers, focus and placement", () => {
     await mount(fixture);
     fixture.emitSnapshot("session-1", 1, 2, twoTerminalSnapshot("session-1"));
     await settle();
-    await openCommand("Open files right");
+    await openCommand("Open Files");
     const first = terminal("pane-1");
     const third = terminal("pane-3");
     const streams = vi.mocked(fixture.client.openTerminal).mock.results.map(result => result.value);
@@ -1282,8 +1281,8 @@ describe("external focus during local terminal creation", () => {
     await mount(fixture);
     fixture.emitSnapshot("session-1", 1, 2, twoTerminalSnapshot("session-1"));
     await settle();
-    await openCommand("Open files right");
-    click(leafButton("tab-1:files", "Split down: new terminal"));
+    await openCommand("Open Files");
+    prefix(window, "-");
 
     fixture.emitSnapshot("session-1", 1, 3, twoTerminalSnapshot("session-1", "pane-3"));
     await settle();

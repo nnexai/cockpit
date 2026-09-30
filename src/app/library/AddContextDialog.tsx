@@ -3,6 +3,7 @@ import type { CockpitClient } from "../../client/CockpitClient";
 import type { LibraryOperation, LibraryResolution, ProjectProvider } from "../../protocol/generated/v1";
 import { createPortal } from "react-dom";
 import { UiIcon } from "../UiIcon";
+import { ErrorSlot } from "../ErrorSlot";
 import { trapDialogKeys, useRestoreFocus } from "./LibraryConfirmDialog";
 import { StatePill } from "./StatePill";
 import { JIRA_KEY, confluencePageInput, confluenceProviders, confluenceSite, confluenceSpaceInput, errorText, issueCount, jiraProviders, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryInputUrl, lookupFailure, pageCount, providerFamily, resolutionNote, resolutionSpaceName, type LibrarySpace, type LookupFailure } from "./libraryState";
@@ -185,8 +186,8 @@ function ConfluenceSpaceList({ client, provider, providers, onPick }: {
  * Jira key, a Confluence page link or id, a Confluence space link or key, or a
  * local folder path, plus `Browse Confluence spaces`. A page can be added alone
  * or its whole space followed. It always saves to the Library first; with a
- * live target Space the destination can also copy the saved item or followed
- * space there.
+ * live target Space and a verified companion the destination can also copy
+ * the saved item or followed space there. Otherwise Library only stays selected.
  */
 export function AddContextDialog({ client, onClose, onOpenItem, space = null, defaultDestination = "library", openInSpace = null }: {
   client: CockpitClient;
@@ -194,7 +195,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   onOpenItem?: (itemId: string) => void;
   /** The Space an add can also copy into; absent with no session or Space. */
   space?: LibrarySpace | null;
-  /** From the entry point (design §1): `Resources → Add…` presets the Space. */
+  /** `Resources → Add…` presets the Space once its companion is verified. */
   defaultDestination?: "library" | "space";
   /** The opening Context pane's companion root; `Open in <Space>` selects a written file there. */
   openInSpace?: { companionRootId: string; open: (path: string) => void } | null;
@@ -243,8 +244,12 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [lookup, setLookup] = useState<Lookup>({ status: "idle" });
   const [lookupRetry, setLookupRetry] = useState(0);
   const spaceChoice = space?.live ? space : null;
-  const [destination, setDestination] = useState<"library" | "space">(spaceChoice && defaultDestination === "space" ? "space" : "library");
+  const [destinationChoice, setDestination] = useState<"library" | "space" | null>(null);
   const spaceListing = useSpaceContextListing(client, spaceChoice?.target ?? null, spaceChoice !== null);
+  const companion = spaceListing.listing?.companion ?? null;
+  const spaceAvailable = spaceChoice !== null && companion?.status === "available";
+  // Never select an unverified destination, including while the opening default is being checked.
+  const destination = spaceAvailable && (destinationChoice ?? defaultDestination) === "space" ? "space" : "library";
   const add = useLibraryOperation(client);
   const credentials = useProviderCredentialActions(client, providers);
   const resume = add.resume;
@@ -350,7 +355,6 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const referenceDepth = depthChoice ?? resolution?.reference_depth ?? (resolution?.kind === "artifact" && family?.key === "jira" ? 1 : 0);
   const depthOptions = [0, 1, 2, 3, ...(referenceDepth > 3 ? [referenceDepth] : [])];
   const destinationSpace = destination === "space" && !jiraFollow ? spaceChoice : null;
-  const companion = spaceListing.listing?.companion ?? null;
   // An item or followed space already in the target Space: the header's Space state decides whether adding applies.
   const existingRow = spaceListing.listing?.rows.find((row) => existingFollow ? row.follow?.follow_id === existingFollow : row.item_id === existingItem);
   const existingInSpace = existing && destinationSpace && spaceListing.listing ? headerSpaceAction(existingRow, destinationSpace.label) : null;
@@ -487,13 +491,14 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   // A partial copy still opens what it wrote.
   const openablePath = openInSpace && written.length > 0 && operation?.space?.companion_root_id === openInSpace.companionRootId ? written[0] : undefined;
   const libraryIncomplete = finished && progress !== null && !progress.complete && lastBeginRef.current !== null;
-  // After success focus moves to `Open in …`; after a failure, to its retry. Only a change of phase moves it:
-  // progress polls must not pull focus off `Cancel`.
-  const focusPhase = startError && !operation && !starting ? "error" : finished ? "finished" : starting || operation ? "running" : "idle";
+  // Progress polls and failures must not steal focus; successful completion can offer the result.
+  const actionFailed = Boolean(startError || spaceFailed || progress?.tone === "failed");
+  const footerMessage = startError ?? (spaceFailed ? spaceStep?.text : progress?.tone === "failed" ? progress.text : null);
+  const focusPhase = finished ? actionFailed ? "failed" : "finished" : starting || operation ? "running" : "idle";
   useEffect(() => {
-    if (focusPhase === "error") primaryActionRef.current?.focus();
-    else if (focusPhase === "finished") (primaryActionRef.current ?? closeActionRef.current)?.focus();
+    if (focusPhase === "finished") (primaryActionRef.current ?? closeActionRef.current)?.focus();
     else if (focusPhase === "running") closeActionRef.current?.focus();
+    else if (focusPhase === "failed" && !closeActionRef.current?.closest("[role='dialog']")?.contains(document.activeElement)) closeActionRef.current?.focus();
   }, [focusPhase]);
   const failure = lookup.status === "error" ? lookup.failure : null;
   // On the body: a Context viewer is a size container and would clip a fixed overlay to its pane.
@@ -511,30 +516,26 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
         {operation || starting ? <div className="library-progress" aria-live="polite">
           <ol className="library-progress-steps">
             <li className={`library-progress-step is-${progress?.tone ?? "running"}`}>
-              <span>{progress?.text ?? (spaceSelection ? `Adding to ${shownSpace}…` : followSource ? (followSource.unit === "pages" ? "Following the space…" : "Following the query…") : "Saving to Library…")}</span>
+              <span>{progress?.tone === "failed" ? "Library" : progress?.text ?? (spaceSelection ? `Adding to ${shownSpace}…` : followSource ? (followSource.unit === "pages" ? "Following the space…" : "Following the query…") : "Saving to Library…")}</span>
               {operation && !finished && !operation.cancel_requested && operation.kind !== "space_add" && !progress?.saved ? <button type="button" onClick={add.cancel}>Cancel</button> : null}
             </li>
-            {spaceStep ? <li className={`library-progress-step is-${spaceStep.tone}`}>
-              <span key={spaceStep.tone} role={spaceFailed ? "alert" : undefined}>{spaceStep.text}</span>
-              {spaceFailed && written.length > 0 ? <ul className="library-progress-files" aria-label={`Copied to ${shownSpace}`}>
-                {written.map((path) => <li key={path}><code>{path}</code></li>)}
-              </ul> : null}
-              {spaceFailed && finished ? <span className="library-progress-actions">
-                <button ref={primaryActionRef} type="button" className="setup-primary" onClick={retrySpace}>{`Retry adding to ${shownSpace}`}</button>
-                {openablePath && openInSpace ? <button type="button" onClick={() => { openInSpace.open(openablePath); onClose(); }}>{`Open in ${shownSpace}`}</button> : null}
-                {onOpenItem && openedItemId ? <button type="button" onClick={() => { onOpenItem(openedItemId); onClose(); }}>Open in Library</button> : null}
-              </span> : null}
+            {operationSpace || spaceStep ? <li className={`library-progress-step is-${spaceStep?.tone ?? "running"}`}>
+              <span>{spaceFailed ? shownSpace : spaceStep?.text ?? `Waiting to add to ${shownSpace}…`}</span>
             </li> : null}
           </ol>
-          {add.error ? <p className="task-setup-note" role="status">{add.error}</p> : null}
         </div> : <>
-          {startError ? <p className="task-setup-note is-error" role="alert">{startError}</p> : null}
           <div className="task-setup-row">
             <label htmlFor={fieldId}>Source</label>
             <div>
               <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => editInput(event.target.value)}
                 placeholder="Issue, MR or PR link, Jira key or query, Confluence page or space, or folder path" autoComplete="off" spellCheck={false}
                 aria-invalid={failure ? "true" : undefined} aria-describedby={failure ? failureId : undefined} />
+              {providersLoaded && (jira.length > 0 || confluence.length > 0) ? <div className="library-source-links">
+                {jira.length > 0 && (trimmed === "" || jiraQuery !== null) ? <div className="library-query-presets" role="group" aria-label="Jira query presets">
+                  {jiraQueryPresets(jiraQuery ? jiraQueryProject(jiraQuery.jql) : null).map((preset) => <button key={preset.label} type="button" className="task-setup-link" title={preset.jql} onClick={() => { editInput(preset.jql); inputRef.current?.focus(); }}>{preset.label}</button>)}
+                </div> : null}
+                {confluence.length > 0 ? <button type="button" className="task-setup-link" aria-expanded={browseOpen} aria-controls={browseOpen ? browseId : undefined} onClick={() => setBrowseOpen((open) => !open)}>Browse Confluence spaces</button> : null}
+              </div> : null}
               {lookup.status === "pending" ? <p className="task-setup-note">{trimmed.startsWith("/") || trimmed === "~" || trimmed.startsWith("~/") ? "Checking the folder…"
                 : confluencePage ? `Looking up Confluence page ${confluencePage.pageId ?? `“${confluencePage.title}”`}${confluencePage.spaceKey ? ` in ${confluencePage.spaceKey}` : ""}${chosen ? ` on ${confluenceSite(chosen.base_url)}` : ""}…`
                 : jiraQuery && chosen && jiraQuery.providers.includes(chosen) ? "Counting the issues this query matches…"
@@ -550,18 +551,10 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
                 {failure.credentialProviderId ? <button type="button" className="task-setup-link" onClick={() => credentials.actions.open(failure.credentialProviderId!)}>Store a token…</button> : null}
                 {failure.retry ? <button type="button" className="task-setup-link" onClick={() => setLookupRetry((value) => value + 1)}>Retry lookup</button> : null}
               </div> : null}
-              {providersLoaded && jira.length > 0 && (trimmed === "" || jiraQuery !== null) ? <div className="library-query-presets" role="group" aria-label="Jira query presets">
-                {jiraQueryPresets(jiraQuery ? jiraQueryProject(jiraQuery.jql) : null).map((preset) => <button key={preset.label} type="button" className="task-setup-link" title={preset.jql} onClick={() => { editInput(preset.jql); inputRef.current?.focus(); }}>{preset.label}</button>)}
-              </div> : null}
               {providersError ? <p className="task-setup-note">{providersError}</p> : null}
-              {providersLoaded && confluence.length > 0 ? <>
-                <button type="button" className="task-setup-link library-browse-toggle" aria-expanded={browseOpen} aria-controls={browseOpen ? browseId : undefined} onClick={() => setBrowseOpen((open) => !open)}>
-                  <UiIcon name={browseOpen ? "down" : "right"} /> Browse Confluence spaces
-                </button>
-                {browseOpen ? <div id={browseId} className="library-browse">
-                  {confluence.map((provider) => <ConfluenceSpaceList key={provider.id} client={client} provider={provider} providers={providers} onPick={pickSpace} />)}
-                </div> : null}
-              </> : null}
+              {providersLoaded && confluence.length > 0 && browseOpen ? <div id={browseId} className="library-browse">
+                {confluence.map((provider) => <ConfluenceSpaceList key={provider.id} client={client} provider={provider} providers={providers} onPick={pickSpace} />)}
+              </div> : null}
             </div>
           </div>
           {folder ? <div className="task-setup-row">
@@ -624,9 +617,10 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
               <p className="task-setup-note">Jira follows can't be added to a Space yet.</p>
             </div> : spaceChoice ? <div role="radiogroup" aria-labelledby={destinationId} className="library-destination-choices">
               <label className="task-setup-check"><input type="radio" name={destinationId} checked={destination === "library"} onChange={() => setDestination("library")} /> Library only</label>
-              <label className="task-setup-check"><input type="radio" name={destinationId} checked={destination === "space"} onChange={() => setDestination("space")} /> Library and {spaceChoice.label}</label>
+              <label className={`task-setup-check${spaceAvailable ? "" : " is-disabled"}`}><input type="radio" name={destinationId} checked={destination === "space"} disabled={!spaceAvailable} onChange={() => setDestination("space")} /> Library and {spaceChoice.label}
+                {!spaceAvailable ? <span className="library-destination-reason">· {companion?.status === "unavailable" || spaceListing.status === "error" ? "no context folder for this Space" : "checking context folder…"}</span> : null}
+              </label>
               {destination === "space" ? <p className="task-setup-note">Saved to the Library first, then copied into {spaceChoice.label}. Later Library refreshes don't change {spaceChoice.label} until you update it.</p> : null}
-              {companion?.status === "unavailable" ? <p className="task-setup-note is-error">{spaceChoice.label}'s context folder couldn't be verified: {companion.error.message.replace(/\.$/, "")}. The Library copy is saved either way; a failed Space step can be retried.</p> : null}
             </div> : <div>
               <p className="library-destination">Library</p>
               <p className="task-setup-note">{space ? `Herdr isn't live, so this adds to the Library only.` : "Select a Space to also add it there."}</p>
@@ -635,23 +629,36 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
         </>}
       </div>
       <footer className="task-setup-footer">
+        <ErrorSlot placement="dialog" message={footerMessage} />
+        {spaceFailed && written.length > 0 ? <details className="library-phase-details">
+          <summary>Copied files</summary>
+          <ul className="library-progress-files" aria-label={`Copied to ${shownSpace}`}>
+            {written.map((path) => <li key={path}><code>{path}</code></li>)}
+          </ul>
+        </details> : null}
+        <div className="library-footer-actions">
+        <button ref={closeActionRef} type="button" onClick={onClose}>{operation || starting ? "Close" : "Cancel"}</button>
         {!operation && !starting ? <>
           {startError && lastBeginRef.current ? <>
             <button type="button" onClick={addAnother}>Add another</button>
             <button ref={primaryActionRef} type="button" className="setup-primary" onClick={retryAll}>Retry</button>
           </> : null}
           {existingItem && onOpenItem ? <button type="button" onClick={() => { onOpenItem(existingItem); onClose(); }}>Open in Library</button> : null}
-          <button type="button" onClick={onClose}>Cancel</button>
           {!startError ? <button ref={submitRef} type="button" className="setup-primary" onClick={submit} disabled={!canAdd}>{primaryLabel}</button> : null}
-        </> : !finished || !progress ? <button ref={closeActionRef} type="button" onClick={onClose}>Close</button> : <>
+        </> : !finished || !progress ? null : <>
           <button type="button" onClick={addAnother}>Add another</button>
-          <button ref={closeActionRef} type="button" onClick={onClose}>Close</button>
           {/* The same source again: primary when nothing was saved, beside the result otherwise. */}
           {libraryIncomplete ? <button ref={progress.saved ? undefined : primaryActionRef} type="button" className={progress.saved ? undefined : "setup-primary"} onClick={retryAll}>Retry</button> : null}
+          {spaceFailed && finished ? <>
+            <button ref={primaryActionRef} type="button" className="setup-primary" onClick={retrySpace}>{`Retry adding to ${shownSpace}`}</button>
+            {openablePath && openInSpace ? <button type="button" onClick={() => { openInSpace.open(openablePath); onClose(); }}>{`Open in ${shownSpace}`}</button> : null}
+            {onOpenItem && openedItemId ? <button type="button" onClick={() => { onOpenItem(openedItemId); onClose(); }}>Open in Library</button> : null}
+          </> : null}
           {!progress.saved || spaceFailed ? null : openablePath && openInSpace
             ? <button ref={primaryActionRef} type="button" className="setup-primary" onClick={() => { openInSpace.open(openablePath); onClose(); }}>{`Open in ${shownSpace}`}</button>
             : onOpenItem && openedItemId ? <button ref={primaryActionRef} type="button" className="setup-primary" onClick={() => { onOpenItem(openedItemId); onClose(); }}>Open in Library</button> : null}
         </>}
+        </div>
       </footer>
     </section>
     {credentials.dialog}

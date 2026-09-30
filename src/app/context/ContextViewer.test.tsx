@@ -530,6 +530,17 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     await flush();
     expect(client.libraryRefresh).toHaveBeenCalledWith({ scope: "all" });
     expect(host.querySelector(".library-report")?.textContent).toContain("1 updated");
+    // A failure before enumeration has no item IDs: Retry must preserve Refresh all, not issue an empty item refresh.
+    vi.mocked(client.libraryRefresh).mockResolvedValueOnce({
+      ...operation, operation_id: "refresh-before-enumeration", item_ids: [], report: null,
+      phases: [{ phase: "library", state: "failed", done: 0, total: null, message: null, error: { code: "source_cli_failed", message: "Provider offline" } }],
+    });
+    await act(async () => toolbarButton("Refresh all")!.click());
+    await flush();
+    const retryRefresh = [...host.querySelectorAll<HTMLButtonElement>(".library-status-area button")].find((button) => button.textContent === "Retry")!;
+    await act(async () => retryRefresh.click());
+    await flush();
+    expect(client.libraryRefresh).toHaveBeenLastCalledWith({ scope: "all" });
     documentText = "# Updated by another source";
     await act(async () => window.dispatchEvent(new Event("cockpit:library-changed")));
     await flush();
@@ -540,7 +551,6 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     await reloadListing();
     await flush();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Library unavailable: listing offline. Space context is unaffected.");
-    expect(host.querySelector(".context-tree-error button")?.textContent).toBe("Retry");
     expect(host.querySelector('[data-library-row="source:mr"]')).not.toBeNull();
     currentListing = { ...listing, generation: "2", items: [] };
     await act(async () => window.dispatchEvent(new Event("cockpit:library-changed")));

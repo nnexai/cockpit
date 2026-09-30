@@ -15,8 +15,8 @@ type Props = {
   selected: boolean; browserInputActive: boolean; browserLiveInputEnabled: boolean;
   terminal: TerminalLeafProps | null;
   focusStatus: "pending" | "error" | null; focusError?: string;
-  splitDisabled: boolean; closeDisabled: boolean;
-  onSelect(): void; onSplit(direction: "right" | "down"): void; onZoom(): void;
+  closeDisabled: boolean;
+  onSelect(): void; onZoom(): void;
   onClose(): void; onRetryFocus(): void; onMenu(event: MouseEvent<HTMLButtonElement>): void;
 };
 
@@ -29,8 +29,8 @@ export function LeafHost(props: Props) {
     <PaneChrome leaf={leaf} title={title} subtitle={root?.label} selected={selected} zoomed={tab.zoomLeafId === leaf.id}
       lastTerminal={leaf.kind === "terminal" && Object.keys(tab.terminals).length === 1}
       focusStatus={leaf.kind === "terminal" ? props.focusStatus : null} focusError={props.focusError}
-      onRetryFocus={props.onRetryFocus} onSplit={props.onSplit} onZoom={props.onZoom} onClose={props.onClose}
-      splitDisabled={props.splitDisabled} closeDisabled={props.closeDisabled} onMenu={props.onMenu} />
+      onRetryFocus={props.onRetryFocus} onZoom={props.onZoom} onClose={props.onClose}
+      closeDisabled={props.closeDisabled} onMenu={props.onMenu} />
     {leaf.kind === "terminal" && terminal ? <TerminalLeaf key={`${ctx.serverInstance}:${pane?.terminal_id}`} {...terminal} /> : null}
     {leaf.kind === "files" && tab.viewers.files ? <FilesLeaf ctx={ctx} tabId={tab.tabId} slot={tab.viewers.files} selected={selected} onSelect={props.onSelect} /> : null}
     {leaf.kind === "review" && tab.viewers.review ? <ReviewLeaf ctx={ctx} tabId={tab.tabId} slot={tab.viewers.review} selected={selected} onSelect={props.onSelect} /> : null}

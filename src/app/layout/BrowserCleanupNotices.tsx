@@ -1,8 +1,9 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import type { LeafCtx } from "./tabLayoutStore";
 import { dismissBrowserCleanup, refreshBrowserCleanup, retryBrowserCleanup, subscribeBrowserLifecycle } from "./browserLifecycle";
+import { ErrorSlot } from "../ErrorSlot";
 
-export function BrowserCleanupNotices({ ctx, activeTabId }: { ctx: LeafCtx; activeTabId: string | null }) {
+export function BrowserCleanupNotices({ ctx, activeTabId, fallback }: { ctx: LeafCtx; activeTabId: string | null; fallback?: ReactNode }) {
   const currentCtx = useRef(ctx); currentCtx.current = ctx;
   const [, redraw] = useReducer((value: number) => value + 1, 0);
   const [error, setError] = useState<string | null>(null);
@@ -25,13 +26,15 @@ export function BrowserCleanupNotices({ ctx, activeTabId }: { ctx: LeafCtx; acti
     finally { setBusy(null); redraw(); }
   };
   const notices = ctx.getState().cleanupNotices.filter((notice) => notice.tabId === activeTabId || notice.tabId === null || !ctx.getState().tabs[notice.tabId]);
-  if (!notices.length && !error) return null;
-  return <div className="browser-cleanup-notices">
-    {error ? <div className="browser-recovery-strip" role="alert"><span>{error}</span><button type="button" disabled={Boolean(busy)} onClick={() => setInspectionEpoch((epoch) => epoch + 1)}>Retry inspection</button></div> : null}
-    {notices.map((notice) => <div key={notice.associationKey} className="browser-recovery-strip" role="alert">
-      <span>Browser cleanup is incomplete: {notice.reason}</span>
+  const notice = notices[0];
+  if (!notice && !error) return fallback ?? <ErrorSlot placement="pane" />;
+  return <ErrorSlot placement="pane"
+    message={error ?? (notice ? `Browser cleanup is incomplete: ${notice.reason}${notices.length > 1 ? ` · ${notices.length - 1} more problems` : ""}` : null)}
+    actions={error ? <>
+      <button type="button" disabled={Boolean(busy)} onClick={() => setInspectionEpoch((epoch) => epoch + 1)}>Retry inspection</button>
+      <button type="button" disabled={Boolean(busy)} onClick={() => setError(null)}>Dismiss</button>
+    </> : notice ? <>
       <button type="button" disabled={Boolean(busy)} onClick={() => void retry(notice.associationKey)}>Retry cleanup</button>
       <button type="button" disabled={Boolean(busy)} onClick={() => dismissBrowserCleanup(ctx, notice.associationKey)}>Dismiss</button>
-    </div>)}
-  </div>;
+    </> : null} />;
 }

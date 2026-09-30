@@ -43,7 +43,6 @@
 .review-base input { width: 10rem; padding: 2px 5px; }
 
 .review-notice { margin: 0; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-.review-error { color: var(--blocked); }
 .review-warning { color: var(--working); }
 .review-body { display: grid; min-height: 0; flex: 1; grid-template-columns: 204px minmax(0, 1fr); }
 .review-files { min-width: 0; overflow: auto; border-right: 1px solid var(--border); background: var(--sidebar-bg); }

@@ -31,7 +31,7 @@ function mount({ zoomed = false, single = false } = {}) {
   const dispatch = (action: LayoutAction) => { state = layoutReducer(state, action).state; render(); };
   function render() {
     root.render(<TabCanvas tab={state.tabs.tab} area={{ x: 0, y: 0, width: 1200, height: 800 }} dispatch={dispatch} registerTransient={registerTransient} announce={() => {}} renderLeaf={leaf => <>
-      <PaneChrome leaf={leaf} title={`Terminal ${leaf.id}`} selected={state.tabs.tab.selectedLeafId === leaf.id} zoomed={state.tabs.tab.zoomLeafId === leaf.id} onSplit={() => {}} onClose={() => {}} onZoom={() => dispatch({ type: "zoom-toggle", tabId: "tab", leafId: leaf.id })} />
+      <PaneChrome leaf={leaf} title={`Terminal ${leaf.id}`} selected={state.tabs.tab.selectedLeafId === leaf.id} zoomed={state.tabs.tab.zoomLeafId === leaf.id} onClose={() => {}} onZoom={() => dispatch({ type: "zoom-toggle", tabId: "tab", leafId: leaf.id })} />
       <textarea aria-label={`Editor ${leaf.id}`} defaultValue={`draft ${leaf.id}`} />
     </>} />);
   }

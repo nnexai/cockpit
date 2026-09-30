@@ -1,4 +1,5 @@
 import { UiIcon } from "../UiIcon";
+import { ErrorSlot } from "../ErrorSlot";
 import { useFileOverview } from "../input/useFileOverview";
 import { Fragment, type CSSProperties, type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
@@ -544,7 +545,6 @@ export function ReviewPane({ identity, sessionId, viewerId, bindingId, repositor
       <button type="button" className="viewer-wrap-toggle" aria-pressed={wrap} onClick={toggleWrap} title={wrap ? "Long lines wrap (Alt+Z)" : "Long lines scroll (Alt+Z)"}><UiIcon name="wrap" /><span className="viewer-wrap-label">Wrap</span></button>
       <button type="button" onClick={submitComparison} disabled={pending || (comparison === "branch" && !draftBaseRef.trim())} aria-label={pending ? "Refreshing…" : "Refresh"} title="Refresh"><UiIcon name="refresh" /></button>
     </header>
-    {error ? <p className="review-notice review-error" role="alert">{error}</p> : null}
     {diff?.truncated ? <p className="review-notice review-warning">This file's unified diff is partial. <button type="button" onClick={onOpenSource}>Open source</button> or narrow the comparison to inspect it safely.</p> : null}
     {review?.truncated ? <p className="review-notice review-warning">Review output reached a configured limit. Refresh with a narrower scope.</p> : null}
     <div className={`review-body${overview.open ? " has-file-overview" : ""}`} style={tree.style}>
@@ -559,6 +559,10 @@ export function ReviewPane({ identity, sessionId, viewerId, bindingId, repositor
         {renderFile && review && diff ? renderFile(review, diff, diffContent, loadSourcePage) : diffContent()}
       </main>
     </div>
+    <ErrorSlot placement="pane" message={error} actions={error ? <>
+      <button type="button" onClick={submitComparison} disabled={pending}>Retry</button>
+      <button type="button" onClick={() => setError(null)}>Dismiss</button>
+    </> : null} />
     <footer className="review-status" aria-label="Review shortcuts"><span>{displayedSelection ? `${displayedSelection.side} · lines ${Math.min(displayedSelection.start, displayedSelection.end)}–${Math.max(displayedSelection.start, displayedSelection.end)}` : ""}</span><span className="review-status-actions"><button type="button" onClick={onCreateLineComment} disabled={!canCreateLineComment} title={canCreateLineComment ? "Comment on selected lines (C)" : "Select review lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={onCreateFileComment} disabled={!canCreateFileComment} title={canCreateFileComment ? "Comment on whole file (Shift+C)" : "Review source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={onOpenCommentOverview} title="Open comments overview">{commentCount !== null ? `${commentCount} comments` : review && review.files.length === 0 && !pending ? "Comments" : "Loading comments…"}</button></span></footer>
     {pickerOpen ? <FilePicker candidates={(review?.files ?? []).map((item) => ({ id: item.file_id, path: filePath(item), detail: `${fileStatus(item)} · ${item.comparison.replaceAll("_", " ")}` } satisfies FileNavigationCandidate))} onChoose={(candidate) => { setSelected(candidate.id); setHunkIndex(-1); setPickerOpen(false); focusContent(); }} onDismiss={() => { setPickerOpen(false); focusContent(); }} /> : null}
   </section>;

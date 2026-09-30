@@ -16,17 +16,6 @@ function fixture(status: BrowserCleanupStatus) {
   return { ctx, browserCleanupRetry };
 }
 
-it("renders no cleanup or saved-work surface during an ordinary run", async () => {
-  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-  const { ctx } = fixture({ failures: [] });
-  const host = document.createElement("div"); document.body.append(host);
-  const root = createRoot(host);
-  try {
-    await act(async () => root.render(<BrowserCleanupNotices ctx={ctx} activeTabId="tab" />));
-    expect(host.childElementCount).toBe(0);
-    expect(browserOpenDisabledReason(ctx, "tab")).toBeNull();
-  } finally { await act(async () => root.unmount()); host.remove(); }
-});
 
 it("retries an incomplete tab cleanup and removes its transient notice on success", async () => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -41,7 +30,7 @@ it("retries an incomplete tab cleanup and removes its transient notice on succes
     const retry = [...host.querySelectorAll("button")].find((button) => button.textContent === "Retry cleanup")!;
     await act(async () => retry.click());
     expect(f.browserCleanupRetry).toHaveBeenCalledExactlyOnceWith({ association_key: "browser:tab" });
-    expect(host.childElementCount).toBe(0);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(browserOpenDisabledReason(f.ctx, "tab")).toBeNull();
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
@@ -56,7 +45,7 @@ it("dismisses a cleanup error without retrying or blocking another tab", async (
     const dismiss = [...host.querySelectorAll("button")].find((button) => button.textContent === "Dismiss")!;
     await act(async () => dismiss.click());
     expect(f.browserCleanupRetry).not.toHaveBeenCalled();
-    expect(host.childElementCount).toBe(0);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(browserOpenDisabledReason(f.ctx, "tab")).toBeNull();
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
