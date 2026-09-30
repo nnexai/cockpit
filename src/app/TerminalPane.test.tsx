@@ -209,6 +209,31 @@ describe("TerminalPane fitting and pointer ownership", () => {
       host.remove();
     }
   });
+  it("forwards popup arrow navigation as application cursor keys", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { request: { session_id: "session", pane_id: "pane", target_kind: "popup" } })} />);
+        await settle();
+      });
+      await act(async () => { messages[0]!(message("owned")); await settle(); });
+      const terminal = mocks.terminals.at(-1)!;
+      for (const [key, sequence] of [["ArrowUp", "\u001bOA"], ["ArrowDown", "\u001bOB"], ["ArrowRight", "\u001bOC"], ["ArrowLeft", "\u001bOD"]] as const) {
+        const event = new KeyboardEvent("keydown", { key, cancelable: true });
+        expect(terminal.keyHandler?.(event)).toBe(false);
+        expect(event.defaultPrevented).toBe(true);
+        expect(sent.at(-1)).toEqual({ type: "terminal.input", text: sequence, bytes: null });
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
 
   it("moves DOM focus only after ownership confirmation when focusOnAttach allows it", async () => {
     for (const focusOnAttach of [false, true, undefined]) {

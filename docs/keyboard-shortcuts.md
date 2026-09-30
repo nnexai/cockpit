@@ -109,7 +109,7 @@ Literal-prefix passthrough remains reserved: `Ctrl+B Ctrl+B` sends a literal `Ct
 
 A server popup appears as one centered floating terminal above the existing split layout, with the server's title and size hints. It is not a new split pane. Underlying panes remain in place, but the workbench is inert and its terminal input is blocked while the popup owns input (also while a popup invocation is pending).
 
-In a live popup, **Esc, Enter, Tab, Shift+Tab and prefix chords go to its program**. Cockpit does not force-close it with Esc, intercept its prefix, or execute shortcuts behind it; the popup program decides when to close. On authoritative server closure Cockpit restores DOM focus to the opener if still available, otherwise selected-tab chrome, without changing Herdr focus. A disconnected popup stays visible with input disabled and retry; stale state is not treated as closure.
+In a live popup, **Esc, Enter, Tab, Shift+Tab and prefix chords go to its program**. Unmodified arrow keys are sent as application-cursor sequences for curses-based popup programs. Cockpit does not force-close it with Esc, intercept its prefix, or execute shortcuts behind it; the popup program decides when to close. On authoritative server closure Cockpit restores DOM focus to the opener if still available, otherwise selected-tab chrome, without changing Herdr focus. A disconnected popup stays visible with input disabled and retry; stale state is not treated as closure.
 
 ### Not bound in Cockpit
 

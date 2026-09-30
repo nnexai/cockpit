@@ -137,6 +137,13 @@ export async function readTerminalClipboard(clipboard: ClipboardAccess = createC
   return clipboard.readText();
 }
 
+const POPUP_CURSOR_KEYS: Readonly<Record<string, string>> = {
+  ArrowUp: "\u001bOA",
+  ArrowDown: "\u001bOB",
+  ArrowRight: "\u001bOC",
+  ArrowLeft: "\u001bOD",
+};
+
 
 function commandInput(text: string | null, bytes: string | null): TerminalCommand {
   return { type: "terminal.input", text, bytes };
@@ -587,6 +594,18 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       const key = event.key.toLowerCase();
       const shortcutModifier = event.ctrlKey || event.metaKey;
       const macCommand = detectPlatform() === "mac" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      // Popup frames are ANSI screen snapshots and omit DEC cursor-key mode.
+      // Herdr's curses popups enable application cursor keys, so forward those
+      // sequences explicitly instead of letting xterm emit normal-mode arrows.
+      if (request.target_kind === "popup" && event.type === "keydown"
+        && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+        const sequence = POPUP_CURSOR_KEYS[event.key];
+        if (sequence) {
+          event.preventDefault();
+          sendInput(commandInput(sequence, null));
+          return false;
+        }
+      }
       // macOS: Cmd+C copies only with a selection (otherwise it falls through), Cmd+V pastes.
       if (event.type === "keydown" && macCommand && key === "c" && terminal.hasSelection()) {
         void copySelection();

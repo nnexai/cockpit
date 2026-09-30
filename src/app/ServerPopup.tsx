@@ -5,9 +5,22 @@ import { TerminalPane } from "./TerminalPane";
 import { trapModalTab } from "./input/modal";
 
 type Props = { client: CockpitClient; sessionId: string; popup: HerdrPopup; live: boolean; error: string | null; focusEpoch: number; terminalMouseInput: boolean; onReconnect: () => void };
+type PopupBounds = { left: number; top: number; width: number; height: number };
+
+function popupBounds(root: HTMLElement | null): PopupBounds {
+  const area = root?.closest(".workbench")?.querySelector<HTMLElement>(".workarea-content")
+    ?? document.querySelector<HTMLElement>(".workbench .workarea-content");
+  const rect = area?.getBoundingClientRect();
+  return rect && rect.width > 0 && rect.height > 0
+    ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+    : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+}
+
 export function ServerPopup({ client, sessionId, popup, live, error, focusEpoch, terminalMouseInput, onReconnect }: Props) {
   const rootRef = useRef<HTMLElement>(null);
-  const [bounds, setBounds] = useState({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight });
+  // Size the terminal from the work area on its first mount; fitting it to the
+  // whole window first leaves its PTY grid larger than the visible popup.
+  const [bounds, setBounds] = useState(() => popupBounds(null));
   const [cell, setCell] = useState({ width: 8, height: 16 });
   const [terminalState, setTerminalState] = useState({ ready: false, error: null as string | null });
   const [attempt, setAttempt] = useState(0);
@@ -26,10 +39,11 @@ export function ServerPopup({ client, sessionId, popup, live, error, focusEpoch,
     };
   }, []);
   useLayoutEffect(() => {
-    const area = rootRef.current?.closest(".workbench")?.querySelector<HTMLElement>(".workarea-content");
+    const area = rootRef.current?.closest(".workbench")?.querySelector<HTMLElement>(".workarea-content")
+      ?? document.querySelector<HTMLElement>(".workbench .workarea-content");
     const measure = () => {
-      const rect = area?.getBoundingClientRect();
-      setBounds(rect && rect.width > 0 && rect.height > 0 ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight });
+      const next = popupBounds(rootRef.current);
+      setBounds(current => current.left === next.left && current.top === next.top && current.width === next.width && current.height === next.height ? current : next);
     };
     measure();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
