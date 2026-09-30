@@ -18,6 +18,10 @@
   --surface-raised: #1b2431;
   --surface-hover: #222e3d;
   --surface-selected: #23354c;
+  /* One selection language: the shared fill plus a 2px accent edge on the side facing the content (left in sidebars and trees, top in tab bars and pane headers). */
+  --select-fill: var(--surface-selected);
+  --select-edge: var(--accent);
+  --select-edge-size: 2px;
   --border: #2b3543;
   --border-strong: #3b4758;
   --text-primary: #cdd6f4;
@@ -476,7 +480,7 @@ summary:focus-visible {
   height: var(--tab-strip-height);
   min-height: 0;
   flex: 1 1 auto;
-  /* Leave room for the selected folder tab to cover the toolbar hairline. */
+  /* The toolbar hairline sits below the strip. */
   margin-bottom: -1px;
   padding-bottom: 1px;
   border-bottom: 0;
@@ -542,8 +546,7 @@ summary:focus-visible {
 
 .pane-view.is-selected {
   z-index: var(--z-raised);
-  border-color: var(--focus-strong);
-  box-shadow: inset 0 0 0 2px var(--focus-strong);
+  border-color: var(--select-edge);
 }
 
 .pane-header {
@@ -563,6 +566,7 @@ summary:focus-visible {
 
 .pane-view.is-selected .pane-header {
   color: var(--text-primary);
+  box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge);
 }
 
 .pane-title {
@@ -770,8 +774,8 @@ summary:focus-visible {
 
 
 .tab-item.is-selected {
-  background: var(--surface);
-  box-shadow: inset 0 2px 0 var(--accent), 0 1px 0 var(--surface);
+  background: var(--select-fill);
+  box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge);
 }
 
 .tab-item .tab-button {
@@ -1626,10 +1630,10 @@ kbd {
 
 /* Top-bar action cluster (Library design §5.3, §5.7): [browser] [Library] [Commands] after one rule, all 28 px in the 41 px bar. */
 .tab-strip-actions { align-items: center; gap: 2px; padding: 0 8px 0 6px; }
-.tab-strip-actions .tab-icon-button { margin: 6px 0; }
+.tab-strip-actions .tab-icon-button { align-self: stretch; height: auto; margin: 0; border-radius: 0; }
 .tab-strip-separator { flex: 0 0 1px; width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
-/* Pressed = the surface is showing: a fill, an accent icon and an inset underline, so it is never colour alone. */
-.tab-icon-button[aria-pressed="true"]:not(:disabled) { background: var(--surface-selected); color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+/* Pressed = the surface is showing: the shared selection fill, an accent icon and the top-bar edge (top), so it is never colour alone. */
+.tab-icon-button[aria-pressed="true"]:not(:disabled) { background: var(--select-fill); color: var(--accent); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); }
 .tab-icon-button:focus-visible,
 .tab-strip-action:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
 .tab-strip-actions .tab-strip-action { height: 28px; margin-left: 6px; padding: 0 10px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); font-size: var(--font-size-control); font-weight: 500; }

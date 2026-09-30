@@ -50,7 +50,7 @@ import { AddContextDialog } from "../library/AddContextDialog";
 import { LibraryConfirmDialog, SpaceCopyConfirmDialog, spaceCopyConflict, type SpaceCopyConfirmation } from "../library/LibraryConfirmDialog";
 import { AttachmentReport, LibraryAttachmentNotice, LibraryItemHeader, ProviderFactsLine, type ItemSpaceState } from "../library/LibraryItemHeader";
 import { LibraryDetails } from "../library/LibraryDetails";
-import { LibraryMenu, LibraryTree, attachmentPath, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions, type LibraryMenuEntry } from "../library/LibraryTree";
+import { LibraryMenu, LibraryTree, attachmentPath, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions, type LibraryMenuEntry, type LibraryTreeNotice } from "../library/LibraryTree";
 import { RefreshReport } from "../library/RefreshReport";
 import { ErrorSlot } from "../ErrorSlot";
 import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
@@ -1209,6 +1209,7 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
   const [libraryReportVerb, setLibraryReportVerb] = useState<"Refresh" | "Replace" | "Keep">("Refresh");
   const [libraryReportDismissed, setLibraryReportDismissed] = useState(false);
   const [dismissedLibraryError, setDismissedLibraryError] = useState<string | null>(null);
+  const [libraryTreeNotice, setLibraryTreeNotice] = useState<LibraryTreeNotice | null>(null);
   useEffect(() => {
     if (library.status !== "error") setDismissedLibraryError(null);
   }, [library.status]);
@@ -1220,6 +1221,9 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
   const libraryOperation = useLibraryOperation(client, () => {
     setRefreshGeneration((generation) => generation + 1);
   });
+  const libraryOperationId = libraryOperation.operation?.operation_id;
+  // A newer refresh report replaces the follow notice rather than queueing behind it.
+  useEffect(() => { setLibraryTreeNotice(null); }, [libraryOperationId]);
   const lastLibraryBegin = useRef<(() => Promise<LibraryOperation>) | null>(null);
   const beginLibraryOperation = libraryOperation.start;
   const startLibraryOperation = useCallback((begin: () => Promise<LibraryOperation>) => {
@@ -1812,7 +1816,7 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
               <span>Nothing in the Library yet</span>
               <button type="button" className="library-button is-primary" onClick={() => setLibraryAdd("library")}><UiIcon name="plus" />Add…</button>
             </div> : null}
-            {library.listing ? <LibraryTree items={library.listing.items} follows={library.listing.follows} providers={library.providers} selectedItemId={selectedLibraryItem?.item_id ?? null} selectedAttachmentId={selectedAttachmentId} pendingItemIds={pendingItemIds} actions={libraryActions} /> : null}
+            {library.listing ? <LibraryTree items={library.listing.items} follows={library.listing.follows} providers={library.providers} selectedItemId={selectedLibraryItem?.item_id ?? null} selectedAttachmentId={selectedAttachmentId} pendingItemIds={pendingItemIds} actions={libraryActions} onNotice={setLibraryTreeNotice} /> : null}
           </> : null}
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
           {directories[keyFor(root.root_id, "")]?.status === "error" && !directories[keyFor(root.root_id, "")]?.data ? <div className="context-tree-error">{directories[keyFor(root.root_id, "")]?.error}</div> : null}
@@ -1847,6 +1851,8 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
           onRetry={(itemIds) => startLibraryRefresh({ scope: "items", item_ids: itemIds }, itemIds)}
           onRetryOperation={retryLibraryOperation}
           onRetryFollow={(followId) => startLibraryRefresh({ scope: "follow", follow_id: followId }, [])} />
+        : libraryTreeNotice ? <ErrorSlot placement="pane" error={libraryTreeNotice.failed} message={libraryTreeNotice.text}
+          actions={<button type="button" onClick={() => setLibraryTreeNotice(null)}>Dismiss</button>} />
         : <ErrorSlot placement="pane" message={libraryOperation.error} actions={libraryOperation.error ? <>
           <button type="button" onClick={retryLibraryOperation}>Retry</button>
           <button type="button" onClick={libraryOperation.reset}>Dismiss</button>

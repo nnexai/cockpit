@@ -117,7 +117,7 @@
   cursor: pointer;
 }
 .context-tree-row:hover { background: var(--surface-hover); }
-.context-tree-row.is-selected { border-left-color: var(--accent); background: var(--surface-selected); }
+.context-tree-row.is-selected { border-left-color: var(--select-edge); background: var(--select-fill); }
 .context-tree-row:disabled { cursor: default; opacity: 1; }
 .context-tree-disclosure { width: 12px; flex: 0 0 12px; color: var(--text-secondary); text-align: center; }
 .context-tree-icon { width: 14px; flex: 0 0 14px; color: var(--accent); text-align: center; }
@@ -154,7 +154,7 @@
 .context-state-warning { color: var(--warning); }
 .context-mode-switch { display: flex; gap: 4px; padding-block-start: 6px; background: var(--terminal-bg); }
 .context-mode-switch button { min-height: 26px; border-bottom-color: transparent; border-radius: var(--radius-control) var(--radius-control) 0 0; color: var(--text-secondary); }
-.context-mode-switch button.is-selected { border-color: var(--accent); background: var(--surface-selected); color: var(--text-primary); }
+.context-mode-switch button.is-selected { border-color: var(--border); border-top-color: transparent; background: var(--select-fill); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); color: var(--text-primary); }
 .context-source-scroll,
 .context-markdown-scroll { min-height: 0; flex: 1; overflow: auto; }
 .context-source-lines { min-width: max-content; padding: 8px 0 24px; }

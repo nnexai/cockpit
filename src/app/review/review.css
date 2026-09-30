@@ -60,7 +60,7 @@
 .review-file-directory > summary::marker { color: var(--text-muted); }
 .review-file { display: grid; width: 100%; height: auto; box-sizing: border-box; grid-template-columns: 14px minmax(0, 1fr) auto auto; align-items: center; gap: 5px; padding: 2px 8px; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .review-file:hover { background: var(--surface-hover); }
-.review-file.is-selected { border-left-color: var(--accent); background: var(--surface-selected); }
+.review-file.is-selected { border-left-color: var(--select-edge); background: var(--select-fill); }
 .review-file b { color: var(--accent); font-weight: 600; }
 .review-file span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-file small { color: var(--text-muted); }
@@ -85,7 +85,7 @@
 }
 .review-line { display: grid; width: 100%; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .review-line:hover { background: var(--surface-hover); }
-.review-line.is-selected { border-left-color: var(--accent); background: var(--surface-selected); }
+.review-line.is-selected { border-left-color: var(--select-edge); background: var(--select-fill); }
 .review-line > span { color: var(--text-muted); text-align: right; user-select: none; }
 .review-line code { overflow-wrap: normal; white-space: pre; font: inherit; }
 .review-diff-marker { color: var(--text-muted); }

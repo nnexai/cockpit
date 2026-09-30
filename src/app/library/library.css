@@ -138,7 +138,7 @@
   background-size: calc(var(--depth, 0) * 14px) 100%;
 }
 .library-tree .context-tree-row.library-tree-row:hover { background-color: var(--surface-hover); }
-.library-tree .context-tree-row.library-tree-row.is-selected { border-left-color: var(--accent); background-color: var(--surface-selected); }
+.library-tree .context-tree-row.library-tree-row.is-selected { border-left-color: var(--select-edge); background-color: var(--select-fill); }
 .library-tree .context-tree-row.library-tree-row:focus { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
 .library-row-chevron { display: grid; width: 16px; flex: 0 0 16px; place-items: center; color: var(--text-muted); }
 .library-row-chevron .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); color: inherit; }
@@ -491,11 +491,6 @@
 .library-attachment-notice > span { overflow-wrap: anywhere; }
 
 /* Followed spaces (design §4.3, §4.5, §4.10, UQ5a). */
-.library-tree-notice { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font-size: var(--font-size-2xs); }
-.library-tree-notice span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.library-tree-notice.is-error { color: var(--blocked); }
-.library-tree-notice button { flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 1px 8px; background: var(--surface); color: var(--text-secondary); font-size: inherit; cursor: pointer; }
-.library-tree-notice button:hover { background: var(--surface-hover); }
 .library-report-limit { margin: 0; }
 .library-report-limit span:last-child { white-space: normal; overflow-wrap: anywhere; }
 .library-note-partial { color: var(--working); }

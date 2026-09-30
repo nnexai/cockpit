@@ -254,6 +254,8 @@ function stoppedFollowing(follow: LibraryFollowSummary): string {
 
 const NO_FOLLOWS: readonly LibraryFollowSummary[] = [];
 
+export type LibraryTreeNotice = { text: string; failed: boolean };
+
 /**
  * Library tree (design §4.3): provider instance → container → item, with
  * Confluence pages under their ancestors. A followed space is a container
@@ -266,7 +268,7 @@ const NO_FOLLOWS: readonly LibraryFollowSummary[] = [];
  * Labels are display names, and the full path is the tooltip. A focused row that
  * disappears (a removed space) hands focus to its parent row.
  */
-export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedItemId, selectedAttachmentId = null, pendingItemIds, actions }: {
+export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedItemId, selectedAttachmentId = null, pendingItemIds, actions, onNotice }: {
   items: readonly LibraryItemSummary[];
   /** Followed spaces from the Library listing; each is shown as its space's container. */
   follows?: readonly LibraryFollowSummary[];
@@ -276,12 +278,13 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
   selectedAttachmentId?: string | null;
   pendingItemIds: ReadonlySet<string>;
   actions: LibraryItemActions;
+  /** Follow outcomes go to the Library's status area, never above the rows. */
+  onNotice: (notice: LibraryTreeNotice | null) => void;
 }) {
   // Keys the user toggled: other rows start open, `Attachments (N)` groups start folded.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [menu, setMenu] = useState<Menu | null>(null);
   const [removing, setRemoving] = useState<LibraryFollowSummary | null>(null);
-  const [followNotice, setFollowNotice] = useState<{ text: string; failed: boolean } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const focusedRow = useRef<{ key: string; parent: string | null; index: number } | null>(null);
   // The row that last held focus stays the tree's one tab stop (roving tabindex); until then the selected row, else the first.
@@ -363,9 +366,9 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
   const removeFollow = actions.removeFollow;
   const stopFollowing = (follow: LibraryFollowSummary) => {
     if (!removeFollow) return;
-    setFollowNotice(null);
-    removeFollow(follow, "stop_following").then(() => setFollowNotice({ text: stoppedFollowing(follow), failed: false }), (cause: unknown) => {
-      setFollowNotice({ text: `Still following ${follow.source.kind === "jira_query" ? "the query" : follow.source.space_key}. ${errorText(cause, "Stopping could not be completed.")}`, failed: true });
+    onNotice(null);
+    removeFollow(follow, "stop_following").then(() => onNotice({ text: stoppedFollowing(follow), failed: false }), (cause: unknown) => {
+      onNotice({ text: `Still following ${follow.source.kind === "jira_query" ? "the query" : follow.source.space_key}. ${errorText(cause, "Stopping could not be completed.")}`, failed: true });
     });
   };
   const attachmentActions = actions.attachments;
@@ -393,7 +396,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
         ...(removeFollow ? [
           { label: "Stop following", onSelect: () => stopFollowing(follow) },
           "separator" as const,
-          { label: `Remove ${noun} and its items…`, onSelect: () => { setFollowNotice(null); setRemoving(follow); }, destructive: true },
+          { label: `Remove ${noun} and its items…`, onSelect: () => { onNotice(null); setRemoving(follow); }, destructive: true },
         ] : []),
       ];
     }
@@ -467,10 +470,6 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
   // Focus moving elsewhere (a menu, a dialog, another pane) is no longer the tree's to restore.
   const onBlur = (event: FocusEvent<HTMLDivElement>) => { if (event.relatedTarget) focusedRow.current = null; };
   return <div className="library-tree" ref={listRef} onKeyDown={onKeyDown} onFocus={onFocus} onBlur={onBlur}>
-    {followNotice ? <div className={`library-tree-notice${followNotice.failed ? " is-error" : ""}`} role={followNotice.failed ? "alert" : "status"}>
-      <span>{followNotice.text}</span>
-      <button type="button" onClick={() => setFollowNotice(null)}>Dismiss</button>
-    </div> : null}
     {rows.map((row) => {
       const depth = { "--depth": row.depth } as CSSProperties;
       if (row.kind === "item" || row.kind === "page") {
@@ -563,7 +562,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
     {removing && removeFollow ? <FollowRemoveDialog follow={removing} onClose={() => setRemoving(null)} remove={async (mode) => {
       await removeFollow(removing, mode);
       setRemoving(null);
-      setFollowNotice({ text: mode === "stop_following" ? stoppedFollowing(removing) : `Removed ${followTitle(removing)} from the Library.`, failed: false });
+      onNotice({ text: mode === "stop_following" ? stoppedFollowing(removing) : `Removed ${followTitle(removing)} from the Library.`, failed: false });
     }} /> : null}
   </div>;
 }

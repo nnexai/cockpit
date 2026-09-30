@@ -7,6 +7,8 @@ import { LibraryTree } from "./LibraryTree";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+const onNotice = vi.fn();
+
 const providers: ProjectProvider[] = [{ id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence", login: "default" }];
 const home = { id: "1", title: "Engineering home" };
 const processPage = { id: "10", title: "Release process" };
@@ -40,7 +42,7 @@ it("places pages under provider, space and ancestors, and gives a page with chil
   // One indent formula: every row and its page chevron read `--depth` from their node.
   const depthOf = (row: HTMLElement) => row.closest<HTMLElement>(".context-tree-node")!.style.getPropertyValue("--depth");
   try {
-    await act(async () => root.render(<LibraryTree items={[sibling, child, parent]} providers={providers} selectedItemId="source:checklist" pendingItemIds={new Set()} actions={actions} />));
+    await act(async () => root.render(<LibraryTree items={[sibling, child, parent]} providers={providers} selectedItemId="source:checklist" pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
     expect(rowLabels()).toEqual(["Confluence · nnexai.atlassian.net", "SD · Software Development", "Engineering home", "Release process", "Release checklist", "Architecture overview"]);
     expect([...host.querySelectorAll<HTMLButtonElement>("[data-library-row]")].map(depthOf)).toEqual(["0", "1", "2", "3", "4", "3"]);
     const space = [...host.querySelectorAll<HTMLButtonElement>("[data-library-row]")][1]!;
@@ -126,7 +128,7 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
   const lastGroup = () => treeRows().filter((row) => row.classList.contains("is-attachments")).at(-1)!;
   const key = (target: HTMLElement, name: string, init: KeyboardEventInit = {}) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, ...init })); });
   try {
-    await act(async () => root.render(<LibraryTree items={[solo, child, mixed]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    await act(async () => root.render(<LibraryTree items={[solo, child, mixed]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
     // Child pages come first, then the page's Attachments group, folded until opened; page-tree order is kept.
     expect(rowLabels()).toEqual(["Confluence · nnexai.atlassian.net", "SD · Software Development", "Engineering home",
       "Release process", "Release checklist", "Attachments", "Architecture overview", "Attachments"]);
@@ -265,7 +267,7 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
   const openMenu = (row: HTMLElement) => act(async () => { row.focus(); row.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })); });
   const choose = (label: string) => act(async () => menuItems().find((item) => item.textContent === label)!.click());
   try {
-    await act(async () => root.render(<LibraryTree items={pages} follows={[sd, ops]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    await act(async () => root.render(<LibraryTree items={pages} follows={[sd, ops]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
     expect(treeRows().map((row) => row.querySelector(".context-tree-name")?.textContent))
       .toEqual(["Confluence · nnexai.atlassian.net", "OPS · Operations", "SD · Software Development", "Home", "Architecture", "Release folder", "Team", "Team notes"]);
     const opsRow = named("OPS · Operations");
@@ -290,9 +292,9 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
     await openMenu(named("SD · Software Development"));
     await choose("Stop following");
     expect(removeFollow).toHaveBeenLastCalledWith(sd, "stop_following");
-    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(onNotice).toHaveBeenLastCalledWith(null);
     await act(async () => stop());
-    expect(host.querySelector('[role="status"]')?.textContent).toContain("Stopped following SD. Its 4 pages stay in the Library; refresh no longer adds new pages.");
+    expect(onNotice).toHaveBeenLastCalledWith({ text: "Stopped following SD. Its 4 pages stay in the Library; refresh no longer adds new pages.", failed: false });
 
     // Removal asks first, with Cancel focused and `Stop following only` as the lesser choice.
     await openMenu(named("SD · Software Development"));
@@ -307,7 +309,7 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(named("SD · Software Development"));
     // The reread drops the space; focus moves to its provider row instead of the page body.
-    await act(async () => root.render(<LibraryTree items={[]} follows={[ops]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    await act(async () => root.render(<LibraryTree items={[]} follows={[ops]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
     expect(named("SD · Software Development")).toBeUndefined();
     expect(document.activeElement).toBe(named("Confluence · nnexai.atlassian.net"));
     expect(actions.remove).not.toHaveBeenCalled();
@@ -341,7 +343,7 @@ it("shows a followed Jira query as a container titled by its JQL, marks unrefere
   const menuItems = () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
   const openMenu = (row: HTMLElement) => act(async () => { row.focus(); row.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })); });
   try {
-    await act(async () => root.render(<LibraryTree items={[held, tombstoned, own]} follows={[query]} providers={jira} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    await act(async () => root.render(<LibraryTree items={[held, tombstoned, own]} follows={[query]} providers={jira} selectedItemId={null} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
     const names = treeRows().map((row) => row.querySelector(".context-tree-name")?.textContent);
     // The followed issue sits under the query; the unfollowed ones under their project.
     expect(names).toEqual(["Jira · jira.test", "OPS", "OPS-3 Issue OPS-3", "OPS-2 Issue OPS-2", "project = OPS AND updated >= -14d", "OPS-1 Issue OPS-1"]);
@@ -391,7 +393,7 @@ it("offers Provider token… on a Jira or Confluence instance row, opens it for 
   const menuItems = () => [...document.body.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent);
   const rightClick = (row: HTMLElement) => act(async () => { row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 20, clientY: 20 })); });
   try {
-    await act(async () => root.render(<LibraryTree items={[issue, wiki, repo]} providers={config} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    await act(async () => root.render(<LibraryTree items={[issue, wiki, repo]} providers={config} selectedItemId={null} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
     expect(credentials.ensure).not.toHaveBeenCalled();
     await rightClick(rowNamed("Jira · team.atlassian.net"));
     expect(menuItems()).toEqual(["Refresh all in Jira · team.atlassian.net", "Provider token…"]);
@@ -441,7 +443,7 @@ it("lists a Jira issue's attachments under an Attachments group, and leaves an i
   const root = createRoot(host);
   const labels = () => [...host.querySelectorAll<HTMLElement>("[data-library-row]")].map((row) => row.querySelector(".context-tree-name")?.textContent);
   try {
-    await act(async () => root.render(<LibraryTree items={[issue("OPS-2", []), issue("OPS-1", [file])]} providers={jira} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    await act(async () => root.render(<LibraryTree items={[issue("OPS-2", []), issue("OPS-1", [file])]} providers={jira} selectedItemId={null} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
     // The issue with attachments gets its group right after it; the other stays a leaf.
     expect(labels().slice(2)).toEqual(["OPS-2", "OPS-1", "Attachments"]);
   } finally {
@@ -477,7 +479,7 @@ async function renderTree(items: LibraryItemSummary[], selectedItemId: string | 
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(<LibraryTree items={items} follows={[query]} providers={jiraProviders} selectedItemId={selectedItemId} pendingItemIds={new Set()} actions={actions} />));
+  await act(async () => root.render(<LibraryTree items={items} follows={[query]} providers={jiraProviders} selectedItemId={selectedItemId} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
   const rows = () => [...host.querySelectorAll<HTMLElement>("[data-library-row]")];
   return {
     actions, host, rows,

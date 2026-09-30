@@ -295,7 +295,7 @@
 .agent-row:active { background: var(--surface-selected); }
 
 .space-tree-row.is-selected,
-.agent-row.is-selected { background: var(--surface-selected); }
+.agent-row.is-selected { background: var(--select-fill); }
 
 /* Pending: Herdr has not confirmed yet, so a neutral pill, not the accent. */
 .space-tree-row.is-pending,
@@ -309,12 +309,11 @@
 .agent-row.is-selected::before,
 .agent-row.is-pending::before {
   position: absolute;
-  top: 8px;
-  bottom: 8px;
+  top: 0;
+  bottom: 0;
   left: 0;
-  width: 3px;
-  border-radius: var(--radius-small);
-  background: var(--accent);
+  width: var(--select-edge-size);
+  background: var(--select-edge);
   content: "";
   pointer-events: none;
 }
