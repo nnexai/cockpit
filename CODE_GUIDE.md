@@ -170,6 +170,8 @@ Setup passes `Arc<LibraryService>` and validated fetch results through `ProjectS
 
 Run `bun run quality:probe` to inspect the pinned metric tools, then `bun run quality:report --base <review-base>` for the current staged, unstaged and untracked scope. `bun run quality:gate --base <review-base> --strict` applies the strict gate. Reports are ignored local artifacts under `quality/reports/`. Missing metric providers produce an inconclusive result (exit 2); they never count as passing coverage or complexity. See `quality/README.md` for provider inputs, baseline review and exception rules.
 
+For manual, source-targeted mutation reports only, use `bun run quality:mutation -- rust|ts --file <source>`; see the opt-in workflow and side-effect warnings in `quality/README.md`. Mutation testing is never invoked by ordinary tests, the gate, or CI.
+
 ## Inline browser implementation
 
 `browser-runtime/browser-helper.mjs` attaches to the tab's CLI-managed Chromium session and owns CDP input, metadata, inspection, and binary frames. `crates/cockpit-host/src/browser_helper.rs` supervises it. `browser_runtime.rs` routes requests through the single runtime owner; `browser_view.rs` provides web routes and bounded binary relay, and native commands use the same runtime. Core `BrowserTarget` selects a tab, or resolves a real pane to its tab; association keys include endpoint identity, session and tab, never Space-only identity.

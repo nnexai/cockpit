@@ -1,0 +1,22 @@
+{
+  "$schema": "../node_modules/@stryker-mutator/api/dist/schema/stryker-core.json",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "vitest": { "configFile": "quality/vite.mutation.config.ts", "related": true },
+  "mutate": [],
+  "reporters": ["clear-text", "json", "html"],
+  "coverageAnalysis": "perTest",
+  "concurrency": 1,
+  "incremental": false,
+  "thresholds": { "break": null },
+  "allowEmpty": false,
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": "always",
+  "ignorePatterns": [
+    "/tsconfig.json",
+    "/target", "/crates", "/src-tauri", "/poc", "/spikes", "/planning", "/archive",
+    "/research", "/scripts", "/quality/reports", "/dist", "/browser-runtime",
+    "/.playwright-cli", "/.playwright", "/.audit", "/.ruff_cache", "/.codex",
+    "/.agents", "/.omp", "/mutants.out*"
+  ]
+}

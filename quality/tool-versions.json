@@ -10,7 +10,8 @@
     "vitest_coverage_v8": { "argv": ["node", "-e", "require.resolve('@vitest/coverage-v8/package.json')"], "expected": null, "package": "@vitest/coverage-v8", "invocation_mode": "optional-unconfigured" },
     "cargo_llvm_cov": { "argv": ["cargo", "llvm-cov", "--version"], "expected": null, "package": "cargo-llvm-cov", "invocation_mode": "optional-unconfigured" },
     "cargo_crap": { "argv": ["cargo", "crap", "--version"], "expected": null, "package": "cargo-crap", "invocation_mode": "optional-unconfigured" },
-    "cargo_mutants": { "argv": ["cargo", "mutants", "--version"], "expected": null, "package": "cargo-mutants", "invocation_mode": "optional-unconfigured" },
-    "stryker": { "argv": ["node", "-e", "require.resolve('@stryker-mutator/core/package.json')"], "expected": null, "package": "@stryker-mutator/core", "invocation_mode": "optional-unconfigured" }
+    "cargo_mutants": { "argv": ["cargo", "mutants", "--version"], "expected": "cargo-mutants 27.1.0", "package": "cargo-mutants", "invocation_mode": "cargo-install" },
+    "stryker": { "argv": ["node", "-p", "require('@stryker-mutator/core/package.json').version"], "expected": "10.0.0", "package": "@stryker-mutator/core", "invocation_mode": "project-lockfile" },
+    "stryker_vitest_runner": { "argv": ["node", "-p", "require('@stryker-mutator/vitest-runner/package.json').version"], "expected": "10.0.0", "package": "@stryker-mutator/vitest-runner", "invocation_mode": "project-lockfile" }
   }
 }

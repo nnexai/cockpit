@@ -29,3 +29,8 @@ __pycache__/
 /planning/product-atlas-2026-09-12/runtime/setup-context-review/logs/
 /planning/product-atlas-2026-09-12/runtime/setup-context-review/fixture-repo/
 /planning/product-atlas-2026-09-12/runtime/workbench-terminal/commands-actions.log
+
+# Opt-in mutation tool sandboxes and bare-tool reports
+/.stryker-tmp/
+/mutants.out/
+/mutants.out.old/

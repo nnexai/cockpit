@@ -11,6 +11,7 @@
     "quality:probe": "python3 scripts/quality/gate.py probe",
     "quality:report": "python3 scripts/quality/gate.py report",
     "quality:gate": "python3 scripts/quality/gate.py gate",
+    "quality:mutation": "python3 scripts/quality/mutation.py",
     "tauri:dev": "bunx tauri dev",
     "tauri:build": "NO_STRIP=1 bunx tauri build",
     "native:install": "python3 scripts/install-native.py"
@@ -34,6 +35,8 @@
     "remark-gfm": "4.0.1"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/vitest-runner": "10.0.0",
     "@tauri-apps/cli": "2.11.4",
     "@types/node": "26.4.1",
     "@types/react": "19.2.18",
