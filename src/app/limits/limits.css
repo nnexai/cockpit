@@ -34,25 +34,29 @@
 }
 .limits-trigger:hover { background: var(--surface-hover); }
 .limits-trigger:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
-.limits-chips, .limits-chip, .limits-summary { display: flex; align-items: center; }
-.limits-chip { gap: 5px; }
+.limits-chips, .limits-chip, .limits-segment, .limits-summary { display: flex; align-items: center; }
+.limits-chip { gap: 8px; }
+.limits-segment { gap: 5px; }
 .limits-chip + .limits-chip { margin-left: 8px; padding-left: 8px; border-left: 1px solid var(--border); }
 .limits-name { font-weight: 500; }
 .limits-value, .limits-row-value { font-variant-numeric: tabular-nums; }
-.limits-chip.is-stale { color: var(--text-muted); }
-.limits-chip.is-stale .limits-value { text-decoration: underline dotted; text-underline-offset: 3px; }
+.limits-chip.is-stale, .limits-segment.is-stale { color: var(--text-muted); }
+.limits-segment.is-stale .limits-value { text-decoration: underline dotted; text-underline-offset: 3px; }
+.limits-segment.limits-tone-warning:not(.is-stale) .limits-value { color: var(--warning); }
+.limits-segment.limits-tone-alert:not(.is-stale) .limits-value { color: var(--blocked); font-weight: 600; }
 .limits-chip .ui-icon { width: 13px; height: 13px; color: var(--blocked); }
 .limits-window, .limits-chip-meter, .limits-age { display: none; }
-.limits-window { max-width: 7ch; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.limits-window { color: var(--text-muted); }
+.limits-segment.has-window-label .limits-window { display: inline-block; }
 .limits-age, .limits-more { color: var(--text-muted); }
-.limits-summary { display: none; gap: 5px; }
+.limits-summary { display: none; gap: 5px; overflow: hidden; }
 .limits-meter { display: inline-block; width: 64px; height: 4px; border-radius: 3px; background: var(--border-strong); overflow: hidden; vertical-align: middle; }
-.limits-meter > span { display: block; width: var(--remaining); height: 100%; background: var(--text-muted); }
+.limits-meter > span { display: block; width: var(--used); height: 100%; background: var(--text-muted); }
 .limits-meter.limits-tone-ok > span { background: var(--accent); }
 .limits-meter.limits-tone-warning > span { background: var(--warning); }
 .limits-meter.limits-tone-alert > span { background: var(--blocked); }
 .limits-meter.is-stale > span { background: repeating-linear-gradient(135deg, var(--text-muted) 0 2px, transparent 2px 4px); }
-.limits-chip-meter .limits-meter { width: 28px; }
+.limits-chip-meter .limits-meter { width: 24px; }
 .limits-popup {
   position: absolute;
   right: 8px;

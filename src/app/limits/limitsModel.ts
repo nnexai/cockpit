@@ -1,4 +1,4 @@
-import type { QuotaErrorCode, QuotaLevel, QuotaLimit, QuotaProvider, QuotaProviderStatus, QuotaStatusResponse } from "../../protocol/generated/v1";
+import type { QuotaErrorCode, QuotaLimit, QuotaProvider, QuotaProviderStatus, QuotaStatusResponse } from "../../protocol/generated/v1";
 import { formatAgo, formatDate } from "../library/libraryState";
 
 export const PROVIDER_ORDER: readonly QuotaProvider[] = ["codex", "claude", "copilot"];
@@ -9,29 +9,20 @@ export function providerName(provider: string): string {
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
-export function remainingFraction(limit: QuotaLimit): number | null {
+export function usedFraction(limit: QuotaLimit): number | null {
   if (limit.unlimited) return null;
-  if (limit.used_fraction !== null) return clamp(1 - limit.used_fraction);
+  if (limit.used_fraction !== null) return clamp(limit.used_fraction);
   if (limit.unit === "credits" && limit.limit !== null && limit.limit > 0) {
-    if (limit.remaining !== null) return clamp(limit.remaining / limit.limit);
-    if (limit.used !== null) return clamp(1 - limit.used / limit.limit);
+    if (limit.remaining !== null) return clamp((limit.limit - limit.remaining) / limit.limit);
+    if (limit.used !== null) return clamp(limit.used / limit.limit);
   }
   return null;
 }
 
-export function limitingLimit(limits: readonly QuotaLimit[]): QuotaLimit | null {
-  let best: QuotaLimit | null = null;
-  let fraction = Infinity;
-  for (const limit of limits) {
-    const value = remainingFraction(limit);
-    if (value === null) continue;
-    if (value < fraction || (value === fraction && (limit.resets_at_ms ?? Infinity) < (best?.resets_at_ms ?? Infinity))) {
-      best = limit;
-      fraction = value;
-    }
-  }
-  return best ?? limits.find(limit => limit.unit === "credits" && (limit.remaining !== null || limit.used !== null))
-    ?? limits.find(limit => limit.unlimited) ?? null;
+export type UsageTone = "ok" | "warning" | "alert";
+
+export function usageTone(used: number | null): UsageTone | null {
+  return used === null ? null : used > 0.95 ? "alert" : used > 0.8 ? "warning" : "ok";
 }
 
 export function windowLabel(window: string | null, tier: string | null): string {
@@ -39,30 +30,23 @@ export function windowLabel(window: string | null, tier: string | null): string 
   return [tier && title(tier), window && title(window)].filter(Boolean).join(" ") || "Limit";
 }
 
-function creditBalance(limit: QuotaLimit): number | null {
-  return limit.remaining ?? (limit.limit !== null && limit.used !== null ? Math.max(0, limit.limit - limit.used) : null);
-}
-
 export function formatLimitValue(limit: QuotaLimit | null, detail = false): string {
   if (!limit) return "—";
   if (limit.unlimited) return detail ? "Unlimited" : "unlimited";
-  if (limit.unit === "percent") {
-    const fraction = remainingFraction(limit);
-    if (fraction === null) return "—";
-    // A tiny positive balance is not exhausted, and floating point noise must not turn 62% into 61%.
-    const percent = fraction === 0 ? "0%" : fraction < 0.01 ? "<1%" : `${Math.floor(fraction * 100 + 1e-9)}%`;
-    return detail ? `${percent} left` : percent;
-  }
-  const balance = creditBalance(limit);
-  if (balance === null) return limit.used === null ? "—" : `${number.format(limit.used)} ${detail ? "AI credits used" : "cr used"}`;
-  if (detail) return `${number.format(balance)}${limit.limit === null ? "" : ` of ${number.format(limit.limit)}`} AI credits left`;
-  return `${balance >= 10_000 ? `${number.format(balance / 1000)}k` : number.format(balance)} cr`;
+  const fraction = usedFraction(limit);
+  const percent = fraction === null ? null : `${number.format(fraction * 100)}%`;
+  if (!detail && percent !== null) return percent;
+  if (limit.unit === "percent") return percent === null ? "—" : `${percent} used`;
+  const used = limit.used ?? (limit.limit !== null && limit.remaining !== null ? Math.max(0, limit.limit - limit.remaining) : null);
+  if (used === null) return percent === null ? "—" : `${percent} used`;
+  if (detail) return `${number.format(used)}${limit.limit === null ? "" : ` of ${number.format(limit.limit)}`} AI credits used${percent === null ? "" : ` · ${percent}`}`;
+  return `${used >= 10_000 ? `${number.format(used / 1000)}k` : number.format(used)} cr used`;
 }
 
-export function errorText(error: QuotaErrorCode | null, provider?: QuotaProvider): string {
+export function errorText(error: QuotaErrorCode | null): string {
   switch (error) {
-    case "source_missing": return provider === "copilot" ? "GitHub CLI not found" : "OMP usage source not found";
-    case "not_signed_in": return "Not signed in";
+    case "source_missing": return "OMP usage source not found";
+    case "not_signed_in": return "Not signed in to OMP";
     case "usage_unavailable": return "No usage report available";
     case "unsupported": return "Not reported for this account";
     case "failed": return "Usage check failed";
@@ -86,25 +70,67 @@ export function formatReset(ms: number | null, now: number): string | null {
   return `resets ${reset} · in ${duration}`;
 }
 
+export function limitIsStale(limit: QuotaLimit, fetchedAt: number, now: number): boolean {
+  return limit.resets_at_ms !== null && limit.resets_at_ms <= now && limit.resets_at_ms > fetchedAt;
+}
+
+function windowDuration(window: string | null): number {
+  if (window === "weekly") return 7 * 86400;
+  if (window === "monthly") return 30 * 86400;
+  const match = window?.match(/^(\d+)([smhdw])$/);
+  if (!match) return Infinity;
+  const seconds: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+  return Number(match[1]) * seconds[match[2]];
+}
+
+export function compareWindows(a: QuotaLimit, b: QuotaLimit): number {
+  const durationA = windowDuration(a.window), durationB = windowDuration(b.window);
+  if (durationA !== durationB) return durationA < durationB ? -1 : 1;
+  return Number(a.tier !== null) - Number(b.tier !== null);
+}
+
+export interface WindowSegment {
+  key: string;
+  label: string;
+  limit: QuotaLimit;
+  used: number | null;
+  text: string;
+  tone: UsageTone | null;
+  stale: boolean;
+}
+
 export function providerView(provider: QuotaProviderStatus, now: number, offline: boolean): ProviderView {
-  const limiting = limitingLimit(provider.accounts.flatMap(account => account.limits));
-  const account = provider.accounts.find(account => limiting !== null && account.limits.includes(limiting));
-  const stale = offline || provider.stale || provider.error !== null || Boolean(limiting?.resets_at_ms !== null && limiting?.resets_at_ms !== undefined && account && limiting.resets_at_ms <= now && limiting.resets_at_ms > account.fetched_at_ms);
-  return {
-    provider, limiting, stale, fraction: limiting ? remainingFraction(limiting) : null,
-    level: limiting?.level ?? "unknown", name: providerName(provider.provider),
-    text: provider.state === "pending" ? "…" : provider.state === "unsupported" ? "n/a" : formatLimitValue(limiting),
-  };
+  const stale = offline || provider.stale || provider.error !== null;
+  const groups = new Map<string, WindowSegment>();
+  for (const account of provider.accounts) {
+    for (const limit of account.limits) {
+      const key = JSON.stringify([limit.tier, limit.window]);
+      const used = usedFraction(limit);
+      const best = groups.get(key);
+      if (best) {
+        const better = used !== null && (best.used === null || used > best.used);
+        const earlierReset = used === best.used && (limit.resets_at_ms ?? Infinity) < (best.limit.resets_at_ms ?? Infinity);
+        if (!better && !earlierReset) continue;
+      }
+      groups.set(key, {
+        key, label: "", limit, used, text: formatLimitValue(limit), tone: usageTone(used),
+        stale: stale || limitIsStale(limit, account.fetched_at_ms, now),
+      });
+    }
+  }
+  const segments = [...groups.values()].sort((a, b) => compareWindows(a.limit, b.limit));
+  for (const segment of segments) {
+    const disambiguate = segments.some(other => other !== segment && other.limit.window === segment.limit.window);
+    segment.label = windowLabel(segment.limit.window, disambiguate ? segment.limit.tier : null);
+  }
+  return { provider, segments, stale, name: providerName(provider.provider) };
 }
 
 export interface ProviderView {
   provider: QuotaProviderStatus;
-  limiting: QuotaLimit | null;
+  segments: WindowSegment[];
   stale: boolean;
-  fraction: number | null;
-  level: QuotaLevel;
   name: string;
-  text: string;
 }
 
 export function providerViews(snapshot: QuotaStatusResponse | null, now: number, offline: boolean): ProviderView[] {
@@ -115,17 +141,21 @@ export function providerViews(snapshot: QuotaStatusResponse | null, now: number,
 
 export function summaryView(views: readonly ProviderView[]): ProviderView | null {
   const visible = views.filter(view => view.provider.state !== "not_signed_in");
-  const fresh = visible.filter(view => !view.stale && view.limiting !== null);
+  const maxUsed = (view: ProviderView, freshOnly: boolean): number => view.segments.reduce((max, segment) =>
+    segment.used !== null && (!freshOnly || !segment.stale) ? Math.max(max, segment.used) : max, -1);
+  const fresh = visible.filter(view => maxUsed(view, true) >= 0);
   const candidates = fresh.length ? fresh : visible;
-  return candidates.reduce<ProviderView | null>((best, view) => view.fraction !== null && (!best || view.fraction < best.fraction!) ? view : best, null) ?? candidates[0] ?? null;
+  return candidates.reduce<ProviderView | null>((best, view) =>
+    !best || maxUsed(view, fresh.length > 0) > maxUsed(best, fresh.length > 0) ? view : best, null);
 }
 
 export function accessibleLabel(views: readonly ProviderView[], now: number, offline: boolean): string {
   const parts = views.filter(view => view.provider.state !== "not_signed_in").map(view => {
-    const value = view.provider.state === "unsupported" ? "not reported" : view.provider.state === "pending" ? "reading limits" : formatLimitValue(view.limiting, true);
-    const window = view.limiting ? ` (${windowLabel(view.limiting.window, view.limiting.tier)})` : "";
+    const value = view.segments.length
+      ? view.segments.map(segment => `${segment.label} ${formatLimitValue(segment.limit, true)}${segment.stale ? ", stale" : ""}`).join(", ")
+      : view.provider.state === "unsupported" ? "not reported" : view.provider.state === "pending" ? "reading limits" : "not reported";
     const age = view.provider.fetched_at_ms === null ? "" : `, updated ${formatAgo(view.provider.fetched_at_ms, now)}`;
-    return `${view.name}: ${value}${window}${view.stale ? ", stale" : ""}${view.provider.error ? `, ${errorText(view.provider.error, view.provider.provider)}` : ""}${age}`;
+    return `${view.name}: ${value}${view.stale ? ", stale" : ""}${view.provider.error ? `, ${errorText(view.provider.error)}` : ""}${age}`;
   });
   return `Subscription limits${offline ? ", offline" : ""}: ${parts.join("; ") || "not signed in"}`;
 }

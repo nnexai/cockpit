@@ -24,6 +24,11 @@ const CADENCE: u64 = 300_000;
 const STALE: u64 = 900_000;
 const RETAIN: u64 = 86_400_000;
 const MAX_CACHE: u64 = 65_536;
+const PROVIDERS: [QuotaProvider; 3] = [
+    QuotaProvider::Codex,
+    QuotaProvider::Claude,
+    QuotaProvider::Copilot,
+];
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,14 +51,12 @@ struct ProviderRecord {
 struct PersistedQuota {
     schema: u32,
     omp: SourceRecord,
-    gh: SourceRecord,
 }
 impl Default for PersistedQuota {
     fn default() -> Self {
         Self {
-            schema: 1,
+            schema: 2,
             omp: SourceRecord::default(),
-            gh: SourceRecord::default(),
         }
     }
 }
@@ -104,7 +107,7 @@ impl QuotaService {
         let mut memory = self.memory.lock().await;
         if !memory.collecting
             && now >= memory.retry_at_ms
-            && (memory.recheck || due(&memory.snapshot.omp, now) || due(&memory.snapshot.gh, now))
+            && (memory.recheck || due(&memory.snapshot.omp, now))
         {
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 memory.collecting = true;
@@ -139,68 +142,36 @@ impl QuotaService {
         }
         let mut current = snapshot.take().unwrap_or_default();
         let omp_due = due(&current.omp, now);
-        let gh_due = due(&current.gh, now);
-        // Persist a lease before starting commands: a killed owner cannot cause a burst.
-        for (record, is_due, providers) in [
-            (
-                &mut current.omp,
-                omp_due,
-                &[QuotaProvider::Codex, QuotaProvider::Claude][..],
-            ),
-            (&mut current.gh, gh_due, &[QuotaProvider::Copilot][..]),
-        ] {
-            if is_due {
-                record.attempted_at_ms = Some(now);
-                record.next_attempt_at_ms = now.saturating_add(CADENCE);
-                if record.providers.is_empty() {
-                    record.providers = providers
-                        .iter()
-                        .map(|provider| {
-                            empty(
-                                *provider,
-                                QuotaProviderState::Unavailable,
-                                Some(QuotaErrorCode::UsageUnavailable),
-                            )
-                        })
-                        .collect();
-                }
+        // Persist a lease before starting the command: a killed owner cannot cause a burst.
+        if omp_due {
+            current.omp.attempted_at_ms = Some(now);
+            current.omp.next_attempt_at_ms = now.saturating_add(CADENCE);
+            if current.omp.providers.is_empty() {
+                current.omp.providers = PROVIDERS
+                    .iter()
+                    .map(|provider| {
+                        empty(
+                            *provider,
+                            QuotaProviderState::Unavailable,
+                            Some(QuotaErrorCode::UsageUnavailable),
+                        )
+                    })
+                    .collect();
             }
-        }
-        if (omp_due || gh_due) && save(&dir, &current).is_err() {
-            self.cache_failed().await;
-            return;
+            if save(&dir, &current).is_err() {
+                self.cache_failed().await;
+                return;
+            }
         }
         {
             let mut memory = self.memory.lock().await;
             memory.snapshot = current.clone();
         }
-        let omp = async {
-            if omp_due {
-                Some(self.collect(false).await)
-            } else {
-                None
-            }
-        };
-        let gh = async {
-            if gh_due {
-                Some(self.collect(true).await)
-            } else {
-                None
-            }
-        };
-        let (omp_result, gh_result) = tokio::join!(omp, gh);
+        if omp_due {
+            let result = self.collect().await;
+            apply(&mut current.omp, result, &PROVIDERS, self.now());
+        }
         let finished = self.now();
-        if let Some(result) = omp_result {
-            apply(
-                &mut current.omp,
-                result,
-                &[QuotaProvider::Codex, QuotaProvider::Claude],
-                finished,
-            );
-        }
-        if let Some(result) = gh_result {
-            apply(&mut current.gh, result, &[QuotaProvider::Copilot], finished);
-        }
         if save(&dir, &current).is_err() {
             let mut memory = self.memory.lock().await;
             mark_cache_failure(&mut memory.snapshot, finished);
@@ -226,32 +197,17 @@ impl QuotaService {
         memory.cache_failures = memory.cache_failures.saturating_add(1).min(5);
         memory.retry_at_ms = now.saturating_add(backoff(memory.cache_failures));
     }
-    async fn collect(&self, gh: bool) -> Result<Vec<ProviderRecord>, QuotaErrorCode> {
-        let executable = if gh {
-            &self.configuration.gh_executable
-        } else {
-            &self.configuration.omp_executable
-        };
-        let mut command = Command::new(executable);
-        command.current_dir(&self.root);
-        if gh {
-            command
-                .args(["api", "--method", "GET", "copilot_internal/user"])
-                .env("GH_PROMPT_DISABLED", "1")
-                .env("GH_PAGER", "cat")
-                .env("GH_HOST", "github.com")
-                .env("GH_NO_UPDATE_NOTIFIER", "1")
-                .env("NO_COLOR", "1");
-        } else {
-            command
-                .args(["usage", "--json", "--redact", "--no-extensions"])
-                .env("NO_COLOR", "1");
-        }
+    async fn collect(&self) -> Result<Vec<ProviderRecord>, QuotaErrorCode> {
+        let mut command = Command::new(&self.configuration.omp_executable);
+        command
+            .current_dir(&self.root)
+            .args(["usage", "--json", "--redact", "--no-extensions"])
+            .env("NO_COLOR", "1");
         let output = run_bounded_command(
             command,
             2 * 1024 * 1024,
             8192,
-            Duration::from_secs(if gh { 20 } else { 30 }),
+            Duration::from_secs(30),
             "quota source",
         )
         .await
@@ -262,33 +218,9 @@ impl QuotaService {
             _ => QuotaErrorCode::Failed,
         })?;
         if !output.status.success() {
-            // Classify locally; raw text is never logged, returned or persisted.
-            let text = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-            if gh && text.contains("http 404") {
-                return Ok(vec![empty(
-                    QuotaProvider::Copilot,
-                    QuotaProviderState::Unsupported,
-                    Some(QuotaErrorCode::Unsupported),
-                )]);
-            }
-            return Err(
-                if gh
-                    && (output.status.code() == Some(4)
-                        || text.contains("not logged")
-                        || text.contains("gh auth login")
-                        || text.contains("http 401"))
-                {
-                    QuotaErrorCode::NotSignedIn
-                } else {
-                    QuotaErrorCode::Failed
-                },
-            );
+            return Err(QuotaErrorCode::Failed);
         }
-        if gh {
-            parse::copilot(&output.stdout, self.now())
-        } else {
-            parse::omp(&output.stdout, self.now())
-        }
+        parse::omp(&output.stdout, self.now())
     }
 }
 fn due(record: &SourceRecord, now: u64) -> bool {
@@ -410,20 +342,12 @@ fn backoff(failures: u8) -> u64 {
     (CADENCE << failures.saturating_sub(1)).min(3_600_000)
 }
 fn mark_cache_failure(snapshot: &mut PersistedQuota, now: u64) {
-    for (record, providers) in [
-        (
-            &mut snapshot.omp,
-            &[QuotaProvider::Codex, QuotaProvider::Claude][..],
-        ),
-        (&mut snapshot.gh, &[QuotaProvider::Copilot][..]),
-    ] {
-        apply(
-            record,
-            Err(QuotaErrorCode::CacheUnavailable),
-            providers,
-            now,
-        );
-    }
+    apply(
+        &mut snapshot.omp,
+        Err(QuotaErrorCode::CacheUnavailable),
+        &PROVIDERS,
+        now,
+    );
 }
 fn empty(
     provider: QuotaProvider,
@@ -438,60 +362,52 @@ fn empty(
     }
 }
 fn response(snapshot: &PersistedQuota, now: u64, collecting: bool) -> QuotaStatusResponse {
-    let providers = [
-        QuotaProvider::Codex,
-        QuotaProvider::Claude,
-        QuotaProvider::Copilot,
-    ]
-    .into_iter()
-    .map(|provider| {
-        let source = if provider == QuotaProvider::Copilot {
-            &snapshot.gh
-        } else {
-            &snapshot.omp
-        };
-        let mut value = source
-            .providers
-            .iter()
-            .find(|value| value.provider == provider)
-            .cloned()
-            .unwrap_or_else(|| {
-                empty(
-                    provider,
-                    if source.attempted_at_ms.is_none() {
-                        QuotaProviderState::Pending
-                    } else {
-                        QuotaProviderState::Unavailable
-                    },
-                    source
-                        .attempted_at_ms
-                        .map(|_| QuotaErrorCode::UsageUnavailable),
-                )
+    let providers = PROVIDERS
+        .into_iter()
+        .map(|provider| {
+            let source = &snapshot.omp;
+            let mut value = source
+                .providers
+                .iter()
+                .find(|value| value.provider == provider)
+                .cloned()
+                .unwrap_or_else(|| {
+                    empty(
+                        provider,
+                        if source.attempted_at_ms.is_none() {
+                            QuotaProviderState::Pending
+                        } else {
+                            QuotaProviderState::Unavailable
+                        },
+                        source
+                            .attempted_at_ms
+                            .map(|_| QuotaErrorCode::UsageUnavailable),
+                    )
+                });
+            value.accounts.retain(|account| {
+                account.fetched_at_ms <= now.saturating_add(60_000)
+                    && now.saturating_sub(account.fetched_at_ms) <= RETAIN
             });
-        value.accounts.retain(|account| {
-            account.fetched_at_ms <= now.saturating_add(60_000)
-                && now.saturating_sub(account.fetched_at_ms) <= RETAIN
-        });
-        if value.state == QuotaProviderState::Available && value.accounts.is_empty() {
-            value.state = QuotaProviderState::Unavailable;
-            value.error = Some(value.error.unwrap_or(QuotaErrorCode::UsageUnavailable));
-        }
-        let fetched_at_ms = value
-            .accounts
-            .iter()
-            .map(|account| account.fetched_at_ms)
-            .min();
-        QuotaProviderStatus {
-            provider,
-            state: value.state,
-            error: value.error,
-            fetched_at_ms,
-            stale: fetched_at_ms
-                .is_some_and(|time| value.error.is_some() || now.saturating_sub(time) > STALE),
-            accounts: value.accounts,
-        }
-    })
-    .collect();
+            if value.state == QuotaProviderState::Available && value.accounts.is_empty() {
+                value.state = QuotaProviderState::Unavailable;
+                value.error = Some(value.error.unwrap_or(QuotaErrorCode::UsageUnavailable));
+            }
+            let fetched_at_ms = value
+                .accounts
+                .iter()
+                .map(|account| account.fetched_at_ms)
+                .min();
+            QuotaProviderStatus {
+                provider,
+                state: value.state,
+                error: value.error,
+                fetched_at_ms,
+                stale: fetched_at_ms
+                    .is_some_and(|time| value.error.is_some() || now.saturating_sub(time) > STALE),
+                accounts: value.accounts,
+            }
+        })
+        .collect();
     QuotaStatusResponse {
         generated_at_ms: now,
         collecting,
@@ -499,13 +415,7 @@ fn response(snapshot: &PersistedQuota, now: u64, collecting: bool) -> QuotaStatu
     }
 }
 fn valid_snapshot(snapshot: &PersistedQuota, now: u64) -> bool {
-    snapshot.schema == 1
-        && valid_source(
-            &snapshot.omp,
-            &[QuotaProvider::Codex, QuotaProvider::Claude],
-            now,
-        )
-        && valid_source(&snapshot.gh, &[QuotaProvider::Copilot], now)
+    snapshot.schema == 2 && valid_source(&snapshot.omp, &PROVIDERS, now)
 }
 fn valid_source(source: &SourceRecord, providers: &[QuotaProvider], now: u64) -> bool {
     if source.failures > 5 || source.next_attempt_at_ms > now.saturating_add(3_600_000 + 60_000) {

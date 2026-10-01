@@ -25,8 +25,8 @@ const snapshot: QuotaStatusResponse = {
     { provider: "codex", state: "not_signed_in", error: null, fetched_at_ms: null, stale: false, accounts: [] },
     { provider: "claude", state: "unsupported", error: "unsupported", fetched_at_ms: null, stale: false, accounts: [] },
     { provider: "copilot", state: "available", error: null, fetched_at_ms: 1000, stale: false, accounts: [{ fetched_at_ms: 1000, limits: [{
-      id: "copilot:monthly:0", window: "monthly", tier: null, unit: "credits", used_fraction: 0,
-      used: 0, limit: 1500, remaining: 1500, unlimited: false, level: "ok", resets_at_ms: 900000,
+      id: "copilot:premium", window: "monthly", tier: "business", unit: "credits", used_fraction: 0.0005,
+      used: 4, limit: 8000, remaining: 7996, unlimited: false, level: "ok", resets_at_ms: 900000,
     }] }] },
   ],
 };
@@ -42,7 +42,7 @@ it("opens a readable credit popup, restores the pointer trigger on Escape, and l
   try {
     await act(async () => root.render(<View />));
     const trigger = host.querySelector<HTMLButtonElement>(".limits-trigger")!;
-    expect(trigger.getAttribute("aria-label")).toContain("1,500 of 1,500 AI credits left");
+    expect(trigger.getAttribute("aria-label")).toContain("4 of 8,000 AI credits used · 0.05%");
     expect(trigger.getAttribute("aria-label")).not.toContain("Codex");
     const outside = host.querySelector<HTMLButtonElement>("[data-outside]")!;
     outside.focus();
@@ -52,7 +52,7 @@ it("opens a readable credit popup, restores the pointer trigger on Escape, and l
     await act(async () => trigger.click());
     const popup = host.querySelector<HTMLElement>(".limits-popup")!;
     expect(document.activeElement).toBe(popup);
-    expect(popup.textContent).toContain("1,500 of 1,500 AI credits left");
+    expect(popup.textContent).toContain("4 of 8,000 AI credits used · 0.05%");
     expect(popup.textContent).toContain("Monthly");
     expect(popup.textContent).toContain("Not signed in to OMP");
     await act(async () => movePointer(trigger, outside));
@@ -187,14 +187,14 @@ it("previews only for a mouse, retains terminal focus, and dismisses without con
 });
 
 it.each([
-  { usedFraction: 0.8, remaining: null, unlimited: false, tone: "ok" },
-  { usedFraction: 0.8000001, remaining: null, unlimited: false, tone: "warning" },
-  { usedFraction: 0.95, remaining: null, unlimited: false, tone: "warning" },
-  { usedFraction: 0.9500001, remaining: null, unlimited: false, tone: "alert" },
-  { usedFraction: null, remaining: 285, unlimited: false, tone: "warning" },
-  { usedFraction: null, remaining: null, unlimited: false, tone: null },
-  { usedFraction: 1, remaining: 0, unlimited: true, tone: null },
-])("colors actual usage independently of backend level: $usedFraction used, $remaining credits left, unlimited=$unlimited", async ({ usedFraction, remaining, unlimited, tone }) => {
+  { usedFraction: 0.8, remaining: null, unlimited: false, tone: "ok", width: 80 },
+  { usedFraction: 0.8000001, remaining: null, unlimited: false, tone: "warning", width: 80.00001 },
+  { usedFraction: 0.95, remaining: null, unlimited: false, tone: "warning", width: 95 },
+  { usedFraction: 0.9500001, remaining: null, unlimited: false, tone: "alert", width: 95.00001 },
+  { usedFraction: null, remaining: 1520, unlimited: false, tone: "warning", width: 81 },
+  { usedFraction: null, remaining: null, unlimited: false, tone: null, width: null },
+  { usedFraction: 1, remaining: 0, unlimited: true, tone: null, width: null },
+])("colors and fills actual used quota independently of backend level: $usedFraction used, $remaining remaining, unlimited=$unlimited", async ({ usedFraction, remaining, unlimited, tone, width }) => {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -211,7 +211,52 @@ it.each([
       expect(meter).toBeNull();
     } else {
       expect(meter?.classList.contains(`limits-tone-${tone}`)).toBe(true);
+      const fill = meter?.firstElementChild as HTMLElement;
+      expect(parseFloat(fill.style.getPropertyValue("--used"))).toBeCloseTo(width!, 8);
+      const segment = host.querySelector(".limits-chips .limits-segment");
+      expect(segment?.classList.contains(`limits-tone-${tone}`)).toBe(true);
     }
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("shows all grouped provider windows in the strip and narrow summary while retaining every account in the popup", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const base = snapshot.providers[2].accounts[0].limits[0];
+  const value: QuotaStatusResponse = { ...snapshot, providers: [
+    { provider: "claude", state: "available", error: null, fetched_at_ms: 1000, stale: false, accounts: [
+      { fetched_at_ms: 1000, limits: [
+        { ...base, id: "weekly", window: "7d", tier: null, unit: "percent", used_fraction: 0.58 },
+        { ...base, id: "short-low", window: "5h", tier: null, unit: "percent", used_fraction: 0.2 },
+      ] },
+      { fetched_at_ms: 1000, limits: [
+        { ...base, id: "short-high", window: "5h", tier: null, unit: "percent", used_fraction: 0.39 },
+      ] },
+    ] },
+    snapshot.providers[2],
+  ] };
+  try {
+    await act(async () => root.render(<SubscriptionLimits snapshot={value} link="live" now={1000} open={true} onOpenChange={() => {}} suspended={false} />));
+    const chips = host.querySelectorAll(".limits-chips .limits-chip");
+    const claude = [...chips].find(chip => chip.querySelector(".limits-name")?.textContent === "Claude")!;
+    expect([...claude.querySelectorAll(".limits-window")].map(label => label.textContent)).toEqual(["5h", "7d"]);
+    expect([...claude.querySelectorAll(".limits-value")].map(label => label.textContent)).toEqual(["39%", "58%"]);
+    const copilot = [...chips].find(chip => chip.querySelector(".limits-name")?.textContent === "Copilot")!;
+    expect(copilot.querySelector(".limits-value")?.textContent).toBe("0.05%");
+    const fill = copilot.querySelector<HTMLElement>(".limits-meter > span")!;
+    expect(parseFloat(fill.style.getPropertyValue("--used"))).toBeCloseTo(0.05, 8);
+    expect(host.querySelector(".limits-summary .limits-name")?.textContent).toBe("Claude");
+    expect([...host.querySelectorAll(".limits-summary .limits-value")].map(value => value.textContent)).toEqual(["39%", "58%"]);
+    const popup = host.querySelector(".limits-provider[aria-label='Claude']")!;
+    expect([...popup.querySelectorAll(".limits-account")].map(account =>
+      [...account.querySelectorAll(".limits-row-value")].map(value => value.textContent),
+    )).toEqual([["20% used", "58% used"], ["39% used"]]);
+    const trigger = host.querySelector(".limits-trigger")!;
+    expect(trigger.getAttribute("aria-label")).toContain("Claude: 5h 39% used, 7d 58% used");
   } finally {
     await act(async () => root.unmount());
     host.remove();

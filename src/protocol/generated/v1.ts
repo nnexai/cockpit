@@ -772,7 +772,7 @@ export type QuotaLimit = { id: string, window: string | null, tier: string | nul
 
 export type QuotaAccount = {
 /**
- * Source-reported fetch time, falling back to completion time for gh.
+ * Source-reported fetch time from the corresponding OMP report.
  */
 fetched_at_ms: number, limits: Array<QuotaLimit>, };
 

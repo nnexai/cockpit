@@ -21,11 +21,10 @@ pub struct WindowConfiguration {
     pub decorations: bool,
 }
 
-/// Executables using their own existing authentication; Cockpit supplies no tokens.
+/// OMP uses its own existing authentication; Cockpit supplies no tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaConfiguration {
     pub omp_executable: PathBuf,
-    pub gh_executable: PathBuf,
 }
 
 /// Browser launch settings and paths for tooling Cockpit is allowed to invoke.
@@ -92,7 +91,6 @@ struct TomlBrowser {
 #[serde(deny_unknown_fields)]
 struct TomlQuota {
     omp_executable: Option<String>,
-    gh_executable: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -494,17 +492,15 @@ pub fn load_browser_configuration(
     })
 }
 
-/// Load quota executable names from `[quota]`, overridden by the environment.
+/// Load the OMP quota executable from `[quota]`, overridden by the environment.
 pub fn load_quota_configuration(
     config_path: Option<&Path>,
 ) -> Result<QuotaConfiguration, InspectionError> {
     let (file, _) = load_file_configuration(config_path)?;
     let quota = file.quota.unwrap_or_default();
     let (omp, _) = choose_path("COCKPIT_OMP_EXECUTABLE", quota.omp_executable, "omp")?;
-    let (gh, _) = choose_path("COCKPIT_GH_EXECUTABLE", quota.gh_executable, "gh")?;
     Ok(QuotaConfiguration {
         omp_executable: PathBuf::from(omp),
-        gh_executable: PathBuf::from(gh),
     })
 }
 

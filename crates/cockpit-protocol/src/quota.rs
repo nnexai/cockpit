@@ -64,7 +64,7 @@ pub struct QuotaLimit {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaAccount {
-    /// Source-reported fetch time, falling back to completion time for gh.
+    /// Source-reported fetch time from the corresponding OMP report.
     #[ts(type = "number")]
     pub fetched_at_ms: u64,
     pub limits: Vec<QuotaLimit>,

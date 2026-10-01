@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QuotaLimit, QuotaProviderStatus } from "../../protocol/generated/v1";
-import { formatLimitValue, limitingLimit, providerView, remainingFraction, summaryView } from "./limitsModel";
+import { formatLimitValue, providerView, usedFraction, summaryView } from "./limitsModel";
 
 const limit = (changes: Partial<QuotaLimit> = {}): QuotaLimit => ({
   id: "test", window: "7d", tier: null, unit: "percent", used_fraction: null,
@@ -11,98 +11,96 @@ const provider = (changes: Partial<QuotaProviderStatus> = {}): QuotaProviderStat
   accounts: [{ fetched_at_ms: 1000, limits: [limit({ used_fraction: 0.2 })] }], ...changes,
 });
 
-describe("subscription limit selection", () => {
-  it("chooses the binding window across all anonymous accounts, including tier limits", () => {
-    const shared = limit({ id: "shared", window: "1h", used_fraction: 0.2 });
-    const tier = limit({ id: "tier", window: "7d", tier: "opus", used_fraction: 0.8 });
-    const view = providerView(provider({ accounts: [{ fetched_at_ms: 1000, limits: [shared] }, { fetched_at_ms: 2000, limits: [tier] }] }), 3000, false);
-    expect(view.limiting).toBe(tier);
-    expect(view.text).toBe("20%");
+describe("subscription usage windows", () => {
+  it("shows every tier/window in duration order and the highest usage across anonymous accounts", () => {
+    const weekly = limit({ id: "weekly", used_fraction: 0.58 });
+    const opus = limit({ id: "opus", tier: "opus", used_fraction: 0.62 });
+    const lower = limit({ id: "lower", window: "5h", used_fraction: 0.2 });
+    const higher = limit({ id: "higher", window: "5h", used_fraction: 0.39 });
+    const view = providerView(provider({ provider: "claude", accounts: [
+      { fetched_at_ms: 1000, limits: [weekly, opus, lower] },
+      { fetched_at_ms: 2000, limits: [higher] },
+    ] }), 3000, false);
+    expect(view.segments.map(segment => [segment.label, segment.text, segment.limit])).toEqual([
+      ["5h", "39%", higher], ["7d", "58%", weekly], ["Opus 7d", "62%", opus],
+    ]);
   });
-  it("breaks equal fractions by earlier reset and keeps report order for exact ties", () => {
+
+  it("breaks equal window usage by earlier reset, then preserves report order", () => {
     const later = limit({ used_fraction: 0.3, resets_at_ms: 9000 });
     const earlier = limit({ used_fraction: 0.3, resets_at_ms: 5000 });
     const equal = limit({ used_fraction: 0.3, resets_at_ms: 5000 });
-    expect(limitingLimit([later, earlier, equal])).toBe(earlier);
+    const lessUsed = limit({ used_fraction: 0.1, resets_at_ms: 4000 });
+    const view = providerView(provider({ accounts: [{ fetched_at_ms: 1000, limits: [later, earlier, equal, lessUsed] }] }), 2000, false);
+    expect(view.segments[0].limit).toBe(earlier);
   });
-  it("prioritizes the binding fraction over an earlier reset on a less constrained limit", () => {
-    const binding = limit({ used_fraction: 0.8, resets_at_ms: 9000 });
-    const earlier = limit({ used_fraction: 0.3, resets_at_ms: 5000 });
-    expect(limitingLimit([binding, earlier])).toBe(binding);
-    expect(limitingLimit([earlier, binding])).toBe(binding);
+
+  it("keeps unknown and unlimited windows rather than dropping them", () => {
+    const view = providerView(provider({ accounts: [{ fetched_at_ms: 1000, limits: [
+      limit({ window: "5h" }), limit({ unlimited: true }),
+      limit({ window: "monthly", unit: "credits", used: 4 }),
+    ] }] }), 2000, false);
+    expect(view.segments.map(segment => [segment.label, segment.text, segment.used])).toEqual([
+      ["5h", "—", null], ["7d", "unlimited", null], ["Monthly", "4 cr used", null],
+    ]);
   });
-  it("never turns missing values into zero or unlimited and distinguishes tiny positive balances", () => {
-    expect(formatLimitValue(limit())).toBe("—");
-    expect(limitingLimit([limit()])).toBeNull();
-    expect(formatLimitValue(limit({ used_fraction: 0 }))).toBe("100%");
-    expect(formatLimitValue(limit({ used_fraction: 1 }))).toBe("0%");
-    expect(formatLimitValue(limit({ used_fraction: 0.999 }))).toBe("<1%");
-    expect(formatLimitValue(limit({ used_fraction: 1.2 }))).toBe("0%");
-    expect(formatLimitValue(limit({ unlimited: true }))).toBe("unlimited");
+
+  it("shows small Business usage without scaling the reported AI credits", () => {
+    const business = limit({ window: "monthly", tier: "business", unit: "credits", used: 4, limit: 8000, remaining: 7996, used_fraction: 0.0005 });
+    const view = providerView(provider({ provider: "copilot", accounts: [{ fetched_at_ms: 1000, limits: [business] }] }), 2000, false);
+    expect(view.segments[0]).toMatchObject({ label: "Monthly", text: "0.05%", used: 0.0005, tone: "ok" });
+    expect(formatLimitValue(business, true)).toBe("4 of 8,000 AI credits used · 0.05%");
+    expect(formatLimitValue({ ...business, used_fraction: null, used: null }, true)).toBe("4 of 8,000 AI credits used · 0.05%");
   });
-  it("shows actual credit balances, preserves zero, and invents no fraction without an entitlement", () => {
-    const credits = limit({ unit: "credits", remaining: 1240, limit: 3000 });
-    expect(formatLimitValue(credits, true)).toBe("1,240 of 3,000 AI credits left");
-    expect(remainingFraction(credits)).toBeCloseTo(1240 / 3000);
-    expect(formatLimitValue(limit({ unit: "credits", remaining: 0 }))).toBe("0 cr");
-    expect(remainingFraction(limit({ unit: "credits", remaining: 0 }))).toBeNull();
-    expect(remainingFraction(limit({ unit: "credits", remaining: 5, limit: 0 }))).toBeNull();
-    expect(formatLimitValue(limit({ unit: "credits", used: 2 }), true)).toBe("2 AI credits used");
+
+  it.each([
+    [0, "0%"], [0.0005, "0.05%"], [0.00001, "0%"], [0.01234, "1.23%"],
+    [0.8, "80%"], [0.8000001, "80%"], [0.95, "95%"], [0.9500001, "95%"],
+    [0.994, "99.4%"], [0.9994, "99.94%"], [1, "100%"],
+  ])("formats actual used fraction %s with at most two fractional digits", (fraction, expected) => {
+    expect(formatLimitValue(limit({ used_fraction: fraction }))).toBe(expected);
   });
-  it("derives bounded credit fractions from usage when no remaining balance is reported", () => {
-    expect(remainingFraction(limit({ unit: "credits", used: 30, limit: 100 }))).toBeCloseTo(0.7);
-    expect(remainingFraction(limit({ unit: "credits", used: 0, limit: 100 }))).toBe(1);
-    expect(remainingFraction(limit({ unit: "credits", used: 100, limit: 100 }))).toBe(0);
-    expect(remainingFraction(limit({ unit: "credits", used: 120, limit: 100 }))).toBe(0);
-    expect(remainingFraction(limit({ unit: "credits", limit: 100 }))).toBeNull();
+
+  it("preserves zero used credits and does not mistake a remaining-only balance for usage", () => {
+    expect(formatLimitValue(limit({ unit: "credits", used: 0 }), true)).toBe("0 AI credits used");
+    expect(formatLimitValue(limit({ unit: "credits", used: 4 }))).toBe("4 cr used");
+    expect(formatLimitValue(limit({ unit: "credits", remaining: 0 }))).toBe("—");
+    expect(usedFraction(limit({ unit: "credits", remaining: 5, limit: 0 }))).toBeNull();
+    expect(usedFraction(limit({ unit: "credits", limit: 100 }))).toBeNull();
   });
-  it("uses reported credit fractions before balances, and remaining balances before usage", () => {
-    expect(remainingFraction(limit({ unit: "credits", used_fraction: 0.25, remaining: 20, used: 90, limit: 100 }))).toBe(0.75);
-    expect(remainingFraction(limit({ unit: "credits", remaining: 20, used: 90, limit: 100 }))).toBe(0.2);
-    expect(remainingFraction(limit({ unit: "credits", remaining: 0, used: 0, limit: 100 }))).toBe(0);
+
+  it("derives bounded used credit fractions without changing source precedence", () => {
+    expect(usedFraction(limit({ unit: "credits", used_fraction: 0.25, remaining: 20, used: 90, limit: 100 }))).toBe(0.25);
+    expect(usedFraction(limit({ unit: "credits", remaining: 20, used: 90, limit: 100 }))).toBe(0.8);
+    expect(usedFraction(limit({ unit: "credits", remaining: 0, used: 0, limit: 100 }))).toBe(1);
+    expect(usedFraction(limit({ unit: "credits", used: 30, limit: 100 }))).toBe(0.3);
+    expect(usedFraction(limit({ unit: "credits", used: 0, limit: 100 }))).toBe(0);
+    expect(usedFraction(limit({ unit: "credits", used: 120, limit: 100 }))).toBe(1);
   });
-  it("does not infer percent fractions from raw counts or bound unlimited reports", () => {
-    expect(remainingFraction(limit({ remaining: 20, used: 80, limit: 100 }))).toBeNull();
-    expect(remainingFraction(limit({ unlimited: true, used_fraction: 0.9 }))).toBeNull();
-    expect(remainingFraction(limit({ unlimited: true, unit: "credits", remaining: 20, used: 80, limit: 100 }))).toBeNull();
+
+  it("does not infer percent fractions from counts or impose a fraction on unlimited reports", () => {
+    expect(usedFraction(limit({ remaining: 20, used: 80, limit: 100 }))).toBeNull();
+    expect(usedFraction(limit({ unlimited: true, used_fraction: 0.9 }))).toBeNull();
+    expect(usedFraction(limit({ unlimited: true, unit: "credits", remaining: 20, used: 80, limit: 100 }))).toBeNull();
   });
-  it("prefers a computable fraction to unlimited or balance-only limits", () => {
-    const unlimited = limit({ unlimited: true });
-    const balance = limit({ unit: "credits", remaining: 0 });
-    const bounded = limit({ used_fraction: 0.1 });
-    expect(limitingLimit([unlimited, balance, bounded])).toBe(bounded);
-    expect(limitingLimit([unlimited, balance])).toBe(balance);
+
+  it("marks only windows reset since their observation stale and retains their used value", () => {
+    const windows = [limit({ window: "5h", used_fraction: 0.8, resets_at_ms: 2000 }), limit({ used_fraction: 0.3, resets_at_ms: 9000 })];
+    const status = provider({ accounts: [{ fetched_at_ms: 1000, limits: windows }] });
+    const view = providerView(status, 3000, false);
+    expect(view.segments.map(segment => [segment.text, segment.stale])).toEqual([["80%", true], ["30%", false]]);
+    expect(providerView({ ...status, error: "timeout" }, 1500, false).segments.every(segment => segment.stale)).toBe(true);
+    expect(providerView(status, 1500, true).segments.every(segment => segment.stale)).toBe(true);
+    expect(providerView({ ...status, accounts: [{ fetched_at_ms: 2500, limits: windows }] }, 3000, false).segments[0].stale).toBe(false);
   });
-  it("falls back to a reported credit usage while skipping unknown entitlements and percent counts", () => {
-    const unknown = limit({ unit: "credits", limit: 100 });
-    const percent = limit({ remaining: 20, used: 80, limit: 100 });
-    const unlimited = limit({ unlimited: true });
-    const usage = limit({ unit: "credits", used: 2 });
-    const laterUsage = limit({ unit: "credits", used: 3 });
-    expect(limitingLimit([unknown, percent, unlimited, usage, laterUsage])).toBe(usage);
-    expect(limitingLimit([unknown, percent])).toBeNull();
-  });
-  it("uses the first unlimited report only when no measurable limit or credit balance exists", () => {
-    const unlimited = limit({ unlimited: true });
-    const laterUnlimited = limit({ unlimited: true });
-    expect(limitingLimit([limit(), unlimited, laterUnlimited])).toBe(unlimited);
-    expect(limitingLimit([])).toBeNull();
-  });
-  it("retains reported values after reset, failure, and offline while marking them stale", () => {
-    const status = provider({ accounts: [{ fetched_at_ms: 1000, limits: [limit({ used_fraction: 0.8, resets_at_ms: 2000 })] }] });
-    const reset = providerView(status, 3000, false);
-    expect(reset.stale).toBe(true);
-    expect(reset.text).toBe("20%");
-    expect(providerView(provider({ error: "timeout" }), 1500, false).stale).toBe(true);
-    expect(providerView(provider(), 1500, true).stale).toBe(true);
-    // A reset already reflected in the source report does not invalidate that report.
-    expect(providerView(provider({ accounts: [{ fetched_at_ms: 2500, limits: status.accounts[0].limits }] }), 3000, false).stale).toBe(false);
-  });
-  it("uses the worst fresh provider for narrow summaries before considering stale data", () => {
-    const stale = providerView(provider({ provider: "claude", stale: true, accounts: [{ fetched_at_ms: 1000, limits: [limit({ used_fraction: 0.99 })] }] }), 1500, false);
-    const fresh = providerView(provider(), 1500, false);
-    expect(summaryView([stale, fresh])).toBe(fresh);
-    expect(summaryView([stale, { ...fresh, stale: true }])).toBe(stale);
-    expect(summaryView([providerView(provider({ state: "not_signed_in", accounts: [], fetched_at_ms: null }), 1500, false)])).toBeNull();
+
+  it("uses the highest fresh usage provider for summaries and retains every window of that provider", () => {
+    const stale = providerView(provider({ provider: "copilot", stale: true, accounts: [{ fetched_at_ms: 1000, limits: [limit({ used_fraction: 0.99 })] }] }), 1500, false);
+    const low = providerView(provider(), 1500, false);
+    const higher = providerView(provider({ provider: "claude", accounts: [{ fetched_at_ms: 1000, limits: [limit({ window: "5h", used_fraction: 0.39 }), limit({ used_fraction: 0.58 })] }] }), 1500, false);
+    expect(summaryView([low, higher, stale])).toBe(higher);
+    expect(summaryView([low, higher, stale])?.segments.map(segment => segment.text)).toEqual(["39%", "58%"]);
+    expect(summaryView([stale])).toBe(stale);
+    expect(summaryView([providerView(provider({ state: "not_signed_in", accounts: [] }), 1500, false)])).toBeNull();
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject 
 import type { QuotaLimit, QuotaStatusResponse } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { formatAgo } from "../library/libraryState";
-import { accessibleLabel, errorText, formatLimitValue, formatReset, providerViews, remainingFraction, summaryView, windowLabel, type ProviderView } from "./limitsModel";
+import { accessibleLabel, compareWindows, errorText, formatLimitValue, formatReset, limitIsStale, providerViews, usedFraction, usageTone, summaryView, windowLabel, type ProviderView } from "./limitsModel";
 import "./limits.css";
 
 export interface SubscriptionLimitsProps {
@@ -16,20 +16,22 @@ export interface SubscriptionLimitsProps {
 }
 
 function Meter({ limit, stale }: { limit: QuotaLimit; stale: boolean }) {
-  const fraction = remainingFraction(limit);
-  if (fraction === null) return null;
-  const used = 1 - fraction;
-  const tone = used > 0.95 ? "alert" : used > 0.8 ? "warning" : "ok";
+  const used = usedFraction(limit);
+  if (used === null) return null;
+  const tone = usageTone(used);
   return <span aria-hidden="true" className={`limits-meter limits-tone-${tone}${stale ? " is-stale" : ""}`}>
-    <span style={{ "--remaining": `${fraction * 100}%` } as CSSProperties} />
+    <span style={{ "--used": `${used * 100}%` } as CSSProperties} />
   </span>;
 }
 
 function Chip({ view, now }: { view: ProviderView; now: number }) {
-  return <span className={`limits-chip limits-level-${view.level}${view.stale ? " is-stale" : ""}`}>
+  return <span className={`limits-chip${view.stale ? " is-stale" : ""}`}>
     <span className="limits-name">{view.name}</span>
-    {view.limiting ? <><span className="limits-window">{windowLabel(view.limiting.window, view.limiting.tier)}</span><span className="limits-chip-meter"><Meter limit={view.limiting} stale={view.stale} /></span></> : null}
-    <span className="limits-value">{view.text}</span>
+    {view.segments.length ? view.segments.map(segment => <span key={segment.key} className={`limits-segment${view.segments.length > 1 ? " has-window-label" : ""}${segment.tone ? ` limits-tone-${segment.tone}` : ""}${segment.stale ? " is-stale" : ""}`}>
+      <span className="limits-window">{segment.label}</span>
+      <span className="limits-chip-meter"><Meter limit={segment.limit} stale={segment.stale} /></span>
+      <span className="limits-value">{segment.text}</span>
+    </span>) : <span className="limits-value">{view.provider.state === "pending" ? "…" : view.provider.state === "unsupported" ? "n/a" : "—"}</span>}
     {view.stale && view.provider.fetched_at_ms !== null ? <span className="limits-age">{formatAgo(view.provider.fetched_at_ms, now)}</span> : null}
     {view.provider.error ? <UiIcon name="info" /> : null}
   </span>;
@@ -111,16 +113,16 @@ export function SubscriptionLimits({ snapshot, link, now, open, onOpenChange, su
         <header><h3>{view.name}</h3><span>{view.provider.fetched_at_ms === null ? "" : `${view.stale ? "stale · " : "updated "}${formatAgo(view.provider.fetched_at_ms, now)}`}</span></header>
         {view.provider.accounts.map((account, accountIndex) => <div key={accountIndex} className="limits-account">
           {view.provider.accounts.length > 1 ? <h4>Account {accountIndex + 1} <span>updated {formatAgo(account.fetched_at_ms, now)}</span></h4> : null}
-          <ul>{account.limits.map((limit, limitIndex) => <li key={`${limit.id}:${limitIndex}`} className="limits-row">
-            <span className="limits-row-label">{windowLabel(limit.window, limit.tier)}{view.limiting === limit ? <span title="Limiting window" aria-label="Limiting window"> •</span> : null}</span>
-            <span className="limits-row-meter"><Meter limit={limit} stale={view.stale} /></span>
+          <ul>{[...account.limits].sort(compareWindows).map((limit, limitIndex) => <li key={`${limit.id}:${limitIndex}`} className="limits-row">
+            <span className="limits-row-label">{windowLabel(limit.window, limit.tier)}</span>
+            <span className="limits-row-meter"><Meter limit={limit} stale={view.stale || limitIsStale(limit, account.fetched_at_ms, now)} /></span>
             <span className="limits-row-detail"><span className="limits-row-value">{formatLimitValue(limit, true)}</span>{formatReset(limit.resets_at_ms, now) ? <span className="limits-reset">{formatReset(limit.resets_at_ms, now)}</span> : null}</span>
           </li>)}</ul>
         </div>)}
-        {view.provider.state === "pending" ? <p>Reading limits…</p> : view.provider.state === "not_signed_in" ? <p>Not signed in to {view.provider.provider === "copilot" ? "GitHub CLI" : "OMP"}</p> : view.provider.state === "unsupported" ? <p>Not reported for this account</p> : !view.limiting ? <p>{errorText(view.provider.error, view.provider.provider)}</p> : null}
-        {view.provider.error && view.limiting ? <p className="limits-error">Last check failed: {errorText(view.provider.error, view.provider.provider)}. {view.provider.fetched_at_ms === null ? "" : `Showing the values from ${formatAgo(view.provider.fetched_at_ms, now)}.`}</p> : null}
+        {view.provider.state === "pending" ? <p>Reading limits…</p> : view.provider.state === "not_signed_in" ? <p>Not signed in to OMP</p> : view.provider.state === "unsupported" ? <p>Not reported for this account</p> : !view.segments.length ? <p>{errorText(view.provider.error)}</p> : null}
+        {view.provider.error && view.segments.length > 0 ? <p className="limits-error">Last check failed: {errorText(view.provider.error)}. {view.provider.fetched_at_ms === null ? "" : `Showing the values from ${formatAgo(view.provider.fetched_at_ms, now)}.`}</p> : null}
       </section>)}
-      <footer>Shared OMP usage cache · Copilot via GitHub CLI · checked about every 5 min</footer>
+      <footer>Shared OMP usage cache · checked about every 5 min</footer>
     </div> : null}
   </div>;
 }
