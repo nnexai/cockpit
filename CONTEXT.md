@@ -178,6 +178,12 @@ This is baseline parity, not a permanent imitation target. Cockpit preserves Her
 
 The UI uses Herdr-native labels such as Spaces, Agents, tabs, and panes. The Herdr API’s workspace terminology remains an internal mapping detail. Agent ordering is blocked, done, working, idle, unknown; newest state change first.
 
+Sidebar Git status is read by Cockpit from the Space's checkout, with a pane folder used only as a read-only fallback. Primary rows keep branch and ahead/behind counters together on the second line; worktree children keep borderless actions immediately after their name. Counts describe local remote-tracking refs since the last fetch, not current remote state. Detached HEAD, absent upstream, missing tracking refs and failed reads remain distinct.
+
+Pull (fast-forward only) and Push to the tracked upstream are Space-scoped actions in the row, its menu and Commands, with no assigned key bindings. Row actions do not select that Space. Only a fresh Herdr-reported checkout grants write authority; a pane-folder fallback does not. The shared core revalidates checkout identity, branch, upstream and effective remote destination after acquiring the checkout's action reservation.
+
+Pull fetches the configured upstream without allowing configured fetch mappings to overwrite local branches, then fast-forwards only; it never creates a merge commit, rebases or autostashes. Push uses an explicit branch-to-upstream refspec and disables mirror/force behavior while retaining ordinary Git credentials and URL aliases. Results refresh status immediately and stay inline on the affected row. Ambiguous spawned or transport failures require inspection in a terminal, never an automatic retry or a claim that nothing changed.
+
 ### 5.3 State and interaction
 
 Herdr is authoritative for agent state. The client renders Herdr’s state categories, including blocked, working, done, idle, and other supported states, with transition detail and freshness when available.

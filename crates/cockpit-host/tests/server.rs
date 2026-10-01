@@ -735,6 +735,77 @@ async fn mutation_route_rejects_malformed_and_oversized_bodies() {
 }
 
 #[tokio::test]
+async fn space_git_action_route_reports_not_run_guards_and_conflicts() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let route = "/api/v1/sessions/session-1/space-git/actions";
+    let valid = serde_json::json!({
+        "space_id": "space-1",
+        "action": "pull",
+        "expected_root": "/work/cockpit",
+        "expected_branch": "main",
+        "expected_upstream": "origin/main",
+    });
+    let mut gone = valid.clone();
+    gone["space_id"] = serde_json::json!("gone");
+    for (service, body, status, code) in [
+        (live_service(Ok(snapshot())), valid.clone(), 409, "space_git_action_ineligible"),
+        (live_service(Ok(snapshot())), gone, 409, "space_git_target_changed"),
+        (service(), valid, 503, "space_git_not_run"),
+    ] {
+        let response = build_router(service, &root, authority).unwrap()
+            .oneshot(Request::builder().method("POST").uri(route)
+                .header("host", authority.to_string())
+                .header("origin", format!("http://{authority}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string())).unwrap())
+            .await.unwrap();
+        assert_eq!(response.status(), status);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["code"], code);
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn space_git_action_route_bounds_requests_and_requires_trusted_origin() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(live_service(Ok(snapshot())), &root, authority).unwrap();
+    let route = "/api/v1/sessions/session-1/space-git/actions";
+    let valid = serde_json::json!({
+        "space_id": "space-1", "action": "push",
+        "expected_root": "/work/cockpit", "expected_branch": "main",
+        "expected_upstream": "origin/main",
+    });
+    let mut unknown = valid.clone();
+    unknown["force"] = serde_json::json!(true);
+    let mut oversized = valid.clone();
+    oversized["expected_root"] = serde_json::json!("x".repeat(64 * 1024));
+    let trusted = format!("http://{authority}");
+    for (origin, body, status, code) in [
+        (None, valid.to_string(), 400, "request_origin_required"),
+        (Some("http://untrusted.test"), valid.to_string(), 403, "invalid_request_authority"),
+        (Some(trusted.as_str()), unknown.to_string(), 400, "invalid_space_git_action"),
+        (Some(trusted.as_str()), r#"{"action":"pull"}"#.to_owned(), 400, "invalid_space_git_action"),
+        (Some(trusted.as_str()), oversized.to_string(), 413, "invalid_space_git_action"),
+    ] {
+        let mut request = Request::builder().method("POST").uri(route)
+            .header("host", authority.to_string()).header("content-type", "application/json");
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+        let response = router.clone().oneshot(request.body(axum::body::Body::from(body)).unwrap()).await.unwrap();
+        assert_eq!(response.status(), status);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["code"], code);
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn authority_guard_allows_exact_loopback_authority_and_optional_same_origin() {
     let root = fixture_root();
     let authority = test_authority();

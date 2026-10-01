@@ -15,6 +15,7 @@ use axum::{
     body::Body,
     extract::{
         DefaultBodyLimit, Path as AxumPath, Query, State,
+        rejection::JsonRejection,
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
     http::{
@@ -36,7 +37,7 @@ use cockpit_protocol::{
     },
     v1::{
         ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
-        SessionSnapshotResponse, SessionStreamMessage, TerminalCommand, TerminalMode,
+        SessionSnapshotResponse, SessionStreamMessage, SpaceGitActionRequest, TerminalCommand, TerminalMode,
         TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
         TerminalTargetKind,
     },
@@ -207,6 +208,12 @@ fn build_router_with_validated_root(
         .route(
             "/api/v1/sessions/{session_id}/space-git",
             get(space_git_status),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/space-git/actions",
+            post(space_git_action)
+                .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
+                .layer(middleware::from_fn(require_origin)),
         )
         .route("/api/v1/sessions/{session_id}/focus", post(focus))
         .route(
@@ -440,6 +447,38 @@ async fn space_git_status(
     }
 }
 
+async fn space_git_action(
+    State(service): State<CockpitService>,
+    AxumPath(session_id): AxumPath<String>,
+    body: Result<Json<SpaceGitActionRequest>, JsonRejection>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Invalid session id");
+    }
+    let request = match body {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            let status = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                StatusCode::PAYLOAD_TOO_LARGE
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return (
+                status,
+                Json(ErrorResponse {
+                    code: "invalid_space_git_action".to_owned(),
+                    message: "Expected a bounded JSON Space Git action request with valid fields".to_owned(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    match service.space_git_action(&session_id, &request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
 async fn focus(
     State(service): State<CockpitService>,
     AxumPath(session_id): AxumPath<String>,
@@ -552,6 +591,9 @@ fn inspection_error(error: InspectionError) -> Response {
         || error.code == "terminal_ownership_conflict"
         || error.code == "stale_generation"
         || error.code == "space_copy_conflict"
+        || error.code == "space_git_target_changed"
+        || error.code == "space_git_action_ineligible"
+        || error.code == "space_git_action_in_progress"
     {
         StatusCode::CONFLICT
     } else {

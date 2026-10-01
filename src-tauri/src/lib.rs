@@ -43,7 +43,7 @@ use cockpit_protocol::{
     v1::{
         CockpitMode, ErrorResponse, FocusRequest, FocusResponse, ResourceMutationRequest,
         ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse,
-        SessionStreamMessage, SpaceGitStatusResponse, StatusResponse, TerminalCommand,
+        SessionStreamMessage, SpaceGitActionRequest, SpaceGitActionResponse, SpaceGitStatusResponse, StatusResponse, TerminalCommand,
         TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
     },
 };
@@ -1103,6 +1103,18 @@ async fn cockpit_space_git_status(
 }
 
 #[tauri::command]
+async fn cockpit_space_git_action(
+    session_id: String,
+    request: SpaceGitActionRequest,
+    service: State<'_, CockpitService>,
+) -> Result<SpaceGitActionResponse, ErrorResponse> {
+    service
+        .space_git_action(&session_id, &request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
 async fn cockpit_focus(
     session_id: String,
     request: FocusRequest,
@@ -1869,6 +1881,7 @@ pub fn run() {
             cockpit_sessions,
             cockpit_session_snapshot,
             cockpit_space_git_status,
+            cockpit_space_git_action,
             cockpit_focus,
             cockpit_mutate,
             cockpit_session_subscribe,

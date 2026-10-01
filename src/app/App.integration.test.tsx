@@ -20,6 +20,7 @@ import type {
   SessionStreamMessage,
   SessionSummary,
   StatusResponse,
+  SpaceGitActionResponse,
 } from "../protocol/generated/v1";
 import { App } from "./App";
 
@@ -260,6 +261,7 @@ class AppFixture {
     sessions: this.sessionsCalls,
     sessionSnapshot: this.snapshotCalls,
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
+    spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
     focus: this.focusCalls,
     mutate: this.mutateCalls,
     subscribeSession: vi.fn(async (sessionId, onMessage, onError) => {
@@ -435,17 +437,65 @@ async function exhaustAutomaticRecovery(fixture: AppFixture): Promise<void> {
 }
 
 describe("mounted App mutation and session ordering", () => {
-  it("shows the Space branch position from Cockpit's Git status", async () => {
+  it("prefers Git's current branch and upstream position over outdated Herdr metadata", async () => {
     const fixture = new AppFixture();
-    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [{ space_id: "space-1", branch: "main", upstream: "origin/main", ahead: 2, behind: 1 }] });
+    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [{ space_id: "space-1", source: "pane_folder", checkout: { state: "branch", root: "/repo", branch: "main", upstream: { state: "tracked", name: "origin/main", ahead: 2, behind: 1 } } }] });
     await mount(fixture);
+    const next = snapshot("session-1");
+    next.spaces[0].git = { repository_key: "/repo", repository: "repo", branch: "outdated", checkout_path: "/repo", is_linked_worktree: false };
+    act(() => fixture.emitSnapshot("session-1", 1, 2, next));
     await settle();
 
     expect(fixture.client.spaceGitStatus).toHaveBeenCalledWith("session-1", expect.any(AbortSignal));
     const line = container.querySelector(".space-branch");
     expect(line?.querySelector(".space-branch-name")?.textContent).toBe("main");
     expect(line?.querySelector(".space-ahead-behind")?.textContent).toBe("↑2 ↓1");
-    expect(line?.closest("button")?.getAttribute("aria-label")).toBe("Alpha space, Idle, branch main, 2 ahead, 1 behind");
+    expect(container.querySelector('[data-row-id="space-1"]')?.getAttribute("aria-label")).toContain("branch main");
+  });
+
+  it("runs a nonselected row's push without changing Herdr focus and refreshes its result", async () => {
+    const fixture = new AppFixture();
+    const git = { space_id: "space-2", source: "pane_folder" as const, checkout: { state: "branch" as const, root: "/child", branch: "feature", upstream: { state: "tracked" as const, name: "origin/main", ahead: 1, behind: 0 } } };
+    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [git] });
+    const action = deferred<SpaceGitActionResponse>();
+    vi.mocked(fixture.client.spaceGitAction).mockReturnValue(action.promise);
+    await mount(fixture);
+    const next = snapshot("session-1");
+    next.spaces.push({ ...next.spaces[0], id: "space-2", label: "Child checkout", focused: false });
+    act(() => fixture.emitSnapshot("session-1", 1, 2, next));
+    await settle();
+    const selectBefore = fixture.focusCalls.mock.calls.length;
+    const readsBefore = vi.mocked(fixture.client.spaceGitStatus).mock.calls.length;
+    click(container.querySelector<HTMLButtonElement>('[data-space-id="space-2"] [data-git-action="push"]')!);
+    expect(fixture.client.spaceGitAction).toHaveBeenCalledWith("session-1", { space_id: "space-2", action: "push", expected_root: "/child", expected_branch: "feature", expected_upstream: "origin/main" });
+    expect(fixture.focusCalls).toHaveBeenCalledTimes(selectBefore);
+    expect(container.querySelector('[data-row-id="space-1"]')?.getAttribute("aria-current")).toBe("true");
+    expect(container.querySelector('[data-space-id="space-2"] .space-git-action')?.getAttribute("aria-busy")).toBe("true");
+    await act(async () => action.resolve({ session_id: "session-1", space_id: "space-2", action: "push", root: "/child", branch: "feature", upstream: "origin/main", outcome: { result: "updated", commits: 1 } }));
+    await settle();
+    expect(vi.mocked(fixture.client.spaceGitStatus).mock.calls.length).toBe(readsBefore + 1);
+    expect(container.querySelector('[data-space-id="space-2"] .git-row-note')?.textContent).toContain("feature → origin/main");
+    expect(fixture.focusCalls).toHaveBeenCalledTimes(selectBefore);
+  });
+
+  it("Commands pulls the selected checkout while a row menu targets its own checkout", async () => {
+    const fixture = new AppFixture();
+    const status = (space_id: string, root: string, branch: string) => ({ space_id, source: "pane_folder" as const, checkout: { state: "branch" as const, root, branch, upstream: { state: "tracked" as const, name: `origin/${branch}`, ahead: 1, behind: 0 } } });
+    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [status("space-1", "/parent", "main"), status("space-2", "/child", "feature")] });
+    vi.mocked(fixture.client.spaceGitAction).mockImplementation(async (sessionId, request) => ({ session_id: sessionId, space_id: request.space_id, action: request.action, root: request.expected_root, branch: request.expected_branch, upstream: request.expected_upstream, outcome: { result: "up_to_date" } }));
+    await mount(fixture);
+    const next = snapshot("session-1");
+    next.spaces.push({ ...next.spaces[0], id: "space-2", label: "Child checkout", focused: false });
+    act(() => fixture.emitSnapshot("session-1", 1, 2, next));
+    await settle();
+    await openCommand("Pull Space (fast-forward only)");
+    expect(fixture.client.spaceGitAction).toHaveBeenLastCalledWith("session-1", expect.objectContaining({ space_id: "space-1", action: "pull", expected_root: "/parent" }));
+    act(() => container.querySelector('[data-row-id="space-2"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 24, clientY: 24 })));
+    await settle();
+    const push = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(element => element.querySelector("span")?.textContent === "Push");
+    click(push!);
+    await settle();
+    expect(fixture.client.spaceGitAction).toHaveBeenLastCalledWith("session-1", expect.objectContaining({ space_id: "space-2", action: "push", expected_root: "/child" }));
   });
 
   it("opens Review as a local tab viewer from the command overlay", async () => {

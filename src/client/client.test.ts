@@ -8,6 +8,7 @@ import {
   parseResourceMutationResponse,
   parseSessionSnapshotResponse,
   parseSpaceGitStatusResponse,
+  parseSpaceGitActionResponse,
   parseStatusResponse,
   parseTerminalCommand,
   parseTerminalOpenRequest,
@@ -144,6 +145,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     sessions: vi.fn(async () => sessions),
     sessionSnapshot: vi.fn(async () => snapshot),
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
+    spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
     focus: vi.fn(async () => ({ session_id: snapshot.session_id, kind: "pane" as const, target_id: "pane-1", accepted: true })),
     mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot, created: null })),
     subscribeSession: vi.fn(async () => ({ close: vi.fn() })),
@@ -166,9 +168,6 @@ describe("client DTO parsers", () => {
     const legacyAgent = { pane_id: "pane-1", space_id: "space-1", tab_id: "tab-1", name: "omp", status: "working", title: null, focused: true };
     expect(parseSessionSnapshotResponse({ ...snapshot, agents: [legacyAgent] }).agents[0]?.state_change_seq).toBe(0);
     expect(() => parseSessionSnapshotResponse({ ...snapshot, session_id: undefined })).toThrow(CockpitClientError);
-    expect(parseSpaceGitStatusResponse({ session_id: "s", spaces: [{ space_id: "w1", branch: "main", upstream: null, ahead: null, behind: null, extra: 1 }] }))
-      .toEqual({ session_id: "s", spaces: [{ space_id: "w1", branch: "main", upstream: null, ahead: null, behind: null }] });
-    expect(() => parseSpaceGitStatusResponse({ session_id: "s", spaces: [{ space_id: "w1", branch: null, upstream: null, ahead: -1, behind: null }] })).toThrow(CockpitClientError);
     expect(() => parseSessionSnapshotResponse({
       ...snapshot,
       spaces: [{ ...snapshot.spaces[0], git: { repository: "cockpit", branch: "main", checkout_path: "/work/cockpit" } }],
@@ -226,6 +225,99 @@ describe("client DTO parsers", () => {
     expect(() => parseResourceMutationRequest({ type: "raw", method: "layout.apply", params: {} })).toThrow(CockpitClientError);
     expect(() => parseResourceMutationResponse({ session_id: "session-1", snapshot: { ...snapshot, session_id: "other" } })).toThrow(/another session/);
   });
+});
+
+describe("Space Git contracts", () => {
+  const tracked = { state: "tracked", name: "origin/main", ahead: 2, behind: 3 } as const;
+  const checkout = { state: "branch", root: "/work/cockpit", branch: "main", upstream: tracked } as const;
+  const space = { space_id: "space-1", source: "pane_folder", checkout } as const;
+  const request = { space_id: "space-1", action: "pull", expected_root: "/work/cockpit", expected_branch: "main", expected_upstream: "origin/main" } as const;
+  const response = { session_id: "session-1", space_id: request.space_id, action: request.action, root: request.expected_root, branch: request.expected_branch, upstream: request.expected_upstream, outcome: { result: "updated", commits: 3 } } as const;
+
+  it("preserves checkout and upstream states while discarding extra keys", () => {
+    const checkouts = [
+      checkout,
+      { state: "detached", root: "/work/cockpit" },
+      { state: "unavailable", root: null, code: "checkout_missing", message: "Folder missing" },
+      ...[
+        { state: "none" },
+        { state: "gone", name: "origin/main" },
+        { state: "local", name: "main" },
+        { state: "unavailable", name: "origin/main", code: "git_read_failed", message: "Cannot read upstream" },
+      ].map(upstream => ({ ...checkout, upstream })),
+    ];
+    for (const item of checkouts) {
+      expect(parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [{ ...space, checkout: { ...item, extra: 1 }, extra: 1 }] }))
+        .toEqual({ session_id: "session-1", spaces: [{ ...space, checkout: item }] });
+    }
+    expect(parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [{ ...space, checkout: { ...checkout, upstream: { ...tracked, extra: 1 } } }] }).spaces[0].checkout)
+      .toEqual(checkout);
+  });
+
+  it("rejects unknown status tags, missing fields and out-of-range counts", () => {
+    const invalidSpaces: unknown[] = [
+      { ...space, source: "unknown" },
+      { ...space, checkout: { ...checkout, state: "unknown" } },
+      { ...space, checkout: { ...checkout, root: undefined } },
+      { ...space, checkout: { ...checkout, upstream: { state: "unknown" } } },
+      { ...space, checkout: { state: "unavailable", code: "missing", message: "Missing root" } },
+      { ...space, checkout: { ...checkout, upstream: { state: "gone" } } },
+    ];
+    for (const field of ["ahead", "behind"]) {
+      for (const count of [-1, 0x1_0000_0000, 1.5, null, undefined, "1"]) {
+        invalidSpaces.push({ ...space, checkout: { ...checkout, upstream: { ...tracked, [field]: count } } });
+      }
+    }
+    for (const item of invalidSpaces) {
+      expect(() => parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [item] })).toThrow(CockpitClientError);
+    }
+    const boundary = { ...checkout, upstream: { ...tracked, ahead: 0, behind: 0xffff_ffff } };
+    expect(parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [{ ...space, checkout: boundary }] }).spaces[0].checkout).toEqual(boundary);
+  });
+
+  it("validates all action outcomes and nullable u32 commit counts", () => {
+    const outcomes = [
+      response.outcome, { result: "updated", commits: null }, { result: "up_to_date" },
+      ...["not_fast_forward", "local_changes", "remote_rejected"].map(reason => ({ result: "refused", reason, detail: "Refused" })),
+    ];
+    for (const outcome of outcomes) {
+      expect(parseSpaceGitActionResponse({ ...response, extra: 1, outcome: { ...outcome, extra: 1 } })).toEqual({ ...response, outcome });
+    }
+    for (const outcome of [
+      { result: "unknown" }, { result: "refused", reason: "unknown", detail: "Refused" },
+      ...[-1, 0x1_0000_0000, 1.5, undefined, "1"].map(commits => ({ result: "updated", commits })),
+    ]) {
+      expect(() => parseSpaceGitActionResponse({ ...response, outcome })).toThrow(CockpitClientError);
+    }
+    expect(() => parseSpaceGitActionResponse({ ...response, action: "force_push" })).toThrow(CockpitClientError);
+    expect(parseSpaceGitActionResponse({ ...response, outcome: { result: "updated", commits: 0xffff_ffff } }).outcome).toEqual({ result: "updated", commits: 0xffff_ffff });
+  });
+
+  for (const transport of ["browser", "native"] as const) {
+    const clientFor = (value: unknown) => transport === "browser"
+      ? createBrowserClient(vi.fn(async () => jsonResponse(value)))
+      : createNativeClient(vi.fn(async () => value));
+
+    it(`${transport} rejects an action result for any different target identity`, async () => {
+      for (const field of ["session_id", "space_id", "action", "root", "branch", "upstream"]) {
+        const mismatch = field === "action" ? "push" : "other";
+        await expect(clientFor({ ...response, [field]: mismatch }).spaceGitAction("session-1", request))
+          .rejects.toMatchObject({ code: "malformed_response" });
+      }
+      await expect(clientFor(response).spaceGitAction("session-1", request)).resolves.toEqual(response);
+    });
+
+    it(`${transport} rejects status from another session and preserves action operation codes`, async () => {
+      await expect(clientFor({ session_id: "other", spaces: [space] }).spaceGitStatus("session-1")).rejects.toMatchObject({ code: "malformed_response" });
+      for (const code of ["space_git_target_changed", "space_git_action_ineligible", "space_git_action_in_progress", "space_git_not_run", "space_git_outcome_unknown"]) {
+        const error = { code, message: "Git operation failed" };
+        const client = transport === "browser"
+          ? createBrowserClient(vi.fn(async () => jsonResponse(error, code.endsWith("changed") || code.endsWith("ineligible") || code.endsWith("progress") ? 409 : 503)))
+          : createNativeClient(vi.fn(async () => { throw error; }));
+        await expect(client.spaceGitAction("session-1", request)).rejects.toMatchObject({ operationCode: code, message: error.message });
+      }
+    });
+  }
 });
 describe("session stream transition policy", () => {
   it("classifies the complete ordering corpus", () => {

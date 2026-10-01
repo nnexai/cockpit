@@ -36,6 +36,8 @@ pub use v1::{
     ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
     SessionSnapshotResponse, SessionStreamMessage, SessionSummary, SpaceGitStatus,
     SpaceGitStatusResponse, SpaceGitSummary, SpaceSummary, StatusResponse, TabSummary,
+    SpaceGitSource, SpaceGitCheckout, SpaceGitUpstream, SpaceGitAction, SpaceGitActionRequest,
+    SpaceGitActionResponse, SpaceGitActionOutcome, SpaceGitRefusal,
     TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalOwnershipState, TerminalTargetKind,
     TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };

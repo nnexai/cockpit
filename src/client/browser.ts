@@ -76,6 +76,7 @@ import {
   parseSessionListResponse,
   parseSessionSnapshotResponse,
   parseSpaceGitStatusResponse,
+  matchSpaceGitActionResponse,
   parseSessionStreamMessage,
   parseStatusResponse,
   parseTerminalOpenRequest,
@@ -104,6 +105,8 @@ import type {
   SessionListResponse,
   SessionSnapshotResponse,
   SpaceGitStatusResponse,
+  SpaceGitActionRequest,
+  SpaceGitActionResponse,
   SessionStreamMessage,
   StatusResponse,
   QuotaStatusResponse,
@@ -1081,6 +1084,14 @@ export function createBrowserClient(
         if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space Git status belongs to another session");
         return value;
       });
+    },
+    spaceGitAction(sessionId: string, actionRequest: SpaceGitActionRequest): Promise<SpaceGitActionResponse> {
+      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
+      const submitted = { ...actionRequest };
+      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-git/actions`, "Space Git action",
+        (value) => matchSpaceGitActionResponse(value, sessionId, submitted), {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(submitted),
+        });
     },
     focus(sessionId: string, focusRequest: FocusRequest): Promise<FocusResponse> {
       try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }

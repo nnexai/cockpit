@@ -72,6 +72,8 @@ fn main() {
             "cockpit_comments_paste_mark_pasted",
             "cockpit_sessions",
             "cockpit_session_snapshot",
+            "cockpit_space_git_status",
+            "cockpit_space_git_action",
             "cockpit_focus",
             "cockpit_mutate",
             "cockpit_session_subscribe",

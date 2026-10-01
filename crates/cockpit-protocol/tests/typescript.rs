@@ -11,6 +11,8 @@ use cockpit_protocol::v1::{
     SessionSummary, StatusResponse,
     TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalScrollDirection,
     TerminalScrollSource, TerminalStreamMessage,
+    SpaceGitAction, SpaceGitActionRequest, SpaceGitActionOutcome, SpaceGitCheckout,
+    SpaceGitRefusal, SpaceGitSource, SpaceGitUpstream,
 };
 use serde_json::json;
 use cockpit_protocol::browser::{BrowserCleanupScope, BrowserCleanupStatus, BrowserFeedbackSendRequest, BrowserWorkScope};
@@ -91,6 +93,29 @@ fn compatibility_uses_stable_status_tag() {
             }
         })
     );
+}
+
+#[test]
+fn space_git_closed_unions_and_action_expectations_use_exact_wire_tags() {
+    assert_eq!(serde_json::to_value(SpaceGitSource::PaneFolder).unwrap(), json!("pane_folder"));
+    assert_eq!(serde_json::to_value(SpaceGitCheckout::Detached { root: "/repo".into() }).unwrap(),
+        json!({ "state": "detached", "root": "/repo" }));
+    assert_eq!(serde_json::to_value(SpaceGitUpstream::Gone { name: "origin/main".into() }).unwrap(),
+        json!({ "state": "gone", "name": "origin/main" }));
+    assert_eq!(serde_json::to_value(SpaceGitActionOutcome::Refused {
+        reason: SpaceGitRefusal::NotFastForward, detail: "diverged".into(),
+    }).unwrap(), json!({ "result": "refused", "reason": "not_fast_forward", "detail": "diverged" }));
+    let request = SpaceGitActionRequest { space_id: "w1".into(), action: SpaceGitAction::Pull,
+        expected_root: "/repo".into(), expected_branch: "main".into(), expected_upstream: "origin/main".into() };
+    let mut wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["action"], json!("pull"));
+    wire["root"] = json!("/other");
+    assert!(serde_json::from_value::<SpaceGitActionRequest>(wire).is_err());
+    assert!(serde_json::from_value::<SpaceGitCheckout>(json!({ "state": "missing", "root": "/repo" })).is_err());
+    assert!(serde_json::from_value::<SpaceGitUpstream>(json!({ "state": "tracked", "name": "origin/main", "ahead": -1, "behind": 0 })).is_err());
+    for result in ["success", "not_sent", "failed"] {
+        assert!(serde_json::from_value::<SpaceGitActionOutcome>(json!({ "result": result, "detail": "unproven" })).is_err());
+    }
 }
 
 #[test]

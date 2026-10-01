@@ -350,6 +350,70 @@
 .resource-select[aria-disabled="true"] { cursor: default; }
 .space-tree-child .resource-select { padding-left: 0; }
 
+/* Selection is a full-row underlay; inline actions are siblings, never nested buttons. */
+.space-tree-row .resource-select { position: absolute; inset: 0; width: 100%; z-index: 1; }
+.space-tree-parent .resource-select { width: calc(100% - 40px); }
+.space-tree-child .resource-select { left: var(--sb-conn); width: calc(100% - var(--sb-conn)); }
+.space-row-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: flex-start;
+  gap: var(--sb-gap);
+  padding: 7px 8px 7px var(--sb-edge);
+  pointer-events: none;
+}
+.space-tree-child .space-row-content { padding-left: 0; }
+.space-name-line { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.space-name-line .space-label { flex: 0 1 auto; }
+.space-git-action {
+  position: relative;
+  flex: none;
+  min-width: 20px;
+  height: 18px;
+  align-self: center;
+  padding: 0 4px;
+  margin: -2px 0 -2px -4px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--idle);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  line-height: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.space-git-action::after { position: absolute; inset: -3px -2px; content: ""; }
+.space-git-action:hover:not([aria-disabled="true"]) { background: var(--border-strong); color: var(--text-primary); }
+.space-git-action:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -1px; }
+.space-git-action .space-ahead-behind { color: inherit; }
+.space-git-action.is-warning { color: var(--warning); }
+.space-git-action.is-explanation { cursor: help; }
+.space-git-action.is-explanation:not(.is-warning), .space-git-action.is-quiet { color: var(--text-muted); }
+.space-git-action.is-quiet { opacity: 0; pointer-events: none; }
+.space-tree-row:hover .space-git-action.is-quiet,
+.space-tree-row:focus-within .space-git-action.is-quiet,
+.space-tree-row.is-selected .space-git-action.is-quiet,
+.space-git-action.is-git-pending { opacity: 1; pointer-events: auto; }
+.space-git-action.is-git-pending { cursor: progress; }
+.space-git-spinner {
+  position: absolute;
+  left: calc(100% + 2px);
+  top: 3px;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: space-git-spin 900ms linear infinite;
+}
+@keyframes space-git-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .space-git-spinner { animation: none; } }
+
 /* Children hang from the connector: a 16px badge, one pixel lower so it centres on the 18px name line. */
 .space-tree-child .sb-glyph {
   flex-basis: var(--icon-size);
@@ -501,6 +565,13 @@
   font-size: var(--font-size-2xs);
   line-height: 14px;
 }
+
+.git-row-note.is-success { border-left-color: var(--done); }
+.git-row-note.is-explanation { border-left-color: var(--warning); }
+.git-row-note.is-child { padding-left: 58px; }
+.git-note-actions { display: flex; gap: 6px; margin-top: 4px; }
+.git-note-actions button { padding: 1px 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.git-note-actions button:hover { background: var(--surface-hover); }
 
 /* ---- agent rows: `space · tab` over `State · agent` ---- */
 .agent-location {

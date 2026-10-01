@@ -15,10 +15,13 @@ import type {
   SessionStreamMessage,
   SessionSummary,
   ViewerSourceOptions,
+  SpaceGitAction,
+  SpaceGitStatus,
 } from "../protocol/generated/v1";
 import { initialSessionState, sessionReducer, type SessionAction, type SessionState } from "./session/sessionStore";
 import { useFocusCoordinator } from "./session/focusCoordinator";
 import { spaceCheckoutKey, useSpaceGitStatus } from "./session/spaceGitStatus";
+import { gitActionReason, gitActionRequest, gitTargetDetail, useSpaceGitActions, type GitNote } from "./session/spaceGitActions";
 import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
 import { tabDropInsertionIndex } from "./layout/layoutProjection";
 import { useTabLayouts, type LayoutAction, type LeafCtx, type PendingCreation, type TabLayoutState } from "./layout/tabLayoutStore";
@@ -281,9 +284,9 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const [active, setActive] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const normalized = query.trim().toLocaleLowerCase();
-  const primaryIds = ["prefix:zoom-pane", "prefix:toggle-library", "browser:open", "prefix:new-tab", "prefix:switch-session", "renderer:review", "prefix:setup-space"];
+  const primaryIds = ["prefix:zoom-pane", "prefix:toggle-library", "browser:open", "prefix:new-tab", "prefix:switch-session", "renderer:review", "prefix:setup-space", "pull-space", "push-space"];
   const ranked = normalized
-    ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group}`)
+    ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group} ${action.reasonDetail ?? ""}`)
     : actions.map((action, index) => ({ ...action, score: index, matchedIndices: [] as number[] }));
   const groups = ["Herdr", "Navigate", "Space", "Tab", "Pane", "Browser", "Library"] as const;
   // Rows render grouped, so keep `filtered` in that order for the highlight and arrow keys. With a query, groups follow their best match.
@@ -306,7 +309,7 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     if (groupActions.length === 0) return null;
     return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => {
       const index = filtered.indexOf(action);
-      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseMove={() => { if (index !== active) setActive(index); }} onClick={() => action.run()}><UiIcon name={commandIcon(action)} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.disabled && action.reason ? <small title={action.reasonDetail ?? action.reason}>{action.reason}</small> : null}</span>{action.shortcut ? <ShortcutKeys text={action.shortcut} /> : null}</button>;
+      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseMove={() => { if (index !== active) setActive(index); }} onClick={() => action.run()}><UiIcon name={commandIcon(action)} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.reason ? <small title={action.reasonDetail ?? action.reason}>{action.reason}</small> : null}</span>{action.shortcut ? <ShortcutKeys text={action.shortcut} /> : null}</button>;
     })}</section>;
   })}</div><footer className="command-footer"><span>↑↓ or Ctrl+N/P navigate · Enter choose · Esc close · type a name or a key</span><button type="button" onClick={() => { setShowAll((value) => !value); setActive(0); }}>{showAll ? "Quick commands" : "All commands"}</button></footer></section></div>;
 }
@@ -461,7 +464,10 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const librarySpace: LibrarySpace | null = state.sessionId && selectedSpace
     ? { target: { session_id: state.sessionId, space_id: selectedSpace.id }, label: selectedSpace.label, live: state.sync === "live" } : null;
   const setupParent = setupParentFor(selectedSpace, snapshot?.panes ?? [], snapshot?.focused_pane_id ?? null);
-  const spaceGit = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
+  const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
+  const spaceGit: ReadonlyMap<string, SpaceGitStatus> = gitPoll.error
+    ? new Map(spaces.filter(space => space.git).map(space => [space.id, { space_id: space.id, source: "herdr_checkout", checkout: { state: "unavailable", root: null, code: "status_failed", message: gitPoll.error! } }]))
+    : gitPoll.spaces;
   const [libraryOpen, setLibraryOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [area, setArea] = useState<Rect>({ x: 0, y: 0, width: 800, height: 600 });
@@ -572,6 +578,29 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const drawerFocusTarget = useRef<{ spaceId: string; paneId: string | null } | null>(null);
   const mutationBusy = mutations.pending !== null;
   const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
+  const gitBlocked = state.sync !== "live" ? "Herdr is not live" : mutationBusy ? "Herdr is applying a change" : popup || popupPending ? "The popup owns keyboard input" : undefined;
+  const [gitNotice, setGitNotice] = useState<{ sessionId: string | null; note: GitNote } | null>(null);
+  const gitActions = useSpaceGitActions(client, state.sessionId, spaceGit, gitPoll.refresh, (spaceId, note) => {
+    const row = [...document.querySelectorAll<HTMLElement>(".space-row-group")].find(element => element.dataset.spaceId === spaceId);
+    const box = row?.getBoundingClientRect();
+    const listBox = row?.closest(".space-list")?.getBoundingClientRect();
+    if (sidebarCollapsed || (narrowViewport && !drawerOpen) || !box || box.height === 0 || !listBox || box.bottom <= listBox.top || box.top >= listBox.bottom) setGitNotice({ sessionId: state.sessionId, note });
+  });
+  useEffect(() => {
+    if (!gitNotice) return;
+    const timer = window.setTimeout(() => setGitNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [gitNotice]);
+  const runGitAction = (spaceId: string, action: SpaceGitAction) => {
+    const status = spaceGit.get(spaceId);
+    const pending = gitActions.forStatus(status);
+    if (gitActionReason(status, action, pending?.pending ? pending.request.action : undefined, gitBlocked)) return;
+    const request = gitActionRequest(status, action);
+    if (request) {
+      setGitNotice(null);
+      gitActions.run(request);
+    }
+  };
   useEffect(() => {
     if (popup || state.sync !== "live" || shell?.status !== "live") setPopupPending(null);
     if (popup) { setPrefixActive(false); setMenu(null); setAttachFocusSuppressed(false); }
@@ -754,6 +783,10 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       if (command === "setup-space" && state.sync === "live") setSetupOpen(true);
       if (command === "rename-space" && space) beginRename({ kind: "space", id: space.id });
       if (command === "close-space") closeSpace(space);
+      if (command === "pull-space" || command === "push-space") {
+        const target = byId(spaces, state.focusPending ? snapshot?.focused_space_id ?? null : selection.spaceId);
+        if (target) runGitAction(target.id, command === "pull-space" ? "pull" : "push");
+      }
       if (command === "new-tab" && selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true);
       if (command === "rename-tab" && tab) beginRename({ kind: "tab", id: tab.id });
       if (command === "close-tab") closeTab(tab);
@@ -815,7 +848,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       return;
     }
     execute();
-  }, [spaces, tabs, panes, tabLayout, area, localLeaves, selectedLeaf, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, browserOpen, browserReason, closeLibrary, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed]);
+  }, [spaces, tabs, panes, tabLayout, area, localLeaves, selectedLeaf, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, state.focusPending, browserOpen, browserReason, closeLibrary, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed, runGitAction]);
   const customCommandReason = state.sync !== "live" || shell?.status !== "live" ? shell?.error ?? "Herdr commands are not live"
     : state.focusPending || state.focusError || !snapshot?.focused_space_id || !snapshot.focused_tab_id ? "Waiting for Herdr focus"
     : mutationBusy ? "Another Herdr action is pending" : undefined;
@@ -845,10 +878,21 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     if (menu.target.kind === "space") {
       const space = spaces.find((candidate) => candidate.id === menu.target.id);
       if (!space) return null;
+      const git = spaceGit.get(space.id);
+      const gitPending = gitActions.forStatus(git);
       return <ContextMenu menu={menu} onDismiss={dismissMenu}>
         <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button>
         <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}><UiIcon name="close" />Close</button>
         <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}><UiIcon name="trash" />Review task cleanup…</button>
+        {git ? <>
+          <div className="context-menu-separator" role="presentation" />
+          <p className="context-menu-heading" role="presentation">Branch · {git.checkout.state === "branch" ? git.checkout.branch : git.checkout.state === "detached" ? "detached HEAD" : "unavailable"}</p>
+          {(["pull", "push"] as const).map(action => {
+            const reason = gitActionReason(git, action, gitPending?.pending ? gitPending.request.action : undefined, gitBlocked);
+            const detail = gitTargetDetail(space.label, git, action);
+            return <button key={action} role="menuitem" type="button" disabled={Boolean(reason)} title={`${detail}${reason ? ` · ${reason}` : ""}`} onClick={() => menuAction(() => runGitAction(space.id, action))}><UiIcon name={action === "pull" ? "down" : "up"} /><span>{action === "pull" ? "Pull (fast-forward only)" : "Push"}</span><small className="context-menu-reason">{reason ?? detail}</small></button>;
+          })}
+        </> : null}
       </ContextMenu>;
     }
     if (menu.target.kind === "tab") {
@@ -880,7 +924,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       id: `herdr:${command.command_id}`, label: command.description ? command.description.charAt(0).toUpperCase() + command.description.slice(1) : "Custom command", icon: command.action === "popup" ? "more" : command.action === "plugin_action" ? "file" : "terminal", shortcut: herdrCommandShortcut(command, customPrefixes), group: "Herdr",
       disabled: Boolean(customCommandReason || popup), reason: customCommandReason, run: () => runHerdrCommand(command),
     })),
-    ...SHORTCUTS.filter((entry) => entry.palette !== false && (entry.prefix || (entry.id === "subscription-limits" && !limits.absent))).map((entry): CommandAction => {
+    ...SHORTCUTS.filter((entry) => entry.id !== "pull-space" && entry.id !== "push-space" && entry.palette !== false && (entry.prefix || (entry.id === "subscription-limits" && !limits.absent))).map((entry): CommandAction => {
       if (entry.id === "subscription-limits") return { id: entry.id, label: entry.label, group: entry.group, run: () => setLimitsOpen(true) };
       const command = entry.id as PrefixCommand;
       const reason = entry.needs === "space" && !selectedSpace ? "Select a Space first"
@@ -893,6 +937,16 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
         id: `prefix:${command}`, label: command === "toggle-library" && libraryOpen ? "Close Library" : entry.label, shortcut: formatShortcut(command), group: entry.group,
         disabled: reason !== undefined, reason, run: () => runCommand(command),
       };
+    }),
+    ...(["pull-space", "push-space"] as const).map((id): CommandAction => {
+      const entry = shortcutEntry(id);
+      const action = id === "pull-space" ? "pull" : "push";
+      const target = byId(spaces, state.focusPending ? snapshot?.focused_space_id ?? null : selection.spaceId);
+      const status = target ? spaceGit.get(target.id) : undefined;
+      const pending = gitActions.forStatus(status);
+      const reason = !target ? "Select a Space first" : gitActionReason(status, action, pending?.pending ? pending.request.action : undefined, gitBlocked);
+      const detail = target ? gitTargetDetail(target.label, status, action) : undefined;
+      return { id: entry.id, label: entry.label, group: entry.group, icon: action === "pull" ? "down" : "up", shortcut: formatShortcut(id), disabled: Boolean(reason), reason: reason ?? detail, reasonDetail: detail ? `${detail}${reason ? ` · ${reason}` : ""}` : reason, run: () => { if (target) runGitAction(target.id, action); } };
     }),
     { id: "recovery:cleanup", label: "Recover task cleanup…", group: "Navigate", run: () => setRecoveryOpen(true) },
     { id: "browser:open", label: "Open Browser", group: "Browser", disabled: Boolean(browserReason), reason: browserReason ?? undefined, run: openBrowser },
@@ -961,7 +1015,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
       <Sidebar session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} hasSession={state.sessionId !== null} hasSnapshot={snapshot !== null}
-        spaces={{ spaces, gitStatus: spaceGit, selectedSpaceId: sidebarSelectedSpaceId, pendingSpaceId, editingId: editing?.kind === "space" ? editing.id : null, busy: mutationBusy, notes: spaceNotesFromFailures(Object.values(mutations.errors)), onEdit: (id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }, onSelect: focusSpace, onContext: openContext, onSetup: () => setSetupOpen(true), setupEnabled: state.sync === "live" && !modalOpen, mutate: onMutate }}
+        spaces={{ spaces, gitStatus: spaceGit, gitBlocked, gitEntry: gitActions.forStatus, onGitAction: runGitAction, onDismissGitNote: gitActions.dismiss, selectedSpaceId: sidebarSelectedSpaceId, pendingSpaceId, editingId: editing?.kind === "space" ? editing.id : null, busy: mutationBusy, notes: spaceNotesFromFailures(Object.values(mutations.errors)), onEdit: (id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }, onSelect: focusSpace, onContext: openContext, onSetup: () => setSetupOpen(true), setupEnabled: state.sync === "live" && !modalOpen, mutate: onMutate }}
         agents={{ agents: snapshot?.agents ?? [], spaces, tabs: allTabs, selectedPaneId: sidebarSelectedPaneId, pendingPaneId, onSelect: focusAgent }} />
     </aside>
     {!narrowViewport && !sidebarCollapsed ? <div className="sidebar-resizer" role="separator" tabIndex={sidebarCollapsed ? -1 : 0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth}
@@ -993,7 +1047,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} parentSpaceId={selection.spaceId} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
-    {prefixActive ? <div className="prefix-indicator" role="status"><span>{armedPrefix.label} · {armedPrefix.origin === "herdr" ? "Herdr commands · Esc cancels" : armedPrefixHint()}</span></div> : commandNotice || commandFailureMessage ? <div className="prefix-indicator is-notice" role="alert">{commandNotice || commandFailureMessage}</div> : popupPending ? <div className="prefix-indicator" role="status">Opening Herdr popup…</div> : prefixHint ? <div className="prefix-indicator is-notice" role="status">{prefixHint}</div> : null}
+    {prefixActive ? <div className="prefix-indicator" role="status"><span>{armedPrefix.label} · {armedPrefix.origin === "herdr" ? "Herdr commands · Esc cancels" : armedPrefixHint()}</span></div> : commandNotice || commandFailureMessage ? <div className="prefix-indicator is-notice" role="alert">{commandNotice || commandFailureMessage}</div> : gitNotice && gitNotice.sessionId === state.sessionId ? <div className="prefix-indicator is-notice" role={gitNotice.note.tone === "error" ? "alert" : "status"}>{gitNotice.note.message}</div> : popupPending ? <div className="prefix-indicator" role="status">Opening Herdr popup…</div> : prefixHint ? <div className="prefix-indicator is-notice" role="status">{prefixHint}</div> : null}
     <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetryMutation={onRetryMutation} />
     </div>
     {popup && state.sessionId ? <ServerPopup key={`${state.sessionId}:${popup.terminal_id}`} client={client} sessionId={state.sessionId} popup={popup} live={state.sync === "live" && shell?.status === "live"} error={shell?.error ?? state.syncError?.message ?? null} focusEpoch={state.epoch} terminalMouseInput={terminalMouseInput} onReconnect={onReconnect} /> : null}

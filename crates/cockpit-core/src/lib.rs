@@ -25,6 +25,7 @@ pub mod repositories;
 pub mod review;
 pub mod sources;
 pub mod space_git;
+pub mod space_git_action;
 pub mod viewer;
 
 pub use browser::{BrowserHerdrAdapter, BrowserHerdrSnapshot, BrowserService};
@@ -42,6 +43,7 @@ use cockpit_protocol::v1::{
     PaneMoveDestination, ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
     SessionSnapshotResponse, SpaceGitStatusResponse, StatusResponse, TerminalCommand,
     TerminalOpenRequest, TerminalStreamMessage,
+    SpaceGitActionRequest, SpaceGitActionResponse,
 };
 use tokio::sync::{RwLock, mpsc};
 
@@ -142,6 +144,7 @@ pub struct CockpitService {
     library: Option<Arc<library::LibraryService>>,
     credentials: Option<Arc<credentials::ProviderCredentials>>,
     quota: Option<Arc<quota::QuotaService>>,
+    git_actions: Arc<space_git_action::SpaceGitActions>,
 }
 
 #[derive(Default)]
@@ -208,6 +211,7 @@ impl CockpitService {
             library: None,
             credentials: None,
             quota: None,
+            git_actions: Arc::new(space_git_action::SpaceGitActions::default()),
         }
     }
 
@@ -387,6 +391,15 @@ impl CockpitService {
     ) -> Result<SpaceGitStatusResponse, InspectionError> {
         let snapshot = self.session_snapshot(session_id).await?;
         Ok(space_git::read(&snapshot).await)
+    }
+
+    /// Pull fast-forward-only or push the exact configured upstream of this Space.
+    pub async fn space_git_action(
+        &self,
+        session_id: &str,
+        request: &SpaceGitActionRequest,
+    ) -> Result<SpaceGitActionResponse, InspectionError> {
+        space_git_action::run_action(self, session_id, request).await
     }
 
     pub async fn focus(

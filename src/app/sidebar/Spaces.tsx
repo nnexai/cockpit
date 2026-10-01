@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type PointerEvent } from "react";
-import type { ResourceMutationRequest, SpaceGitStatus } from "../../protocol/generated/v1";
+import type { ResourceMutationRequest, SpaceGitAction, SpaceGitStatus } from "../../protocol/generated/v1";
 import { aheadBehindLabel } from "../session/spaceGitStatus";
 import { withShortcut } from "../input/shortcuts";
 import { InlineRename } from "../InlineRename";
@@ -8,6 +8,8 @@ import { SidebarSkeleton } from "./SidebarSkeleton";
 import { StateGlyph } from "./StateGlyph";
 import { projectSpaceTree, spaceDropBeforeId, spaceRawName, spaceRowStatus, spaceStatus, type Space } from "./spaceTree";
 import { useRovingList } from "./useRovingList";
+import { SpaceGitAction as InlineGitAction } from "./SpaceGitAction";
+import type { GitActionState } from "../session/spaceGitActions";
 
 /** What the sidebar needs from a context-menu trigger: a point, from a pointer or from a row's box. */
 export type ContextAnchor = { clientX: number; clientY: number; preventDefault(): void; stopPropagation(): void };
@@ -17,9 +19,13 @@ type DropMark = { targetId: string; side: "before" | "after" } | null;
 /** A rejected Space mutation, shown directly under the row it concerns. */
 export type SpaceNote = { spaceId: string; id: string; message: string };
 
-export function Spaces({ spaces, gitStatus, selectedSpaceId, pendingSpaceId, editingId, busy, loading, hasSession, notes, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate, focusRef }: {
+export function Spaces({ spaces, gitStatus, gitBlocked, gitEntry, onGitAction, onDismissGitNote, selectedSpaceId, pendingSpaceId, editingId, busy, loading, hasSession, notes, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate, focusRef }: {
   spaces: Space[];
   gitStatus: ReadonlyMap<string, SpaceGitStatus>;
+  gitBlocked?: string;
+  gitEntry(status: SpaceGitStatus | undefined): GitActionState | undefined;
+  onGitAction(spaceId: string, action: SpaceGitAction): void;
+  onDismissGitNote(root: string): void;
   /** The Space Herdr confirmed as focused. */
   selectedSpaceId: string | null;
   /** The Space a focus request is in flight for; Herdr has not confirmed it yet. */
@@ -44,6 +50,7 @@ export function Spaces({ spaces, gitStatus, selectedSpaceId, pendingSpaceId, edi
   const [dropMark, setDropMark] = useState<DropMark>(null);
   const [staleDrag, setStaleDrag] = useState<{ spaceId: string; message: string } | null>(null);
   const [dismissedNotes, setDismissedNotes] = useState<ReadonlySet<string>>(() => new Set());
+  const [gitExplanation, setGitExplanation] = useState<{ spaceId: string; message: string } | null>(null);
   const rows = projectSpaceTree(spaces, collapsedRepositoryKeys, selectedSpaceId);
   const visibleNotes = notes.filter((note) => !dismissedNotes.has(note.id));
   const noteFor = (spaceId: string): string | null => (staleDrag?.spaceId === spaceId ? staleDrag.message : null) ?? visibleNotes.find((note) => note.spaceId === spaceId)?.message ?? null;
@@ -59,6 +66,14 @@ export function Spaces({ spaces, gitStatus, selectedSpaceId, pendingSpaceId, edi
     rowIds: rows.map((row) => row.space.id),
     selectedId: selectedSpaceId,
     onEscape: () => {
+      const focusedId = document.activeElement?.closest<HTMLElement>("[data-space-id]")?.dataset.spaceId;
+      const git = focusedId ? gitStatus.get(focusedId) : undefined;
+      const entry = gitEntry(git);
+      if (entry?.note || gitExplanation?.spaceId === focusedId) {
+        if (git?.checkout.state !== "unavailable" && git?.checkout.root) onDismissGitNote(git.checkout.root);
+        setGitExplanation(null);
+        return true;
+      }
       if (!staleDrag && visibleNotes.length === 0) return false;
       setStaleDrag(null);
       setDismissedNotes((current) => new Set([...current, ...visibleNotes.map((note) => note.id)]));
@@ -132,28 +147,29 @@ export function Spaces({ spaces, gitStatus, selectedSpaceId, pendingSpaceId, edi
           const ownStatus = spaceStatus(space.agent_status);
           const word = status.className === "unknown" ? "No agent" : status.word;
           const git = gitStatus.get(space.id);
-          const branch = row.branch ?? git?.branch ?? null;
+          const checkout = git?.checkout;
+          const branch = checkout ? (checkout.state === "branch" ? checkout.branch : null) : row.branch || null;
+          const tracked = checkout?.state === "branch" && checkout.upstream.state === "tracked" ? checkout.upstream : undefined;
           const position = aheadBehindLabel(git);
-          // Herdr shows the branch under every Space's name except a linked worktree's, which is named for its branch.
-          const showBranch = Boolean(branch && !space.git?.is_linked_worktree && row.kind !== "child");
+          const child = space.git?.is_linked_worktree || row.kind === "child";
+          const showBranch = Boolean(!child && (branch || checkout));
+          const entry = gitEntry(git);
+          const gitNote = entry?.note ?? (gitExplanation?.spaceId === space.id ? { tone: "explanation" as const, message: gitExplanation.message } : undefined);
+          const gitAction = <InlineGitAction status={git} child={Boolean(child)} entry={entry} blocked={gitBlocked} onAction={action => onGitAction(space.id, action)} onExplain={message => setGitExplanation({ spaceId: space.id, message })} />;
           const title = [
             `${row.kind === "child" ? spaceRawName(space) : space.label} · ${word}`,
-            branch ? (git?.upstream ? `${branch} · ${position || "level"} vs ${git.upstream}` : branch) : null,
-            space.git?.checkout_path ?? null,
+            branch ? (tracked ? `${branch} · ${position || "level"} vs ${tracked.name} (last fetch)` : branch) : checkout?.state === "detached" ? "Detached HEAD" : checkout?.state === "unavailable" ? checkout.message : null,
+            checkout && checkout.state !== "unavailable" ? checkout.root : space.git?.checkout_path,
           ].filter(Boolean).join("\n");
-          const accessibleName = [
-            row.label,
-            word,
-            showBranch ? `branch ${branch}` : null,
-            showBranch && git?.upstream ? `${git.ahead ?? 0} ahead, ${git.behind ?? 0} behind` : null,
-          ].filter(Boolean).join(", ");
+          const accessibleName = [row.label, word, branch ? `branch ${branch}` : null,
+            tracked ? `${tracked.ahead} ahead, ${tracked.behind} behind ${tracked.name}` : null].filter(Boolean).join(", ");
           const pending = pendingSpaceId === space.id;
           const selected = selectedSpaceId === space.id && !pending;
           const side = dropMark?.targetId === space.id ? dropMark.side : null;
           const note = noteFor(space.id);
           const hiddenUrgency = row.kind === "parent" && !row.expanded && status.className !== ownStatus.className && status.className !== "unknown"
             ? ` (worktree ${status.word.toLowerCase()})` : "";
-          return <div key={space.id} className="space-row-group">
+          return <div key={space.id} className="space-row-group" data-space-id={space.id}>
             <div className={`space-tree-row space-tree-${row.kind}${showBranch ? " has-branch" : ""} state-${status.className}${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}${side ? ` drop-${side}` : ""}`} draggable={!busy && editingId !== space.id}
               onDragStart={(event) => startDrag(event, space)}
               onDragEnd={() => { setDragIntent(null); setDropMark(null); }}
@@ -177,19 +193,28 @@ export function Spaces({ spaces, gitStatus, selectedSpaceId, pendingSpaceId, edi
               {row.kind === "child" ? <span className={`space-connector${row.connector === "└─" ? " is-last" : ""}`} aria-hidden="true" /> : null}
               {editingId === space.id
                 ? <InlineRename label={space.label} ariaLabel={`Rename Space ${space.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`space:${space.id}`, { type: "space_rename", space_id: space.id, label }); if (accepted) onEdit(null); return accepted; }} />
-                : <button type="button" data-row-id={space.id} tabIndex={roving.tabIndexFor(space.id)} draggable={!busy} className="resource-select" title={title} aria-label={accessibleName} aria-disabled={busy || undefined} aria-current={selected ? "true" : undefined} aria-busy={pending || undefined}
-                  onDragStart={(event) => startDrag(event, space)} onClick={() => { if (!busy) onSelect(space); }} onDoubleClick={() => onEdit(space.id)}>
-                  <StateGlyph shape={status.shape} />
-                  <span className="space-details">
-                    <span className="space-label">{row.label}</span>
-                    {showBranch ? <span className="space-branch"><span className="space-branch-name">{branch}</span>{position ? <span className="space-ahead-behind" aria-hidden="true">{position}</span> : null}</span> : null}
-                  </span>
-                </button>}
+                : <>
+                  <button type="button" data-row-id={space.id} tabIndex={roving.tabIndexFor(space.id)} draggable={!busy} className="resource-select" title={title} aria-label={accessibleName} aria-disabled={busy || undefined} aria-current={selected ? "true" : undefined} aria-busy={pending || undefined}
+                    onDragStart={(event) => startDrag(event, space)} onClick={() => { if (!busy) onSelect(space); }} onDoubleClick={() => onEdit(space.id)} />
+                  <div className="space-row-content" aria-hidden={undefined}>
+                    <StateGlyph shape={status.shape} />
+                    <span className="space-details">
+                      <span className="space-name-line"><span className="space-label">{row.label}</span>{child ? gitAction : null}</span>
+                      {showBranch ? <span className="space-branch">{branch ? <span className="space-branch-name">{branch}</span> : null}{gitAction}</span> : null}
+                    </span>
+                  </div>
+                </>}
               {row.kind === "parent" && row.repositoryKey
                 ? <button type="button" className="space-chevron" tabIndex={-1} aria-disabled={busy || undefined} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}${hiddenUrgency}`} aria-expanded={row.expanded} onClick={() => { if (!busy) toggleRepository(row.repositoryKey!); }}><UiIcon name={row.expanded ? "down" : "right"} /></button>
                 : null}
             </div>
+            {entry?.pending ? <span className="sr-only" role="status">{entry.request.action === "push" ? "Pushing" : "Pulling"} {space.label}: {entry.request.expected_branch} {entry.request.action === "push" ? "→" : "←"} {entry.request.expected_upstream}</span> : null}
             {note ? <p className="row-note" role="status">{note}</p> : null}
+            {gitNote ? <div className={`row-note git-row-note is-${gitNote.tone}${child ? " is-child" : ""}`} role={gitNote.tone === "error" ? "alert" : "status"}>
+              <span>{gitNote.message}</span><span className="git-note-actions">
+                <button type="button" onClick={() => { if (checkout && checkout.state !== "unavailable") onDismissGitNote(checkout.root); setGitExplanation(null); }}>Dismiss</button>
+              </span>
+            </div> : null}
           </div>;
         })}
     </div>

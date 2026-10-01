@@ -71,6 +71,8 @@
     "allow-cockpit-library-file-index",
     "allow-cockpit-library-document",
     "allow-cockpit-library-media",
+    "allow-cockpit-space-git-status",
+    "allow-cockpit-space-git-action",
     "allow-cockpit-browser-action",
     "allow-cockpit-browser-feedback",
     "allow-cockpit-browser-feedback-ack",

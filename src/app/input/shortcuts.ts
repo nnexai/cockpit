@@ -28,7 +28,7 @@ export type ShortcutGroup = "Navigate" | "Space" | "Tab" | "Pane" | "Browser" | 
 export type ShortcutScope = "global" | "terminal" | "browser" | "viewer" | "line";
 
 export type PrefixCommand =
-  | "help" | "new-space" | "rename-space" | "close-space" | "setup-space"
+  | "help" | "new-space" | "rename-space" | "close-space" | "setup-space" | "pull-space" | "push-space"
   | "new-tab" | "rename-tab" | "previous-tab" | "next-tab" | "close-tab"
   | "rename-pane" | "split-right" | "split-down" | "close-pane" | "zoom-pane" | "resize"
   | "previous-pane" | "next-pane" | "focus-left" | "focus-right" | "focus-up" | "focus-down"
@@ -100,6 +100,8 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "new-space", label: "New Space", group: "Space", scope: "global", prefix: k("n", true), note: "Creates a bare Herdr workspace." },
   { id: "rename-space", label: "Rename Space", group: "Space", scope: "global", prefix: k("w", true), needs: "space" },
   { id: "close-space", label: "Close Space", group: "Space", scope: "global", prefix: k("d", true), needs: "space", note: "Asks for confirmation." },
+  { id: "pull-space", label: "Pull Space (fast-forward only)", group: "Space", scope: "global", needs: "space", note: "Commands or a Space row menu; targets the selected checkout's upstream. No assigned shortcut." },
+  { id: "push-space", label: "Push Space to upstream", group: "Space", scope: "global", needs: "space", note: "Commands or a Space row menu; normal push to the tracked upstream, never forced. No assigned shortcut." },
   { id: "setup-space", label: "Set up a Space", group: "Navigate", scope: "global", prefix: k("s", true), note: "Opens the task Space setup dialog, like the Spaces + button." },
   { id: "rename-pane", label: "Rename terminal", group: "Pane", scope: "global", prefix: k("p", true), needs: "pane", paneScoped: true, note: "Real terminals only; viewers have fixed titles." },
   { id: "split-right", label: "New terminal beside pane", group: "Pane", scope: "global", prefix: k("v"), palette: false, needs: "pane", paneScoped: true, note: "Creates a terminal beside the selected terminal or viewer." },

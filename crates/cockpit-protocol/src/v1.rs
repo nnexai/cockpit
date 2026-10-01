@@ -69,17 +69,59 @@ pub struct SpaceGitSummary {
     pub is_linked_worktree: bool,
 }
 
-/// Branch position of a Space checkout, read from Git by Cockpit because
-/// Herdr's API does not expose it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceGitSource {
+    HerdrCheckout,
+    PaneFolder,
+}
+
+/// Branch position of a Space checkout, read from Git by Cockpit.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct SpaceGitStatus {
     pub space_id: String,
-    pub branch: Option<String>,
-    pub upstream: Option<String>,
-    /// Commits on HEAD that are not on the upstream; `None` without an upstream.
-    pub ahead: Option<u32>,
-    /// Commits on the upstream that are not on HEAD; `None` without an upstream.
-    pub behind: Option<u32>,
+    pub source: SpaceGitSource,
+    pub checkout: SpaceGitCheckout,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SpaceGitCheckout {
+    Branch {
+        root: String,
+        branch: String,
+        upstream: SpaceGitUpstream,
+    },
+    Detached {
+        root: String,
+    },
+    Unavailable {
+        root: Option<String>,
+        code: String,
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SpaceGitUpstream {
+    Tracked {
+        name: String,
+        ahead: u32,
+        behind: u32,
+    },
+    None,
+    Gone {
+        name: String,
+    },
+    Local {
+        name: String,
+    },
+    Unavailable {
+        name: String,
+        code: String,
+        message: String,
+    },
 }
 
 /// Git status for the Spaces of one session that have a repository checkout.
@@ -87,6 +129,55 @@ pub struct SpaceGitStatus {
 pub struct SpaceGitStatusResponse {
     pub session_id: String,
     pub spaces: Vec<SpaceGitStatus>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceGitAction {
+    Pull,
+    Push,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceGitActionRequest {
+    pub space_id: String,
+    pub action: SpaceGitAction,
+    pub expected_root: String,
+    pub expected_branch: String,
+    pub expected_upstream: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct SpaceGitActionResponse {
+    pub session_id: String,
+    pub space_id: String,
+    pub action: SpaceGitAction,
+    pub root: String,
+    pub branch: String,
+    pub upstream: String,
+    pub outcome: SpaceGitActionOutcome,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum SpaceGitActionOutcome {
+    Updated {
+        commits: Option<u32>,
+    },
+    UpToDate,
+    Refused {
+        reason: SpaceGitRefusal,
+        detail: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceGitRefusal {
+    NotFastForward,
+    LocalChanges,
+    RemoteRejected,
 }
 
 /// A summary of a Herdr Space in the current session.

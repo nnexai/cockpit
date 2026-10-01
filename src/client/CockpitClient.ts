@@ -108,6 +108,11 @@ import type {
   SessionSummary,
   SpaceGitStatus,
   SpaceGitStatusResponse,
+  SpaceGitCheckout,
+  SpaceGitUpstream,
+  SpaceGitActionRequest,
+  SpaceGitActionResponse,
+  SpaceGitActionOutcome,
   SpaceGitSummary,
   SpaceSummary,
   TabSummary,
@@ -361,6 +366,7 @@ export interface CockpitClient {
   sessions(): Promise<SessionListResponse>;
   sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<CockpitSessionSnapshot>;
   spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse>;
+  spaceGitAction(sessionId: string, request: SpaceGitActionRequest): Promise<SpaceGitActionResponse>;
   focus(sessionId: string, request: FocusRequest): Promise<FocusResponse>;
   mutate(sessionId: string, request: ResourceMutationRequest): Promise<ResourceMutationResponse>;
   subscribeSession(sessionId: string, onMessage: (message: SessionStreamMessage) => void, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<ClosableStream>;
@@ -1534,20 +1540,87 @@ export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotRes
   };
 }
 
-function isNullableU32(value: unknown): value is number | null {
-  return value === null || isU32(value);
+function parseSpaceGitUpstream(value: unknown): SpaceGitUpstream {
+  if (!isRecord(value)) return malformed("Space Git upstream is malformed");
+  switch (value.state) {
+    case "none": return { state: "none" };
+    case "tracked":
+      if (!isString(value.name) || !isU32(value.ahead) || !isU32(value.behind)) break;
+      return { state: "tracked", name: value.name, ahead: value.ahead, behind: value.behind };
+    case "gone":
+    case "local":
+      if (!isString(value.name)) break;
+      return { state: value.state, name: value.name };
+    case "unavailable":
+      if (!isString(value.name) || !isString(value.code) || !isString(value.message)) break;
+      return { state: "unavailable", name: value.name, code: value.code, message: value.message };
+  }
+  return malformed("Space Git upstream is malformed");
 }
 
-function isSpaceGitStatus(value: unknown): value is SpaceGitStatus {
-  return isRecord(value) && isString(value.space_id) && isNullableString(value.branch) && isNullableString(value.upstream) &&
-    isNullableU32(value.ahead) && isNullableU32(value.behind);
+function parseSpaceGitCheckout(value: unknown): SpaceGitCheckout {
+  if (!isRecord(value)) return malformed("Space Git checkout is malformed");
+  switch (value.state) {
+    case "branch":
+      if (!isString(value.root) || !isString(value.branch)) break;
+      return { state: "branch", root: value.root, branch: value.branch, upstream: parseSpaceGitUpstream(value.upstream) };
+    case "detached":
+      if (!isString(value.root)) break;
+      return { state: "detached", root: value.root };
+    case "unavailable":
+      if (!isNullableString(value.root) || !isString(value.code) || !isString(value.message)) break;
+      return { state: "unavailable", root: value.root, code: value.code, message: value.message };
+  }
+  return malformed("Space Git checkout is malformed");
 }
 
 export function parseSpaceGitStatusResponse(value: unknown): SpaceGitStatusResponse {
-  if (!isRecord(value) || !isString(value.session_id) || !Array.isArray(value.spaces) || !value.spaces.every(isSpaceGitStatus)) {
+  if (!isRecord(value) || !isString(value.session_id) || !Array.isArray(value.spaces)) {
     return malformed("Space Git status response is missing required fields");
   }
-  return { session_id: value.session_id, spaces: value.spaces.map(({ space_id, branch, upstream, ahead, behind }) => ({ space_id, branch, upstream, ahead, behind })) };
+  const spaces: SpaceGitStatus[] = value.spaces.map((space: unknown) => {
+    if (!isRecord(space) || !isString(space.space_id) || !isOneOf(space.source, ["herdr_checkout", "pane_folder"] as const)) {
+      return malformed("Space Git status is malformed");
+    }
+    return { space_id: space.space_id, source: space.source, checkout: parseSpaceGitCheckout(space.checkout) };
+  });
+  return { session_id: value.session_id, spaces };
+}
+
+function parseSpaceGitActionOutcome(value: unknown): SpaceGitActionOutcome {
+  if (!isRecord(value)) return malformed("Space Git action outcome is malformed");
+  switch (value.result) {
+    case "updated":
+      if (!(value.commits === null || isU32(value.commits))) break;
+      return { result: "updated", commits: value.commits };
+    case "up_to_date": return { result: "up_to_date" };
+    case "refused":
+      if (!isOneOf(value.reason, ["not_fast_forward", "local_changes", "remote_rejected"] as const) || !isString(value.detail)) break;
+      return { result: "refused", reason: value.reason, detail: value.detail };
+  }
+  return malformed("Space Git action outcome is malformed");
+}
+
+export function parseSpaceGitActionResponse(value: unknown): SpaceGitActionResponse {
+  if (!isRecord(value) || !isString(value.session_id) || !isString(value.space_id)
+    || !isOneOf(value.action, ["pull", "push"] as const) || !isString(value.root)
+    || !isString(value.branch) || !isString(value.upstream)) {
+    return malformed("Space Git action response is missing required fields");
+  }
+  return {
+    session_id: value.session_id, space_id: value.space_id, action: value.action,
+    root: value.root, branch: value.branch, upstream: value.upstream,
+    outcome: parseSpaceGitActionOutcome(value.outcome),
+  };
+}
+
+export function matchSpaceGitActionResponse(value: unknown, sessionId: string, request: SpaceGitActionRequest): SpaceGitActionResponse {
+  const response = parseSpaceGitActionResponse(value);
+  if (response.session_id !== sessionId || response.space_id !== request.space_id || response.action !== request.action
+    || response.root !== request.expected_root || response.branch !== request.expected_branch || response.upstream !== request.expected_upstream) {
+    return malformed("Space Git action response belongs to another target");
+  }
+  return response;
 }
 
 export function parseSessionSummary(value: unknown): SessionSummary {

@@ -54,6 +54,8 @@ import type {
   SessionListResponse,
   SessionSnapshotResponse,
   SpaceGitStatusResponse,
+  SpaceGitActionRequest,
+  SpaceGitActionResponse,
   SessionStreamMessage,
   StatusResponse,
   QuotaStatusResponse,
@@ -93,6 +95,7 @@ import {
   parseSessionListResponse,
   parseSessionSnapshotResponse,
   parseSpaceGitStatusResponse,
+  matchSpaceGitActionResponse,
   parseSessionStreamMessage,
   parseStatusResponse,
   parseTerminalCommand,
@@ -967,6 +970,12 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
         if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space Git status belongs to another session");
         return value;
       });
+    },
+    spaceGitAction(sessionId: string, actionRequest: SpaceGitActionRequest): Promise<SpaceGitActionResponse> {
+      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
+      const submitted = { ...actionRequest };
+      return invokeAndParse(invoke, "cockpit_space_git_action", { sessionId, request: submitted }, "Space Git action",
+        (value) => matchSpaceGitActionResponse(value, sessionId, submitted));
     },
     sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<SessionSnapshotResponse> {
       try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }

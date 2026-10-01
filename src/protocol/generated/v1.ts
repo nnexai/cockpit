@@ -217,17 +217,25 @@ export type BrowserViewCommandResponse = { "status": "accepted", view_id: string
 
 export type SpaceGitSummary = { repository_key: string, repository: string, branch: string | null, checkout_path: string, is_linked_worktree: boolean, };
 
-export type SpaceGitStatus = { space_id: string, branch: string | null, upstream: string | null,
-/**
- * Commits on HEAD that are not on the upstream; `None` without an upstream.
- */
-ahead: number | null,
-/**
- * Commits on the upstream that are not on HEAD; `None` without an upstream.
- */
-behind: number | null, };
+export type SpaceGitStatus = { space_id: string, source: SpaceGitSource, checkout: SpaceGitCheckout, };
 
 export type SpaceGitStatusResponse = { session_id: string, spaces: Array<SpaceGitStatus>, };
+
+export type SpaceGitSource = "herdr_checkout" | "pane_folder";
+
+export type SpaceGitCheckout = { "state": "branch", root: string, branch: string, upstream: SpaceGitUpstream, } | { "state": "detached", root: string, } | { "state": "unavailable", root: string | null, code: string, message: string, };
+
+export type SpaceGitUpstream = { "state": "tracked", name: string, ahead: number, behind: number, } | { "state": "none" } | { "state": "gone", name: string, } | { "state": "local", name: string, } | { "state": "unavailable", name: string, code: string, message: string, };
+
+export type SpaceGitAction = "pull" | "push";
+
+export type SpaceGitActionRequest = { space_id: string, action: SpaceGitAction, expected_root: string, expected_branch: string, expected_upstream: string, };
+
+export type SpaceGitActionResponse = { session_id: string, space_id: string, action: SpaceGitAction, root: string, branch: string, upstream: string, outcome: SpaceGitActionOutcome, };
+
+export type SpaceGitActionOutcome = { "result": "updated", commits: number | null, } | { "result": "up_to_date" } | { "result": "refused", reason: SpaceGitRefusal, detail: string, };
+
+export type SpaceGitRefusal = "not_fast_forward" | "local_changes" | "remote_rejected";
 
 export type SpaceSummary = { id: string, label: string, number: number, tab_count: number, pane_count: number, focused: boolean, agent_status: string, git: SpaceGitSummary | null, };
 
