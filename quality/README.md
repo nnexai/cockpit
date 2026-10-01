@@ -80,6 +80,31 @@ reviewed test gaps. A whole-file TS run also exercised timeout reporting:
 228 killed, 124 survived, 18 uncovered and 5 timed out; its launcher result
 was inconclusive, not a pass.
 
+Follow-up investigation addressed the confirmed behavior gaps:
+
+- Bare-project recognition now tests accepted digits/underscores, invalid
+  suffixes, length boundaries, and uppercase JQL versus project expansion.
+  All 7 scoped Rust mutants are caught (previously 3 survived).
+- Layout/drop tests now cover recursive minima, degradation boundaries,
+  frozen-weight redistribution, translated/rounded/tiny geometry, and
+  four-sided drop boundaries, precedence, minimum-fit fallback and previews.
+  All 134 meaningful previously surviving/uncovered layout mutants are killed,
+  including all 18 previously uncovered mutants. All 26 mutations from the
+  focused `minSize` pilot are killed.
+- The full layout rerun has 360 killed, 10 surviving, and 5 timeouts. Seven
+  survivors are equivalent or runtime-equivalent type-invalid changes
+  (axis literals, initial array length, exact-minimum freezing, and an
+  unobserved final position update). Three change presentation strings only;
+  incidental wording assertions are intentionally not used to chase them.
+  The five timeout mutants remove loop progress or termination; Stryker's
+  hit-limit protection stops them. They do not demonstrate an original-code
+  hang, and the launcher still reports the full run as inconclusive.
+
+No production defect was demonstrated; these changes strengthen behavioral
+regressions without altering the algorithms, adding mutation exclusions,
+or enforcing a score. Treat future survivors the same way: classify them,
+address confirmed gaps, and rerun the affected scope before declaring closure.
+
 At least one literal, repository-relative source `--file` is required. Repeat
 `--file` for multiple distinct files; wildcards, tests, generated files,
 declaration-only `.d.ts` files, nonexistent files, symlinks, and the wrong

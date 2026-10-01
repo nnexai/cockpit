@@ -390,11 +390,38 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_queries_and_leaves_other_inputs_alone() {
+    fn expands_bare_project_keys_with_digits_and_underscores() {
+        let longest = "A".repeat(32);
+        for project in ["AB", "OPS", "AB1", "AB_1", "A_", longest.as_str()] {
+            assert_eq!(
+                jira_query_input(project).unwrap(),
+                Some(JiraQueryInput {
+                    jql: format!("project = {project}"),
+                    bare_project: true,
+                }),
+                "{project}"
+            );
+        }
+    }
+
+    #[test]
+    fn leaves_non_project_tokens_unrecognized() {
+        let too_long = "A".repeat(33);
+        for input in ["A", "1A", "_A", "aB", "Ab", "AB!", "AB-XY", "ABé", too_long.as_str()] {
+            assert_eq!(jira_query_input(input).unwrap(), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn recognizes_uppercase_jql_without_expanding_it_as_a_project() {
         assert_eq!(
-            jira_query_input("OPS").unwrap(),
-            Some(JiraQueryInput { jql: "project = OPS".into(), bare_project: true })
+            jira_query_input("PROJECT = OPS").unwrap(),
+            Some(JiraQueryInput { jql: "PROJECT = OPS".into(), bare_project: false })
         );
+    }
+
+    #[test]
+    fn normalizes_queries_and_leaves_other_inputs_alone() {
         assert_eq!(jira_query_input("OPS-12").unwrap(), None);
         assert_eq!(jira_query_input("https://x.atlassian.net/browse/OPS-1?a=b").unwrap(), None);
         assert_eq!(jira_query_input("/tmp/a=b").unwrap(), None);
