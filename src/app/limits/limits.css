@@ -11,6 +11,14 @@
   font-size: var(--font-size-control);
   min-width: 0;
 }
+.subscription-limits.is-open::before {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 100%;
+  width: min(560px, calc(100vw - 16px));
+  height: 4px;
+}
 .limits-trigger {
   display: flex;
   align-items: center;
@@ -40,9 +48,9 @@
 .limits-summary { display: none; gap: 5px; }
 .limits-meter { display: inline-block; width: 64px; height: 4px; border-radius: 3px; background: var(--border-strong); overflow: hidden; vertical-align: middle; }
 .limits-meter > span { display: block; width: var(--remaining); height: 100%; background: var(--text-muted); }
-.limits-meter.limits-level-ok > span { background: var(--accent); }
-.limits-meter.limits-level-warning > span { background: var(--warning); }
-.limits-meter.limits-level-exhausted > span { background: var(--blocked); }
+.limits-meter.limits-tone-ok > span { background: var(--accent); }
+.limits-meter.limits-tone-warning > span { background: var(--warning); }
+.limits-meter.limits-tone-alert > span { background: var(--blocked); }
 .limits-meter.is-stale > span { background: repeating-linear-gradient(135deg, var(--text-muted) 0 2px, transparent 2px 4px); }
 .limits-chip-meter .limits-meter { width: 28px; }
 .limits-popup {

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type CSSProperties, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject } from "react";
 import type { QuotaLimit, QuotaStatusResponse } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { formatAgo } from "../library/libraryState";
@@ -18,7 +18,9 @@ export interface SubscriptionLimitsProps {
 function Meter({ limit, stale }: { limit: QuotaLimit; stale: boolean }) {
   const fraction = remainingFraction(limit);
   if (fraction === null) return null;
-  return <span aria-hidden="true" className={`limits-meter limits-level-${limit.level}${stale ? " is-stale" : ""}`}>
+  const used = 1 - fraction;
+  const tone = used > 0.95 ? "alert" : used > 0.8 ? "warning" : "ok";
+  return <span aria-hidden="true" className={`limits-meter limits-tone-${tone}${stale ? " is-stale" : ""}`}>
     <span style={{ "--remaining": `${fraction * 100}%` } as CSSProperties} />
   </span>;
 }
@@ -41,43 +43,68 @@ export function SubscriptionLimits({ snapshot, link, now, open, onOpenChange, su
   const opener = useRef<HTMLElement | null>(null);
   const onChangeRef = useRef(onOpenChange);
   onChangeRef.current = onOpenChange;
-  const shown = open && !suspended;
+  const [hover, setHover] = useState(false);
+  const pinned = open && !suspended;
+  const shown = (open || hover) && !suspended;
   useEffect(() => {
-    if (suspended && open) onChangeRef.current(false);
+    if (!suspended) return;
+    setHover(false);
+    if (open) onChangeRef.current(false);
   }, [suspended, open]);
   useEffect(() => {
-    if (!shown) return;
+    // Don't retain hover across a pin: closing it stays closed until a new mouse entry.
+    if (!pinned) return;
+    setHover(false);
     // Commands supplies the focus before its overlay opened; pointer activation records the trigger.
     opener.current ??= commandOpener?.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     popupRef.current?.focus({ preventScroll: true });
+    return () => { opener.current = null; };
+  }, [pinned, commandOpener]);
+  useEffect(() => {
+    if (!shown) return;
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) onChangeRef.current(false);
+      if (!(event.target instanceof Node) || rootRef.current?.contains(event.target)) return;
+      setHover(false);
+      if (pinned) onChangeRef.current(false);
     };
     document.addEventListener("pointerdown", outside, true);
-    return () => {
-      document.removeEventListener("pointerdown", outside, true);
-      opener.current = null;
+    return () => document.removeEventListener("pointerdown", outside, true);
+  }, [shown, pinned]);
+  useEffect(() => {
+    if (!hover || pinned || suspended) return;
+    // A preview never owns keyboard focus; terminal Escape still passes through.
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setHover(false);
     };
-  }, [shown, commandOpener]);
+    document.addEventListener("keydown", escape, true);
+    return () => document.removeEventListener("keydown", escape, true);
+  }, [hover, pinned, suspended]);
   const views = providerViews(snapshot, now, link === "offline");
   const visible = views.filter(view => view.provider.state !== "not_signed_in");
   const summary = summaryView(views);
-  return <div className="subscription-limits" ref={rootRef} onKeyDown={event => {
-    if (!shown || event.key !== "Escape") return;
-    event.preventDefault();
-    event.stopPropagation();
-    const target = opener.current?.isConnected && !opener.current.closest("[inert]") ? opener.current : triggerRef.current;
-    onOpenChange(false);
-    target?.focus({ preventScroll: true });
-  }}>
+  return <div className={`subscription-limits${shown ? " is-open" : ""}`} ref={rootRef}
+    onPointerEnter={event => { if (event.pointerType === "mouse" && !suspended && !pinned) setHover(true); }}
+    onPointerLeave={event => { if (event.pointerType === "mouse") setHover(false); }}
+    onKeyDown={event => {
+      if (!pinned || event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const target = opener.current?.isConnected && !opener.current.closest("[inert]") ? opener.current : triggerRef.current;
+      setHover(false);
+      onOpenChange(false);
+      target?.focus({ preventScroll: true });
+    }}>
     <button type="button" ref={triggerRef} className="limits-trigger" aria-label={accessibleLabel(views, now, link === "offline")}
       title="Subscription limits" aria-haspopup="dialog" aria-expanded={shown} aria-controls={shown ? id : undefined}
-      disabled={suspended} onClick={() => { opener.current = triggerRef.current; onOpenChange(!shown); }}>
+      disabled={suspended} onClick={() => { setHover(false); opener.current = triggerRef.current; onOpenChange(!pinned); }}>
       <span className="limits-chips" aria-hidden="true">{visible.length ? visible.map(view => <Chip key={view.provider.provider} view={view} now={now} />) : <span>Limits —</span>}</span>
       <span className="limits-summary" aria-hidden="true">{summary ? <><Chip view={summary} now={now} />{visible.length > 1 ? <span className="limits-more">+{visible.length - 1}</span> : null}</> : <span>Limits —</span>}</span>
     </button>
     {shown ? <div id={id} ref={popupRef} role="dialog" tabIndex={-1} aria-label="Subscription limits" className="limits-popup" onBlur={event => {
-      if (!(event.relatedTarget instanceof Node) || !rootRef.current?.contains(event.relatedTarget)) onOpenChange(false);
+      if (!(event.relatedTarget instanceof Node) || !rootRef.current?.contains(event.relatedTarget)) {
+        setHover(false);
+        if (pinned) onOpenChange(false);
+      }
     }}>
       {link === "offline" ? <p className="limits-offline">Offline — showing the last values Cockpit received.</p> : null}
       {views.map(view => <section key={view.provider.provider} aria-label={view.name} className="limits-provider">
