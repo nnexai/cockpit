@@ -54,6 +54,8 @@ The shell subscription currently advertises `surface_active: true` at 120×40 ce
 
 Run `bun run browser` to build the frontend and serve the browser app at `http://127.0.0.1:4173`. Extra server flags can be appended, for example `bun run browser --herdr-session my-session`. Run `bun run tauri:dev` for the native app.
 
+The main Tauri webview disables native drag/drop interception (`dragDropEnabled: false`) so tab sorting receives HTML `dragover`/`drop` events. Keep tab drops in the shared frontend; enabling Tauri's native file-drop handler can intercept them on macOS. Cockpit does not consume native file-drop events.
+
 For a focused frontend change, run `bun run typecheck` and `bun run test -- <affected-test-file>`. For a Rust change, run the affected package/test filter. At an integration boundary:
 
 ```sh
