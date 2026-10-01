@@ -57,7 +57,7 @@ it("rereads a plain Space when its first pane moves to another folder, and ignor
   expect(spaceCheckoutKey([plain], [pane("w1:p1"), pane("w1:p2", "/tmp")])).toBe(spaceCheckoutKey([plain], [pane("w1:p2", "/tmp")]));
 });
 
-it("surfaces read failures and refreshes immediately after an action even while hidden", async () => {
+it.each(["session", "checkout"] as const)("retains last-known status on a failed read, refreshes while hidden, and never carries it across %s changes", async identity => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const status: SpaceGitStatus = { space_id: "w1", source: "herdr_checkout", checkout: { state: "detached", root: "/repo" } };
   const spaceGitStatus = vi.fn().mockResolvedValueOnce({ session_id: "session", spaces: [status] }).mockRejectedValueOnce(new Error("ACL denied"));
@@ -65,8 +65,10 @@ it("surfaces read failures and refreshes immediately after an action even while 
   let refresh!: () => void;
   let error: string | undefined;
   let spaces: ReadonlyMap<string, SpaceGitStatus> = new Map();
+  let sessionId = "session";
+  let checkoutKey = "w1";
   function Probe() {
-    const poll = useSpaceGitStatus(client, "session", "w1");
+    const poll = useSpaceGitStatus(client, sessionId, checkoutKey);
     refresh = poll.refresh; error = poll.error; spaces = poll.spaces;
     return null;
   }
@@ -78,8 +80,19 @@ it("surfaces read failures and refreshes immediately after an action even while 
     visibility.mockReturnValue("hidden");
     await act(async () => refresh());
     expect(error).toBe("ACL denied");
-    expect(spaces.has("w1")).toBe(false);
+    expect(spaces.get("w1")).toEqual(status);
     expect(spaceGitStatus).toHaveBeenCalledTimes(2);
+    spaceGitStatus.mockResolvedValueOnce({ session_id: "session", spaces: [status] });
+    await act(async () => refresh());
+    expect(error).toBeUndefined();
+    expect(spaces.get("w1")).toEqual(status);
+    spaceGitStatus.mockRejectedValueOnce(new Error("new target unreadable"));
+    if (identity === "session") sessionId = "other-session";
+    else checkoutKey = "other-checkout";
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => refresh());
+    expect(error).toBe("new target unreadable");
+    expect(spaces.has("w1")).toBe(false);
   } finally { await act(async () => root.unmount()); visibility.mockRestore(); }
 });
 

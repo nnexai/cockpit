@@ -474,7 +474,9 @@ describe("mounted App mutation and session ordering", () => {
     await act(async () => action.resolve({ session_id: "session-1", space_id: "space-2", action: "push", root: "/child", branch: "feature", upstream: "origin/main", outcome: { result: "updated", commits: 1 } }));
     await settle();
     expect(vi.mocked(fixture.client.spaceGitStatus).mock.calls.length).toBe(readsBefore + 1);
-    expect(container.querySelector('[data-space-id="space-2"] .git-row-note')?.textContent).toContain("feature → origin/main");
+    expect(container.querySelector('[data-space-id="space-2"] .git-problem')).toBeNull();
+    expect(container.querySelector('[data-space-id="space-2"] .space-git-action')?.getAttribute("data-phase")).toBe("done");
+    expect(container.querySelector(".prefix-indicator.is-notice")).toBeNull();
     expect(fixture.focusCalls).toHaveBeenCalledTimes(selectBefore);
   });
 

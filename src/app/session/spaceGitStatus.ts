@@ -28,7 +28,11 @@ export function useSpaceGitStatus(client: CockpitClient, sessionId: string | nul
       client.spaceGitStatus(sessionId, current.signal).then((response) => {
         if (!current.signal.aborted) setStatus({ sessionId, checkoutKey, spaces: new Map(response.spaces.map((space) => [space.space_id, space])) });
       }, (error: unknown) => {
-        if (!current.signal.aborted) setStatus({ sessionId, checkoutKey, spaces: EMPTY, error: error instanceof Error ? error.message : String(error) });
+        if (!current.signal.aborted) setStatus(previous => ({
+          sessionId, checkoutKey,
+          spaces: previous?.sessionId === sessionId && previous.checkoutKey === checkoutKey ? previous.spaces : EMPTY,
+          error: error instanceof Error ? error.message : String(error),
+        }));
       }).finally(() => { if (controller === current) controller = null; });
     };
     const visiblePoll = () => poll();

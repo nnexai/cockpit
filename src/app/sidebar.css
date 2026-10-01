@@ -386,11 +386,13 @@
   line-height: 14px;
   cursor: pointer;
   pointer-events: auto;
+  transition: opacity 140ms ease-out;
 }
 .space-git-action::after { position: absolute; inset: -3px -2px; content: ""; }
 .space-git-action:hover:not([aria-disabled="true"]) { background: var(--border-strong); color: var(--text-primary); }
 .space-git-action:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -1px; }
-.space-git-action .space-ahead-behind { color: inherit; }
+.space-git-action .space-ahead-behind { color: inherit; transition: opacity 140ms ease-out; }
+.space-git-action:is([data-phase="pending"], [data-phase="done"]) .space-ahead-behind { opacity: 0; }
 .space-git-action.is-warning { color: var(--warning); }
 .space-git-action.is-explanation { cursor: help; }
 .space-git-action.is-explanation:not(.is-warning), .space-git-action.is-quiet { color: var(--text-muted); }
@@ -398,12 +400,15 @@
 .space-tree-row:hover .space-git-action.is-quiet,
 .space-tree-row:focus-within .space-git-action.is-quiet,
 .space-tree-row.is-selected .space-git-action.is-quiet,
-.space-git-action.is-git-pending { opacity: 1; pointer-events: auto; }
-.space-git-action.is-git-pending { cursor: progress; }
+.space-git-action:is([data-phase="pending"], [data-phase="done"], .is-unknown) { opacity: 1; pointer-events: auto; }
+.space-git-action[data-phase="pending"] { cursor: progress; }
+.space-git-action.is-problem { color: var(--warning); }
+.space-git-action.is-unknown { color: var(--blocked); cursor: not-allowed; }
 .space-git-spinner {
   position: absolute;
-  left: calc(100% + 2px);
-  top: 3px;
+  left: 50%;
+  top: 50%;
+  margin: -6px 0 0 -6px;
   width: 12px;
   height: 12px;
   border: 1.5px solid currentColor;
@@ -412,7 +417,14 @@
   animation: space-git-spin 900ms linear infinite;
 }
 @keyframes space-git-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .space-git-spinner { animation: none; } }
+.space-git-check { position: absolute; left: 50%; top: 50%; margin: -6px 0 0 -6px; width: 12px; height: 12px; color: var(--done); animation: space-git-check-in 140ms ease-out; }
+.space-git-check .ui-icon { width: 12px; height: 12px; stroke-width: 3.2; }
+.space-git-action.is-noop .space-git-check { color: var(--text-muted); }
+@keyframes space-git-check-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .space-git-spinner, .space-git-check { animation: none; }
+  .space-git-action, .space-git-action .space-ahead-behind { transition: none; }
+}
 
 /* Children hang from the connector: a 16px badge, one pixel lower so it centres on the 18px name line. */
 .space-tree-child .sb-glyph {
@@ -481,6 +493,7 @@
 }
 
 .space-chevron {
+  position: relative;
   display: flex;
   width: 24px;
   height: 24px;
@@ -495,6 +508,7 @@
   color: var(--text-muted);
   cursor: pointer;
 }
+.space-chevron.has-git-problem::after { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); content: ""; }
 
 .space-chevron:hover {
   background: var(--border-strong);
@@ -566,12 +580,29 @@
   line-height: 14px;
 }
 
-.git-row-note.is-success { border-left-color: var(--done); }
-.git-row-note.is-explanation { border-left-color: var(--warning); }
-.git-row-note.is-child { padding-left: 58px; }
-.git-note-actions { display: flex; gap: 6px; margin-top: 4px; }
+.git-problem { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding-right: 6px; border-left-color: var(--warning); animation: git-problem-in 180ms ease-out; }
+.git-problem.is-unknown { border-left-color: var(--blocked); }
+.git-problem.is-child { padding-left: 58px; }
+.git-problem.is-section { flex: none; padding-left: var(--sb-edge); }
+.git-problem details { min-width: 0; }
+.git-problem summary { display: flex; align-items: flex-start; gap: 4px; list-style: none; cursor: pointer; color: var(--text-primary); }
+.git-problem summary::-webkit-details-marker { display: none; }
+.git-problem summary > span:not(.git-problem-icon) { min-width: 0; overflow-wrap: anywhere; }
+.git-problem summary .ui-icon { flex: none; width: 12px; height: 12px; margin-top: 1px; }
+.git-problem details[open] summary .ui-icon { transform: rotate(180deg); }
+.git-problem-icon { flex: none; color: var(--warning); }
+.git-problem.is-unknown .git-problem-icon { color: var(--blocked); }
+.git-problem-details p { margin: 3px 0 0; overflow-wrap: anywhere; }
+.git-problem-target { font-family: var(--font-mono); color: var(--text-muted); }
+.git-problem-details pre { margin: 3px 0 0; padding: 3px 5px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); color: var(--text-muted); font: inherit; font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.git-note-actions { display: flex; align-items: flex-start; gap: 6px; }
 .git-note-actions button { padding: 1px 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.git-note-actions button[aria-label="Dismiss"] { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; }
+.git-note-actions button .ui-icon { width: 12px; height: 12px; }
 .git-note-actions button:hover { background: var(--surface-hover); }
+.git-problem :is(summary, button):focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -1px; }
+@keyframes git-problem-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .git-problem { animation: none; } }
 
 /* ---- agent rows: `space · tab` over `State · agent` ---- */
 .agent-location {

@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
 import type { SpaceGitActionRequest, SpaceGitActionResponse, SpaceGitStatus } from "../../protocol/generated/v1";
-import { gitActionReason, gitActionRequest, gitFailureNote, gitOutcomeNote, useSpaceGitActions, type SpaceGitActions } from "./spaceGitActions";
+import { gitActionReason, gitActionRequest, gitFailureProblem, useSpaceGitActions, type SpaceGitActions } from "./spaceGitActions";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -46,28 +46,20 @@ it("does not redirect a worktree action to its parent or invent an upstream", ()
   }
 });
 
-it.each(["space_git_target_changed", "space_git_action_ineligible", "space_git_action_in_progress", "space_git_not_run", "invalid_session_id"])("claims not-run only for proven %s", operationCode => {
-  const note = gitFailureNote(new CockpitClientError("http_error", "target changed", { operationCode }), request);
-  expect(note.message).toContain("was not run");
+it.each(["space_git_target_changed", "space_git_action_ineligible", "space_git_action_in_progress", "space_git_not_run", "invalid_session_id"])("classifies proven %s failures as safe to re-arm", operationCode => {
+  const problem = gitFailureProblem(new CockpitClientError("http_error", "target changed", { operationCode }), request);
+  expect(problem.unknown).toBe(false);
 });
 
-it.each([undefined, "malformed_response", "space_git_outcome_unknown", "some_backend_error"])("keeps %s errors uncertain", operationCode => {
-  const note = gitFailureNote(new CockpitClientError("transport_error", "connection lost", { operationCode }), request);
-  expect(note.message).toContain("may or may not");
-  expect(note.message).not.toContain("was not run");
-});
-
-it("limits definitive pull refusal claims to branch and working files, not all Git state", () => {
-  const pull = { ...request, action: "pull" as const };
-  const refused = gitOutcomeNote({ result: "refused", reason: "local_changes", detail: "local changes" }, pull);
-  expect(refused.message).toContain("branch and files are unchanged");
-  expect(refused.message).not.toContain("nothing changed");
+it.each([undefined, "malformed_response", "space_git_outcome_unknown", "some_backend_error"])("classifies %s errors as requiring inspection before re-arming", operationCode => {
+  const problem = gitFailureProblem(new CockpitClientError("transport_error", "connection lost", { operationCode }), request);
+  expect(problem.unknown).toBe(true);
 });
 
 afterEach(() => { vi.useRealTimers(); });
 
 describe("checkout-scoped write state", () => {
-  it("single-flights a shared root while another checkout stays actionable, and settles independent notes", async () => {
+  it("single-flights a shared root while another checkout stays actionable, and settles independent problems", async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     vi.useFakeTimers();
     const completions: ((response: SpaceGitActionResponse) => void)[] = [];
@@ -93,7 +85,7 @@ describe("checkout-scoped write state", () => {
       expect(actions.forStatus(statuses.get("parent"))?.pending).toBe(true);
       await act(async () => completions[0]({ session_id: "session", space_id: "child", action: "push", root: request.expected_root, branch: "feature", upstream: "origin/main", outcome: { result: "refused", reason: "remote_rejected", detail: "remote rejected push" } }));
       expect(actions.forStatus(statuses.get("alias"))?.pending).toBe(false);
-      expect(actions.forStatus(statuses.get("alias"))?.note?.tone).toBe("error");
+      expect(actions.forStatus(statuses.get("alias"))?.result).toMatchObject({ kind: "problem", unknown: false });
       expect(actions.forStatus(statuses.get("parent"))?.pending).toBe(true);
       act(() => actions.dismiss(request.expected_root));
       expect(actions.forStatus(statuses.get("child"))).toBeUndefined();
@@ -113,58 +105,71 @@ describe("checkout-scoped write state", () => {
     let statuses = new Map([["child", tracked()]]);
     let session = "session";
     const refresh = vi.fn();
-    const onResult = vi.fn();
+    const onProblem = vi.fn();
     let actions!: SpaceGitActions;
-    function Probe() { actions = useSpaceGitActions(client, session, statuses, refresh, onResult); return null; }
+    function Probe() { actions = useSpaceGitActions(client, session, statuses, refresh, onProblem); return null; }
     const root = createRoot(document.createElement("div"));
     try {
       await act(async () => root.render(<Probe />));
       act(() => actions.run(request));
       statuses = new Map([["child", tracked("child", "/other")]]);
       await act(async () => root.render(<Probe />));
-      await act(async () => complete({ session_id: "session", space_id: "child", action: "push", root: request.expected_root, branch: "feature", upstream: "origin/main", outcome: { result: "updated", commits: 1 } }));
+      await act(async () => complete({ session_id: "session", space_id: "child", action: "push", root: request.expected_root, branch: "feature", upstream: "origin/main", outcome: { result: "refused", reason: "remote_rejected", detail: "remote rejected" } }));
       expect(actions.forStatus(statuses.get("child"))).toBeUndefined();
-      expect(onResult).not.toHaveBeenCalled();
+      expect(onProblem).not.toHaveBeenCalled();
       expect(refresh).toHaveBeenCalledTimes(1);
       statuses = new Map([["child", tracked()]]);
       await act(async () => root.render(<Probe />));
       act(() => actions.run(request));
       session = "other-session";
       await act(async () => root.render(<Probe />));
-      await act(async () => complete({ session_id: "session", space_id: "child", action: "push", root: request.expected_root, branch: "feature", upstream: "origin/main", outcome: { result: "up_to_date" } }));
+      await act(async () => complete({ session_id: "session", space_id: "child", action: "push", root: request.expected_root, branch: "feature", upstream: "origin/main", outcome: { result: "refused", reason: "remote_rejected", detail: "remote rejected" } }));
       expect(actions.forStatus(statuses.get("child"))).toBeUndefined();
-      expect(onResult).not.toHaveBeenCalled();
+      expect(onProblem).not.toHaveBeenCalled();
       expect(refresh).toHaveBeenCalledTimes(1);
     } finally { await act(async () => root.unmount()); }
   });
 
-  it("keeps a newer pending action through an older success timer, then records an uncertain failure without retrying", async () => {
+  it("keeps a newer pending action through an older completion timer, and locks uncertain outcomes until dismissal", async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     vi.useFakeTimers();
     const first = deferred<SpaceGitActionResponse>();
     const second = deferred<SpaceGitActionResponse>();
-    const spaceGitAction = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const third = deferred<SpaceGitActionResponse>();
+    const spaceGitAction = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise).mockReturnValueOnce(third.promise);
     const client = { spaceGitAction } as unknown as CockpitClient;
     const status = tracked();
     const statuses = new Map([[status.space_id, status]]);
     const refresh = vi.fn();
+    const onProblem = vi.fn();
     let actions!: SpaceGitActions;
-    function Probe() { actions = useSpaceGitActions(client, "session", statuses, refresh, () => undefined); return null; }
+    function Probe() { actions = useSpaceGitActions(client, "session", statuses, refresh, onProblem); return null; }
     const root = createRoot(document.createElement("div"));
     try {
       await act(async () => root.render(<Probe />));
       act(() => actions.run(request));
       await act(async () => first.resolve({ session_id: "session", space_id: "child", action: "push", root: "/repo/worktree", branch: "feature", upstream: "origin/main", outcome: { result: "up_to_date" } }));
       expect(actions.forStatus(status)?.pending).toBe(false);
+      expect(actions.forStatus(status)?.result).toMatchObject({ kind: "done", noop: true });
+      expect(onProblem).not.toHaveBeenCalled();
       act(() => actions.run(request));
       await act(async () => vi.advanceTimersByTimeAsync(6000));
       expect(actions.forStatus(status)?.pending).toBe(true);
       await act(async () => second.reject(new CockpitClientError("transport_error", "disconnected")));
       expect(actions.forStatus(status)?.pending).toBe(false);
-      expect(actions.forStatus(status)?.note?.message).toContain("may or may not");
+      expect(actions.forStatus(status)?.result).toMatchObject({ kind: "problem", unknown: true });
+      expect(onProblem).toHaveBeenCalledTimes(1);
+      act(() => actions.run(request));
+      act(() => actions.run({ ...request, action: "pull" }));
+      expect(gitActionReason(status, "push", actions.forStatus(status))).toBeTruthy();
+      expect(gitActionReason(status, "pull", actions.forStatus(status))).toBeTruthy();
       await act(async () => vi.advanceTimersByTimeAsync(60_000));
       expect(spaceGitAction).toHaveBeenCalledTimes(2);
       expect(refresh).toHaveBeenCalledTimes(2);
+      act(() => actions.dismiss(request.expected_root));
+      expect(gitActionReason(status, "push", actions.forStatus(status))).toBeUndefined();
+      act(() => actions.run(request));
+      expect(spaceGitAction).toHaveBeenCalledTimes(3);
     } finally { await act(async () => root.unmount()); }
   });
 });

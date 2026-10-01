@@ -21,7 +21,7 @@ import type {
 import { initialSessionState, sessionReducer, type SessionAction, type SessionState } from "./session/sessionStore";
 import { useFocusCoordinator } from "./session/focusCoordinator";
 import { spaceCheckoutKey, useSpaceGitStatus } from "./session/spaceGitStatus";
-import { gitActionReason, gitActionRequest, gitTargetDetail, useSpaceGitActions, type GitNote } from "./session/spaceGitActions";
+import { gitActionReason, gitActionRequest, gitTargetDetail, useSpaceGitActions } from "./session/spaceGitActions";
 import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
 import { tabDropInsertionIndex } from "./layout/layoutProjection";
 import { useTabLayouts, type LayoutAction, type LeafCtx, type PendingCreation, type TabLayoutState } from "./layout/tabLayoutStore";
@@ -465,9 +465,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     ? { target: { session_id: state.sessionId, space_id: selectedSpace.id }, label: selectedSpace.label, live: state.sync === "live" } : null;
   const setupParent = setupParentFor(selectedSpace, snapshot?.panes ?? [], snapshot?.focused_pane_id ?? null);
   const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
-  const spaceGit: ReadonlyMap<string, SpaceGitStatus> = gitPoll.error
-    ? new Map(spaces.filter(space => space.git).map(space => [space.id, { space_id: space.id, source: "herdr_checkout", checkout: { state: "unavailable", root: null, code: "status_failed", message: gitPoll.error! } }]))
-    : gitPoll.spaces;
+  const spaceGit = gitPoll.spaces;
   const [libraryOpen, setLibraryOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [area, setArea] = useState<Rect>({ x: 0, y: 0, width: 800, height: 600 });
@@ -578,13 +576,13 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const drawerFocusTarget = useRef<{ spaceId: string; paneId: string | null } | null>(null);
   const mutationBusy = mutations.pending !== null;
   const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
-  const gitBlocked = state.sync !== "live" ? "Herdr is not live" : mutationBusy ? "Herdr is applying a change" : popup || popupPending ? "The popup owns keyboard input" : undefined;
-  const [gitNotice, setGitNotice] = useState<{ sessionId: string | null; note: GitNote } | null>(null);
-  const gitActions = useSpaceGitActions(client, state.sessionId, spaceGit, gitPoll.refresh, (spaceId, note) => {
+  const gitBlocked = state.sync !== "live" ? "Herdr is not live" : mutationBusy ? "Herdr is applying a change" : popup || popupPending ? "The popup owns keyboard input" : gitPoll.error ? `Git status unavailable: ${gitPoll.error}` : undefined;
+  const [gitNotice, setGitNotice] = useState<{ sessionId: string | null; text: string } | null>(null);
+  const gitActions = useSpaceGitActions(client, state.sessionId, spaceGit, gitPoll.refresh, (spaceId, problem) => {
     const row = [...document.querySelectorAll<HTMLElement>(".space-row-group")].find(element => element.dataset.spaceId === spaceId);
     const box = row?.getBoundingClientRect();
     const listBox = row?.closest(".space-list")?.getBoundingClientRect();
-    if (sidebarCollapsed || (narrowViewport && !drawerOpen) || !box || box.height === 0 || !listBox || box.bottom <= listBox.top || box.top >= listBox.bottom) setGitNotice({ sessionId: state.sessionId, note });
+    if (sidebarCollapsed || (narrowViewport && !drawerOpen) || !box || box.height === 0 || !listBox || box.bottom <= listBox.top || box.top >= listBox.bottom) setGitNotice({ sessionId: state.sessionId, text: `${byId(spaces, spaceId)?.label ?? "Space"}: ${problem.summary}` });
   });
   useEffect(() => {
     if (!gitNotice) return;
@@ -594,7 +592,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const runGitAction = (spaceId: string, action: SpaceGitAction) => {
     const status = spaceGit.get(spaceId);
     const pending = gitActions.forStatus(status);
-    if (gitActionReason(status, action, pending?.pending ? pending.request.action : undefined, gitBlocked)) return;
+    if (gitActionReason(status, action, pending, gitBlocked)) return;
     const request = gitActionRequest(status, action);
     if (request) {
       setGitNotice(null);
@@ -888,7 +886,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
           <div className="context-menu-separator" role="presentation" />
           <p className="context-menu-heading" role="presentation">Branch · {git.checkout.state === "branch" ? git.checkout.branch : git.checkout.state === "detached" ? "detached HEAD" : "unavailable"}</p>
           {(["pull", "push"] as const).map(action => {
-            const reason = gitActionReason(git, action, gitPending?.pending ? gitPending.request.action : undefined, gitBlocked);
+            const reason = gitActionReason(git, action, gitPending, gitBlocked);
             const detail = gitTargetDetail(space.label, git, action);
             return <button key={action} role="menuitem" type="button" disabled={Boolean(reason)} title={`${detail}${reason ? ` · ${reason}` : ""}`} onClick={() => menuAction(() => runGitAction(space.id, action))}><UiIcon name={action === "pull" ? "down" : "up"} /><span>{action === "pull" ? "Pull (fast-forward only)" : "Push"}</span><small className="context-menu-reason">{reason ?? detail}</small></button>;
           })}
@@ -944,7 +942,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       const target = byId(spaces, state.focusPending ? snapshot?.focused_space_id ?? null : selection.spaceId);
       const status = target ? spaceGit.get(target.id) : undefined;
       const pending = gitActions.forStatus(status);
-      const reason = !target ? "Select a Space first" : gitActionReason(status, action, pending?.pending ? pending.request.action : undefined, gitBlocked);
+      const reason = !target ? "Select a Space first" : gitActionReason(status, action, pending, gitBlocked);
       const detail = target ? gitTargetDetail(target.label, status, action) : undefined;
       return { id: entry.id, label: entry.label, group: entry.group, icon: action === "pull" ? "down" : "up", shortcut: formatShortcut(id), disabled: Boolean(reason), reason: reason ?? detail, reasonDetail: detail ? `${detail}${reason ? ` · ${reason}` : ""}` : reason, run: () => { if (target) runGitAction(target.id, action); } };
     }),
@@ -1015,7 +1013,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
       <Sidebar session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} hasSession={state.sessionId !== null} hasSnapshot={snapshot !== null}
-        spaces={{ spaces, gitStatus: spaceGit, gitBlocked, gitEntry: gitActions.forStatus, onGitAction: runGitAction, onDismissGitNote: gitActions.dismiss, selectedSpaceId: sidebarSelectedSpaceId, pendingSpaceId, editingId: editing?.kind === "space" ? editing.id : null, busy: mutationBusy, notes: spaceNotesFromFailures(Object.values(mutations.errors)), onEdit: (id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }, onSelect: focusSpace, onContext: openContext, onSetup: () => setSetupOpen(true), setupEnabled: state.sync === "live" && !modalOpen, mutate: onMutate }}
+        spaces={{ spaces, gitStatus: spaceGit, gitBlocked, gitEntry: gitActions.forStatus, gitStatusError: gitPoll.error, onRetryGitStatus: gitPoll.refresh, onGitAction: runGitAction, onDismissGitProblem: gitActions.dismiss, selectedSpaceId: sidebarSelectedSpaceId, pendingSpaceId, editingId: editing?.kind === "space" ? editing.id : null, busy: mutationBusy, notes: spaceNotesFromFailures(Object.values(mutations.errors)), onEdit: (id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }, onSelect: focusSpace, onContext: openContext, onSetup: () => setSetupOpen(true), setupEnabled: state.sync === "live" && !modalOpen, mutate: onMutate }}
         agents={{ agents: snapshot?.agents ?? [], spaces, tabs: allTabs, selectedPaneId: sidebarSelectedPaneId, pendingPaneId, onSelect: focusAgent }} />
     </aside>
     {!narrowViewport && !sidebarCollapsed ? <div className="sidebar-resizer" role="separator" tabIndex={sidebarCollapsed ? -1 : 0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth}
@@ -1047,7 +1045,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} parentSpaceId={selection.spaceId} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
-    {prefixActive ? <div className="prefix-indicator" role="status"><span>{armedPrefix.label} · {armedPrefix.origin === "herdr" ? "Herdr commands · Esc cancels" : armedPrefixHint()}</span></div> : commandNotice || commandFailureMessage ? <div className="prefix-indicator is-notice" role="alert">{commandNotice || commandFailureMessage}</div> : gitNotice && gitNotice.sessionId === state.sessionId ? <div className="prefix-indicator is-notice" role={gitNotice.note.tone === "error" ? "alert" : "status"}>{gitNotice.note.message}</div> : popupPending ? <div className="prefix-indicator" role="status">Opening Herdr popup…</div> : prefixHint ? <div className="prefix-indicator is-notice" role="status">{prefixHint}</div> : null}
+    {prefixActive ? <div className="prefix-indicator" role="status"><span>{armedPrefix.label} · {armedPrefix.origin === "herdr" ? "Herdr commands · Esc cancels" : armedPrefixHint()}</span></div> : commandNotice || commandFailureMessage ? <div className="prefix-indicator is-notice" role="alert">{commandNotice || commandFailureMessage}</div> : gitNotice && gitNotice.sessionId === state.sessionId ? <div className="prefix-indicator is-notice" role="alert">{gitNotice.text}</div> : popupPending ? <div className="prefix-indicator" role="status">Opening Herdr popup…</div> : prefixHint ? <div className="prefix-indicator is-notice" role="status">{prefixHint}</div> : null}
     <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetryMutation={onRetryMutation} />
     </div>
     {popup && state.sessionId ? <ServerPopup key={`${state.sessionId}:${popup.terminal_id}`} client={client} sessionId={state.sessionId} popup={popup} live={state.sync === "live" && shell?.status === "live"} error={shell?.error ?? state.syncError?.message ?? null} focusEpoch={state.epoch} terminalMouseInput={terminalMouseInput} onReconnect={onReconnect} /> : null}
