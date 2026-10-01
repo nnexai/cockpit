@@ -103,13 +103,15 @@ The generated tables describe Cockpit's static shortcuts. Herdr can also adverti
 
 Use the configured Herdr prefix chord(s) for advertised prefix bindings. Cockpit still uses `Ctrl+B`: if Herdr uses a different prefix, it does not replace Cockpit's prefix or move Cockpit-only commands to that chord. When Herdr also uses `Ctrl+B`, an advertised custom prefix binding wins a collision with a Cockpit shortcut; matching direct custom keys likewise take precedence over local viewer chords. Shadowed Cockpit shortcut labels are omitted from Commands and tooltips. Direct custom bindings do not run in text editors or local dialogs, but can claim keys in ordinary terminal and inline browser surfaces. Thus the generated terminal passthrough rule has an exception for advertised bindings and configured Herdr prefixes.
 
+Advertised Alt-letter bindings follow the letter produced by the active keyboard layout, not its QWERTY key position (for example, Colemak `Alt+I`). When Alt/Option produces a symbol or dead key instead of a letter, Cockpit uses the physical key as a fallback.
+
 Literal-prefix passthrough remains reserved: `Ctrl+B Ctrl+B` sends a literal `Ctrl+B`. After arming a Herdr prefix, pressing a configured Herdr prefix again passes that chord through rather than invoking a custom prefix command. Custom invocation uses the confirmed Herdr Space/tab/pane context, not a locally selected viewer; unavailable focus, disconnected/unsupported shell capability or a retired command produces an actionable status instead of dispatching stale configuration.
 
 ### Herdr popup terminal
 
 A server popup appears as one centered floating terminal above the existing split layout, with the server's title and size hints. It is not a new split pane. Underlying panes remain in place, but the workbench is inert and its terminal input is blocked while the popup owns input (also while a popup invocation is pending).
 
-In a live popup, **Esc, Enter, Tab, Shift+Tab and prefix chords go to its program**. Unmodified arrow keys are sent as application-cursor sequences for curses-based popup programs. Cockpit does not force-close it with Esc, intercept its prefix, or execute shortcuts behind it; the popup program decides when to close. On authoritative server closure Cockpit restores DOM focus to the opener if still available, otherwise selected-tab chrome, without changing Herdr focus. A disconnected popup stays visible with input disabled and retry; stale state is not treated as closure.
+In a live popup, **Esc, Enter, Tab, Shift+Tab and prefix chords go to its program**. Unmodified arrow keys are sent as application-cursor sequences for curses-based popup programs. Cockpit does not force-close it with Esc, intercept its prefix, or execute shortcuts behind it; the popup program decides when to close. On authoritative server closure the eligible selected terminal regains keyboard focus; opener restoration does not steal it. If no selected pane regains focus, Cockpit restores the available opener or selected-tab chrome, without changing Herdr focus. A disconnected popup stays visible with input disabled and retry; stale state is not treated as closure.
 
 ### Not bound in Cockpit
 
@@ -118,7 +120,7 @@ These Herdr built-in prefix keys have no Cockpit action, so Ctrl+B followed by o
 ### Where things happen
 
 - Pane commands (split, close, zoom, rename, swap, resize divider) close the Library first when it is open, then act on the selected layout leaf. Split always creates a real terminal, even beside a viewer; only real terminals can be renamed.
-- Closing the Library with Ctrl+B i returns keyboard focus to the pane it was opened from; Esc or a click on Close leaves focus on the selected tab.
+- Closing the Library with Ctrl+B i, Esc, its toolbar toggle or Close button returns keyboard focus to the selected terminal once it reattaches. An explicit connected sidebar invoker keeps focus instead; an originating graphical pane regains focus if still selected. Closing never changes Herdr focus.
 - Outside a Herdr popup, Esc closes the innermost layer first: an armed prefix, then a menu, then a dialog or picker, then the narrow drawer or file overlay, then the Library. In terminal, browser and viewer content Esc belongs to that surface. With focus on layout chrome, Esc restores zoom; during a pane-header drag it cancels the drag first. On a focused divider it returns focus to the selected leaf.
 - Ctrl+B works from the inline browser surface, not from its address field or note editor. Press Ctrl+B twice to send a literal Ctrl+B to the page.
 - Zoom, divider resizing and swapping change only Cockpit's layout. Directional focus and pane cycling include all terminals and viewers; selecting a leaf hidden by zoom restores the layout first.

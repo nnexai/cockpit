@@ -29,12 +29,13 @@ function restoreWorkbenchFocus(invoker: HTMLElement | null): void {
 /**
  * The Cockpit-owned Library view (design §4.1). It is not a Herdr pane or tab
  * and sends no Herdr request. The workbench unmounts the covered panes while
- * it is open; on close, DOM focus returns to the invoker if it is still
- * mounted, otherwise to a safe workbench target, before the panes attach again.
+ * it is open; on close, DOM focus temporarily returns to a connected invoker
+ * or safe chrome target. The workbench then focuses an eligible selected terminal.
  */
-export function LibraryView({ client, onClose, command = null, fullScreen = false, space = null }: {
+export function LibraryView({ client, onClose, onCaptureInvoker, command = null, fullScreen = false, space = null }: {
   client: CockpitClient;
   onClose: () => void;
+  onCaptureInvoker?: (invoker: HTMLElement | null) => void;
   command?: LibraryCommand | null;
   /** Herdr's selected Space: the `Add to <Space>` target. Null with no session or Space. */
   space?: LibrarySpace | null;
@@ -44,6 +45,8 @@ export function LibraryView({ client, onClose, command = null, fullScreen = fals
   const rootRef = useRef<HTMLElement>(null);
   const invokerRef = useRef<HTMLElement | null>(null);
   const treeFocusedRef = useRef(false);
+  const captureInvokerRef = useRef(onCaptureInvoker);
+  captureInvokerRef.current = onCaptureInvoker;
   const [view, setView] = useState(createContextViewState);
   const library = useLibraryListing(client, true);
   const listing = library.listing;
@@ -66,6 +69,7 @@ export function LibraryView({ client, onClose, command = null, fullScreen = fals
   useEffect(() => {
     const active = document.activeElement;
     invokerRef.current = active instanceof HTMLElement && active !== document.body && !rootRef.current?.contains(active) ? active : null;
+    captureInvokerRef.current?.(invokerRef.current);
     rootRef.current?.focus({ preventScroll: true });
   }, []);
   // Focus leaves the view before it is removed, so the reattached panes never inherit a lost focus.

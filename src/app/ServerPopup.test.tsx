@@ -29,6 +29,7 @@ afterEach(async () => {
   workbench?.remove();
   workbench = null;
   observedPopupStyle.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("ServerPopup geometry", () => {
@@ -55,5 +56,42 @@ describe("ServerPopup geometry", () => {
     />));
 
     expect(observedPopupStyle).toHaveBeenCalledWith({ left: "180px", top: "170px", width: "640px", height: "420px" });
+  });
+});
+
+describe("ServerPopup closing focus", () => {
+  it("does not steal focus from the selected terminal when its opener is connected chrome", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => { frames.push(callback); return frames.length; });
+    workbench = document.createElement("div");
+    workbench.className = "workbench";
+    const opener = document.createElement("button");
+    const pane = document.createElement("section");
+    pane.className = "pane-view is-selected";
+    const terminal = document.createElement("textarea");
+    terminal.className = "xterm-helper-textarea";
+    pane.append(terminal);
+    const host = document.createElement("div");
+    workbench.append(opener, pane, host);
+    document.body.append(workbench);
+    opener.focus();
+    root = createRoot(host);
+    await act(async () => root?.render(<ServerPopup
+      client={{} as CockpitClient}
+      sessionId="session"
+      popup={{ terminal_id: "popup", title: "Agent Inbox", width: null, height: null }}
+      live={false}
+      error={null}
+      focusEpoch={1}
+      terminalMouseInput={false}
+      onReconnect={() => undefined}
+    />));
+    expect(document.activeElement).toBe(host.querySelector(".server-popup"));
+
+    await act(async () => root?.render(null));
+    // The underlying TerminalPane has regained its confirmed, owned selection.
+    terminal.focus();
+    frames.splice(0).forEach(callback => callback(0));
+    expect(document.activeElement).toBe(terminal);
   });
 });

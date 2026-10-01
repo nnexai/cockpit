@@ -33,6 +33,9 @@ export function ServerPopup({ client, sessionId, popup, live, error, focusEpoch,
     return () => {
       requestAnimationFrame(() => {
         if (document.querySelector("[data-server-modal]")) return;
+        // The selected pane's ownership-gated focus effect runs before this frame.
+        // Never replace its restored keyboard focus with the popup's chrome opener.
+        if (document.activeElement instanceof HTMLElement && document.activeElement.closest(".pane-view.is-selected")) return;
         const target = opener?.isConnected && !opener.closest("[inert]") ? opener : document.querySelector<HTMLElement>('.tab-button[aria-selected="true"]:not(:disabled), .drawer-toggle, .tab-icon-button[aria-controls="cockpit-sidebar"]');
         target?.focus({ preventScroll: true });
       });

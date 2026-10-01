@@ -289,6 +289,33 @@ describe("TerminalPane fitting and pointer ownership", () => {
     }
   });
 
+  it.each(["owned", "lost", "conflict"] as const)("restores focus after an overlay only with owned control (%s)", async ownership => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const render = (controlAllowed: boolean) => act(async () => {
+      root.render(<TerminalPane {...paneProps(client, false, { controlAllowed })} />);
+      await settle();
+    });
+    try {
+      await render(false);
+      await act(async () => { messages[0]!(message(ownership)); });
+      const terminal = mocks.terminals.at(-1)!;
+      terminal.focus.mockClear();
+      await render(true);
+      if (ownership === "owned") expect(terminal.focus).toHaveBeenCalledOnce();
+      else expect(terminal.focus).not.toHaveBeenCalled();
+      expect(openTerminal).toHaveBeenCalledOnce();
+      expect(sent.filter(command => command.type === "terminal.input")).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("waits to attach a hidden incoming tab terminal", async () => {
     const sent: TerminalCommand[] = [];
     const messages: Array<(value: TerminalStreamMessage) => void> = [];

@@ -246,6 +246,33 @@ describe("advertised Herdr command routing", () => {
     expect(runHerdrCommand.mock.calls).toEqual([[command], [command]]);
     expect(routed.runCommand).not.toHaveBeenCalled();
   });
+  it("uses active-layout Alt letters instead of claiming their physical QWERTY positions", () => {
+    const inbox = { command_id: "opaque:inbox", binding_labels: ["prefix+alt+i"], action: "shell" as const, description: "Inbox" };
+    const runHerdrCommand = vi.fn();
+    const routed = harness(false, { herdrBindings: herdrBindings([inbox]), runHerdrCommand });
+    routed.route(ctrlB());
+    const otherLetter = keyEvent({ key: "l", code: "KeyI", altKey: true });
+    routed.route(otherLetter);
+    expect(otherLetter.preventDefault).not.toHaveBeenCalled();
+    expect(runHerdrCommand).not.toHaveBeenCalled();
+    routed.route(ctrlB());
+    const colemak = keyEvent({ key: "i", code: "KeyL", altKey: true });
+    routed.route(colemak);
+    expect(colemak.preventDefault).toHaveBeenCalledOnce();
+    expect(runHerdrCommand).toHaveBeenCalledExactlyOnceWith(inbox);
+    expect(routed.runCommand).not.toHaveBeenCalled();
+    expect(routed.armed()).toBe(false);
+  });
+  it("retains the physical Alt letter fallback for dead keys", () => {
+    const inbox = { command_id: "opaque:inbox", binding_labels: ["prefix+alt+i"], action: "shell" as const, description: "Inbox" };
+    const runHerdrCommand = vi.fn();
+    const routed = harness(false, { herdrBindings: herdrBindings([inbox]), runHerdrCommand });
+    routed.route(ctrlB());
+    const deadKey = keyEvent({ key: "Dead", code: "KeyI", altKey: true });
+    routed.route(deadKey);
+    expect(deadKey.preventDefault).toHaveBeenCalledOnce();
+    expect(runHerdrCommand).toHaveBeenCalledExactlyOnceWith(inbox);
+  });
   it("claims direct chords only on prefix-safe targets and never invokes repeats", () => {
     const runHerdrCommand = vi.fn();
     const routed = harness(false, { herdrBindings: herdrBindings([command]), runHerdrCommand });

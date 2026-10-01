@@ -512,14 +512,15 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const [libraryAddOpen, setLibraryAddOpen] = useState(false);
   const [libraryCommand, setLibraryCommand] = useState<LibraryCommand | null>(null);
   const libraryCommandToken = useRef(0);
-  // Set when the Library closes; cleared by an explicit local pane, tab or Space action.
+  // Preserve an explicit sidebar invoker; other Library closes let the selected terminal attach with focus.
   const [attachFocusSuppressed, setAttachFocusSuppressed] = useState(false);
-  // The pane the Library was opened from, so closing it with the toggle key returns focus there (design R2).
   const libraryOrigin = useRef<{ paneId: string; graphical: boolean } | null>(null);
+  const librarySidebarInvoker = useRef<HTMLElement | null>(null);
   const selectedPaneIdRef = useRef(selection.paneId);
   selectedPaneIdRef.current = selection.paneId;
   const openLibrary = useCallback((command?: { kind: "refresh" } | { kind: "tokens" } | { kind: "open"; itemId: string }) => {
     const active = document.activeElement;
+    librarySidebarInvoker.current = null;
     libraryOrigin.current = active instanceof HTMLElement && active.closest(".pane-view") && selectedPaneIdRef.current
       ? { paneId: selectedPaneIdRef.current, graphical: active.closest<HTMLElement>("[data-kind]")?.dataset.kind !== "terminal" }
       : null;
@@ -528,17 +529,14 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     setLibraryCommand(command ? { ...command, token: ++libraryCommandToken.current } : null);
   }, []);
   const closeLibrary = useCallback(() => {
-    libraryOrigin.current = null;
-    setLibraryOpen(false);
-    setAttachFocusSuppressed(true);
-  }, []);
-  // Closing with the toggle key: the originating pane, if still selected, takes DOM focus back (a terminal once it attaches).
-  const closeLibraryToOrigin = useCallback(() => {
     const origin = libraryOrigin.current;
     libraryOrigin.current = null;
+    const sidebarInvoker = librarySidebarInvoker.current;
+    librarySidebarInvoker.current = null;
+    const returnToSidebar = Boolean(sidebarInvoker?.isConnected && !sidebarInvoker.closest("[inert]"));
     const returnToPane = origin !== null && origin.paneId === selectedPaneIdRef.current;
     setLibraryOpen(false);
-    setAttachFocusSuppressed(!returnToPane);
+    setAttachFocusSuppressed(returnToSidebar);
     if (returnToPane && origin.graphical) {
       const focusDocument = (attempts: number) => {
         const document_ = document.querySelector<HTMLElement>(".pane-view.is-selected .context-document, .pane-view.is-selected .review-diff, .pane-view.is-selected .browser-surface");
@@ -567,7 +565,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
   useEffect(() => {
     if (popup || state.sync !== "live" || shell?.status !== "live") setPopupPending(null);
-    if (popup) { setPrefixActive(false); setMenu(null); }
+    if (popup) { setPrefixActive(false); setMenu(null); setAttachFocusSuppressed(false); }
   }, [popup, state.sync, shell?.status]);
   useEffect(() => {
     if (!popupPending || mutations.pending) return;
@@ -775,7 +773,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       if (command === "open-file-picker") dispatchFileNavigation("open-picker");
       if (command === "switch-session") openSessionChooser();
       if (command === "toggle-browser") toggleBrowser();
-      if (command === "toggle-library") { if (libraryOpen) closeLibraryToOrigin(); else openLibrary(); }
+      if (command === "toggle-library") { if (libraryOpen) closeLibrary(); else openLibrary(); }
       if (command === "toggle-sidebar") {
         const visible = narrowViewport ? drawerOpen : !sidebarCollapsed;
         if (narrowViewport) { if (drawerOpen) closeDrawer(); else openDrawer(); } else toggleSidebarCollapsed();
@@ -808,7 +806,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       return;
     }
     execute();
-  }, [spaces, tabs, panes, tabLayout, area, localLeaves, selectedLeaf, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, browserOpen, browserReason, closeLibraryToOrigin, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed]);
+  }, [spaces, tabs, panes, tabLayout, area, localLeaves, selectedLeaf, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, browserOpen, browserReason, closeLibrary, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed]);
   const customCommandReason = state.sync !== "live" || shell?.status !== "live" ? shell?.error ?? "Herdr commands are not live"
     : state.focusPending || state.focusError || !snapshot?.focused_space_id || !snapshot.focused_tab_id ? "Waiting for Herdr focus"
     : mutationBusy ? "Another Herdr action is pending" : undefined;
@@ -963,7 +961,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
       {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="workarea-content">
-        {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
+        {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} onCaptureInvoker={invoker => { librarySidebarInvoker.current = invoker?.closest(".sidebar") ? invoker : null; }} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
           onContextMenu={event => { const pane = (event.target as HTMLElement).closest<HTMLElement>("[data-leaf-id]"); if (pane?.dataset.leafId) { selectLeaf(pane.dataset.leafId); openContext(event, { kind: "pane", id: pane.dataset.leafId }); } }}>
           {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
         </div>}

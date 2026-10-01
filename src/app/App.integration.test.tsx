@@ -24,7 +24,11 @@ import { App } from "./App";
 
 const terminalReadyCallbacks = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("./TerminalPane", () => ({
-  TerminalPane: ({ client, request, deferAttachment, focusOnAttach = true, onSelect, onReady, registerStream }: TerminalPaneProps) => {
+  TerminalPane: ({ client, request, selected, presented = true, controlAllowed, deferAttachment, focusOnAttach = true, onSelect, onReady, registerStream }: TerminalPaneProps) => {
+    const input = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+      if (selected && presented && controlAllowed && !deferAttachment && focusOnAttach) input.current?.focus();
+    }, [selected, presented, controlAllowed, deferAttachment, focusOnAttach]);
     if (onReady) terminalReadyCallbacks.set(request.pane_id, onReady);
     const registration = useRef(registerStream);
     registration.current = registerStream;
@@ -45,7 +49,7 @@ vi.mock("./TerminalPane", () => ({
         stream?.close();
       };
     }, [client, request.session_id, request.pane_id, deferAttachment]);
-    return <button type="button" data-testid={`terminal-${request.pane_id}`} data-deferred={String(Boolean(deferAttachment))} data-focus-on-attach={String(focusOnAttach)} onClick={onSelect}>terminal</button>;
+    return <button ref={input} type="button" data-testid={`terminal-${request.pane_id}`} data-deferred={String(Boolean(deferAttachment))} onClick={onSelect}>terminal</button>;
   },
 }));
 
@@ -900,11 +904,10 @@ describe("Library view presentation lifecycle", () => {
     readyTerminal("pane-1");
     await settle();
     expect(document.activeElement).toBe(invoker);
-    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("false");
     expect(fixture.focusCalls).not.toHaveBeenCalled();
   });
 
-  it("falls back to the selected tab when the invoking terminal was unmounted by the Library view", async () => {
+  it.each(["pointer", "Escape", "toggle"])("returns keyboard focus to the selected terminal after a %s close", async (close) => {
     const fixture = new AppFixture();
     emptyLibrary(fixture);
     await mount(fixture);
@@ -913,29 +916,55 @@ describe("Library view presentation lifecycle", () => {
 
     await openLibraryFromPalette();
     expect(terminal("pane-1")).toBeNull();
-    click(button("Close Library"));
+    if (close === "pointer") click(button("Close Library"));
+    else if (close === "Escape") press(document.activeElement!, "Escape");
+    else prefix(document.activeElement!, "i");
     await settle();
     readyTerminal("pane-1");
     await settle();
-    expect(document.activeElement).toBe(container.querySelector('.tab-button[aria-selected="true"]'));
-    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("false");
+    expect(document.activeElement).toBe(terminal("pane-1"));
     expect(fixture.focusCalls).not.toHaveBeenCalled();
   });
 
-  it("lets an explicit pane selection attach with terminal focus again", async () => {
+  it("returns keyboard focus to the selected terminal when the toolbar opened the Library", async () => {
     const fixture = new AppFixture();
     emptyLibrary(fixture);
     await mount(fixture);
     fixture.focusCalls.mockClear();
+    const invoker = container.querySelector<HTMLButtonElement>(".tab-icon-button[aria-label*='Library']")!;
+    act(() => invoker.focus());
+    click(invoker);
+    await settle();
+    click(button("Close Library"));
+    await settle();
+    expect(document.activeElement).toBe(terminal("pane-1"));
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+  });
+
+  it("returns to the selected terminal after a popup closes following a Library close", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => { frames.push(callback); return frames.length; });
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    await mount(fixture);
+    fixture.focusCalls.mockClear();
+    const invoker = container.querySelector<HTMLButtonElement>(".space-tree-row .resource-select")!;
+    act(() => invoker.focus());
     await openLibraryFromPalette();
     click(button("Close Library"));
     await settle();
-    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("false");
-    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(invoker);
 
-    click(terminal("pane-1")!);
+    const next = snapshot("session-1");
+    next.herdr_shell = { status: "live", prefix_bindings: ["ctrl+b"], commands: [], popup: { terminal_id: "popup", title: "Inbox", width: null, height: null }, error: null };
+    act(() => fixture.emitSnapshot("session-1", 1, 2, next));
     await settle();
-    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("true");
+    expect(container.querySelector("[data-server-modal]")).not.toBeNull();
+    act(() => fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1")));
+    await settle();
+    frames.splice(0).forEach(callback => callback(0));
+    expect(document.activeElement).toBe(terminal("pane-1"));
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
   });
 
   it("opens the Library from the no-session screen without any Space action", async () => {
@@ -991,8 +1020,7 @@ describe("keyboard prefix in the workbench", () => {
     prefix(document.activeElement!, "i");
     await settle();
     expect(container.querySelector('section[aria-label="Library"]')).toBeNull();
-    // The originating terminal attaches with focus allowed; Esc or a click on Close keeps it suppressed.
-    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("true");
+    expect(document.activeElement).toBe(terminal("pane-1"));
   });
 
 

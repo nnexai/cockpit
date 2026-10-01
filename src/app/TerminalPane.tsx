@@ -33,7 +33,7 @@ export type TerminalPaneProps = {
   focusToken: number;
   terminalMouseInput: boolean;
   deferAttachment?: boolean;
-  /** Whether attaching may move DOM focus into the terminal; false after the Library view closes until an explicit pane action. */
+  /** Whether attachment/control confirmation may move DOM focus into the terminal; false when returning to a connected sidebar invoker. */
   focusOnAttach?: boolean;
   onRequestControl?: () => void;
   onSelect?: () => void;

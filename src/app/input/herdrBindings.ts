@@ -36,7 +36,9 @@ export function herdrPrefixes(labels: readonly string[]): readonly HerdrChord[] 
 export function herdrBindingMatches(binding: HerdrChord, event: HerdrBindingEvent): boolean {
   const shiftedSymbol = event.shiftKey && !binding.shift && binding.key.length === 1 && !/^[a-z ]$/i.test(binding.key) && event.key === binding.key;
   if (binding.ctrl !== event.ctrlKey || binding.alt !== event.altKey || (!shiftedSymbol && binding.shift !== event.shiftKey) || binding.meta !== event.metaKey) return false;
-  if (binding.alt && /^[a-z]$/i.test(binding.key) && /^Key[A-Z]$/.test(event.code ?? "")) return event.code === `Key${binding.key.toUpperCase()}`;
+  // Alt/Option can replace a letter with a symbol or dead key, but an actual
+  // letter still follows the active keyboard layout (for example Colemak).
+  if (binding.alt && /^[a-z]$/i.test(binding.key) && !/^[a-z]$/i.test(event.key) && /^Key[A-Z]$/.test(event.code ?? "")) return event.code === `Key${binding.key.toUpperCase()}`;
   return binding.key.toLowerCase() === event.key.toLowerCase();
 }
 export function matchingHerdrCommand(bindings: readonly HerdrBinding[], event: HerdrBindingEvent, prefix: boolean): HerdrCommand | null {
