@@ -31,6 +31,7 @@ import {
   matchProviderCredential, parseProviderCredentialClearRequest, parseProviderCredentialSetRequest,
   parseProviderCredentialStatus, parseProviderCredentialStatusList,
 } from "./credentialProtocol";
+import { parseQuotaStatusResponse } from "./quotaProtocol";
 import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
   parseWorkspaceDefaults, parseWorkspaceDefaultsRequest,
@@ -55,6 +56,7 @@ import type {
   SpaceGitStatusResponse,
   SessionStreamMessage,
   StatusResponse,
+  QuotaStatusResponse,
   TerminalCommand,
   TerminalOpenRequest,
   TerminalStreamMessage,
@@ -950,6 +952,13 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       return invokeAndParse(invoke, "cockpit_browser_feedback_send", { request }, "browser feedback send", parseBrowserFeedbackSendResponse);
     },
     status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
+    quotaStatus(signal?: AbortSignal): Promise<QuotaStatusResponse> {
+      try { signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+      return invokeAndParse(invoke, "cockpit_quota_status", undefined, "subscription quota", parseQuotaStatusResponse).then((value) => {
+        signal?.throwIfAborted();
+        return value;
+      });
+    },
     sessions(): Promise<SessionListResponse> { return invokeAndParse(invoke, "cockpit_sessions", undefined, "sessions", parseSessionListResponse); },
     spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse> {
       try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }

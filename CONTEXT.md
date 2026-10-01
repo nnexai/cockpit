@@ -66,6 +66,16 @@ The frontend is shared between native and browser builds.
 
 Native access is restricted through Tauri capability configuration. The browser path does not initially add a separate authentication mechanism; it remains loopback-only and must not be exposed remotely.
 
+#### Subscription limits
+
+The existing 28 px work-area bottom strip shows compact Codex, Claude, and Copilot balances without adding height. Click it, or choose **Subscription limits** in Commands, for every reported window, reset time, source age, and failure state. The most constrained reported window determines each provider's chip; narrow layouts show one provider and a count. Accounts are anonymous. Missing windows are not inferred, and unavailable or unsupported values are not zero balances.
+
+The shared core quota service reads `omp usage --json --redact --no-extensions` for Codex/Claude and `gh api --method GET copilot_internal/user` for Copilot. It reuses those CLIs' authentication; Cockpit neither reads credentials nor signs in, switches accounts, or redeems credits. OMP may refresh its own tokens while collecting. Copilot requires explicit token-billing flags and credit used/remaining/entitlement fields; legacy premium-request counters are never relabelled as AI credits. This GitHub endpoint is internal and may change.
+
+Requests return immediately and schedule background work. Native and browser hosts sharing `cache_root` reuse a private, allowlisted snapshot under `quota/v1`, guarded by a cross-process lock and a persisted pre-command lease. Each source runs at most once per five minutes, with independent 5/10/20/40/60-minute failure backoff. No OMP cache invalidation is performed. Hidden clients stop requesting updates; there is no active-agent-triggered polling or host timer. Source observation timestamps, not command completion, determine freshness: errors or age over 15 minutes mark retained data stale, and values older than 24 hours are unavailable. Unsafe/unwritable cache paths fail closed rather than starting an independent collector.
+
+Optional `[quota] omp_executable` and `gh_executable` settings default to `omp` and `gh`; `COCKPIT_OMP_EXECUTABLE` and `COCKPIT_GH_EXECUTABLE` override them. Existing `PI_CODING_AGENT_DIR` and `GH_CONFIG_DIR` authentication overrides are inherited by the CLI children.
+
 ### 3.3 Herdr authority
 
 Herdr-server is the authoritative state machine for:

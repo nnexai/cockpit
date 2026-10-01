@@ -1,0 +1,91 @@
+.subscription-limits {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  box-sizing: border-box;
+  border-top: 1px solid var(--border);
+  padding: 0 6px 0 0;
+  background: var(--chrome-bg);
+  color: var(--text-secondary);
+  font-size: var(--font-size-control);
+  min-width: 0;
+}
+.limits-trigger {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.limits-trigger:hover { background: var(--surface-hover); }
+.limits-trigger:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.limits-chips, .limits-chip, .limits-summary { display: flex; align-items: center; }
+.limits-chip { gap: 5px; }
+.limits-chip + .limits-chip { margin-left: 8px; padding-left: 8px; border-left: 1px solid var(--border); }
+.limits-name { font-weight: 500; }
+.limits-value, .limits-row-value { font-variant-numeric: tabular-nums; }
+.limits-chip.is-stale { color: var(--text-muted); }
+.limits-chip.is-stale .limits-value { text-decoration: underline dotted; text-underline-offset: 3px; }
+.limits-chip .ui-icon { width: 13px; height: 13px; color: var(--blocked); }
+.limits-window, .limits-chip-meter, .limits-age { display: none; }
+.limits-window { max-width: 7ch; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.limits-age, .limits-more { color: var(--text-muted); }
+.limits-summary { display: none; gap: 5px; }
+.limits-meter { display: inline-block; width: 64px; height: 4px; border-radius: 3px; background: var(--border-strong); overflow: hidden; vertical-align: middle; }
+.limits-meter > span { display: block; width: var(--remaining); height: 100%; background: var(--text-muted); }
+.limits-meter.limits-level-ok > span { background: var(--accent); }
+.limits-meter.limits-level-warning > span { background: var(--warning); }
+.limits-meter.limits-level-exhausted > span { background: var(--blocked); }
+.limits-meter.is-stale > span { background: repeating-linear-gradient(135deg, var(--text-muted) 0 2px, transparent 2px 4px); }
+.limits-chip-meter .limits-meter { width: 28px; }
+.limits-popup {
+  position: absolute;
+  right: 8px;
+  bottom: calc(100% + 4px);
+  width: min(560px, calc(100vw - 16px));
+  box-sizing: border-box;
+  max-height: min(60vh, 420px);
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px #0006;
+  color: var(--text-secondary);
+  font-size: var(--font-size-control);
+  white-space: normal;
+}
+.limits-popup:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.limits-provider { padding: 10px 12px; }
+.limits-provider + .limits-provider { border-top: 1px solid var(--border); }
+.limits-provider header, .limits-account h4 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.limits-provider h3 { margin: 0; font: inherit; font-weight: 600; color: var(--text-primary); }
+.limits-provider header > span, .limits-account h4 > span { font-weight: 400; color: var(--text-muted); font-size: var(--font-size-2xs); }
+.limits-account h4 { margin: 8px 0 0; font-size: var(--font-size-2xs); font-weight: 500; }
+.limits-account ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.limits-row { display: grid; grid-template-columns: 76px 64px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 4px 0; }
+.limits-row-label { overflow-wrap: anywhere; }
+.limits-row-detail { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 12px; min-width: 0; }
+.limits-row-value { max-width: 100%; }
+.limits-reset { color: var(--text-muted); font-size: var(--font-size-2xs); }
+.limits-provider p, .limits-offline { margin: 6px 0 0; }
+.limits-error { color: var(--blocked); }
+.limits-offline { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.limits-popup footer { padding: 8px 12px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: var(--font-size-2xs); }
+@container statusbar (width < 560px) {
+  .limits-chips { display: none; }
+  .limits-summary { display: flex; }
+}
+@container statusbar (width >= 1280px) {
+  .limits-window, .limits-chip-meter, .limits-age { display: inline-block; }
+}
+@media (max-width: 480px) {
+  .limits-row { grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
+  .limits-row-meter { display: none; }
+}

@@ -757,3 +757,25 @@ username?: string,
 token: string, };
 
 export type ProviderCredentialClearRequest = { provider_id: string, };
+
+export type QuotaProvider = "codex" | "claude" | "copilot";
+
+export type QuotaProviderState = "pending" | "available" | "not_signed_in" | "unsupported" | "unavailable";
+
+export type QuotaErrorCode = "source_missing" | "not_signed_in" | "usage_unavailable" | "unsupported" | "failed" | "timeout" | "malformed" | "cache_unavailable";
+
+export type QuotaUnit = "percent" | "credits";
+
+export type QuotaLevel = "ok" | "warning" | "exhausted" | "unknown";
+
+export type QuotaLimit = { id: string, window: string | null, tier: string | null, unit: QuotaUnit, used_fraction: number | null, used: number | null, limit: number | null, remaining: number | null, unlimited: boolean, level: QuotaLevel, resets_at_ms: number | null, };
+
+export type QuotaAccount = {
+/**
+ * Source-reported fetch time, falling back to completion time for gh.
+ */
+fetched_at_ms: number, limits: Array<QuotaLimit>, };
+
+export type QuotaProviderStatus = { provider: QuotaProvider, state: QuotaProviderState, error: QuotaErrorCode | null, fetched_at_ms: number | null, stale: boolean, accounts: Array<QuotaAccount>, };
+
+export type QuotaStatusResponse = { generated_at_ms: number, collecting: boolean, providers: Array<QuotaProviderStatus>, };

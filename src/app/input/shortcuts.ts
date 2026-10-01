@@ -37,14 +37,14 @@ export type PrefixCommand =
   | "toggle-library" | "toggle-browser" | "open-file-picker"
   | `select-tab-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
-/** Actions that have a local chord but no prefix key. */
+/** Actions with no prefix key, including Commands-only navigation. */
 export type LocalShortcutId =
   | "focus-file-tree" | "focus-file-content" | "toggle-preview" | "toggle-wrap" | "reload-listing"
   | "review-previous-file" | "review-next-file" | "review-previous-hunk" | "review-next-hunk"
   | "comment-lines" | "comment-file"
   | "terminal-copy" | "terminal-paste" | "terminal-newline"
   | "browser-delete-annotation"
-  | "literal-prefix" | "cancel-prefix" | "commands-bare";
+  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "subscription-limits";
 
 export type ShortcutId = PrefixCommand | LocalShortcutId;
 
@@ -121,6 +121,7 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "focus-spaces", label: "Focus Spaces list", group: "Navigate", scope: "global", prefix: k("w"), note: "Then ↑ ↓ move, Enter selects through Herdr, Esc returns." },
   { id: "focus-agents", label: "Focus Agents list", group: "Navigate", scope: "global", prefix: k("a") },
   { id: "switch-session", label: "Switch session…", group: "Navigate", scope: "global", prefix: k("g") },
+  { id: "subscription-limits", label: "Subscription limits", group: "Navigate", scope: "global", note: "Commands-only; opens read-only subscription limits in the lower workarea strip." },
   { id: "toggle-library", label: "Open Library", group: "Library", scope: "global", prefix: k("i"), note: "Closing with Ctrl+B i returns focus to the pane it was opened from." },
   { id: "toggle-browser", label: "Toggle browser for tab", group: "Browser", scope: "global", prefix: k("b", true), palette: false, note: "Opens or closes the selected tab's browser, like the tab-strip button." },
   {

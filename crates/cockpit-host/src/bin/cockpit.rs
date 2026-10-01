@@ -251,6 +251,19 @@ async fn run(cli: Cli) -> Result<(), String> {
             } else {
                 Some(project_configuration(&args.project)?)
             };
+            let quota = projects
+                .as_ref()
+                .map(|configuration| {
+                    cockpit_core::config::load_quota_configuration(args.project.config.as_deref())
+                        .map(|quota_configuration| {
+                            Arc::new(cockpit_core::quota::QuotaService::new(
+                                quota_configuration,
+                                std::path::Path::new(&configuration.cache_root),
+                            ))
+                        })
+                        .map_err(|error| error.to_string())
+                })
+                .transpose()?;
             let browser_runtime = if let Some(projects_config) = projects.as_ref() {
                 Some(
                     browser_owner_runtime(
@@ -264,6 +277,10 @@ async fn run(cli: Cli) -> Result<(), String> {
                 None
             };
             let service = make_service(args.herdr, mode, projects)?;
+            let service = match quota {
+                Some(quota) => service.with_quota(quota),
+                None => service,
+            };
             serve(ServerConfig {
                 bind: args.bind,
                 static_dir: args.static_dir,

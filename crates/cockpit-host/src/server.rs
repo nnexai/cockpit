@@ -173,6 +173,7 @@ fn build_router_with_validated_root(
 
     Router::new()
         .route("/api/v1/status", get(status))
+        .route("/api/v1/quota", get(quota_status))
         .route(
             "/api/v1/browser/action",
             post(browser_action).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
@@ -293,6 +294,13 @@ fn authority_headers_match(
 }
 async fn status(State(service): State<CockpitService>) -> impl IntoResponse {
     Json(service.status().await)
+}
+
+async fn quota_status(State(service): State<CockpitService>) -> Response {
+    match service.quota() {
+        Ok(quota) => Json(quota.status().await).into_response(),
+        Err(error) => inspection_error(error),
+    }
 }
 
 async fn browser_action(

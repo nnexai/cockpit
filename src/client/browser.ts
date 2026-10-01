@@ -31,6 +31,7 @@ import {
   matchProviderCredential, parseProviderCredentialClearRequest, parseProviderCredentialSetRequest,
   parseProviderCredentialStatus, parseProviderCredentialStatusList,
 } from "./credentialProtocol";
+import { parseQuotaStatusResponse } from "./quotaProtocol";
 import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
   parseWorkspaceDefaults, parseWorkspaceDefaultsRequest,
@@ -105,6 +106,7 @@ import type {
   SpaceGitStatusResponse,
   SessionStreamMessage,
   StatusResponse,
+  QuotaStatusResponse,
   TerminalCommand,
   TerminalOpenRequest,
   TerminalStreamMessage,
@@ -1057,6 +1059,13 @@ export function createBrowserClient(
       });
     },
     status(): Promise<StatusResponse> { return getJson(request, "/api/v1/status", "status", parseStatusResponse); },
+    quotaStatus(signal?: AbortSignal): Promise<QuotaStatusResponse> {
+      try { signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+      return getJson(request, "/api/v1/quota", "subscription quota", parseQuotaStatusResponse, { signal }).then((value) => {
+        signal?.throwIfAborted();
+        return value;
+      });
+    },
     sessions(): Promise<SessionListResponse> { return getJson(request, "/api/v1/sessions", "sessions", parseSessionListResponse); },
     sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<SessionSnapshotResponse> {
       try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }

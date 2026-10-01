@@ -62,6 +62,10 @@ use crate::credentials::{
     ProviderAuthKind, ProviderCredentialClearRequest, ProviderCredentialSetRequest,
     ProviderCredentialState, ProviderCredentialStatus, ProviderCredentialStatusList,
 };
+use crate::quota::{
+    QuotaProvider, QuotaProviderState, QuotaErrorCode, QuotaUnit, QuotaLevel,
+    QuotaLimit, QuotaAccount, QuotaProviderStatus, QuotaStatusResponse,
+};
 use crate::sources::SourceCapability;
 use crate::library::{
     LibraryAddRequest, LibraryAncestor, LibraryAttachment, LibraryAttachmentAction,
@@ -429,6 +433,15 @@ pub fn render_v1() -> String {
         ProviderCredentialStatusList::decl(&config),
         ProviderCredentialSetRequest::decl(&config),
         ProviderCredentialClearRequest::decl(&config),
+        QuotaProvider::decl(&config),
+        QuotaProviderState::decl(&config),
+        QuotaErrorCode::decl(&config),
+        QuotaUnit::decl(&config),
+        QuotaLevel::decl(&config),
+        QuotaLimit::decl(&config),
+        QuotaAccount::decl(&config),
+        QuotaProviderStatus::decl(&config),
+        QuotaStatusResponse::decl(&config),
     ]
     .into_iter()
     .map(|declaration| format!("export {declaration}"))

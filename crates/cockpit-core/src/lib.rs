@@ -20,6 +20,7 @@ mod project_store;
 pub mod project_teardown;
 mod repository_cache;
 pub mod projects;
+pub mod quota;
 pub mod repositories;
 pub mod review;
 pub mod sources;
@@ -140,6 +141,7 @@ pub struct CockpitService {
     reviews: Option<Arc<review::ReviewService>>,
     library: Option<Arc<library::LibraryService>>,
     credentials: Option<Arc<credentials::ProviderCredentials>>,
+    quota: Option<Arc<quota::QuotaService>>,
 }
 
 #[derive(Default)]
@@ -205,6 +207,7 @@ impl CockpitService {
             reviews: None,
             library: None,
             credentials: None,
+            quota: None,
         }
     }
 
@@ -271,6 +274,20 @@ impl CockpitService {
             InspectionError::new(
                 "credentials_unavailable",
                 "Provider credentials are not configured in this host",
+            )
+        })
+    }
+
+    pub fn with_quota(mut self, quota: Arc<quota::QuotaService>) -> Self {
+        self.quota = Some(quota);
+        self
+    }
+
+    pub fn quota(&self) -> Result<&Arc<quota::QuotaService>, InspectionError> {
+        self.quota.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "quota_unavailable",
+                "Subscription quota is not configured in this host",
             )
         })
     }

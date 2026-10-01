@@ -39,6 +39,7 @@ use cockpit_protocol::{
         BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewEvent,
         BrowserViewOpenRequest, BrowserViewSnapshot,
     },
+    quota::QuotaStatusResponse,
     v1::{
         CockpitMode, ErrorResponse, FocusRequest, FocusResponse, ResourceMutationRequest,
         ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse,
@@ -598,6 +599,14 @@ async fn cockpit_status(
     service: State<'_, CockpitService>,
 ) -> Result<StatusResponse, ErrorResponse> {
     Ok(service.status().await)
+}
+
+#[tauri::command]
+async fn cockpit_quota_status(
+    service: State<'_, CockpitService>,
+) -> Result<QuotaStatusResponse, ErrorResponse> {
+    let quota = service.quota().map_err(inspection_error_response)?;
+    Ok(quota.status().await)
 }
 
 #[tauri::command]
@@ -1674,6 +1683,12 @@ pub fn run() {
     let startup_inspector = Arc::clone(&inspector);
     let project_config = cockpit_core::config::load_project_configuration(None, None)
         .expect("failed to load project configuration");
+    let quota_config = cockpit_core::config::load_quota_configuration(None)
+        .expect("failed to load quota configuration");
+    let quota = Arc::new(cockpit_core::quota::QuotaService::new(
+        quota_config,
+        std::path::Path::new(&project_config.cache_root),
+    ));
     let credentials = Arc::new(cockpit_core::credentials::ProviderCredentials::new(
         &project_config,
         cockpit_secrets::os_vault(),
@@ -1712,7 +1727,8 @@ pub fn run() {
     );
     let service = CockpitService::new(CockpitMode::Normal, inspector.clone())
         .with_projects(project_service)
-        .with_credentials(credentials);
+        .with_credentials(credentials)
+        .with_quota(quota);
     let warm_projects = service.projects().expect("project operations configured").clone();
     tauri::async_runtime::spawn(async move { warm_projects.prewarm_repositories(); });
     let shutdown_projects = service
@@ -1833,6 +1849,7 @@ pub fn run() {
             comments::cockpit_comments_attach,
             comments::cockpit_comments_discard,
             cockpit_status,
+            cockpit_quota_status,
             cockpit_browser_action,
             cockpit_browser_view_open,
             cockpit_browser_draft_recovery,

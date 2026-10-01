@@ -2,6 +2,7 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "cockpit_status",
+            "cockpit_quota_status",
             "cockpit_browser_action",
             "cockpit_browser_view_open",
             "cockpit_browser_draft_recovery",

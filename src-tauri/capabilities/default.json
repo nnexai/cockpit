@@ -7,6 +7,7 @@
   ],
   "permissions": [
     "allow-cockpit-status",
+    "allow-cockpit-quota-status",
     "allow-cockpit-sessions",
     "allow-cockpit-project-configuration",
     "allow-cockpit-repositories",

@@ -30,6 +30,8 @@ import { LeafHost } from "./layout/LeafHost";
 import { openViewerLeaf, closeViewerLeaf, releaseViewers, getViewerClientId } from "./layout/viewerLifecycle";
 import { openBrowserLeaf, closeBrowserLeaf, retireTabBrowser, browserOpenDisabledReason, retryBrowserCleanup, subscribeBrowserLifecycle } from "./layout/browserLifecycle";
 import { BrowserCleanupNotices } from "./layout/BrowserCleanupNotices";
+import { SubscriptionLimits } from "./limits/SubscriptionLimits";
+import { useSubscriptionLimits } from "./limits/useSubscriptionLimits";
 import { routeWorkbenchKeydown } from "./input/keymap";
 import { herdrBindings, herdrPrefixes, herdrCommandShortcut, setEffectiveHerdrBindings } from "./input/herdrBindings";
 import { ServerPopup } from "./ServerPopup";
@@ -505,6 +507,13 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const [editing, setEditing] = useState<ContextTarget | null>(null);
   const [dialog, setDialog] = useState<PaneDialog | null>(null);
   const [commandsOpen, setCommandsOpen] = useState(false);
+  const [limitsOpen, setLimitsOpen] = useState(false);
+  const limits = useSubscriptionLimits(client);
+  const commandsOpener = useRef<HTMLElement | null>(null);
+  // Capture before CommandOverlay's passive effect focuses its search field.
+  useLayoutEffect(() => {
+    if (commandsOpen) commandsOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }, [commandsOpen]);
   const [sessionChooserOpen, setSessionChooserOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
@@ -871,7 +880,8 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       id: `herdr:${command.command_id}`, label: command.description ? command.description.charAt(0).toUpperCase() + command.description.slice(1) : "Custom command", icon: command.action === "popup" ? "more" : command.action === "plugin_action" ? "file" : "terminal", shortcut: herdrCommandShortcut(command, customPrefixes), group: "Herdr",
       disabled: Boolean(customCommandReason || popup), reason: customCommandReason, run: () => runHerdrCommand(command),
     })),
-    ...SHORTCUTS.filter((entry) => entry.prefix && entry.palette !== false).map((entry): CommandAction => {
+    ...SHORTCUTS.filter((entry) => entry.palette !== false && (entry.prefix || (entry.id === "subscription-limits" && !limits.absent))).map((entry): CommandAction => {
+      if (entry.id === "subscription-limits") return { id: entry.id, label: entry.label, group: entry.group, run: () => setLimitsOpen(true) };
       const command = entry.id as PrefixCommand;
       const reason = entry.needs === "space" && !selectedSpace ? "Select a Space first"
         : entry.needs === "tab" && !selectedTab ? "Select a tab first"
@@ -966,10 +976,14 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
           {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
         </div>}
       </div>
+      <div className="workarea-statusbar">
       <BrowserCleanupNotices ctx={ctx} activeTabId={selection.tabId} fallback={<ErrorSlot placement="pane" message={[lifecycleError, layoutError].filter(Boolean).join(" · ")} actions={lifecycleError || layoutError ? <>
         <button type="button" onClick={onReconnect}>Resync</button>
         <button type="button" onClick={() => { setLifecycleError(null); onDismissLayoutError(); }}>Dismiss</button>
       </> : null} />} />
+      {!limits.absent ? <SubscriptionLimits snapshot={limits.snapshot} link={limits.link} now={limits.now} open={limitsOpen}
+        onOpenChange={setLimitsOpen} suspended={modalOpen} commandOpener={commandsOpener} /> : null}
+      </div>
     </main>
     {renderMenu()}
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} leafChoices={localLeaves.map(leaf => ({ id: leaf.id, title: byId(panes, leaf.id)?.title || leaf.kind }))} onSwap={swap} confirmMove={pane => { const message = lastTerminalMessage(pane, "Moving"); return !message || window.confirm(message); }} /> : null}

@@ -1621,6 +1621,17 @@ kbd {
   flex: 1 1 auto;
 }
 
+.workarea-statusbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  flex: 0 0 28px;
+  height: 28px;
+  min-width: 0;
+  position: relative;
+  z-index: var(--z-panel);
+  container: statusbar / inline-size;
+}
+
 
 
 

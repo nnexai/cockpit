@@ -82,6 +82,7 @@ function streamStale(sequence: number, generation = 1) {
 function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
   const base: CockpitClient = {
     status: vi.fn(async () => status),
+    quotaStatus: vi.fn(async () => { throw new CockpitClientError("http_error", "Subscription quota is not configured in this fixture", { status: 503, operationCode: "quota_unavailable" }); }),
     browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this tab", cleanup: "none" as const, cleanup_reason: null })),
     browserCleanupStatus: vi.fn(async () => ({ failures: [] })),
     browserCleanupRetry: vi.fn(async () => ({ failures: [] })),
