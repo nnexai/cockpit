@@ -8,6 +8,9 @@ use std::{
 };
 
 const NOW: u64 = 1_790_856_600_000;
+const WORKING: QuotaStatusRequest = QuotaStatusRequest {
+    agents_working: true,
+};
 struct Fixture {
     root: PathBuf,
 }
@@ -74,8 +77,14 @@ fn omp_payload(now: u64) -> Value {
     ],"accountsWithoutUsage":[],"disabledCredentials":[{"token":"private-marker"}]})
 }
 async fn settled(service: &Arc<QuotaService>) -> QuotaStatusResponse {
+    settled_with(service, QuotaStatusRequest::default()).await
+}
+async fn settled_with(
+    service: &Arc<QuotaService>,
+    request: QuotaStatusRequest,
+) -> QuotaStatusResponse {
     for _ in 0..300 {
-        let value = service.status().await;
+        let value = service.status(request).await;
         if !value.collecting {
             return value;
         }
@@ -88,7 +97,7 @@ async fn settled(service: &Arc<QuotaService>) -> QuotaStatusResponse {
 async fn source_projection_is_anonymous_and_preserves_real_windows_and_business_counters() {
     let fixture = Fixture::new();
     let service = fixture.service(NOW);
-    let first = service.status().await;
+    let first = service.status(QuotaStatusRequest::default()).await;
     assert!(first.collecting);
     assert!(
         first
@@ -173,7 +182,10 @@ async fn concurrent_services_share_collection_lease_and_cached_values() {
     fixture.script("sleep 0.1");
     let a = fixture.service(NOW);
     let b = fixture.service(NOW);
-    tokio::join!(a.status(), b.status());
+    tokio::join!(
+        a.status(QuotaStatusRequest::default()),
+        b.status(QuotaStatusRequest::default())
+    );
     let va = settled(&a).await;
     let vb = settled(&b).await;
     // Either host may own the lock. Advance past contention recheck, not source TTL.
@@ -277,8 +289,225 @@ async fn unavailable_cache_preserves_previous_values_and_backs_off() {
         assert!(provider.error == Some(QuotaErrorCode::CacheUnavailable) && provider.stale);
     }
     service.now.store(NOW + CADENCE + 60_000, Ordering::Relaxed);
+    settled_with(&service, WORKING).await;
+    assert_eq!(fixture.count(), 1);
+}
+
+#[tokio::test]
+async fn working_success_boundary_and_working_to_idle_switch_preserve_source_times() {
+    let fixture = Fixture::new();
+    let service = fixture.service(NOW);
+    let initial = settled(&service).await;
+    for (offset, request, count) in [
+        (WORKING_CADENCE - 1, WORKING, 1),
+        (WORKING_CADENCE, WORKING, 2),
+        (
+            WORKING_CADENCE + CADENCE - 1,
+            QuotaStatusRequest::default(),
+            2,
+        ),
+        (WORKING_CADENCE + CADENCE, QuotaStatusRequest::default(), 3),
+    ] {
+        service.now.store(NOW + offset, Ordering::Relaxed);
+        let value = settled_with(&service, request).await;
+        assert_eq!(fixture.count(), count);
+        assert_eq!(value.providers, initial.providers);
+    }
+}
+
+#[tokio::test]
+async fn idle_to_working_switch_collects_when_success_deadline_has_elapsed() {
+    let fixture = Fixture::new();
+    let service = fixture.service(NOW);
+    settled(&service).await;
+    service.now.store(NOW + 240_000, Ordering::Relaxed);
     settled(&service).await;
     assert_eq!(fixture.count(), 1);
+    settled_with(&service, WORKING).await;
+    assert_eq!(fixture.count(), 2);
+    settled(&service).await;
+    assert_eq!(fixture.count(), 2);
+}
+
+#[tokio::test]
+async fn working_demand_never_shortens_any_failure_backoff() {
+    let fixture = Fixture::new();
+    let service = fixture.service(NOW);
+    let initial = settled(&service).await;
+    fixture.script("exit 1");
+    let mut failed_at = NOW + WORKING_CADENCE;
+    service.now.store(failed_at, Ordering::Relaxed);
+    settled_with(&service, WORKING).await;
+    let mut count = 2;
+    for delay in [300_000, 600_000, 1_200_000, 2_400_000, 3_600_000, 3_600_000] {
+        for now in [failed_at + WORKING_CADENCE, failed_at + delay - 1] {
+            let value = settled_with(&fixture.service(now), WORKING).await;
+            assert_eq!(fixture.count(), count);
+            for (provider, previous) in value.providers.iter().zip(&initial.providers) {
+                assert_eq!(provider.accounts, previous.accounts);
+                assert_eq!(provider.fetched_at_ms, previous.fetched_at_ms);
+                assert_eq!(provider.error, Some(QuotaErrorCode::Failed));
+                assert!(provider.stale);
+            }
+        }
+        failed_at += delay;
+        service.now.store(failed_at, Ordering::Relaxed);
+        settled_with(&service, WORKING).await;
+        count += 1;
+        assert_eq!(fixture.count(), count);
+    }
+}
+
+#[tokio::test]
+async fn persisted_precommand_lease_clears_success_and_cadence_starts_at_completion() {
+    let fixture = Fixture::new();
+    let service = fixture.service(NOW);
+    settled(&service).await;
+    let release = fixture.root.join("release");
+    fixture.script(&format!(
+        "while [ ! -f '{}' ]; do sleep 0.01; done",
+        release.display()
+    ));
+    let started = NOW + WORKING_CADENCE;
+    service.now.store(started, Ordering::Relaxed);
+    assert!(service.status(WORKING).await.collecting);
+    let mut lease = None;
+    for _ in 0..300 {
+        let stored: Value = serde_json::from_slice(&fs::read(fixture.cache()).unwrap()).unwrap();
+        if stored["omp"]["attempted_at_ms"] == json!(started) {
+            lease = Some(stored);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let completed = started + 17_000;
+    service.now.store(completed, Ordering::Relaxed);
+    fs::write(&release, "").unwrap();
+    settled_with(&service, WORKING).await;
+    let lease = lease.expect("the pre-command lease was not persisted");
+    assert!(lease["omp"].get("succeeded_at_ms").is_none());
+    assert_eq!(lease["omp"]["next_attempt_at_ms"], json!(started + CADENCE));
+    let stored: Value = serde_json::from_slice(&fs::read(fixture.cache()).unwrap()).unwrap();
+    assert_eq!(stored["omp"]["attempted_at_ms"], json!(completed));
+    assert_eq!(stored["omp"]["succeeded_at_ms"], json!(completed));
+    assert_eq!(
+        stored["omp"]["next_attempt_at_ms"],
+        json!(completed + CADENCE)
+    );
+    service
+        .now
+        .store(completed + WORKING_CADENCE - 1, Ordering::Relaxed);
+    settled_with(&service, WORKING).await;
+    assert_eq!(fixture.count(), 2);
+    service
+        .now
+        .store(completed + WORKING_CADENCE, Ordering::Relaxed);
+    settled_with(&service, WORKING).await;
+    assert_eq!(fixture.count(), 3);
+}
+
+#[tokio::test]
+async fn persisted_crash_lease_blocks_working_demand_for_five_minutes() {
+    let fixture = Fixture::new();
+    let initial = settled(&fixture.service(NOW)).await;
+    let leased_at = NOW + WORKING_CADENCE;
+    let mut stored: Value = serde_json::from_slice(&fs::read(fixture.cache()).unwrap()).unwrap();
+    stored["omp"]["attempted_at_ms"] = json!(leased_at);
+    stored["omp"]["next_attempt_at_ms"] = json!(leased_at + CADENCE);
+    stored["omp"]
+        .as_object_mut()
+        .unwrap()
+        .remove("succeeded_at_ms");
+    fs::write(fixture.cache(), serde_json::to_vec(&stored).unwrap()).unwrap();
+    let service = fixture.service(leased_at + WORKING_CADENCE);
+    let value = settled_with(&service, WORKING).await;
+    assert_eq!(value.providers, initial.providers);
+    assert_eq!(fixture.count(), 1);
+    service
+        .now
+        .store(leased_at + CADENCE - 1, Ordering::Relaxed);
+    settled_with(&service, WORKING).await;
+    assert_eq!(fixture.count(), 1);
+    service.now.store(leased_at + CADENCE, Ordering::Relaxed);
+    settled_with(&service, WORKING).await;
+    assert_eq!(fixture.count(), 2);
+}
+
+#[tokio::test]
+async fn old_snapshot_without_success_evidence_uses_idle_deadline() {
+    let fixture = Fixture::new();
+    let initial = settled(&fixture.service(NOW)).await;
+    let mut stored: Value = serde_json::from_slice(&fs::read(fixture.cache()).unwrap()).unwrap();
+    stored["omp"]
+        .as_object_mut()
+        .unwrap()
+        .remove("succeeded_at_ms");
+    fs::write(fixture.cache(), serde_json::to_vec(&stored).unwrap()).unwrap();
+    let service = fixture.service(NOW + WORKING_CADENCE);
+    let value = settled_with(&service, WORKING).await;
+    assert_eq!(value.providers, initial.providers);
+    assert_eq!(fixture.count(), 1);
+    service.now.store(NOW + CADENCE - 1, Ordering::Relaxed);
+    settled_with(&service, WORKING).await;
+    assert_eq!(fixture.count(), 1);
+    service.now.store(NOW + CADENCE, Ordering::Relaxed);
+    settled_with(&service, WORKING).await;
+    assert_eq!(fixture.count(), 2);
+}
+
+#[tokio::test]
+async fn working_and_idle_services_share_one_minute_schedule() {
+    let fixture = Fixture::new();
+    let a = fixture.service(NOW);
+    let b = fixture.service(NOW);
+    let c = fixture.service(NOW);
+    for (offset, count) in [(0, 1), (30_000, 1), (60_000, 2), (90_000, 2), (120_000, 3)] {
+        for service in [&a, &b, &c] {
+            service.now.store(NOW + offset, Ordering::Relaxed);
+        }
+        tokio::join!(
+            settled_with(&a, WORKING),
+            settled(&b),
+            settled_with(&c, WORKING)
+        );
+        // Contending hosts reread under the lock after their three-second retry.
+        for service in [&a, &b, &c] {
+            service.now.store(NOW + offset + 3_001, Ordering::Relaxed);
+        }
+        let (va, vb, vc) = tokio::join!(
+            settled_with(&a, WORKING),
+            settled(&b),
+            settled_with(&c, WORKING)
+        );
+        assert_eq!(fixture.count(), count);
+        assert_eq!(va.providers, vb.providers);
+        assert_eq!(va.providers, vc.providers);
+    }
+}
+
+#[tokio::test]
+async fn inconsistent_success_time_has_no_cache_authority() {
+    let fixture = Fixture::new();
+    settled(&fixture.service(NOW)).await;
+    for (success, failures, count) in [(NOW + 1, 0, 2), (NOW, 1, 3)] {
+        let mut stored: Value =
+            serde_json::from_slice(&fs::read(fixture.cache()).unwrap()).unwrap();
+        stored["omp"]["succeeded_at_ms"] = json!(success);
+        stored["omp"]["failures"] = json!(failures);
+        fs::write(fixture.cache(), serde_json::to_vec(&stored).unwrap()).unwrap();
+        let value = settled_with(&fixture.service(NOW), WORKING).await;
+        assert_eq!(fixture.count(), count);
+        assert!(value.providers.iter().all(|provider| {
+            provider.state == QuotaProviderState::Available && provider.error.is_none()
+        }));
+    }
+}
+
+#[test]
+fn success_evidence_without_an_attempt_is_invalid_even_for_an_empty_snapshot() {
+    let mut snapshot = PersistedQuota::default();
+    snapshot.omp.succeeded_at_ms = Some(NOW);
+    assert!(!valid_snapshot(&snapshot, NOW));
 }
 
 #[test]

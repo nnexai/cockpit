@@ -173,8 +173,8 @@ describe("quota client errors and cancellation", () => {
     const envelope = { code: "quota_unavailable", message: "Subscription quota is not configured in this host" };
     const browser = createBrowserClient(async () => new Response(JSON.stringify(envelope), { status: 503 }));
     const native = createNativeClient(async () => { throw envelope; });
-    await expect(browser.quotaStatus()).rejects.toMatchObject({ code: "http_error", operationCode: "quota_unavailable", status: 503 });
-    await expect(native.quotaStatus()).rejects.toMatchObject({ code: "native_error", operationCode: "quota_unavailable" });
+    await expect(browser.quotaStatus({ agents_working: false })).rejects.toMatchObject({ code: "http_error", operationCode: "quota_unavailable", status: 503 });
+    await expect(native.quotaStatus({ agents_working: false })).rejects.toMatchObject({ code: "native_error", operationCode: "quota_unavailable" });
   });
 
   it("refuses already-aborted requests without touching either transport", async () => {
@@ -182,8 +182,8 @@ describe("quota client errors and cancellation", () => {
     const invoke = vi.fn(async () => snapshot());
     const controller = new AbortController();
     controller.abort();
-    await expect(createBrowserClient(request).quotaStatus(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
-    await expect(createNativeClient(invoke).quotaStatus(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(createBrowserClient(request).quotaStatus({ agents_working: false }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(createNativeClient(invoke).quotaStatus({ agents_working: false }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
     expect(request).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -192,7 +192,7 @@ describe("quota client errors and cancellation", () => {
     let resolve: (value: unknown) => void = () => { throw new Error("Native read not started"); };
     const pending = new Promise<unknown>((complete) => { resolve = complete; });
     const controller = new AbortController();
-    const result = createNativeClient(() => pending).quotaStatus(controller.signal);
+    const result = createNativeClient(() => pending).quotaStatus({ agents_working: false }, controller.signal);
     controller.abort();
     resolve(snapshot());
     await expect(result).rejects.toMatchObject({ name: "AbortError" });

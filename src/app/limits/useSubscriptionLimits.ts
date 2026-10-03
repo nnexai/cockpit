@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
 import type { QuotaStatusResponse } from "../../protocol/generated/v1";
 
@@ -12,8 +12,16 @@ export interface SubscriptionLimitsState {
 // Client identity prevents snapshots from one host leaking into another; Workbench resync retains it.
 const snapshots = new WeakMap<CockpitClient, SubscriptionLimitsState>();
 
-export function useSubscriptionLimits(client: CockpitClient): SubscriptionLimitsState {
+const COLLECTING_MS = 3000;
+const WORKING_MS = 15_000;
+const IDLE_MS = 60_000;
+
+export function useSubscriptionLimits(client: CockpitClient, agentsWorking: boolean): SubscriptionLimitsState {
   const [state, setState] = useState(() => snapshots.get(client) ?? { snapshot: null, link: "loading" as const, absent: false, now: Date.now() });
+  const working = useRef(agentsWorking);
+  working.current = agentsWorking;
+  const previousWorking = useRef(agentsWorking);
+  const updatePolling = useRef<((refreshNow: boolean) => void) | null>(null);
   useEffect(() => {
     let current: SubscriptionLimitsState = { ...(snapshots.get(client) ?? { snapshot: null, link: "loading", absent: false, now: Date.now() }), absent: false };
     let failures = current.link === "offline" ? 2 : 0;
@@ -27,7 +35,7 @@ export function useSubscriptionLimits(client: CockpitClient): SubscriptionLimits
     const schedule = () => {
       if (stopped || current.absent) return;
       clearTimeout(timer);
-      timer = setTimeout(refresh, current.snapshot?.collecting ? 3000 : 60_000);
+      timer = setTimeout(refresh, current.snapshot?.collecting ? COLLECTING_MS : working.current ? WORKING_MS : IDLE_MS);
     };
     const refresh = () => {
       if (stopped || current.absent || controller) return;
@@ -36,7 +44,7 @@ export function useSubscriptionLimits(client: CockpitClient): SubscriptionLimits
       publish();
       const request = new AbortController();
       controller = request;
-      void client.quotaStatus(request.signal).then(snapshot => {
+      void client.quotaStatus({ agents_working: working.current }, request.signal).then(snapshot => {
         if (stopped || request.signal.aborted) return;
         failures = 0;
         current = { snapshot, link: "live", absent: false, now: Date.now() };
@@ -51,15 +59,25 @@ export function useSubscriptionLimits(client: CockpitClient): SubscriptionLimits
         schedule();
       });
     };
+    updatePolling.current = refreshNow => {
+      clearTimeout(timer);
+      if (refreshNow) refresh();
+      else schedule();
+    };
     publish();
     refresh();
     document.addEventListener("visibilitychange", refresh);
     return () => {
       stopped = true;
+      updatePolling.current = null;
       clearTimeout(timer);
       controller?.abort();
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [client]);
+  useEffect(() => {
+    if (previousWorking.current !== agentsWorking) updatePolling.current?.(agentsWorking);
+    previousWorking.current = agentsWorking;
+  }, [agentsWorking]);
   return state;
 }

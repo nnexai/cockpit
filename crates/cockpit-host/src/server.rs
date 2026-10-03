@@ -35,6 +35,7 @@ use cockpit_protocol::{
         BrowserCleanupRetryRequest, BrowserFeedbackAckRequest, BrowserFeedbackImageRequest,
         BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserRequest,
     },
+    quota::QuotaStatusRequest,
     v1::{
         ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
         SessionSnapshotResponse, SessionStreamMessage, SpaceGitActionRequest, TerminalCommand, TerminalMode,
@@ -305,9 +306,12 @@ async fn status(State(service): State<CockpitService>) -> impl IntoResponse {
     Json(service.status().await)
 }
 
-async fn quota_status(State(service): State<CockpitService>) -> Response {
+async fn quota_status(
+    State(service): State<CockpitService>,
+    Query(request): Query<QuotaStatusRequest>,
+) -> Response {
     match service.quota() {
-        Ok(quota) => Json(quota.status().await).into_response(),
+        Ok(quota) => Json(quota.status(request).await).into_response(),
         Err(error) => inspection_error(error),
     }
 }

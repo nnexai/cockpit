@@ -63,6 +63,7 @@ import type {
   SpaceGitActionResponse,
   SessionStreamMessage,
   StatusResponse,
+  QuotaStatusRequest,
   QuotaStatusResponse,
   TerminalCommand,
   TerminalOpenRequest,
@@ -1031,9 +1032,9 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       return invokeAndParse(invoke, "cockpit_browser_feedback_send", { request }, "browser feedback send", parseBrowserFeedbackSendResponse);
     },
     status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
-    quotaStatus(signal?: AbortSignal): Promise<QuotaStatusResponse> {
+    quotaStatus(request: QuotaStatusRequest, signal?: AbortSignal): Promise<QuotaStatusResponse> {
       try { signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-      return invokeAndParse(invoke, "cockpit_quota_status", undefined, "subscription quota", parseQuotaStatusResponse).then((value) => {
+      return invokeAndParse(invoke, "cockpit_quota_status", { request: { agents_working: request.agents_working } }, "subscription quota", parseQuotaStatusResponse).then((value) => {
         signal?.throwIfAborted();
         return value;
       });

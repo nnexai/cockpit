@@ -134,6 +134,7 @@ import type {
   ProviderCredentialSetRequest,
   ProviderCredentialStatus,
   ProviderCredentialStatusList,
+  QuotaStatusRequest,
   QuotaStatusResponse,
   RepositoryListResponse,
   WorkspaceDefaults, WorkspaceDefaultsRequest,
@@ -308,7 +309,7 @@ export interface TerminalStream extends ClosableStream {
 export interface CockpitClient {
   status(): Promise<StatusResponse>;
   /** Cached subscription limits; provider CLIs own authentication and collection. */
-  quotaStatus(signal?: AbortSignal): Promise<QuotaStatusResponse>;
+  quotaStatus(request: QuotaStatusRequest, signal?: AbortSignal): Promise<QuotaStatusResponse>;
   browserAction(request: BrowserRequest): Promise<BrowserResponse>;
   browserCleanupStatus(): Promise<BrowserCleanupStatus>;
   browserCleanupRetry(request: BrowserCleanupRetryRequest): Promise<BrowserCleanupStatus>;

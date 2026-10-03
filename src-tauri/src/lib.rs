@@ -39,7 +39,7 @@ use cockpit_protocol::{
         BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewEvent,
         BrowserViewOpenRequest, BrowserViewSnapshot,
     },
-    quota::QuotaStatusResponse,
+    quota::{QuotaStatusRequest, QuotaStatusResponse},
     widget::{
         WIDGET_MAX_SNAPSHOT_BYTES, WidgetContent, WidgetContentRequest, WidgetEvent, WidgetRemoveRequest,
         WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse, WidgetWindowReport,
@@ -621,10 +621,11 @@ async fn cockpit_status(
 
 #[tauri::command]
 async fn cockpit_quota_status(
+    request: QuotaStatusRequest,
     service: State<'_, CockpitService>,
 ) -> Result<QuotaStatusResponse, ErrorResponse> {
     let quota = service.quota().map_err(inspection_error_response)?;
-    Ok(quota.status().await)
+    Ok(quota.status(request).await)
 }
 
 #[tauri::command]

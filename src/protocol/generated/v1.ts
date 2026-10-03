@@ -766,6 +766,12 @@ fetched_at_ms: number, limits: Array<QuotaLimit>, };
 
 export type QuotaProviderStatus = { provider: QuotaProvider, state: QuotaProviderState, error: QuotaErrorCode | null, fetched_at_ms: number | null, stale: boolean, accounts: Array<QuotaAccount>, };
 
+export type QuotaStatusRequest = {
+/**
+ * The caller sees at least one live Herdr agent in a working state.
+ */
+agents_working: boolean, };
+
 export type QuotaStatusResponse = { generated_at_ms: number, collecting: boolean, providers: Array<QuotaProviderStatus>, };
 
 export type WidgetLocator = { "type": "current_pane" } | { "type": "pane", pane_id: string, } | { "type": "tab", tab_id: string, } | { "type": "space", space_id: string, };

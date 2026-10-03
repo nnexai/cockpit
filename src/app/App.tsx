@@ -54,7 +54,7 @@ import type { LibrarySpace } from "./library/libraryState";
 import { InlineRename } from "./InlineRename";
 import { Sidebar } from "./sidebar/Sidebar";
 import { spaceNotesFromFailures, type ContextAnchor } from "./sidebar/Spaces";
-import type { Agent, Space } from "./sidebar/spaceTree";
+import { stateClass, type Agent, type Space } from "./sidebar/spaceTree";
 
 type StatusError = { message: string; code?: string };
 type SessionSnapshot = SessionSnapshotResponse;
@@ -563,7 +563,8 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const [dialog, setDialog] = useState<PaneDialog | null>(null);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [limitsOpen, setLimitsOpen] = useState(false);
-  const limits = useSubscriptionLimits(client);
+  const agentsWorking = state.sync === "live" && (snapshot?.agents ?? []).some(agent => stateClass(agent.status) === "working");
+  const limits = useSubscriptionLimits(client, agentsWorking);
   const commandsOpener = useRef<HTMLElement | null>(null);
   // Capture before CommandOverlay's passive effect focuses its search field.
   useLayoutEffect(() => {

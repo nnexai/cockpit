@@ -80,6 +80,12 @@ pub struct QuotaProviderStatus {
     pub stale: bool,
     pub accounts: Vec<QuotaAccount>,
 }
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(default, deny_unknown_fields)]
+pub struct QuotaStatusRequest {
+    /// The caller sees at least one live Herdr agent in a working state.
+    pub agents_working: bool,
+}
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaStatusResponse {

@@ -114,6 +114,7 @@ import type {
   SpaceGitActionResponse,
   SessionStreamMessage,
   StatusResponse,
+  QuotaStatusRequest,
   QuotaStatusResponse,
   TerminalCommand,
   TerminalOpenRequest,
@@ -1123,9 +1124,9 @@ export function createBrowserClient(
       });
     },
     status(): Promise<StatusResponse> { return getJson(request, "/api/v1/status", "status", parseStatusResponse); },
-    quotaStatus(signal?: AbortSignal): Promise<QuotaStatusResponse> {
+    quotaStatus(quotaRequest: QuotaStatusRequest, signal?: AbortSignal): Promise<QuotaStatusResponse> {
       try { signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-      return getJson(request, "/api/v1/quota", "subscription quota", parseQuotaStatusResponse, { signal }).then((value) => {
+      return getJson(request, `/api/v1/quota?agents_working=${quotaRequest.agents_working ? "true" : "false"}`, "subscription quota", parseQuotaStatusResponse, { signal }).then((value) => {
         signal?.throwIfAborted();
         return value;
       });

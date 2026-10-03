@@ -64,7 +64,7 @@ use crate::credentials::{
 };
 use crate::quota::{
     QuotaProvider, QuotaProviderState, QuotaErrorCode, QuotaUnit, QuotaLevel,
-    QuotaLimit, QuotaAccount, QuotaProviderStatus, QuotaStatusResponse,
+    QuotaLimit, QuotaAccount, QuotaProviderStatus, QuotaStatusRequest, QuotaStatusResponse,
 };
 use crate::sources::SourceCapability;
 use crate::library::{
@@ -452,6 +452,7 @@ pub fn render_v1() -> String {
         QuotaLimit::decl(&config),
         QuotaAccount::decl(&config),
         QuotaProviderStatus::decl(&config),
+        QuotaStatusRequest::decl(&config),
         QuotaStatusResponse::decl(&config),
         WidgetLocator::decl(&config),
         WidgetAddress::decl(&config),

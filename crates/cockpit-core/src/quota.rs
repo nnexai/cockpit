@@ -21,6 +21,7 @@ use std::{
 use tokio::{process::Command, sync::Mutex};
 
 const CADENCE: u64 = 300_000;
+const WORKING_CADENCE: u64 = 60_000;
 const STALE: u64 = 900_000;
 const RETAIN: u64 = 86_400_000;
 const MAX_CACHE: u64 = 65_536;
@@ -34,6 +35,8 @@ const PROVIDERS: [QuotaProvider; 3] = [
 #[serde(deny_unknown_fields)]
 struct SourceRecord {
     attempted_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    succeeded_at_ms: Option<u64>,
     next_attempt_at_ms: u64,
     failures: u8,
     providers: Vec<ProviderRecord>,
@@ -102,24 +105,24 @@ impl QuotaService {
             .min(u64::MAX as u128) as u64
     }
     /// Reads memory only; filesystem work, lock attempts and subprocesses run in the background.
-    pub async fn status(self: &Arc<Self>) -> QuotaStatusResponse {
+    pub async fn status(self: &Arc<Self>, request: QuotaStatusRequest) -> QuotaStatusResponse {
         let now = self.now();
         let mut memory = self.memory.lock().await;
         if !memory.collecting
             && now >= memory.retry_at_ms
-            && (memory.recheck || due(&memory.snapshot.omp, now))
+            && (memory.recheck || due(&memory.snapshot.omp, now, request.agents_working))
         {
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 memory.collecting = true;
                 let service = Arc::clone(self);
                 runtime.spawn(async move {
-                    service.refresh().await;
+                    service.refresh(request.agents_working).await;
                 });
             }
         }
         response(&memory.snapshot, now, memory.collecting)
     }
-    async fn refresh(self: Arc<Self>) {
+    async fn refresh(self: Arc<Self>, agents_working: bool) {
         let root = self.root.clone();
         let now = self.now();
         let opened = tokio::task::spawn_blocking(move || open_cache(&root, now)).await;
@@ -141,10 +144,11 @@ impl QuotaService {
             return;
         }
         let mut current = snapshot.take().unwrap_or_default();
-        let omp_due = due(&current.omp, now);
+        let omp_due = due(&current.omp, now, agents_working);
         // Persist a lease before starting the command: a killed owner cannot cause a burst.
         if omp_due {
             current.omp.attempted_at_ms = Some(now);
+            current.omp.succeeded_at_ms = None;
             current.omp.next_attempt_at_ms = now.saturating_add(CADENCE);
             if current.omp.providers.is_empty() {
                 current.omp.providers = PROVIDERS
@@ -223,12 +227,16 @@ impl QuotaService {
         parse::omp(&output.stdout, self.now())
     }
 }
-fn due(record: &SourceRecord, now: u64) -> bool {
+fn due(record: &SourceRecord, now: u64, agents_working: bool) -> bool {
     record.attempted_at_ms.is_none()
         || now >= record.next_attempt_at_ms
         || record
             .attempted_at_ms
             .is_some_and(|time| time > now.saturating_add(60_000))
+        || (agents_working
+            && record
+                .succeeded_at_ms
+                .is_some_and(|time| now >= time.saturating_add(WORKING_CADENCE)))
 }
 fn open_cache(
     root: &Path,
@@ -308,9 +316,11 @@ fn apply(
             }
             record.providers = values;
             record.failures = 0;
+            record.succeeded_at_ms = Some(now);
             record.next_attempt_at_ms = now.saturating_add(CADENCE);
         }
         Err(error) => {
+            record.succeeded_at_ms = None;
             record.failures = record.failures.saturating_add(1).min(5);
             record.next_attempt_at_ms = now.saturating_add(backoff(record.failures));
             record.providers = providers
@@ -418,6 +428,11 @@ fn valid_snapshot(snapshot: &PersistedQuota, now: u64) -> bool {
     snapshot.schema == 2 && valid_source(&snapshot.omp, &PROVIDERS, now)
 }
 fn valid_source(source: &SourceRecord, providers: &[QuotaProvider], now: u64) -> bool {
+    if source.succeeded_at_ms.is_some()
+        && (source.failures != 0 || source.succeeded_at_ms != source.attempted_at_ms)
+    {
+        return false;
+    }
     if source.failures > 5 || source.next_attempt_at_ms > now.saturating_add(3_600_000 + 60_000) {
         return false;
     }
