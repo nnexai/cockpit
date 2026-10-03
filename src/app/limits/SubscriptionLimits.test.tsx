@@ -254,7 +254,7 @@ it("shows all grouped provider windows in the strip and narrow summary while ret
     const popup = host.querySelector(".limits-provider[aria-label='Claude']")!;
     expect([...popup.querySelectorAll(".limits-account")].map(account =>
       [...account.querySelectorAll(".limits-row-value")].map(value => value.textContent),
-    )).toEqual([["20% used", "58% used"], ["39% used"]]);
+    )).toEqual([["20%", "58%"], ["39%"]]);
     const trigger = host.querySelector(".limits-trigger")!;
     expect(trigger.getAttribute("aria-label")).toContain("Claude: 5h 39% used, 7d 58% used");
   } finally {

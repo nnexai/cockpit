@@ -83,6 +83,33 @@ function windowDuration(window: string | null): number {
   return Number(match[1]) * seconds[match[2]];
 }
 
+export interface Pace {
+  /** Fraction of the window already elapsed: where an even burn would be now. */
+  expected: number;
+  /** Time until the limit is hit at the current burn rate, only when that is before the reset. */
+  runsOutMs: number | null;
+}
+
+// Needs a known window length and reset; very early in a window the rate is too noisy to project.
+const MIN_ELAPSED = 0.05;
+
+export function limitPace(limit: QuotaLimit, used: number | null, now: number): Pace | null {
+  const length = windowDuration(limit.window) * 1000;
+  if (used === null || limit.resets_at_ms === null || !Number.isFinite(length) || limit.resets_at_ms <= now) return null;
+  const remaining = limit.resets_at_ms - now;
+  const expected = clamp(1 - remaining / length);
+  if (expected < MIN_ELAPSED) return null;
+  const toExhaust = used > 0 && used < 1 ? (1 - used) * expected * length / used : null;
+  return { expected, runsOutMs: toExhaust !== null && toExhaust < remaining ? toExhaust : null };
+}
+
+export function formatSpan(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  if (minutes >= 1440) return `${Math.floor(minutes / 1440)}d${Math.floor(minutes % 1440 / 60) ? ` ${Math.floor(minutes % 1440 / 60)}h` : ""}`;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
+  return `${minutes}m`;
+}
+
 export function compareWindows(a: QuotaLimit, b: QuotaLimit): number {
   const durationA = windowDuration(a.window), durationB = windowDuration(b.window);
   if (durationA !== durationB) return durationA < durationB ? -1 : 1;
@@ -97,6 +124,7 @@ export interface WindowSegment {
   text: string;
   tone: UsageTone | null;
   stale: boolean;
+  pace: Pace | null;
 }
 
 export function providerView(provider: QuotaProviderStatus, now: number, offline: boolean): ProviderView {
@@ -112,9 +140,10 @@ export function providerView(provider: QuotaProviderStatus, now: number, offline
         const earlierReset = used === best.used && (limit.resets_at_ms ?? Infinity) < (best.limit.resets_at_ms ?? Infinity);
         if (!better && !earlierReset) continue;
       }
+      const segmentStale = stale || limitIsStale(limit, account.fetched_at_ms, now);
       groups.set(key, {
         key, label: "", limit, used, text: formatLimitValue(limit), tone: usageTone(used),
-        stale: stale || limitIsStale(limit, account.fetched_at_ms, now),
+        stale: segmentStale, pace: segmentStale ? null : limitPace(limit, used, now),
       });
     }
   }
@@ -152,7 +181,7 @@ export function summaryView(views: readonly ProviderView[]): ProviderView | null
 export function accessibleLabel(views: readonly ProviderView[], now: number, offline: boolean): string {
   const parts = views.filter(view => view.provider.state !== "not_signed_in").map(view => {
     const value = view.segments.length
-      ? view.segments.map(segment => `${segment.label} ${formatLimitValue(segment.limit, true)}${segment.stale ? ", stale" : ""}`).join(", ")
+      ? view.segments.map(segment => `${segment.label} ${formatLimitValue(segment.limit, true)}${segment.pace?.runsOutMs != null ? `, runs out in ${formatSpan(segment.pace.runsOutMs)}` : ""}${segment.stale ? ", stale" : ""}`).join(", ")
       : view.provider.state === "unsupported" ? "not reported" : view.provider.state === "pending" ? "reading limits" : "not reported";
     const age = view.provider.fetched_at_ms === null ? "" : `, updated ${formatAgo(view.provider.fetched_at_ms, now)}`;
     return `${view.name}: ${value}${view.stale ? ", stale" : ""}${view.provider.error ? `, ${errorText(view.provider.error)}` : ""}${age}`;

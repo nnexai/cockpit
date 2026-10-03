@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QuotaLimit, QuotaProviderStatus } from "../../protocol/generated/v1";
-import { formatLimitValue, providerView, usedFraction, summaryView } from "./limitsModel";
+import { formatLimitValue, limitPace, providerView, usedFraction, summaryView } from "./limitsModel";
 
 const limit = (changes: Partial<QuotaLimit> = {}): QuotaLimit => ({
   id: "test", window: "7d", tier: null, unit: "percent", used_fraction: null,
@@ -102,5 +102,28 @@ describe("subscription usage windows", () => {
     expect(summaryView([low, higher, stale])?.segments.map(segment => segment.text)).toEqual(["39%", "58%"]);
     expect(summaryView([stale])).toBe(stale);
     expect(summaryView([providerView(provider({ state: "not_signed_in", accounts: [] }), 1500, false)])).toBeNull();
+  });
+});
+
+describe("pace projection", () => {
+  const H = 3_600_000;
+  it("projects each window independently: 5h can run out while 7d is on pace", () => {
+    const now = 100 * H;
+    const view = providerView(provider({ provider: "claude", accounts: [{ fetched_at_ms: now, limits: [
+      limit({ window: "5h", used_fraction: 0.6, resets_at_ms: now + 3 * H }),
+      limit({ window: "7d", used_fraction: 0.3, resets_at_ms: now + 4 * 24 * H }),
+    ] }] }), now, false);
+    const [five, seven] = view.segments;
+    expect(five.pace!.expected).toBeCloseTo(0.4);
+    expect(five.pace!.runsOutMs).toBeCloseTo(H * 4 / 3, -3); // 0.6 in 2h → 0.4 left lasts 80 min
+    expect(seven.pace!.runsOutMs).toBeNull();
+  });
+
+  it("gives no projection without a window length, early in the window, or when stale", () => {
+    const now = 100 * H;
+    expect(limitPace(limit({ window: null, resets_at_ms: now + H }), 0.5, now)).toBeNull();
+    expect(limitPace(limit({ window: "5h", resets_at_ms: now + 4.9 * H }), 0.5, now)).toBeNull();
+    expect(limitPace(limit({ window: "5h", resets_at_ms: now - 1 }), 0.5, now)).toBeNull();
+    expect(limitPace(limit({ window: "5h", resets_at_ms: now + H }), 0, now)!.runsOutMs).toBeNull();
   });
 });
