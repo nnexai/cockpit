@@ -1866,17 +1866,17 @@ pub fn run() {
         .projects()
         .expect("project operations configured")
         .clone();
+    let library = Arc::new(cockpit_core::library::LibraryService::new(project_config.clone(), sources)
+        .with_herdr(inspector.clone()));
     let contexts = cockpit_core::context::ContextService::new(
         project_config.clone(),
         inspector.source_adapter(),
         shutdown_projects.clone(),
-    );
+    ).with_library(library.clone());
     let viewers = Arc::new(cockpit_core::viewer::ViewerService::new(Arc::new(contexts.clone())));
     let contexts = contexts.with_viewers(viewers.clone());
     let service = service.with_contexts(contexts).with_viewers(viewers);
-    let library = cockpit_core::library::LibraryService::new(project_config.clone(), sources)
-        .with_projects(shutdown_projects.clone(), inspector.clone());
-    let service = service.with_library(library);
+    let service = service.with_library((*library).clone());
     let reviews = cockpit_core::review::ReviewService::new(
         project_config.clone(),
         service
@@ -1973,9 +1973,8 @@ pub fn run() {
             library::cockpit_library_media,
             library::cockpit_library_space_list,
             library::cockpit_library_space_add,
-            library::cockpit_library_space_update,
+            library::cockpit_library_space_repositories,
             library::cockpit_library_space_remove,
-            library::cockpit_library_space_attempts_dismiss,
             review::cockpit_review_snapshot,
             review::cockpit_review_file,
             comments::cockpit_comments_list,

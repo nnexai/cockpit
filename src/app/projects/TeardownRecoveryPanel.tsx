@@ -26,14 +26,13 @@ function stateLabel(recovery: WorkspaceTeardownRecovery): string {
   switch (recovery.state) {
     case "pending": return "Removal dispatch needs reconciliation";
     case "outcome_unknown": return "Removal outcome unknown";
-    case "orphaned_companion": return "Companion cleanup pending";
   }
 }
 
 /**
  * Recovery is intentionally independent of the current Space list. The
  * selected entry opens the normal fresh-proof dialog using its durable
- * workspace identity, so an absent Space cannot hide an orphaned cleanup.
+ * workspace identity, so an absent Space cannot hide an unknown removal outcome.
  */
 export function TeardownRecoveryPanel({ client, sessionId, open, onClose }: TeardownRecoveryPanelProps) {
   const titleId = useId();

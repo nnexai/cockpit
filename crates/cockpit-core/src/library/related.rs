@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use cockpit_protocol::library::{
-    LibraryInclusion, LibraryInclusionHolder, LibraryItemRef, LibraryReportOutcome, SpaceTarget,
+    LibraryInclusion, LibraryInclusionHolder, LibraryItemRef, LibraryReportOutcome,
 };
 use std::{
     collections::BTreeSet,
@@ -119,7 +119,6 @@ impl LibraryService {
         budget: TraversalBudget,
         holder: &LibraryInclusionHolder,
         reference: &LibraryItemRef,
-        target: Option<&SpaceTarget>,
         skip: &(dyn Fn(&RelatedAsset) -> bool + Sync),
     ) -> Result<RelatedPass, InspectionError> {
         let cancel = AtomicBool::new(false);
@@ -148,7 +147,7 @@ impl LibraryService {
         // Discovered work: each reached item reports a row, so the phase total grows.
         operations::add_total(store, operation, assets.len() as u32)?;
         let saved = self
-            .save_related(store, operation, assets, holder, reference, target, skip)
+            .save_related(store, operation, assets, holder, reference, skip)
             .await?;
         if saved.cancelled {
             return Ok(RelatedPass::cancelled());
@@ -187,7 +186,6 @@ impl LibraryService {
         assets: Vec<RelatedAsset>,
         holder: &LibraryInclusionHolder,
         reference: &LibraryItemRef,
-        target: Option<&SpaceTarget>,
         skip: &(dyn Fn(&RelatedAsset) -> bool + Sync),
     ) -> Result<Saved, InspectionError> {
         let mut out = Saved {
@@ -230,7 +228,6 @@ impl LibraryService {
                     related.asset,
                     old,
                     SaveOptions {
-                        target,
                         reference: Some(reference.clone()),
                         ..SaveOptions::default()
                     },
@@ -289,7 +286,6 @@ impl LibraryService {
         seed_id: &str,
         seed: Option<ReferenceSeed>,
         depth: u32,
-        target: Option<&SpaceTarget>,
     ) -> Result<(), InspectionError> {
         let holder = LibraryInclusionHolder::Item {
             item_id: seed_id.to_owned(),
@@ -334,7 +330,6 @@ impl LibraryService {
                 TraversalBudget::Single,
                 &holder,
                 &LibraryItemRef::Manual,
-                target,
                 &|_: &RelatedAsset| false,
             )
             .await?
@@ -371,7 +366,7 @@ impl LibraryService {
         if depth == 0 {
             return Ok(());
         }
-        self.apply_reference_depth(store, operation, seed_id, Some(seed), depth, None)
+        self.apply_reference_depth(store, operation, seed_id, Some(seed), depth)
             .await
     }
 }

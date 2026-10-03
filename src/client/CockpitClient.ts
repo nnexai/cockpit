@@ -7,7 +7,7 @@ export type {
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
 } from "../protocol/generated/v1";
 import type { ContextMedia, ContextMediaRequest } from "../protocol/generated/v1";
-import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest } from "../protocol/generated/v1";
+import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceRepositoriesRequest, SpaceRemoveRequest } from "../protocol/generated/v1";
 import type { ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
 import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
 import type {
@@ -347,10 +347,9 @@ export interface CockpitClient {
   contextMedia(sessionId: string, viewerId: string, request: ContextMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;
   librarySpaceList(request: SpaceContextRequest, signal?: AbortSignal): Promise<SpaceContextListing>;
   librarySpaceAdd(request: SpaceAddRequest): Promise<LibraryOperation>;
-  librarySpaceAttemptsDismiss(request: SpaceAttemptsDismissRequest): Promise<void>;
-  /** Writes the selected (or all eligible) Library copies into one Space only; edited copies are skipped unless listed in `replace_edited`. */
-  librarySpaceUpdate(request: SpaceUpdateRequest): Promise<LibraryOperation>;
-  /** Deletes one Space copy; edited files are removed only when `confirmed` matches their current hashes. Returns the Space's listing afterwards. */
+  /** Replaces this Space's additional existing repository selections. */
+  librarySpaceRepositories(request: SpaceRepositoriesRequest): Promise<SpaceContextListing>;
+  /** Unselects Library items without changing their files. */
   librarySpaceRemove(request: SpaceRemoveRequest): Promise<SpaceContextListing>;
   commentBatches(sessionId: string, viewerId: string, request: CommentRequestScope, signal?: AbortSignal): Promise<CommentBatchList>;
   commentBatch(sessionId: string, viewerId: string, request: CommentBatchRequest, signal?: AbortSignal): Promise<CommentBatch>;

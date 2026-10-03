@@ -32,8 +32,6 @@ function actionLabel(action: WorkspaceTeardownAction): string {
     case "close_space": return "Close Space";
     case "remove_owned_worktree": return "Remove task worktree";
     case "reconcile_remove_outcome": return "Reconcile removal";
-    case "remove_orphaned_companion": return "Remove orphaned companion";
-    case "forget_association": return "Forget association";
   }
 }
 
@@ -63,7 +61,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
   }, [client, open, refresh, sessionId, workspaceId]);
 
   if (!open) return null;
-  const removeSelected = selectedAction === "remove_owned_worktree" || selectedAction === "remove_orphaned_companion";
+  const removeSelected = selectedAction === "remove_owned_worktree";
   const canConfirm = Boolean(selectedAction)
     && (!removeSelected || confirmation === preview?.required_confirmation)
     && !busy;
@@ -105,9 +103,8 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
             <div className="setup-summary-row"><span>Checkout</span><code>{preview.checkout_path}</code></div>
             <div className="setup-summary-row"><span>Ownership</span><span>{preview.ownership.replaceAll("_", " ")}</span></div>
             <div className="setup-summary-row"><span>Git status</span><span>{preview.dirty_state}</span></div>
-            <div className="setup-summary-row"><span>Companion</span><code>{preview.companion_path ?? "No owned companion"}</code></div>
           </div>
-          {preview.ownership === "borrowed_opened" ? <p className="setup-inline-status">This directory is borrowed. Closing its Space and removing an owned companion leave its files in place.</p> : null}
+          {preview.ownership === "borrowed_opened" ? <p className="setup-inline-status">This directory is borrowed. Closing its Space leaves its files in place.</p> : null}
           {preview.blockers.length > 0 ? <div className="setup-diagnostics" role="status"><strong>Removal blocked</strong><ul>{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div> : null}
           {preview.warnings.length > 0 ? <div className="setup-warnings"><strong>Recovery notes</strong><ul>{preview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div> : null}
           <div className="setup-progress-actions">{preview.allowed_actions.map((action) => <button key={action} type="button" className={selectedAction === action ? "setup-primary" : ""} aria-pressed={selectedAction === action} onClick={() => { setSelectedAction(action); setConfirmation(""); }} disabled={busy}>{actionLabel(action)}</button>)}</div>

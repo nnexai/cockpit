@@ -3,8 +3,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { LibraryListing, LibraryOperation } from "../../protocol/generated/v1";
-import { LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation } from "./useLibraryOperation";
+import type { LibraryListing, LibraryOperation, SpaceContextListing } from "../../protocol/generated/v1";
+import { LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing } from "./useLibraryOperation";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -114,6 +114,36 @@ it("retains the last good listing when reload fails so the view can show its ret
     expect(host.querySelector("span")?.getAttribute("data-status")).toBe("error");
     expect(host.querySelector("span")?.getAttribute("data-items")).toBe("1");
     expect(host.textContent).toContain("offline");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("reads direct Space selections on demand and on Library changes, without periodic polling", async () => {
+  vi.useFakeTimers();
+  const target = { session_id: "session", space_id: "space" };
+  const listing: SpaceContextListing = { target, space_label: "Review", library_root: "/data/library", checkout_path: "/repo", items: [], repository_paths: ["/extra"], diagnostics: [] };
+  const client = { librarySpaceList: vi.fn(async () => listing) } as unknown as CockpitClient;
+  function View() {
+    const state = useSpaceContextListing(client, target, true);
+    return <div><span data-status={state.status}>{state.listing?.repository_paths.join(",")}</span>
+      <button type="button" onClick={state.reload}>Reload</button></div>;
+  }
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<View />));
+    expect(client.librarySpaceList).toHaveBeenCalledWith({ target }, expect.any(AbortSignal));
+    expect(host.querySelector("span")?.getAttribute("data-status")).toBe("ready");
+    expect(host.textContent).toContain("/extra");
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(client.librarySpaceList).toHaveBeenCalledTimes(1);
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+    expect(client.librarySpaceList).toHaveBeenCalledTimes(2);
+    await act(async () => window.dispatchEvent(new Event(LIBRARY_CHANGED_EVENT)));
+    expect(client.librarySpaceList).toHaveBeenCalledTimes(3);
   } finally {
     await act(async () => root.unmount());
     host.remove();

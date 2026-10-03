@@ -121,7 +121,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     reviewSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
-    contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(),
+    contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceRepositories: vi.fn(), librarySpaceRemove: vi.fn(),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -343,7 +343,7 @@ describe("session stream transition policy", () => {
 });
 
 const libraryListing = {
-  root: { root_id: "library:test", kind: "library", label: "Library", path: "/library", repository_id: "library", checkout_path: "/library", companion_id: null },
+  root: { root_id: "library:test", kind: "library", label: "Library", path: "/library", repository_id: "library", checkout_path: "/library" },
   generation: "1", items: [], follows: [], next_offset: null, diagnostics: [],
 };
 const libraryOperation = {
@@ -457,10 +457,10 @@ describe("library client validation", () => {
     await expect(client.libraryOperation("op/1")).resolves.toMatchObject({ phases: [{ message: null }], item_ids: operation.item_ids });
     await expect(client.libraryDirectory(libraryRequests.directory)).resolves.toMatchObject({ entries: directory.entries });
   });
-  it("rejects cross-Space replies, unsafe Space paths and oversized selections in both transports", async () => {
+  it("rejects cross-Space replies, unsafe live paths and oversized selections in both transports", async () => {
     const target = { session_id: "session", space_id: "space" };
     const other = { ...target, space_id: "other-space" };
-    const listing = { target, companion: { status: "unavailable", error: { code: "source_companion_unavailable", message: "Disconnected" } }, attempts: [], rows: [], behind: 0, diagnostics: [] };
+    const listing = { target, space_label: "Task", library_root: "/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] };
     let payload: unknown = listing;
     for (const client of [
       createBrowserClient(vi.fn(async () => jsonResponse(payload))),
@@ -468,49 +468,47 @@ describe("library client validation", () => {
     ]) {
       payload = { ...listing, target: other };
       await expect(client.librarySpaceList({ target })).rejects.toMatchObject({ code: "malformed_response" });
-      payload = { ...listing, attempts: [{ target: other, space_label: null, item_id: "source:1", follow_id: null, title: "Saved", state: "failed", error: null, operation_id: "operation", updated_at: "now" }] };
+      payload = { ...listing, library_root: "/library/../escape" };
       await expect(client.librarySpaceList({ target })).rejects.toMatchObject({ code: "malformed_response" });
-      payload = { ...listing, rows: [{ item_id: "source:1", logical_id: "logical", title: "Saved", provider_id: null, resource_type: null, kind: "provider_snapshot", state: "up_to_date", library_newer: false, paths: ["../escape"], edited: [], copy_mode: null, library_revision_copied: null, current_library_revision: null, follow: null }] };
+      payload = { ...listing, repository_paths: ["relative/repository"] };
       await expect(client.librarySpaceList({ target })).rejects.toMatchObject({ code: "malformed_response" });
       payload = { ...libraryOperation, kind: "space_add", target: other };
-      await expect(client.librarySpaceAdd({ target, item_ids: ["source:1"], follow_ids: [] })).rejects.toMatchObject({ code: "malformed_response" });
-      await expect(client.librarySpaceAttemptsDismiss({ target, item_ids: Array(5001).fill("item"), follow_ids: [] })).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceAdd({ target, item_ids: ["source:1"] })).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceAdd({ target, item_ids: Array(5001).fill("item") })).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceRepositories({ target, repository_paths: Array(65).fill("/repo") })).rejects.toMatchObject({ code: "malformed_response" });
     }
   });
-  it("sends per-Space update and removal only for this Space and refuses unsafe confirmations in both transports", async () => {
+  it("sends selection removal and repository replacement only for the requested Space in both transports", async () => {
     const target = { session_id: "session", space_id: "space" };
     const other = { ...target, space_id: "other-space" };
-    const listing = { target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] };
-    const updated = { ...libraryOperation, kind: "space_update", target };
-    const confirmed = [{ path: "sources/github/issue/acme-api-3.md", current_hash: "sha256:edited" }];
-    const request = vi.fn(async (path: string, _init?: RequestInit) => jsonResponse(path.endsWith("/space/update") ? updated : listing));
-    const invoke = vi.fn(async (command: string, _args?: Record<string, unknown>) => command === "cockpit_library_space_update" ? updated : listing);
+    const listing = { target, space_label: "Task", library_root: "/library", checkout_path: "/checkout", items: [], repository_paths: ["/repos/api"], diagnostics: [] };
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => jsonResponse(listing));
+    const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>) => listing);
     const browser = createBrowserClient(request);
     const native = createNativeClient(invoke);
-    const update = { target, scope: { scope: "selection" as const, item_ids: ["source:a"], follow_ids: [] }, replace_edited: confirmed };
-    const remove = { target, logical_id: "source:github:acme/api#3", confirmed };
-    await expect(browser.librarySpaceUpdate(update)).resolves.toMatchObject({ kind: "space_update", target });
+    const repositories = { target, repository_paths: ["/repos/api"] };
+    const remove = { target, item_ids: ["source:a"] };
+    await expect(browser.librarySpaceRepositories(repositories)).resolves.toMatchObject({ target, repository_paths: ["/repos/api"] });
     await expect(browser.librarySpaceRemove(remove)).resolves.toMatchObject({ target });
     expect(request.mock.calls.map(([path, init]) => [path, JSON.parse(String(init?.body))])).toEqual([
-      ["/api/v1/library/space/update", update],
+      ["/api/v1/library/space/repositories", repositories],
       ["/api/v1/library/space/remove", remove],
     ]);
-    await expect(native.librarySpaceUpdate({ target, scope: { scope: "all" }, replace_edited: [] })).resolves.toMatchObject({ kind: "space_update" });
+    await expect(native.librarySpaceRepositories(repositories)).resolves.toMatchObject({ target });
     await expect(native.librarySpaceRemove(remove)).resolves.toMatchObject({ target });
     expect(invoke.mock.calls).toEqual([
-      ["cockpit_library_space_update", { request: { target, scope: { scope: "all" }, replace_edited: [] } }],
+      ["cockpit_library_space_repositories", { request: repositories }],
       ["cockpit_library_space_remove", { request: remove }],
     ]);
     for (const client of [browser, native]) {
-      await expect(client.librarySpaceRemove({ ...remove, confirmed: [{ path: "../escape", current_hash: "sha256:edited" }] })).rejects.toMatchObject({ code: "malformed_response" });
-      await expect(client.librarySpaceUpdate({ ...update, scope: { scope: "every" } } as never)).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceRemove({ ...remove, item_ids: [""] })).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceRepositories({ ...repositories, repository_paths: ["/repo/../escape"] })).rejects.toMatchObject({ code: "malformed_response" });
     }
     expect(request).toHaveBeenCalledTimes(2);
     expect(invoke).toHaveBeenCalledTimes(2);
-    updated.target = other;
     listing.target = other;
     for (const client of [browser, native]) {
-      await expect(client.librarySpaceUpdate(update)).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceRepositories(repositories)).rejects.toMatchObject({ code: "malformed_response" });
       await expect(client.librarySpaceRemove(remove)).rejects.toMatchObject({ code: "malformed_response" });
     }
   });
@@ -536,8 +534,8 @@ describe("library client validation", () => {
   });
   it("parses Jira query follows, item refs and dropped outcomes strictly", async () => {
     const jiraFollow = { follow_id: "follow:j", provider_id: "jira", provider_instance: "https://jira.test", source: { kind: "jira_query", jql: "project = OPS", mode: "live" }, include_attachments: false, item_count: 2, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh" };
-    const issue = { ...unsafeLibraryItem, item_path: "jira/x/OPS/OPS-1", refs: [{ kind: "follow", follow_id: "follow:j" }, { kind: "space", companion_root_id: "companion:c" }], purge_after: "0", issue: { updated: "2026-01-01 10:00:00", fetched_updated: null, status: "Open", issue_type: "Task", assignee: null } };
-    let payload: unknown = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/l", repository_id: "repo", checkout_path: "", companion_id: null }, generation: "1", items: [issue], follows: [jiraFollow], next_offset: null, diagnostics: [] };
+    const issue = { ...unsafeLibraryItem, item_path: "jira/x/OPS/OPS-1", refs: [{ kind: "follow", follow_id: "follow:j" }, { kind: "space", space_context_id: "space:c" }], purge_after: "0", issue: { updated: "2026-01-01 10:00:00", fetched_updated: null, status: "Open", issue_type: "Task", assignee: null } };
+    let payload: unknown = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/l", repository_id: "repo", checkout_path: "" }, generation: "1", items: [issue], follows: [jiraFollow], next_offset: null, diagnostics: [] };
     const browser = createBrowserClient(vi.fn(async () => jsonResponse(payload)));
     await expect(browser.libraryListing()).resolves.toMatchObject({ follows: [{ source: { kind: "jira_query", mode: "live" }, item_count: 2 }], items: [{ refs: [{ kind: "follow" }, { kind: "space" }] }] });
     payload = { ...(payload as object), follows: [{ ...jiraFollow, source: { kind: "jira_query", jql: "x", mode: "sometimes" } }] };
@@ -937,7 +935,7 @@ it("discards saved batches through both transports with generation and attachmen
 describe("owned-tab client identity boundaries", () => {
   const target = { session_id: "session-1", tab_id: "tab-1", pane_id: null, endpoint_path: null };
   const key = "0123456789abcdef01234567";
-  const folder = { root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null };
+  const folder = { root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" };
   const context = {
     session_id: "session-1", viewer_id: "viewer-1", binding_id: "binding", tab_id: "tab-1", space_id: "space-1",
     kind: "files", source_kind: "context", source_id: "source", roots: [folder], default_root_id: "folder", diagnostics: [],
@@ -970,6 +968,23 @@ describe("owned-tab client identity boundaries", () => {
     expect(parseViewerSourceOptions(sources).files_folder_root_id).toBe("folder");
     expect(() => parseViewerSourceOptions({ ...sources, files_context_root_id: "folder" })).toThrow(CockpitClientError);
     expect(() => matchViewerContext(parseViewerContext(context), "session-1", { ...open, tab_id: "other" })).toThrow(CockpitClientError);
+  });
+
+  it("opens selected repository Files roots and full Library Context without companion fields", async () => {
+    const repository = { ...folder, root_id: "repository:selected", kind: "repository", repository_id: "repo" };
+    const library = { ...folder, root_id: "library:root", kind: "library", repository_id: "library", path: "/library" };
+    const sources = { session_id: "session-1", pane_id: "pane-1", tab_id: "tab-1", space_id: "space-1", files_context_root_id: "library:root", files_folder_root_id: null, review_repository_ids: ["repo"], roots: [library, repository], reason: "", diagnostics: [] };
+    expect(parseViewerSourceOptions(sources).files_context_root_id).toBe("library:root");
+    const selectedOpen = { ...open, source: { kind: "files_repository" as const, root_id: repository.root_id } };
+    const selectedContext = { ...context, roots: [repository], default_root_id: repository.root_id };
+    for (const client of [
+      createBrowserClient(vi.fn(async () => jsonResponse(selectedContext))),
+      createNativeClient(vi.fn(async () => selectedContext)),
+    ]) {
+      await expect(client.viewerOpen("session-1", selectedOpen)).resolves.toMatchObject({ roots: [repository] });
+      await expect(client.viewerOpen("session-1", { ...selectedOpen, source: { kind: "files_repository", root_id: "other" } })).rejects.toThrow(CockpitClientError);
+    }
+    expect(() => parseViewerSourceOptions({ ...sources, roots: [{ ...library, kind: "companion" }, repository] })).toThrow(CockpitClientError);
   });
 
   it("rejects viewer-open responses from another tab through both transports", async () => {

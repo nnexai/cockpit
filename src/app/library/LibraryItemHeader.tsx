@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
-import type { LibraryAttachment, LibraryAttachmentRequest, LibraryItemSummary, LibraryOperation, ProjectProvider, SpaceAddAttempt, SpaceCopyRow } from "../../protocol/generated/v1";
+import type { LibraryAttachment, LibraryAttachmentRequest, LibraryItemSummary, LibraryOperation, ProjectProvider } from "../../protocol/generated/v1";
 import type { ProviderFacts } from "../context/providerDocument";
 import { UiIcon } from "../UiIcon";
 import { ErrorSlot } from "../ErrorSlot";
@@ -7,32 +7,16 @@ import { attachmentSummary, instanceHost, isConfluencePage, itemDisplayId, itemK
 import { ATTACHMENT_STATE, LibraryMenu, attachmentMark, attachmentPath, attachmentProgress, byteSize, downloadableAttachments, itemMenuEntries, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions, type LibraryMenuEntry } from "./LibraryTree";
 import { ProviderMark } from "./ProviderMark";
 import { PendingPill, StatePill } from "./StatePill";
-import { headerSpaceAction, type SpaceCopyAction } from "./spaceCopyPresentation";
-import { spaceAddFailure } from "./SpaceContextList";
 
 /** The item's standing in the target Space (design §4.4); absent without a live target Space. */
 export type ItemSpaceState = {
   label: string;
-  /** The Space row whose `item_id` is this item; undefined when the Space holds no copy. */
-  row: SpaceCopyRow | undefined;
-  /** A durable add attempt for this item in that Space (D10). */
-  attempt: SpaceAddAttempt | undefined;
+  selected: boolean;
   adding: boolean;
-  /**
-   * Why this surface's last `Add to <Space>` failed when no durable attempt
-   * records it: the request didn't start, or the copy stopped first.
-   */
+  busy: boolean;
   error: string | null;
   onAdd: () => void;
-  /** The existing copy's actions this surface performs: `Update`, a confirmed replace or removal, the Library version. */
-  actions: SpaceCopyAction[];
-  /** This item's copy update or replace is running, or awaits the Space's reread. */
-  updating: boolean;
-  /** Holds the copy actions until the Space confirms the last one, including while its reread failed. */
-  busy: boolean;
-  /** Why this item's last update, replace or removal in the Space changed nothing. */
-  copyError: string | null;
-  onAction: (action: SpaceCopyAction) => void;
+  onRemove: () => void;
 };
 
 /** A Confluence page's last edit, from the page document's frontmatter; `by` is a display name, never an email. */
@@ -75,9 +59,8 @@ function breadcrumb(segments: readonly string[]): string {
  * item's standing in the Space, a token cue and the attachments toggle, which
  * opens the attachments panel (a Jira issue's list is read-only: names, sizes,
  * types). Item facts beyond that live in the Details popover (`details`).
- * The Space actions come from `headerSpaceAction`: `Add to <Space>` (the one
- * primary action), or the copy's `Update in <Space>`, a confirmed replace or
- * removal, and the Library version. Attachments are metadata only until the user
+ * The Space action selects or unselects the live Library item: `Add to Space`
+ * or `Remove from Space`. Attachments are metadata only until the user
  * explicitly downloads (`Download all`, `Download selected` or a row's
  * `Download`); `Remove downloaded` drops the bytes and keeps the rows. A Jira
  * issue whose files need a token says so on the state line, and `⋯` offers
@@ -142,8 +125,20 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
   const needsToken = jira === "needs_token" && credentials ? credentials : null;
   // `Provider tokens…` in `⋯` for every provider that stores one; it stays before the destructive entry.
   const tokenProvider = credentials && item.provider_id && (family.key === "jira" || family.key === "confluence") ? item.provider_id : null;
+  const spacePending = Boolean(space && (space.adding || space.busy));
+  const spaceActionLabel = space
+    ? spacePending ? space.adding || !space.selected ? "Adding…" : "Removing…"
+      : space.selected ? "Remove from Space" : "Add to Space"
+    : null;
+  const changeSpaceSelection = () => {
+    if (!space || spacePending) return;
+    if (space.selected) space.onRemove(); else space.onAdd();
+  };
   const menuEntries = (): LibraryMenuEntry[] => {
-    const entries = itemMenuEntries(item, actions, false);
+    const entries = itemMenuEntries(item, space ? {
+      ...actions,
+      spaceEntries: () => [{ label: spaceActionLabel!, onSelect: changeSpaceSelection, disabled: spacePending }],
+    } : actions, false);
     if (!credentials || !tokenProvider) return entries;
     const destructive = entries.lastIndexOf("separator");
     const tokens = { label: "Provider tokens…", onSelect: () => credentials.open(tokenProvider) };
@@ -185,13 +180,7 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
     return mark ? <StatePill shape={mark.shape} tone={mark.tone} word={ATTACHMENT_STATE[attachment.state]} /> : <span className="library-state is-muted">{ATTACHMENT_STATE[attachment.state]}</span>;
   };
   const refresh = () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]);
-  const spaceAction = space ? headerSpaceAction(space.row, space.label) : null;
-  const spaceStatus = spaceAction?.status ?? null;
-  const spaceAdding = Boolean(space && (space.adding || space.attempt?.state === "pending"));
-  const addLabel = spaceAction?.actions.find((action) => action.kind === "add")?.label;
-  const spaceUpdating = Boolean(space?.updating);
-  const spaceFailure = !space || spaceAdding ? null : space.attempt?.state === "failed" ? spaceAddFailure(space.attempt.error, space.label) : space.error;
-  // `Add to <Space>` and its retry give way to progress, then to the result; focus stays in the Space slot.
+  // Keep focus in the Space slot as a selection request settles.
   const spaceSlotRef = useRef<HTMLSpanElement>(null);
   const spaceFocused = useRef(false);
   const trackSpaceFocus = {
@@ -222,11 +211,11 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
         <div className="library-item-actions">
           {refreshButton}
           {space ? <span ref={spaceSlotRef} className="library-space-slot" tabIndex={-1} {...trackSpaceFocus}>
-            {spaceAdding ? <span role="status"><PendingPill word={`Adding to ${space.label}…`} /></span> : null}
-            {spaceUpdating ? <span role="status"><PendingPill word={`Updating ${space.label}…`} /></span> : null}
-            {!spaceAdding && !narrow && addLabel && !spaceFailure ? <button type="button" className="library-button is-primary" title={`Copy this ${page ? "page" : "item"} into Space "${space.label}"`} onClick={space.onAdd}><UiIcon name="plus" />{addLabel}</button> : null}
-            {/* aria-disabled keeps focus on the pressed button, or the confirmation's opener, while the update runs. */}
-            {!spaceAdding && !narrow ? space.actions.map((action) => <button key={action.kind} type="button" className="library-button" aria-disabled={space.busy} onClick={() => space.onAction(action)}>{action.label}</button>) : null}
+            {spacePending && narrow ? <span role="status"><PendingPill word={spaceActionLabel!} /></span> : null}
+            {!narrow ? <button type="button" className={`library-button${space.selected ? "" : " is-primary"}`} aria-disabled={spacePending} aria-label={space.selected ? `Remove ${item.title} from ${space.label}` : `Add ${item.title} to ${space.label}`} title={space.selected ? `Remove this item from Space "${space.label}"; keep it in the Library` : `Select this item for Space "${space.label}"; read it directly from the Library`} onClick={changeSpaceSelection}>
+              {!space.selected ? <UiIcon name="plus" /> : null}
+              <span role={spacePending ? "status" : undefined}>{spaceActionLabel}</span>
+            </button> : null}
           </span> : null}
           <button type="button" className="library-icon-button library-overflow library-more" aria-label={`More actions for ${item.title}`} title="More actions" aria-haspopup="menu" aria-expanded={menu !== null} onClick={(event) => setMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button>
           {details}
@@ -238,9 +227,9 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
           ? <PendingPill size="header" word={progress ?? (folder ? "Re-copying…" : "Refreshing…")} />
           : <StatePill size="header" shape={chip.shape} word={chip.word} tone={chip.tone} />}
         <span className="library-item-phrase" title={phraseTitle || undefined}>{folder ? <>Copied{copiedAgo ? ` ${copiedAgo}` : ""} from <code>{folder.origin_path}</code> · {folder.files} files · {folder.bytes >= 1_000_000 ? `${(folder.bytes / 1_000_000).toFixed(1)} MB` : `${folder.bytes} bytes`}{folder.git_working_tree ? " · Git working tree" : ""}</> : phrase}</span>
-        {space && !spaceAdding && !spaceUpdating && !narrow && spaceStatus ? <span className="library-space-state">
-          {spaceStatus.context ? <span className="library-space-context">{spaceStatus.context}</span> : null}
-          <StatePill shape={spaceStatus.shape} word={spaceStatus.word} tone={spaceStatus.tone} />
+        {space ? <span className="library-space-state" role="status">
+          <span className="library-space-context">{space.label}</span>
+          <span className="library-state">{space.selected ? "Selected" : "Not selected"}</span>
         </span> : null}
         {needsToken ? <span className="library-token-cue" role="status">
           <UiIcon name="info" />Attachments need a token
@@ -256,12 +245,9 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
         {item.state === "conflict" ? <button type="button" className="library-button" onClick={() => onReplace(item)} disabled={actions.refreshBusy}>Replace with source version…</button> : null}
         {item.state === "failed" ? <button type="button" className="library-button" onClick={refresh} disabled={actions.refreshBusy}>Retry</button> : null}
       </div> : null}
-      {space && spaceFailure ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
-        <span>{spaceFailure}</span>
-        <button type="button" className="library-button" onClick={space.onAdd}>{`Retry adding to ${space.label}`}</button>
-      </div> : null}
-      {space && space.copyError && !spaceUpdating ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
-        <span>{space.copyError}</span>
+      {space?.error ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
+        <span>{space.error}</span>
+        <button type="button" className="library-button" aria-label={`Retry ${space.selected ? `removing ${item.title} from` : `adding ${item.title} to`} ${space.label}`} disabled={spacePending} onClick={changeSpaceSelection}>Retry</button>
       </div> : null}
       {item.attachments.length > 0 && attachmentsOpen ? <div className="library-attachments" id={attachmentListId}>
         <div className="library-attachments-head">
@@ -393,6 +379,6 @@ export function AttachmentReport({ request, operation, starting, error, item, se
     summary = `Removed ${removed} downloaded ${removed === 1 ? "attachment" : "attachments"}. Their details stay listed.`;
   }
   return <ErrorSlot placement="pane" className="library-report" error={failedIds.length > 0}
-    message={<><strong>{cancelled ? (download ? "Download cancelled:" : "Removal cancelled:") : (download ? "Download finished:" : "Removal finished:")}</strong> {summary} <span className="library-report-note">Spaces aren't changed.</span></>}
+    message={<><strong>{cancelled ? (download ? "Download cancelled:" : "Removal cancelled:") : (download ? "Download finished:" : "Removal finished:")}</strong> {summary} <span className="library-report-note">Spaces selecting this item read its current Library files.</span></>}
     actions={<>{failedIds.length ? <button type="button" onClick={() => onRetry(failedIds)}>Retry failed</button> : null}{dismiss}</>} />;
 }

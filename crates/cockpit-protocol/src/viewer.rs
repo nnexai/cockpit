@@ -10,8 +10,9 @@ pub enum ViewerKind { Files, Review }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ViewerSourceSelector {
-    FilesContext,
-    FilesFolder,
+    FilesContext {},
+    FilesFolder {},
+    FilesRepository { root_id: String },
     Review { repository_id: String },
 }
 
@@ -52,4 +53,25 @@ pub struct ViewerContext {
     pub roots: Vec<ContextRoot>,
     pub default_root_id: Option<String>,
     pub diagnostics: Vec<ProjectDiagnostic>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn files_repository_selector_accepts_root_identity_not_client_paths() {
+        let selector = serde_json::from_value::<ViewerSourceSelector>(serde_json::json!({
+            "kind": "files_repository", "root_id": "repository:identity:1:2",
+        })).expect("repository root selector");
+        assert!(matches!(selector, ViewerSourceSelector::FilesRepository { root_id } if root_id == "repository:identity:1:2"));
+        for value in [
+            serde_json::json!({"kind": "files_repository", "path": "/repository"}),
+            serde_json::json!({"kind": "files_repository", "root_id": "root", "path": "/repository"}),
+            serde_json::json!({"kind": "files_context", "companion_id": "legacy"}),
+            serde_json::json!({"kind": "files_folder", "path": "/repository"}),
+        ] {
+            assert!(serde_json::from_value::<ViewerSourceSelector>(value).is_err());
+        }
+    }
 }

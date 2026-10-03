@@ -63,6 +63,8 @@ Cockpit-rendered declarative choices. No selection is pasted into the terminal.
 Without a target, HERDR_ENV=1 resolves the caller's current pane. Outside Herdr,
 pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     Widget(WidgetArgs),
+    /// Print the live Library context selected by a Herdr Space.
+    Context(ContextArgs),
 }
 #[derive(Debug, Clone, Args)]
 struct HerdrArgs {
@@ -104,6 +106,20 @@ struct BrowserArgs {
     config: Option<PathBuf>,
     #[arg(long = "id")]
     ids: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct ContextArgs {
+    #[command(flatten)]
+    herdr: HerdrArgs,
+    #[command(flatten)]
+    project: ProjectArgs,
+    /// Resolve the originating Herdr pane, never the process cwd.
+    #[arg(long, conflicts_with = "space", required_unless_present = "space")]
+    current: bool,
+    /// Explicit Space identity; requires --herdr-session and --herdr-socket.
+    #[arg(long, conflicts_with = "current")]
+    space: Option<String>,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -276,8 +292,8 @@ fn make_service(
                 .with_sources(sources.clone());
             let service = service.with_projects(projects).with_credentials(credentials);
             service.projects().map_err(|error| error.to_string())?.prewarm_repositories();
-            let library = LibraryService::new(config.clone(), sources.clone())
-                .with_projects(service.projects().map_err(|error| error.to_string())?.clone(), adapter.clone());
+            let library = Arc::new(LibraryService::new(config.clone(), sources.clone())
+                .with_herdr(adapter.clone()));
             let contexts = cockpit_core::context::ContextService::new(
                 config.clone(),
                 adapter.source_adapter(),
@@ -285,7 +301,7 @@ fn make_service(
                     .projects()
                     .map_err(|error| error.to_string())?
                     .clone(),
-            );
+            ).with_library(library.clone());
             let viewers = Arc::new(cockpit_core::viewer::ViewerService::new(Arc::new(contexts.clone())));
             let contexts = contexts.with_viewers(viewers.clone());
             let service = service.with_contexts(contexts).with_viewers(viewers);
@@ -314,7 +330,7 @@ fn make_service(
                         .map_err(|error| error.to_string())?
                         .clone(),
                 );
-            Ok(service.with_comments(comments).with_library(library))
+            Ok(service.with_comments(comments).with_library((*library).clone()))
         }
         None => Ok(service),
     }
@@ -416,6 +432,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         }
         Command::Browser(args) => run_browser(args).await,
         Command::Widget(_) => unreachable!("widget commands use their own exit-status contract"),
+        Command::Context(args) => run_context(args).await,
     }
 }
 fn inherited_session_from_socket(path: &std::path::Path) -> Option<String> {
@@ -424,6 +441,102 @@ fn inherited_session_from_socket(path: &std::path::Path) -> Option<String> {
         return Some(stem.trim_start_matches("herdr-").to_owned());
     }
     path.parent()?.file_name()?.to_str().map(str::to_owned)
+}
+
+async fn current_pane_id(
+    executable: &std::path::Path,
+    socket: Option<&std::path::Path>,
+    session: Option<&str>,
+    caller: &str,
+) -> Result<String, String> {
+    if std::env::var("HERDR_ENV").ok().as_deref() != Some("1") {
+        return Err(format!("{caller} --current requires HERDR_ENV=1 in the inherited Herdr caller environment"));
+    }
+    let mut command = tokio::process::Command::new(executable);
+    command.env_remove("HERDR_SESSION").env_remove("HERDR_SOCKET_PATH");
+    if let Some(socket) = socket {
+        command.env("HERDR_SOCKET_PATH", socket);
+    } else if let Some(session) = session {
+        command.arg("--session").arg(session);
+    }
+    let output = command.args(["pane", "current", "--current"]).output().await
+        .map_err(|error| format!("cannot resolve current Herdr pane: {error}"))?;
+    if !output.status.success() {
+        return Err("Herdr pane current lookup failed".to_owned());
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("invalid Herdr current-pane response: {error}"))?;
+    value.get("result").and_then(|result| result.get("pane"))
+        .and_then(|pane| pane.get("pane_id")).and_then(|id| id.as_str())
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| "Herdr current-pane response has no pane_id".to_owned())
+}
+
+async fn run_context(args: ContextArgs) -> Result<(), String> {
+    let executable = args.herdr.herdr.clone().unwrap_or_else(|| PathBuf::from("herdr"));
+    let inherited_socket = std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from);
+    let inherited_session = std::env::var("HERDR_SESSION_NAME").ok()
+        .or_else(|| std::env::var("HERDR_SESSION").ok())
+        .or_else(|| inherited_socket.as_deref().and_then(inherited_session_from_socket));
+    let socket = args.herdr.herdr_socket.clone().or(inherited_socket);
+    let session = args.herdr.herdr_session.clone().or(inherited_session)
+        .ok_or_else(|| "context requires a resolvable Herdr session identity".to_owned())?;
+    if !args.current && (args.herdr.herdr_session.is_none() || args.herdr.herdr_socket.is_none()) {
+        return Err("explicit context targets require --herdr-session, --herdr-socket, and --space".to_owned());
+    }
+    let pane_id = if args.current {
+        Some(current_pane_id(&executable, socket.as_deref(), Some(&session), "context").await?)
+    } else {
+        None
+    };
+    let config = HerdrCliConfig::from_options(Some(executable), Some(session.clone()), socket)
+        .map_err(|error| error.to_string())?;
+    let adapter = Arc::new(HerdrCliAdapter::new(config));
+    let source_adapter = adapter.source_adapter();
+    let evidence = match pane_id.as_deref() {
+        Some(pane_id) => Some(source_adapter.source_pane_evidence(&session, pane_id).await
+            .map_err(|error| error.to_string())?),
+        None => None,
+    };
+    let space_id = evidence.as_ref().map(|source| source.workspace_id.clone())
+        .or(args.space).ok_or_else(|| "context has no current Space evidence".to_owned())?;
+    let project_config = project_configuration(&args.project)?;
+    let credentials = Arc::new(cockpit_core::credentials::ProviderCredentials::new(
+        &project_config, cockpit_secrets::os_vault(), cockpit_providers::credential_kinds,
+    ));
+    let sources = Arc::new(cockpit_core::sources::SourceService::new(
+        &project_config,
+        cockpit_providers::configured_providers(&project_config, credentials)
+            .map_err(|error| error.to_string())?,
+    ).map_err(|error| error.to_string())?);
+    let library = LibraryService::new(project_config, sources).with_herdr(adapter);
+    let target = cockpit_protocol::library::SpaceTarget { session_id: session, space_id };
+    let listing = library.space_listing(&target).await.map_err(|error| error.to_string())?;
+    if let (Some(pane_id), Some(before)) = (pane_id.as_deref(), evidence.as_ref()) {
+        let after = source_adapter.source_pane_evidence(&target.session_id, pane_id).await
+            .map_err(|error| error.to_string())?;
+        if before.pane_id != pane_id || after.pane_id != pane_id
+            || before.workspace_id != target.space_id || after.workspace_id != target.space_id
+            || before.endpoint_identity != after.endpoint_identity || before.tab_id != after.tab_id
+        {
+            return Err("current context pane identity changed during lookup".to_owned());
+        }
+    }
+    let root = std::path::Path::new(&listing.library_root);
+    let items = listing.items.iter().map(|item| serde_json::json!({
+        "item_id": item.item_id,
+        "title": item.title,
+        "kind": item.kind,
+        "path": root.join(item.document_path.as_deref().unwrap_or(&item.item_path)),
+    })).collect::<Vec<_>>();
+    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+        "target": listing.target, "space_label": listing.space_label, "pane_id": pane_id,
+        "library_root": listing.library_root, "items": items,
+        "checkout_path": listing.checkout_path, "repository_paths": listing.repository_paths,
+        "diagnostics": listing.diagnostics,
+    })).map_err(|error| error.to_string())?);
+    Ok(())
 }
 
 async fn run_browser(args: BrowserArgs) -> Result<(), String> {
@@ -910,6 +1023,16 @@ mod tests {
             "cockpit", "browser", "feedback", "--current", "--tab", "w1:t1",
         ]).is_err());
         assert!(Cli::try_parse_from(["cockpit", "browser", "open", "--space", "w1"]).is_err());
+    }
+
+    #[test]
+    fn context_requires_current_or_an_explicit_space() {
+        assert!(Cli::try_parse_from(["cockpit", "context"]).is_err());
+        assert!(Cli::try_parse_from(["cockpit", "context", "--current"]).is_ok());
+        assert!(Cli::try_parse_from(["cockpit", "context", "--current", "--space", "w1"]).is_err());
+        assert!(Cli::try_parse_from([
+            "cockpit", "context", "--herdr-session", "fixture", "--herdr-socket", "/fixture/herdr.sock", "--space", "w1",
+        ]).is_ok());
     }
 
     #[test]

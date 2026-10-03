@@ -147,7 +147,7 @@ export type LibraryItemActions = {
   copyLibraryPath?: (item: LibraryItemSummary) => void;
   canCopyLibraryPath?: boolean;
   refreshBusy: boolean;
-  /** The target Space's actions for the item: `Add to <Space>`, or its copy's `Update`, replace, removal and Library version. */
+  /** Selects or unselects the live Library item: `Add to Space` or `Remove from Space`. */
   spaceEntries?: (item: LibraryItemSummary) => LibraryMenuEntry[];
   /** Stops following a space or query, or removes it from the Library; resolves once the Library accepted it. */
   removeFollow?: (follow: LibraryFollowSummary, mode: FollowRemoveMode) => Promise<void>;

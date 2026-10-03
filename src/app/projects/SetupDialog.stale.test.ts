@@ -71,7 +71,7 @@ function sourceDefaults(branch: string, canonicalId: string, extra: Partial<Work
 }
 
 function openPlan(): WorkspaceSetupPlan {
-  return { operation_id: "operation-1", generation: 1, endpoint_identity: "endpoint-1", session_id: "session-1", repository: null, mode: "open", ownership: "borrowed_directory", branch: null, base: null, checkout_path: "/tmp/borrowed", companion_path: "/companions/operation-1", companion_id: "operation-1", companion_created_by_operation: true, label: "borrowed", focus: true, artifact: null, linked_artifacts: [], effects: [], warnings: [] };
+  return { operation_id: "operation-1", generation: 1, endpoint_identity: "endpoint-1", session_id: "session-1", repository: null, mode: "open", ownership: "borrowed_directory", branch: null, base: null, checkout_path: "/tmp/borrowed", label: "borrowed", focus: true, artifact: null, linked_artifacts: [], effects: [], warnings: [] };
 }
 
 function createPlan(overrides: Partial<WorkspaceSetupPlan> = {}): WorkspaceSetupPlan {
@@ -101,7 +101,6 @@ function workspaceOperation(plan: WorkspaceSetupPlan, state: WorkspaceOperation[
     workspace_id: "workspace-1",
     tab_id: null,
     pane_id: null,
-    companion_id: plan.companion_id,
     owned_resources: [],
     error: null,
     resume_allowed: false,

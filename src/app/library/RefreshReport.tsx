@@ -43,7 +43,7 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
     : <span>{row.title}</span>;
   return <div className="library-report-block">
     <ErrorSlot placement="pane" className="library-report" error={Boolean(failed || error || rows.some((row) => row.outcome === "failed"))}
-      message={<><strong>{verb === "Keep" ? (phase?.state === "cancelled" ? "Keep cancelled:" : failed ? "Keep failed:" : "Kept in Library:") : `${verb} ${phase?.state === "cancelled" ? "cancelled" : failed ? "failed" : "finished"}:`}</strong> {error ?? failed?.message ?? (report ? reportSummary(report) : "done")} <span className="library-report-note">Spaces aren't changed.</span></>}
+      message={<><strong>{verb === "Keep" ? (phase?.state === "cancelled" ? "Keep cancelled:" : failed ? "Keep failed:" : "Kept in Library:") : `${verb} ${phase?.state === "cancelled" ? "cancelled" : failed ? "failed" : "finished"}:`}</strong> {error ?? failed?.message ?? (report ? reportSummary(report) : "done")} <span className="library-report-note">Spaces selecting these items read their current Library versions.</span></>}
       actions={<>
         {rows.length > 0 ? <button type="button" aria-expanded={shown} onClick={() => setShown((value) => !value)}>{shown ? "Hide" : "Show"}</button> : null}
         {retryIds.length > 0 || failedFollowIds.length === 1 ? <button type="button" onClick={() => {

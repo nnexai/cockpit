@@ -4,14 +4,9 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
-import type { ContextDirectory, ContextFileIndex, LibraryItemSummary, LibraryListing, LibraryOperation, ViewerContext, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow, SpaceUpdateRequest } from "../../protocol/generated/v1";
+import type { CommentBatch, CommentUpsertRequest, ContextDirectory, ContextFileIndex, LibraryItemSummary, LibraryListing, LibraryOperation, ViewerContext, SpaceContextListing } from "../../protocol/generated/v1";
 import { ContextViewer, createContextViewState, SourceLines, type ContextViewState } from "./ContextViewer";
 
-/** The item header's Space status as `context | pill word`; states that need no context read just the word. */
-function spaceState(root: ParentNode): string {
-  const state = root.querySelector(".library-space-state");
-  return [state?.querySelector(".library-space-context")?.textContent, state?.querySelector(".library-pill")?.textContent].filter(Boolean).join(" | ");
-}
 
 async function settle(): Promise<void> {
   await act(async () => { await Promise.resolve(); });
@@ -67,7 +62,7 @@ it("opens only requested directories, compresses loaded single-child paths, and 
   });
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r3", content_hash: null, bytes: 12, media_type: "text/html", text: "<p>ok</p>", truncated: false, diagnostics: [] }));
   const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return createElement(ContextViewer, { client, context, value: view, onChange: setView });
@@ -118,7 +113,7 @@ it("does not reclaim tree focus after async expansion when the user focuses cont
     return new Promise((resolve) => { resolveSrc = resolve; });
   });
   const client = { contextDirectory: directory } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
@@ -156,7 +151,7 @@ it("indexes unopened nested files for the picker and opens the selected result",
   }));
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r2", content_hash: null, bytes: 12, media_type: "text/markdown", text: "# Target", truncated: false, diagnostics: [] }));
   const client = { contextDirectory: directory, contextFileIndex: index, contextDocument: documentRead } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
@@ -200,7 +195,7 @@ it("cancels fresh picker indexing when the picker is dismissed", async () => {
     return new Promise<ContextFileIndex>(() => undefined);
   });
   const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
@@ -241,7 +236,7 @@ it("recovers a stale or failed picker list on its own, without reopening", async
     return { ...base, files: [{ path: "new.md", bytes: null }], state: "fresh" };
   });
   const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "heal-binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "heal-folder", roots: [{ root_id: "heal-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "heal-binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "heal-folder", roots: [{ root_id: "heal-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
@@ -280,7 +275,7 @@ it("keeps a late cached picker list visible after fresh indexing fails", async (
     return new Promise((resolve) => { resolveCached = resolve; });
   });
   const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "late-cache-binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "late-cache-folder", roots: [{ root_id: "late-cache-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "late-cache-binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "late-cache-folder", roots: [{ root_id: "late-cache-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
@@ -316,7 +311,7 @@ it("shows the incomplete file-index status for a capped index", async () => {
     binding_id: "binding", root_id: "folder", files, truncated: true, source: "walk", state: request.mode === "cached" ? "cached" : "fresh", diagnostics: [],
   }));
   const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
@@ -348,7 +343,7 @@ it("renders a PNG from a verified Folder root through the safe media command", a
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r1", content_hash: null, bytes: 68, media_type: "application/octet-stream", text: null, truncated: false, diagnostics: [] }));
   const mediaRead = vi.fn(async () => ({ binding_id: "binding", root_id: "folder", path: "palette.png", revision: "r1", content_hash: "sha256:fixture", bytes: 68, mime_type: "image/png", width: 1, height: 1, data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLq9wAAAABJRU5ErkJggg==" }));
   const client = { contextDirectory: directory, contextDocument: documentRead, contextMedia: mediaRead } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:folder-png"), revokeObjectURL: vi.fn() });
   function Harness() {
     const [view, setView] = useState(createContextViewState());
@@ -382,7 +377,7 @@ it("retains the visible source when a continuation crosses a revision change", a
     .mockResolvedValueOnce({ binding_id: "binding", root_id: "folder", path: "large.txt", revision: "r1", content_hash: null, bytes: 6, media_type: "text/plain", text: "old\n", truncated: true, offset: 0, next_offset: 4, total_bytes: 6, line_offset: 0, diagnostics: [] })
     .mockResolvedValueOnce({ binding_id: "binding", root_id: "folder", path: "large.txt", revision: "r2", content_hash: null, bytes: 6, media_type: "text/plain", text: "new\n", truncated: false, offset: 4, next_offset: undefined, total_bytes: 6, line_offset: undefined, diagnostics: [] });
   const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
@@ -428,7 +423,7 @@ it("releases continuation loading when navigation aborts the pending page", asyn
     return { binding_id: "binding", root_id: "folder", path, revision: path === "one.txt" ? "r1" : "r2", content_hash: null, bytes: 6, media_type: "text/plain", text: path === "one.txt" ? "head" : "two", truncated: true, offset: 0, next_offset: 4, total_bytes: 6, line_offset: 0, diagnostics: [] };
   });
   const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return <ContextViewer client={client} context={context} value={view} onChange={setView} />;
@@ -465,18 +460,20 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     document_path: "gitlab/gitlab.test/platform/api/merge-requests/482/Fix token refresh race.md", item_path: "gitlab/gitlab.test/platform/api/merge-requests/482", source_url: "https://gitlab.test/platform/api/-/merge_requests/482", original_url: null, source_revision: "abc", revision: "sha256:r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
   };
-  const listing: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
+  const listing: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "" }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
   const operation: LibraryOperation = { operation_id: "op-1", kind: "refresh", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:mr"], report: { new: 0, updated: 1, unchanged: 0, removed_at_source: 0, dropped: 0, partial: 0, failed: 0, conflict: 0, rows: [], truncated_rows: false }, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "" };
   let documentText = "# Fix it";
   let currentListing = listing;
   const client = {
-    contextDirectory: vi.fn(async (): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: "companion", path: "", truncated: false, diagnostics: [], entries: [] })),
+    contextDirectory: vi.fn(async (): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: "folder", path: "", truncated: false, diagnostics: [], entries: [] })),
     libraryListing: vi.fn(async () => currentListing),
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" }] })),
     libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: documentText, truncated: false, diagnostics: [] })),
+    contextDocument: vi.fn(),
+    commentBatch: vi.fn(),
     libraryRefresh: vi.fn(async () => operation),
   } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "companion", roots: [{ root_id: "companion", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "repo", checkout_path: "/repo" }], diagnostics: [] }
   function Harness() {
     const [view, setView] = useState(createContextViewState());
     return createElement(ContextViewer, { client, context, value: view, onChange: setView });
@@ -509,6 +506,8 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     await act(async () => row.click());
     await flush();
     expect(client.libraryDocument).toHaveBeenCalledWith({ path: "gitlab/gitlab.test/platform/api/merge-requests/482/Fix token refresh race.md", expected_revision: null, offset: null }, expect.any(AbortSignal));
+    expect(client.contextDocument).not.toHaveBeenCalled();
+    expect(host.querySelector(".context-comment-status")).toBeNull();
     expect(host.querySelector(".library-kind-chip")?.textContent).toBe("GitLab MR");
     // Wrap only applies to source lines: it appears with Source and is not offered over the rendered preview.
     expect(toolbarButton("Refresh Context files")).toBeUndefined();
@@ -562,7 +561,7 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
   }
 });
 
-it("opens any file a folder copy captured, not only its first file", async () => {
+it.each(["bound", "global"] as const)("opens every copied folder file and safe media through the %s Library authority", async (authority) => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const host = document.createElement("div");
   document.body.append(host);
@@ -572,21 +571,38 @@ it("opens any file a folder copy captured, not only its first file", async () =>
     canonical_id: null, container: null, parent_item_id: null, ancestors: [], order: null, title: "Design notes",
     document_path: "folders/Design notes/README.md", item_path: "folders/Design notes", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], diagnostics: [],
-    folder: { origin_path: "/home/user/notes", git_working_tree: false, files: 2, bytes: 20, skipped_symlinks: 0, skipped_special: 0, skipped_ignored: 0, skipped_other: 0 },
+    folder: { origin_path: "/home/user/notes", git_working_tree: false, files: 3, bytes: 88, skipped_symlinks: 0, skipped_special: 0, skipped_ignored: 0, skipped_other: 0 },
   };
-  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
-  const entry = (path: string, kind: "file" | "directory") => ({ entry_id: path, name: path.slice(path.lastIndexOf("/") + 1), path, kind, bytes: kind === "file" ? 10 : null, revision: "r1", refusal: null });
+  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "" }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
+  const entry = (path: string, kind: "file" | "directory") => ({ entry_id: path, name: path.slice(path.lastIndexOf("/") + 1), path, kind, bytes: kind === "file" ? path.endsWith(".png") ? 68 : 10 : null, revision: "r1", refusal: null });
+  const files = [{ path: item.document_path!, bytes: 10 }, { path: "folders/Design notes/docs/guide.md", bytes: 10 }, { path: "folders/Design notes/palette.png", bytes: 68 }];
+  const documentResponse = (bindingId: string, path: string) => ({ binding_id: bindingId, root_id: library.root.root_id, path, revision: "r1", content_hash: null, bytes: path.endsWith(".png") ? 68 : 10, media_type: path.endsWith(".png") ? "application/octet-stream" : "text/markdown", text: path.endsWith(".png") ? null : path.endsWith("guide.md") ? "# Guide body" : "# Readme body", truncated: false, diagnostics: [] });
+  const mediaResponse = (bindingId: string, path: string) => ({ binding_id: bindingId, root_id: library.root.root_id, path, revision: "r1", content_hash: "sha256:fixture", bytes: 68, mime_type: "image/png", width: 1, height: 1, data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLq9wAAAABJRU5ErkJggg==" });
   const client = {
     libraryListing: vi.fn(async () => library),
     projectConfiguration: vi.fn(async () => ({ providers: [] })),
     libraryDirectory: vi.fn(async (request: { path: string }): Promise<ContextDirectory> => ({ binding_id: "library", root_id: "library:fs", path: request.path, truncated: false, diagnostics: [],
-      entries: request.path === "" ? [entry("folders/Design notes", "directory")] : [entry("folders/Design notes/README.md", "file"), entry("folders/Design notes/docs/guide.md", "file")] })),
-    libraryFileIndex: vi.fn(async (request: { mode: "cached" | "fresh" }): Promise<ContextFileIndex> => ({ binding_id: "library", root_id: "library:fs", files: [{ path: "folders/Design notes/README.md", bytes: 10 }, { path: "folders/Design notes/docs/guide.md", bytes: 10 }], truncated: false, source: "walk", state: request.mode === "cached" ? "cached" : "fresh", diagnostics: [] })),
-    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 10, media_type: "text/markdown", text: request.path.endsWith("guide.md") ? "# Guide body" : "# Readme body", truncated: false, diagnostics: [] })),
+      entries: request.path === "" ? [entry("folders/Design notes", "directory")] : files.map((file) => entry(file.path, "file")) })),
+    libraryFileIndex: vi.fn(async (request: { mode: "cached" | "fresh" }): Promise<ContextFileIndex> => ({ binding_id: "library", root_id: library.root.root_id, files, truncated: false, source: "walk", state: request.mode === "cached" ? "cached" : "fresh", diagnostics: [] })),
+    libraryDocument: vi.fn(async (request: { path: string }) => documentResponse("library", request.path)),
+    libraryMedia: vi.fn(async (request: { path: string }) => mediaResponse("library", request.path)),
+    contextFileIndex: vi.fn(async (_session: string, _viewer: string, request: { binding_id: string; root_id: string; mode: "cached" | "fresh" }): Promise<ContextFileIndex> => ({ ...request, files, truncated: false, source: "walk", state: request.mode === "cached" ? "cached" : "fresh", diagnostics: [] })),
+    contextDocument: vi.fn(async (_session: string, _viewer: string, request: { binding_id: string; path: string }) => documentResponse(request.binding_id, request.path)),
+    contextMedia: vi.fn(async (_session: string, _viewer: string, request: { binding_id: string; path: string }) => mediaResponse(request.binding_id, request.path)),
+    commentBatch: vi.fn(async (): Promise<CommentBatch> => ({
+      batch_id: "folder-comments", generation: 1,
+      owner: { kind: "viewer", session_id: "session", server_instance: "server", tab_id: "tab", source_kind: "context", source_id: library.root.root_id },
+      last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now",
+    })),
   } as unknown as CockpitClient;
+  const context: ViewerContext | null = authority === "global" ? null : {
+    session_id: "session", viewer_id: "viewer", binding_id: "bound-library-binding", tab_id: "tab", space_id: "space", kind: "files",
+    source_kind: "context", source_id: library.root.root_id, roots: [library.root], default_root_id: library.root.root_id, diagnostics: [],
+  };
+  vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:library-png"), revokeObjectURL: vi.fn() });
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView });
+    return createElement(ContextViewer, { client, context, value: view, onChange: setView });
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   try {
@@ -599,434 +615,44 @@ it("opens any file a folder copy captured, not only its first file", async () =>
     const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.title.includes("docs/guide.md"));
     await act(async () => result!.click());
     await flush();
-    expect(client.libraryDocument).toHaveBeenCalledWith(expect.objectContaining({ path: "folders/Design notes/docs/guide.md" }), expect.any(AbortSignal));
+    if (authority === "bound") {
+      expect(client.contextDocument).toHaveBeenCalledWith("session", "viewer", { binding_id: "bound-library-binding", root_id: library.root.root_id, path: "folders/Design notes/docs/guide.md", expected_revision: null }, expect.any(AbortSignal));
+      expect(client.contextFileIndex).toHaveBeenCalledWith("session", "viewer", { binding_id: "bound-library-binding", root_id: library.root.root_id, mode: "cached" }, expect.any(AbortSignal));
+      expect(client.libraryDocument).not.toHaveBeenCalled();
+      expect(client.libraryFileIndex).not.toHaveBeenCalled();
+      expect(client.commentBatch).toHaveBeenCalledWith("session", "viewer", { scope: { binding_id: "bound-library-binding", client_id: expect.any(String) }, batch_id: null });
+      expect(host.querySelector<HTMLButtonElement>('[title="Comment on whole file (Shift+C)"]')?.disabled).toBe(false);
+    } else {
+      expect(client.libraryDocument).toHaveBeenCalledWith(expect.objectContaining({ path: "folders/Design notes/docs/guide.md" }), expect.any(AbortSignal));
+      expect(client.contextDocument).not.toHaveBeenCalled();
+      expect(client.contextFileIndex).not.toHaveBeenCalled();
+      expect(client.commentBatch).not.toHaveBeenCalled();
+      expect(host.querySelector(".context-comment-status")).toBeNull();
+    }
     // The listing doesn't name this file, but it is part of the folder copy: it stays open.
     expect(host.textContent).toContain("Guide body");
+    await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
+    await flush();
+    const imageResult = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.title.includes("palette.png"))!;
+    await act(async () => imageResult.click());
+    await flush();
+    if (authority === "bound") {
+      expect(client.contextMedia).toHaveBeenCalledWith("session", "viewer", { binding_id: "bound-library-binding", root_id: library.root.root_id, path: "folders/Design notes/palette.png", expected_revision: "r1" }, expect.any(AbortSignal));
+      expect(client.libraryMedia).not.toHaveBeenCalled();
+    } else {
+      expect(client.libraryMedia).toHaveBeenCalledWith({ path: "folders/Design notes/palette.png", expected_revision: "r1" }, expect.any(AbortSignal));
+      expect(client.contextMedia).not.toHaveBeenCalled();
+      expect(client.commentBatch).not.toHaveBeenCalled();
+    }
+    expect(host.querySelector<HTMLImageElement>('img[alt="folders/Design notes/palette.png"]')?.src).toBe("blob:library-png");
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
+    vi.unstubAllGlobals();
   }
 });
 
-it("lists this Space's Library context in Resources, failed adds first, and retries from the saved item into the companion", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const target = { session_id: "session", space_id: "space-1" };
-  const row = (title: string, state: SpaceCopyRow["state"]): SpaceCopyRow => ({
-    item_id: `source:${title}`, logical_id: `logical:${title}`, title, provider_id: "github", resource_type: "issue", kind: "provider_snapshot", state, library_newer: state === "library_newer",
-    paths: [`sources/github/issue/${title}.md`], edited: [], copy_mode: "reflink", library_revision_copied: "r1", current_library_revision: state === "library_newer" ? "r2" : "r1", follow: null,
-  });
-  const failed: SpaceAddAttempt = {
-    target, space_label: null, item_id: "source:pr-7", follow_id: null, title: "Fix token refresh race", state: "failed",
-    error: { code: "source_companion_unavailable", message: "Exactly one verified companion is required" }, operation_id: "op-failed", updated_at: "",
-  };
-  const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
-  let listing: SpaceContextListing = { target, companion, attempts: [failed], rows: [row("alpha", "up_to_date"), row("zeta", "library_newer")], behind: 1, diagnostics: [] };
-  const copied: LibraryOperation = {
-    operation_id: "op-resources-retry", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:pr-7"],
-    report: null, space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/github/review/acme-api-7.md"], skipped_edited: [], companion_root_id: "companion:c1" },
-    target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-  };
-  const client = {
-    contextDirectory: vi.fn(async (_session: string, _pane: string, request: { root_id: string; path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: request.root_id, path: request.path, truncated: false, diagnostics: [], entries: [] })),
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
-    repositories: vi.fn(async () => ({ repositories: [], diagnostics: [] })),
-    librarySpaceList: vi.fn(async () => listing),
-    librarySpaceAdd: vi.fn(async () => {
-      listing = { ...listing, attempts: [], rows: [...listing.rows, { ...row("Fix token refresh race", "up_to_date"), item_id: "source:pr-7" }] };
-      return copied;
-    }),
-  } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] }
-  const space = { target, label: "api-review", live: true };
-  function Harness() {
-    const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, context, value: view, onChange: setView, space });
-  }
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    expect(client.librarySpaceList).toHaveBeenCalledWith({ target }, expect.any(AbortSignal));
-    const resources = [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!;
-    expect(resources.textContent).toBe("Resources · 1 behind");
-    await act(async () => resources.click());
-    await flush();
-    const dialog = host.querySelector<HTMLElement>(".context-resources")!;
-    expect(dialog.querySelector(".space-context-summary")?.textContent).toBe("In api-review · 2 items · 1 behind");
-    expect([...dialog.querySelectorAll("[role='listitem'] .context-source-title")].map((title) => title.textContent)).toEqual(["Fix token refresh race", "zeta", "alpha"]);
-    const attempt = dialog.querySelector<HTMLElement>("[role='listitem']")!;
-    expect(attempt.textContent).toContain("Not added — Retry");
-    expect(attempt.querySelector("[role='alert']")?.textContent).toBe("Saved to the Library, but api-review's context folder couldn't be verified. Nothing was written to api-review.");
-    expect(dialog.textContent).toContain("Library newer");
-    expect(dialog.textContent).toContain("Up to date");
-
-    const retry = [...attempt.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry adding to api-review")!;
-    retry.focus();
-    await act(async () => retry.click());
-    await flush();
-    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:pr-7"], follow_ids: [] });
-    const paths = vi.mocked(client.contextDirectory).mock.calls.map(([, , request]) => request.path);
-    expect(paths).toEqual(expect.arrayContaining(["sources", "sources/github", "sources/github/review"]));
-    expect(dialog.textContent).not.toContain("Not added");
-    expect([...dialog.querySelectorAll("[role='listitem'] .context-source-title")].map((title) => title.textContent)).toEqual(["zeta", "alpha", "Fix token refresh race"]);
-    expect(document.activeElement?.textContent).toBe("Add…");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-function spaceResourcesFixture(initialRows: SpaceCopyRow[]) {
-  const target = { session_id: "session", space_id: "space-1" };
-  const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
-  const state = { rows: initialRows };
-  const client = {
-    contextDirectory: vi.fn(async (_session: string, _pane: string, request: { root_id: string; path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: request.root_id, path: request.path, truncated: false, diagnostics: [], entries: [] })),
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
-    repositories: vi.fn(async () => ({ repositories: [], diagnostics: [] })),
-    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion, attempts: [], rows: state.rows, behind: state.rows.filter((row) => row.library_newer).length, diagnostics: [] })),
-    librarySpaceUpdate: vi.fn(),
-    librarySpaceRemove: vi.fn(),
-  } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] }
-  const space = { target, label: "api-review", live: true };
-  function Harness() {
-    const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, context, value: view, onChange: setView, space });
-  }
-  return { target, state, client, Harness };
-}
-
-function spaceRow(title: string, state: SpaceCopyRow["state"], overrides: Partial<SpaceCopyRow> = {}): SpaceCopyRow {
-  return {
-    item_id: `source:${title}`, logical_id: `logical:${title}`, title, provider_id: "github", resource_type: "issue", kind: "provider_snapshot", state, library_newer: state === "library_newer",
-    paths: [`sources/github/issue/${title}.md`], edited: [], copy_mode: "reflink", library_revision_copied: "r1", current_library_revision: "r1", follow: null, ...overrides,
-  };
-}
-
-function spaceUpdated(operationId: string, target: { session_id: string; space_id: string }, itemIds: string[], written: string[], skipped: string[] = []): LibraryOperation {
-  return {
-    operation_id: operationId, kind: "space_update", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: itemIds,
-    report: null, space: { space_id: "space-1", copy_mode: "reflink", written, skipped_edited: skipped, companion_root_id: "companion:c1" },
-    target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-  };
-}
-
-it("updates only the selected copy in this Space, counts Update all from behind and missing copies, reports skipped edits, and never offers Update on kept copies", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const edited = { path: "sources/github/issue/delta.md", current_hash: "sha256:edited" };
-  const fixture = spaceResourcesFixture([
-    spaceRow("alpha", "library_newer"),
-    spaceRow("beta", "library_newer"),
-    spaceRow("delta", "edited_in_space", { library_newer: true, edited: [edited] }),
-    spaceRow("gamma", "missing_in_space"),
-    spaceRow("kept", "removed_at_source"),
-    spaceRow("orphan", "not_in_library", { item_id: null }),
-    spaceRow("legacy", "not_linked", { item_id: null }),
-    spaceRow("current", "up_to_date"),
-  ]);
-  const { target, state, client, Harness } = fixture;
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  const actions = (title: string) => {
-    const entry = [...host.querySelectorAll<HTMLElement>(".context-resources [role='listitem']")].find((candidate) => candidate.querySelector(".context-source-title")?.textContent === title)!;
-    return [...entry.querySelectorAll<HTMLButtonElement>(".space-context-actions button")];
-  };
-  const updateAll = () => [...host.querySelectorAll<HTMLButtonElement>(".space-context-bar button")].find((button) => button.textContent?.startsWith("Update all"))!;
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    const resources = [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!;
-    await act(async () => resources.click());
-    await flush();
-    // Rows needing action first, by title; then up-to-date and unlinked copies.
-    expect([...host.querySelectorAll(".context-resources [role='listitem'] .context-source-title")].map((title) => title.textContent))
-      .toEqual(["alpha", "beta", "delta", "gamma", "kept", "orphan", "current", "legacy"]);
-    expect(updateAll().textContent).toBe("Update all (3)");
-    expect(actions("alpha").map((button) => button.textContent)).toEqual(["Update"]);
-    expect(actions("gamma").map((button) => button.textContent)).toEqual(["Restore from Library"]);
-    expect(actions("delta").map((button) => button.textContent)).toEqual(["Replace with Library version…"]);
-    expect(actions("kept").map((button) => button.textContent)).toEqual(["Remove from this Space…"]);
-    expect(actions("orphan").map((button) => button.textContent)).toEqual(["Remove from this Space…"]);
-    expect(actions("legacy")).toEqual([]);
-    expect(actions("current").map((button) => button.textContent)).toEqual(["Remove from this Space…"]);
-
-    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
-      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "alpha" ? { ...row, state: "up_to_date", library_newer: false } : row);
-      return spaceUpdated("op-s3-selected", target, ["source:alpha"], ["sources/github/issue/alpha.md"]);
-    });
-    const update = actions("alpha")[0];
-    update.focus();
-    await act(async () => update.click());
-    await flush();
-    expect(client.librarySpaceUpdate).toHaveBeenCalledWith({ target, scope: { scope: "selection", item_ids: ["source:alpha"], follow_ids: [] }, replace_edited: [] });
-    // The reread listing, not the click, decides the row: alpha is current, beta is still behind, and the row kept its place.
-    expect(host.querySelector(".context-resources [role='listitem']")?.textContent).toContain("Up to date");
-    expect(actions("beta").map((button) => button.textContent)).toEqual(["Update"]);
-    expect(updateAll().textContent).toBe("Update all (2)");
-    expect(document.activeElement).toBe(actions("alpha")[0]);
-    expect(document.activeElement?.textContent).toBe("Remove from this Space…");
-
-    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
-      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "beta" || row.title === "gamma" ? { ...row, state: "up_to_date", library_newer: false } : row);
-      return spaceUpdated("op-s3-all", target, ["source:beta", "source:delta", "source:gamma"], ["sources/github/issue/beta.md", "sources/github/issue/gamma.md"], [edited.path]);
-    });
-    await act(async () => updateAll().click());
-    await flush();
-    expect(client.librarySpaceUpdate).toHaveBeenLastCalledWith({ target, scope: { scope: "all" }, replace_edited: [] });
-    expect(host.querySelector(".space-context [role='status']")?.textContent).toBe("Updated 2 items in api-review. Skipped 1 edited copy.");
-    // Only the edited copy is left: N stays 0, but Update all still runs so it can report the skipped edit.
-    expect(updateAll().textContent).toBe("Update all (0)");
-    expect(updateAll().getAttribute("aria-disabled")).toBe("false");
-    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => spaceUpdated("op-s3-all-edited", target, ["source:delta"], [], [edited.path]));
-    await act(async () => updateAll().click());
-    await flush();
-    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(3);
-    expect(client.librarySpaceUpdate).toHaveBeenLastCalledWith({ target, scope: { scope: "all" }, replace_edited: [] });
-    expect(host.querySelector(".space-context [role='status']")?.textContent).toBe("Nothing updated in api-review. Skipped 1 edited copy.");
-    expect(host.querySelector(".context-resources")?.textContent).toContain("Edited in Space · Library newer");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-it("replaces an edited copy only after confirmation with the listed hashes, keeps it on a conflict, and removes a copy from this Space", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const path = "sources/github/issue/delta.md";
-  const { target, state, client, Harness } = spaceResourcesFixture([
-    spaceRow("delta", "edited_in_space", { library_newer: true, edited: [{ path, current_hash: "sha256:first" }], paths: [path] }),
-    spaceRow("kept", "removed_at_source"),
-  ]);
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  const entry = (title: string) => [...host.querySelectorAll<HTMLElement>(".context-resources [role='listitem']")].find((candidate) => candidate.querySelector(".context-source-title")?.textContent === title);
-  const button = (root: ParentNode | undefined, label: string) => [...(root?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((candidate) => candidate.textContent === label);
-  const confirmDialog = () => document.body.querySelector<HTMLElement>(".library-confirm");
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!.click());
-    await flush();
-
-    const replace = button(entry("delta"), "Replace with Library version…")!;
-    replace.focus();
-    await act(async () => replace.click());
-    expect(confirmDialog()?.querySelector("h2")?.textContent).toBe('Replace your edited copy of "delta"?');
-    expect(confirmDialog()?.textContent).toContain(path);
-    expect(document.activeElement?.textContent).toBe("Keep my copy");
-    await act(async () => button(confirmDialog()!, "Keep my copy")!.click());
-    expect(confirmDialog()).toBeNull();
-    expect(client.librarySpaceUpdate).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(replace);
-
-    // The copy was edited again after the listing was read: the confirmed hash no longer matches.
-    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
-      state.rows = state.rows.map((row) => row.title === "delta" ? { ...row, edited: [{ path, current_hash: "sha256:second" }] } : row);
-      throw new CockpitClientError("http_error", "The Space copy changed", { status: 409, operationCode: "space_copy_conflict" });
-    });
-    const listReads = vi.mocked(client.librarySpaceList).mock.calls.length;
-    await act(async () => replace.click());
-    await act(async () => button(confirmDialog()!, "Replace with Library version")!.click());
-    await flush();
-    const firstReplace: SpaceUpdateRequest = { target, scope: { scope: "selection", item_ids: ["source:delta"], follow_ids: [] }, replace_edited: [{ path, current_hash: "sha256:first" }] };
-    expect(client.librarySpaceUpdate).toHaveBeenCalledWith(firstReplace);
-    expect(confirmDialog()).toBeNull();
-    expect(vi.mocked(client.librarySpaceList).mock.calls.length).toBeGreaterThan(listReads);
-    expect(entry("delta")?.querySelector("[role='alert']")?.textContent).toBe("api-review's copy changed since it was checked, so nothing was changed. Review it and try again.");
-    expect(entry("delta")?.textContent).toContain("Edited in Space · Library newer");
-
-    // Retrying confirms the reread hash, never the stale one.
-    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
-      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "delta" ? { ...row, state: "up_to_date", library_newer: false, edited: [] } : row);
-      return spaceUpdated("op-s3-replace", target, ["source:delta"], [path]);
-    });
-    await act(async () => button(entry("delta"), "Replace with Library version…")!.click());
-    await act(async () => button(confirmDialog()!, "Replace with Library version")!.click());
-    await flush();
-    expect(client.librarySpaceUpdate).toHaveBeenLastCalledWith({ ...firstReplace, replace_edited: [{ path, current_hash: "sha256:second" }] });
-    expect(entry("delta")?.textContent).toContain("Up to date");
-    expect(entry("delta")?.querySelector("[role='alert']")).toBeNull();
-
-    const remove = button(entry("kept"), "Remove from this Space…")!;
-    remove.focus();
-    await act(async () => remove.click());
-    expect(confirmDialog()?.querySelector("h2")?.textContent).toBe('Remove "kept" from api-review?');
-    expect(confirmDialog()?.textContent).toContain("Deletes api-review's copy. The Library item stays.");
-    expect(document.activeElement?.textContent).toBe("Cancel");
-    vi.mocked(client.librarySpaceRemove).mockImplementationOnce(async () => {
-      state.rows = state.rows.filter((row) => row.title !== "kept");
-      return { target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: state.rows, behind: 0, diagnostics: [] };
-    });
-    await act(async () => button(confirmDialog()!, "Remove from api-review")!.click());
-    await flush();
-    expect(client.librarySpaceRemove).toHaveBeenCalledWith({ target, logical_id: "logical:kept", confirmed: [] });
-    expect(entry("kept")).toBeUndefined();
-    expect(document.activeElement?.textContent).toBe("Add…");
-    // Nothing behind, missing or edited is left: Update all has nothing to do.
-    const updateAll = [...host.querySelectorAll<HTMLButtonElement>(".space-context-bar button")].find((candidate) => candidate.textContent?.startsWith("Update all"))!;
-    expect(updateAll.getAttribute("aria-disabled")).toBe("true");
-    await act(async () => updateAll.click());
-    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(2);
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-it("keeps Tab and Shift+Tab inside a Space copy confirmation opened over Resources, and Escape still cancels it", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const path = "sources/github/issue/delta.md";
-  const { client, Harness } = spaceResourcesFixture([spaceRow("delta", "edited_in_space", { library_newer: true, edited: [{ path, current_hash: "sha256:first" }], paths: [path] })]);
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  const confirmDialog = () => document.body.querySelector<HTMLElement>(".library-confirm");
-  const press = async (target: Element, key: string, shiftKey = false) => {
-    await act(async () => target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, shiftKey })));
-  };
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!.click());
-    await flush();
-    const replace = [...host.querySelectorAll<HTMLButtonElement>(".context-resources button")].find((candidate) => candidate.textContent === "Replace with Library version…")!;
-    replace.focus();
-    await act(async () => replace.click());
-    expect(document.activeElement?.textContent).toBe("Keep my copy");
-    const buttons = [...confirmDialog()!.querySelectorAll<HTMLButtonElement>("button")];
-    const first = buttons[0];
-    const last = buttons.at(-1)!;
-    first.focus();
-    await press(first, "Tab", true);
-    expect(document.activeElement).toBe(last);
-    expect(confirmDialog()?.contains(document.activeElement)).toBe(true);
-    await press(last, "Tab");
-    expect(document.activeElement).toBe(first);
-    await press(first, "Escape");
-    expect(confirmDialog()).toBeNull();
-    expect(host.querySelector(".context-resources")).not.toBeNull();
-    expect(document.activeElement).toBe(replace);
-    expect(client.librarySpaceUpdate).not.toHaveBeenCalled();
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-it("holds an update's result and its conflicting actions until the Space is reread, and offers a reread when that fails", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const edited = { path: "sources/github/issue/delta.md", current_hash: "sha256:edited" };
-  const { target, state, client, Harness } = spaceResourcesFixture([
-    spaceRow("alpha", "library_newer"),
-    spaceRow("delta", "edited_in_space", { library_newer: true, edited: [edited], paths: [edited.path] }),
-  ]);
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  const updateAll = () => [...host.querySelectorAll<HTMLButtonElement>(".space-context-bar button")].find((button) => button.textContent?.startsWith("Update all"))!;
-  const report = () => host.querySelector(".space-context > p[role='status']");
-  const listingError = () => host.querySelector<HTMLElement>(".space-context > .context-resource-error");
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!.click());
-    await flush();
-    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
-      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "alpha" ? { ...row, state: "up_to_date", library_newer: false } : row);
-      return spaceUpdated("op-s3-unconfirmed", target, ["source:alpha", "source:delta"], ["sources/github/issue/alpha.md"], [edited.path]);
-    });
-    vi.mocked(client.librarySpaceList).mockRejectedValueOnce(new Error("Space offline"));
-    await act(async () => updateAll().click());
-    await flush();
-    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(1);
-    // The update finished but nothing confirmed it: no result, no spinner, and Update all stays held.
-    expect(host.textContent).not.toMatch(/Updated \d/);
-    expect(report()).toBeNull();
-    expect(host.querySelector(".context-resources .library-spinner")).toBeNull();
-    expect(listingError()?.querySelector("strong")?.textContent).toBe("The update finished, but api-review's copies couldn't be reread, so its result isn't shown yet.");
-    expect(listingError()?.textContent).toContain("Space offline");
-    expect(updateAll().getAttribute("aria-disabled")).toBe("true");
-    const alphaUpdate = [...host.querySelectorAll<HTMLButtonElement>(".context-resources [role='listitem'] .space-context-actions button")].find((button) => button.textContent === "Update")!;
-    expect(alphaUpdate.getAttribute("aria-disabled")).toBe("true");
-    await act(async () => updateAll().click());
-    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(1);
-
-    await act(async () => [...listingError()!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry")!.click());
-    await flush();
-    expect(listingError()).toBeNull();
-    expect(report()?.textContent).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
-    expect(updateAll().getAttribute("aria-disabled")).toBe("false");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-it("keeps an Update all report as it finished after the skipped copy is replaced and then removed", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const edited = { path: "sources/github/issue/delta.md", current_hash: "sha256:edited" };
-  const { target, state, client, Harness } = spaceResourcesFixture([
-    spaceRow("alpha", "library_newer"),
-    spaceRow("delta", "edited_in_space", { library_newer: true, edited: [edited], paths: [edited.path] }),
-  ]);
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  const entry = (title: string) => [...host.querySelectorAll<HTMLElement>(".context-resources [role='listitem']")].find((candidate) => candidate.querySelector(".context-source-title")?.textContent === title);
-  const button = (root: ParentNode | undefined, label: string) => [...(root?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((candidate) => candidate.textContent === label);
-  const confirmDialog = () => document.body.querySelector<HTMLElement>(".library-confirm");
-  const report = () => host.querySelector(".space-context > p[role='status']")?.textContent;
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!.click());
-    await flush();
-    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
-      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "alpha" ? { ...row, state: "up_to_date", library_newer: false } : row);
-      return spaceUpdated("op-s3-all-history", target, ["source:alpha", "source:delta"], ["sources/github/issue/alpha.md"], [edited.path]);
-    });
-    await act(async () => button(host.querySelector(".space-context-bar") ?? undefined, "Update all (1)")!.click());
-    await flush();
-    expect(report()).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
-
-    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
-      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "delta" ? { ...row, state: "up_to_date", library_newer: false, edited: [] } : row);
-      return spaceUpdated("op-s3-replace-history", target, ["source:delta"], [edited.path]);
-    });
-    await act(async () => button(entry("delta"), "Replace with Library version…")!.click());
-    await act(async () => button(confirmDialog()!, "Replace with Library version")!.click());
-    await flush();
-    expect(entry("delta")?.textContent).toContain("Up to date");
-    expect(report()).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
-
-    vi.mocked(client.librarySpaceRemove).mockImplementationOnce(async () => {
-      state.rows = state.rows.filter((row) => row.title !== "delta");
-      return { target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: state.rows, behind: 0, diagnostics: [] };
-    });
-    await act(async () => button(entry("delta"), "Remove from this Space…")!.click());
-    await act(async () => button(confirmDialog()!, "Remove from api-review")!.click());
-    await flush();
-    expect(entry("delta")).toBeUndefined();
-    expect(report()).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-it("adds a Library item to the Space and rereads its standing after provider refresh without updating its copy", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+it("keeps an issued Library root's viewer authority and item selection through comment capture and saving", async () => {
   const host = document.createElement("div");
   document.body.append(host);
   const mounted = createRoot(host);
@@ -1034,162 +660,56 @@ it("adds a Library item to the Space and rereads its standing after provider ref
   const item: LibraryItemSummary = {
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
-    document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    document_path: "jira/OPS-311/Rotate signing keys.md", item_path: "jira/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
   };
-  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
-  const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
-  let rows: SpaceCopyRow[] = [];
-  const copied: LibraryOperation = {
-    operation_id: "op-header-add", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:ops-311"],
-    report: null, space: { space_id: "space-1", copy_mode: "copy", written: ["sources/jira/issue/ops-311.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+  const library: LibraryListing = {
+    root: { root_id: "library:realpath-identity", kind: "library", label: "Library", path: "/real/data/library", repository_id: "", checkout_path: "" },
+    generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [],
+  };
+  let listing: SpaceContextListing = { target, space_label: "api-review", library_root: library.root.path, checkout_path: "/repo", items: [], repository_paths: [], diagnostics: [] };
+  const selected: LibraryOperation = {
+    operation_id: "op-header-select", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
+    item_ids: [item.item_id], report: null, space: { space_id: target.space_id, item_ids: [item.item_id] },
     target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
   };
+  let batch: CommentBatch = {
+    batch_id: "bound-library-comments", generation: 1,
+    owner: { kind: "viewer", session_id: target.session_id, server_instance: "server", tab_id: "tab", source_kind: "context", source_id: library.root.root_id },
+    last_known_location: { workspace_id: target.space_id, tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now",
+  };
+  const changes: ContextViewState[] = [];
   const client = {
+    contextDirectory: vi.fn(),
+    contextDocument: vi.fn(async (_session: string, _viewer: string, request: { binding_id: string; root_id: string; path: string }) => ({ ...request, revision: "r1", content_hash: "sha256:keys", bytes: 6, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
+    contextFileIndex: vi.fn(async (_session: string, _viewer: string, request: { binding_id: string; root_id: string }): Promise<ContextFileIndex> => ({ ...request, files: [{ path: item.document_path!, bytes: 6 }], truncated: false, source: "walk", state: "cached", diagnostics: [] })),
     libraryListing: vi.fn(async () => library),
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
-    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: library.items[0].revision, content_hash: null, bytes: 7, media_type: "text/markdown", text: library.generation === "1" ? "# Keys" : "# Refreshed keys", truncated: false, diagnostics: [] })),
-    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion, attempts: [], rows, behind: rows.filter((row) => row.library_newer).length, diagnostics: [] })),
-    librarySpaceAdd: vi.fn(async () => {
-      rows = [{ item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state: "up_to_date", library_newer: false, paths: ["sources/jira/issue/ops-311.md"], edited: [], copy_mode: "copy", library_revision_copied: "sha256:r1", current_library_revision: "sha256:r1", follow: null }];
-      return copied;
-    }),
-    libraryRefresh: vi.fn(async (): Promise<LibraryOperation> => ({
-      ...copied, operation_id: "op-header-source-refresh", kind: "refresh", target: null, space: null, finished: false,
-      phases: [{ phase: "library", state: "running", done: 0, total: 1, message: null, error: null }],
+    libraryDocument: vi.fn(),
+    libraryFileIndex: vi.fn(),
+    commentBatch: vi.fn(async () => batch),
+    commentBatches: vi.fn(async (_session: string, _viewer: string, scope: { binding_id: string; client_id: string }) => ({
+      attachment: { owner: batch.owner, location: batch.last_known_location, ...scope }, batches: [], truncated: false,
     })),
-    libraryOperation: vi.fn(async (): Promise<LibraryOperation> => {
-      library.generation = "2";
-      library.items = [{ ...item, revision: "sha256:r2" }];
-      rows = rows.map((row) => ({ ...row, state: "library_newer", library_newer: true, current_library_revision: "sha256:r2" }));
-      return {
-        ...copied, operation_id: "op-header-source-refresh", kind: "refresh", target: null, space: null,
-        phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }],
-      };
+    commentUpsert: vi.fn(async (_session: string, _viewer: string, request: CommentUpsertRequest): Promise<CommentBatch> => {
+      const capture = request.capture!;
+      batch = { ...batch, generation: batch.generation + 1, drafts: [{
+        draft_id: "library-note", file_ref: { root_id: capture.root_id, path: capture.path, absolute_path: `${library.root.path}/${capture.path}`, revision: capture.expected_revision, content_hash: "sha256:keys" },
+        anchor: { kind: "whole_file" }, comment_text: request.comment_text, source_state: "current", updated_at: "now",
+      }] };
+      return batch;
     }),
-    librarySpaceUpdate: vi.fn(),
+    librarySpaceList: vi.fn(async () => listing),
+    librarySpaceAdd: vi.fn(async () => { listing = { ...listing, items: [item] }; return selected; }),
+    librarySpaceRemove: vi.fn(async () => { listing = { ...listing, items: [] }; return listing; }),
   } as unknown as CockpitClient;
-  function Harness() {
-    const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
-  }
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
-    await flush();
-    const header = host.querySelector<HTMLElement>(".library-item-header")!;
-    const add = [...header.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Add to api-review")!;
-    const documentReads = vi.mocked(client.libraryDocument).mock.calls.length;
-    add.focus();
-    await act(async () => add.click());
-    await flush();
-    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:ops-311"], follow_ids: [] });
-    // Copying into the Space leaves the Library item alone: the open document and its header stay mounted.
-    expect(vi.mocked(client.libraryDocument).mock.calls.length).toBe(documentReads);
-    expect(header.isConnected).toBe(true);
-    expect(spaceState(header)).toBe("In api-review | Up to date");
-    expect([...header.querySelectorAll("button")].map((button) => button.textContent)).not.toContain("Add to api-review");
-    expect(document.activeElement).toBe(header.querySelector(".library-space-slot"));
-
-    vi.useFakeTimers();
-    await act(async () => [...header.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Refresh")!.click());
-    await act(async () => { await vi.advanceTimersByTimeAsync(750); });
-    await flush();
-    expect(client.libraryRefresh).toHaveBeenCalledWith({ scope: "items", item_ids: [item.item_id] });
-    expect(host.textContent).toContain("Refreshed keys");
-    expect(spaceState(host)).toBe("In api-review | Library newer");
-    expect(client.librarySpaceAdd).toHaveBeenCalledTimes(1);
-    expect(client.librarySpaceUpdate).not.toHaveBeenCalled();
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-    vi.useRealTimers();
-  }
-});
-
-it("rereads the Space's copies when Context files are refreshed and when Resources reopens", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const target = { session_id: "session", space_id: "space-1" };
-  const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
-  const copy = (state: SpaceCopyRow["state"], libraryNewer = false): SpaceCopyRow => ({
-    item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state, library_newer: libraryNewer,
-    paths: ["sources/jira/issue/ops-311.md"], edited: [], copy_mode: "copy", library_revision_copied: "r1", current_library_revision: libraryNewer ? "r2" : "r1", follow: null,
-  });
-  let listing: SpaceContextListing = { target, companion, attempts: [], rows: [copy("up_to_date")], behind: 0, diagnostics: [] };
-  const client = {
-    contextDirectory: vi.fn(async (_session: string, _pane: string, request: { root_id: string; path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: request.root_id, path: request.path, truncated: false, diagnostics: [], entries: [] })),
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
-    repositories: vi.fn(async () => ({ repositories: [], diagnostics: [] })),
-    librarySpaceList: vi.fn(async () => ({ ...listing })),
-  } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] }
-  function Harness() {
-    const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, context, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
-  }
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  const toolbarButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith(label) || candidate.getAttribute("aria-label") === label);
-  const openResources = async () => { await act(async () => toolbarButton("Resources")!.click()); await flush(); };
-  const closeResources = async () => { await act(async () => host.querySelector<HTMLButtonElement>(".context-resources-close")!.click()); await flush(); };
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    expect(toolbarButton("Resources")?.textContent).toBe("Resources");
-
-    // The user edits the copy outside Cockpit, then refreshes the files.
-    listing = { ...listing, rows: [copy("edited_in_space", true)], behind: 1 };
-    await act(async () => toolbarButton("Refresh Context files")!.click());
-    await flush();
-    expect(toolbarButton("Resources")?.textContent).toBe("Resources · 1 behind");
-    await openResources();
-    expect(host.querySelector(".context-resources")?.textContent).toContain("Edited in Space · Library newer");
-    await closeResources();
-
-    // Deleted on disk while Resources is closed: reopening shows it without another refresh.
-    listing = { ...listing, rows: [copy("missing_in_space")], behind: 0 };
-    await openResources();
-    const resources = host.querySelector(".context-resources")!;
-    expect(resources.textContent).toContain("Missing in Space");
-    expect(resources.textContent).not.toContain("Edited in Space");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-it("keeps a failed Add to <Space> visible with its retry when no durable attempt records it", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const target = { session_id: "session", space_id: "space-1" };
-  const item: LibraryItemSummary = {
-    item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
-    canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
-    document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
+  const context: ViewerContext = {
+    session_id: target.session_id, viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: target.space_id,
+    kind: "files", source_kind: "context", source_id: "source", default_root_id: library.root.root_id, roots: [library.root], diagnostics: [],
   };
-  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
-  // The copy stopped before its attempt was written: the reread listing has no attempt for it.
-  const stopped: LibraryOperation = {
-    operation_id: "op-header-stopped", kind: "space_add", item_ids: [], report: null, space: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-    phases: [{ phase: "space", state: "failed", done: 0, total: 1, message: null, error: { code: "library_item_busy", message: "Too many pending Space adds" } }],
-  };
-  const client = {
-    libraryListing: vi.fn(async () => library),
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
-    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
-    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
-    librarySpaceAdd: vi.fn(async () => stopped),
-  } as unknown as CockpitClient;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
+    return <ContextViewer client={client} context={context} value={view} onChange={(next) => { changes.push(next); setView(next); }} space={{ target, label: "api-review", live: true }} />;
   }
   const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
   const headerButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".library-item-header button")].find((button) => button.textContent === label);
@@ -1198,157 +718,63 @@ it("keeps a failed Add to <Space> visible with its retry when no durable attempt
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
     await flush();
-    const listReads = vi.mocked(client.librarySpaceList).mock.calls.length;
-    await act(async () => headerButton("Add to api-review")!.click());
+    expect(client.contextDocument).toHaveBeenCalledWith("session", "viewer", {
+      binding_id: "binding", root_id: library.root.root_id, path: item.document_path, expected_revision: null,
+    }, expect.any(AbortSignal));
+    expect(client.contextDirectory).not.toHaveBeenCalled();
+    expect(client.libraryDocument).not.toHaveBeenCalled();
+    expect(client.contextFileIndex).toHaveBeenCalledWith("session", "viewer", { binding_id: "binding", root_id: library.root.root_id, mode: "fresh" }, expect.any(AbortSignal));
+    expect(client.libraryFileIndex).not.toHaveBeenCalled();
+    expect(client.commentBatch).toHaveBeenCalledWith("session", "viewer", {
+      scope: { binding_id: "binding", client_id: expect.any(String) }, batch_id: null,
+    });
+    expect(changes.at(-1)?.rootId).toBe(library.root.root_id);
+    expect(changes.at(-1)?.path).toBe(item.document_path);
+    expect(host.querySelector(".library-kind-chip")?.textContent).toBe("Jira issue");
+    expect(host.querySelector(".context-markdown-body")).not.toBeNull();
+    // The detached batch belongs to the issued root, not context.source_id.
+    // An enabled Reattach proves CommentDrafts retains that root as sourceIdentity.
+    await act(async () => host.querySelector<HTMLButtonElement>('[title="Open comments overview"]')!.click());
     await flush();
-    expect(vi.mocked(client.librarySpaceList).mock.calls.length).toBeGreaterThan(listReads);
-    const notice = host.querySelector(".library-item-header [role='alert']");
-    expect(notice?.textContent).toContain("Saved to the Library, but not added to api-review. Too many pending Space adds");
-    expect(headerButton("Add to api-review")).toBeUndefined();
-    await act(async () => headerButton("Retry adding to api-review")!.click());
+    expect([...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Reattach")?.disabled).toBe(false);
+    await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Close comments overview"]')!.click());
+    const wholeFile = host.querySelector<HTMLButtonElement>('[title="Comment on whole file (Shift+C)"]')!;
+    expect(wholeFile.disabled).toBe(false);
+    await act(async () => wholeFile.click());
+    expect(changes.at(-1)?.commentEditor).toEqual(expect.objectContaining({ rootId: library.root.root_id, path: item.document_path, revision: "r1", editor: "whole_file" }));
+    const textarea = document.body.querySelector<HTMLTextAreaElement>("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Verify key rotation before deployment.");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Save comment")!.click());
     await flush();
-    expect(client.librarySpaceAdd).toHaveBeenCalledTimes(2);
-    expect(client.librarySpaceAdd).toHaveBeenLastCalledWith({ target, item_ids: ["source:ops-311"], follow_ids: [] });
+    expect(client.commentUpsert).toHaveBeenCalledWith("session", "viewer", {
+      batch: { scope: { binding_id: "binding", client_id: expect.any(String) }, batch_id: "bound-library-comments", expected_generation: 1 },
+      draft_id: null, capture: { root_id: library.root.root_id, path: item.document_path, expected_revision: "r1", start_line: null, end_line: null },
+      comment_text: "Verify key rotation before deployment.",
+    });
+    expect(changes.at(-1)?.commentEditor).toBeNull();
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("Verify key rotation before deployment.");
+    expect(host.querySelector(".library-item-header")?.textContent).toContain(item.title);
+    expect(host.querySelector(".library-kind-chip")?.textContent).toBe("Jira issue");
+    expect(host.querySelector(".context-markdown-body")).not.toBeNull();
+    await act(async () => headerButton("Add to Space")!.click());
+    await flush();
+    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: [item.item_id] });
+    expect(headerButton("Remove from Space")).toBeDefined();
+    await act(async () => headerButton("Remove from Space")!.click());
+    await flush();
+    expect(client.librarySpaceRemove).toHaveBeenCalledWith({ target, item_ids: [item.item_id] });
+    expect(headerButton("Add to Space")).toBeDefined();
+    expect(host.textContent).toContain("Keys");
+    expect(document.body.querySelector(".library-confirm")).toBeNull();
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
   }
 });
 
-it("clears a header's failed Add to <Space> once another surface copies the item into that Space", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const target = { session_id: "session", space_id: "space-1" };
-  const item: LibraryItemSummary = {
-    item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
-    canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
-    document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
-  };
-  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
-  const stopped: LibraryOperation = {
-    operation_id: "op-header-stopped-then-added", kind: "space_add", item_ids: [], report: null, space: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-    phases: [{ phase: "space", state: "failed", done: 0, total: 1, message: null, error: { code: "library_item_busy", message: "Too many pending Space adds" } }],
-  };
-  let rows: SpaceCopyRow[] = [];
-  const client = {
-    libraryListing: vi.fn(async () => library),
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
-    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
-    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows, behind: 0, diagnostics: [] })),
-    librarySpaceAdd: vi.fn(async () => stopped),
-  } as unknown as CockpitClient;
-  function Harness() {
-    const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
-  }
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  const headerButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".library-item-header button")].find((button) => button.textContent === label);
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
-    await flush();
-    await act(async () => headerButton("Add to api-review")!.click());
-    await flush();
-    expect(headerButton("Retry adding to api-review")).toBeDefined();
-
-    // The Add dialog (another surface) copies the item; its finished operation rereads the Space.
-    rows = [{ item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state: "up_to_date", library_newer: false, paths: ["sources/jira/issue/ops-311.md"], edited: [], copy_mode: "copy", library_revision_copied: "sha256:r1", current_library_revision: "sha256:r1", follow: null }];
-    const addedElsewhere: LibraryOperation = { ...stopped, operation_id: "op-added-elsewhere", item_ids: ["source:ops-311"], phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], space: { space_id: "space-1", copy_mode: "copy", written: ["sources/jira/issue/ops-311.md"], skipped_edited: [], companion_root_id: "companion:c1" } };
-    await act(async () => window.dispatchEvent(new CustomEvent("cockpit:library-changed", { detail: addedElsewhere })));
-    await flush();
-    const header = host.querySelector<HTMLElement>(".library-item-header")!;
-    expect(spaceState(header)).toBe("In api-review | Up to date");
-    expect(header.querySelector("[role='alert']")).toBeNull();
-    expect(headerButton("Retry adding to api-review")).toBeUndefined();
-    expect(header.textContent).not.toContain("Too many pending Space adds");
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
-
-it("offers the copy's Update, Replace and Remove for the target Space in the Library item header and its menu", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const host = document.createElement("div");
-  document.body.append(host);
-  const mounted = createRoot(host);
-  const target = { session_id: "session", space_id: "space-1" };
-  const item: LibraryItemSummary = {
-    item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
-    canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
-    document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r2",
-    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
-  };
-  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
-  const path = "sources/jira/issue/ops-311.md";
-  const copy = (state: SpaceCopyRow["state"], libraryNewer: boolean, edited: SpaceCopyRow["edited"] = []): SpaceCopyRow => ({
-    item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state, library_newer: libraryNewer,
-    paths: [path], edited, copy_mode: "copy", library_revision_copied: "sha256:r1", current_library_revision: "sha256:r2", follow: null,
-  });
-  let rows: SpaceCopyRow[] = [copy("library_newer", true)];
-  const client = {
-    libraryListing: vi.fn(async () => library),
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
-    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "sha256:r2", content_hash: null, bytes: 7, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
-    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows, behind: rows.filter((row) => row.library_newer).length, diagnostics: [] })),
-    librarySpaceUpdate: vi.fn(async () => {
-      rows = [copy("up_to_date", false)];
-      return spaceUpdated("op-header-update", target, ["source:ops-311"], [path]);
-    }),
-    librarySpaceRemove: vi.fn(async () => {
-      rows = [];
-      return { target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows, behind: 0, diagnostics: [] };
-    }),
-  } as unknown as CockpitClient;
-  function Harness() {
-    const [view, setView] = useState(createContextViewState());
-    return createElement(ContextViewer, { client, context: null, value: view, onChange: setView, space: { target, label: "api-review", live: true } });
-  }
-  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
-  const header = () => host.querySelector<HTMLElement>(".library-item-header")!;
-  const headerButton = (label: string) => [...header().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === label);
-  const dialogButton = (label: string) => [...document.body.querySelectorAll<HTMLButtonElement>("[role='dialog'] button")].find((button) => button.textContent === label);
-  const reread = async () => { await act(async () => window.dispatchEvent(new CustomEvent("cockpit:library-changed", { detail: null }))); await flush(); };
-  try {
-    await act(async () => mounted.render(<Harness />));
-    await flush();
-    await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
-    await flush();
-    expect(spaceState(header())).toBe("In api-review | Library newer");
-    await act(async () => headerButton("Update in api-review")!.click());
-    await flush();
-    expect(client.librarySpaceUpdate).toHaveBeenCalledWith({ target, scope: { scope: "selection", item_ids: ["source:ops-311"], follow_ids: [] }, replace_edited: [] });
-    expect(spaceState(header())).toBe("In api-review | Up to date");
-    expect(headerButton("Update in api-review")).toBeUndefined();
-
-    // Edited in the Space: the header replaces only after confirmation.
-    rows = [copy("edited_in_space", true, [{ path, current_hash: "sha256:edit" }])];
-    await reread();
-    expect(spaceState(header())).toBe("Edited in Space · Library newer");
-    await act(async () => headerButton("Replace with Library version…")!.click());
-    expect(document.body.querySelector("[role='dialog'] h2")?.textContent).toBe('Replace your edited copy of "Rotate signing keys"?');
-    await act(async () => dialogButton("Keep my copy")!.click());
-    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(1);
-
-    // Removed at source: the item's `⋯` menu offers removing this Space's copy, confirmed first.
-    rows = [copy("removed_at_source", false)];
-    await reread();
-    await act(async () => header().querySelector<HTMLButtonElement>(".library-more")!.click());
-    const remove = [...document.body.querySelectorAll<HTMLButtonElement>("[role='menu'] button")].find((button) => button.textContent === "Remove from this Space…")!;
-    await act(async () => remove.click());
-    await act(async () => dialogButton("Remove from api-review")!.click());
-    await flush();
-    expect(client.librarySpaceRemove).toHaveBeenCalledWith({ target, logical_id: "source:jira:ops-311", confirmed: [] });
-    expect(headerButton("Add to api-review")).toBeDefined();
-  } finally {
-    await act(async () => mounted.unmount());
-    host.remove();
-  }
-});
 
 it("keeps the rendered Markdown while scrolling and records the position once scrolling settles", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -1363,7 +789,7 @@ it("keeps the rendered Markdown while scrolling and records the position once sc
     })),
     contextDocument: vi.fn(async () => ({ binding_id: "binding", root_id: "folder", path: "notes.md", revision: "r1", content_hash: null, bytes: text.length, media_type: "text/markdown", text, truncated: false, offset: 0, next_offset: undefined, total_bytes: text.length, line_offset: 0, diagnostics: [] })),
   } as unknown as CockpitClient;
-  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] }
+  const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder" }], diagnostics: [] }
   const changes: ContextViewState[] = [];
   function Harness() {
     const [view, setView] = useState(createContextViewState());
@@ -1402,7 +828,7 @@ it("reports an expired reader to its owning leaf without replacing the selected 
   const context: ViewerContext = {
     session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space",
     kind: "files", source_kind: "context", source_id: "source", default_root_id: "folder",
-    roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "repo", checkout_path: "/folder", companion_id: null }],
+    roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "repo", checkout_path: "/folder" }],
     diagnostics: [],
   };
   const client = { contextDirectory: vi.fn().mockRejectedValue(missing) } as unknown as CockpitClient;

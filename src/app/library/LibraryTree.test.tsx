@@ -301,7 +301,6 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
     await choose("Remove space and its items…");
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dialog.querySelector("h2")?.textContent).toBe("Remove SD · Software Development from the Library?");
-    expect(dialog.textContent).toContain("Deletes the items only this space holds (up to 4 pages) from the Library and stops following it. Items you kept in the Library or that another follow holds stay.");
     expect([...dialog.querySelectorAll("footer button")].map((button) => button.textContent)).toEqual(["Cancel", "Stop following only", "Remove space"]);
     expect(document.activeElement?.textContent).toBe("Cancel");
     await act(async () => [...dialog.querySelectorAll<HTMLButtonElement>("footer button")].find((button) => button.textContent === "Remove space")!.click());

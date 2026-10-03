@@ -1,4 +1,4 @@
-use super::{inspection_error_response, requests::{decode_confirmation_request, decode_request}};
+use super::{inspection_error_response, requests::{decode_library_request, decode_request}};
 use cockpit_core::CockpitService;
 use cockpit_protocol::{
     context::{ContextDirectory, ContextDocument, ContextFileIndex},
@@ -7,8 +7,8 @@ use cockpit_protocol::{
         LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest,
         LibraryDocumentRequest, LibraryFileIndexRequest, LibraryListing, LibraryMediaRequest,
         LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
-        LibraryResolution, LibraryResolveRequest, SpaceAddRequest, SpaceAttemptsDismissRequest,
-        SpaceContextListing, SpaceContextRequest, SpaceUpdateRequest, SpaceUpdateScope, SpaceRemoveRequest,
+        LibraryResolution, LibraryResolveRequest, SpaceAddRequest,
+        SpaceContextListing, SpaceContextRequest, SpaceRepositoriesRequest, SpaceRemoveRequest,
     },
     v1::ErrorResponse,
 };
@@ -184,7 +184,7 @@ pub async fn cockpit_library_replace(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<LibraryOperation, ErrorResponse> {
-    let request: LibraryReplaceRequest = decode_confirmation_request(request, "library replace")?;
+    let request: LibraryReplaceRequest = decode_library_request(request, "library replace")?;
     let operation = service
         .library()
         .map_err(inspection_error_response)?
@@ -199,7 +199,7 @@ pub async fn cockpit_library_remove(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<LibraryListing, ErrorResponse> {
-    let request: LibraryRemoveRequest = decode_confirmation_request(request, "library remove")?;
+    let request: LibraryRemoveRequest = decode_library_request(request, "library remove")?;
     service
         .library()
         .map_err(inspection_error_response)?
@@ -274,7 +274,7 @@ pub async fn cockpit_library_space_list(
     service
         .library()
         .map_err(inspection_error_response)?
-        .space_listing(request.target)
+        .space_listing(&request.target)
         .await
         .map_err(inspection_error_response)
 }
@@ -284,10 +284,10 @@ pub async fn cockpit_library_space_add(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<LibraryOperation, ErrorResponse> {
-    let request: SpaceAddRequest = decode_request(request, "library space add")?;
+    let request: SpaceAddRequest = decode_library_request(request, "library space add")?;
     validate_space_request(
         &request.target,
-        request.item_ids.len() + request.follow_ids.len(),
+        request.item_ids.len(),
     )?;
     let operation = service
         .library()
@@ -299,38 +299,20 @@ pub async fn cockpit_library_space_add(
 }
 
 #[tauri::command]
-pub async fn cockpit_library_space_attempts_dismiss(
+pub async fn cockpit_library_space_repositories(
     request: Value,
     service: State<'_, CockpitService>,
-) -> Result<(), ErrorResponse> {
-    let request: SpaceAttemptsDismissRequest =
-        decode_request(request, "library space attempts dismiss")?;
-    validate_space_request(
-        &request.target,
-        request.item_ids.len() + request.follow_ids.len(),
-    )?;
-    service
-        .library()
-        .map_err(inspection_error_response)?
-        .dismiss_space_attempts(request)
-        .await
-        .map_err(inspection_error_response)
-}
-
-#[tauri::command]
-pub async fn cockpit_library_space_update(
-    request: Value,
-    service: State<'_, CockpitService>,
-) -> Result<LibraryOperation, ErrorResponse> {
-    let request: SpaceUpdateRequest = decode_confirmation_request(request, "library space update")?;
-    let count = match &request.scope {
-        SpaceUpdateScope::Selection { item_ids, follow_ids } => item_ids.len() + follow_ids.len(),
-        SpaceUpdateScope::All {} => 0,
-    };
-    validate_space_request(&request.target, count)?;
-    let operation = service.library().map_err(inspection_error_response)?
-        .start_space_update(request).await.map_err(inspection_error_response)?;
-    Ok(bounded_operation(operation))
+) -> Result<SpaceContextListing, ErrorResponse> {
+    let request: SpaceRepositoriesRequest = decode_library_request(request, "library space repositories")?;
+    validate_space_request(&request.target, request.repository_paths.len())?;
+    if request.repository_paths.len() > 64 {
+        return Err(super::stream_error(
+            "invalid_library_request",
+            "Too many selected repositories",
+        ));
+    }
+    service.library().map_err(inspection_error_response)?
+        .space_repositories(request).await.map_err(inspection_error_response)
 }
 
 #[tauri::command]
@@ -338,8 +320,8 @@ pub async fn cockpit_library_space_remove(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<SpaceContextListing, ErrorResponse> {
-    let request: SpaceRemoveRequest = decode_confirmation_request(request, "library space remove")?;
-    validate_space_request(&request.target, 0)?;
+    let request: SpaceRemoveRequest = decode_library_request(request, "library space remove")?;
+    validate_space_request(&request.target, request.item_ids.len())?;
     service.library().map_err(inspection_error_response)?
         .space_remove(request).await.map_err(inspection_error_response)
 }

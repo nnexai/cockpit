@@ -20,10 +20,9 @@ const workspaceId = (value: unknown): value is string =>
 const operationId = (value: unknown): value is string =>
   text(value) && /^[A-Za-z0-9_-]{1,96}$/.test(value);
 const action = (value: unknown): value is WorkspaceTeardownAction =>
-  value === "close_space" || value === "remove_owned_worktree" || value === "reconcile_remove_outcome"
-    || value === "remove_orphaned_companion" || value === "forget_association";
+  value === "close_space" || value === "remove_owned_worktree" || value === "reconcile_remove_outcome";
 const outcome = (value: unknown): value is WorkspaceTeardownOutcome =>
-  value === "completed" || value === "outcome_unknown" || value === "orphaned_companion" || value === "retained";
+  value === "completed" || value === "outcome_unknown" || value === "retained";
 
 function malformed(label: string): never {
   throw new CockpitClientError("malformed_response", `Invalid ${label}`);
@@ -47,12 +46,11 @@ export function parseWorkspaceTeardownExecuteRequest(value: unknown): WorkspaceT
 export function parseWorkspaceTeardownPreview(value: unknown): WorkspaceTeardownPreview {
   if (!record(value) || !operationId(value.operation_id) || !workspaceId(value.workspace_id)
     || !text(value.endpoint_identity) || !nullableText(value.repository_key) || !nullableText(value.repository_root)
-    || !text(value.checkout_path) || !["owned_created", "borrowed_opened", "foreign", "unknown"].includes(String(value.ownership))
+    || !text(value.checkout_path) || !["owned_created", "borrowed_opened", "unknown"].includes(String(value.ownership))
     || !["live", "missing", "ambiguous"].includes(String(value.workspace_state))
-    || !["owned", "missing", "foreign", "ambiguous"].includes(String(value.companion_state))
     || typeof value.is_linked_worktree !== "boolean"
     || !["clean", "dirty", "unknown"].includes(String(value.dirty_state))
-    || !nullableText(value.companion_path) || !Array.isArray(value.allowed_actions) || !value.allowed_actions.every(action)
+    || !Array.isArray(value.allowed_actions) || !value.allowed_actions.every(action)
     || !texts(value.blockers) || !texts(value.warnings) || !nullableText(value.required_confirmation)) {
     malformed("workspace teardown preview");
   }
@@ -70,7 +68,7 @@ export function parseWorkspaceTeardownResult(value: unknown): WorkspaceTeardownR
 function recovery(value: unknown): value is WorkspaceTeardownRecovery {
   return record(value) && operationId(value.operation_id) && workspaceId(value.workspace_id)
     && text(value.checkout_path)
-    && (value.state === "pending" || value.state === "outcome_unknown" || value.state === "orphaned_companion");
+    && (value.state === "pending" || value.state === "outcome_unknown");
 }
 
 export function parseWorkspaceTeardownRecoveryList(value: unknown): WorkspaceTeardownRecoveryList {

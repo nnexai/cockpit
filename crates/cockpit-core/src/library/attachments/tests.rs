@@ -1,5 +1,5 @@
 use super::*;
-use crate::library::{tests::{self as base, finished}, space::tests::{companion_named, target}};
+use crate::library::tests::{self as base, finished};
 use crate::sources::{SourceProvider, SourceService, SourceFetchRequest, ProviderResolution, ConfluencePage, DownloadedAttachment, SpacePageListing, SpacePage, confluence_page_url};
 use cockpit_protocol::{projects::ProjectProvider, sources::SourceCapability};
 use std::sync::{Mutex, atomic::{AtomicUsize, Ordering}};
@@ -320,35 +320,6 @@ async fn follow_opt_in_is_saved_and_refresh_downloads_only_when_enabled() {
     finished(&f.service, f.service.start_refresh(LibraryRefreshRequest::All).await.unwrap()).await;
     assert!(!f.service.listing(None).await.unwrap().follows[0].include_attachments);
     assert_eq!(p.calls.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn space_shared_layout_manifest_and_edited_obsolete_attachments() {
-    let (f,_) = fixture(vec![attachment("a", "release-flow.png", b"first"), attachment("b", "edited.png", b"second")], 100, 100);
-    let (projects, adapter, root) = companion_named(&f, "space").await;
-    let service = f.service.clone().with_projects(projects, adapter);
-    let old = save(&f).await;
-    action(&service, &old, &["a", "b"], LibraryAttachmentAction::Download).await;
-    let saved = item(&service).await;
-    let add = finished(&service, service.start_space_add(SpaceAddRequest { target: target(), item_ids: vec![saved.item_id.clone()], follow_ids: vec![] }).await.unwrap()).await;
-    assert_eq!(add.phases[0].state, LibraryPhaseState::Done, "{add:?}");
-    let row = service.space_listing(target()).await.unwrap().rows.remove(0);
-    let doc = row.paths.iter().find(|p| p.ends_with(".md")).unwrap();
-    let parent = Path::new(doc).parent().unwrap();
-    let a = parent.join("_files/release-flow.png"); let b = parent.join("_files/edited.png");
-    assert_eq!(std::fs::read(root.join(doc)).unwrap(), document(&f, &saved));
-    assert_eq!(std::fs::read(root.join(&a)).unwrap(), bytes(&f, &saved, 0));
-    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("context-manifest.json")).unwrap()).unwrap();
-    let file = manifest["entries"].as_array().unwrap().iter().find(|e| e["library_file"] == "_files/release-flow.png").unwrap();
-    assert_eq!(file["content_hash"], store::hash(b"first"));
-    assert!(String::from_utf8(document(&f, &saved)).unwrap().contains("path: \"_files/release-flow.png\""));
-    action(&service, &saved, &["a", "b"], LibraryAttachmentAction::RemoveDownloaded).await;
-    assert_ne!(item(&service).await.revision, saved.revision);
-    assert_eq!(service.space_listing(target()).await.unwrap().rows[0].state, SpaceCopyState::LibraryNewer);
-    std::fs::write(root.join(&b), b"edited locally").unwrap();
-    let updated = finished(&service, service.start_space_update(SpaceUpdateRequest { target: target(), scope: SpaceUpdateScope::All {}, replace_edited: vec![] }).await.unwrap()).await;
-    assert!(!root.join(&a).exists()); assert_eq!(std::fs::read(root.join(&b)).unwrap(), b"edited locally");
-    assert_eq!(updated.space.unwrap().skipped_edited, vec![b.to_string_lossy().into_owned()]);
 }
 
 #[tokio::test]

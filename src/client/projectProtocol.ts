@@ -109,8 +109,7 @@ export function parseWorkspaceSetupPlan(value: unknown): WorkspaceSetupPlan {
   if (!record(value) || !text(value.operation_id) || !u32(value.generation) || !text(value.session_id)
     || !text(value.endpoint_identity) || value.endpoint_identity.length === 0
     || !(value.repository === null || isRepository(value.repository)) || !mode(value.mode) || !nullableText(value.branch) || !nullableText(value.base)
-    || !text(value.checkout_path) || !text(value.companion_path) || !text(value.label)
-    || !text(value.companion_id) || value.companion_id.length === 0 || !bool(value.companion_created_by_operation)
+    || !text(value.checkout_path) || !text(value.label)
     || !bool(value.focus) || !["owned_worktree", "borrowed_directory"].includes(String(value.ownership))
     || !(value.artifact === null || isArtifact(value.artifact)) || !Array.isArray(value.linked_artifacts) || !value.linked_artifacts.every(isArtifact)
     || !texts(value.effects) || !texts(value.warnings)) {
@@ -124,17 +123,16 @@ export function parseWorkspaceOperation(value: unknown): WorkspaceOperation {
     || !text(value.session_id) || !text(value.state)
     || !["planned", "running", "completed", "partial", "outcome_unknown", "cancelled", "needs_review"].includes(value.state)
     || !text(value.step) || !["planned", "validated", "herdr_requested", "herdr_observed", "worktree_ready", "workspace_verified",
-      "companion_ready", "context_preparing", "context_ready", "environment_requested", "environment_ready", "completed"].includes(value.step)
+      "context_preparing", "context_ready", "environment_requested", "environment_ready", "completed"].includes(value.step)
     || !nullableText(value.workspace_id) || !nullableText(value.tab_id) || !nullableText(value.pane_id)
-    || !nullableText(value.companion_id) || !bool(value.resume_allowed) || !bool(value.cancel_requested)
+    || !bool(value.resume_allowed) || !bool(value.cancel_requested)
     || !text(value.updated_at) || !(value.error === null || parseErrorEnvelope(value.error) !== undefined)
     || !Array.isArray(value.owned_resources) || !value.owned_resources.every((resource) => record(resource)
       && text(resource.kind) && text(resource.path) && bool(resource.created_by_operation))) {
     malformed("workspace operation");
   }
   const plan = parseWorkspaceSetupPlan(value.plan);
-  if (plan.operation_id !== value.operation_id || plan.session_id !== value.session_id
-    || (value.companion_id !== null && value.companion_id !== plan.companion_id)) {
+  if (plan.operation_id !== value.operation_id || plan.session_id !== value.session_id) {
     malformed("workspace operation identity");
   }
   return value as unknown as WorkspaceOperation;

@@ -7,44 +7,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cap_fs_ext::{DirExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, OpenOptions};
-use cockpit_protocol::projects::{ProjectArtifact, WorkspaceOperation, WorkspaceSetupPlan};
+use cockpit_protocol::projects::{WorkspaceOperation, WorkspaceSetupPlan};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use nix::fcntl::{RenameFlags, renameat2};
-#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
-use rustix::fs::{Mode, OFlags, fsync, openat};
-#[cfg(target_os = "macos")]
-use rustix::fs::{RenameFlags, fcntl_fullfsync, renameat_with};
 
 use crate::InspectionError;
 
 const LOCK_WAIT: Duration = Duration::from_secs(5);
 const MAX_RECORD_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_COMPANION_ENTRIES: usize = 1024;
 const MAX_OPERATION_ENTRIES: usize = 4096;
-
-/// The durable association written next to a Cockpit-owned companion.
-///
-/// This is deliberately evidence of an association, rather than a registry of
-/// Herdr workspaces. Every use must validate it against a fresh Herdr snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct CompanionManifest {
-    pub schema_version: u32,
-    pub cockpit_operation_id: String,
-    pub herdr_session_identity: String,
-    pub herdr_workspace_id: String,
-    pub repository_key: String,
-    pub repository_root: String,
-    pub checkout_path: String,
-    pub artifact: Option<ProjectArtifact>,
-    pub created_at: String,
-    pub updated_at: String,
-    pub ownership: String,
-}
 
 /// Durable evidence for a teardown removal that may need explicit recovery.
 /// The receipt is separate from setup progress so an indeterminate teardown
@@ -56,7 +29,9 @@ pub(crate) struct TeardownReceipt {
     pub workspace_id: String,
     pub endpoint_identity: String,
     pub checkout_path: String,
-    pub companion: CompanionManifest,
+    pub session_id: String,
+    pub repository_key: String,
+    pub repository_root: String,
     pub state: TeardownReceiptState,
     pub updated_at: String,
 }
@@ -66,7 +41,6 @@ pub(crate) struct TeardownReceipt {
 pub(crate) enum TeardownReceiptState {
     Pending,
     OutcomeUnknown,
-    OrphanedCompanion,
     Completed,
 }
 
@@ -74,6 +48,96 @@ pub(crate) enum TeardownReceiptState {
 #[serde(deny_unknown_fields)]
 struct StoredOperation {
     operation: WorkspaceOperation,
+}
+
+/// Remove the retired lifecycle before serde sees the current, strict DTOs.
+/// This only rewrites the journal; companion/user paths are never opened.
+fn migrate_legacy_operation_json(value: &mut serde_json::Value) -> bool {
+    let Some(operation) = value.get_mut("operation").and_then(serde_json::Value::as_object_mut) else {
+        return false;
+    };
+    let mut changed = operation.remove("companion_id").is_some();
+    if let Some(plan) = operation.get_mut("plan").and_then(serde_json::Value::as_object_mut) {
+        for field in ["companion_path", "companion_id", "companion_created_by_operation"] {
+            changed |= plan.remove(field).is_some();
+        }
+        if let Some(effects) = plan.get_mut("effects").and_then(serde_json::Value::as_array_mut) {
+            let before = effects.len();
+            effects.retain(|effect| !effect.as_str().is_some_and(|effect| effect.contains("companion")));
+            changed |= effects.len() != before;
+        }
+    }
+    if let Some(resources) = operation.get_mut("owned_resources").and_then(serde_json::Value::as_array_mut) {
+        let before = resources.len();
+        resources.retain(|resource| resource.get("kind").and_then(serde_json::Value::as_str) != Some("companion"));
+        changed |= resources.len() != before;
+    }
+    if operation.get("step").and_then(serde_json::Value::as_str)
+        .is_some_and(|step| matches!(step, "companion_ready" | "associate_companion"))
+    {
+        operation.insert("step".to_owned(), serde_json::json!("workspace_verified"));
+        changed = true;
+    }
+    changed
+}
+
+fn receipt_matches_operation(receipt: &TeardownReceipt, operation: &WorkspaceOperation) -> bool {
+    let repository = operation.plan.repository.as_ref();
+    receipt.operation_id == operation.operation_id
+        && receipt.operation_id == operation.plan.operation_id
+        && operation.workspace_id.as_deref() == Some(receipt.workspace_id.as_str())
+        && receipt.endpoint_identity == operation.plan.endpoint_identity
+        && receipt.session_id == operation.session_id
+        && receipt.session_id == operation.plan.session_id
+        && receipt.checkout_path == operation.plan.checkout_path
+        && receipt.repository_key == repository.map(|repository| repository.common_dir.as_str()).unwrap_or("")
+        && receipt.repository_root == repository.map(|repository| repository.root.as_str()).unwrap_or("")
+}
+
+fn migrate_legacy_teardown_receipt(
+    value: &mut serde_json::Value,
+    load: impl FnOnce() -> Result<WorkspaceOperation, InspectionError>,
+) -> Result<bool, InspectionError> {
+    let Some(receipt) = value.as_object_mut() else {
+        return Ok(false);
+    };
+    let orphaned = receipt.get("state").and_then(serde_json::Value::as_str) == Some("orphaned_companion");
+    let companion = receipt.remove("companion");
+    let mut changed = companion.is_some() || orphaned;
+    // Herdr removal was already confirmed. Retire only the obsolete cleanup
+    // obligation; every old directory and note is retained.
+    if orphaned {
+        receipt.insert("state".to_owned(), serde_json::json!("completed"));
+    }
+    if let Some(companion) = companion {
+        let operation = if orphaned { load().ok() } else { Some(load()?) };
+        let exact = operation.as_ref().is_some_and(|operation| {
+            let repository = operation.plan.repository.as_ref();
+            companion.get("cockpit_operation_id") == receipt.get("operation_id")
+            && companion.get("herdr_workspace_id") == receipt.get("workspace_id")
+            && companion.get("herdr_session_identity") == receipt.get("endpoint_identity")
+            && companion.get("checkout_path") == receipt.get("checkout_path")
+            && companion.get("ownership").and_then(serde_json::Value::as_str) == Some("cockpit")
+            && receipt.get("operation_id").and_then(serde_json::Value::as_str) == Some(operation.operation_id.as_str())
+            && receipt.get("workspace_id").and_then(serde_json::Value::as_str) == operation.workspace_id.as_deref()
+            && receipt.get("endpoint_identity").and_then(serde_json::Value::as_str) == Some(operation.plan.endpoint_identity.as_str())
+            && receipt.get("checkout_path").and_then(serde_json::Value::as_str) == Some(operation.plan.checkout_path.as_str())
+            && companion.get("repository_key").and_then(serde_json::Value::as_str) == Some(repository.map(|repository| repository.common_dir.as_str()).unwrap_or(""))
+            && companion.get("repository_root").and_then(serde_json::Value::as_str) == Some(repository.map(|repository| repository.root.as_str()).unwrap_or(""))
+        });
+        // Foreign evidence cannot acquire reconciliation authority. An
+        // identity mismatch keeps the obligation but prohibits redispatch.
+        receipt.insert("session_id".to_owned(), serde_json::json!(
+            operation.as_ref().filter(|_| exact).map(|operation| operation.session_id.as_str()).unwrap_or("")
+        ));
+        for field in ["repository_key", "repository_root"] {
+            receipt.insert(field.to_owned(), companion.get(field).cloned().unwrap_or(serde_json::json!("")));
+        }
+    }
+    for field in ["companion_path", "companion_id", "companion_created_by_operation"] {
+        changed |= receipt.remove(field).is_some();
+    }
+    Ok(changed)
 }
 
 fn migrate_legacy_operation(operation: &mut WorkspaceOperation) -> bool {
@@ -142,7 +206,7 @@ pub struct ExecutionLease {
     _file: File,
 }
 
-/// Small file-backed journal for setup operations and companion associations.
+/// Small file-backed journal for setup operations and teardown receipts.
 ///
 /// The state directory is opened once and all record access is descriptor
 /// relative. This prevents a path check followed by a path open from crossing a
@@ -207,7 +271,6 @@ impl ProjectStore {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            companion_id: None,
             owned_resources: Vec::new(),
             error: None,
             resume_allowed: false,
@@ -228,7 +291,7 @@ impl ProjectStore {
             return Ok(false);
         };
         let lock = self.acquire_lock(operation_id)?;
-        let stored: StoredOperation = read_json(&self.root_dir, &record_name(operation_id))?;
+        let stored = self.read_stored_operation(&record_name(operation_id))?;
         let operation = stored.operation;
         if operation.state != WorkspaceOperationState::Planned
             || operation.step != WorkspaceOperationStep::Planned
@@ -254,11 +317,7 @@ impl ProjectStore {
         validate_operation_id(operation_id)?;
         let _lock = self.acquire_lock(operation_id)?;
         let name = record_name(operation_id);
-        let mut stored: StoredOperation = read_json(&self.root_dir, &name)?;
-        if migrate_legacy_operation(&mut stored.operation) {
-            atomic_write_json(&self.root_dir, &name, &stored)
-                .map_err(|error| map_io(error, "state_write"))?;
-        }
+        let stored = self.read_stored_operation(&name)?;
         Ok(stored.operation)
     }
 
@@ -278,9 +337,8 @@ impl ProjectStore {
         validate_operation_id(operation_id)?;
         let _lock = self.acquire_lock(operation_id)?;
         let name = record_name(operation_id);
-        let stored: StoredOperation = read_json(&self.root_dir, &name)?;
+        let stored = self.read_stored_operation(&name)?;
         let mut operation = stored.operation;
-        migrate_legacy_operation(&mut operation);
         if let Some(expected) = expected_generation {
             if operation.generation != expected {
                 return Err(InspectionError::new(
@@ -352,11 +410,7 @@ impl ProjectStore {
                 ));
             }
             let _lock = self.acquire_lock(stem)?;
-            let mut stored = read_json::<StoredOperation>(&self.root_dir, name)?;
-            if migrate_legacy_operation(&mut stored.operation) {
-                atomic_write_json(&self.root_dir, name, &stored)
-                    .map_err(|error| map_io(error, "state_write"))?;
-            }
+            let stored = self.read_stored_operation(name)?;
             result.push(stored.operation);
         }
         result.sort_by(|a, b| {
@@ -389,336 +443,6 @@ impl ProjectStore {
             .map(|file| file.map(|file| ExecutionLease { _file: file }))
     }
 
-    /// Check publication support and validate the companion parent before any
-    /// Herdr resource is created. The final no-replace operation remains
-    /// authoritative if the parent or destination changes after this check.
-    pub fn preflight_companion_publication(
-        &self,
-        companion_root: impl AsRef<Path>,
-    ) -> Result<(), InspectionError> {
-        if !companion_publication_supported() {
-            return Err(InspectionError::new(
-                "companion_publish_unsupported",
-                "atomic no-replace companion publication is unsupported on this platform",
-            ));
-        }
-        let _ = prepare_root(companion_root.as_ref(), "companion")?;
-        Ok(())
-    }
-
-    pub fn write_companion(
-        &self,
-        companion_root: impl AsRef<Path>,
-        manifest: &CompanionManifest,
-    ) -> Result<PathBuf, InspectionError> {
-        validate_operation_id(&manifest.cockpit_operation_id)?;
-        validate_resource_id(&manifest.herdr_workspace_id, "workspace")?;
-        if manifest.ownership != "cockpit" {
-            return Err(InspectionError::new(
-                "invalid_ownership",
-                "companion ownership must be cockpit",
-            ));
-        }
-        self.preflight_companion_publication(companion_root.as_ref())?;
-
-        let (root_path, root) = prepare_root(companion_root.as_ref(), "companion")?;
-        let id = manifest.cockpit_operation_id.as_str();
-        let (temporary_name, temporary_dir) = create_companion_staging_dir(&root)?;
-        if let Err(error) = write_staged_manifest(&temporary_dir, manifest) {
-            let _ = temporary_dir.remove_open_dir_all();
-            return Err(if error.kind() == io::ErrorKind::InvalidInput {
-                InspectionError::new(
-                    "unsafe_path",
-                    "companion manifest destination is not a regular file",
-                )
-            } else {
-                map_io(error, "companion_manifest")
-            });
-        }
-        if let Err(error) = verify_staging_dir(&root, &temporary_name, &temporary_dir) {
-            let _ = temporary_dir.remove_open_dir_all();
-            return Err(if error.kind() == io::ErrorKind::InvalidInput {
-                InspectionError::new("unsafe_path", "companion staging path was replaced")
-            } else {
-                map_io(error, "companion_stage")
-            });
-        }
-
-        if let Err(error) = publish_companion_no_replace(&root, &temporary_name, id) {
-            let _ = temporary_dir.remove_open_dir_all();
-            if error.kind() == io::ErrorKind::AlreadyExists {
-                return Err(InspectionError::new(
-                    "association_conflict",
-                    "companion directory already exists",
-                ));
-            }
-            return Err(map_io(error, "companion_publish"));
-        }
-        if let Err(error) = sync_directory(&root) {
-            drop(temporary_dir);
-            return Err(map_io(error, "companion_publish"));
-        }
-        drop(temporary_dir);
-        self.bump_mutation_generation();
-        Ok(root_path.join(id))
-    }
-
-    /// Reconcile a publication whose no-replace rename may have succeeded
-    /// before the caller persisted its acknowledgement. This only succeeds
-    /// after revalidating the exact operation manifest and syncing the
-    /// published child and its parent through descriptor-bound handles.
-    pub(crate) fn sync_companion_publication(
-        &self,
-        companion_root: impl AsRef<Path>,
-        expected: &CompanionManifest,
-    ) -> Result<(), InspectionError> {
-        validate_operation_id(&expected.cockpit_operation_id)?;
-        validate_resource_id(&expected.herdr_workspace_id, "workspace")?;
-        if expected.ownership != "cockpit" {
-            return Err(InspectionError::new(
-                "invalid_ownership",
-                "companion ownership must be cockpit",
-            ));
-        }
-        if !companion_publication_supported() {
-            return Err(InspectionError::new(
-                "companion_publish_unsupported",
-                "companion durability is unsupported on this platform",
-            ));
-        }
-        let absolute = absolute_root(companion_root.as_ref()).map_err(|error| {
-            if error.kind() == io::ErrorKind::InvalidInput {
-                InspectionError::new("unsafe_path", "unsafe companion root path")
-            } else {
-                map_io(error, "companion_recovery")
-            }
-        })?;
-        let root = open_dir_nofollow_absolute(&absolute).map_err(|error| {
-            if error.kind() == io::ErrorKind::InvalidInput
-                || error.kind() == io::ErrorKind::NotFound
-            {
-                InspectionError::new("unsafe_path", "companion root is not a real directory")
-            } else {
-                map_io(error, "companion_recovery")
-            }
-        })?;
-        let id = expected.cockpit_operation_id.as_str();
-        let child = root.open_dir_nofollow(id).map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                InspectionError::new("companion_missing", "published companion is missing")
-            } else {
-                map_io(error, "companion_recovery")
-            }
-        })?;
-        verify_staging_dir(&root, id, &child).map_err(|error| {
-            if error.kind() == io::ErrorKind::InvalidInput {
-                InspectionError::new("unsafe_path", "published companion path was replaced")
-            } else {
-                map_io(error, "companion_recovery")
-            }
-        })?;
-        let (manifest_file, actual) = open_companion_manifest_for_sync(&child)?;
-        if actual != *expected {
-            return Err(InspectionError::new(
-                "association_conflict",
-                "published companion manifest does not match the operation",
-            ));
-        }
-        sync_file(&manifest_file).map_err(|error| map_io(error, "companion_recovery"))?;
-        sync_directory(&child).map_err(|error| map_io(error, "companion_recovery"))?;
-        verify_staging_dir(&root, id, &child).map_err(|error| {
-            if error.kind() == io::ErrorKind::InvalidInput {
-                InspectionError::new("unsafe_path", "published companion path was replaced")
-            } else {
-                map_io(error, "companion_recovery")
-            }
-        })?;
-        sync_directory(&root).map_err(|error| map_io(error, "companion_recovery"))?;
-        Ok(())
-    }
-
-    pub fn read_companion(
-        &self,
-        companion_root: impl AsRef<Path>,
-        companion_id: &str,
-    ) -> Result<CompanionManifest, InspectionError> {
-        validate_operation_id(companion_id)?;
-        let (_, root) = prepare_root(companion_root.as_ref(), "companion")?;
-        let child = root.open_dir_nofollow(companion_id).map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                InspectionError::new("companion_missing", "companion directory does not exist")
-            } else {
-                map_io(error, "companion_read")
-            }
-        })?;
-        match child.symlink_metadata("manifest.json") {
-            Ok(_) => read_json(&child, "manifest.json"),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Err(InspectionError::new(
-                "companion_missing",
-                "companion manifest does not exist",
-            )),
-            Err(error) => Err(map_io(error, "companion_read")),
-        }
-    }
-    /// Enumerate bounded companion manifests without following any path
-    /// component. Non-companion entries (including staging files) are ignored;
-    /// a malformed manifest is an explicit association failure.
-    pub fn list_companions(
-        &self,
-        companion_root: impl AsRef<Path>,
-    ) -> Result<Vec<(String, CompanionManifest)>, InspectionError> {
-        let (_, root) = prepare_root(companion_root.as_ref(), "companion")?;
-        let mut companions = Vec::new();
-        let entries = root.entries().map_err(io_error("companion_read"))?;
-        let mut entries_seen = 0usize;
-        for entry in entries {
-            entries_seen = entries_seen.saturating_add(1);
-            if entries_seen > MAX_COMPANION_ENTRIES {
-                return Err(InspectionError::new(
-                    "companion_lookup_bounded",
-                    "companion lookup exceeded its bounded entry limit",
-                ));
-            }
-            let entry = entry.map_err(io_error("companion_read"))?;
-            let file_type = entry.file_type().map_err(io_error("companion_read"))?;
-            if file_type.is_symlink() {
-                return Err(InspectionError::new(
-                    "unsafe_path",
-                    "companion directory is a symlink",
-                ));
-            }
-            if !file_type.is_dir() {
-                continue;
-            }
-            let name = entry.file_name();
-            let Some(id) = name.to_str() else {
-                continue;
-            };
-            if Uuid::parse_str(id).is_err() {
-                continue;
-            }
-            let child = root
-                .open_dir_nofollow(id)
-                .map_err(io_error("companion_read"))?;
-            let Ok(metadata) = child.symlink_metadata("manifest.json") else {
-                continue;
-            };
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(InspectionError::new(
-                    "unsafe_path",
-                    "companion manifest is not a regular file",
-                ));
-            }
-            let manifest: CompanionManifest = read_json(&child, "manifest.json")?;
-            if manifest.cockpit_operation_id != id {
-                return Err(InspectionError::new(
-                    "association_conflict",
-                    "companion directory and manifest identities differ",
-                ));
-            }
-            companions.push((id.to_owned(), manifest));
-        }
-        companions.sort_by(|left, right| left.0.cmp(&right.0));
-        Ok(companions)
-    }
-
-    /// Replace only the association metadata for an existing companion.
-    /// Generated and user files remain untouched. The creator operation identity
-    /// and repository provenance are immutable; endpoint/workspace changes are
-    /// allowed only through an explicit reattachment flow.
-    pub fn reattach_companion(
-        &self,
-        companion_root: impl AsRef<Path>,
-        manifest: &CompanionManifest,
-    ) -> Result<PathBuf, InspectionError> {
-        validate_operation_id(&manifest.cockpit_operation_id)?;
-        validate_resource_id(&manifest.herdr_workspace_id, "workspace")?;
-        if manifest.ownership != "cockpit" {
-            return Err(InspectionError::new(
-                "invalid_ownership",
-                "companion ownership must be cockpit",
-            ));
-        }
-        let _lock = self.acquire_lock(&manifest.cockpit_operation_id)?;
-        let (_, root) = prepare_root(companion_root.as_ref(), "companion")?;
-        let id = manifest.cockpit_operation_id.as_str();
-        let child = root.open_dir_nofollow(id).map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                InspectionError::new("companion_missing", "companion directory does not exist")
-            } else {
-                map_io(error, "companion_read")
-            }
-        })?;
-        let existing: CompanionManifest = read_json(&child, "manifest.json")?;
-        if existing.cockpit_operation_id != manifest.cockpit_operation_id
-            || existing.repository_key != manifest.repository_key
-            || existing.repository_root != manifest.repository_root
-            || existing.checkout_path != manifest.checkout_path
-            || existing.artifact != manifest.artifact
-            || existing.ownership != "cockpit"
-        {
-            return Err(InspectionError::new(
-                "association_conflict",
-                "companion provenance cannot be replaced",
-            ));
-        }
-        atomic_write_json(&child, "manifest.json", manifest).map_err(|error| {
-            if error.kind() == io::ErrorKind::InvalidInput {
-                InspectionError::new(
-                    "unsafe_path",
-                    "companion manifest destination is not a regular file",
-                )
-            } else {
-                map_io(error, "companion_manifest")
-            }
-        })?;
-        self.bump_mutation_generation();
-        Ok(companion_root.as_ref().to_path_buf().join(id))
-    }
-
-    /// Remove one exactly reviewed Cockpit-owned companion directory. The
-    /// descriptor-relative operation cannot traverse outside `companion_root`;
-    /// the manifest must still exactly match the reviewed association.
-    pub fn remove_owned_companion(
-        &self,
-        companion_root: impl AsRef<Path>,
-        manifest: &CompanionManifest,
-    ) -> Result<(), InspectionError> {
-        validate_operation_id(&manifest.cockpit_operation_id)?;
-        if manifest.ownership != "cockpit" {
-            return Err(InspectionError::new(
-                "invalid_ownership",
-                "companion ownership must be cockpit",
-            ));
-        }
-        let _lock = self.acquire_lock(&manifest.cockpit_operation_id)?;
-        let (_, root) = prepare_root(companion_root.as_ref(), "companion")?;
-        let id = manifest.cockpit_operation_id.as_str();
-        let child = root.open_dir_nofollow(id).map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                InspectionError::new("companion_missing", "companion directory does not exist")
-            } else {
-                map_io(error, "companion_read")
-            }
-        })?;
-        let existing: CompanionManifest = read_json(&child, "manifest.json")?;
-        if existing != *manifest {
-            return Err(InspectionError::new(
-                "association_conflict",
-                "companion association changed after teardown review",
-            ));
-        }
-        root.remove_dir_all(id).map_err(|error| {
-            if error.kind() == io::ErrorKind::InvalidInput {
-                InspectionError::new("unsafe_path", "companion destination is unsafe")
-            } else {
-                map_io(error, "companion_remove")
-            }
-        })?;
-        self.bump_mutation_generation();
-        Ok(())
-    }
-
     pub(crate) fn read_teardown_receipt(
         &self,
         operation_id: &str,
@@ -730,7 +454,17 @@ impl ProjectStore {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
                 InspectionError::new("unsafe_path", "teardown receipt is not a regular file"),
             ),
-            Ok(_) => read_json(&self.root_dir, &name).map(Some),
+            Ok(_) => {
+                let mut value: serde_json::Value = read_json(&self.root_dir, &name)?;
+                let migrated = migrate_legacy_teardown_receipt(&mut value, || self.load(operation_id))?;
+                let receipt: TeardownReceipt = serde_json::from_value(value)
+                    .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?;
+                if migrated {
+                    atomic_write_json(&self.root_dir, &name, &receipt)
+                        .map_err(io_error("teardown_write"))?;
+                }
+                Ok(Some(receipt))
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(map_io(error, "teardown_read")),
         }
@@ -742,15 +476,13 @@ impl ProjectStore {
     ) -> Result<(), InspectionError> {
         validate_operation_id(&receipt.operation_id)?;
         validate_resource_id(&receipt.workspace_id, "workspace")?;
-        if receipt.companion.cockpit_operation_id != receipt.operation_id
-            || receipt.companion.ownership != "cockpit"
-            || receipt.checkout_path != receipt.companion.checkout_path
-            || receipt.endpoint_identity != receipt.companion.herdr_session_identity
-            || receipt.workspace_id != receipt.companion.herdr_workspace_id
-        {
+        validate_resource_id(&receipt.session_id, "session")?;
+        validate_endpoint_identity(&receipt.endpoint_identity)?;
+        let operation = self.load(&receipt.operation_id)?;
+        if !receipt_matches_operation(receipt, &operation) {
             return Err(InspectionError::new(
-                "association_conflict",
-                "teardown receipt does not match its reviewed companion",
+                "stale_identity",
+                "teardown receipt does not match the exact workspace operation",
             ));
         }
         let _lock =
@@ -767,6 +499,20 @@ impl ProjectStore {
                 map_io(error, "teardown_write")
             }
         })
+    }
+
+    /// Call only while holding the operation's journal lock.
+    fn read_stored_operation(&self, name: &str) -> Result<StoredOperation, InspectionError> {
+        let mut value: serde_json::Value = read_json(&self.root_dir, name)?;
+        let raw_migrated = migrate_legacy_operation_json(&mut value);
+        let mut stored: StoredOperation = serde_json::from_value(value)
+            .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?;
+        let ownership_migrated = migrate_legacy_operation(&mut stored.operation);
+        if raw_migrated || ownership_migrated {
+            atomic_write_json(&self.root_dir, name, &stored).map_err(io_error("state_write"))?;
+            self.bump_mutation_generation();
+        }
+        Ok(stored)
     }
 
     fn acquire_lock(&self, id: &str) -> Result<LockGuard, InspectionError> {
@@ -1012,227 +758,6 @@ pub(crate) fn open_dir_nofollow_absolute(path: &Path) -> io::Result<Dir> {
     Ok(dir)
 }
 
-fn create_companion_staging_dir(root: &Dir) -> Result<(String, Dir), InspectionError> {
-    for _ in 0..16 {
-        let name = format!(".companion-{}.tmp", Uuid::new_v4());
-        match root.create_dir(&name) {
-            Ok(()) => {
-                let dir = match root.open_dir_nofollow(&name) {
-                    Ok(dir) => dir,
-                    Err(error) => {
-                        let _ = root.remove_dir_all(&name);
-                        return Err(map_io(error, "companion_stage"));
-                    }
-                };
-                if let Err(error) = sync_directory(root) {
-                    let _ = dir.remove_open_dir_all();
-                    return Err(map_io(error, "companion_stage"));
-                }
-                return Ok((name, dir));
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(map_io(error, "companion_stage")),
-        }
-    }
-    Err(InspectionError::new(
-        "companion_stage",
-        "could not allocate a unique staging directory",
-    ))
-}
-
-fn write_staged_manifest(dir: &Dir, manifest: &CompanionManifest) -> io::Result<()> {
-    let name = "manifest.json";
-    match dir.symlink_metadata(name) {
-        Ok(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "staged manifest destination already exists",
-            ));
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    let tmp = format!(".manifest-{}.tmp", Uuid::new_v4());
-    let bytes = serde_json::to_vec_pretty(manifest)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let mut options = OpenOptions::new();
-    options
-        .write(true)
-        .create_new(true)
-        .follow(cap_fs_ext::FollowSymlinks::No);
-    let mut file = dir.open_with(&tmp, &options)?;
-    file.write_all(&bytes)?;
-    sync_file(&file)?;
-    dir.rename(&tmp, dir, name)?;
-    sync_directory(dir)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn verify_staging_dir(root: &Dir, name: &str, expected: &Dir) -> io::Result<()> {
-    use cap_std::fs::MetadataExt;
-
-    let actual = root.open_dir_nofollow(name)?;
-    let actual_metadata = actual.dir_metadata()?;
-    let expected_metadata = expected.dir_metadata()?;
-    if actual_metadata.dev() != expected_metadata.dev()
-        || actual_metadata.ino() != expected_metadata.ino()
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "staging directory was replaced",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn verify_staging_dir(_root: &Dir, _name: &str, _expected: &Dir) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "descriptor-bound staging verification is unsupported",
-    ))
-}
-
-#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
-fn sync_directory(dir: &Dir) -> io::Result<()> {
-    let fd = openat(
-        dir,
-        ".",
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::empty(),
-    )
-    .map_err(io::Error::from)?;
-    #[cfg(target_os = "macos")]
-    {
-        fcntl_fullfsync(&fd).map_err(io::Error::from)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        fsync(&fd).map_err(io::Error::from)
-    }
-}
-
-#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
-fn sync_directory(_dir: &Dir) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "companion durability is unsupported on this platform",
-    ))
-}
-
-fn sync_file(file: &cap_std::fs::File) -> io::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        return fcntl_fullfsync(file).map_err(io::Error::from);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        file.sync_all()
-    }
-}
-
-fn open_companion_manifest_for_sync(
-    dir: &Dir,
-) -> Result<(cap_std::fs::File, CompanionManifest), InspectionError> {
-    let metadata = dir.symlink_metadata("manifest.json").map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            InspectionError::new("companion_missing", "companion manifest does not exist")
-        } else {
-            map_io(error, "companion_recovery")
-        }
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES
-    {
-        return Err(InspectionError::new(
-            "unsafe_path",
-            "companion manifest is not a bounded regular file",
-        ));
-    }
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .follow(cap_fs_ext::FollowSymlinks::No)
-        .nonblock(true);
-    let mut file = dir
-        .open_with("manifest.json", &options)
-        .map_err(|error| map_io(error, "companion_recovery"))?;
-    let opened_metadata = file
-        .metadata()
-        .map_err(|error| map_io(error, "companion_recovery"))?;
-    if !opened_metadata.is_file() || opened_metadata.len() > MAX_RECORD_BYTES {
-        return Err(InspectionError::new(
-            "unsafe_path",
-            "opened companion manifest is not a bounded regular file",
-        ));
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    (&mut file)
-        .take(MAX_RECORD_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| map_io(error, "companion_recovery"))?;
-    if bytes.len() as u64 > MAX_RECORD_BYTES {
-        return Err(InspectionError::new(
-            "unsafe_path",
-            "companion manifest exceeded its bounded size while reading",
-        ));
-    }
-    let manifest = serde_json::from_slice(&bytes)
-        .map_err(|error| InspectionError::new("association_conflict", error.to_string()))?;
-    Ok((file, manifest))
-}
-
-fn companion_publication_supported() -> bool {
-    cfg!(any(
-        all(target_os = "linux", target_env = "gnu"),
-        target_os = "macos"
-    ))
-}
-
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn publish_companion_no_replace(
-    root: &Dir,
-    temporary_name: &str,
-    operation_id: &str,
-) -> io::Result<()> {
-    renameat2(
-        root,
-        temporary_name,
-        root,
-        operation_id,
-        RenameFlags::RENAME_NOREPLACE,
-    )
-    .map_err(|error| io::Error::from_raw_os_error(error as i32))
-}
-
-#[cfg(target_os = "macos")]
-fn publish_companion_no_replace(
-    root: &Dir,
-    temporary_name: &str,
-    operation_id: &str,
-) -> io::Result<()> {
-    renameat_with(
-        root,
-        temporary_name,
-        root,
-        operation_id,
-        RenameFlags::NOREPLACE,
-    )
-    .map_err(io::Error::from)
-}
-
-#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
-fn publish_companion_no_replace(
-    _root: &Dir,
-    _temporary_name: &str,
-    _operation_id: &str,
-) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "atomic no-replace companion publication is unsupported on this platform",
-    ))
-}
-
 fn record_name(id: &str) -> String {
     format!("{id}.json")
 }
@@ -1307,8 +832,12 @@ pub(crate) fn read_json_bounded<T: for<'de> Deserialize<'de>>(
     let mut file = dir
         .open_with(name, &options)
         .map_err(io_error("state_read"))?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.read_to_end(&mut bytes)
+    let opened_metadata = file.metadata().map_err(io_error("state_read"))?;
+    if !opened_metadata.is_file() || opened_metadata.len() > max_bytes {
+        return Err(InspectionError::new("unsafe_path", "opened state record is not a bounded regular file"));
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    (&mut file).take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)
         .map_err(io_error("state_read"))?;
     if bytes.len() as u64 > max_bytes {
         return Err(InspectionError::new(
@@ -1338,6 +867,16 @@ fn validate_resource_id(value: &str, kind: &str) -> Result<(), InspectionError> 
         return Err(InspectionError::new(
             "invalid_identity",
             format!("invalid {kind} identity"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_endpoint_identity(value: &str) -> Result<(), InspectionError> {
+    if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
+        return Err(InspectionError::new(
+            "invalid_identity",
+            "endpoint identity must be nonempty, bounded and contain no control characters",
         ));
     }
     Ok(())
@@ -1398,9 +937,6 @@ mod tests {
             branch: Some("task".to_owned()),
             base: Some("main".to_owned()),
             checkout_path: "/work/task".to_owned(),
-            companion_path: "/companion/id".to_owned(),
-            companion_id: id.to_owned(),
-            companion_created_by_operation: true,
             label: "Task".to_owned(),
             focus: false,
             artifact: None,
@@ -1410,32 +946,15 @@ mod tests {
         }
     }
 
-    fn manifest(id: &str) -> CompanionManifest {
-        CompanionManifest {
-            schema_version: 1,
-            cockpit_operation_id: id.to_owned(),
-            herdr_session_identity: "session-a".to_owned(),
-            herdr_workspace_id: "workspace-a".to_owned(),
-            repository_key: "repo-a".to_owned(),
-            repository_root: "/repo".to_owned(),
-            checkout_path: "/repo".to_owned(),
-            artifact: None,
-            created_at: "1".to_owned(),
-            updated_at: "1".to_owned(),
-            ownership: "cockpit".to_owned(),
-        }
-    }
-
     fn teardown_receipt(id: &str, state: TeardownReceiptState) -> TeardownReceipt {
-        let mut companion = manifest(id);
-        companion.herdr_session_identity = "endpoint-a".to_owned();
-        companion.herdr_workspace_id = "workspace-a".to_owned();
         TeardownReceipt {
             operation_id: id.to_owned(),
             workspace_id: "workspace-a".to_owned(),
             endpoint_identity: "endpoint-a".to_owned(),
-            checkout_path: companion.checkout_path.clone(),
-            companion,
+            session_id: "setup-fixture".to_owned(),
+            repository_key: "/repo/.git".to_owned(),
+            repository_root: "/repo".to_owned(),
+            checkout_path: "/work/task".to_owned(),
             state,
             updated_at: "1".to_owned(),
         }
@@ -1576,10 +1095,43 @@ mod tests {
     }
 
     #[test]
+    fn teardown_receipt_accepts_full_endpoint_identity_only_when_exactly_matching() {
+        let endpoint = "unix-socket:/tmp/cockpit-fixture/config/herdr/sessions/fixture/herdr.sock:pid=939432:uid=1000:gid=1000:start=5501986";
+        let root = temp_root("teardown-endpoint");
+        let id = Uuid::new_v4().to_string();
+        let store = ProjectStore::new(&root).expect("store");
+        let mut setup = plan(&id);
+        setup.endpoint_identity = endpoint.to_owned();
+        store.persist_plan(setup).expect("plan");
+        store.update(&id, None, |operation| {
+            operation.workspace_id = Some("workspace-a".to_owned());
+            Ok(())
+        }).expect("workspace receipt");
+        let mut receipt = teardown_receipt(&id, TeardownReceiptState::Pending);
+        receipt.endpoint_identity = endpoint.to_owned();
+        store.write_teardown_receipt(&receipt).expect("full matching endpoint");
+        assert_eq!(store.read_teardown_receipt(&id).expect("read").expect("receipt").endpoint_identity, endpoint);
+        receipt.endpoint_identity = endpoint.replace("pid=939432", "pid=939433");
+        assert_eq!(store.write_teardown_receipt(&receipt).expect_err("different endpoint").code, "stale_identity");
+        for invalid in ["".to_owned(), format!("{endpoint}\n"), "x".repeat(4097)] {
+            receipt.endpoint_identity = invalid;
+            assert_eq!(store.write_teardown_receipt(&receipt).expect_err("invalid endpoint").code, "invalid_identity");
+        }
+        assert_eq!(store.read_teardown_receipt(&id).expect("retained read").expect("retained receipt").endpoint_identity, endpoint);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn teardown_receipt_survives_reopen_and_preserves_unknown_state() {
         let root = temp_root("teardown-receipt-restart");
         let id = Uuid::new_v4().to_string();
         let mut receipt = teardown_receipt(&id, TeardownReceiptState::Pending);
+        let store = ProjectStore::new(&root).expect("store");
+        store.persist_plan(plan(&id)).expect("plan");
+        store.update(&id, None, |operation| {
+            operation.workspace_id = Some("workspace-a".to_owned());
+            Ok(())
+        }).expect("workspace receipt");
         ProjectStore::new(&root)
             .expect("first store")
             .write_teardown_receipt(&receipt)
@@ -1687,93 +1239,6 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    #[test]
-    fn companion_preflight_checks_capability_before_final_creation() {
-        let state = temp_root("companion-preflight-state");
-        let companions = temp_root("companion-preflight-companions").join("nested");
-        let id = Uuid::new_v4().to_string();
-        let store = ProjectStore::new(&state).expect("store");
-        let result = store.preflight_companion_publication(&companions);
-        if companion_publication_supported() {
-            result.expect("supported publication");
-            assert!(companions.is_dir());
-            assert!(!companions.join(id).exists());
-        } else {
-            let error = result.expect_err("unsupported publication");
-            assert_eq!(error.code, "companion_publish_unsupported");
-            assert!(!companions.exists());
-        }
-        fs::remove_dir_all(state).expect("cleanup state");
-        let parent = companions
-            .parent()
-            .expect("companion preflight parent")
-            .to_path_buf();
-        if parent.exists() {
-            fs::remove_dir_all(parent).expect("cleanup companions");
-        }
-    }
-
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    #[test]
-    fn foreign_empty_companion_destination_is_preserved_and_retry_publishes() {
-        let state = temp_root("foreign-destination-state");
-        let companions = temp_root("foreign-destination-companions");
-        let store = ProjectStore::new(&state).expect("store");
-        let id = Uuid::new_v4().to_string();
-        let destination = companions.join(&id);
-        fs::create_dir(&destination).expect("foreign destination");
-        let error = store
-            .write_companion(&companions, &manifest(&id))
-            .expect_err("foreign destination must win");
-        assert_eq!(error.code, "association_conflict");
-        assert!(destination.is_dir());
-        assert!(
-            fs::read_dir(&destination)
-                .expect("destination entries")
-                .next()
-                .is_none()
-        );
-        fs::remove_dir(&destination).expect("remove foreign destination");
-        let published = store
-            .write_companion(&companions, &manifest(&id))
-            .expect("retry publication");
-        assert_eq!(published, destination);
-        assert_eq!(
-            store
-                .read_companion(&companions, &id)
-                .expect("read manifest"),
-            manifest(&id)
-        );
-        fs::remove_dir_all(state).expect("cleanup state");
-        fs::remove_dir_all(companions).expect("cleanup companions");
-    }
-
-    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
-    #[test]
-    fn publication_recovery_requires_exact_manifest_before_acknowledgement() {
-        let state = temp_root("publication-recovery-state");
-        let companions = temp_root("publication-recovery-companions");
-        let store = ProjectStore::new(&state).expect("store");
-        let id = Uuid::new_v4().to_string();
-        let expected = manifest(&id);
-        store
-            .write_companion(&companions, &expected)
-            .expect("publish companion");
-        store
-            .sync_companion_publication(&companions, &expected)
-            .expect("sync published companion");
-
-        let mut mismatch = expected.clone();
-        mismatch.updated_at = "2".to_owned();
-        let error = store
-            .sync_companion_publication(&companions, &mismatch)
-            .expect_err("mismatched recovery must fail");
-        assert_eq!(error.code, "association_conflict");
-
-        fs::remove_dir_all(state).expect("cleanup state");
-        fs::remove_dir_all(companions).expect("cleanup companions");
-    }
-
     #[cfg(unix)]
     #[test]
     fn project_root_rejects_intermediate_symlink_without_creation() {
@@ -1847,20 +1312,240 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    #[cfg(unix)]
+    fn legacy_companion(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "cockpit_operation_id": id,
+            "herdr_session_identity": "endpoint-a",
+            "herdr_workspace_id": "workspace-a",
+            "repository_key": "/repo/.git",
+            "repository_root": "/repo",
+            "checkout_path": "/work/task",
+            "artifact": null,
+            "created_at": "1",
+            "updated_at": "1",
+            "ownership": "cockpit"
+        })
+    }
+
+    fn legacy_operation(root: &Path, id: &str, step: &str) {
+        let path = root.join(record_name(id));
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("record")).expect("json");
+        value["operation"]["companion_id"] = serde_json::json!(id);
+        value["operation"]["step"] = serde_json::json!(step);
+        let plan = &mut value["operation"]["plan"];
+        plan["companion_path"] = serde_json::json!(root.join("old-companion").to_str().unwrap());
+        plan["companion_id"] = serde_json::json!(id);
+        plan["companion_created_by_operation"] = serde_json::json!(true);
+        plan["effects"] = serde_json::json!(["create worktree", "create companion context"]);
+        value["operation"]["owned_resources"].as_array_mut().unwrap().push(serde_json::json!({
+            "kind": "companion",
+            "path": root.join("old-companion").to_str().unwrap(),
+            "created_by_operation": true
+        }));
+        fs::write(path, serde_json::to_vec(&value).unwrap()).expect("legacy record");
+    }
+
     #[test]
-    fn companion_symlink_substitution_is_rejected() {
-        use std::os::unix::fs::symlink;
-        let root = temp_root("companion-link");
-        let outside = temp_root("companion-outside");
+    fn legacy_companion_journals_migrate_before_load_list_and_update() {
+        for access in 0..3 {
+            let root = temp_root("legacy-companion-operation");
+            let store = ProjectStore::new(&root).expect("store");
+            let id = Uuid::new_v4().to_string();
+            store.persist_plan(plan(&id)).expect("plan");
+            fs::create_dir(root.join("old-companion")).expect("old directory");
+            fs::write(root.join("old-companion/notes.md"), "user notes").expect("notes");
+            legacy_operation(&root, &id, if access == 1 { "associate_companion" } else { "companion_ready" });
+            let record = root.join(record_name(&id));
+            let mut raw: serde_json::Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+            raw["operation"]["owned_resources"].as_array_mut().unwrap().push(serde_json::json!({
+                "kind": "worktree", "path": "/work/task", "created_by_operation": true
+            }));
+            fs::write(record, serde_json::to_vec(&raw).unwrap()).unwrap();
+            let operation = match access {
+                0 => store.load(&id).expect("load"),
+                1 => store.list().expect("list").remove(0),
+                2 => store.update(&id, Some(1), |_| Ok(())).expect("update"),
+                _ => unreachable!(),
+            };
+            assert_eq!(operation.step, cockpit_protocol::projects::WorkspaceOperationStep::WorkspaceVerified);
+            assert_eq!(operation.owned_resources.len(), 1);
+            assert_eq!(operation.owned_resources[0].kind, "worktree");
+            assert_eq!(operation.owned_resources[0].path, "/work/task");
+            assert!(operation.owned_resources[0].created_by_operation);
+            assert_eq!(operation.plan.effects, ["create worktree"]);
+            assert_eq!(operation.session_id, "setup-fixture");
+            let persisted: serde_json::Value = serde_json::from_slice(&fs::read(root.join(record_name(&id))).unwrap()).unwrap();
+            assert!(persisted["operation"].get("companion_id").is_none());
+            assert!(persisted["operation"]["plan"].get("companion_path").is_none());
+            assert!(persisted["operation"]["plan"].get("companion_id").is_none());
+            assert!(persisted["operation"]["plan"].get("companion_created_by_operation").is_none());
+            assert_eq!(fs::read_to_string(root.join("old-companion/notes.md")).unwrap(), "user notes");
+            fs::remove_dir_all(root).expect("cleanup");
+        }
+    }
+
+    #[test]
+    fn discard_legacy_unstarted_plan_keeps_old_companion_files() {
+        let root = temp_root("discard-legacy-companion");
         let store = ProjectStore::new(&root).expect("store");
         let id = Uuid::new_v4().to_string();
-        symlink(&outside, root.join(&id)).expect("link");
-        let error = store
-            .read_companion(&root, &id)
-            .expect_err("symlink must fail");
-        assert_ne!(error.code, "state_corrupt");
-        fs::remove_dir_all(root).expect("cleanup root");
-        fs::remove_dir_all(outside).expect("cleanup outside");
+        store.persist_plan(plan(&id)).expect("plan");
+        fs::create_dir(root.join("old-companion")).expect("old directory");
+        fs::write(root.join("old-companion/notes.md"), "notes").expect("notes");
+        legacy_operation(&root, &id, "planned");
+        assert!(store.discard_unstarted_plan(&id).expect("discard"));
+        assert_eq!(fs::read_to_string(root.join("old-companion/notes.md")).unwrap(), "notes");
+        fs::remove_dir_all(root).expect("cleanup");
     }
+
+    #[test]
+    fn legacy_teardown_receipts_preserve_unknown_outcomes_and_retire_cleanup() {
+        for state in ["pending", "outcome_unknown", "orphaned_companion", "completed"] {
+            let root = temp_root("legacy-teardown-receipt");
+            let store = ProjectStore::new(&root).expect("store");
+            let id = Uuid::new_v4().to_string();
+            store.persist_plan(plan(&id)).expect("plan");
+            store.update(&id, None, |operation| {
+                operation.workspace_id = Some("workspace-a".to_owned());
+                Ok(())
+            }).expect("workspace");
+            fs::create_dir(root.join("old-companion")).expect("old directory");
+            fs::write(root.join("old-companion/notes.md"), "user notes").expect("notes");
+            let value = serde_json::json!({
+                "operation_id": id,
+                "workspace_id": "workspace-a",
+                "endpoint_identity": "endpoint-a",
+                "checkout_path": "/work/task",
+                "companion": legacy_companion(&id),
+                "state": state,
+                "updated_at": "1"
+            });
+            fs::write(root.join(teardown_record_name(&id)), serde_json::to_vec(&value).unwrap()).expect("legacy receipt");
+            let receipt = store.read_teardown_receipt(&id).expect("migration").unwrap();
+            assert_eq!(receipt.session_id, "setup-fixture");
+            assert_eq!(receipt.repository_key, "/repo/.git");
+            assert_eq!(receipt.repository_root, "/repo");
+            assert_eq!(receipt.state, match state {
+                "pending" => TeardownReceiptState::Pending,
+                "outcome_unknown" => TeardownReceiptState::OutcomeUnknown,
+                _ => TeardownReceiptState::Completed,
+            });
+            let upgraded: serde_json::Value = serde_json::from_slice(&fs::read(root.join(teardown_record_name(&id))).unwrap()).unwrap();
+            assert!(upgraded.get("companion").is_none());
+            assert_eq!(fs::read_to_string(root.join("old-companion/notes.md")).unwrap(), "user notes");
+            assert_eq!(ProjectStore::new(&root).unwrap().read_teardown_receipt(&id).unwrap().unwrap(), receipt);
+            fs::remove_dir_all(root).expect("cleanup");
+        }
+    }
+
+    #[test]
+    fn orphaned_cleanup_receipt_without_operation_retires_without_filesystem_access() {
+        let root = temp_root("orphaned-legacy-receipt");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        let value = serde_json::json!({
+            "operation_id": id, "workspace_id": "workspace-a",
+            "endpoint_identity": "endpoint-a", "checkout_path": "/work/task",
+            "companion": legacy_companion(&id),
+            "state": "orphaned_companion", "updated_at": "1"
+        });
+        fs::write(root.join(teardown_record_name(&id)), serde_json::to_vec(&value).unwrap()).unwrap();
+        let receipt = store.read_teardown_receipt(&id).expect("safe retirement").unwrap();
+        assert_eq!(receipt.state, TeardownReceiptState::Completed);
+        assert!(receipt.session_id.is_empty());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn foreign_legacy_receipt_cannot_gain_reconciliation_identity() {
+        let root = temp_root("foreign-legacy-receipt");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        store.persist_plan(plan(&id)).unwrap();
+        store.update(&id, None, |operation| {
+            operation.workspace_id = Some("workspace-a".to_owned());
+            Ok(())
+        }).unwrap();
+        let mut companion = legacy_companion(&id);
+        companion["herdr_session_identity"] = serde_json::json!("other-endpoint");
+        let value = serde_json::json!({
+            "operation_id": id, "workspace_id": "workspace-a",
+            "endpoint_identity": "endpoint-a", "checkout_path": "/work/task",
+            "session_id": "setup-fixture",
+            "companion": companion, "state": "outcome_unknown", "updated_at": "1"
+        });
+        fs::write(root.join(teardown_record_name(&id)), serde_json::to_vec(&value).unwrap()).unwrap();
+        let receipt = store.read_teardown_receipt(&id).expect("migration").unwrap();
+        assert_eq!(receipt.state, TeardownReceiptState::OutcomeUnknown);
+        assert!(receipt.session_id.is_empty());
+        assert!(!receipt_matches_operation(&receipt, &store.load(&id).unwrap()));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn teardown_receipt_requires_exact_operation_provenance() {
+        let root = temp_root("teardown-provenance");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        store.persist_plan(plan(&id)).unwrap();
+        store.update(&id, None, |operation| {
+            operation.workspace_id = Some("workspace-a".to_owned());
+            Ok(())
+        }).unwrap();
+        let valid = teardown_receipt(&id, TeardownReceiptState::Pending);
+        for mutation in 0..6 {
+            let mut receipt = valid.clone();
+            match mutation {
+                0 => receipt.session_id = "other".to_owned(),
+                1 => receipt.workspace_id = "other".to_owned(),
+                2 => receipt.endpoint_identity = "other".to_owned(),
+                3 => receipt.checkout_path = "/other".to_owned(),
+                4 => receipt.repository_key = "/other/.git".to_owned(),
+                5 => receipt.repository_root = "/other".to_owned(),
+                _ => unreachable!(),
+            }
+            assert_eq!(store.write_teardown_receipt(&receipt).unwrap_err().code, "stale_identity");
+        }
+        store.write_teardown_receipt(&valid).expect("valid receipt");
+        store.update(&id, None, |operation| {
+            operation.plan.session_id = "different-plan-session".to_owned();
+            Ok(())
+        }).unwrap();
+        assert_eq!(store.write_teardown_receipt(&valid).unwrap_err().code, "stale_identity");
+        store.update(&id, None, |operation| {
+            operation.plan.session_id = valid.session_id.clone();
+            operation.session_id = "different-operation-session".to_owned();
+            Ok(())
+        }).unwrap();
+        assert_eq!(store.write_teardown_receipt(&valid).unwrap_err().code, "stale_identity");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_teardown_receipt_is_rejected_without_touching_target() {
+        use std::os::unix::fs::symlink;
+        let root = temp_root("teardown-symlink");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        let target = root.join("user-notes");
+        fs::write(&target, "notes").unwrap();
+        symlink(&target, root.join(teardown_record_name(&id))).unwrap();
+        assert_eq!(store.read_teardown_receipt(&id).unwrap_err().code, "unsafe_path");
+        assert_eq!(fs::read_to_string(target).unwrap(), "notes");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn oversized_journal_is_rejected_before_migration() {
+        let root = temp_root("oversized-journal");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        fs::write(root.join(record_name(&id)), vec![b' '; MAX_RECORD_BYTES as usize + 1]).unwrap();
+        assert_eq!(store.load(&id).unwrap_err().code, "unsafe_path");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
 }

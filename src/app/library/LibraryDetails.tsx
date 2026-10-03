@@ -40,7 +40,7 @@ export function LibraryDetails({ item, providers, now, document, root, pageUpdat
   providers: readonly ProjectProvider[];
   now: number;
   document: LibraryDetailsDocument;
-  root: { id: string; kind: string; path: string; repositoryId: string; companionId: string | null };
+  root: { id: string; kind: string; path: string; repositoryId: string };
   /** A Confluence page's last edit from its frontmatter; the source clock. */
   pageUpdate: { at: string | null; by: string | null };
 }) {
@@ -120,7 +120,7 @@ export function LibraryDetails({ item, providers, now, document, root, pageUpdat
             {row("Skipped special files", <span className="library-detail-human">{folder.skipped_special}</span>)}
             {row("Skipped ignored files", <span className="library-detail-human">{folder.skipped_ignored}</span>)}
             {row("Skipped other files", <span className="library-detail-human">{folder.skipped_other}</span>)}
-            {row("Updates", <span className="library-detail-human">Source edits do not change this copy until an explicit re-copy. Space copies update separately.</span>)}
+            {row("Updates", <span className="library-detail-human">Source edits do not change this Library capture until an explicit re-copy. Spaces read the same Library item.</span>)}
           </> : <>
             {item.container ? row(page ? "Space" : "Project", <span className="library-detail-human">{item.container.label}</span>) : null}
             {item.canonical_id ? row(page ? "Page ID" : "Source identity", identifier({ label: page ? "page ID" : "source identity", value: item.canonical_id })) : null}
@@ -157,7 +157,7 @@ export function LibraryDetails({ item, providers, now, document, root, pageUpdat
         {technical ? <dl>
           {row("Full path", identifier({ label: "full path", value: fullPath, shown: middlePath(fullPath) }))}
           {row("Root identity", identifier({ label: "root identity", value: root.id }))}
-          {row("Provenance", <span className="library-detail-human">{root.kind}{root.repositoryId ? ` · repository ${root.repositoryId}` : ""}{root.companionId ? ` · companion ${root.companionId}` : ""}</span>)}
+          {row("Provenance", <span className="library-detail-human">{root.kind}{root.repositoryId ? ` · repository ${root.repositoryId}` : ""}</span>)}
           {row("Content hash", document.contentHash ? identifier({ label: "content hash", value: document.contentHash, shown: shortHash(document.contentHash) }) : <span className="library-detail-human is-unknown">Unavailable</span>)}
           {document.frontmatter ? row("Frontmatter", <pre className="library-detail-frontmatter">{document.frontmatter}</pre>) : null}
           {document.diagnostics.map((diagnostic, index) => row(`Diagnostic ${index + 1}`, <span className="library-detail-human"><code>{diagnostic.code}</code>{diagnostic.path ? ` · ${diagnostic.path}` : ""} · {diagnostic.message}</span>))}

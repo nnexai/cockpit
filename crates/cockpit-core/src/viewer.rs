@@ -68,19 +68,23 @@ impl ViewerService {
         }
         let options = self.context.source_options(session_id, &source).await?;
         let root_id = match (&request.source, request.kind) {
-            (ViewerSourceSelector::FilesContext, ViewerKind::Files) => options.files_context_root_id.clone(),
-            (ViewerSourceSelector::FilesFolder, ViewerKind::Files) => options.files_folder_root_id.clone(),
+            (ViewerSourceSelector::FilesContext {}, ViewerKind::Files) => options.files_context_root_id.clone(),
+            (ViewerSourceSelector::FilesFolder {}, ViewerKind::Files) => options.files_folder_root_id.clone(),
+            (ViewerSourceSelector::FilesRepository { root_id }, ViewerKind::Files) => options.roots.iter()
+                .find(|root| root.kind == ContextRootKind::Repository && root.root_id == *root_id)
+                .map(|root| root.root_id.clone()),
             (ViewerSourceSelector::Review { repository_id }, ViewerKind::Review) => options.roots.iter()
-                .find(|root| root.kind == ContextRootKind::Repository && root.repository_id == *repository_id)
+                .find(|root| root.kind == ContextRootKind::Repository && root.repository_id == *repository_id
+                    && options.review_repository_ids.contains(repository_id))
                 .map(|root| root.root_id.clone()),
             _ => None,
         }.ok_or_else(|| InspectionError::new("viewer_source_unavailable", "requested viewer source is unavailable from this terminal"))?;
         let root = options.roots.iter().find(|root| root.root_id == root_id).expect("selected root exists");
         let source_id = if request.kind == ViewerKind::Review {
             crate::review::checkout_source_id(std::path::Path::new(&root.path))?
-        } else { root.companion_id.clone().unwrap_or_else(|| root.root_id.clone()) };
-        // Pin the selected root alone. A Files viewer cannot gain a repository
-        // or unrelated companion merely because its source terminal can see it.
+        } else { root.root_id.clone() };
+        // Pin the selected root alone; other source options grant no authority
+        // to this viewer until the user explicitly switches its source.
         let roots = vec![root.clone()];
         find_root(&roots, &root_id).map_err(root_not_authorized)?;
         let confirmed = self.context.adapter.tab_evidence(session_id, &request.tab_id).await?;
@@ -128,7 +132,7 @@ impl ViewerService {
         let options = self.context.source_options(session_id, &entry.source).await.map_err(root_not_authorized)?;
         for pinned in &entry.context.roots {
             if !options.roots.iter().any(|root| root.root_id == pinned.root_id && root.path == pinned.path
-                && root.repository_id == pinned.repository_id && root.checkout_path == pinned.checkout_path && root.companion_id == pinned.companion_id) {
+                && root.kind == pinned.kind && root.repository_id == pinned.repository_id && root.checkout_path == pinned.checkout_path) {
                 return Err(root_not_authorized(InspectionError::new("context_root_not_authorized", "pinned viewer root changed")));
             }
             find_root(&entry.context.roots, &pinned.root_id).map_err(root_not_authorized)?;

@@ -43,7 +43,7 @@ impl ContextSearchService {
         validate_search_request(request)?;
         let root = self
             .context
-            .authorize_companion_root(session_id, viewer_id, &request.binding_id, &request.root_id)
+            .authorize_files_root(session_id, viewer_id, &request.binding_id, &request.root_id)
             .await?;
         let request = request.clone();
         let permit = self
@@ -75,7 +75,7 @@ impl ContextSearchService {
         validate_invalidation_request(request)?;
         let root = self
             .context
-            .authorize_companion_root(session_id, viewer_id, &request.binding_id, &request.root_id)
+            .authorize_files_root(session_id, viewer_id, &request.binding_id, &request.root_id)
             .await?;
         let request = request.clone();
         let permit = self

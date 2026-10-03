@@ -1,7 +1,7 @@
 //! S6 followed Confluence spaces: durable follow records in the Library index,
 //! D20 enumeration refresh, D17 exclusions and follow removal.
 use super::{
-    LibraryService, SaveOptions, confluence_instance_authority, item_id, operations, refs, space,
+    LibraryService, SaveOptions, confluence_instance_authority, item_id, operations, refs,
     store::{Index, LibraryIndexEntry, Lease, Store, error},
 };
 use crate::{
@@ -248,20 +248,12 @@ impl LibraryService {
             if operations::cancelled(&worker_store, &id)? {
                 return Ok(());
             }
-            let follow_id = follow.follow_id.clone();
             service
-                .refresh_follow(&worker_store, &id, follow, true, request.target.as_ref())
+                .refresh_follow(&worker_store, &id, follow, true)
                 .await?;
             if let Some(target) = &request.target {
-                let saved = {
-                    let _lock = worker_store.shared()?;
-                    worker_store.index()?.follows.iter().any(|f| f.follow_id == follow_id)
-                };
-                if saved {
-                    service
-                        .copy_saved_follows(&worker_store, &id, target, &[follow_id])
-                        .await?;
-                }
+                let saved = operations::get(&worker_store, &id)?.item_ids;
+                service.select_saved_items(&worker_store, &id, target, &saved).await?;
             }
             refs::purge_expired(&worker_store, &id)
         });
@@ -278,7 +270,6 @@ impl LibraryService {
         operation: &str,
         mut follow: LibraryFollowSummary,
         create: bool,
-        target: Option<&SpaceTarget>,
     ) -> Result<(), InspectionError> {
         if matches!(follow.source, LibraryFollowSource::JiraQuery { .. }) {
             return self.refresh_jira_follow(store, operation, follow, create).await;
@@ -320,9 +311,6 @@ impl LibraryService {
                 }
                 Ok(())
             })?;
-            if let Some(target) = target {
-                space::prepare_saved_follow(store, operation, target, &follow)?;
-            }
         }
         let mut pages = listing.pages.clone();
         if let Some(homepage) = listing
@@ -912,8 +900,8 @@ pub(super) fn recount(index: &mut Index, follow_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        space::tests::{companion_named, target},
-        tests::{self as base, finished, reopen},
+        space::tests::{adapter, target},
+        tests::{self as base, finished},
     };
     use super::*;
     use crate::sources::{
@@ -922,7 +910,7 @@ mod tests {
     };
     use async_trait::async_trait;
     use cockpit_protocol::{projects::ProjectProvider, sources::SourceCapability};
-    use std::{path::Path, sync::Mutex};
+    use std::sync::Mutex;
 
     #[derive(Clone)]
     struct Page {
@@ -1385,162 +1373,29 @@ mod tests {
         assert!(service.listing(None).await.unwrap().follows.iter().any(|f| refs::space_key(f) == Some("OPS")));
     }
 
-    fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
-        fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    walk(root, &path, files);
-                } else {
-                    let relative = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
-                    files.insert(relative, std::fs::read(&path).unwrap());
-                }
-            }
-        }
-        let mut files = BTreeMap::new();
-        walk(root, root, &mut files);
-        files
-    }
-    fn manifest(root: &Path) -> serde_json::Value {
-        serde_json::from_slice(&std::fs::read(root.join("context-manifest.json")).unwrap()).unwrap()
-    }
-    fn known(root: &Path, follow_id: &str) -> BTreeSet<String> {
-        manifest(root)["library_follows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|record| record["follow_id"] == follow_id)
-            .map(|record| {
-                record["known_page_item_ids"].as_array().unwrap().iter().map(|id| id.as_str().unwrap().to_owned()).collect()
-            })
-            .unwrap_or_default()
-    }
-    fn space_path(root: &Path, item_id: &str) -> String {
-        manifest(root)["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["library_item_id"] == item_id)
-            .map(|entry| entry["relative_path"].as_str().unwrap().to_owned())
-            .unwrap()
-    }
-    async fn follow_row(service: &LibraryService, target: SpaceTarget, follow_id: &str) -> SpaceCopyRow {
-        service.space_listing(target).await.unwrap().rows.into_iter().find(|row| row.logical_id == follow_id).unwrap()
-    }
-    async fn update(service: &LibraryService, target: SpaceTarget, scope: SpaceUpdateScope) -> LibraryOperation {
-        let request = SpaceUpdateRequest { target, scope, replace_edited: vec![] };
-        finished(service, service.start_space_update(request).await.unwrap()).await
-    }
-    fn only(follow_id: &str) -> SpaceUpdateScope {
-        SpaceUpdateScope::Selection { item_ids: vec![], follow_ids: vec![follow_id.into()] }
-    }
-
     #[tokio::test]
-    async fn per_follow_update_changes_only_that_follow_in_that_space() {
+    async fn follow_add_selects_only_items_saved_by_the_current_operation() {
         let f = fixture(CLOUD, true, 200);
-        let (projects_x, adapter_x, x) = companion_named(&f.base, "space-x").await;
-        let (projects_y, adapter_y, y) = companion_named(&f.base, "space-y").await;
-        let sx = reopen(&f.base).with_projects(projects_x, adapter_x);
-        let sy = reopen(&f.base).with_projects(projects_y, adapter_y);
-        let tx = SpaceTarget { space_id: "space-x".into(), ..target() };
-        let ty = SpaceTarget { space_id: "space-y".into(), ..target() };
-        let (_, f1) = follow(&sx, "SD").await;
-        // Follow and add to X in one operation: phase 2 copies the new follow.
-        let added = finished(&sx, sx.start_add(follow_request("OPS", Some(tx.clone()))).await.unwrap()).await;
-        assert!(added.phases.iter().all(|p| p.state == LibraryPhaseState::Done), "{added:?}");
-        let f2 = sx.listing(None).await.unwrap().follows.into_iter().find(|f| refs::space_key(f) == Some("OPS")).unwrap().follow_id;
-        for (service, target, follows) in [(&sx, &tx, vec![f1.clone()]), (&sy, &ty, vec![f1.clone()])] {
-            let request = SpaceAddRequest { target: target.clone(), item_ids: vec![], follow_ids: follows };
-            let operation = finished(service, service.start_space_add(request).await.unwrap()).await;
-            assert_eq!(operation.phases[0].state, LibraryPhaseState::Done, "{operation:?}");
-            assert_eq!(operation.report.unwrap().new, 6);
-        }
-        let rows = sx.space_listing(tx.clone()).await.unwrap().rows;
-        assert_eq!(rows.len(), 2, "one aggregate row per follow: {rows:?}");
-        assert!(rows.iter().all(|row| row.state == SpaceCopyState::UpToDate && row.item_id.is_none()));
-        let items = pages(&sx).await;
-        assert_eq!(known(&x, &f1), ["100", "110", "111", "112", "200", "201"].map(|id| items[id].item_id.clone()).into());
-        assert_eq!(known(&x, &f2).len(), 2);
-        assert!(sx.space_listing(tx.clone()).await.unwrap().attempts.is_empty());
-
-        // Both follows gain one new and one changed page.
-        {
-            let mut site = f.provider.site();
-            let n = page("SD", "N", &[("900", "Folder F"), ("200", "T")]);
-            site.pages.insert("202".into(), n);
-            site.pages.insert("302".into(), page("OPS", "Q", &[("300", "O")]));
-        }
+        let service = f.base.service.clone().with_herdr(adapter("space"));
+        let (_, follow_id) = follow(&service, "SD").await;
+        let membership = pages(&service).await;
+        assert_eq!(membership.len(), 6);
         f.provider.bump("110");
-        f.provider.bump("301");
-        let report = refresh(&sx, LibraryRefreshRequest::All).await;
-        assert_eq!((report.new, report.updated), (2, 2));
-        for follow_id in [&f1, &f2] {
-            let summary = follow_row(&sx, tx.clone(), follow_id).await.follow.unwrap();
-            assert_eq!((summary.new_pages, summary.changed_pages), (1, 1), "{follow_id}");
-        }
-        assert_eq!(follow_row(&sx, tx.clone(), &f1).await.state, SpaceCopyState::LibraryNewer);
-        let x_before = snapshot(&x);
-        let y_before = snapshot(&y);
-        let items = pages(&sx).await;
-        let f2_paths = follow_row(&sx, tx.clone(), &f2).await.paths;
 
-        let updated = update(&sx, tx.clone(), only(&f1)).await;
-        assert_eq!(updated.phases[0].state, LibraryPhaseState::Done, "{updated:?}");
-        let written = updated.space.unwrap().written;
-        assert_eq!(written.len(), 2, "{written:?}");
-        assert!(written.contains(&space_path(&x, &items["110"].item_id)));
-        assert!(written.contains(&space_path(&x, &items["202"].item_id)));
-        let row = follow_row(&sx, tx.clone(), &f1).await;
-        assert_eq!(row.state, SpaceCopyState::UpToDate);
-        assert!(known(&x, &f1).contains(&items["202"].item_id));
-        let other = follow_row(&sx, tx.clone(), &f2).await;
-        assert_eq!((other.follow.as_ref().unwrap().new_pages, other.follow.unwrap().changed_pages), (1, 1));
-        let x_after = snapshot(&x);
-        for path in &f2_paths {
-            assert_eq!(x_after[path], x_before[path], "{path}");
-        }
-        assert_eq!(known(&x, &f2).len(), 2);
-        assert_eq!(snapshot(&y), y_before, "Space Y is byte-identical");
-
-        // A page removed from X stays known and is not re-added by Update.
-        let n_path = space_path(&x, &items["202"].item_id);
-        sx.space_remove(SpaceRemoveRequest { target: tx.clone(), logical_id: items["202"].logical_id.clone(), confirmed: vec![] })
-            .await
-            .unwrap();
-        assert!(!x.join(&n_path).exists());
-        f.provider.bump("202");
-        refresh(&sx, LibraryRefreshRequest::Follow { follow_id: f1.clone() }).await;
-        let again = update(&sx, tx.clone(), only(&f1)).await;
-        assert!(again.space.unwrap().written.is_empty());
-        assert!(!x.join(&n_path).exists());
-        assert!(known(&x, &f1).contains(&items["202"].item_id));
-        assert_eq!(follow_row(&sx, tx.clone(), &f1).await.state, SpaceCopyState::UpToDate);
-
-        // An edited page is skipped and listed; Library newer stays visible.
-        let a_path = space_path(&x, &items["110"].item_id);
-        std::fs::write(x.join(&a_path), b"edited in X").unwrap();
-        f.provider.bump("110");
-        refresh(&sx, LibraryRefreshRequest::Follow { follow_id: f1.clone() }).await;
-        let row = follow_row(&sx, tx.clone(), &f1).await;
-        assert_eq!((row.state, row.follow.unwrap().edited_pages), (SpaceCopyState::EditedInSpace, 1));
-        let skipped = update(&sx, tx.clone(), only(&f1)).await;
-        assert_eq!(skipped.space.unwrap().skipped_edited, vec![a_path.clone()]);
-        assert_eq!(std::fs::read(x.join(&a_path)).unwrap(), b"edited in X");
-
-        // `All` covers the other follow too; removing a follow from X removes
-        // only its copies and record.
-        update(&sx, tx.clone(), SpaceUpdateScope::All {}).await;
-        assert_eq!(follow_row(&sx, tx.clone(), &f2).await.state, SpaceCopyState::UpToDate);
-        let f1_known = known(&x, &f1);
-        let listing = sx
-            .space_remove(SpaceRemoveRequest { target: tx.clone(), logical_id: f2.clone(), confirmed: vec![] })
-            .await
-            .unwrap();
-        assert!(listing.rows.iter().all(|row| row.logical_id != f2));
-        assert!(f2_paths.iter().all(|path| !x.join(path).exists()));
-        assert!(known(&x, &f2).is_empty());
-        assert_eq!(known(&x, &f1), f1_known);
-        assert_eq!(std::fs::read(x.join(&a_path)).unwrap(), b"edited in X");
-        assert_eq!(snapshot(&y), y_before, "Space Y is byte-identical");
+        let added = finished(
+            &service,
+            service.start_add(follow_request("SD", Some(target()))).await.unwrap(),
+        ).await;
+        let saved_ids = vec![membership["110"].item_id.clone()];
+        assert!(added.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done), "{added:?}");
+        assert_eq!(added.item_ids, saved_ids);
+        assert_eq!(added.space.unwrap().item_ids, saved_ids);
+        let selected = service.space_listing(&target()).await.unwrap().items
+            .into_iter().map(|item| item.item_id).collect::<Vec<_>>();
+        assert_eq!(selected, saved_ids);
+        let follow = service.listing(None).await.unwrap().follows
+            .into_iter().find(|follow| follow.follow_id == follow_id).unwrap();
+        assert_eq!(follow.item_count, 6, "selection leaves the global follow intact");
     }
+
 }

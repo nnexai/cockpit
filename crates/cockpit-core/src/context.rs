@@ -26,6 +26,7 @@ pub struct ContextService {
     pub(crate) configuration: ProjectConfiguration,
     pub(crate) adapter: Arc<dyn SourcePaneAdapter>,
     projects: Arc<ProjectService>,
+    library: Option<Arc<crate::library::LibraryService>>,
     viewers: Option<Arc<crate::viewer::ViewerService>>,
     /// Shared across transient host handlers so bounded searches cannot exhaust blocking workers.
     pub(crate) search_permits: Arc<Semaphore>,
@@ -33,7 +34,7 @@ pub struct ContextService {
 
 /// Fresh, internal proof used by the durable reference-comment service.
 ///
-/// The proof intentionally contains only identity and the authorized companion
+/// The proof intentionally contains only identity and the authorized browsing
 /// root. Callers cannot provide any of these values as authority.
 #[derive(Debug, Clone)]
 pub(crate) struct ContextCommentEvidence {
@@ -43,8 +44,7 @@ pub(crate) struct ContextCommentEvidence {
     pub workspace_id: String,
     pub tab_id: String,
     pub root_id: String,
-    pub companion_id: String,
-    pub companion_path: String,
+    pub root_path: String,
 }
 
 pub(crate) struct AuthorizedRoot {
@@ -64,12 +64,18 @@ impl ContextService {
             configuration,
             adapter,
             projects,
+            library: None,
             viewers: None,
             search_permits: Arc::new(Semaphore::new(2)),
         }
     }
     pub fn with_viewers(mut self, viewers: Arc<crate::viewer::ViewerService>) -> Self {
         self.viewers = Some(viewers);
+        self
+    }
+
+    pub fn with_library(mut self, library: Arc<crate::library::LibraryService>) -> Self {
+        self.library = Some(library);
         self
     }
 
@@ -92,7 +98,6 @@ impl ContextService {
         let root_id = context.default_root_id.as_deref().ok_or_else(||
             InspectionError::new("comments_detached", "viewer has no browsing root"))?;
         let root = context.roots.iter().find(|root| root.root_id == root_id)
-            .filter(|root| matches!(root.kind, ContextRootKind::Companion | ContextRootKind::Folder))
             .ok_or_else(|| InspectionError::new("comments_detached", "viewer browsing root is unavailable"))?;
         Ok(ContextCommentEvidence {
             binding_id: context.binding_id.clone(),
@@ -101,18 +106,17 @@ impl ContextService {
             workspace_id: context.space_id.clone(),
             tab_id: context.tab_id.clone(),
             root_id: root.root_id.clone(),
-            companion_id: root.companion_id.clone().unwrap_or_else(|| root.root_id.clone()),
-            companion_path: root.path.clone(),
+            root_path: root.path.clone(),
         })
     }
 
-    pub(crate) async fn authorize_companion_root(
+    pub(crate) async fn authorize_files_root(
         &self, session_id: &str, viewer_id: &str, binding_id: &str, root_id: &str,
     ) -> Result<AuthorizedRoot, InspectionError> {
         let authorization = self.authorize_viewer(session_id, viewer_id, binding_id).await?;
         let mut authorized = find_root(&authorization.context.roots, root_id)?;
-        if authorized.root.kind != ContextRootKind::Companion {
-            return Err(InspectionError::new("context_root_not_companion", "bounded search requires a companion root"));
+        if authorization.context.kind != cockpit_protocol::viewer::ViewerKind::Files {
+            return Err(InspectionError::new("context_root_not_files", "bounded reads require a Files viewer"));
         }
         authorized.max_depth = self.configuration.limits.context_tree_depth;
         Ok(authorized)
@@ -121,13 +125,7 @@ impl ContextService {
     pub(crate) async fn authorize_media_root(
         &self, session_id: &str, viewer_id: &str, binding_id: &str, root_id: &str,
     ) -> Result<AuthorizedRoot, InspectionError> {
-        let authorization = self.authorize_viewer(session_id, viewer_id, binding_id).await?;
-        let mut authorized = find_root(&authorization.context.roots, root_id)?;
-        if !matches!(authorized.root.kind, ContextRootKind::Companion | ContextRootKind::Folder) {
-            return Err(InspectionError::new("context_root_not_media", "bounded media requires a companion or folder root"));
-        }
-        authorized.max_depth = self.configuration.limits.context_tree_depth;
-        Ok(authorized)
+        self.authorize_files_root(session_id, viewer_id, binding_id, root_id).await
     }
 
 
@@ -229,58 +227,96 @@ impl ContextService {
     pub(crate) async fn source_options(
         &self, session_id: &str, evidence: &SourcePaneEvidence,
     ) -> Result<cockpit_protocol::viewer::ViewerSourceOptions, InspectionError> {
-        let cwd = evidence_cwd(evidence).ok_or_else(||
-            InspectionError::new("viewer_source_unavailable", "source terminal directory is unavailable or unsafe"))?;
+        let cwd = evidence_cwd(evidence);
         let mut roots = Vec::new();
         let mut diagnostics = Vec::new();
         let mut files_context_root_id = None;
-        match self.projects.context_companions(session_id, &evidence.workspace_id, &evidence.endpoint_identity).await {
-            Ok(companions) => {
-                for mut root in companions {
-                    let Ok((path, _, metadata)) = canonical_directory(Path::new(&root.path)) else { continue };
-                    let checkout = absolute_context_path(Path::new(&root.checkout_path)).ok();
-                    if checkout.as_deref().is_some_and(|checkout| is_within(&cwd, checkout)) || is_within(&cwd, &path) {
-                        root.root_id = format!("companion:{}:{}", root.companion_id.as_deref().unwrap_or(&root.repository_id), filesystem_identity(&metadata));
-                        root.path = path.to_string_lossy().into_owned();
-                        if files_context_root_id.is_none() { files_context_root_id = Some(root.root_id.clone()); }
-                        else { files_context_root_id = None; }
-                        roots.push(root);
+        let mut selected_repositories = Vec::new();
+        if let Some(library) = &self.library {
+            let target = cockpit_protocol::library::SpaceTarget {
+                session_id: session_id.to_owned(),
+                space_id: evidence.workspace_id.clone(),
+            };
+            match library.space_listing(&target).await {
+                Ok(listing) => {
+                    diagnostics.extend(listing.diagnostics);
+                    match canonical_directory(Path::new(library.root_path())) {
+                        Ok((path, dir, _)) => {
+                            let root = AuthorizedRoot::library(path, dir, self.configuration.limits.context_tree_depth)?.summary();
+                            files_context_root_id = Some(root.root_id.clone());
+                            roots.push(root);
+                        }
+                        Err(error) => diagnostics.push(diagnostic(&error.code, &error.message, None)),
                     }
+                    selected_repositories = listing.repository_paths;
                 }
+                Err(error) => diagnostics.push(diagnostic(&error.code, &error.message, None)),
             }
-            Err(error) => diagnostics.push(diagnostic(&error.code, &error.message, None)),
         }
         let mut review_repository_ids = Vec::new();
-        if let Ok(repository) = self.projects.cached_discover_checkout(&cwd).await {
-            if let Ok((checkout, _, metadata)) = canonical_directory(Path::new(&repository.checkout_path)) {
-                review_repository_ids.push(repository.repository_id.clone());
-                roots.push(ContextRoot {
-                    root_id: format!("repository:{}:{}", repository.repository_id, filesystem_identity(&metadata)),
-                    kind: ContextRootKind::Repository, label: repository.name,
-                    path: checkout.to_string_lossy().into_owned(), repository_id: repository.repository_id,
-                    checkout_path: checkout.to_string_lossy().into_owned(), companion_id: None,
-                });
+        if let Some(cwd) = &cwd {
+            if let Ok(repository) = self.projects.cached_discover_checkout(cwd).await {
+                if let Ok(root) = verified_repository_root(
+                    &self.configuration, Path::new(&repository.checkout_path), repository.repository_id, repository.name,
+                ).await {
+                    review_repository_ids.push(root.repository_id.clone());
+                    roots.push(root);
+                }
             }
         }
-        let files_folder_root_id = if let Some(folder) = resolve_viewer_root(&self.configuration, &cwd).await {
+        let selected_catalog = if selected_repositories.is_empty() {
+            Vec::new()
+        } else {
+            match self.projects.repositories().await {
+                Ok(listing) => {
+                    diagnostics.extend(listing.diagnostics);
+                    listing.repositories
+                }
+                Err(error) => {
+                    diagnostics.push(diagnostic(&error.code, &error.message, None));
+                    Vec::new()
+                }
+            }
+        };
+        for repository_path in selected_repositories {
+            if roots.iter().any(|root| root.kind == ContextRootKind::Repository && root.path == repository_path) {
+                continue;
+            }
+            let Some(repository) = selected_catalog.iter().find(|repository| repository.checkout_path == repository_path) else {
+                diagnostics.push(diagnostic("context_root_not_authorized", "selected repository is no longer in the configured catalog", Some(&repository_path)));
+                continue;
+            };
+            match verified_repository_root(&self.configuration, Path::new(&repository_path), repository.repository_id.clone(), repository.name.clone()).await {
+                Ok(root) => roots.push(root),
+                Err(error) => diagnostics.push(diagnostic(&error.code, &error.message, Some(&repository_path))),
+            }
+        }
+        let folder = match &cwd {
+            Some(cwd) => resolve_viewer_root(&self.configuration, cwd).await,
+            None => None,
+        };
+        let files_folder_root_id = if let Some(folder) = folder {
             if let Ok((folder, _, metadata)) = canonical_directory(&folder) {
                 let root_id = format!("folder:{}", filesystem_identity(&metadata));
                 roots.push(ContextRoot {
                     root_id: root_id.clone(), kind: ContextRootKind::Folder,
                     label: folder.file_name().and_then(|name| name.to_str()).unwrap_or("Folder").to_owned(),
                     path: folder.to_string_lossy().into_owned(), repository_id: root_id.clone(),
-                    checkout_path: folder.to_string_lossy().into_owned(), companion_id: None,
+                    checkout_path: folder.to_string_lossy().into_owned(),
                 });
                 Some(root_id)
             } else { None }
         } else { None };
         roots.sort_by(|a,b| a.root_id.cmp(&b.root_id));
-        if roots.iter().filter(|root| root.kind == ContextRootKind::Companion).count() != 1 { files_context_root_id = None; }
+        let confirmed = self.adapter.tab_evidence(session_id, &evidence.tab_id).await?;
+        if !confirmed.present || confirmed.endpoint_identity != evidence.endpoint_identity || confirmed.workspace_id != evidence.workspace_id {
+            return Err(InspectionError::new("viewer_tab_absent", "viewer tab or server identity is no longer current"));
+        }
         Ok(cockpit_protocol::viewer::ViewerSourceOptions {
             session_id: session_id.to_owned(), pane_id: evidence.pane_id.clone(),
             tab_id: evidence.tab_id.clone(), space_id: evidence.workspace_id.clone(),
             files_context_root_id, files_folder_root_id, review_repository_ids, roots,
-            reason: "Viewers use this terminal's authorized directory and checkout".to_owned(), diagnostics,
+            reason: "Files use the full Library, selected repositories, or this terminal's verified folder".to_owned(), diagnostics,
         })
     }
 
@@ -289,6 +325,31 @@ impl ContextService {
     ) -> Result<cockpit_protocol::projects::RepositoryCandidate, InspectionError> {
         self.projects.cached_discover_checkout(cwd).await
     }
+}
+
+async fn verified_repository_root(
+    configuration: &ProjectConfiguration, path: &Path, repository_id: String, label: String,
+) -> Result<ContextRoot, InspectionError> {
+    if git_metadata_path(path) {
+        return Err(InspectionError::new("context_root_unavailable", "Git metadata cannot be a repository root"));
+    }
+    let (path, dir, metadata) = canonical_directory(path)?;
+    let git_metadata = dir.symlink_metadata(".git")
+        .map_err(|error| InspectionError::new("context_root_unavailable", error.to_string()))?;
+    if git_metadata.file_type().is_symlink() || (!git_metadata.is_dir() && !git_metadata.is_file()) {
+        return Err(InspectionError::new("context_root_unavailable", "Git metadata must not be a symbolic link"));
+    }
+    git_root_matches(configuration, &path, ContextRootKind::Repository).await?;
+    let (_, _, current) = canonical_directory(&path)?;
+    if filesystem_identity(&metadata) != filesystem_identity(&current) {
+        return Err(InspectionError::new("context_stale_root", "repository filesystem identity changed"));
+    }
+    Ok(ContextRoot {
+        root_id: format!("repository:{}:{}", repository_id, filesystem_identity(&metadata)),
+        kind: ContextRootKind::Repository, label,
+        path: path.to_string_lossy().into_owned(), repository_id,
+        checkout_path: path.to_string_lossy().into_owned(),
+    })
 }
 
 const MAX_FILE_INDEX_FILES: usize = 50_000;
@@ -406,7 +467,7 @@ pub(crate) fn enumerate_file_index(
             let entry = entry.map_err(|error| InspectionError::new("context_file_index", error.to_string()))?;
             let name = entry.file_name();
             let relative = prefix.join(&name);
-            if crate::context_assets::excluded_source_path(&relative)
+            if crate::library::folder_io::excluded_source_path(&relative)
                 || reserved_context_path(authorized.root.kind, &relative).is_some()
                 || relative.to_str().is_none()
                 || relative.as_os_str().as_encoded_bytes().contains(&b'\\') {
@@ -836,7 +897,6 @@ impl AuthorizedRoot {
                 path: path.to_string_lossy().into_owned(),
                 repository_id: identity,
                 checkout_path: path.to_string_lossy().into_owned(),
-                companion_id: None,
             },
             canonical: path,
             dir,
@@ -905,21 +965,6 @@ pub(crate) fn reserved_context_path(kind: ContextRootKind, relative: &Path) -> O
         }
         if kind == ContextRootKind::Library && first && name == ".cockpit" {
             return Some("Cockpit Library metadata is not exposed");
-        }
-        if kind == ContextRootKind::Companion {
-            if first
-                && (name == "manifest.json"
-                    || name == "context-manifest.json"
-                    || name == ".context-assets.lock")
-            {
-                return Some("Cockpit companion metadata is not exposed");
-            }
-            if name.to_str().is_some_and(|name| {
-                (name.starts_with(".companion-") || name.starts_with(".context-snapshot-"))
-                    && name.ends_with(".tmp")
-            }) {
-                return Some("Cockpit staging internals are not exposed");
-            }
         }
         first = false;
     }
@@ -1343,9 +1388,6 @@ fn diagnostic(code: &str, message: &str, path: Option<&str>) -> ProjectDiagnosti
     }
 }
 
-fn is_within(path: &Path, root: &Path) -> bool {
-    path == root || path.strip_prefix(root).is_ok()
-}
 
 #[cfg(test)]
 mod review_checkout_tests {
@@ -1419,6 +1461,239 @@ mod review_checkout_tests {
         (context, viewers)
     }
 
+    fn library_services(
+        configuration: ProjectConfiguration, adapter: Arc<TestAdapter>,
+    ) -> (Arc<crate::library::LibraryService>, Arc<ContextService>, Arc<ViewerService>) {
+        let sources = Arc::new(SourceService::new(&configuration, vec![]).expect("source service"));
+        let library = Arc::new(crate::library::LibraryService::new(configuration.clone(), sources).with_herdr(adapter.clone()));
+        let projects = Arc::new(ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"));
+        let context = Arc::new(ContextService::new(configuration, adapter, projects).with_library(library.clone()));
+        let viewers = Arc::new(ViewerService::new(context.clone()));
+        let context = Arc::new(context.as_ref().clone().with_viewers(viewers.clone()));
+        (library, context, viewers)
+    }
+
+    async fn assert_files_features(
+        configuration: &ProjectConfiguration, context: &Arc<ContextService>,
+        viewer: &ViewerContext, root_path: &Path,
+    ) {
+        let root_id = viewer.default_root_id.clone().expect("Files root");
+        let document = context.document("session", &viewer.viewer_id, &ContextDocumentRequest {
+            binding_id: viewer.binding_id.clone(), root_id: root_id.clone(),
+            path: "notes.md".into(), expected_revision: None, offset: None,
+        }).await.expect("read live source");
+        assert_eq!(document.text.as_deref(), Some("direct source needle\n"));
+        let search = crate::context_search::ContextSearchService::new(context.clone())
+            .search("session", &viewer.viewer_id, &cockpit_protocol::context_search::ContextSearchRequest {
+                binding_id: viewer.binding_id.clone(), root_id: root_id.clone(),
+                query: "needle".into(), request_generation: 1, offset: None, revision: None,
+            }).await.expect("bounded Files search");
+        assert_eq!(search.results.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(), vec!["notes.md"]);
+        let media = context.media("session", &viewer.viewer_id, &cockpit_protocol::context_media::ContextMediaRequest {
+            binding_id: viewer.binding_id.clone(), root_id: root_id.clone(),
+            path: "image.jpg".into(), expected_revision: None,
+        }).await.expect("bounded Files raster");
+        assert_eq!((media.width, media.height, media.mime_type.as_str()), (1, 1, "image/jpeg"));
+        let index = context.file_index("session", &viewer.viewer_id, &ContextFileIndexRequest {
+            binding_id: viewer.binding_id.clone(), root_id: root_id.clone(), mode: ContextFileIndexMode::Fresh,
+        }).await.expect("Files index");
+        assert!(index.files.iter().any(|entry| entry.path == "notes.md"));
+        assert!(!index.files.iter().any(|entry| entry.path.starts_with(".git/")));
+        let comments = crate::comments::CommentsService::new(configuration.clone(), context.clone()).expect("comments");
+        let scope = cockpit_protocol::comments::CommentRequestScope {
+            binding_id: viewer.binding_id.clone(), client_id: "client".into(),
+        };
+        let batch = comments.batch("session", &viewer.viewer_id, &cockpit_protocol::comments::CommentBatchRequest {
+            scope: scope.clone(), batch_id: None,
+        }).await.expect("same-tab comments");
+        let captured = comments.upsert("session", &viewer.viewer_id, &cockpit_protocol::comments::CommentUpsertRequest {
+            batch: cockpit_protocol::comments::CommentBatchMutation {
+                scope: scope.clone(), batch_id: batch.batch_id, expected_generation: batch.generation,
+            },
+            draft_id: None,
+            capture: Some(cockpit_protocol::comments::CommentCapture {
+                root_id: root_id.clone(), path: "notes.md".into(), expected_revision: document.revision,
+                start_line: Some(1), end_line: Some(1), review: None,
+            }),
+            comment_text: "Direct comment".into(),
+        }).await.expect("capture direct source comment");
+        assert_eq!(captured.drafts[0].file_ref.absolute_path, root_path.join("notes.md").to_string_lossy());
+        let preview = comments.preview("session", &viewer.viewer_id, &cockpit_protocol::comments::CommentPreviewRequest {
+            batch: cockpit_protocol::comments::CommentBatchMutation {
+                scope, batch_id: captured.batch_id.clone(), expected_generation: captured.generation,
+            },
+            retain_stale_excerpts: false,
+        }).await.expect("authorized direct-source payload");
+        assert!(preview.payload.starts_with(&format!("{}:1\n", root_path.join("notes.md").to_string_lossy())));
+        assert!(preview.payload.contains("Direct comment"));
+        assert!(matches!(&captured.owner, cockpit_protocol::comments::CommentOwner::Viewer {
+            tab_id, source_id, ..
+        } if tab_id == "tab" && source_id == &root_id));
+    }
+
+    fn direct_source_files(root: &Path) {
+        std::fs::create_dir_all(root).expect("source root");
+        std::fs::write(root.join("notes.md"), "direct source needle\n").expect("source text");
+        // A complete 1x1, 8-bit, three-component JPEG header accepted by the
+        // bounded media parser (the viewer receives bytes, not host paths).
+        std::fs::write(root.join("image.jpg"), [
+            0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 0, 1, 0, 1, 3,
+            1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 0xff, 0xd9,
+        ]).expect("source raster");
+    }
+
+    #[tokio::test]
+    async fn files_context_exposes_full_library_without_cwd_or_selected_items() {
+        let workspace = std::env::temp_dir().join(format!("cockpit-direct-library-{}", Uuid::new_v4()));
+        let source = workspace.join("unrelated");
+        std::fs::create_dir_all(&source).expect("source");
+        let configuration = configuration(&workspace);
+        let library_path = PathBuf::from(&configuration.library_root);
+        direct_source_files(&library_path);
+        std::fs::create_dir(library_path.join("unselected-folder")).expect("unselected content");
+        std::fs::write(library_path.join("unselected-folder/document.md"), "unselected live data").expect("unselected document");
+        let adapter = Arc::new(TestAdapter::new(&source, &source));
+        {
+            let mut evidence = adapter.evidence.lock().await;
+            evidence.cwd = None;
+            evidence.foreground_cwd = None;
+        }
+        let (library, context, viewers) = library_services(configuration.clone(), adapter.clone());
+        let target = cockpit_protocol::library::SpaceTarget { session_id: "session".into(), space_id: "space".into() };
+        assert!(library.space_listing(&target).await.expect("live Space").items.is_empty());
+        std::fs::write(library_path.join(".cockpit/private.txt"), "private needle").expect("private metadata");
+        let options = viewers.sources("session", "pane").await.expect("Library without cwd");
+        assert!(options.files_folder_root_id.is_none());
+        let viewer = viewers.open("session", &open_request(ViewerSourceSelector::FilesContext {})).await.expect("full Library viewer");
+        let root_id = viewer.default_root_id.clone().expect("Library root");
+        assert_eq!(Some(root_id.clone()), options.files_context_root_id);
+        assert_eq!(viewer.roots[0].kind, ContextRootKind::Library);
+        assert_files_features(&configuration, &context, &viewer, &library_path).await;
+        let directory = context.directory("session", &viewer.viewer_id, &ContextDirectoryRequest {
+            binding_id: viewer.binding_id.clone(), root_id: root_id.clone(), path: "".into(), offset: None, revision: None,
+        }).await.expect("full Library directory");
+        assert!(directory.entries.iter().any(|entry| entry.name == "unselected-folder"));
+        assert!(!directory.entries.iter().any(|entry| entry.name == ".cockpit"));
+        let unselected = context.document("session", &viewer.viewer_id, &ContextDocumentRequest {
+            binding_id: viewer.binding_id.clone(), root_id: root_id.clone(),
+            path: "unselected-folder/document.md".into(), expected_revision: None, offset: None,
+        }).await.expect("unselected Library content remains readable");
+        assert_eq!(unselected.text.as_deref(), Some("unselected live data"));
+        let mut request = ContextDocumentRequest {
+            binding_id: viewer.binding_id.clone(), root_id, path: ".cockpit/private.txt".into(), expected_revision: None, offset: None,
+        };
+        assert_eq!(context.document("session", &viewer.viewer_id, &request).await.expect_err("metadata hidden").code, "context_reserved_path");
+        request.path = "notes.md".into();
+        std::fs::write(library_path.join("notes.md"), "refreshed live data").expect("refresh");
+        assert_eq!(context.document("session", &viewer.viewer_id, &request).await.expect("live refresh").text.as_deref(), Some("refreshed live data"));
+        std::fs::rename(&library_path, workspace.join("old-library")).expect("retain original Library");
+        std::fs::create_dir(&library_path).expect("replacement Library");
+        assert_eq!(context.document("session", &viewer.viewer_id, &request).await.expect_err("stale Library root").code, "context_root_not_authorized");
+        std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn files_repository_uses_fresh_selection_and_rejects_paths_and_retired_roots() {
+        let workspace = std::env::temp_dir().join(format!("cockpit-direct-repository-{}", Uuid::new_v4()));
+        let repository = workspace.join("repository");
+        git_fixture(&repository);
+        direct_source_files(&repository);
+        let source = workspace.join("unrelated");
+        std::fs::create_dir(&source).expect("unrelated source");
+        let adapter = Arc::new(TestAdapter::new(&source, &source));
+        let configuration = configuration(&workspace);
+        let (library, context, viewers) = library_services(configuration.clone(), adapter.clone());
+        let target = cockpit_protocol::library::SpaceTarget { session_id: "session".into(), space_id: "space".into() };
+        library.space_repositories(cockpit_protocol::library::SpaceRepositoriesRequest {
+            target: target.clone(), repository_paths: vec![repository.to_string_lossy().into_owned()],
+        }).await.expect("select repository");
+        let options = viewers.sources("session", "pane").await.expect("fresh selected repository");
+        assert!(options.review_repository_ids.is_empty(), "selection does not grant Review authority");
+        let root = options.roots.iter().find(|root| root.kind == ContextRootKind::Repository).expect("selected root");
+        assert_eq!(root.path, repository.to_string_lossy());
+        assert_eq!(viewers.open("session", &open_request(ViewerSourceSelector::FilesRepository {
+            root_id: repository.to_string_lossy().into_owned(),
+        })).await.expect_err("client path grants no authority").code, "viewer_source_unavailable");
+        assert_eq!(viewers.open("session", &open_request(ViewerSourceSelector::Review {
+            repository_id: root.repository_id.clone(),
+        })).await.expect_err("extra repository is Files-only").code, "viewer_source_unavailable");
+        let viewer = viewers.open("session", &open_request(ViewerSourceSelector::FilesRepository {
+            root_id: root.root_id.clone(),
+        })).await.expect("selected repository Files viewer");
+        assert_files_features(&configuration, &context, &viewer, &repository).await;
+        let request = ContextDocumentRequest {
+            binding_id: viewer.binding_id.clone(), root_id: root.root_id.clone(),
+            path: "notes.md".into(), expected_revision: None, offset: None,
+        };
+        #[cfg(unix)]
+        {
+            let metadata = workspace.join("original-git");
+            std::fs::rename(repository.join(".git"), &metadata).expect("retain Git metadata");
+            std::os::unix::fs::symlink(&metadata, repository.join(".git")).expect("unsafe Git metadata");
+            assert_eq!(context.document("session", &viewer.viewer_id, &request).await.expect_err("symlink Git root revoked").code, "context_root_not_authorized");
+            std::fs::remove_file(repository.join(".git")).expect("remove fixture symlink");
+            std::fs::rename(metadata, repository.join(".git")).expect("restore Git metadata");
+        }
+        library.space_repositories(cockpit_protocol::library::SpaceRepositoriesRequest {
+            target: target.clone(), repository_paths: vec![],
+        }).await.expect("remove selection");
+        assert_eq!(context.document("session", &viewer.viewer_id, &request).await.expect_err("unselected root revoked").code, "context_root_not_authorized");
+        library.space_repositories(cockpit_protocol::library::SpaceRepositoriesRequest {
+            target, repository_paths: vec![repository.to_string_lossy().into_owned()],
+        }).await.expect("restore selection");
+        std::fs::rename(&repository, workspace.join("old-repository")).expect("retain selected checkout");
+        git_fixture(&repository);
+        direct_source_files(&repository);
+        assert_eq!(context.document("session", &viewer.viewer_id, &request).await.expect_err("replacement checkout").code, "context_root_not_authorized");
+        adapter.tab.lock().await.endpoint_identity = "new-endpoint".into();
+        assert_eq!(context.document("session", &viewer.viewer_id, &request).await.expect_err("retired endpoint").code, "viewer_tab_absent");
+        std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn persisted_repository_selection_loses_authority_when_removed_from_catalog() {
+        let workspace = std::env::temp_dir().join(format!("cockpit-direct-catalog-revocation-{}", Uuid::new_v4()));
+        let repository = workspace.join("repository");
+        git_fixture(&repository);
+        direct_source_files(&repository);
+        let source = workspace.join("source");
+        std::fs::create_dir(&source).expect("source");
+        let adapter = Arc::new(TestAdapter::new(&source, &source));
+        let initial = configuration(&workspace);
+        let target = cockpit_protocol::library::SpaceTarget { session_id: "session".into(), space_id: "space".into() };
+        let (library, context, viewers) = library_services(initial.clone(), adapter.clone());
+        library.space_repositories(cockpit_protocol::library::SpaceRepositoriesRequest {
+            target: target.clone(), repository_paths: vec![repository.to_string_lossy().into_owned()],
+        }).await.expect("select configured repository");
+        let issued = viewers.sources("session", "pane").await.expect("initial roots");
+        let root = issued.roots.iter().find(|root| root.path == repository.to_string_lossy()).expect("issued repository");
+        let selector = ViewerSourceSelector::FilesRepository { root_id: root.root_id.clone() };
+        viewers.open("session", &open_request(selector.clone())).await.expect("initial authorized viewer");
+        drop(viewers);
+        drop(context);
+        drop(library);
+        let configured = workspace.join("remaining-configured-root");
+        std::fs::create_dir(&configured).expect("remaining root");
+        let mut revised = initial;
+        revised.repository_roots = vec![configured.to_string_lossy().into_owned()];
+        let (library, _context, viewers) = library_services(revised, adapter.clone());
+        let listing = library.space_listing(&target).await.expect("retained selection");
+        assert_eq!(listing.repository_paths, vec![repository.to_string_lossy().into_owned()]);
+        assert!(!listing.diagnostics.is_empty(), "selection remains recoverable but diagnosed");
+        let options = viewers.sources("session", "pane").await.expect("revised roots");
+        assert!(!options.roots.iter().any(|root| root.path == repository.to_string_lossy()), "retired catalog selection grants no root");
+        assert_eq!(viewers.open("session", &open_request(selector)).await.expect_err("stale selector").code, "viewer_source_unavailable");
+        {
+            let mut evidence = adapter.evidence.lock().await;
+            evidence.cwd = Some(repository.to_string_lossy().into_owned());
+            evidence.foreground_cwd = evidence.cwd.clone();
+        }
+        let options = viewers.sources("session", "pane").await.expect("terminal-owned checkout roots");
+        assert!(options.roots.iter().any(|root| root.kind == ContextRootKind::Repository && root.path == repository.to_string_lossy()),
+            "independent live terminal checkout authority is not catalog-restricted");
+        std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
     fn open_request(source: ViewerSourceSelector) -> ViewerOpenRequest {
         ViewerOpenRequest {
             tab_id: "tab".to_owned(),
@@ -1433,7 +1708,7 @@ mod review_checkout_tests {
     }
 
     async fn open_folder(viewers: &ViewerService) -> ViewerContext {
-        viewers.open("session", &open_request(ViewerSourceSelector::FilesFolder))
+        viewers.open("session", &open_request(ViewerSourceSelector::FilesFolder {}))
             .await.expect("open Files folder viewer")
     }
 
@@ -1457,9 +1732,26 @@ mod review_checkout_tests {
         }
         async fn session_snapshot(
             &self,
-            _: &str,
+            session_id: &str,
         ) -> Result<SessionSnapshotResponse, InspectionError> {
-            unavailable()
+            let tab = self.tab.lock().await.clone();
+            Ok(SessionSnapshotResponse {
+                session_id: session_id.to_owned(),
+                server_instance: tab.server_instance,
+                version: "test".into(),
+                protocol: 1,
+                focused_space_id: None,
+                focused_tab_id: None,
+                focused_pane_id: None,
+                herdr_shell: None,
+                spaces: if tab.present {
+                    vec![cockpit_protocol::v1::SpaceSummary {
+                        id: tab.workspace_id, label: "Test Space".into(), number: 1,
+                        tab_count: 1, pane_count: 1, focused: false, agent_status: "none".into(), git: None,
+                    }]
+                } else { vec![] },
+                tabs: vec![], panes: vec![], agents: vec![],
+            })
         }
         async fn focus(&self, _: &str, _: &FocusRequest) -> Result<FocusResponse, InspectionError> {
             unavailable()
@@ -1489,7 +1781,7 @@ mod review_checkout_tests {
     #[async_trait::async_trait]
     impl ProjectHerdrAdapter for TestAdapter {
         async fn project_endpoint_identity(&self, _: &str) -> Result<String, InspectionError> {
-            unavailable()
+            Ok(self.tab.lock().await.endpoint_identity.clone())
         }
 
         async fn project_inventory(
@@ -1983,7 +2275,7 @@ mod review_checkout_tests {
         let adapter = Arc::new(TestAdapter::new(&linked, &linked));
         let (context, viewers) = services(configuration(&workspace), adapter.clone());
         assert_eq!(
-            viewers.open("session", &open_request(ViewerSourceSelector::FilesFolder))
+            viewers.open("session", &open_request(ViewerSourceSelector::FilesFolder {}))
                 .await.expect_err("symlink source is unsafe").code,
             "viewer_source_unavailable",
         );
@@ -2082,7 +2374,7 @@ mod review_checkout_tests {
         std::fs::write(workspace.join("notes.md"), "source\n").expect("source");
         let adapter = Arc::new(TestAdapter::new(&workspace, &workspace));
         let (context, viewers) = services(configuration(&workspace), adapter.clone());
-        let mut wrong_tab = open_request(ViewerSourceSelector::FilesFolder);
+        let mut wrong_tab = open_request(ViewerSourceSelector::FilesFolder {});
         wrong_tab.tab_id = "other-tab".to_owned();
         assert_eq!(
             viewers.open("session", &wrong_tab).await.expect_err("source belongs to another tab").code,
@@ -2157,7 +2449,6 @@ mod file_index_tests {
                 path: root.to_string_lossy().into_owned(),
                 repository_id: "test".into(),
                 checkout_path: root.to_string_lossy().into_owned(),
-                companion_id: None,
             },
             canonical: root.to_path_buf(),
             dir,

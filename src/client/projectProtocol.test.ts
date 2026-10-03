@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseWorkspaceOperation, parseWorkspaceSetupRequest, parseWorkspaceDefaults } from "./projectProtocol";
+import { parseWorkspaceTeardownPreview, parseWorkspaceTeardownExecuteRequest, parseWorkspaceTeardownResult, parseWorkspaceTeardownRecoveryList } from "./projectTeardownProtocol";
 
 const repository = {
   repository_id: "repo-1",
@@ -23,9 +24,6 @@ const plan = {
   branch: "task",
   base: "main",
   checkout_path: "/worktrees/task",
-  companion_path: "/companions/operation-1",
-  companion_id: "operation-1",
-  companion_created_by_operation: true,
   label: "Task",
   focus: true,
   ownership: "owned_worktree",
@@ -47,7 +45,6 @@ function operation(step: "context_preparing" | "context_ready") {
     workspace_id: "workspace-1",
     tab_id: null,
     pane_id: null,
-    companion_id: "operation-1",
     owned_resources: [],
     error: null,
     resume_allowed: false,
@@ -83,4 +80,31 @@ it("carries linked work items in defaults and worktree requests", () => {
   const request = { operation: "create", repository_id: "repo", branch: null, base_ref: null, checkout_path: null, label: null, task_name: null, artifact_url: "https://gitlab.test/a/b/-/merge_requests/1", linked_artifact_urls: [jira.canonical_url], focus: true };
   expect(parseWorkspaceSetupRequest(request)).toEqual(request);
   expect(() => parseWorkspaceSetupRequest({ ...request, linked_artifact_urls: Array(5).fill(jira.canonical_url) })).toThrow();
+});
+
+it("decodes worktree teardown without companion state and rejects removed destructive actions", () => {
+  const preview = {
+    operation_id: "operation-1", workspace_id: "space-1", endpoint_identity: "endpoint-1",
+    repository_key: "repo", repository_root: "/repos/repo", checkout_path: "/worktrees/task",
+    ownership: "owned_created", workspace_state: "live", is_linked_worktree: true, dirty_state: "clean",
+    allowed_actions: ["close_space", "remove_owned_worktree"], blockers: [], warnings: [], required_confirmation: "task",
+  };
+  expect(parseWorkspaceTeardownPreview(preview)).toEqual(preview);
+  expect(() => parseWorkspaceTeardownPreview({ ...preview, ownership: "foreign" })).toThrow();
+  const request = {
+    operation_id: "operation-1", workspace_id: "space-1",
+    expected_endpoint_identity: "endpoint-1", expected_checkout_path: "/worktrees/task",
+    action: "remove_owned_worktree", confirmation: "task",
+  };
+  expect(parseWorkspaceTeardownExecuteRequest(request)).toEqual(request);
+  for (const action of ["remove_orphaned_companion", "forget_association"]) {
+    expect(() => parseWorkspaceTeardownExecuteRequest({ ...request, action })).toThrow();
+    expect(() => parseWorkspaceTeardownPreview({ ...preview, allowed_actions: [action] })).toThrow();
+  }
+  expect(() => parseWorkspaceTeardownResult({
+    operation_id: "operation-1", workspace_id: "space-1", action: "close_space", outcome: "orphaned_companion", message: "old",
+  })).toThrow();
+  expect(() => parseWorkspaceTeardownRecoveryList({
+    recoveries: [{ operation_id: "operation-1", workspace_id: "space-1", checkout_path: "/worktrees/task", state: "orphaned_companion" }],
+  })).toThrow();
 });

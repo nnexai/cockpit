@@ -39,6 +39,28 @@ it("switches a single viewer between sources without losing either source's unsa
   expect(ctx.getState().tabs.tab.selectedLeafId).toBe("tab:files");
 });
 
+it("maps a repository root selector to the core-issued root ID and preserves source drafts", async () => {
+  const rootId = "selected-repository-root";
+  const repository = { ...viewer("repository-source", "repository-binding"), roots: [] };
+  const open = vi.fn(async (_session: string, request: ViewerOpenRequest) => request.source.kind === "files_repository" ? repository : viewer());
+  const client = { viewerOpen: open, viewerRelease: vi.fn(async () => undefined) } as unknown as CockpitClient;
+  const { ctx } = fixture(client);
+  await openViewerLeaf(ctx, "tab", "files", { kind: "files_context" }, "row", "tab:terminal");
+  const firstTree = ctx.getState().tabs.tab.root;
+  const draft = { commentEditor: { text: "Unsaved Library notes" }, path: "note.md" };
+  ctx.dispatch({ type: "viewer/source-view", tabId: "tab", kind: "files", sourceId: "source-a", view: draft });
+  await openViewerLeaf(ctx, "tab", "files", { kind: "files_repository", rootId }, "row", "tab:terminal");
+  expect(open).toHaveBeenLastCalledWith("session", {
+    tab_id: "tab", kind: "files", source_pane_id: "tab:terminal",
+    source: { kind: "files_repository", root_id: rootId }, client_id: "window",
+  });
+  expect(ctx.getState().tabs.tab.viewers.files?.selector).toEqual({ kind: "files_repository", rootId });
+  expect(ctx.getState().tabs.tab.viewers.files?.context?.source_id).toBe("repository-source");
+  expect(ctx.getState().tabs.tab.root).toEqual(firstTree);
+  await openViewerLeaf(ctx, "tab", "files", { kind: "files_context" }, "row", "tab:terminal");
+  expect(ctx.getState().tabs.tab.viewers.files?.viewsBySource["source-a"]).toEqual(draft);
+});
+
 it("releases a context returned after its opening leaf was closed", async () => {
   let resolve!: (context: ViewerContext) => void;
   const response = new Promise<ViewerContext>(done => { resolve = done; });

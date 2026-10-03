@@ -9,7 +9,7 @@ import { createReviewViewState, retainReviewScrollPosition, type ContextViewStat
 import { ReviewViewer, reviewRepositoryId } from "./ReviewViewer";
 import { reviewScrollIdentity } from "./ReviewPane";
 
-const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "review", source_kind: "review", source_id: "source", default_root_id: "repo-root", roots: [{ root_id: "repo-root", kind: "repository", label: "Repository", path: "/repo", repository_id: "repo", checkout_path: "/repo", companion_id: null }], diagnostics: [] };
+const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "review", source_kind: "review", source_id: "source", default_root_id: "repo-root", roots: [{ root_id: "repo-root", kind: "repository", label: "Repository", path: "/repo", repository_id: "repo", checkout_path: "/repo" }], diagnostics: [] };
 
 it("uses the default repository root when nested repositories share a context", () => {
   const roots = [

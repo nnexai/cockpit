@@ -1,6 +1,8 @@
 //! Durable, session-independent provider snapshots. Legacy source caches are inert.
 mod attachments;
 mod folder;
+pub(crate) mod folder_io;
+mod legacy;
 mod follow;
 mod jira_follow;
 mod operations;
@@ -128,8 +130,7 @@ fn looks_like_confluence_url(input: &str) -> bool {
 pub struct LibraryService {
     configuration: ProjectConfiguration,
     sources: Arc<SourceService>,
-    projects: Option<Arc<crate::projects::ProjectService>>,
-    herdr: Option<Arc<dyn crate::HerdrAdapter>>,
+    herdr: Option<Arc<dyn crate::ProjectHerdrAdapter>>,
     store: Arc<OnceLock<Arc<Store>>>,
 }
 
@@ -138,7 +139,6 @@ impl LibraryService {
         Self {
             configuration,
             sources,
-            projects: None,
             herdr: None,
             store: Arc::new(OnceLock::new()),
         }
@@ -147,12 +147,10 @@ impl LibraryService {
     pub fn root_path(&self) -> &str {
         &self.configuration.library_root
     }
-    pub fn with_projects(
+    pub fn with_herdr(
         mut self,
-        projects: Arc<crate::projects::ProjectService>,
-        herdr: Arc<dyn crate::HerdrAdapter>,
+        herdr: Arc<dyn crate::ProjectHerdrAdapter>,
     ) -> Self {
-        self.projects = Some(projects);
         self.herdr = Some(herdr);
         self
     }
@@ -160,7 +158,6 @@ impl LibraryService {
     pub(crate) fn open(&self) -> Result<Arc<Store>, InspectionError> {
         if let Some(store) = self.store.get() {
             store.recover_pending()?;
-            space::recover_attempts(store)?;
             return Ok(store.clone());
         }
         let store = Store::open(
@@ -168,7 +165,6 @@ impl LibraryService {
             self.configuration.limits.library_max_items as usize,
         )?;
         let _ = self.store.set(store);
-        space::recover_attempts(self.store.get().expect("Library store initialized"))?;
         Ok(self.store.get().expect("Library store initialized").clone())
     }
     pub async fn listing(&self, offset: Option<u32>) -> Result<LibraryListing, InspectionError> {
@@ -565,9 +561,6 @@ impl LibraryService {
                     if !saved.summary.refs.contains(&LibraryItemRef::Manual) {
                         worker_store.add_ref(&asset_id, LibraryItemRef::Manual)?;
                     }
-                    if let Some(target) = &request.target {
-                        space::prepare_saved_item(&worker_store, &id, target, &saved.summary)?;
-                    }
                     operations::row(
                         &worker_store,
                         &id,
@@ -578,7 +571,6 @@ impl LibraryService {
                     continue;
                 }
                 service.save_asset_with(&worker_store, &id, asset, old, SaveOptions {
-                    target: request.target.as_ref(),
                     reference: Some(LibraryItemRef::Manual),
                     download_all: request.download_attachments && asset_id == primary_id,
                     ..SaveOptions::default()
@@ -592,7 +584,6 @@ impl LibraryService {
                         &primary_id,
                         seed,
                         request.reference_depth,
-                        request.target.as_ref(),
                     )
                     .await?;
             }
@@ -601,17 +592,16 @@ impl LibraryService {
                 if saved.is_empty() && operations::cancelled(&worker_store, &id)? {
                     return Ok(());
                 }
-                service.copy_saved_items(&worker_store, &id, target, &saved).await?;
+                service.select_saved_items(&worker_store, &id, target, &saved).await?;
             }
             Ok(())
         });
         Ok(record)
     }
 
-    /// Setup commits every prevalidated artifact before starting any Space copy.
-    /// `saved_ids` identifies durable items reused on a resumed setup; no provider
-    /// request is performed here or while retrying their companion copies.
-    pub(crate) async fn add_fetched_and_copy(
+    /// Save prevalidated setup assets before selecting them. Resumed setup reuses
+    /// saved IDs without fetching providers again; selection failure keeps saved data.
+    pub(crate) async fn add_fetched_and_select(
         &self,
         target: SpaceTarget,
         fetched: Vec<FetchedAssets>,
@@ -648,22 +638,20 @@ impl LibraryService {
                 if operations::cancelled(&worker_store, &worker_id)? { return Ok(()); }
                 let old = service.entry(&worker_store, id)?;
                 if let Some(old) = old {
-                    space::prepare_saved_item(&worker_store, &worker_id, &target, &old.summary)?;
+                    worker_store.add_ref(id, LibraryItemRef::Manual)?;
                     operations::row(&worker_store, &worker_id, Some(&old.summary),
                         LibraryReportOutcome::Unchanged, Some("Already saved in Library".into()))?;
                 } else {
                     let asset = assets.remove(id).ok_or_else(||
                         error("library_item_not_found", "Saved setup item no longer exists"))?;
                     service.save_asset_with(&worker_store, &worker_id, asset, None, SaveOptions {
-                        target: Some(&target),
                         reference: Some(LibraryItemRef::Manual),
                         ..SaveOptions::default()
                     }).await?;
                 }
             }
-            // Every item and its pending attempt are now durable. Companion
-            // authorization/publication cannot prevent another item being saved.
-            service.copy_saved_items(&worker_store, &worker_id, &target, &ids).await
+            // Space authority cannot prevent successful Library publication.
+            service.select_saved_items(&worker_store, &worker_id, &target, &ids).await
         });
         loop {
             let record = self.operation(&operation_id).await?;
@@ -797,7 +785,7 @@ impl LibraryService {
                 if operations::cancelled(&worker_store, &id)? {
                     break;
                 }
-                service.refresh_follow(&worker_store, &id, follow, false, None).await?;
+                service.refresh_follow(&worker_store, &id, follow, false).await?;
             }
             refs::purge_expired(&worker_store, &id)
         });
@@ -862,7 +850,7 @@ impl LibraryService {
             let input = entry.summary.folder.as_ref().ok_or_else(||
                 error("library_corrupt", "Folder item has no origin"))?.origin_path.clone();
             return match self.save_folder(store, operation, &input, None, Some(entry.clone()),
-                confirmed.as_deref(), None).await {
+                confirmed.as_deref()).await {
                 Ok(()) => Ok(()),
                 Err(e) => self.fetch_failed(store, operation, entry, e, true),
             };
@@ -923,7 +911,7 @@ impl LibraryService {
                         label: asset_label(&asset),
                         references: asset_references(&self.configuration, &asset),
                     };
-                    match self.save_asset(store, operation, asset, Some(entry.clone()), confirmed.as_deref(), None).await {
+                    match self.save_asset(store, operation, asset, Some(entry.clone()), confirmed.as_deref()).await {
                         Ok(()) => self.refresh_related(store, operation, &entry.summary.item_id, seed).await,
                         Err(e) => self.fetch_failed(store, operation, entry, e, true),
                     }
@@ -983,9 +971,8 @@ impl LibraryService {
         asset: SourceAsset,
         old: Option<LibraryIndexEntry>,
         confirmed: Option<&[LibraryConflictFile]>,
-        target: Option<&SpaceTarget>,
     ) -> Result<(), InspectionError> {
-        self.save_asset_with(store, operation, asset, old, SaveOptions { confirmed, target, ..SaveOptions::default() }).await
+        self.save_asset_with(store, operation, asset, old, SaveOptions { confirmed, ..SaveOptions::default() }).await
     }
     async fn save_asset_with(
         &self,
@@ -995,7 +982,7 @@ impl LibraryService {
         old: Option<LibraryIndexEntry>,
         options: SaveOptions<'_>,
     ) -> Result<(), InspectionError> {
-        let SaveOptions { confirmed, target, reference, reason, download_all, attachment_request, issue_row } = options;
+        let SaveOptions { confirmed, reference, reason, download_all, attachment_request, issue_row } = options;
         if let Some(old) = &old {
             asset.original_url = old.summary.original_url.clone();
         }
@@ -1140,9 +1127,6 @@ impl LibraryService {
         if equal && confirmed.is_none() {
             // Preserve the snapshot timestamp: provenance refreshes do not rewrite files.
             entry.summary.fetched_at = old.as_ref().and_then(|e| e.summary.fetched_at.clone());
-            if let Some(target) = target {
-                space::prepare_saved_item(store, operation, target, &entry.summary)?;
-            }
             store.update(entry.clone())?;
         } else {
             let stage = match prepared {
@@ -1151,9 +1135,6 @@ impl LibraryService {
             };
             if operations::cancelled(store, operation)? {
                 return Ok(());
-            }
-            if let Some(target) = target {
-                space::prepare_saved_item(store, operation, target, &entry.summary)?;
             }
             if let Err(e) = store.publish(
                 stage,
@@ -1174,17 +1155,6 @@ impl LibraryService {
         if old.is_some() {
             if let Some(reference) = reference {
                 store.add_ref(&entry.summary.item_id, reference)?;
-            }
-        }
-        #[cfg(test)] {
-            let mut fault = store.fault.lock().unwrap_or_else(|e| e.into_inner());
-            if *fault == Some("space_after_library_publish") {
-                *fault = None;
-                return Err(error("library_test_crash", "space_after_library_publish"));
-            }
-            if *fault == Some("space_cancel_after_library_publish") {
-                *fault = None;
-                operations::cancel(store, operation)?;
             }
         }
         operations::row(
@@ -1246,7 +1216,6 @@ impl LibraryService {
 #[derive(Default)]
 struct SaveOptions<'a> {
     confirmed: Option<&'a [LibraryConflictFile]>,
-    target: Option<&'a SpaceTarget>,
     /// The reference this save adds: the birth reference of a new item, or added
     /// to an existing one after the save. `None` leaves references untouched.
     reference: Option<LibraryItemRef>,
@@ -1471,9 +1440,6 @@ mod tests {
     impl Provider {
         pub(super) fn set_body(&self, body: &str) {
             self.state.lock().unwrap_or_else(|e| e.into_inner()).body = body.into();
-        }
-        pub(super) fn set_failure(&self, failure: Option<&str>) {
-            self.state.lock().unwrap_or_else(|e| e.into_inner()).failure = failure.map(str::to_owned);
         }
     }
     #[async_trait]
@@ -1916,43 +1882,6 @@ mod tests {
         assert_eq!(saved[0].reference_depth, Some(1));
     }
 
-    #[tokio::test]
-    async fn crash_after_library_publish_before_report_recovers_retry_intent() {
-        let f = fixture();
-        let store = f.service.open().unwrap();
-        let target = SpaceTarget { session_id: "session".into(), space_id: "space".into() };
-        let (operation, lease) = operations::create(&store, LibraryOperationKind::Add, None).unwrap();
-        operations::set_target(&store, &operation.operation_id, target.clone()).unwrap();
-        *store.fault.lock().unwrap_or_else(|e| e.into_inner()) = Some("space_after_library_publish");
-        let failure = f.service.save_asset(&store, &operation.operation_id, asset(1, "published"),
-            None, None, Some(&target)).await.unwrap_err();
-        assert_eq!(failure.code, "library_test_crash");
-        assert!(operations::get(&store, &operation.operation_id).unwrap().item_ids.is_empty());
-        drop(lease);
-        let reopened = reopen(&f);
-        let saved = reopened.listing(None).await.unwrap().items;
-        assert_eq!(saved[0].canonical_id.as_deref(), Some("acme/repo#1"));
-        let attempts = reopened.space_listing(target).await.unwrap().attempts;
-        assert_eq!(attempts.len(), 1);
-        assert_eq!(attempts[0].item_id.as_ref(), Some(&saved[0].item_id));
-        assert_eq!(attempts[0].state, SpaceAddAttemptState::Failed);
-        assert_eq!(attempts[0].error.as_ref().unwrap().code, "space_add_interrupted");
-    }
-
-    #[tokio::test]
-    async fn interrupted_write_ahead_attempt_without_library_publish_is_discarded() {
-        let f = fixture();
-        let store = f.service.open().unwrap();
-        let target = SpaceTarget { session_id: "session".into(), space_id: "space".into() };
-        let (operation, lease) = operations::create(&store, LibraryOperationKind::Add, None).unwrap();
-        operations::set_target(&store, &operation.operation_id, target.clone()).unwrap();
-        let entry = asset_entry(&asset(1, "not published"), None);
-        space::prepare_saved_item(&store, &operation.operation_id, &target, &entry.summary).unwrap();
-        drop(lease);
-        let reopened = reopen(&f);
-        assert!(reopened.listing(None).await.unwrap().items.is_empty());
-        assert!(reopened.space_listing(target).await.unwrap().attempts.is_empty());
-    }
 
     #[tokio::test]
     async fn linked_fetch_failure_persists_partial_report_with_omitted_path() {
@@ -2080,8 +2009,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn target_add_cancelled_before_publish_does_not_start_space_phase() {
+    async fn target_add_cancelled_before_publish_preserves_existing_library_and_selection() {
         let f = fixture();
+        let runtime = space::tests::adapter("space");
+        let service = f.service.clone().with_herdr(runtime);
+        let existing = saved(&f, 2).await;
+        finished(&service, service.start_space_add(SpaceAddRequest {
+            target: space::tests::target(), item_ids: vec![existing.item_id.clone()],
+        }).await.unwrap()).await;
+        let notes = f.root.join("notes.md");
+        std::fs::write(&notes, b"preserve user notes").unwrap();
         f.provider.block.store(true, Ordering::SeqCst);
         let mut request = add(1);
         request.target = Some(SpaceTarget { session_id: "session".into(), space_id: "space".into() });
@@ -2092,9 +2029,14 @@ mod tests {
         let operation = finished(&f.service, operation).await;
         assert_eq!(operation.phases[0].state, LibraryPhaseState::Cancelled);
         assert_eq!(operation.phases[1].state, LibraryPhaseState::Cancelled);
-        assert!(f.service.listing(None).await.unwrap().items.is_empty());
-        assert!(f.service.space_listing(SpaceTarget { session_id: "session".into(), space_id: "space".into() })
-            .await.unwrap().attempts.is_empty());
+        let library = service.listing(None).await.unwrap().items;
+        assert_eq!(library.len(), 1);
+        assert_eq!(library[0].item_id, existing.item_id);
+        assert_eq!(library[0].revision, existing.revision);
+        let selected = service.space_listing(&space::tests::target()).await.unwrap().items;
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].item_id, existing.item_id);
+        assert_eq!(std::fs::read(notes).unwrap(), b"preserve user notes");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

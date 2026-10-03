@@ -7,7 +7,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use cockpit_protocol::context::{ContextRoot, ContextRootKind};
 use cockpit_protocol::project_teardown::{
     WorkspaceTeardownExecuteRequest, WorkspaceTeardownOutcome, WorkspaceTeardownPreview,
     WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecovery, WorkspaceTeardownRecoveryList,
@@ -21,7 +20,6 @@ use cockpit_protocol::projects::{
     WorkspaceSetupRequest,
 };
 use cockpit_protocol::v1::ErrorResponse;
-use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -30,7 +28,7 @@ use crate::project_adapter::{
     ProjectWorktreeResult,
 };
 use crate::project_store::{
-    CompanionManifest, ProjectStore, TeardownReceipt, TeardownReceiptState, prepare_project_root,
+    ProjectStore, TeardownReceipt, TeardownReceiptState, prepare_project_root,
     timestamp, validate_project_root,
 };
 use crate::project_teardown::{
@@ -79,7 +77,7 @@ fn unstarted(operation: &WorkspaceOperation) -> bool {
 
 struct FreshTeardownEvidence {
     operation: WorkspaceOperation,
-    companion: Option<CompanionManifest>,
+    session_id: String,
     endpoint_identity: String,
     repository_key: String,
     repository_root: String,
@@ -91,7 +89,7 @@ impl FreshTeardownEvidence {
     fn evidence(&self) -> WorkspaceTeardownEvidence<'_> {
         WorkspaceTeardownEvidence {
             operation: &self.operation,
-            companion: self.companion.as_ref(),
+            session_id: &self.session_id,
             endpoint_identity: &self.endpoint_identity,
             repository_key: &self.repository_key,
             repository_root: &self.repository_root,
@@ -108,9 +106,7 @@ impl ProjectService {
     ) -> Result<Self, InspectionError> {
         let store = ProjectStore::new(&configuration.state_root)?;
         prepare_project_root(Path::new(&configuration.worktree_root))?;
-        prepare_project_root(Path::new(&configuration.companion_root))?;
         validate_project_root(Path::new(&configuration.worktree_root))?;
-        validate_project_root(Path::new(&configuration.companion_root))?;
         recover_startup(&store)?;
         Ok(Self {
             configuration,
@@ -155,10 +151,6 @@ impl ProjectService {
         self.configuration.clone()
     }
 
-    /// Fresh endpoint authority for Space-scoped Library operations.
-    pub async fn project_endpoint_identity(&self, session_id: &str) -> Result<String, InspectionError> {
-        self.adapter.project_endpoint_identity(session_id).await
-    }
 
     pub fn with_sources(mut self, sources: Arc<SourceService>) -> Self {
         self.sources = Some(sources);
@@ -212,8 +204,6 @@ impl ProjectService {
             branch,
             base,
             checkout_path,
-            companion_id,
-            companion_created_by_operation,
             label,
             focus,
             artifact,
@@ -406,8 +396,6 @@ impl ProjectService {
                     Some(branch),
                     base,
                     path,
-                    operation_id.clone(),
-                    true,
                     label,
                     *focus,
                     artifact,
@@ -438,8 +426,6 @@ impl ProjectService {
                     None,
                     None,
                     checkout_path,
-                    operation_id.clone(),
-                    true,
                     label,
                     *focus,
                     None,
@@ -450,11 +436,6 @@ impl ProjectService {
                 )
             }
         };
-        let companion_path = bounded_path(
-            &companion_id,
-            Path::new(&self.configuration.companion_root),
-            "companion_path",
-        )?;
         let endpoint_identity = if mode == WorkspaceSetupMode::Create {
             let repository = repository.as_ref().expect("Create plan has repository");
             let inventory = self
@@ -467,7 +448,6 @@ impl ProjectService {
             self.adapter.project_endpoint_identity(session).await?
         };
         let mut effects = effects;
-        effects.push(format!("Associate Cockpit companion at {}", companion_path));
         effects.push(
             "Create a new context-aware terminal with allowlisted COCKPIT_* environment".to_owned(),
         );
@@ -478,12 +458,11 @@ impl ProjectService {
             );
         }
         if artifact.is_some() {
-            effects.push("Hydrate the selected source into the companion Context".to_owned());
-            effects.push("Record the selected artifact in the companion manifest".to_owned());
+            effects.push("Save the selected source in the Library and select it for this Space".to_owned());
         }
         for linked in &linked_artifacts {
             effects.push(format!(
-                "Import linked {} into the companion Context",
+                "Save and select linked {} for this Space",
                 linked.canonical_id
             ));
         }
@@ -498,9 +477,6 @@ impl ProjectService {
             branch,
             base,
             checkout_path,
-            companion_path,
-            companion_id,
-            companion_created_by_operation,
             label,
             focus,
             artifact,
@@ -685,6 +661,10 @@ impl ProjectService {
                 || receipt.workspace_id != workspace_id
                 || receipt.endpoint_identity != operation.plan.endpoint_identity
                 || receipt.checkout_path != operation.plan.checkout_path
+                || receipt.session_id != operation.session_id
+                || receipt.session_id != operation.plan.session_id
+                || receipt.repository_key != operation.plan.repository.as_ref().map(|repository| repository.common_dir.as_str()).unwrap_or("")
+                || receipt.repository_root != operation.plan.repository.as_ref().map(|repository| repository.root.as_str()).unwrap_or("")
             {
                 return Err(InspectionError::new(
                     "association_conflict",
@@ -695,9 +675,6 @@ impl ProjectService {
                 TeardownReceiptState::Pending => WorkspaceTeardownRecoveryState::Pending,
                 TeardownReceiptState::OutcomeUnknown => {
                     WorkspaceTeardownRecoveryState::OutcomeUnknown
-                }
-                TeardownReceiptState::OrphanedCompanion => {
-                    WorkspaceTeardownRecoveryState::OrphanedCompanion
                 }
                 TeardownReceiptState::Completed => continue,
             };
@@ -716,9 +693,8 @@ impl ProjectService {
         Ok(WorkspaceTeardownRecoveryList { recoveries })
     }
 
-    /// Execute one explicitly reviewed teardown action. A worktree removal is
-    /// always non-force and removes the companion only after Herdr confirms the
-    /// exact requested checkout was removed.
+    /// Execute one explicitly reviewed teardown action. Worktree removal is
+    /// always non-force; unrelated directories and existing notes are retained.
     pub async fn teardown_execute(
         &self,
         session: &str,
@@ -753,31 +729,7 @@ impl ProjectService {
                     workspace_id,
                     action: request.action,
                     outcome: WorkspaceTeardownOutcome::Completed,
-                    message: "workspace closed; the checkout and companion were retained"
-                        .to_owned(),
-                })
-            }
-            WorkspaceTeardownCommand::ForgetAssociation { operation_id } => {
-                self.store.update(&operation_id, None, |operation| {
-                    if operation.session_id != session {
-                        return Err(InspectionError::new(
-                            "stale_identity",
-                            "operation belongs to another session",
-                        ));
-                    }
-                    operation.companion_id = None;
-                    operation.owned_resources.retain(|resource| {
-                        resource.kind != "companion" || resource.created_by_operation
-                    });
-                    Ok(())
-                })?;
-                Ok(WorkspaceTeardownResult {
-                    operation_id,
-                    workspace_id: request.workspace_id.clone(),
-                    action: request.action,
-                    outcome: WorkspaceTeardownOutcome::Retained,
-                    message: "borrowed checkout association forgotten; no files were removed"
-                        .to_owned(),
+                    message: "workspace closed; the checkout was retained".to_owned(),
                 })
             }
             WorkspaceTeardownCommand::RemoveOwnedWorktree {
@@ -810,61 +762,24 @@ impl ProjectService {
                             workspace_id,
                             action: request.action,
                             outcome: WorkspaceTeardownOutcome::OutcomeUnknown,
-                            message: "Herdr did not confirm removal; reconcile before retrying and the companion remains retained".to_owned(),
+                            message: "Herdr did not confirm removal; reconcile before retrying".to_owned(),
                         });
                     }
                 }
-                match self
-                    .store
-                    .remove_owned_companion(&self.configuration.companion_root, &receipt.companion)
-                {
-                    Ok(()) => {
-                        receipt.state = TeardownReceiptState::Completed;
-                        receipt.updated_at = timestamp();
-                        self.store.write_teardown_receipt(&receipt)?;
-                        Ok(WorkspaceTeardownResult {
-                            operation_id: request.operation_id.clone(),
-                            workspace_id,
-                            action: request.action,
-                            outcome: WorkspaceTeardownOutcome::Completed,
-                            message: "Herdr removed the owned worktree without force".to_owned(),
-                        })
-                    }
-                    Err(error) if error.code == "companion_missing" => {
-                        receipt.state = TeardownReceiptState::Completed;
-                        receipt.updated_at = timestamp();
-                        self.store.write_teardown_receipt(&receipt)?;
-                        Ok(WorkspaceTeardownResult {
-                            operation_id: request.operation_id.clone(),
-                            workspace_id,
-                            action: request.action,
-                            outcome: WorkspaceTeardownOutcome::Completed,
-                            message: "Herdr removed the owned worktree without force".to_owned(),
-                        })
-                    }
-                    Err(error) => {
-                        receipt.state = TeardownReceiptState::OrphanedCompanion;
-                        receipt.updated_at = timestamp();
-                        self.store.write_teardown_receipt(&receipt)?;
-                        Ok(WorkspaceTeardownResult {
-                            operation_id: request.operation_id.clone(),
-                            workspace_id,
-                            action: request.action,
-                            outcome: WorkspaceTeardownOutcome::OrphanedCompanion,
-                            message: format!(
-                                "Herdr removed the worktree; the reviewed companion was retained: {}",
-                                error.message
-                            ),
-                        })
-                    }
-                }
+                receipt.state = TeardownReceiptState::Completed;
+                receipt.updated_at = timestamp();
+                self.store.write_teardown_receipt(&receipt)?;
+                Ok(WorkspaceTeardownResult {
+                    operation_id: request.operation_id.clone(),
+                    workspace_id,
+                    action: request.action,
+                    outcome: WorkspaceTeardownOutcome::Completed,
+                    message: "Herdr removed the owned worktree without force".to_owned(),
+                })
             }
             WorkspaceTeardownCommand::ReconcileRemoveOutcome { operation_id } => {
                 self.reconcile_teardown_removal(session, &operation_id, request, &evidence)
                     .await
-            }
-            WorkspaceTeardownCommand::RemoveOrphanedCompanion { operation_id } => {
-                self.recover_orphaned_companion(&operation_id, request, &evidence)
             }
         }
     }
@@ -915,20 +830,16 @@ impl ProjectService {
         &self,
         evidence: &FreshTeardownEvidence,
     ) -> Result<TeardownReceipt, InspectionError> {
-        let companion = evidence.companion.clone().ok_or_else(|| {
-            InspectionError::new(
-                "teardown_not_allowed",
-                "the reviewed companion is no longer available",
-            )
-        })?;
         Ok(TeardownReceipt {
             operation_id: evidence.operation.operation_id.clone(),
             workspace_id: evidence.operation.workspace_id.clone().ok_or_else(|| {
                 InspectionError::new("stale_identity", "operation no longer has a workspace")
             })?,
             endpoint_identity: evidence.endpoint_identity.clone(),
+            session_id: evidence.session_id.clone(),
+            repository_key: evidence.repository_key.clone(),
+            repository_root: evidence.repository_root.clone(),
             checkout_path: evidence.operation.plan.checkout_path.clone(),
-            companion,
             state: TeardownReceiptState::Pending,
             updated_at: timestamp(),
         })
@@ -938,7 +849,6 @@ impl ProjectService {
         &self,
         evidence: &FreshTeardownEvidence,
         expected: TeardownReceiptState,
-        require_companion: bool,
     ) -> Result<TeardownReceipt, InspectionError> {
         let receipt = evidence.receipt.clone().ok_or_else(|| {
             InspectionError::new(
@@ -956,7 +866,9 @@ impl ProjectService {
                     .unwrap_or_default()
             || receipt.endpoint_identity != evidence.endpoint_identity
             || receipt.checkout_path != evidence.operation.plan.checkout_path
-            || (require_companion && evidence.companion.as_ref() != Some(&receipt.companion))
+            || receipt.session_id != evidence.session_id
+            || receipt.repository_key != evidence.repository_key
+            || receipt.repository_root != evidence.repository_root
         {
             return Err(InspectionError::new(
                 "stale_identity",
@@ -974,38 +886,25 @@ impl ProjectService {
         evidence: &FreshTeardownEvidence,
     ) -> Result<WorkspaceTeardownResult, InspectionError> {
         let mut receipt = self
-            .recovery_receipt(evidence, TeardownReceiptState::OutcomeUnknown, false)
+            .recovery_receipt(evidence, TeardownReceiptState::OutcomeUnknown)
             .or_else(|error| {
                 if error.code == "stale_identity" {
-                    self.recovery_receipt(evidence, TeardownReceiptState::Pending, false)
+                    self.recovery_receipt(evidence, TeardownReceiptState::Pending)
                 } else {
                     Err(error)
                 }
             })?;
         match evidence.worktrees.as_slice() {
             [] => {
-                let companion_missing = evidence.companion.is_none();
-                receipt.state = if companion_missing {
-                    TeardownReceiptState::Completed
-                } else {
-                    TeardownReceiptState::OrphanedCompanion
-                };
+                receipt.state = TeardownReceiptState::Completed;
                 receipt.updated_at = timestamp();
                 self.store.write_teardown_receipt(&receipt)?;
                 Ok(WorkspaceTeardownResult {
                     operation_id: operation_id.to_owned(),
                     workspace_id: request.workspace_id.clone(),
                     action: request.action,
-                    outcome: if companion_missing {
-                        WorkspaceTeardownOutcome::Completed
-                    } else {
-                        WorkspaceTeardownOutcome::OrphanedCompanion
-                    },
-                    message: if companion_missing {
-                        "fresh Herdr inventory confirms the worktree and reviewed companion are gone".to_owned()
-                    } else {
-                        "fresh Herdr inventory confirms the worktree is gone; explicitly review companion cleanup".to_owned()
-                    },
+                    outcome: WorkspaceTeardownOutcome::Completed,
+                    message: "fresh Herdr inventory confirms the worktree is gone".to_owned(),
                 })
             }
             [worktree]
@@ -1032,55 +931,6 @@ impl ProjectService {
         }
     }
 
-    fn recover_orphaned_companion(
-        &self,
-        operation_id: &str,
-        request: &WorkspaceTeardownExecuteRequest,
-        evidence: &FreshTeardownEvidence,
-    ) -> Result<WorkspaceTeardownResult, InspectionError> {
-        let mut receipt =
-            self.recovery_receipt(evidence, TeardownReceiptState::OrphanedCompanion, true)?;
-        match self
-            .store
-            .remove_owned_companion(&self.configuration.companion_root, &receipt.companion)
-        {
-            Ok(()) => {
-                receipt.state = TeardownReceiptState::Completed;
-                receipt.updated_at = timestamp();
-                self.store.write_teardown_receipt(&receipt)?;
-                Ok(WorkspaceTeardownResult {
-                    operation_id: operation_id.to_owned(),
-                    workspace_id: request.workspace_id.clone(),
-                    action: request.action,
-                    outcome: WorkspaceTeardownOutcome::Completed,
-                    message: "the reviewed orphaned companion was removed".to_owned(),
-                })
-            }
-            Err(error) if error.code == "companion_missing" => {
-                receipt.state = TeardownReceiptState::Completed;
-                receipt.updated_at = timestamp();
-                self.store.write_teardown_receipt(&receipt)?;
-                Ok(WorkspaceTeardownResult {
-                    operation_id: operation_id.to_owned(),
-                    workspace_id: request.workspace_id.clone(),
-                    action: request.action,
-                    outcome: WorkspaceTeardownOutcome::Completed,
-                    message: "the reviewed orphaned companion was removed".to_owned(),
-                })
-            }
-            Err(error) => {
-                receipt.updated_at = timestamp();
-                self.store.write_teardown_receipt(&receipt)?;
-                Ok(WorkspaceTeardownResult {
-                    operation_id: operation_id.to_owned(),
-                    workspace_id: request.workspace_id.clone(),
-                    action: request.action,
-                    outcome: WorkspaceTeardownOutcome::OrphanedCompanion,
-                    message: format!("the reviewed companion was retained: {}", error.message),
-                })
-            }
-        }
-    }
 
     async fn fresh_teardown_evidence(
         &self,
@@ -1089,15 +939,8 @@ impl ProjectService {
     ) -> Result<FreshTeardownEvidence, InspectionError> {
         if operation.plan.mode == WorkspaceSetupMode::Open || operation.plan.repository.is_none() {
             let endpoint_identity = self.adapter.project_endpoint_identity(session).await?;
-            let companion = match self.store.read_companion(
-                &self.configuration.companion_root,
-                &operation.plan.companion_id,
-            ) {
-                Ok(manifest) => Some(manifest),
-                Err(error) if error.code == "companion_missing" => None,
-                Err(error) => return Err(error),
-            };
             return Ok(FreshTeardownEvidence {
+                session_id: session.to_owned(),
                 receipt: self.store.read_teardown_receipt(&operation.operation_id)?,
                 endpoint_identity,
                 repository_key: String::new(),
@@ -1109,7 +952,6 @@ impl ProjectService {
                     dirty: None,
                 }],
                 operation,
-                companion,
             });
         }
         let repository = operation.plan.repository.as_ref().expect("checked above");
@@ -1146,161 +988,16 @@ impl ProjectService {
                 dirty,
             })
             .collect();
-        let companion = match self.store.read_companion(
-            &self.configuration.companion_root,
-            &operation.plan.companion_id,
-        ) {
-            Ok(manifest) => Some(manifest),
-            Err(error) if error.code == "companion_missing" => None,
-            Err(error) => return Err(error),
-        };
         let receipt = self.store.read_teardown_receipt(&operation.operation_id)?;
         Ok(FreshTeardownEvidence {
+            session_id: session.to_owned(),
             endpoint_identity: inventory.endpoint_identity,
             repository_key: inventory.repository_key,
             repository_root: inventory.repository_root,
             operation,
-            companion,
             worktrees,
             receipt,
         })
-    }
-    /// Return companions whose durable metadata is still authorized by the
-    /// current Herdr endpoint and, for owned worktrees, a fresh inventory.
-    /// Paths supplied by callers are never used as authorization.
-    pub async fn context_companions(
-        &self,
-        session_id: &str,
-        workspace_id: &str,
-        endpoint_identity: &str,
-    ) -> Result<Vec<ContextRoot>, InspectionError> {
-        validate_identity(workspace_id, "workspace_id")?;
-        validate_session(session_id)?;
-        validate_text(endpoint_identity, "endpoint_identity", 4096)?;
-
-        let operations = self.store.list()?;
-        let manifests = self
-            .store
-            .list_companions(&self.configuration.companion_root)?;
-        let mut roots = Vec::new();
-        let mut seen_checkouts = HashSet::new();
-        for (companion_id, manifest) in manifests {
-            if manifest.herdr_session_identity != endpoint_identity
-                || manifest.herdr_workspace_id != workspace_id
-            {
-                continue;
-            }
-            if manifest.ownership != "cockpit" {
-                return Err(InspectionError::new(
-                    "association_conflict",
-                    "matching companion is not Cockpit-owned",
-                ));
-            }
-            let operation = operations
-                .iter()
-                .find(|operation| operation.operation_id == manifest.cockpit_operation_id)
-                .ok_or_else(|| {
-                    InspectionError::new(
-                        "association_conflict",
-                        "companion creator operation is missing",
-                    )
-                })?;
-            if operation.companion_id.as_deref() != Some(companion_id.as_str())
-                || !operation
-                    .owned_resources
-                    .iter()
-                    .any(|resource| resource.kind == "companion" && resource.created_by_operation)
-                || operation.plan.companion_id != companion_id
-                || operation
-                    .plan
-                    .repository
-                    .as_ref()
-                    .map(|repository| repository.common_dir.as_str())
-                    .unwrap_or("")
-                    != manifest.repository_key
-                || operation
-                    .plan
-                    .repository
-                    .as_ref()
-                    .map(|repository| repository.root.as_str())
-                    .unwrap_or("")
-                    != manifest.repository_root
-                || operation.plan.checkout_path != manifest.checkout_path
-            {
-                return Err(InspectionError::new(
-                    "association_conflict",
-                    "companion creator provenance differs",
-                ));
-            }
-            if !seen_checkouts.insert(manifest.checkout_path.clone()) {
-                return Err(InspectionError::new(
-                    "association_conflict",
-                    "multiple companions are associated with the exact checkout",
-                ));
-            }
-            if operation.plan.mode == WorkspaceSetupMode::Create {
-                let repository = operation
-                    .plan
-                    .repository
-                    .as_ref()
-                    .expect("Create operation has repository");
-                let inventory = self
-                    .adapter
-                    .project_inventory(session_id, &repository.checkout_path)
-                    .await?;
-                if inventory.endpoint_identity != endpoint_identity
-                    || inventory.repository_key != manifest.repository_key
-                    || inventory.repository_root != manifest.repository_root
-                {
-                    return Err(InspectionError::new(
-                        "stale_identity",
-                        "companion provenance is not confirmed by the current Herdr endpoint",
-                    ));
-                }
-                let matches = inventory
-                    .worktrees
-                    .iter()
-                    .filter(|entry| {
-                        entry.checkout_path == manifest.checkout_path
-                            && entry.open_workspace_id.as_deref() == Some(workspace_id)
-                    })
-                    .count();
-                if matches != 1 {
-                    return Err(InspectionError::new(
-                        "association_conflict",
-                        "fresh inventory did not prove exactly one companion worktree",
-                    ));
-                }
-            } else if self.adapter.project_endpoint_identity(session_id).await? != endpoint_identity
-            {
-                return Err(InspectionError::new(
-                    "stale_identity",
-                    "companion endpoint is no longer current",
-                ));
-            }
-            let companion_path = Path::new(&self.configuration.companion_root).join(&companion_id);
-            let root_id =
-                stable_companion_root_id(&companion_path.to_string_lossy(), &companion_id)?;
-            roots.push(ContextRoot {
-                root_id,
-                kind: ContextRootKind::Companion,
-                label: format!("{} context", operation.plan.label),
-                path: Path::new(&self.configuration.companion_root)
-                    .join(&companion_id)
-                    .to_string_lossy()
-                    .into_owned(),
-                repository_id: operation
-                    .plan
-                    .repository
-                    .as_ref()
-                    .map(|repository| repository.repository_id.clone())
-                    .unwrap_or_default(),
-                checkout_path: manifest.checkout_path.clone(),
-                companion_id: Some(companion_id),
-            });
-        }
-        roots.sort_by(|left, right| left.root_id.cmp(&right.root_id));
-        Ok(roots)
     }
 
     pub async fn resume(
@@ -1534,17 +1231,16 @@ impl ProjectService {
             }
             WorkspaceRecoveryAction::RetryEnvironment => {
                 if operation.workspace_id.is_none()
-                    || operation.companion_id.is_none()
                     || operation.pane_id.is_some()
                     || !matches!(
                         operation.step,
-                        WorkspaceOperationStep::CompanionReady
+                        WorkspaceOperationStep::WorkspaceVerified
                             | WorkspaceOperationStep::EnvironmentRequested
                     )
                 {
                     return Err(InspectionError::new(
                         "invalid_reconcile",
-                        "environment retry requires a verified workspace and companion",
+                        "environment retry requires a verified workspace",
                     ));
                 }
                 let inventory = self
@@ -1565,7 +1261,7 @@ impl ProjectService {
                     ));
                 }
                 self.store.update(&operation.operation_id, Some(operation.generation), |operation| {
-                    operation.step = WorkspaceOperationStep::CompanionReady;
+                    operation.step = WorkspaceOperationStep::WorkspaceVerified;
                     if operation.cancel_requested {
                         operation.state = WorkspaceOperationState::Cancelled;
                         operation.resume_allowed = false;
@@ -1644,8 +1340,6 @@ impl ProjectService {
         validate_sources: bool,
     ) -> Result<(Option<ProjectInventory>, Vec<FetchedAssets>), InspectionError> {
         validate_project_root(Path::new(&self.configuration.worktree_root))?;
-        self.store
-            .preflight_companion_publication(&self.configuration.companion_root)?;
         let before = if plan.mode == WorkspaceSetupMode::Create {
             let repository = plan.repository.as_ref().ok_or_else(|| {
                 InspectionError::new("repository_missing", "create plan has no repository")
@@ -1885,90 +1579,9 @@ impl ProjectService {
                 ));
             }
         }
-        let companion_id = plan.companion_id.as_str();
-        let companion = match self
-            .store
-            .read_companion(&self.configuration.companion_root, companion_id)
-        {
-            Ok(existing) => {
-                verify_manifest_identity(&existing, &plan, companion_id)?;
-                let existing = if existing.herdr_session_identity == plan.endpoint_identity
-                    && existing.herdr_workspace_id == result.workspace_id
-                {
-                    existing
-                } else if plan.mode == WorkspaceSetupMode::Open
-                    && !plan.companion_created_by_operation
-                {
-                    let reattached = CompanionManifest {
-                        herdr_session_identity: plan.endpoint_identity.clone(),
-                        herdr_workspace_id: result.workspace_id.clone(),
-                        updated_at: now(),
-                        ..existing
-                    };
-                    self.store
-                        .reattach_companion(&self.configuration.companion_root, &reattached)?;
-                    reattached
-                } else {
-                    return Err(InspectionError::new(
-                        "association_conflict",
-                        "existing companion is attached to a different Herdr workspace",
-                    ));
-                };
-                verify_manifest(
-                    &existing,
-                    &plan,
-                    &result.workspace_id,
-                    &plan.endpoint_identity,
-                    companion_id,
-                )?;
-                self.store
-                    .sync_companion_publication(&self.configuration.companion_root, &existing)?;
-                Path::new(&self.configuration.companion_root).join(companion_id)
-            }
-            Err(error) if error.code == "companion_missing" => {
-                if !plan.companion_created_by_operation {
-                    return Err(InspectionError::new(
-                        "association_conflict",
-                        "borrowed companion disappeared during operation",
-                    ));
-                }
-                let manifest = CompanionManifest {
-                    schema_version: 1,
-                    cockpit_operation_id: companion_id.to_owned(),
-                    herdr_session_identity: plan.endpoint_identity.clone(),
-                    herdr_workspace_id: result.workspace_id.clone(),
-                    repository_key: repository
-                        .map(|repository| repository.common_dir.clone())
-                        .unwrap_or_default(),
-                    repository_root: repository
-                        .map(|repository| repository.root.clone())
-                        .unwrap_or_default(),
-                    checkout_path: result.checkout_path.clone(),
-                    artifact: plan.artifact.clone(),
-                    created_at: now(),
-                    updated_at: now(),
-                    ownership: "cockpit".to_owned(),
-                };
-                self.store
-                    .write_companion(&self.configuration.companion_root, &manifest)?
-            }
-            Err(error) => return Err(error),
-        };
         operation = self.store.update(id, None, |operation| {
-            operation.companion_id = Some(companion_id.to_owned());
-            if !operation
-                .owned_resources
-                .iter()
-                .any(|resource| resource.kind == "companion")
-            {
-                operation.owned_resources.push(WorkspaceOwnedResource {
-                    kind: "companion".to_owned(),
-                    path: companion.to_string_lossy().into_owned(),
-                    created_by_operation: plan.companion_created_by_operation,
-                });
-            }
-            if !step_at_least(operation.step, WorkspaceOperationStep::CompanionReady) {
-                operation.step = WorkspaceOperationStep::CompanionReady;
+            if !step_at_least(operation.step, WorkspaceOperationStep::WorkspaceVerified) {
+                operation.step = WorkspaceOperationStep::WorkspaceVerified;
             }
             operation.error = None;
             if operation.cancel_requested {
@@ -2007,10 +1620,6 @@ impl ProjectService {
         }
         if operation.pane_id.is_none() {
             let mut env = BTreeMap::new();
-            env.insert(
-                "COCKPIT_CONTEXT_PATH".to_owned(),
-                companion.to_string_lossy().into_owned(),
-            );
             env.insert(
                 "COCKPIT_LIBRARY_ROOT".to_owned(),
                 library.root_path().to_owned(),
@@ -2100,8 +1709,8 @@ impl ProjectService {
                         asset.source.provider_id == artifact.provider_id && asset.source.resource_type == artifact.kind
                             && asset.source.canonical_id == artifact.canonical_id));
                     if !prevalidated {
-                        // Resuming copies saved items without another provider read.
-                        // Only an item never saved in phase 1 needs to be fetched.
+                        // Resume selects saved items without another provider read.
+                        // Only an item never saved in the Library needs fetching.
                         let mut offset = None;
                         let saved = loop {
                             let listing = library.listing(offset).await?;
@@ -2115,7 +1724,7 @@ impl ProjectService {
                 }
                 let response = if fetched.is_empty() {
                     let operation = library.start_space_add(SpaceAddRequest {
-                        target, item_ids: saved_ids, follow_ids: vec![],
+                        target, item_ids: saved_ids,
                     }).await?;
                     loop {
                         let response = library.operation(&operation.operation_id).await?;
@@ -2123,18 +1732,20 @@ impl ProjectService {
                         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                     }
                 } else {
-                    library.add_fetched_and_copy(target, fetched, saved_ids).await?
+                    library.add_fetched_and_select(target, fetched, saved_ids).await?
                 };
                 if let Some(phase) = response.phases.iter().find(|phase| phase.state != LibraryPhaseState::Done) {
                     return Err(InspectionError::new(
                         if phase.phase == LibraryPhaseName::Space { "source_sync_conflict" }
                         else { phase.error.as_ref().map(|error| error.code.as_str()).unwrap_or("source_provider_contract") },
                         phase.error.as_ref().map(|error| error.message.clone()).unwrap_or_else(||
-                            "Setup artifacts were not copied to the Space; retry the saved Library items".into()),
+                            "Setup artifacts were saved in the Library but not selected for the Space; retry the saved Library items".into()),
                     ));
                 }
-                if expected_ids.iter().any(|id| !response.item_ids.contains(id)) {
-                    return Err(InspectionError::new("source_provider_contract", "source provider returned no reviewed artifact"));
+                let selected = response.space.as_ref().filter(|space| space.space_id == result.workspace_id)
+                    .ok_or_else(|| InspectionError::new("source_provider_contract", "Library operation returned no matching Space selection"))?;
+                if expected_ids.iter().any(|id| !selected.item_ids.contains(id)) {
+                    return Err(InspectionError::new("source_provider_contract", "Library operation did not select every reviewed artifact"));
                 }
                 Ok::<(), InspectionError>(())
             }
@@ -2400,7 +2011,6 @@ fn step_at_least(current: WorkspaceOperationStep, wanted: WorkspaceOperationStep
         HerdrObserved => 3,
         WorktreeReady => 4,
         WorkspaceVerified => 5,
-        CompanionReady => 6,
         EnvironmentRequested => 7,
         EnvironmentReady => 8,
         ContextPreparing => 9,
@@ -2555,104 +2165,6 @@ fn verify_worktree_result(
     }
     Ok(())
 }
-fn verify_manifest_identity(
-    manifest: &CompanionManifest,
-    plan: &WorkspaceSetupPlan,
-    companion_id: &str,
-) -> Result<(), InspectionError> {
-    if manifest.schema_version != 1
-        || manifest.cockpit_operation_id != companion_id
-        || manifest.repository_key
-            != plan
-                .repository
-                .as_ref()
-                .map(|repository| repository.common_dir.as_str())
-                .unwrap_or("")
-        || manifest.repository_root
-            != plan
-                .repository
-                .as_ref()
-                .map(|repository| repository.root.as_str())
-                .unwrap_or("")
-        || manifest.checkout_path != plan.checkout_path
-        || manifest.artifact != plan.artifact
-        || manifest.ownership != "cockpit"
-    {
-        return Err(InspectionError::new(
-            "association_conflict",
-            "existing companion provenance differs",
-        ));
-    }
-    Ok(())
-}
-
-fn verify_manifest(
-    manifest: &CompanionManifest,
-    plan: &WorkspaceSetupPlan,
-    workspace_id: &str,
-    endpoint_identity: &str,
-    companion_id: &str,
-) -> Result<(), InspectionError> {
-    verify_manifest_identity(manifest, plan, companion_id)?;
-    if manifest.herdr_session_identity != endpoint_identity
-        || manifest.herdr_workspace_id != workspace_id
-    {
-        return Err(InspectionError::new(
-            "association_conflict",
-            "existing companion endpoint/workspace differs",
-        ));
-    }
-    Ok(())
-}
-
-fn stable_companion_root_id(
-    root_path: &str,
-    companion_id: &str,
-) -> Result<String, InspectionError> {
-    let path = Path::new(root_path);
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        InspectionError::new(
-            "companion_unavailable",
-            format!("cannot inspect companion: {error}"),
-        )
-    })?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(InspectionError::new(
-            "unsafe_path",
-            "companion root identity is not a real directory",
-        ));
-    }
-    let mut hasher = Sha256::new();
-    hasher.update(companion_id.as_bytes());
-    hasher.update([0]);
-    hasher.update(root_path.as_bytes());
-    hasher.update([0]);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        hasher.update(metadata.dev().to_le_bytes());
-        hasher.update(metadata.ino().to_le_bytes());
-    }
-    #[cfg(not(unix))]
-    {
-        hasher.update(metadata.len().to_le_bytes());
-        hasher.update(
-            metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|duration| duration.as_nanos().to_le_bytes().to_vec())
-                .unwrap_or_default(),
-        );
-    }
-    let digest = hasher.finalize();
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(encoded, "{byte:02x}");
-    }
-    Ok(format!("companion-{encoded}"))
-}
 
 const MAX_LINKED_ARTIFACT_URLS: usize = 4;
 
@@ -2774,16 +2286,6 @@ fn validate_session(session: &str) -> Result<(), InspectionError> {
     Ok(())
 }
 
-fn validate_identity(value: &str, field: &str) -> Result<(), InspectionError> {
-    validate_text(value, field, 256)?;
-    if value.contains('/') || value.contains('\\') {
-        return Err(InspectionError::new(
-            "invalid_identity",
-            format!("{field} contains a path separator"),
-        ));
-    }
-    Ok(())
-}
 
 fn validate_text(value: &str, field: &str, max: usize) -> Result<(), InspectionError> {
     if value.is_empty()
@@ -2910,15 +2412,6 @@ fn error_response(code: &str, message: impl Into<String>) -> ErrorResponse {
         message: message.into(),
     }
 }
-fn now() -> String {
-    format!(
-        "{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-    )
-}
 
 #[cfg(test)]
 mod tests {
@@ -2957,7 +2450,7 @@ mod tests {
         terminal_requests: StdMutex<Vec<ProjectTerminalRequest>>,
         closed_workspaces: StdMutex<Vec<String>>,
         repository: std::sync::OnceLock<RepositoryCandidate>,
-        copy_available: AtomicBool,
+        selection_available: AtomicBool,
     }
 
     fn unused<T>() -> Result<T, InspectionError> {
@@ -2985,7 +2478,7 @@ mod tests {
             &self,
             session: &str,
         ) -> Result<SessionSnapshotResponse, InspectionError> {
-            if !self.copy_available.load(Ordering::SeqCst) {
+            if !self.selection_available.load(Ordering::SeqCst) {
                 return Err(InspectionError::new("disconnected", "fixture unavailable"));
             }
             Ok(SessionSnapshotResponse {
@@ -3216,8 +2709,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_saves_primary_and_linked_artifacts_centrally_and_retries_copy_without_fetch() {
-        for fail_copy in [false, true] {
+    async fn setup_saves_primary_and_linked_artifacts_and_retries_selection_without_fetch() {
+        for fail_selection in [false, true] {
             let root = std::env::temp_dir().join(format!("cockpit-setup-library-{}", Uuid::new_v4()));
             let repository = root.join("repository");
             std::fs::create_dir_all(&repository).unwrap();
@@ -3235,12 +2728,12 @@ mod tests {
             }) as Arc<dyn crate::sources::SourceProvider>).collect();
             let sources = Arc::new(SourceService::new(&configuration, providers).unwrap());
             let adapter = Arc::new(NestedDirectoryAdapter::default());
-            adapter.copy_available.store(!fail_copy, Ordering::SeqCst);
+            adapter.selection_available.store(!fail_selection, Ordering::SeqCst);
             let service = Arc::new(ProjectService::new(configuration.clone(), adapter.clone()).unwrap().with_sources(sources.clone()));
             let candidate = service.repositories().await.unwrap().repositories.into_iter()
                 .find(|candidate| candidate.checkout_path == repository.to_string_lossy()).unwrap();
             adapter.repository.set(candidate.clone()).unwrap();
-            let library = Arc::new(LibraryService::new(configuration.clone(), sources).with_projects(service.clone(), adapter.clone()));
+            let library = Arc::new(LibraryService::new(configuration.clone(), sources).with_herdr(adapter.clone()));
             let legacy = Path::new(&configuration.state_root).join("sources");
             std::fs::create_dir_all(&legacy).unwrap();
             let sentinel = legacy.join("source-current.json");
@@ -3259,28 +2752,21 @@ mod tests {
             let mut operation = settled_setup(&service, &plan.operation_id).await;
             assert_eq!(calls.load(Ordering::SeqCst), 2, "Library must save the validated assets without another fetch");
             let target = SpaceTarget { session_id: "session".into(), space_id: "workspace".into() };
-            if fail_copy {
+            if fail_selection {
                 assert_eq!(operation.state, WorkspaceOperationState::Partial);
                 assert_eq!(operation.error.as_ref().unwrap().code, "source_sync_conflict");
                 assert!(operation.resume_allowed);
                 let saved = library.listing(None).await.unwrap();
                 let mut identities = saved.items.iter().filter_map(|item| item.canonical_id.as_deref()).collect::<Vec<_>>();
                 identities.sort();
-                assert_eq!(identities, vec!["OPS-3", "other/service#7"], "all linked assets must survive a copy failure");
-                let failed = library.space_listing(target.clone()).await.unwrap();
-                assert_eq!(failed.attempts.len(), 2);
-                for item in &saved.items {
-                    let attempt = failed.attempts.iter().find(|attempt| attempt.item_id.as_ref() == Some(&item.item_id)).unwrap();
-                    assert_eq!(attempt.state, cockpit_protocol::library::SpaceAddAttemptState::Failed);
-                    assert_eq!(attempt.operation_id, failed.attempts[0].operation_id, "setup artifacts share one Library operation");
-                }
+                assert_eq!(identities, vec!["OPS-3", "other/service#7"], "all linked assets must survive a selection failure");
                 let fetched = calls.load(Ordering::SeqCst);
-                adapter.copy_available.store(true, Ordering::SeqCst);
+                adapter.selection_available.store(true, Ordering::SeqCst);
                 service.resume("session", &WorkspaceOperationRequest {
                     operation_id: operation.operation_id.clone(), expected_generation: operation.generation,
                 }, library.clone()).await.unwrap();
                 operation = settled_setup(&service, &plan.operation_id).await;
-                assert_eq!(calls.load(Ordering::SeqCst), fetched, "copy retry must never ask the provider");
+                assert_eq!(calls.load(Ordering::SeqCst), fetched, "selection retry must never ask the provider");
             }
             assert_eq!(operation.state, WorkspaceOperationState::Completed, "{operation:?}");
             assert_eq!(
@@ -3291,15 +2777,20 @@ mod tests {
             let mut identities = items.iter().filter_map(|item| item.canonical_id.as_deref()).collect::<Vec<_>>();
             identities.sort();
             assert_eq!(identities, vec!["OPS-3", "other/service#7"]);
-            let listing = library.space_listing(target).await.unwrap();
-            assert!(listing.attempts.is_empty());
+            let listing = library.space_listing(&target).await.unwrap();
+            assert_eq!(listing.items.len(), items.len());
             for item in &items {
-                let row = listing.rows.iter().find(|row| row.item_id.as_ref() == Some(&item.item_id)).unwrap();
-                assert_eq!(row.state, cockpit_protocol::library::SpaceCopyState::UpToDate);
-                let bytes = std::fs::read_to_string(Path::new(&plan.companion_path).join(&row.paths[0])).unwrap();
+                assert!(listing.items.iter().any(|selected| selected.item_id == item.item_id));
+                let bytes = std::fs::read_to_string(Path::new(&configuration.library_root).join(item.document_path.as_ref().unwrap())).unwrap();
                 let expected_read = if item.canonical_id.as_deref() == Some("other/service#7") { 1 } else { 2 };
-                assert!(bytes.contains(&format!("Setup context body: fetch {expected_read}")), "copy must contain the validated provider result");
-                assert!(bytes.contains(&item.item_id));
+                assert!(bytes.contains(&format!("Setup context body: fetch {expected_read}")), "Library must contain the validated provider result");
+            }
+            assert!(!Path::new(&configuration.companion_root).exists(), "setup never creates companion directories");
+            {
+                let requests = adapter.terminal_requests.lock().expect("terminal requests");
+                let env = &requests[0].env;
+                assert_eq!(env.get("COCKPIT_WORKSPACE_ID").map(String::as_str), Some("workspace"));
+                assert!(!env.contains_key("COCKPIT_CONTEXT_PATH"));
             }
             assert_eq!(std::fs::read(&sentinel).unwrap(), b"opaque legacy fixture");
             assert_eq!(std::fs::read_dir(&legacy).unwrap().count(), 1);
@@ -3317,8 +2808,10 @@ mod tests {
         git(&repository, &["init"]);
         std::fs::write(nested.join("keep.txt"), "keep\n").expect("borrowed file");
         let configuration = configuration(&root);
+        let legacy_notes = Path::new(&configuration.companion_root).join("legacy-task/notes.md");
+        std::fs::create_dir_all(legacy_notes.parent().unwrap()).expect("legacy companion");
+        std::fs::write(&legacy_notes, "user notes\n").expect("legacy notes");
         std::fs::create_dir_all(&configuration.worktree_root).expect("worktree root");
-        std::fs::create_dir_all(&configuration.companion_root).expect("companion root");
         let adapter = Arc::new(NestedDirectoryAdapter::default());
         let service = ProjectService::new(configuration, adapter.clone()).expect("project service");
 
@@ -3376,6 +2869,7 @@ mod tests {
                 .allowed_actions
                 .contains(&WorkspaceTeardownAction::CloseSpace)
         );
+        assert!(!preview.allowed_actions.contains(&WorkspaceTeardownAction::RemoveOwnedWorktree));
         service
             .teardown_execute(
                 "session",
@@ -3403,6 +2897,7 @@ mod tests {
             std::fs::read_to_string(nested.join("keep.txt")).expect("borrowed file"),
             "keep\n"
         );
+        assert_eq!(std::fs::read_to_string(&legacy_notes).expect("retained legacy notes"), "user notes\n");
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

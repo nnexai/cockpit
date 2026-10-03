@@ -12,8 +12,7 @@ import {
   parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest, parseLibraryReplaceRequest,
   parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
-  parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
-  parseSpaceUpdateRequest, parseSpaceRemoveRequest,
+  parseSpaceAddRequest, matchSpaceOperation, parseSpaceRepositoriesRequest, parseSpaceRemoveRequest,
 } from "./libraryProtocol";
 import { parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
@@ -965,14 +964,10 @@ export function createBrowserClient(
       const response = await getJson(request, "/api/v1/library/space/add", "Space add", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       return matchSpaceOperation(response, body.target);
     },
-    async librarySpaceAttemptsDismiss(value) {
-      const body = parseSpaceAttemptsDismissRequest(value);
-      await getJson(request, "/api/v1/library/space/attempts/dismiss", "Space attempt dismissal", parseSpaceAttemptsDismissed, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async librarySpaceUpdate(value) {
-      const body = parseSpaceUpdateRequest(value);
-      const response = await getJson(request, "/api/v1/library/space/update", "Space update", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      return matchSpaceOperation(response, body.target);
+    async librarySpaceRepositories(value) {
+      const body = parseSpaceRepositoriesRequest(value);
+      const response = await getJson(request, "/api/v1/library/space/repositories", "Space repositories", parseSpaceContextListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return matchSpaceContextListing(response, body);
     },
     async librarySpaceRemove(value) {
       const body = parseSpaceRemoveRequest(value);

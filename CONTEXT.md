@@ -14,7 +14,7 @@ Cockpit follows conventional engineering workflows:
 
 - discover a local repository;
 - create a task worktree or open an existing directory;
-- attach a companion context directory;
+- select relevant Library items and existing repositories for a Space;
 - supervise persistent Herdr sessions and agent terminals;
 - gather static issue, review, wiki, and telemetry context;
 - inspect, test, and review changes locally;
@@ -32,7 +32,7 @@ Cockpit brings together several provider-neutral product domains:
 - **Telemetry** — optional static log and trace context.
 - **Herdr Client** — a graphical client for Herdr sessions, following Herdr semantics and authority.
 
-Forge, Issue Tracker, and Wiki are domain contracts served by configured provider adapters. Source import, refresh, and copied local-folder Library items are implemented; the companion repository-snapshot action has been replaced by the Library folder flow.
+Forge, Issue Tracker, and Wiki are domain contracts served by configured provider adapters. Source import, refresh, and explicit copied local-folder Library items are implemented. Additional Space repositories are existing local checkout paths, not snapshots.
 
 ## 3. Runtime architecture
 
@@ -140,16 +140,16 @@ New worktree setup performs this sequence:
 1. enumerate and select a repository;
 2. resolve a typed task/artifact;
 3. ask Herdr to create the worktree workspace;
-4. create the Cockpit-owned companion context resource;
-5. record the companion association in a Cockpit-owned provenance manifest and pass context environment to explicitly created new Cockpit tabs/panes;
-6. optionally hydrate explicitly requested context;
+4. record exact worktree ownership and the Herdr creation receipt;
+5. optionally save prevalidated primary and linked context into the Library and select it for the Space;
+6. pass Library and Space discovery environment to explicitly created new Cockpit tabs/panes;
 7. return the selected Herdr session/resource.
 
 Configured repository actions run without a per-operation consent checkbox. Cockpit does not set Herdr's Git `trust_repository` override. Setup retains its operation identity after uncertain dispatch and reconciles before any further mutation.
 
 The durable global Context Library, not a cache, survives workspace destruction. Destruction removes only proven owned resources; Library items and unrelated resources are never removed with a workspace. Library operations do not inspect, import, or modify the legacy `<state_root>/sources` cache.
 
-Independent reflink snapshots are preferred where available. Normal copies preserve correctness and report the fallback. Hardlinks and Git alternates must not couple writable context files to their originals.
+Spaces do not copy context files or create companion directories. Agents read the live Library and existing checkout paths. Task notes belong in the working checkout; the Library is Cockpit-managed and read-only by convention, not a sandbox.
 
 ## 5. Herdr client UI
 
@@ -236,9 +236,13 @@ Each tab has at most one Files, one Review and one Browser leaf. Opening an exis
 
 The core's `ViewerService` opens Files/Review contexts from fresh evidence of a real terminal in the same tab. It pins only the requested root and records source cwd, endpoint, tab and Space. Requests use `viewer_id` and `binding_id`, revalidate current tab/endpoint/Space and root filesystem identity, and reject replaced bindings. A later `cd` or source-pane close does not retarget a viewer. Missing contexts require explicit Reopen; closing a viewer or retiring its tab releases the context without deleting durable batches.
 
+Additional selected repositories must still belong to the current configured repository catalog before Files grants access. Removing a configured root revokes that authority without deleting the persisted selection; it remains diagnosed for recovery. The terminal's own freshly verified checkout is a separate source of authority.
+
+The bound Context Library retains its issued root and supports comments, search and media through that binding. The standalone global Library remains unbound and comment-free. Context comment messages identify the authorized absolute file path, so identical relative filenames in the Library, an additional repository and the working checkout cannot be confused.
+
 The Context browser:
 
-- enumerates the companion context tree and optionally an authorized repository root;
+- enumerates the live Library and explicitly authorized local checkout roots;
 - recognizes frontmatter/resource identity and discovers user-created files;
 - renders Markdown with Mermaid, bounded source/plain text/logs, and safe images;
 - preserves exact original source line numbers, including frontmatter;
@@ -338,24 +342,24 @@ A single import stores its depth on the seed item (`LibraryItemSummary.reference
 
 Provider failures leave successful assets in place, record a per-item status, and allow the workspace/session to proceed when the primary resource is available.
 
-### 7.3 Durable Library and Space copies
+### 7.3 Durable Library and Space selections
 
-The global Context Library is the durable, Cockpit-owned source for provider snapshots. It is stored under the configured `library_root`, independently of any Herdr session, Space, or companion. Adding or refreshing an item updates the Library; it does not automatically fan out changes to companion copies.
+The global Context Library is the durable, Cockpit-owned source for provider snapshots. It is stored under the configured `library_root`, independently of Herdr sessions and Spaces. Spaces hold relevance selections, not separate files or pinned versions. Library refreshes are visible the next time an agent or viewer reads the item.
 
-Space adds save the Library item first, then copy or reflink it into a freshly verified companion. Setup passes its prevalidated primary and linked assets into one Library operation without fetching them again; every item and pending attempt becomes durable before any companion copy starts. A companion failure leaves all saved items and their durable Space-add attempts; setup reports `source_sync_conflict` and can resume by copying saved content without asking the provider again. A later Library refresh never silently updates a Space copy. In the UI, a live target Space (the Library view's selected Space, or a Context pane's own Space) adds `Add to <Space>` to Library item headers and menus and a `Library and <Space>` destination to the Add dialog, whose progress shows the Library and Space phases separately. A companion's `Resources` lists that Space's Library copies with read-only states, failed adds first with `Retry adding to <Space>` (copying the saved item, never fetching again) and `Dismiss`; its toolbar button reads `Resources · N behind` when copies are behind. `Update` and `Restore from Library` act only on selected `Library newer` or `Missing in Space` rows in that Space; `Update all (N)` counts those rows and skips edited copies. `Replace with Library version…` and `Remove from this Space…` require confirmation bound to the listed path hashes; a stale confirmation conflicts without changing the file. Copies marked `Removed at source`, `Not in Library`, or `Not linked` are not updated; removing a Library item leaves its Space files intact.
+Space adds save to the Library first, then select the saved item IDs for a freshly verified Herdr Space. Setup reuses its prevalidated primary and linked assets without fetching them again. A failed selection leaves the saved Library items intact; there is no companion copy, copy retry journal, or Space update phase. The Library UI offers `Add to <Space>` and `Library and <Space>`. Context `Resources` lists selected items and additional repository paths; removing an item or repository from a Space only removes its selection.
 
-`SourceService` is fetch-only: provider lookup, bounded metadata/fetch, setup's short-lived `RecentReads`, and bounded reference traversal (`collect_related`, which returns assets without persisting them). `LibraryService` is the persistence authority. The legacy pane-scoped source import/list/refresh transports are removed in favor of Library operations and the explicit Space list/add/attempt-dismiss transports.
+`SourceService` is fetch-only: provider lookup, bounded metadata/fetch, setup's short-lived `RecentReads`, and bounded reference traversal (`collect_related`, which returns assets without persisting them). `LibraryService` is the persistence authority for Library content and Space selections.
 
 The old `<state_root>/sources` cache is inert: Cockpit never reads, imports, reports, modifies, or deletes it. There is no migration. It remains on disk for manual user removal after confirmation.
 
-Local folders are copied into the Library from a typed absolute or `~` path; there is no live link, two-way sync, or native folder picker. Capture rejects a directory that overlaps the Library, a Space companion, state, or worktree root. Git roots use tracked and untracked non-ignored files; plain directories use regular files. Nested `.git`, symlinks, special files, hardlinks, and native executables are excluded and counted. Fixed build/dependency exclusions apply. Paths are byte-wise sorted, and file/byte limits keep a sorted prefix with a `partial` result. The source is not changed. Refresh is an explicit re-copy: Library bytes change only after confirmation if a Library file was edited; existing Space copies remain untouched and become `Library newer`.
+Local folders are explicitly copied into the Library from a typed absolute or `~` path; this remains separate from selecting an existing repository for a Space. Capture has no live link, two-way sync, or native folder picker. It rejects overlaps with Cockpit-owned roots. Git roots use tracked and untracked non-ignored files; plain directories use regular files. Nested `.git`, symlinks, special files, hardlinks, and native executables are excluded and counted. Fixed build/dependency exclusions apply. Paths are byte-wise sorted, and file/byte limits keep a sorted prefix with a `partial` result. The source is not changed. Refresh is an explicit re-copy, with confirmation protecting edited Library bytes; all Spaces read the resulting Library version directly.
 
 The Library is a human- and agent-readable tree that mirrors each source's own hierarchy; no Cockpit knowledge is needed to traverse it. Provider items live at `<provider>/<host>/<source hierarchy>/<leaf>/<Title>.md`: Confluence `confluence/<host>/<KEY - Space Name>/<ancestor titles>/<Title>/<Title>.md` with child pages nested in the parent's directory; Jira `jira/<host>/<PROJ>/<PROJ-123>/<Title>.md`; forges `<provider>/<host>/<owner>/<repo>/issues|merge-requests|pulls/<n>/<Title>.md`. Downloaded attachments sit in the item's `_files/`. Folder copies live under `folders/<Folder Name>`. Segments keep real titles and replace only unsafe characters; a sibling collision appends ` [<id>]`. All machine state (index, journal, staging, trash, locks, operations) is under `.cockpit/`, and a generated root `README.md` explains the layout. A provider item owns only its document and `_files/`; child items and user files in its directory are never touched by its refresh, replacement or removal. A title or ancestor change moves the item by renaming its directory (children move with it) and rewrites descendant paths in one journaled index commit. The flat layout (index schema 1) has no migration: such a Library fails with `library_layout_outdated` and must be deleted and re-added. Index schema 2 is upgraded to schema 3 in place when the Library opens (see the reference model below); that upgrade is one-way, and an older binary reports the schema 3 index as corrupt, so copy the Library before trying a new build on real data.
 Issue-like provider snapshots use generated Markdown plus frontmatter fields for known type, status, priority, author, assignee, timestamps, and comment count. The body starts with a title and one-line summary, then optional `## Description` and `## Comments (n)` sections. Each comment is a `### Author · YYYY-MM-DD HH:MM` card with an optional edited time/location, one permalink paragraph, and its body; provider headings are demoted so descriptions and comments cannot collide with document structure. Partial comment lists state shown and total counts.
 
 
-Folder items retain each file at its relative path. Adding any item to a Space mirrors its Library-relative paths in the companion, so links resolve the same way there, with one manifest entry and content hash per file. Explicit Space update copies new or changed Library files, restores missing files, and removes unedited files no longer in the Library. Edited files are skipped until their listed path hashes are explicitly confirmed; edited Space-only files are preserved and reported. Removal applies the same per-file compare-and-swap protection. A Library move reaches a Space only through its explicit update, which writes the new paths and removes unedited files at the old ones.
-Markdown links navigate within their current Library or Space root; links to a Library source URL open the corresponding Library item or its Space copy, and file actions copy Library-relative or absolute paths. Newly created context terminals receive `COCKPIT_LIBRARY_ROOT` alongside `COCKPIT_CONTEXT_PATH`.
+Folder items retain each file at its relative Library path. Selecting an item never materializes a Space copy. Additional repositories are selected from the configured local catalog and read in place; the Space's own checkout remains available. Repository paths are revalidated with fresh filesystem and Git evidence before becoming viewer roots.
+Markdown links navigate within the current authorized root; source URLs open the corresponding Library item, and file actions copy Library-relative or absolute paths. New context terminals receive `COCKPIT_LIBRARY_ROOT`, not `COCKPIT_CONTEXT_PATH`. Existing terminals discover relevant files with the read-only `cockpit context --current` command, which reports the originating Space, Library root, selected item paths, checkout and extra repository paths.
 
 A followed Confluence space includes every page the profile can read across its top-level trees, not only the homepage tree; Cloud folders appear as ancestor-only nodes in the hierarchy. Its durable follow record, page count, partial state, and excluded page ids live in the Library index. `Refresh space` pages the space once and fetches a page only when new or when its version, title, or ancestor chain changed. Page metadata, labels, body, and attachment lookups run concurrently; changed pages are fetched with a bounded concurrency of eight, then published in deterministic parent-first order, each as its own crash-safe durable Library transaction. Ancestor metadata drives hierarchy and parent links; a moved or renamed page's directory is renamed to its new place. Pages absent from a complete enumeration are identified as removed at source, not deleted; previously imported snapshots are preserved.
 
@@ -407,7 +411,7 @@ Verification uses the actual changed surface:
 - a real native smoke test connects to an installed Herdr-server, mirrors Spaces/Agents/tabs/panes, attaches a visible terminal, sends input, and observes state updates;
 - browser runtime verification uses `cockpit serve` against an explicit run-owned Herdr session; `--test-mode` is only an unavailable-state fixture, not live compatibility proof;
 - context/provider tests cover normalization, frontmatter identity, freshness unchanged/changed cases, bounded reference traversal, and partial failures;
-- workspace lifecycle tests cover configured repository discovery, Herdr worktree provenance, companion ownership, warning-producing copy fallback, and coupled destruction.
+- workspace lifecycle tests cover configured repository discovery, exact Herdr worktree provenance, borrowed-directory safety, direct Space selections, and preservation of legacy companion files.
 
 ## 10. Deferred scope
 

@@ -15,7 +15,6 @@ pub enum ViewerSourceKind {
 #[serde(rename_all = "snake_case")]
 pub enum ContextRootKind {
     Repository,
-    Companion,
     Folder,
     Library,
 }
@@ -28,7 +27,6 @@ pub struct ContextRoot {
     pub path: String,
     pub repository_id: String,
     pub checkout_path: String,
-    pub companion_id: Option<String>,
 }
 
 

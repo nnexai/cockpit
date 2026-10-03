@@ -23,8 +23,9 @@ const MAX_TREE_ENTRIES: usize = 1_000_000;
 const MAX_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024 + MAX_RECORD;
 const MAX_TREE_DEPTH: usize = 64;
 
-/// On-disk index schema. 3 introduced item reference sets and follow sources.
-const SCHEMA: u32 = 3;
+/// Schema 4 replaces companion ownership with durable Space selections.
+const SCHEMA: u32 = 4;
+const INTENT_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,11 +47,24 @@ pub(crate) struct LibraryIndexEntry {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct SpaceContextRecord {
+    pub space_context_id: String,
+    pub session_id: String,
+    pub space_id: String,
+    pub item_ids: Vec<String>,
+    pub repository_paths: Vec<String>,
+    #[serde(default)]
+    pub legacy_migrated: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Index {
     schema: u32,
     pub generation: String,
     pub items: Vec<LibraryIndexEntry>,
     pub follows: Vec<LibraryFollowSummary>,
+    #[serde(default)]
+    pub space_contexts: Vec<SpaceContextRecord>,
 }
 impl Default for Index {
     fn default() -> Self {
@@ -59,6 +73,7 @@ impl Default for Index {
             generation: Uuid::new_v4().to_string(),
             items: vec![],
             follows: vec![],
+            space_contexts: vec![],
         }
     }
 }
@@ -289,6 +304,7 @@ impl Store {
         }
         store.ensure_readme()?;
         store.upgrade_v2()?;
+        store.upgrade_v3()?;
         store.recover()?;
         Ok(store)
     }
@@ -351,6 +367,65 @@ impl Store {
                 upgrade_v2_follow(record);
             }
         }
+        index["schema"] = 3.into();
+        index["generation"] = Uuid::new_v4().to_string().into();
+        bounded_write(&self.meta, "index.json", &index, MAX_INDEX)
+    }
+    /// Journal and operation records are rewritten before the schema flip.
+    /// Raw JSON keeps interrupted old transactions readable during cutover.
+    fn upgrade_v3(&self) -> Result<(), InspectionError> {
+        let mut index: serde_json::Value = read_json_bounded(&self.meta, "index.json", MAX_INDEX)
+            .map_err(|e| corrupt(e.message))?;
+        if index.get("schema").and_then(serde_json::Value::as_u64) != Some(3) {
+            return Ok(());
+        }
+        for name in super::legacy::json_names(&self.journal, 4096)? {
+            let mut intent: serde_json::Value = read_json_bounded(&self.journal, &name, MAX_RECORD)
+                .map_err(|e| corrupt(e.message))?;
+            for key in ["new_entry", "old_entry"] {
+                if let Some(entry) = intent.get_mut(key) {
+                    super::legacy::upgrade_entry(entry)?;
+                }
+            }
+            if let Some(entries) = intent.get_mut("moved_entries").and_then(serde_json::Value::as_array_mut) {
+                for entry in entries {
+                    super::legacy::upgrade_entry(entry)?;
+                }
+            }
+            let schema = intent.get("schema").and_then(serde_json::Value::as_u64);
+            if !matches!(schema, Some(1 | 2)) {
+                return Err(corrupt("unsupported Library journal schema"));
+            }
+            intent["schema"] = INTENT_SCHEMA.into();
+            bounded_write(&self.journal, &name, &intent, MAX_RECORD)?;
+        }
+        let saved = super::legacy::upgrade_operations(self)?;
+        // Newly published entries may exist only in the pending journal. Protect
+        // their saved IDs before replay can make them visible without ownership.
+        for name in super::legacy::json_names(&self.journal, 4096)? {
+            let mut intent: serde_json::Value = read_json_bounded(&self.journal, &name, MAX_RECORD)
+                .map_err(|e| corrupt(e.message))?;
+            for key in ["new_entry", "old_entry"] {
+                if let Some(entry) = intent.get_mut(key) {
+                    super::legacy::protect_saved_entry(entry, &saved)?;
+                }
+            }
+            if let Some(entries) = intent.get_mut("moved_entries").and_then(serde_json::Value::as_array_mut) {
+                for entry in entries {
+                    super::legacy::protect_saved_entry(entry, &saved)?;
+                }
+            }
+            bounded_write(&self.journal, &name, &intent, MAX_RECORD)?;
+        }
+        if let Some(items) = index.get_mut("items").and_then(serde_json::Value::as_array_mut) {
+            for entry in items {
+                super::legacy::upgrade_entry(entry)?;
+                super::legacy::protect_saved_entry(entry, &saved)?;
+            }
+        }
+        if index.get("space_contexts").is_none() {
+            index["space_contexts"] = serde_json::json!([]);
+        }
         index["schema"] = SCHEMA.into();
         index["generation"] = Uuid::new_v4().to_string().into();
         bounded_write(&self.meta, "index.json", &index, MAX_INDEX)
@@ -376,6 +451,14 @@ impl Store {
         let file = lock_file(&self.meta, "library.lock")?;
         FileExt::lock_exclusive(&file).map_err(io_error)?;
         Ok(Lease { _file: file })
+    }
+    pub fn try_exclusive(&self) -> Result<Option<Lease>, InspectionError> {
+        let file = lock_file(&self.meta, "library.lock")?;
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(Lease { _file: file })),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(io_error(e)),
+        }
     }
     pub fn lease(&self, id: &str) -> Result<Lease, InspectionError> {
         let file = lock_file(
@@ -444,6 +527,20 @@ impl Store {
                 return Err(corrupt("duplicate Library identity or path"));
             }
         }
+        let mut contexts = std::collections::HashSet::new();
+        for context in &index.space_contexts {
+            if context.space_context_id.is_empty() || context.session_id.is_empty()
+                || context.space_id.is_empty() || context.item_ids.len() > 1_000_000
+                || context.repository_paths.len() > 64
+                || !contexts.insert(&context.space_context_id)
+            {
+                return Err(corrupt("invalid or duplicate Space selection identity"));
+            }
+            if context.item_ids.windows(2).any(|pair| pair[0] >= pair[1])
+                || context.item_ids.iter().any(String::is_empty) {
+                return Err(corrupt("invalid Space selected item IDs"));
+            }
+        }
         let index = Arc::new(index);
         *self.index_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((identity, Arc::clone(&index)));
         Ok(index)
@@ -488,6 +585,13 @@ impl Store {
         change: impl FnOnce(&mut Index) -> Result<R, InspectionError>,
     ) -> Result<R, InspectionError> {
         let _lock = self.exclusive()?;
+        self.mutate_index_locked(change)
+    }
+    /// Caller must already hold the exclusive Library lock.
+    pub(super) fn mutate_index_locked<R>(
+        &self,
+        change: impl FnOnce(&mut Index) -> Result<R, InspectionError>,
+    ) -> Result<R, InspectionError> {
         let mut index = self.index()?;
         let before = index
             .items
@@ -740,7 +844,7 @@ impl Store {
         }
         let id = Uuid::new_v4().to_string();
         let mut intent = Intent {
-            schema: 1,
+            schema: INTENT_SCHEMA,
             intent_id: id.clone(),
             op: "publish".into(),
             method,
@@ -858,7 +962,7 @@ impl Store {
         check_confirmation(&conflicts(entry, &predecessor), None)?;
         let intent_id = Uuid::new_v4().to_string();
         let intent = Intent {
-            schema: 1,
+            schema: INTENT_SCHEMA,
             intent_id: intent_id.clone(),
             op: "remove".into(),
             method: if entry.summary.kind == LibraryItemKind::FolderCopy {
@@ -1195,7 +1299,7 @@ impl Store {
         }
         let id = Uuid::new_v4().to_string();
         let intent = Intent {
-            schema: 1,
+            schema: INTENT_SCHEMA,
             intent_id: id.clone(),
             op: "move".into(),
             method: Method::Move,
@@ -1331,7 +1435,7 @@ fn validate_entry(entry: &LibraryIndexEntry) -> Result<(), InspectionError> {
     Ok(())
 }
 fn validate_intent(i: &Intent, name: &str) -> Result<(), InspectionError> {
-    if i.schema != 1
+    if i.schema != INTENT_SCHEMA
         || Uuid::parse_str(&i.intent_id).is_err()
         || name != format!("{}.json", i.intent_id)
         || i.backup != i.intent_id
@@ -2609,7 +2713,7 @@ mod tests {
 
         let upgraded = reopen(&f).open().unwrap();
         let raw: serde_json::Value = read_json_bounded(&upgraded.meta, "index.json", MAX_INDEX).unwrap();
-        assert_eq!(raw["schema"], 3);
+        assert_eq!(raw["schema"], 4);
         let index = upgraded.index().unwrap();
         let refs = |id: &str| index.items.iter().find(|e| e.summary.item_id == id).unwrap().summary.refs.clone();
         assert_eq!(refs(&one.summary.item_id), [LibraryItemRef::Follow { follow_id: "follow:sd".into() }]);
@@ -2672,5 +2776,120 @@ mod tests {
         let saved = store.index().unwrap().items.remove(0).summary;
         assert_ne!(saved.revision, first.summary.revision, "the publish happened");
         assert_eq!((saved.reference_depth, saved.included_by), (Some(2), Some(vec![inclusion])));
+    }
+
+    #[test]
+    fn schema_three_migrates_pending_journal_ownership_and_preserves_saved_items() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let existing = publish_asset(&store, 1, "one", None);
+        let mut pending = asset_entry(&asset(2, "pending"), None);
+        let pending_id = pending.summary.item_id.clone();
+        let stage = store.stage_asset(&mut pending, &asset(2, "pending")).unwrap();
+        // Publication reached the durable target; only the index commit was
+        // interrupted. A journal-only crash is correctly rolled back instead.
+        fault(&store, "new_to_target");
+        assert_eq!(store.publish(stage, pending, None, None).unwrap_err().code, "library_test_crash");
+        let names = super::super::legacy::json_names(&store.journal, 4096).unwrap();
+        let mut intent: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
+        intent["schema"] = 1.into();
+        intent["new_entry"]["summary"]["refs"] = serde_json::json!([
+            {"kind": "space", "companion_root_id": "unknown-pending"}
+        ]);
+        intent["moved_entries"] = serde_json::json!([intent["new_entry"].clone()]);
+        bounded_write(&store.journal, &names[0], &intent, MAX_RECORD).unwrap();
+        let mut index: serde_json::Value = read_json_bounded(&store.meta, "index.json", MAX_INDEX).unwrap();
+        index["schema"] = 3.into();
+        index.as_object_mut().unwrap().remove("space_contexts");
+        index["items"][0]["summary"]["refs"] = serde_json::json!([
+            {"kind": "space", "companion_root_id": "unknown-existing"}
+        ]);
+        bounded_write(&store.meta, "index.json", &index, MAX_INDEX).unwrap();
+        store.meta.create_dir("space-adds").unwrap();
+        let attempts = store.meta.open_dir_nofollow("space-adds").unwrap();
+        bounded_write(&attempts, "saved.json", &serde_json::json!({
+            "target": {"session_id": "missing-session", "space_id": "missing-space"},
+            "item_id": pending_id, "state": "pending"
+        }), MAX_RECORD).unwrap();
+        let _lock = store.exclusive().unwrap();
+        store.upgrade_v3().unwrap();
+        let migrated: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
+        assert_eq!(migrated["schema"], INTENT_SCHEMA);
+        assert_eq!(migrated["new_entry"]["summary"]["refs"], serde_json::json!([
+            {"kind": "space", "space_context_id": "legacy:unknown-pending"}, {"kind": "manual"}
+        ]));
+        assert_eq!(migrated["moved_entries"][0]["summary"]["refs"], migrated["new_entry"]["summary"]["refs"]);
+        assert_eq!(migrated["target"], intent["target"]);
+        assert_eq!(migrated["staging"], intent["staging"]);
+        store.recover().unwrap();
+        let index = store.index().unwrap();
+        let pending = index.items.iter().find(|e| e.summary.item_id == pending_id).unwrap();
+        assert!(pending.summary.refs.contains(&LibraryItemRef::Manual));
+        assert!(pending.summary.refs.contains(&LibraryItemRef::Space { space_context_id: "legacy:unknown-pending".into() }));
+        assert!(index.items.iter().find(|e| e.summary.item_id == existing.summary.item_id).unwrap().summary.refs
+            .contains(&LibraryItemRef::Space { space_context_id: "legacy:unknown-existing".into() }));
+        assert!(index.space_contexts.is_empty());
+        let generation = index.generation;
+        store.upgrade_v3().unwrap();
+        assert_eq!(store.index().unwrap().generation, generation, "schema migration is idempotent");
+        assert!(attempts.symlink_metadata("saved.json").unwrap().is_file(), "legacy attempts stay inert on disk");
+    }
+
+    #[test]
+    fn schema_three_preserves_replacement_journal_predecessor_references() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let first = publish_asset(&store, 1, "one", None);
+        let mut replacement = asset_entry(&asset(1, "changed"), Some(&first));
+        let stage = store.stage_asset(&mut replacement, &asset(1, "changed")).unwrap();
+        fault(&store, "journal");
+        assert_eq!(store.publish(stage, replacement, Some(&first.summary.revision), None).unwrap_err().code, "library_test_crash");
+        let names = super::super::legacy::json_names(&store.journal, 4096).unwrap();
+        let mut intent: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
+        for key in ["new_entry", "old_entry"] {
+            intent[key]["summary"]["refs"] = serde_json::json!([{"kind": "space", "companion_root_id": "predecessor"}]);
+        }
+        intent["schema"] = 1.into();
+        let inventory = intent["old_entry"]["inventory"].clone();
+        let previous_revision = intent["previous_revision"].clone();
+        bounded_write(&store.journal, &names[0], &intent, MAX_RECORD).unwrap();
+        let mut index: serde_json::Value = read_json_bounded(&store.meta, "index.json", MAX_INDEX).unwrap();
+        index["schema"] = 3.into();
+        index["items"][0]["summary"]["refs"] = intent["old_entry"]["summary"]["refs"].clone();
+        bounded_write(&store.meta, "index.json", &index, MAX_INDEX).unwrap();
+        let _lock = store.exclusive().unwrap();
+        store.upgrade_v3().unwrap();
+        let migrated: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
+        assert_eq!(migrated["old_entry"]["summary"]["refs"], serde_json::json!([{"kind": "space", "space_context_id": "legacy:predecessor"}]));
+        assert_eq!(migrated["new_entry"]["summary"]["refs"], migrated["old_entry"]["summary"]["refs"]);
+        assert_eq!(migrated["old_entry"]["inventory"], inventory);
+        assert_eq!(migrated["previous_revision"], previous_revision);
+        store.recover().unwrap();
+        assert_eq!(store.index().unwrap().items[0].summary.refs,
+            [LibraryItemRef::Space { space_context_id: "legacy:predecessor".into() }]);
+    }
+
+    #[test]
+    fn schema_three_unknown_reference_blocks_flip_without_discarding_it() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        publish_asset(&store, 1, "one", None);
+        let mut raw: serde_json::Value = read_json_bounded(&store.meta, "index.json", MAX_INDEX).unwrap();
+        raw["schema"] = 3.into();
+        raw["items"][0]["summary"]["refs"] = serde_json::json!([{"kind": "future-owner", "identity": "retain"}]);
+        bounded_write(&store.meta, "index.json", &raw, MAX_INDEX).unwrap();
+        let _lock = store.exclusive().unwrap();
+        assert_eq!(store.upgrade_v3().unwrap_err().code, "library_corrupt");
+        assert_eq!(read_json_bounded::<serde_json::Value>(&store.meta, "index.json", MAX_INDEX).unwrap(), raw);
+    }
+
+    #[test]
+    fn exclusive_try_lock_reports_contention_without_waiting() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let held = store.exclusive().unwrap();
+        assert!(store.try_exclusive().unwrap().is_none());
+        drop(held);
+        assert!(store.try_exclusive().unwrap().is_some());
     }
 }

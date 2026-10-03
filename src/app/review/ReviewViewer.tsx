@@ -146,7 +146,7 @@ export function ReviewViewer({ client, context, value, onChange, onViewerError }
         const sourceTruncated = page ? page.nextOffset < page.totalBytes : (side === "old" ? diff.old_source_truncated : diff.new_source_truncated);
         const documentRevision = revision ?? "unavailable";
         const range = selection?.fileId === diff.file.file_id ? { start: selection.start, end: selection.end } : null;
-        const root: ContextRoot = { root_id: review.source_id, kind: "repository", label: "Review", path: review.checkout_path, repository_id: repositoryId, checkout_path: review.checkout_path, companion_id: null };
+        const root: ContextRoot = { root_id: review.source_id, kind: "repository", label: "Review", path: review.checkout_path, repository_id: repositoryId, checkout_path: review.checkout_path };
         const document: ContextDocument = { binding_id: binding, root_id: root.root_id, path, revision: documentRevision, content_hash: side === "old" ? diff.old_source_hash : diff.new_source_hash, bytes: new TextEncoder().encode(text ?? "").length, media_type: "text/plain", text, truncated: sourceTruncated, diagnostics: diff.diagnostics };
         const reference = { review_id: review.review_id, generation: review.generation, file_id: diff.file.file_id, side };
         const commentIdentity = reviewCommentBatchIdentity(context, review.source_id, review.comparison);
