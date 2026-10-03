@@ -44,7 +44,8 @@ export type LocalShortcutId =
   | "comment-lines" | "comment-file"
   | "terminal-copy" | "terminal-paste" | "terminal-newline"
   | "browser-delete-annotation"
-  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "subscription-limits";
+  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "subscription-limits"
+  | "show-widgets" | "next-widget" | "previous-widget" | "remove-widget";
 
 export type ShortcutId = PrefixCommand | LocalShortcutId;
 
@@ -124,6 +125,10 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "focus-agents", label: "Focus Agents list", group: "Navigate", scope: "global", prefix: k("a") },
   { id: "switch-session", label: "Switch session…", group: "Navigate", scope: "global", prefix: k("g") },
   { id: "subscription-limits", label: "Subscription limits", group: "Navigate", scope: "global", note: "Commands-only; opens read-only subscription limits in the lower workarea strip." },
+  { id: "show-widgets", label: "Show widgets", group: "Pane", scope: "global", note: "Commands-only; opens widgets waiting in the selected tab without taking terminal focus." },
+  { id: "next-widget", label: "Next widget", group: "Pane", scope: "global", note: "Commands-only; shows the next widget in the selected tab's dock." },
+  { id: "previous-widget", label: "Previous widget", group: "Pane", scope: "global", note: "Commands-only; shows the previous widget in the selected tab's dock." },
+  { id: "remove-widget", label: "Remove widget", group: "Pane", scope: "global", note: "Commands-only; immediately removes the current widget. The agent must explicitly reopen it." },
   { id: "toggle-library", label: "Open Library", group: "Library", scope: "global", prefix: k("i"), note: "Closing with Ctrl+B i returns focus to the pane it was opened from." },
   { id: "toggle-browser", label: "Toggle browser for tab", group: "Browser", scope: "global", prefix: k("b", true), palette: false, note: "Opens or closes the selected tab's browser, like the tab-strip button." },
   {
@@ -352,6 +357,7 @@ export function renderShortcutDocs(): string {
     "### Files, Review, Context and Library viewers", "", "Local chords act when focus is inside the viewer and not in a text field or dialog. Alt chords match the physical key, so Option works on macOS.", "",
     docsTable(local("viewer"), ["Keys", "Action"]), "",
     "### Focused source or diff line", "", docsTable(local("line"), ["Keys", "Action"]), "",
-    "### Inline browser", "", docsTable(local("browser"), ["Keys", "Action"]),
+    "### Inline browser", "", docsTable(local("browser"), ["Keys", "Action"]), "",
+    "### Widget commands", "", docsTable(SHORTCUTS.filter(entry => entry.id === "show-widgets" || entry.id === "next-widget" || entry.id === "previous-widget" || entry.id === "remove-widget").map(entry => row(entry, "Commands")), ["Keys", "Action"]),
   ].join("\n");
 }

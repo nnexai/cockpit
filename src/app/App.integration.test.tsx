@@ -21,6 +21,8 @@ import type {
   SessionSummary,
   StatusResponse,
   SpaceGitActionResponse,
+  WidgetEvent,
+  WidgetSummary,
 } from "../protocol/generated/v1";
 import { App } from "./App";
 
@@ -191,6 +193,8 @@ class AppFixture {
   readonly viewerSources = vi.fn<CockpitClient["viewerSources"]>();
   readonly viewerOpen = vi.fn<CockpitClient["viewerOpen"]>();
   readonly subscriptions: Subscription[] = [];
+  widgetEvent: ((event: WidgetEvent) => void) | null = null;
+  readonly liveWidgetSubscriptions = new Set<(event: WidgetEvent) => void>();
   readonly mutationResponses: Array<Deferred<ResourceMutationResponse>> = [];
   private readonly snapshotQueues = new Map<string, Array<Promise<SessionSnapshotResponse>>>();
   private sessionResults: Array<Promise<{ sessions: SessionSummary[] }>> = [Promise.resolve({ sessions: sessions() })];
@@ -198,6 +202,18 @@ class AppFixture {
   readonly client: CockpitClient = {
     status: vi.fn(async () => status),
     quotaStatus: vi.fn(async () => { throw new CockpitClientError("http_error", "Subscription quota is not configured in this fixture", { status: 503, operationCode: "quota_unavailable" }); }),
+    subscribeWidgets: vi.fn(async onEvent => {
+      this.widgetEvent = onEvent;
+      this.liveWidgetSubscriptions.add(onEvent);
+      onEvent({ type: "snapshot", sequence: 0, widgets: [] });
+      return { close: () => {
+        this.liveWidgetSubscriptions.delete(onEvent);
+        if (this.widgetEvent === onEvent) this.widgetEvent = null;
+      }, report: vi.fn() };
+    }),
+    widgetContent: vi.fn(async request => ({ key: request.key, revision: request.revision, sha256: "a".repeat(64), body: { type: "html" as const, document: "<p>Widget statistics</p>" }, selection: null })),
+    widgetRemove: vi.fn(async () => ({ result: "removed" as const })),
+    widgetSelect: vi.fn(async () => ({ at_ms: 1 })),
     browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this tab", cleanup: "none" as const, cleanup_reason: null })),
     browserCleanupStatus: vi.fn(async () => ({ failures: [] })),
     browserCleanupRetry: vi.fn(async () => ({ failures: [] })),
@@ -435,6 +451,74 @@ async function exhaustAutomaticRecovery(fixture: AppFixture): Promise<void> {
     await advanceTimers(delay);
   }
 }
+
+function htmlWidget(arrival: WidgetSummary["arrival"] = "own_tab"): WidgetSummary {
+  return {
+    key: { session_id: "session-1", tab_id: "tab-1", id: "stats" }, space_id: "space-1", title: "Statistics",
+    revision: 1, created_seq: 1, kind: "html", presentation: "active",
+    content: { sha256: "a".repeat(64), bytes: 24, from: "stdin", name: null }, warnings: [],
+    source: { pane_id: "pane-1", tab_id: "tab-1", space_id: "space-1", terminal_id: "terminal-1", agent_label: "omp", fingerprint_prefix: "abcdef", status: "present" },
+    arrival, resolved_from: "current_pane", change: "opened", created_at_ms: 1, updated_at_ms: 1, selection: null,
+  };
+}
+
+it.each(["own_tab", "cross_source"] as const)("reveals an %s widget without changing selected terminal, DOM focus or Herdr focus", async arrival => {
+  const fixture = new AppFixture();
+  await mount(fixture);
+  // jsdom's automatic about:blank load is not the replacement's srcDoc-ready transition.
+  const frameLoad = new Event("load");
+  container.addEventListener("load", event => {
+    if (event.target instanceof HTMLIFrameElement && event !== frameLoad) event.stopImmediatePropagation();
+  }, true);
+  const terminal = container.querySelector<HTMLButtonElement>('[data-testid="terminal-pane-1"]')!;
+  terminal.focus();
+  const before = selectedLeaf();
+  const beforeTab = selectedTab();
+  expect(fixture.liveWidgetSubscriptions.size).toBe(1);
+  fixture.focusCalls.mockClear();
+  const widget = htmlWidget(arrival);
+  await act(async () => fixture.widgetEvent!({ type: "upserted", sequence: 1, widget }));
+  await settle();
+  expect(fixture.liveWidgetSubscriptions.size).toBe(1);
+  if (arrival === "cross_source") {
+    expect(container.querySelector('[data-leaf-id="tab-1:widget"]')).toBeNull();
+    expect(selectedLeaf()).toBe(before);
+    expect(document.activeElement).toBe(terminal);
+    expect(selectedTab()).toBe(beforeTab);
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    click(button("Show widgets"));
+    await settle();
+    expect(container.querySelector('button[aria-label="Show widgets"]')).toBeNull();
+  }
+  expect(leaf("tab-1:widget")).toBeTruthy();
+  expect(selectedLeaf()).toBe(before);
+  expect(selectedTab()).toBe(beforeTab);
+  expect(document.activeElement).toBe(terminal);
+  expect(fixture.focusCalls).not.toHaveBeenCalled();
+  const frame = leaf("tab-1:widget").querySelector("iframe")!;
+  expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+  const updated: WidgetSummary = { ...widget, revision: 2, change: "replaced", content: { ...widget.content, sha256: "b".repeat(64) } };
+  vi.mocked(fixture.client.widgetContent).mockResolvedValueOnce({
+    key: updated.key, revision: 2, sha256: updated.content.sha256,
+    body: { type: "html", document: "<p>Updated statistics</p>" }, selection: null,
+  });
+  await act(async () => fixture.widgetEvent!({ type: "upserted", sequence: 2, widget: updated }));
+  await settle();
+  const incoming = leaf("tab-1:widget").querySelector<HTMLIFrameElement>("iframe[data-pending]")!;
+  expect(incoming).not.toBeNull();
+  expect(leaf("tab-1:widget").querySelector("iframe")).toBe(frame);
+  expect(document.activeElement).toBe(terminal);
+  await act(async () => incoming.dispatchEvent(frameLoad));
+  expect(leaf("tab-1:widget").querySelectorAll("iframe")).toHaveLength(1);
+  expect(leaf("tab-1:widget").querySelector("iframe")).toBe(incoming);
+  expect(selectedLeaf()).toBe(before);
+  expect(selectedTab()).toBe(beforeTab);
+  expect(document.activeElement).toBe(terminal);
+  expect(fixture.focusCalls).not.toHaveBeenCalled();
+  await act(async () => root?.unmount());
+  root = null;
+  expect(fixture.liveWidgetSubscriptions.size).toBe(0);
+});
 
 describe("mounted App mutation and session ordering", () => {
   it("prefers Git's current branch and upstream position over outdated Herdr metadata", async () => {
@@ -1059,7 +1143,119 @@ function prefix(target: Element | Window, key: string, init: KeyboardEventInit =
   press(target, key, init);
 }
 
+async function focusWidget(fixture: AppFixture): Promise<HTMLIFrameElement> {
+  await act(async () => fixture.widgetEvent!({ type: "upserted", sequence: 1, widget: htmlWidget() }));
+  await settle();
+  const frame = leaf("tab-1:widget").querySelector<HTMLIFrameElement>("iframe")!;
+  act(() => frame.focus());
+  expect(document.activeElement).toBe(frame);
+  return frame;
+}
+
+function widgetShortcut(frame: HTMLIFrameElement, key: string, init: Record<string, unknown> = {}): void {
+  act(() => window.dispatchEvent(new CustomEvent("cockpit-widget-shortcut", { detail: {
+    key, code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, repeat: false,
+    target: frame, ...init,
+  } })));
+}
+
 describe("keyboard prefix in the workbench", () => {
+  it("routes widget Ctrl+B and its next key to Commands without synthetic keydown or terminal input", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const frame = await focusWidget(fixture);
+    const selected = selectedLeaf();
+    const stream = await vi.mocked(fixture.client.openTerminal).mock.results[0].value;
+    const keydown = vi.fn();
+    window.addEventListener("keydown", keydown);
+    try {
+      widgetShortcut(frame, "?");
+      expect(container.querySelector(".command-overlay")).toBeNull();
+      widgetShortcut(frame, "b", { ctrlKey: true, code: "KeyB" });
+      expect(container.querySelector(".prefix-indicator")).not.toBeNull();
+      expect(document.activeElement).toBe(frame);
+      widgetShortcut(frame, "?");
+      await settle();
+      expect(container.querySelector('input[aria-label="Find a command"]')).not.toBeNull();
+      expect(selectedLeaf()).toBe(selected);
+      expect(fixture.mutateCalls).not.toHaveBeenCalled();
+      expect(stream.send).not.toHaveBeenCalled();
+      expect(keydown).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", keydown);
+    }
+  });
+
+  it.each(["b", "k"])("acknowledges configured widget Ctrl+%s prefixes and routes their plain follower", async key => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const next = snapshot("session-1");
+    next.herdr_shell = { status: "live", prefix_bindings: [`ctrl+${key}`], commands: [{ command_id: "prefix-command", binding_labels: ["prefix+a"], action: "plugin_action", description: "Prefix action" }], popup: null, error: null };
+    act(() => fixture.emitSnapshot("session-1", 1, 2, next));
+    await settle();
+    const frame = await focusWidget(fixture);
+    const acknowledgements: Array<{ target: HTMLIFrameElement; active: boolean }> = [];
+    const acknowledge = (event: Event) => acknowledgements.push((event as CustomEvent<{ target: HTMLIFrameElement; active: boolean }>).detail);
+    window.addEventListener("cockpit-widget-prefix", acknowledge);
+    try {
+      widgetShortcut(frame, key, { ctrlKey: true, code: `Key${key.toUpperCase()}` });
+      expect(acknowledgements).toContainEqual({ target: frame, active: true });
+      widgetShortcut(frame, "a", { code: "KeyA" });
+      await settle();
+      expect(acknowledgements).toContainEqual({ target: frame, active: false });
+      expect(fixture.mutateCalls).toHaveBeenCalledExactlyOnceWith("session-1", { type: "command_invoke", command_id: "prefix-command", space_id: "space-1", tab_id: "tab-1", pane_id: "pane-1" });
+      const stream = await vi.mocked(fixture.client.openTerminal).mock.results[0].value;
+      expect(stream.send).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("cockpit-widget-prefix", acknowledge);
+    }
+  });
+
+  it.each(["alt+a", "prefix+alt+a"])("routes widget %s through advertised commands but respects Commands modal ownership", async binding => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const next = snapshot("session-1");
+    next.herdr_shell = { status: "live", prefix_bindings: ["ctrl+b"], commands: [{ command_id: "widget-command", binding_labels: [binding], action: "plugin_action", description: "Widget action" }], popup: null, error: null };
+    act(() => fixture.emitSnapshot("session-1", 1, 2, next));
+    await settle();
+    const frame = await focusWidget(fixture);
+    fixture.focusCalls.mockClear();
+    click(button("Commands"));
+    await settle();
+    act(() => frame.focus());
+    widgetShortcut(frame, "b", { ctrlKey: true, code: "KeyB" });
+    widgetShortcut(frame, "a", { altKey: true, code: "KeyA" });
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+    expect(container.querySelector(".prefix-indicator")).toBeNull();
+    click(button("Close commands"));
+    await settle();
+    act(() => frame.focus());
+    if (binding.startsWith("prefix+")) widgetShortcut(frame, "b", { ctrlKey: true, code: "KeyB" });
+    widgetShortcut(frame, "a", { altKey: true, code: "KeyA" });
+    await settle();
+    expect(fixture.mutateCalls).toHaveBeenCalledExactlyOnceWith("session-1", { type: "command_invoke", command_id: "widget-command", space_id: "space-1", tab_id: "tab-1", pane_id: "pane-1" });
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    const stream = await vi.mocked(fixture.client.openTerminal).mock.results[0].value;
+    expect(stream.send).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed, unfocused, pending and non-widget shortcut targets", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const frame = await focusWidget(fixture);
+    widgetShortcut(frame, "b", { ctrlKey: "true" });
+    widgetShortcut(frame, "b", { ctrlKey: true, metaKey: true });
+    widgetShortcut(frame, "b", { ctrlKey: true, target: terminal("pane-1") });
+    act(() => frame.setAttribute("data-pending", "true"));
+    widgetShortcut(frame, "b", { ctrlKey: true });
+    act(() => frame.removeAttribute("data-pending"));
+    act(() => terminal("pane-1")!.focus());
+    widgetShortcut(frame, "b", { ctrlKey: true });
+    expect(container.querySelector(".prefix-indicator")).toBeNull();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(terminal("pane-1"));
+  });
+
   it("opens the Library from a focused terminal with Ctrl+B i and returns focus to that terminal on the same key", async () => {
     const fixture = new AppFixture();
     emptyLibrary(fixture);

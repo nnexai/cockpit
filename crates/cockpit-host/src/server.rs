@@ -56,6 +56,7 @@ mod projects;
 mod review;
 mod library;
 mod viewer;
+mod widgets;
 
 // The enclosing guard verifies the exact bound Host and Origin.
 async fn require_origin(request: Request<Body>, next: Next) -> Response {
@@ -234,6 +235,7 @@ fn build_router_with_validated_root(
         .merge(library::routes())
         .merge(credentials::routes())
         .merge(browser_view::routes())
+        .merge(widgets::routes())
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(static_service)

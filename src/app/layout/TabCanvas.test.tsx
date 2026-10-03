@@ -23,7 +23,7 @@ function mount({ zoomed = false, single = false } = {}) {
   const tree: LayoutNode = { t: "split", id: "row", dir: "row", w: 1, kids: ["a", "b", "c"].map(id => ({ t: "leaf", id, kind: "terminal", w: 1 })) };
   const tab: TabLayoutState = { tabId: "tab", spaceId: "space", root: single ? tree.kids[0] : tree,
     terminals: single ? { a: "ta" } : { a: "ta", b: "tb", c: "tc" }, selectedLeafId: "a", lastRealLeafId: "a", zoomLeafId: zoomed ? "a" : null,
-    viewers: {}, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null, focusedPaneId: "a", revision: 0, selectionRevision: 0 };
+    viewers: {}, widgetShare: 0.4, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null, focusedPaneId: "a", revision: 0, selectionRevision: 0 };
   let state: SessionLayoutState = { ...createSessionLayoutState("session", "server"), tabs: { tab }, activeTabId: "tab", activeSpaceId: "space" };
   const body = document.createElement("div"); document.body.append(body);
   const root = createRoot(body);

@@ -1,3 +1,9 @@
+import {
+  matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest,
+  parseWidgetRemoveResponse, parseWidgetSelectRequest, parseWidgetSelectResponse,
+} from "./widgetProtocol";
+import { widgetAbortable, widgetEventCursor, widgetReports } from "./widgetTransport";
+import type { WidgetEventHandler, WidgetStream } from "./CockpitClient";
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import {
   matchLibraryAttachmentsOperation, matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
@@ -389,6 +395,81 @@ function streamId(value: unknown): string {
   if (typeof value === "string" && value.length > 0) return value;
   if (typeof value === "object" && value !== null && "stream_id" in value && typeof value.stream_id === "string" && value.stream_id.length > 0) return value.stream_id;
   throw new CockpitClientError("malformed_response", "Native stream command returned no stream id");
+}
+
+function nativeWidgetSubscription(
+  factory: NativeChannelFactory, invoke: NativeInvoke, onEvent: WidgetEventHandler,
+  onError: (error: CockpitClientError) => void, signal?: AbortSignal,
+): Promise<WidgetStream> {
+  try { signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+  let resolve!: (stream: WidgetStream) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<WidgetStream>((accept, fail) => { resolve = accept; reject = fail; });
+  const accept = widgetEventCursor();
+  let closed = false;
+  let ready = false;
+  let snapshotSeen = false;
+  let activeId: string | undefined;
+  const cancel = (id: string) => {
+    void invoke("cockpit_stream_cancel", { streamId: id }).catch(() => undefined);
+  };
+  const reports = widgetReports((report) => {
+    if (closed || activeId === undefined) return;
+    void invokeAndParse(invoke, "cockpit_widget_report", { streamId: activeId, report }, "widget report", (value) => {
+      if (value !== null && value !== undefined) throw new CockpitClientError("malformed_response", "Widget report response is malformed");
+    }).catch((error: unknown) => {
+      fail(error instanceof CockpitClientError ? error : new CockpitClientError("native_error", "Widget report failed", { cause: error }));
+    });
+  });
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    reports.close();
+    signal?.removeEventListener("abort", abort);
+    if (activeId !== undefined) cancel(activeId);
+  };
+  const fail = (error: CockpitClientError) => {
+    if (closed) return;
+    close();
+    if (ready) onError(error); else reject(error);
+  };
+  const abort = () => {
+    close();
+    if (!ready) reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+  };
+  const settle = () => {
+    if (!closed && !ready && snapshotSeen && activeId !== undefined) {
+      ready = true;
+      resolve({ close, report: reports.report });
+    }
+  };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const channel = factory<unknown>((raw) => {
+      if (closed) return;
+      try {
+        const event = accept(raw);
+        if (!event) return;
+        onEvent(event);
+        snapshotSeen = true;
+        settle();
+      } catch (cause) {
+        fail(cause instanceof CockpitClientError ? cause : new CockpitClientError("malformed_response", "Widget event is malformed", { cause }));
+      }
+    });
+    const errorChannel = factory<unknown>((raw) => {
+      const envelope = parseErrorEnvelope(raw);
+      fail(new CockpitClientError("stream_error", envelope?.message ?? "Widget stream failed", { operationCode: envelope?.code }));
+    });
+    void invokeAndParse(invoke, "cockpit_widget_subscribe", { channel, errorChannel }, "widget subscribe", streamId).then((id) => {
+      activeId = id;
+      if (closed) cancel(id); else settle();
+    }, (cause: unknown) => fail(cause instanceof CockpitClientError ? cause : new CockpitClientError("native_error", "Widget subscription failed", { cause })));
+  } catch (cause) {
+    fail(cause instanceof CockpitClientError ? cause : new CockpitClientError("native_error", "Widget channels failed", { cause }));
+  }
+  if (signal?.aborted) abort();
+  return promise;
 }
 
 function sessionSubscription(
@@ -1023,6 +1104,28 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
         }
         return value;
       });
+    },
+    subscribeWidgets(onEvent, onError, signal) {
+      return nativeWidgetSubscription(channelFactory, invoke, onEvent, onError, signal);
+    },
+    widgetContent(value, signal) {
+      return widgetAbortable(async () => {
+        const parsed = parseWidgetContentRequest(value);
+        return invokeAndParse(invoke, "cockpit_widget_content", { request: parsed }, "widget content",
+          (body) => matchWidgetContent(body, parsed));
+      }, signal);
+    },
+    widgetRemove(value, signal) {
+      return widgetAbortable(async () => {
+        const parsed = parseWidgetRemoveRequest(value);
+        return invokeAndParse(invoke, "cockpit_widget_remove", { request: parsed }, "widget remove", parseWidgetRemoveResponse);
+      }, signal);
+    },
+    widgetSelect(value, signal) {
+      return widgetAbortable(async () => {
+        const parsed = parseWidgetSelectRequest(value);
+        return invokeAndParse(invoke, "cockpit_widget_select", { request: parsed }, "widget select", parseWidgetSelectResponse);
+      }, signal);
     },
     subscribeSession(sessionId, onMessage, onError, signal) { return sessionSubscription(channelFactory, invoke, sessionId, onMessage, onError, signal); },
     openTerminal(request, onMessage, onError, signal) { return terminalSubscription(channelFactory, invoke, request, onMessage, onError, signal); },

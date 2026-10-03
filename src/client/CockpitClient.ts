@@ -1,3 +1,11 @@
+import type {
+  WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent,
+  WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
+} from "../protocol/generated/v1";
+export type {
+  WidgetKey, WidgetSummary, WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent,
+  WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
+} from "../protocol/generated/v1";
 import type { ContextMedia, ContextMediaRequest } from "../protocol/generated/v1";
 import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest } from "../protocol/generated/v1";
 import type { ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
@@ -287,6 +295,12 @@ export interface ClosableStream {
   close(): void;
 }
 
+export interface WidgetStream extends ClosableStream {
+  /** Coalesced latest window state, sent at most once per 100 ms. */
+  report(report: WidgetWindowReport): void;
+}
+export type WidgetEventHandler = (event: WidgetEvent) => void;
+
 export interface TerminalStream extends ClosableStream {
   send(command: TerminalCommand): void;
 }
@@ -372,6 +386,10 @@ export interface CockpitClient {
   subscribeSession(sessionId: string, onMessage: (message: SessionStreamMessage) => void, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<ClosableStream>;
   openTerminal(request: TerminalOpenRequest, onMessage: (message: TerminalStreamMessage) => void, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<TerminalStream>;
   openBrowserView(request: BrowserViewOpenRequest, onEvent: BrowserViewEventHandler, onFrame: BrowserViewFrameHandler, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<BrowserViewStream>;
+  subscribeWidgets(onEvent: WidgetEventHandler, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<WidgetStream>;
+  widgetContent(request: WidgetContentRequest, signal?: AbortSignal): Promise<WidgetContent>;
+  widgetRemove(request: WidgetRemoveRequest, signal?: AbortSignal): Promise<WidgetRemoveResponse>;
+  widgetSelect(request: WidgetSelectRequest, signal?: AbortSignal): Promise<WidgetSelectResponse>;
 }
 
 export type CockpitClientErrorCode =

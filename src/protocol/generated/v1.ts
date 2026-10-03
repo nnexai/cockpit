@@ -787,3 +787,95 @@ fetched_at_ms: number, limits: Array<QuotaLimit>, };
 export type QuotaProviderStatus = { provider: QuotaProvider, state: QuotaProviderState, error: QuotaErrorCode | null, fetched_at_ms: number | null, stale: boolean, accounts: Array<QuotaAccount>, };
 
 export type QuotaStatusResponse = { generated_at_ms: number, collecting: boolean, providers: Array<QuotaProviderStatus>, };
+
+export type WidgetLocator = { "type": "current_pane" } | { "type": "pane", pane_id: string, } | { "type": "tab", tab_id: string, } | { "type": "space", space_id: string, };
+
+export type WidgetAddress = { session_id: string, endpoint_path: string | null, source_pane_id: string | null, locator: WidgetLocator, space_check: string | null, };
+
+export type WidgetInputKind = "file" | "stdin";
+
+export type WidgetContentInput = { "type": "html", content_base64: string, sha256: string, from: WidgetInputKind, name: string | null, } | { "type": "choices", spec_json: string, sha256: string, from: WidgetInputKind, name: string | null, };
+
+export type WidgetShowRequest = { address: WidgetAddress, id: string, title: string | null, content: WidgetContentInput, reopen: boolean, clear_selection: boolean, };
+
+export type WidgetShowResult = "opened" | "replaced" | "unchanged" | "reopened";
+
+export type WidgetDisplayed = "now" | "when_visible" | "when_tab_selected" | "when_opened" | "no_window";
+
+export type WidgetPresentation = "active" | "choices";
+
+export type WidgetResolvedFrom = "current_pane" | "pane" | "tab" | "space_focused_tab" | "stored";
+
+export type WidgetContentFacts = { sha256: string, bytes: number, from: WidgetInputKind, name: string | null, };
+
+export type WidgetSourceFacts = { pane_id: string, tab_id: string, space_id: string, };
+
+export type WidgetTargetFacts = { session_id: string, space_id: string, tab_id: string, resolved_from: WidgetResolvedFrom, };
+
+export type WidgetShowResponse = { id: string, revision: number, result: WidgetShowResult, displayed: WidgetDisplayed, location: string, presentation: WidgetPresentation, content: WidgetContentFacts, source: WidgetSourceFacts | null, target: WidgetTargetFacts, warnings: Array<string>, };
+
+export type WidgetCloseRequest = { address: WidgetAddress, id: string, };
+
+export type WidgetCloseResult = "closed" | "already_removed";
+
+export type WidgetCloseResponse = { id: string, result: WidgetCloseResult, };
+
+export type WidgetListRequest = { address: WidgetAddress, };
+
+export type WidgetListState = "live" | "removed_by_user";
+
+export type WidgetListEntry = { id: string, state: WidgetListState, revision: number, presentation: WidgetPresentation | null, displayed: WidgetDisplayed | null, removed_at_ms: number | null, };
+
+export type WidgetListResponse = { widgets: Array<WidgetListEntry>, };
+
+export type WidgetSelectionRequest = { address: WidgetAddress, id: string, wait_seconds: number | null, };
+
+export type WidgetSelectionStatus = "none" | "selected" | "timeout" | "dismissed" | "retired";
+
+export type WidgetSelectionResponse = { id: string, revision: number | null, status: WidgetSelectionStatus, value_json: string | null, at_ms: number | null, removed_at_ms: number | null, };
+
+export type WidgetKey = { session_id: string, tab_id: string, id: string, };
+
+export type WidgetKind = "html" | "choices";
+
+export type WidgetArrival = "own_tab" | "cross_source";
+
+export type WidgetChange = "opened" | "replaced" | "reopened" | "updated";
+
+export type WidgetSourceStatus = "present" | "closed" | "restarted" | "unknown";
+
+export type WidgetSourceSummary = { pane_id: string, tab_id: string, space_id: string, terminal_id: string, agent_label: string | null, fingerprint_prefix: string | null, status: WidgetSourceStatus, };
+
+export type WidgetSelectionFacts = { revision: number, at_ms: number, read_at_ms: number | null, };
+
+export type WidgetSummary = { key: WidgetKey, space_id: string, title: string, revision: number, created_seq: number, kind: WidgetKind, presentation: WidgetPresentation, content: WidgetContentFacts, warnings: Array<string>, source: WidgetSourceSummary | null, arrival: WidgetArrival, resolved_from: WidgetResolvedFrom, change: WidgetChange, created_at_ms: number, updated_at_ms: number, selection: WidgetSelectionFacts | null, };
+
+export type WidgetRemovalReason = "user" | "agent" | "retired";
+
+export type WidgetEvent = { "type": "snapshot", sequence: number, widgets: Array<WidgetSummary>, } | { "type": "upserted", sequence: number, widget: WidgetSummary, } | { "type": "removed", sequence: number, key: WidgetKey, reason: WidgetRemovalReason, };
+
+export type WidgetBlocker = "library" | "zoom" | "drag" | "too_narrow";
+
+export type WidgetWindowReport = { session_id: string | null, displayed_tab_id: string | null, blocker: WidgetBlocker | null, };
+
+export type WidgetContentRequest = { key: WidgetKey, revision: number, };
+
+export type WidgetBody = { "type": "html", document: string, } | { "type": "choices", spec: WidgetChoicesSpec, };
+
+export type WidgetContent = { key: WidgetKey, revision: number, sha256: string, body: WidgetBody, selection: WidgetSelectionResponse | null, };
+
+export type WidgetRemoveRequest = { key: WidgetKey, };
+
+export type WidgetRemoveResult = "removed" | "already_removed";
+
+export type WidgetRemoveResponse = { result: WidgetRemoveResult, };
+
+export type WidgetSelectValue = { "type": "choice", choice_id: string, } | { "type": "page", value_json: string, };
+
+export type WidgetSelectRequest = { key: WidgetKey, revision: number, value: WidgetSelectValue, };
+
+export type WidgetSelectResponse = { at_ms: number, };
+
+export type WidgetChoicesSpec = { prompt: string | null, choices: Array<WidgetChoice>, };
+
+export type WidgetChoice = { id: string, label: string, detail: string | null, };

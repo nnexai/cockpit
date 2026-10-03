@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { BrowserAssociation, CreatedPane, ViewerContext } from "../../protocol/generated/v1";
-import { applyDrop, findNode, removeLeaf, setPairWeights, splitLeaf, type Direction, type LayoutNode, type LeafId } from "./splitTree";
+import { applyDrop, findNode, leaves, removeLeaf, setPairWeights, splitLeaf, type Direction, type LayoutNode, type LeafId, type ViewerKind } from "./splitTree";
 import type { DropTarget } from "./solveLayout";
 import { reconcileSnapshot, settleCreation, type FocusEcho, type LayoutEffect, type LayoutSnapshot } from "./reconcile";
 export type { LayoutEffect } from "./reconcile";
@@ -16,12 +16,14 @@ export type BrowserSlot = {
   status: "opening" | "open" | "closing" | "close_failed" | "outcome_unknown" | "error";
   association: BrowserAssociation | null; error: string | null; requestId?: string;
 };
+export type WidgetDockSlot = { currentId: string | null; previousSelectedLeafId: LeafId | null };
 export type BrowserCleanupNotice = { associationKey: string; tabId: string | null; reason: string };
 export type PendingCreation = { token: number; tabId: string; placeBeside: LeafId; dir: Direction; sourcePaneId: string; selectionRevision?: number };
 export type TabLayoutState = {
   tabId: string; spaceId: string; root: LayoutNode | null; terminals: Record<string, string>;
   selectedLeafId: LeafId | null; lastRealLeafId: string | null; zoomLeafId: LeafId | null;
-  viewers: { files?: ViewerSlot; review?: ViewerSlot; browser?: BrowserSlot };
+  viewers: { files?: ViewerSlot; review?: ViewerSlot; browser?: BrowserSlot; widget?: WidgetDockSlot };
+  widgetShare: number;
   heldMembers: string[]; heldTerminalIds: Record<string, string>; bufferedFocus: FocusTriple | null;
   focusedPaneId: string | null; revision: number; selectionRevision: number;
 };
@@ -49,6 +51,9 @@ export type LayoutAction =
   | { type: "viewer/closed"; tabId: string; kind: "files" | "review"; requestId?: string }
   | { type: "viewer/source-view"; tabId: string; kind: "files" | "review"; sourceId: string; view: unknown }
   | { type: "browser/state"; tabId: string; slot: BrowserSlot; dir?: Direction; placeBeside?: LeafId; requestId?: string }
+  | { type: "widget/dock"; tabId: string; besideLeafId: LeafId; currentId: string }
+  | { type: "widget/current"; tabId: string; currentId: string }
+  | { type: "widget/undock"; tabId: string }
   | { type: "cleanup/notice"; notice: BrowserCleanupNotice }
   | { type: "cleanup/dismiss"; associationKey: string }
   | { type: "leaf/close-local"; tabId: string; leafId: LeafId };
@@ -68,30 +73,60 @@ export function createSessionLayoutState(sessionId: string, serverInstance = "")
 export function selectTabLeaf(tab: TabLayoutState, id: string): TabLayoutState {
   const leaf = findNode(tab.root, id);
   if (!leaf || leaf.t !== "leaf") return tab;
-  return { ...tab, selectedLeafId: id, lastRealLeafId: leaf.kind === "terminal" ? id : tab.lastRealLeafId,
+  const widget = tab.viewers.widget;
+  const viewers = leaf.kind === "widget" && widget && tab.selectedLeafId !== id
+    ? { ...tab.viewers, widget: { ...widget, previousSelectedLeafId: tab.selectedLeafId } } : tab.viewers;
+  return { ...tab, viewers, selectedLeafId: id, lastRealLeafId: leaf.kind === "terminal" ? id : tab.lastRealLeafId,
     zoomLeafId: tab.zoomLeafId && tab.zoomLeafId !== id ? null : tab.zoomLeafId, selectionRevision: tab.selectionRevision + 1 };
+}
+
+function widgetPlacement(root: LayoutNode, id: LeafId): { share: number; besideTerminalId: LeafId | null } | null {
+  if (root.t === "leaf") return null;
+  for (let i = 0; i < root.kids.length; i++) {
+    const child = root.kids[i];
+    if (child.id === id) {
+      const beside = root.kids[i - 1] ?? root.kids[i + 1];
+      if (!beside) return null;
+      // Same-axis normalization flattens the dock/source pair into its parent.
+      return { share: child.w / (child.w + beside.w),
+        besideTerminalId: leaves(beside).find(leaf => leaf.kind === "terminal")?.id ?? null };
+    }
+    const placement = widgetPlacement(child, id);
+    if (placement) return placement;
+  }
+  return null;
 }
 
 function closeLocal(tab: TabLayoutState, id: string): TabLayoutState {
   const leaf = findNode(tab.root, id);
   if (!leaf || leaf.t !== "leaf" || leaf.kind === "terminal" || !tab.root) return tab;
+  const placement = leaf.kind === "widget" ? widgetPlacement(tab.root, id) : null;
   const removed = removeLeaf(tab.root, id), viewers = { ...tab.viewers };
   delete viewers[leaf.kind];
   let next = { ...tab, root: removed.root, viewers, revision: tab.revision + 1,
     zoomLeafId: tab.zoomLeafId === id ? null : tab.zoomLeafId };
+  if (placement) next = { ...next, widgetShare: placement.share };
   if (next.selectedLeafId === id) {
     next = { ...next, selectedLeafId: null };
-    if (removed.absorbedBy) next = selectTabLeaf(next, removed.absorbedBy);
+    const previous = leaf.kind === "widget" ? tab.viewers.widget?.previousSelectedLeafId : null;
+    const previousLeaf = previous ? findNode(removed.root, previous) : null;
+    const fallback = leaf.kind === "widget"
+      ? placement?.besideTerminalId ?? (tab.lastRealLeafId && findNode(removed.root, tab.lastRealLeafId) ? tab.lastRealLeafId : null)
+        ?? leaves(removed.root).find(candidate => candidate.kind === "terminal")?.id
+      : removed.absorbedBy;
+    const selected = previousLeaf?.t === "leaf" ? previousLeaf.id : fallback;
+    if (selected) next = selectTabLeaf(next, selected);
   }
   return next;
 }
 
-function insertViewer(tab: TabLayoutState, kind: "files" | "review" | "browser", dir: Direction, target?: LeafId): TabLayoutState {
+function insertViewer(tab: TabLayoutState, kind: ViewerKind, dir: Direction, target?: LeafId, share = 0.5): TabLayoutState {
   const id = `${tab.tabId}:${kind}`;
   if (findNode(tab.root, id)) return tab;
   const beside = target ?? tab.selectedLeafId;
   if (!tab.root || !beside || !findNode(tab.root, beside)) return tab;
-  return { ...tab, root: splitLeaf(tab.root, beside, dir, false, { t: "leaf", id, kind, w: 1 }), revision: tab.revision + 1 };
+  const root = splitLeaf(tab.root, beside, dir, false, { t: "leaf", id, kind, w: 1 }, share);
+  return root === tab.root ? tab : { ...tab, root, revision: tab.revision + 1 };
 }
 
 export function layoutReducer(state: SessionLayoutState, action: LayoutAction): LayoutResult {
@@ -173,8 +208,25 @@ export function layoutReducer(state: SessionLayoutState, action: LayoutAction): 
       if (!slot) next = selectTabLeaf(next, `${tab.tabId}:browser`);
       break;
     }
+    case "widget/dock": {
+      next = insertViewer(tab, "widget", "row", action.besideLeafId, tab.widgetShare);
+      if (!findNode(next.root, `${tab.tabId}:widget`)) return result();
+      const slot = tab.viewers.widget;
+      next = { ...next, viewers: { ...next.viewers, widget: {
+        currentId: action.currentId, previousSelectedLeafId: slot?.previousSelectedLeafId ?? null,
+      } } };
+      break;
+    }
+    case "widget/current": {
+      const slot = tab.viewers.widget;
+      if (!slot || slot.currentId === action.currentId) return result();
+      next = { ...tab, viewers: { ...tab.viewers, widget: { ...slot, currentId: action.currentId } } };
+      break;
+    }
+    case "widget/undock": next = closeLocal(tab, `${tab.tabId}:widget`); break;
     case "leaf/close-local": next = closeLocal(tab, action.leafId); break;
   }
+  if (next === tab) return result();
   return result({ ...state, tabs: { ...state.tabs, [tab.tabId]: next } });
 }
 

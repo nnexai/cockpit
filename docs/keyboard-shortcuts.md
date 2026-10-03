@@ -97,6 +97,15 @@ Local chords act when focus is inside the viewer and not in a text field or dial
 | --- | --- |
 | Delete | Delete selected annotation |
 
+### Widget commands
+
+| Keys | Action |
+| --- | --- |
+| Commands | Show widgets. Commands-only; opens widgets waiting in the selected tab without taking terminal focus. |
+| Commands | Next widget. Commands-only; shows the next widget in the selected tab's dock. |
+| Commands | Previous widget. Commands-only; shows the previous widget in the selected tab's dock. |
+| Commands | Remove widget. Commands-only; immediately removes the current widget. The agent must explicitly reopen it. |
+
 <!-- shortcuts:end -->
 
 ### Runtime Herdr custom bindings

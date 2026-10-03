@@ -8,6 +8,11 @@
   "permissions": [
     "allow-cockpit-status",
     "allow-cockpit-quota-status",
+    "allow-cockpit-widget-subscribe",
+    "allow-cockpit-widget-report",
+    "allow-cockpit-widget-content",
+    "allow-cockpit-widget-remove",
+    "allow-cockpit-widget-select",
     "allow-cockpit-sessions",
     "allow-cockpit-project-configuration",
     "allow-cockpit-repositories",

@@ -89,6 +89,24 @@ describe("tab layouts follow membership, not geometry or routine focus", () => {
     expect(runtimeSource({ ...tab, root: null, terminals: {}, focusedPaneId: null }, null)).toBeNull();
   });
 
+  it("retains a widget dock and remembered share through routine membership refresh", () => {
+    let state = initial();
+    state = apply(state, { type: "widget/dock", tabId: "tab", besideLeafId: "p2", currentId: "stats" });
+    const root = state.tabs.tab.root!;
+    state = apply(state, { type: "resize-commit", tabId: "tab", splitId: root.id, index: 1, wa: 2, wb: 3 });
+    state = apply(state, { type: "widget/undock", tabId: "tab" });
+    const refreshed = reconcileSnapshot(state, snapshot()).state;
+    expect(refreshed.tabs.tab.widgetShare).toBeCloseTo(.6);
+    const reopened = apply(refreshed, { type: "widget/dock", tabId: "tab", besideLeafId: "p2", currentId: "stats" });
+    const routine = reconcileSnapshot(reopened, snapshot()).state;
+    expect(routine.tabs.tab.root).toBe(reopened.tabs.tab.root);
+    expect(routine.tabs.tab.viewers.widget?.currentId).toBe("stats");
+    expect(routine.tabs.tab.selectedLeafId).toBe("p1");
+    const retired = reconcileSnapshot(routine, snapshot([]));
+    expect(retired.state.tabs.tab).toBeUndefined();
+    expect(retired.effects).not.toContainEqual(expect.objectContaining({ type: "browser-retire" }));
+  });
+
   it("retires viewers only on confirmed last-real loss and releases their live context", () => {
     let state = files(initial(["p1"]));
     state = apply(state, { type: "viewer/opened", tabId: "tab", kind: "files", context: { viewer_id: "viewer" } as ViewerContext });

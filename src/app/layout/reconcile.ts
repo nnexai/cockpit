@@ -99,7 +99,7 @@ export function reconcileSnapshot(state: SessionLayoutState, snapshot: LayoutSna
       const selected = members.some(pane => pane.id === knownFocus) ? knownFocus : members[0].id;
       tabs[summary.id] = { tabId: summary.id, spaceId: summary.space_id, root: firstLoadGrid(terminalLeaves),
         terminals: Object.fromEntries(members.map(pane => [pane.id, pane.terminal_id])), selectedLeafId: selected, lastRealLeafId: selected,
-        zoomLeafId: null, viewers: {}, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null,
+        zoomLeafId: null, viewers: {}, widgetShare: 0.4, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null,
         focusedPaneId: knownFocus, revision: 0, selectionRevision: 0 };
       continue;
     }

@@ -27,6 +27,7 @@ pub mod sources;
 pub mod space_git;
 pub mod space_git_action;
 pub mod viewer;
+pub mod widget;
 
 pub use browser::{BrowserHerdrAdapter, BrowserHerdrSnapshot, BrowserService};
 pub use extension_adapter::{SourcePaneAdapter, SourcePaneEvidence, TabEvidence};

@@ -22,7 +22,7 @@ it("retains per-source unsaved comments and overview choice through switches and
         { t: "leaf", id: "pane-a", kind: "terminal", w: 1 }, { t: "leaf", id: "pane-b", kind: "terminal", w: 1 },
       ] },
       terminals: { "pane-a": "terminal-a", "pane-b": "terminal-b" }, selectedLeafId: "pane-a", lastRealLeafId: "pane-a",
-      zoomLeafId: null, viewers: {}, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null,
+      zoomLeafId: null, viewers: {}, widgetShare: 0.4, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null,
       focusedPaneId: "pane-a", revision: 0, selectionRevision: 0,
     } },
   };

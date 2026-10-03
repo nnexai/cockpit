@@ -5,6 +5,7 @@ import { TerminalLeaf, type TerminalLeafProps } from "./TerminalLeaf";
 import { FilesLeaf } from "./FilesLeaf";
 import { ReviewLeaf } from "./ReviewLeaf";
 import { BrowserLeaf } from "./BrowserLeaf";
+import { WidgetDock } from "../widgets/WidgetDock";
 import type { Leaf } from "./splitTree";
 import type { Rect } from "./solveLayout";
 import type { LeafCtx, TabLayoutState } from "./tabLayoutStore";
@@ -16,6 +17,8 @@ type Props = {
   terminal: TerminalLeafProps | null;
   focusStatus: "pending" | "error" | null; focusError?: string;
   closeDisabled: boolean;
+  widgetInputBlocked: boolean; widgetLive: boolean; widgetLocation?: string;
+  onWidgetAgent(paneId: string, tabId: string, spaceId: string): void;
   onSelect(): void; onZoom(): void;
   onClose(): void; onRetryFocus(): void; onMenu(event: MouseEvent<HTMLButtonElement>): void;
 };
@@ -25,6 +28,7 @@ export function LeafHost(props: Props) {
   const viewer = leaf.kind === "files" ? tab.viewers.files : leaf.kind === "review" ? tab.viewers.review : undefined;
   const title = leaf.kind === "terminal" ? pane?.title || "Terminal" : leaf.kind === "files" ? viewer?.selector.kind === "files_context" ? "Context" : "Files" : leaf.kind === "review" ? "Review" : "Browser";
   const root = viewer?.context?.roots.find(candidate => candidate.root_id === viewer.context?.default_root_id);
+  if (leaf.kind === "widget") return <WidgetDock ctx={ctx} tab={tab} width={rect.width} selected={selected} inputBlocked={props.widgetInputBlocked} live={props.widgetLive} location={props.widgetLocation} onSelect={props.onSelect} onZoom={props.onZoom} onGoToAgent={props.onWidgetAgent} />;
   return <>
     <PaneChrome leaf={leaf} title={title} subtitle={root?.label} selected={selected} zoomed={tab.zoomLeafId === leaf.id}
       lastTerminal={leaf.kind === "terminal" && Object.keys(tab.terminals).length === 1}

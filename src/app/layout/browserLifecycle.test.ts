@@ -11,7 +11,7 @@ function association(tabId: string): BrowserAssociation {
 function fixture(run: (request: BrowserRequest) => Promise<BrowserResponse>) {
   let state = createSessionLayoutState("session", "server");
   for (const tabId of ["a", "b"]) {
-    const tab: TabLayoutState = { tabId, spaceId: "space", root: { t: "leaf", id: `terminal:${tabId}`, kind: "terminal", w: 1 }, terminals: { [`terminal:${tabId}`]: `pty:${tabId}` }, selectedLeafId: `terminal:${tabId}`, lastRealLeafId: `terminal:${tabId}`, zoomLeafId: null, viewers: {}, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null, focusedPaneId: `terminal:${tabId}`, revision: 0, selectionRevision: 0 };
+    const tab: TabLayoutState = { tabId, spaceId: "space", root: { t: "leaf", id: `terminal:${tabId}`, kind: "terminal", w: 1 }, terminals: { [`terminal:${tabId}`]: `pty:${tabId}` }, selectedLeafId: `terminal:${tabId}`, lastRealLeafId: `terminal:${tabId}`, zoomLeafId: null, viewers: {}, widgetShare: 0.4, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null, focusedPaneId: `terminal:${tabId}`, revision: 0, selectionRevision: 0 };
     state.tabs[tabId] = tab;
   }
   const browserAction = vi.fn(run);

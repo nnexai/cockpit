@@ -3,6 +3,11 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "cockpit_status",
             "cockpit_quota_status",
+            "cockpit_widget_subscribe",
+            "cockpit_widget_report",
+            "cockpit_widget_content",
+            "cockpit_widget_remove",
+            "cockpit_widget_select",
             "cockpit_browser_action",
             "cockpit_browser_view_open",
             "cockpit_browser_draft_recovery",

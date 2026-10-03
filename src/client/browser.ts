@@ -1,3 +1,9 @@
+import {
+  matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest,
+  parseWidgetRemoveResponse, parseWidgetSelectRequest, parseWidgetSelectResponse,
+} from "./widgetProtocol";
+import { widgetEventCursor, widgetReports } from "./widgetTransport";
+import type { WidgetEventHandler, WidgetStream } from "./CockpitClient";
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import {
   matchLibraryAttachmentsOperation, matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
@@ -184,6 +190,66 @@ async function getJson<T>(
     if (error instanceof CockpitClientError) throw error;
     throw new CockpitClientError("malformed_response", `Cockpit ${endpoint} endpoint returned an invalid response`, { cause: error, status: response.status });
   }
+}
+
+function openWidgetStream(
+  factory: BrowserWebSocketFactory, onEvent: WidgetEventHandler,
+  onError: (error: CockpitClientError) => void, signal?: AbortSignal,
+): Promise<WidgetStream> {
+  try { signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+  let socket: BrowserWebSocket;
+  try { socket = factory(websocketUrl("/api/v1/widgets/events")); }
+  catch (cause) { return Promise.reject(new CockpitClientError("transport_error", "Widget stream could not open", { cause })); }
+  let resolve!: (stream: WidgetStream) => void;
+  let reject!: (error: unknown) => void;
+  // The shipped frontend targets ES2022, before Promise.withResolvers.
+  const promise = new Promise<WidgetStream>((accept, fail) => { resolve = accept; reject = fail; });
+  const accept = widgetEventCursor();
+  let closed = false;
+  let ready = false;
+  const reports = widgetReports((report) => {
+    try { socket.send(JSON.stringify(report)); }
+    catch (cause) { fail(new CockpitClientError("stream_error", "Widget report failed", { cause })); }
+  });
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    reports.close();
+    signal?.removeEventListener("abort", abort);
+    socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
+    socket.close();
+  };
+  const fail = (error: CockpitClientError) => {
+    if (closed) return;
+    close();
+    if (ready) onError(error); else reject(error);
+  };
+  const abort = () => {
+    close();
+    if (!ready) reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+  };
+  signal?.addEventListener("abort", abort, { once: true });
+  socket.onmessage = ({ data }) => {
+    if (closed) return;
+    try {
+      if (typeof data !== "string" || new TextEncoder().encode(data).byteLength > 8 * 1024 * 1024) {
+        throw new CockpitClientError("malformed_response", "Widget event exceeds transport bounds");
+      }
+      const event = accept(JSON.parse(data));
+      if (!event) return;
+      onEvent(event);
+      if (!ready) {
+        ready = true;
+        resolve({ close, report: reports.report });
+      }
+    } catch (cause) {
+      fail(cause instanceof CockpitClientError ? cause : new CockpitClientError("malformed_response", "Widget event is malformed", { cause }));
+    }
+  };
+  socket.onerror = () => fail(new CockpitClientError("transport_error", "Widget stream failed"));
+  socket.onclose = () => fail(new CockpitClientError("stream_error", "Widget stream disconnected"));
+  if (signal?.aborted) abort();
+  return promise;
 }
 
 function websocketUrl(path: string): string {
@@ -1126,6 +1192,25 @@ export function createBrowserClient(
         }
         return value;
       });
+    },
+    subscribeWidgets(onEvent, onError, signal) {
+      return openWidgetStream(webSocketFactory, onEvent, onError, signal);
+    },
+    async widgetContent(value, signal) {
+      const parsed = parseWidgetContentRequest(value);
+      return getJson(request, "/api/v1/widgets/content", "widget content",
+        (body) => matchWidgetContent(body, parsed),
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+    },
+    async widgetRemove(value, signal) {
+      const parsed = parseWidgetRemoveRequest(value);
+      return getJson(request, "/api/v1/widgets/remove", "widget remove", parseWidgetRemoveResponse,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+    },
+    async widgetSelect(value, signal) {
+      const parsed = parseWidgetSelectRequest(value);
+      return getJson(request, "/api/v1/widgets/select", "widget select", parseWidgetSelectResponse,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
     },
     subscribeSession(sessionId, onMessage, onError, signal) { return openSessionStream(webSocketFactory, sessionId, onMessage, onError, signal); },
     openTerminal(requestValue, onMessage, onError, signal) { return openTerminalStream(webSocketFactory, requestValue, onMessage, onError, signal); },

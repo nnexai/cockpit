@@ -1,6 +1,6 @@
 import type { DropTarget } from "./solveLayout";
 
-export type ViewerKind = "files" | "review" | "browser";
+export type ViewerKind = "files" | "review" | "browser" | "widget";
 export type LeafKind = "terminal" | ViewerKind;
 export type LeafId = string;
 export type Direction = "row" | "col";
@@ -83,12 +83,12 @@ export function firstLoadGrid(sortedLeaves: Leaf[]): LayoutNode | null {
   return normalize(root);
 }
 
-export function splitLeaf(root: LayoutNode, targetId: LeafId, dir: Direction, before: boolean, leaf: Leaf): LayoutNode {
+export function splitLeaf(root: LayoutNode, targetId: LeafId, dir: Direction, before: boolean, leaf: Leaf, share = 0.5): LayoutNode {
   const target = findNode(root, targetId);
-  if (!target || target.t !== "leaf" || findNode(root, leaf.id)) return root;
+  if (!target || target.t !== "leaf" || findNode(root, leaf.id) || !(share > 0 && share < 1)) return root;
   const id = splitId(root);
   return normalize(mapNode(root, targetId, node => ({ t: "split", id, dir, w: node.w,
-    kids: before ? [{ ...leaf, w: .5 }, { ...node, w: .5 }] : [{ ...node, w: .5 }, { ...leaf, w: .5 }] })));
+    kids: before ? [{ ...leaf, w: share }, { ...node, w: 1 - share }] : [{ ...node, w: 1 - share }, { ...leaf, w: share }] })));
 }
 
 export function removeLeaf(root: LayoutNode, id: LeafId): { root: LayoutNode | null; absorbedBy: LeafId | null } {

@@ -40,6 +40,10 @@ use cockpit_protocol::{
         BrowserViewOpenRequest, BrowserViewSnapshot,
     },
     quota::QuotaStatusResponse,
+    widget::{
+        WIDGET_MAX_SNAPSHOT_BYTES, WidgetContent, WidgetContentRequest, WidgetEvent, WidgetRemoveRequest,
+        WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse, WidgetWindowReport,
+    },
     v1::{
         CockpitMode, ErrorResponse, FocusRequest, FocusResponse, ResourceMutationRequest,
         ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse,
@@ -466,6 +470,10 @@ enum StreamEntry {
     BrowserView {
         control: Arc<StreamControl>,
     },
+    Widget {
+        control: Arc<StreamControl>,
+        window_id: String,
+    },
 }
 
 /// Process-local bounded registry for live native streams.
@@ -507,6 +515,14 @@ impl StreamRegistry {
         }
     }
 
+    fn widget_window(&self, stream_id: &str) -> Option<String> {
+        let entries = self.entries.lock().expect("stream registry lock poisoned");
+        match entries.get(stream_id) {
+            Some(StreamEntry::Widget { window_id, .. }) => Some(window_id.clone()),
+            _ => None,
+        }
+    }
+
     fn complete(&self, stream_id: &str) {
         let entry = self
             .entries
@@ -517,7 +533,8 @@ impl StreamRegistry {
             match entry {
                 StreamEntry::Session { control }
                 | StreamEntry::Terminal { control, .. }
-                | StreamEntry::BrowserView { control, .. } => {
+                | StreamEntry::BrowserView { control, .. }
+                | StreamEntry::Widget { control, .. } => {
                     control.cancelled.store(true, Ordering::Release);
                 }
             }
@@ -534,7 +551,8 @@ impl StreamRegistry {
             match entry {
                 StreamEntry::Session { control }
                 | StreamEntry::Terminal { control, .. }
-                | StreamEntry::BrowserView { control, .. } => {
+                | StreamEntry::BrowserView { control, .. }
+                | StreamEntry::Widget { control, .. } => {
                     control.cancel().await;
                 }
             }
@@ -1685,6 +1703,103 @@ async fn cockpit_stream_cancel(
     Ok(())
 }
 
+fn widget_request_size<T: Serialize>(request: &T) -> Result<(), ErrorResponse> {
+    struct SizeLimit(usize);
+    impl std::io::Write for SizeLimit {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.0 {
+                return Err(std::io::Error::other("widget request exceeds byte limit"));
+            }
+            self.0 -= bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    if serde_json::to_writer(SizeLimit(4096), request).is_ok() {
+        Ok(())
+    } else {
+        Err(stream_error("widget_usage", "Malformed or oversized widget request"))
+    }
+}
+
+#[tauri::command]
+async fn cockpit_widget_content(
+    request: WidgetContentRequest, runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<WidgetContent, ErrorResponse> {
+    widget_request_size(&request)?;
+    runtime.widget_content(request).await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_widget_remove(
+    request: WidgetRemoveRequest, runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<WidgetRemoveResponse, ErrorResponse> {
+    widget_request_size(&request)?;
+    runtime.widget_remove(request).await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_widget_select(
+    request: WidgetSelectRequest, runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<WidgetSelectResponse, ErrorResponse> {
+    widget_request_size(&request)?;
+    runtime.widget_select(request).await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_widget_report(
+    stream_id: String, report: WidgetWindowReport,
+    runtime: State<'_, Arc<BrowserRuntime>>, registry: State<'_, StreamRegistry>,
+) -> Result<(), ErrorResponse> {
+    widget_request_size(&report)?;
+    let window_id = registry.widget_window(&stream_id)
+        .ok_or_else(|| stream_error("widget_usage", "Widget subscription is closed"))?;
+    runtime.widget_report(&window_id, report).await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_widget_subscribe(
+    channel: Channel<tauri::ipc::Response>, error_channel: Channel<ErrorResponse>,
+    runtime: State<'_, Arc<BrowserRuntime>>, registry: State<'_, StreamRegistry>,
+) -> Result<String, ErrorResponse> {
+    let mut stream = runtime.widget_events().await.map_err(inspection_error_response)?;
+    let control = StreamControl::new(None);
+    let stream_id = registry.allocate(StreamEntry::Widget {
+        control: control.clone(), window_id: stream.window_id.clone(),
+    })?;
+    let returned_id = stream_id.clone();
+    let task_registry = registry.inner().clone();
+    let task_control = control.clone();
+    let task = tokio::spawn(async move {
+        let send = |event: &WidgetEvent| {
+            let Ok(json) = serde_json::to_string(event) else { return false };
+            json.len() <= WIDGET_MAX_SNAPSHOT_BYTES
+                && channel.send(tauri::ipc::Response::new(json)).is_ok()
+        };
+        if send(&stream.snapshot) {
+            loop {
+                if task_control.cancelled.load(Ordering::Acquire) { break; }
+                match stream.events.recv().await {
+                    Ok(event) => if !send(&event) {
+                        let _ = error_channel.send(stream_error("widget_stream_closed", "Widget event delivery failed"));
+                        break;
+                    },
+                    Err(_) => {
+                        let _ = error_channel.send(stream_error("widget_stream_closed", "Widget stream requires a fresh snapshot"));
+                        break;
+                    }
+                }
+            }
+        } else {
+            let _ = error_channel.send(stream_error("widget_stream_closed", "Widget snapshot delivery failed"));
+        }
+        drop(stream);
+        task_registry.complete(&stream_id);
+    });
+    control.set_abort(task.abort_handle());
+    Ok(returned_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let window_config = cockpit_core::config::load_window_configuration(None)
@@ -1728,12 +1843,16 @@ pub fn run() {
             inspector.clone(),
         )
         .expect("failed to initialize browser service")
-        .with_paste_adapter(paste_adapter),
+        .with_paste_adapter(paste_adapter.clone()),
     );
+    let widgets = Arc::new(cockpit_core::widget::WidgetService::new(
+        inspector.clone(), paste_adapter,
+    ));
     let browser_runtime = Arc::new(
         tauri::async_runtime::block_on(BrowserRuntime::start(
             std::path::PathBuf::from(&project_config.state_root),
             browser_service,
+            widgets,
         ))
         .expect("failed to initialize browser runtime"),
     );
@@ -1809,6 +1928,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            cockpit_widget_subscribe,
+            cockpit_widget_report,
+            cockpit_widget_content,
+            cockpit_widget_remove,
+            cockpit_widget_select,
             projects::cockpit_resolve_workspace_defaults,
             projects::cockpit_project_configuration,
             projects::cockpit_repositories,

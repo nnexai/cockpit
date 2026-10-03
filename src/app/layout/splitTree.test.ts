@@ -30,6 +30,32 @@ describe("immutable split tree placement", () => {
     expect(leaves(removed.root).map(node => node.id)).toEqual(["p1", "p3"]);
   });
 
+  it.each([true, false])("assigns the newcomer share without resizing unrelated leaves, before=%s", before => {
+    const original = row();
+    const next = splitLeaf(original, "p2", "row", before, { ...leaf("widget"), kind: "widget" }, .4);
+    const slots = leaves(next);
+    expect(slots.map(node => node.id)).toEqual(before ? ["p1", "widget", "p2"] : ["p1", "p2", "widget"]);
+    expect(slots.find(node => node.id === "p1")?.w).toBeCloseTo(.6);
+    expect(slots.find(node => node.id === "p2")?.w).toBeCloseTo(.24);
+    expect(slots.find(node => node.id === "widget")?.w).toBeCloseTo(.16);
+    expect(original).toEqual(row());
+  });
+
+  it("retains the source-local newcomer ratio in a nested split", () => {
+    const next = splitLeaf(row(), "p2", "col", false, { ...leaf("widget"), kind: "widget" }, .3);
+    expect(next.t).toBe("split");
+    if (next.t !== "split") throw new Error("Expected root row");
+    expect(next.kids[0]).toEqual(leaf("p1", .6));
+    const pair = next.kids[1];
+    expect(pair).toMatchObject({ t: "split", dir: "col", w: .4 });
+    expect(leaves(pair).map(node => [node.id, node.w])).toEqual([["p2", .7], ["widget", .3]]);
+  });
+
+  it.each([0, 1, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a degenerate split share %s", share => {
+    const root = row();
+    expect(splitLeaf(root, "p2", "row", false, leaf("widget"), share)).toBe(root);
+  });
+
   it("inserts an external pane with equal leaf share while preserving nested ratios", () => {
     const root: LayoutNode = { t: "split", id: "outer", dir: "row", w: 1, kids: [leaf("p1", .6),
       { t: "split", id: "inner", dir: "col", w: .4, kids: [leaf("p2", .5), { ...leaf("f", .5), kind: "files" }] }] };

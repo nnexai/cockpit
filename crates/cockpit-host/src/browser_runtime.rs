@@ -11,7 +11,7 @@ mod browser_helper;
 
 use browser_helper::BrowserHelperSupervisor;
 pub use browser_helper::{BrowserViewEvents, BrowserViewNativeSubscription, BrowserViewOpen};
-use cockpit_core::{InspectionError, browser::BrowserService};
+use cockpit_core::{InspectionError, browser::BrowserService, widget::{WidgetService, WidgetWindowGuard}};
 use cockpit_protocol::browser::{
     BrowserCleanupRetryRequest, BrowserCleanupStatus, BrowserFeedbackAckRequest,
     BrowserFeedbackImage, BrowserFeedbackImageRequest, BrowserFeedbackLookup,
@@ -23,12 +23,13 @@ use cockpit_protocol::browser_view::{
     BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewDraftCommand, BrowserViewFrameGrant,
     BrowserViewOpenRequest, BrowserDraftRecoveryRequest,
 };
+use cockpit_protocol::widget::*;
 
 use fs2::FileExt;
 use nix::unistd::Uid;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     sync::{Mutex, Semaphore, oneshot},
     time::timeout,
@@ -58,6 +59,10 @@ fn response_read_timeout(request: &WireRequest) -> Duration {
         WireRequest::Action(_) | WireRequest::CleanupRetry(_) => BROWSER_ACTION_RESPONSE_TIMEOUT,
         WireRequest::BrowserViewOpen(_) => INLINE_VIEW_OPEN_RESPONSE_TIMEOUT,
         WireRequest::BrowserViewCommand(_) => INLINE_VIEW_COMMAND_RESPONSE_TIMEOUT,
+        WireRequest::WidgetShow(_) | WireRequest::WidgetClose(_) | WireRequest::WidgetList(_) =>
+            Duration::from_secs(45),
+        WireRequest::WidgetSelection(request) =>
+            Duration::from_secs(request.wait_seconds.unwrap_or(0).min(WIDGET_MAX_WAIT_SECONDS) + 45),
         _ => IO_TIMEOUT,
     }
 }
@@ -95,6 +100,15 @@ enum WireRequest {
     BrowserViewFrameEndpoint(BrowserViewFrameGrant),
     BrowserViewDetach(String),
     BrowserDraftRecovery(BrowserDraftRecoveryRequest),
+    WidgetShow(WidgetShowRequest),
+    WidgetClose(WidgetCloseRequest),
+    WidgetList(WidgetListRequest),
+    WidgetSelection(WidgetSelectionRequest),
+    WidgetContent(WidgetContentRequest),
+    WidgetRemove(WidgetRemoveRequest),
+    WidgetSelect(WidgetSelectRequest),
+    WidgetWindowReport { window_id: String, report: WidgetWindowReport },
+    WidgetEvents,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,6 +126,16 @@ enum WireResponse {
     BrowserViewFrameEndpoint(String),
     BrowserViewDetached,
     BrowserDraftRecovery(BrowserViewCommandOutcome),
+    WidgetShown(WidgetShowResponse),
+    WidgetClosed(WidgetCloseResponse),
+    WidgetListed(WidgetListResponse),
+    WidgetSelection(WidgetSelectionResponse),
+    WidgetContent(WidgetContent),
+    WidgetRemoved(WidgetRemoveResponse),
+    WidgetSelected(WidgetSelectResponse),
+    WidgetReported,
+    WidgetSubscribed { window_id: String },
+    WidgetEvent(WidgetEvent),
     Err(WireError),
 }
 
@@ -147,9 +171,31 @@ enum RuntimeRole {
 pub struct BrowserRuntime {
     role: Mutex<RuntimeRole>,
     service: Arc<BrowserService>,
+    widgets: Option<Arc<WidgetService>>,
     /// Present only in the local owner. Observers intentionally cannot attach
     /// to, command, or subscribe to the owner's private browser helper.
     helper: Option<Arc<BrowserHelperSupervisor>>,
+}
+
+/// Keep the complete stream alive: dropping it unregisters this window.
+pub struct WidgetEventStream {
+    pub window_id: String,
+    pub snapshot: WidgetEvent,
+    pub events: tokio::sync::broadcast::Receiver<WidgetEvent>,
+    _guard: WidgetStreamGuard,
+}
+
+enum WidgetStreamGuard {
+    Owner { _window: WidgetWindowGuard },
+    Observer(tokio::task::JoinHandle<()>),
+}
+
+impl Drop for WidgetStreamGuard {
+    fn drop(&mut self) {
+        if let Self::Observer(task) = self {
+            task.abort();
+        }
+    }
 }
 
 impl BrowserRuntime {
@@ -172,12 +218,14 @@ impl BrowserRuntime {
             role: Mutex::new(RuntimeRole::Observer { socket }),
             service,
             helper: None,
+            widgets: None,
         })
     }
 
     pub async fn start(
         state_root: PathBuf,
         service: Arc<BrowserService>,
+        widgets: Arc<WidgetService>,
     ) -> Result<Self, InspectionError> {
         let owner_state_root = state_root;
         let state_root = owner_state_root.join("browser");
@@ -229,7 +277,9 @@ impl BrowserRuntime {
                     .uid();
                 let peers = Arc::new(Semaphore::new(MAX_PEERS));
                 let (stop_tx, mut stop_rx) = oneshot::channel();
+                let (widget_stop, _) = tokio::sync::watch::channel(false);
                 let owner_service = Arc::clone(&service);
+                let owner_widgets = Arc::clone(&widgets);
                 let cleanup_socket = socket.clone();
                 let cleanup_device = socket_device;
                 let cleanup_inode = socket_inode;
@@ -249,6 +299,7 @@ impl BrowserRuntime {
                             _ = reconcile.tick() => {
                                 let _ = owner_service.reconcile().await;
                                 let _ = owner_service.prune_feedback();
+                                owner_widgets.reconcile().await;
                             }
                             _ = endpoint_probe.tick() => {
                                 task_helper.verify_active_endpoints(&owner_service).await;
@@ -263,10 +314,14 @@ impl BrowserRuntime {
                                 let Ok(permit) = Arc::clone(&peers).try_acquire_owned() else { continue; };
                                 let service = Arc::clone(&owner_service);
                                 let helper = Arc::clone(&task_helper);
-                                tokio::spawn(async move { let _permit = permit; serve_peer(stream, service, helper).await; });
+                                let widgets = Arc::clone(&owner_widgets);
+                                let stopped = widget_stop.subscribe();
+                                tokio::spawn(async move { let _permit = permit; serve_peer(stream, service, helper, widgets, stopped).await; });
                             }
                         }
                     }
+                    owner_widgets.shutdown();
+                    widget_stop.send_replace(true);
                     if let Ok(metadata) = fs::symlink_metadata(&cleanup_socket)
                         && metadata.file_type().is_socket()
                         && metadata.dev() == cleanup_device
@@ -285,6 +340,7 @@ impl BrowserRuntime {
                         task: Some(task),
                     })),
                     service,
+                    widgets: Some(widgets),
                     helper: Some(helper),
                 })
             }
@@ -298,6 +354,7 @@ impl BrowserRuntime {
                 Ok(Self {
                     role: Mutex::new(RuntimeRole::Observer { socket }),
                     service,
+                    widgets: None,
                     helper: None,
                 })
             }
@@ -526,6 +583,89 @@ impl BrowserRuntime {
         }
     }
 
+    pub async fn widget_show(&self, request: WidgetShowRequest) -> Result<WidgetShowResponse, InspectionError> {
+        match self.request(WireRequest::WidgetShow(request)).await? {
+            WireResponse::WidgetShown(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_close(&self, request: WidgetCloseRequest) -> Result<WidgetCloseResponse, InspectionError> {
+        match self.request(WireRequest::WidgetClose(request)).await? {
+            WireResponse::WidgetClosed(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_list(&self, request: WidgetListRequest) -> Result<WidgetListResponse, InspectionError> {
+        match self.request(WireRequest::WidgetList(request)).await? {
+            WireResponse::WidgetListed(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_selection(&self, request: WidgetSelectionRequest) -> Result<WidgetSelectionResponse, InspectionError> {
+        let response = self.request(WireRequest::WidgetSelection(request)).await.map_err(|error| {
+            if error.code == "browser_outcome_unknown" {
+                InspectionError::new("widget_retired", "Widget owner ended the selection request")
+            } else {
+                error
+            }
+        })?;
+        match response {
+            WireResponse::WidgetSelection(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_content(&self, request: WidgetContentRequest) -> Result<WidgetContent, InspectionError> {
+        match self.request(WireRequest::WidgetContent(request)).await? {
+            WireResponse::WidgetContent(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_remove(&self, request: WidgetRemoveRequest) -> Result<WidgetRemoveResponse, InspectionError> {
+        match self.request(WireRequest::WidgetRemove(request)).await? {
+            WireResponse::WidgetRemoved(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_select(&self, request: WidgetSelectRequest) -> Result<WidgetSelectResponse, InspectionError> {
+        match self.request(WireRequest::WidgetSelect(request)).await? {
+            WireResponse::WidgetSelected(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_report(&self, window_id: &str, report: WidgetWindowReport) -> Result<(), InspectionError> {
+        match self.request(WireRequest::WidgetWindowReport { window_id: window_id.to_owned(), report }).await? {
+            WireResponse::WidgetReported => Ok(()),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_events(&self) -> Result<WidgetEventStream, InspectionError> {
+        let socket = {
+            let role = self.role.lock().await;
+            match &*role {
+                RuntimeRole::Owner(_) => None,
+                RuntimeRole::Observer { socket } => Some(socket.clone()),
+            }
+        };
+        if let Some(socket) = socket {
+            return forward_widget_events(&socket).await;
+        }
+        let subscription = widget_service(self.widgets.as_deref())?.subscribe();
+        Ok(WidgetEventStream {
+            window_id: subscription.window_id,
+            snapshot: subscription.snapshot,
+            events: subscription.events,
+            _guard: WidgetStreamGuard::Owner { _window: subscription.guard },
+        })
+    }
+
     async fn request(&self, request: WireRequest) -> Result<WireResponse, InspectionError> {
         let socket = {
             let role = self.role.lock().await;
@@ -535,7 +675,7 @@ impl BrowserRuntime {
             }
         };
         match socket {
-            None => dispatch(&self.service, self.helper.as_ref(), request).await,
+            None => dispatch(&self.service, self.helper.as_ref(), self.widgets.as_deref(), request).await,
             Some(socket) => forward(&socket, request).await,
         }
     }
@@ -562,6 +702,9 @@ impl BrowserRuntime {
         let Some((stop, mut task, socket, socket_device, socket_inode)) = owner else {
             return Ok(());
         };
+        if let Some(widgets) = &self.widgets {
+            widgets.shutdown();
+        }
         if let Some(helper) = &self.helper {
             helper.shutdown().await;
         }
@@ -644,9 +787,22 @@ fn invalid_response() -> InspectionError {
 async fn dispatch(
     service: &BrowserService,
     helper: Option<&Arc<BrowserHelperSupervisor>>,
+    widgets: Option<&WidgetService>,
     request: WireRequest,
 ) -> Result<WireResponse, InspectionError> {
     match request {
+        WireRequest::WidgetShow(request) => widget_service(widgets)?.show(request).await.map(WireResponse::WidgetShown),
+        WireRequest::WidgetClose(request) => widget_service(widgets)?.close(request).await.map(WireResponse::WidgetClosed),
+        WireRequest::WidgetList(request) => widget_service(widgets)?.list(request).await.map(WireResponse::WidgetListed),
+        WireRequest::WidgetSelection(request) => widget_service(widgets)?.selection(request).await.map(WireResponse::WidgetSelection),
+        WireRequest::WidgetContent(request) => widget_service(widgets)?.content(request).map(WireResponse::WidgetContent),
+        WireRequest::WidgetRemove(request) => widget_service(widgets)?.remove(request).map(WireResponse::WidgetRemoved),
+        WireRequest::WidgetSelect(request) => widget_service(widgets)?.select(request).map(WireResponse::WidgetSelected),
+        WireRequest::WidgetWindowReport { window_id, report } => {
+            widget_service(widgets)?.report_window(&window_id, report)?;
+            Ok(WireResponse::WidgetReported)
+        }
+        WireRequest::WidgetEvents => Err(InspectionError::new("widget_usage", "Widget events require a streaming connection")),
         WireRequest::BrowserDraftRecovery(request) => service.browser_draft_recovery(request).await.map(WireResponse::BrowserDraftRecovery),
         WireRequest::Action(request) => service.execute(request).await.map(WireResponse::Action),
         WireRequest::CleanupStatus => service.cleanup_status().await.map(WireResponse::CleanupStatus),
@@ -727,6 +883,10 @@ async fn dispatch(
             "Browser view events require a streaming connection",
         )),
     }
+}
+
+fn widget_service(widgets: Option<&WidgetService>) -> Result<&WidgetService, InspectionError> {
+    widgets.ok_or_else(|| InspectionError::new("widget_no_owner", "Widget owner is unavailable"))
 }
 
 async fn verify_view_endpoint(
@@ -824,6 +984,8 @@ async fn serve_peer(
     stream: UnixStream,
     service: Arc<BrowserService>,
     helper: Arc<BrowserHelperSupervisor>,
+    widgets: Arc<WidgetService>,
+    mut owner_stopped: tokio::sync::watch::Receiver<bool>,
 ) {
     let (mut reader, mut writer) = stream.into_split();
     let Ok(Ok(Some(frame))) = timeout(IO_TIMEOUT, read_frame(&mut reader, MAX_REQUEST_FRAME)).await
@@ -844,6 +1006,30 @@ async fn serve_peer(
             return;
         }
     };
+    if matches!(request, WireRequest::WidgetEvents) {
+        let subscription = widgets.subscribe();
+        let _guard = subscription.guard;
+        if write_wire(&mut writer, &WireResponse::WidgetSubscribed { window_id: subscription.window_id }).await.is_err()
+            || write_wire(&mut writer, &WireResponse::WidgetEvent(subscription.snapshot)).await.is_err()
+        {
+            return;
+        }
+        let mut events = subscription.events;
+        let mut peer_byte = [0u8; 1];
+        loop {
+            tokio::select! {
+                _ = owner_stopped.changed() => break,
+                _ = reader.read(&mut peer_byte) => break,
+                event = events.recv() => {
+                    let Ok(event) = event else { break; };
+                    if write_wire(&mut writer, &WireResponse::WidgetEvent(event)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        return;
+    }
     if let WireRequest::BrowserViewEvents(view_id) = request {
         if verify_view_endpoint(&service, &helper, &view_id).await.is_err() {
             return;
@@ -881,7 +1067,35 @@ async fn serve_peer(
         }
         return;
     }
-    let response = match dispatch(&service, Some(&helper), request).await {
+    // Selection waits are read-only. Drop their dispatch future on disconnect
+    // so its WaitGuard releases the globally bounded waiter slot immediately.
+    // Ordinary mutations must finish even when their client disappears.
+    let waiting_selection = matches!(
+        &request,
+        WireRequest::WidgetSelection(request) if request.wait_seconds.is_some_and(|seconds| seconds > 0)
+    );
+    let dispatched = if waiting_selection {
+        if *owner_stopped.borrow() {
+            return;
+        }
+        tokio::select! {
+            biased;
+            _ = owner_stopped.changed() => return,
+            _ = async {
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match reader.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            } => return,
+            response = dispatch(&service, Some(&helper), Some(&widgets), request) => response,
+        }
+    } else {
+        dispatch(&service, Some(&helper), Some(&widgets), request).await
+    };
+    let response = match dispatched {
         Ok(value) => value,
         Err(error) => WireResponse::Err(WireError {
             code: error.code,
@@ -1057,6 +1271,92 @@ async fn forward_view_events(
         snapshot,
         events: receiver,
     })
+}
+
+async fn forward_widget_events(socket: &Path) -> Result<WidgetEventStream, InspectionError> {
+    let stream = timeout(IO_TIMEOUT, UnixStream::connect(socket)).await
+        .map_err(|_| InspectionError::new("browser_owner_timeout", "Widget owner connection timed out"))?
+        .map_err(|error| io_error("browser_owner_unavailable", error))?;
+    let peer_uid = stream.peer_cred()
+        .map_err(|error| io_error("browser_owner_unavailable", error))?.uid();
+    let expected_uid = fs::metadata(socket)
+        .map_err(|error| io_error("browser_owner_unavailable", error))?.uid();
+    if peer_uid != expected_uid {
+        return Err(InspectionError::new("browser_owner_unavailable", "Widget owner belongs to another user"));
+    }
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let request = serde_json::to_vec(&WireRequest::WidgetEvents)
+        .map_err(|error| InspectionError::new("widget_usage", error.to_string()))?;
+    timeout(IO_TIMEOUT, async {
+        writer.write_all(&request).await?;
+        writer.write_all(b"\n").await
+    }).await
+        .map_err(|_| InspectionError::new("browser_owner_timeout", "Widget subscription timed out"))?
+        .map_err(|error| io_error("browser_owner_unavailable", error))?;
+    let subscribed = read_widget_stream_frame(&mut reader).await?;
+    let WireResponse::WidgetSubscribed { window_id } = subscribed else {
+        return Err(invalid_response());
+    };
+    let snapshot = read_widget_stream_frame(&mut reader).await?;
+    let WireResponse::WidgetEvent(snapshot @ WidgetEvent::Snapshot { .. }) = snapshot else {
+        return Err(invalid_response());
+    };
+    let (events, receiver) = tokio::sync::broadcast::channel(VIEW_EVENT_QUEUE);
+    let task = tokio::spawn(async move {
+        let _writer = writer;
+        loop {
+            let frame = tokio::select! {
+                _ = events.closed() => break,
+                frame = read_stream_frame(&mut reader, MAX_RESPONSE_FRAME) => frame,
+            };
+            let Ok(Some(frame)) = frame else { break; };
+            let Ok(WireResponse::WidgetEvent(event)) = serde_json::from_slice(&frame) else { break; };
+            if events.send(event).is_err() { break; }
+        }
+    });
+    Ok(WidgetEventStream { window_id, snapshot, events: receiver, _guard: WidgetStreamGuard::Observer(task) })
+}
+
+async fn read_widget_stream_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<WireResponse, InspectionError> {
+    let frame = timeout(IO_TIMEOUT, read_stream_frame(reader, MAX_RESPONSE_FRAME)).await
+        .map_err(|_| InspectionError::new("browser_owner_timeout", "Widget event snapshot timed out"))?
+        .map_err(|error| io_error("browser_owner_unavailable", error))?
+        .ok_or_else(|| InspectionError::new("widget_retired", "Widget owner closed the event stream"))?;
+    match serde_json::from_slice(&frame)
+        .map_err(|error| InspectionError::new("invalid_browser_response", error.to_string()))?
+    {
+        WireResponse::Err(error) => Err(InspectionError::new(error.code, error.message)),
+        response => Ok(response),
+    }
+}
+
+// A stream reader must retain bytes following the first newline: subscription,
+// snapshot and subsequent events can all arrive in the same socket read.
+async fn read_stream_frame<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    limit: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut frame = Vec::with_capacity(limit.min(4096));
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            return Ok((!frame.is_empty()).then_some(frame));
+        }
+        let newline = chunk.iter().position(|byte| *byte == b'\n');
+        let count = newline.unwrap_or(chunk.len());
+        if count > limit - frame.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "frame exceeds bound",
+            ));
+        }
+        frame.extend_from_slice(&chunk[..count]);
+        reader.consume(count + usize::from(newline.is_some()));
+        if newline.is_some() {
+            return Ok(Some(frame));
+        }
+    }
 }
 
 async fn read_frame<R: AsyncRead + Unpin>(
@@ -1299,6 +1599,8 @@ mod tests {
     use async_trait::async_trait;
     use cockpit_core::browser::{BrowserHerdrAdapter, BrowserHerdrSnapshot};
     use cockpit_core::config::BrowserConfiguration;
+    use std::{future::{Future, poll_fn}, task::Poll};
+    use sha2::{Digest, Sha256};
 
     struct OfflineHerdr;
 
@@ -1309,6 +1611,61 @@ mod tests {
             _session_id: &str,
         ) -> Result<BrowserHerdrSnapshot, InspectionError> {
             Err(InspectionError::new("herdr_unavailable", "Herdr is offline"))
+        }
+    }
+
+    #[async_trait]
+    impl cockpit_core::paste_adapter::CommentPasteAdapter for OfflineHerdr {
+        async fn comment_paste_targets(&self, _: &str) -> Result<Vec<cockpit_protocol::comment_paste::CommentPasteTarget>, InspectionError> {
+            Err(InspectionError::new("herdr_unavailable", "Herdr is offline"))
+        }
+        async fn focus_comment_paste_target(&self, _: &cockpit_protocol::comment_paste::CommentPasteTarget) -> Result<(), InspectionError> {
+            Err(InspectionError::new("herdr_unavailable", "Herdr is offline"))
+        }
+        async fn confirm_comment_paste_target_focus(&self, _: &cockpit_protocol::comment_paste::CommentPasteTarget) -> Result<(), InspectionError> {
+            Err(InspectionError::new("herdr_unavailable", "Herdr is offline"))
+        }
+        async fn send_comment_paste(&self, _: &cockpit_protocol::comment_paste::CommentPasteTarget, _: &str) -> Result<(), InspectionError> {
+            Err(InspectionError::new("herdr_unavailable", "Herdr is offline"))
+        }
+    }
+
+    struct WidgetHerdr;
+
+    #[async_trait]
+    impl BrowserHerdrAdapter for WidgetHerdr {
+        async fn browser_snapshot(&self, _: &str) -> Result<BrowserHerdrSnapshot, InspectionError> {
+            Ok(BrowserHerdrSnapshot {
+                endpoint_identity: "widget-fixture".into(),
+                endpoint_path: "/fixture/herdr.sock".into(),
+                snapshot: serde_json::from_value(serde_json::json!({
+                    "session_id": "daily", "server_instance": "fixture", "version": "fixture", "protocol": 22,
+                    "focused_space_id": "s1", "focused_tab_id": "t1", "focused_pane_id": "p1",
+                    "spaces": [{"id":"s1","label":"Test","number":1,"tab_count":1,"pane_count":1,
+                        "focused":true,"agent_status":"idle","git":null}],
+                    "tabs": [{"id":"t1","space_id":"s1","label":"Test","number":1,"pane_count":1,
+                        "focused":true,"focused_pane_id":"p1"}],
+                    "panes": [{"id":"p1","terminal_id":"term1","space_id":"s1","tab_id":"t1",
+                        "focused":true,"agent_status":"idle","revision":0}],
+                    "agents": []
+                })).unwrap(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl cockpit_core::paste_adapter::CommentPasteAdapter for WidgetHerdr {
+        async fn comment_paste_targets(&self, _: &str) -> Result<Vec<cockpit_protocol::comment_paste::CommentPasteTarget>, InspectionError> {
+            Ok(Vec::new())
+        }
+        async fn focus_comment_paste_target(&self, _: &cockpit_protocol::comment_paste::CommentPasteTarget) -> Result<(), InspectionError> {
+            panic!("widget operations must not focus a terminal")
+        }
+        async fn confirm_comment_paste_target_focus(&self, _: &cockpit_protocol::comment_paste::CommentPasteTarget) -> Result<(), InspectionError> {
+            panic!("widget operations must not request paste focus")
+        }
+        async fn send_comment_paste(&self, _: &cockpit_protocol::comment_paste::CommentPasteTarget, _: &str) -> Result<(), InspectionError> {
+            panic!("widget operations must not paste into a terminal")
         }
     }
 
@@ -1340,6 +1697,10 @@ mod tests {
                 .unwrap(),
             )
         }
+
+        fn widgets(&self) -> Arc<WidgetService> {
+            Arc::new(WidgetService::new(Arc::new(OfflineHerdr), Arc::new(OfflineHerdr)))
+        }
     }
 
     impl Drop for RuntimeFixture {
@@ -1359,7 +1720,7 @@ mod tests {
         }
         let project = fixture.0.join("project.json");
         fs::write(&project, b"project state").unwrap();
-        let owner = BrowserRuntime::start(fixture.0.clone(), service).await.unwrap();
+        let owner = BrowserRuntime::start(fixture.0.clone(), service, fixture.widgets()).await.unwrap();
         let lock_inode = fs::metadata(fixture.0.join("browser/owner.lock")).unwrap().ino();
         assert!(owner.is_owner().await);
         for dir in work_dirs {
@@ -1374,7 +1735,7 @@ mod tests {
         }
         observer.shutdown().await.unwrap();
         // Closing an observer must not relinquish ownership or discard in-run work.
-        let next_window = BrowserRuntime::start(fixture.0.clone(), fixture.service()).await.unwrap();
+        let next_window = BrowserRuntime::start(fixture.0.clone(), fixture.service(), fixture.widgets()).await.unwrap();
         assert!(!next_window.is_owner().await);
         assert!(next_window.cleanup_status().await.unwrap().failures.is_empty());
         for dir in work_dirs {
@@ -1383,7 +1744,7 @@ mod tests {
         next_window.shutdown().await.unwrap();
 
         owner.shutdown().await.unwrap();
-        let replacement = BrowserRuntime::start(fixture.0.clone(), fixture.service()).await.unwrap();
+        let replacement = BrowserRuntime::start(fixture.0.clone(), fixture.service(), fixture.widgets()).await.unwrap();
         assert!(replacement.is_owner().await);
         for dir in work_dirs {
             assert!(!fixture.0.join(dir).join("current-run").exists());
@@ -1391,5 +1752,143 @@ mod tests {
         assert_eq!(fs::metadata(fixture.0.join("browser/owner.lock")).unwrap().ino(), lock_inode);
         assert_eq!(fs::read(project).unwrap(), b"project state");
         replacement.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn widget_stream_retains_coalesced_subscription_snapshot_and_events() {
+        let mut wire = Vec::new();
+        for response in [
+            WireResponse::WidgetSubscribed { window_id: "window".into() },
+            WireResponse::WidgetEvent(WidgetEvent::Snapshot { sequence: 1, widgets: Vec::new() }),
+            WireResponse::WidgetEvent(WidgetEvent::Snapshot { sequence: 2, widgets: Vec::new() }),
+        ] {
+            wire.extend(serde_json::to_vec(&response).unwrap());
+            wire.push(b'\n');
+        }
+        // All three frames are deliberately returned by a single fill_buf.
+        let mut reader = BufReader::with_capacity(wire.len(), wire.as_slice());
+        assert!(matches!(
+            read_widget_stream_frame(&mut reader).await.unwrap(),
+            WireResponse::WidgetSubscribed { window_id } if window_id == "window"
+        ));
+        assert!(matches!(
+            read_widget_stream_frame(&mut reader).await.unwrap(),
+            WireResponse::WidgetEvent(WidgetEvent::Snapshot { sequence: 1, .. })
+        ));
+        let event = read_stream_frame(&mut reader, MAX_RESPONSE_FRAME).await.unwrap().unwrap();
+        assert!(matches!(
+            serde_json::from_slice::<WireResponse>(&event).unwrap(),
+            WireResponse::WidgetEvent(WidgetEvent::Snapshot { sequence: 2, .. })
+        ));
+        assert!(read_stream_frame(&mut reader, MAX_RESPONSE_FRAME).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn widget_stream_frames_handle_split_boundaries_and_enforce_size() {
+        for capacity in [1, 2, 3, 4, 5, 7] {
+            let mut reader = BufReader::with_capacity(capacity, &b"abcd\nxy\nlast"[..]);
+            for expected in [b"abcd".as_slice(), b"xy", b"last"] {
+                assert_eq!(read_stream_frame(&mut reader, 4).await.unwrap().unwrap(), expected);
+            }
+            assert!(read_stream_frame(&mut reader, 4).await.unwrap().is_none());
+            for oversized in [b"abcde\n".as_slice(), b"abcde"] {
+                let mut reader = BufReader::with_capacity(capacity, oversized);
+                assert_eq!(
+                    read_stream_frame(&mut reader, 4).await.unwrap_err().kind(),
+                    std::io::ErrorKind::InvalidData
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn widget_disconnected_and_owner_stopped_waits_release_all_slots() {
+        let fixture = RuntimeFixture::new();
+        let widgets = Arc::new(WidgetService::new(Arc::new(WidgetHerdr), Arc::new(WidgetHerdr)));
+        let address = WidgetAddress {
+            session_id: "daily".into(), endpoint_path: Some("/fixture/herdr.sock".into()),
+            source_pane_id: None, locator: WidgetLocator::Tab { tab_id: "t1".into() }, space_check: None,
+        };
+        let spec_json = r#"{"prompt":"Choose","choices":[{"id":"one","label":"One"}]}"#.to_string();
+        widgets.show(WidgetShowRequest {
+            address: address.clone(), id: "waiting".into(), title: None,
+            content: WidgetContentInput::Choices {
+                sha256: format!("{:x}", Sha256::digest(spec_json.as_bytes())),
+                spec_json, from: WidgetInputKind::File, name: None,
+            },
+            reopen: false, clear_selection: false,
+        }).await.unwrap();
+        let request = WidgetSelectionRequest {
+            address, id: "waiting".into(), wait_seconds: Some(WIDGET_MAX_WAIT_SECONDS),
+        };
+        let service = fixture.service();
+        let helper = Arc::new(BrowserHelperSupervisor::new(fixture.0.clone()));
+        let mut capacity_request = request.clone();
+        capacity_request.wait_seconds = Some(0);
+        // A second full batch proves all eight slots became reusable, not
+        // merely that a disconnect stopped one socket handler.
+        for shutdown_owner in [false, true] {
+            for _ in 0..2 {
+                // A fresh receiver must not inherit an unseen false reset:
+                // changed() is a notification, not a test of the stored bool.
+                let (stopped, owner_stopped) = tokio::sync::watch::channel(false);
+                let mut completed_early = 0;
+                let mut clients = Vec::new();
+                let mut peers = Vec::new();
+                for _ in 0..WIDGET_MAX_SELECTION_WAITERS {
+                    let (mut client, server) = UnixStream::pair().unwrap();
+                    let mut frame = serde_json::to_vec(&WireRequest::WidgetSelection(request.clone())).unwrap();
+                    frame.push(b'\n');
+                    client.write_all(&frame).await.unwrap();
+                    server.readable().await.unwrap();
+                    let mut peer = Box::pin(serve_peer(
+                        server, service.clone(), helper.clone(), widgets.clone(), owner_stopped.clone(),
+                    ));
+                    // Drive the already-readable request. Registration is
+                    // verified below through public capacity behavior, not
+                    // an assertion about this future's scheduling state.
+                    if poll_fn(|cx| Poll::Ready(peer.as_mut().poll(cx))).await.is_ready() {
+                        completed_early += 1;
+                    }
+                    clients.push(client);
+                    peers.push(peer);
+                }
+                // This checks actual service registration rather than relying
+                // on task scheduling, sleeps or socket response echoes.
+                let capacity = widgets.selection(capacity_request.clone()).await;
+                assert!(
+                    matches!(&capacity, Err(error) if error.code == "widget_busy"),
+                    "expected eight registered waits; capacity probe: {capacity:?}; \
+                     {completed_early} peer handlers completed before cancellation"
+                );
+                if shutdown_owner {
+                    stopped.send(true).unwrap();
+                } else {
+                    clients.clear();
+                }
+                for peer in peers {
+                    timeout(Duration::from_secs(2), peer).await.unwrap();
+                }
+                drop(clients);
+            }
+        }
+        // Zero-wait selection must work after the final cancellations too.
+        let mut immediate = request;
+        immediate.wait_seconds = Some(0);
+        assert_eq!(widgets.selection(immediate).await.unwrap().status, WidgetSelectionStatus::Timeout);
+    }
+
+    #[tokio::test]
+    async fn widget_observer_event_stream_closes_when_owner_exits() {
+        let fixture = RuntimeFixture::new();
+        let owner = BrowserRuntime::start(fixture.0.clone(), fixture.service(), fixture.widgets()).await.unwrap();
+        let observer = BrowserRuntime::connect(fixture.0.clone(), fixture.service()).await.unwrap();
+        let mut stream = observer.widget_events().await.unwrap();
+        owner.shutdown().await.unwrap();
+        assert!(matches!(
+            timeout(Duration::from_secs(2), stream.events.recv()).await.unwrap(),
+            Err(tokio::sync::broadcast::error::RecvError::Closed)
+        ));
+        observer.shutdown().await.unwrap();
     }
 }

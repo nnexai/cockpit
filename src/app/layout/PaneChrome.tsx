@@ -1,12 +1,14 @@
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type { Leaf } from "./splitTree";
 
-export const PANE_BADGE = { terminal: "T", files: "F", review: "R", browser: "B" } as const;
+export const PANE_BADGE = { terminal: "T", files: "F", review: "R", browser: "B", widget: "W" } as const;
 
 export interface PaneChromeProps {
   leaf: Leaf;
   title: string;
   subtitle?: string | null;
+  titleContent?: ReactNode;
+  controls?: ReactNode;
   selected?: boolean;
   zoomed?: boolean;
   lastTerminal?: boolean;
@@ -25,15 +27,16 @@ function PaneIcon({ name }: { name: "zoom" | "restore" | "close" }) {
   </svg>;
 }
 
-export function PaneChrome({ leaf, title, subtitle, selected, zoomed, lastTerminal, focusStatus, focusError, onRetryFocus, onZoom, onClose, onMenu, closeDisabled }: PaneChromeProps) {
+export function PaneChrome({ leaf, title, subtitle, titleContent, controls, selected, zoomed, lastTerminal, focusStatus, focusError, onRetryFocus, onZoom, onClose, onMenu, closeDisabled }: PaneChromeProps) {
   const closeLabel = leaf.kind === "terminal" && lastTerminal
     ? "Close last terminal (closes all viewers in this tab)"
-    : leaf.kind === "browser" ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : `Close ${title}`;
+    : leaf.kind === "widget" ? `Remove widget: ${title}` : leaf.kind === "browser" ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : `Close ${title}`;
   return <header className="pane-header pane-chrome" data-pane-header={leaf.id} data-selected={selected || undefined} tabIndex={-1} title="Drag to move or swap this pane">
     <span className="pane-kind-badge" data-kind={leaf.kind} aria-label={leaf.kind}>{PANE_BADGE[leaf.kind]}</span>
-    <span className="pane-title" data-pane-title title={title}>{title}</span>
+    {titleContent ?? <span className="pane-title" data-pane-title title={title}>{title}</span>}
     {subtitle && <span className="pane-subtitle" title={subtitle}>{subtitle}</span>}
-    <span className="pane-scope">{leaf.kind === "terminal" ? "Herdr terminal" : "local to this tab"}</span>
+    {leaf.kind !== "widget" && <span className="pane-scope">{leaf.kind === "terminal" ? "Herdr terminal" : "local to this tab"}</span>}
+    {controls}
     {focusStatus === "pending" && <span className="focus-label" role="status" aria-label="Focus pending">⟳</span>}
     {focusStatus === "error" && <>
       <span className="focus-label is-error" role="status" title={focusError ?? "Focus failed"} aria-label={focusError ?? "Focus failed"}>!</span>

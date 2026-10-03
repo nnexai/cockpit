@@ -12,7 +12,7 @@ function viewer(sourceId = "source-a", bindingId = "binding-a", tabId = "tab"): 
 function fixture(client: CockpitClient, tabIds = ["tab"]) {
   let state = createSessionLayoutState("session", "instance");
   for (const tabId of tabIds) {
-    const tab: TabLayoutState = { tabId, spaceId: "space", root: { t: "leaf", id: `${tabId}:terminal`, kind: "terminal", w: 1 }, terminals: { [`${tabId}:terminal`]: "terminal-id" }, selectedLeafId: `${tabId}:terminal`, lastRealLeafId: `${tabId}:terminal`, zoomLeafId: null, viewers: {}, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null, focusedPaneId: `${tabId}:terminal`, revision: 0, selectionRevision: 0 };
+    const tab: TabLayoutState = { tabId, spaceId: "space", root: { t: "leaf", id: `${tabId}:terminal`, kind: "terminal", w: 1 }, terminals: { [`${tabId}:terminal`]: "terminal-id" }, selectedLeafId: `${tabId}:terminal`, lastRealLeafId: `${tabId}:terminal`, zoomLeafId: null, viewers: {}, widgetShare: 0.4, heldMembers: [], heldTerminalIds: {}, bufferedFocus: null, focusedPaneId: `${tabId}:terminal`, revision: 0, selectionRevision: 0 };
     state = { ...state, tabs: { ...state.tabs, [tabId]: tab }, activeTabId: tabId, activeSpaceId: "space" };
   }
   const initial = state;
