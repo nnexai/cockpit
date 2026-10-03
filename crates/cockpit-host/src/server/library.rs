@@ -12,8 +12,8 @@ use cockpit_core::CockpitService;
 use cockpit_protocol::library::{
     LibraryAddRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryFileIndexRequest, LibraryMediaRequest,
     LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
-    LibraryResolveRequest, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceContextRequest,
-    SpaceUpdateRequest, SpaceUpdateScope, SpaceRemoveRequest,
+    LibraryResolveRequest, SpaceAddRequest, SpaceContextRequest,
+    SpaceRepositoriesRequest, SpaceRemoveRequest,
 };
 use serde::Deserialize;
 
@@ -44,12 +44,8 @@ pub(super) fn routes() -> Router<CockpitService> {
         .route("/api/v1/library/confluence/spaces", post(confluence_spaces))
         .route("/api/v1/library/space/list", post(space_list))
         .route("/api/v1/library/space/add", post(space_add))
-        .route("/api/v1/library/space/update", post(space_update))
         .route("/api/v1/library/space/remove", post(space_remove))
-        .route(
-            "/api/v1/library/space/attempts/dismiss",
-            post(space_attempts_dismiss),
-        )
+        .route("/api/v1/library/space/repositories", post(space_repositories))
         .layer(DefaultBodyLimit::max(MAX_LIBRARY_CONFIRMATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
 }
@@ -367,7 +363,7 @@ async fn space_list(
         return invalid_request();
     }
     match service.library() {
-        Ok(library) => match library.space_listing(request.target).await {
+        Ok(library) => match library.space_listing(&request.target).await {
             Ok(value) => Json(value).into_response(),
             Err(error) => inspection_error(error),
         },
@@ -384,7 +380,7 @@ async fn space_add(
         Err(response) => return response,
     };
     if !valid_target(&request.target)
-        || request.item_ids.len() + request.follow_ids.len() > MAX_LIBRARY_PAGE_ITEMS
+        || request.item_ids.len() > MAX_LIBRARY_PAGE_ITEMS
     {
         return invalid_request();
     }
@@ -397,46 +393,20 @@ async fn space_add(
     }
 }
 
-async fn space_attempts_dismiss(
+async fn space_repositories(
     State(service): State<CockpitService>,
-    body: Result<Json<SpaceAttemptsDismissRequest>, JsonRejection>,
+    body: Result<Json<SpaceRepositoriesRequest>, JsonRejection>,
 ) -> Response {
     let request = match request(body) {
         Ok(request) => request,
         Err(response) => return response,
     };
-    if !valid_target(&request.target)
-        || request.item_ids.len() + request.follow_ids.len() > MAX_LIBRARY_PAGE_ITEMS
-    {
+    if !valid_target(&request.target) || request.repository_paths.len() > 64 {
         return invalid_request();
     }
     match service.library() {
-        Ok(library) => match library.dismiss_space_attempts(request).await {
-            Ok(()) => Json(()).into_response(),
-            Err(error) => inspection_error(error),
-        },
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn space_update(
-    State(service): State<CockpitService>,
-    body: Result<Json<SpaceUpdateRequest>, JsonRejection>,
-) -> Response {
-    let request = match request(body) {
-        Ok(request) => request,
-        Err(response) => return response,
-    };
-    let count = match &request.scope {
-        SpaceUpdateScope::Selection { item_ids, follow_ids } => item_ids.len() + follow_ids.len(),
-        SpaceUpdateScope::All {} => 0,
-    };
-    if !valid_target(&request.target) || count > MAX_LIBRARY_PAGE_ITEMS {
-        return invalid_request();
-    }
-    match service.library() {
-        Ok(library) => match library.start_space_update(request).await {
-            Ok(value) => operation_response(value),
+        Ok(library) => match library.space_repositories(request).await {
+            Ok(value) => Json(value).into_response(),
             Err(error) => inspection_error(error),
         },
         Err(error) => inspection_error(error),
@@ -451,7 +421,7 @@ async fn space_remove(
         Ok(request) => request,
         Err(response) => return response,
     };
-    if !valid_target(&request.target) {
+    if !valid_target(&request.target) || request.item_ids.len() > MAX_LIBRARY_PAGE_ITEMS {
         return invalid_request();
     }
     match service.library() {

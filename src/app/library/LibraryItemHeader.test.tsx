@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { LibraryItemSummary } from "../../protocol/generated/v1";
-import { LibraryItemHeader } from "./LibraryItemHeader";
+import { LibraryItemHeader, type ItemSpaceState } from "./LibraryItemHeader";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -100,6 +100,110 @@ it("shows a Confluence page's path, version, last editor and freshness, and list
     expect(actions.remove).not.toHaveBeenCalled();
   } finally {
     vi.useRealTimers();
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+const selectionItem: LibraryItemSummary = {
+  item_id: "source:issue-123", logical_id: "source:jira:issue:123", kind: "provider_snapshot",
+  provider_id: "jira", provider_instance: "https://example.atlassian.net", resource_type: "issue",
+  canonical_id: "OPS-123", container: { container_id: "OPS", label: "Operations" }, parent_item_id: null,
+  ancestors: [], order: null, title: "Deployment notes", document_path: "jira/OPS-123.md", item_path: "jira/OPS-123",
+  source_url: "https://example.atlassian.net/browse/OPS-123", original_url: null, source_revision: null,
+  revision: "r1", state: "fresh", partial: null, conflict: [], fetched_at: "2026-09-26T00:00:00Z",
+  checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
+};
+
+it("selects and removes the live Library item without optimistic state, and keeps pending and failure feedback local", async () => {
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: true, refreshBusy: false };
+  const space: ItemSpaceState = { label: "api-review", selected: false, adding: false, busy: false, error: null, onAdd: vi.fn(), onRemove: vi.fn() };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const render = (state: ItemSpaceState | null) => <LibraryItemHeader item={selectionItem} providers={[]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} space={state} />;
+  const button = () => host.querySelector<HTMLButtonElement>(".library-space-slot button")!;
+  try {
+    await act(async () => root.render(render(space)));
+    expect(host.querySelector(".library-space-state")?.textContent).toBe("api-reviewNot selected");
+    expect(button().textContent).toBe("Add to Space");
+    expect(button().getAttribute("aria-label")).toBe("Add Deployment notes to api-review");
+    await act(async () => button().click());
+    expect(space.onAdd).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".library-space-state")?.textContent).toContain("Not selected");
+
+    button().focus();
+    await act(async () => root.render(render({ ...space, adding: true, busy: true })));
+    expect(button().textContent).toBe("Adding…");
+    expect(button().getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(button());
+    await act(async () => button().click());
+    expect(space.onAdd).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.render(render({ ...space, error: "Couldn't select for api-review. Permission denied." })));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Couldn't select for api-review. Permission denied.");
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Retry adding Deployment notes to api-review"]')!.click());
+    expect(space.onAdd).toHaveBeenCalledTimes(2);
+
+    const selected = { ...space, selected: true };
+    await act(async () => root.render(render(selected)));
+    expect(host.querySelector(".library-space-state")?.textContent).toBe("api-reviewSelected");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(button().textContent).toBe("Remove from Space");
+    expect(button().getAttribute("title")).toContain("keep it in the Library");
+    await act(async () => button().click());
+    expect(space.onRemove).toHaveBeenCalledTimes(1);
+    expect(actions.remove).not.toHaveBeenCalled();
+    expect(host.querySelector(".library-space-state")?.textContent).toContain("Selected");
+
+    await act(async () => root.render(render({ ...selected, busy: true })));
+    expect(button().textContent).toBe("Removing…");
+    await act(async () => button().click());
+    expect(space.onRemove).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".library-space-state")?.textContent).toBe("api-reviewSelected");
+
+    await act(async () => root.render(render({ ...selected, error: "Couldn't remove Deployment notes from api-review. Disk error." })));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Disk error.");
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Retry removing Deployment notes from api-review"]')!.click());
+    expect(space.onRemove).toHaveBeenCalledTimes(2);
+
+    await act(async () => root.render(render(null)));
+    expect(host.querySelector(".library-space-state")).toBeNull();
+    expect(host.querySelector(".library-space-slot")).toBeNull();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(actions.refresh).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it.each([false, true])("keeps the selection toggle in the narrow menu when selected=%s", async (selected) => {
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: true, refreshBusy: false };
+  const space: ItemSpaceState = { label: "api-review", selected, adding: false, busy: false, error: null, onAdd: vi.fn(), onRemove: vi.fn() };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const render = (state: ItemSpaceState) => <LibraryItemHeader item={selectionItem} providers={[]} narrow rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} space={state} />;
+  try {
+    await act(async () => root.render(render(space)));
+    expect(host.querySelector(".library-space-slot button")).toBeNull();
+    expect(host.querySelector(".library-space-state")?.textContent).toBe(`api-review${selected ? "Selected" : "Not selected"}`);
+    await act(async () => host.querySelector<HTMLButtonElement>("button.library-more")!.click());
+    const toggle = [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((entry) => entry.textContent === (selected ? "Remove from Space" : "Add to Space"))!;
+    expect(toggle).toBeDefined();
+    expect(document.body.querySelector('[role="menu"]')?.textContent).not.toMatch(/Update in|Replace in|Library version/);
+    await act(async () => toggle.click());
+    expect(selected ? space.onRemove : space.onAdd).toHaveBeenCalledTimes(1);
+    expect(actions.remove).not.toHaveBeenCalled();
+
+    await act(async () => root.render(render({ ...space, adding: !selected, busy: true })));
+    expect(host.querySelector(".library-space-slot [role='status']")?.textContent).toBe(selected ? "Removing…" : "Adding…");
+    await act(async () => host.querySelector<HTMLButtonElement>("button.library-more")!.click());
+    const pendingToggle = [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((entry) => entry.textContent === (selected ? "Removing…" : "Adding…"))!;
+    expect(pendingToggle.disabled).toBe(true);
+    expect(actions.refresh).not.toHaveBeenCalled();
+  } finally {
     await act(async () => root.unmount());
     host.remove();
   }

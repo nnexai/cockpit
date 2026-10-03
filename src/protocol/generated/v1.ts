@@ -331,7 +331,7 @@ export type LibraryAttachment = { attachment_id: string, original_name: string, 
 
 export type LibraryFolderInfo = { origin_path: string, git_working_tree: boolean, files: number, bytes: number, skipped_symlinks: number, skipped_special: number, skipped_ignored: number, skipped_other: number, };
 
-export type LibraryItemRef = { "kind": "manual" } | { "kind": "follow", follow_id: string, } | { "kind": "space", companion_root_id: string, };
+export type LibraryItemRef = { "kind": "manual" } | { "kind": "follow", follow_id: string, } | { "kind": "space", space_context_id: string, };
 
 export type LibraryInclusionHolder = { "kind": "item", item_id: string, } | { "kind": "follow", follow_id: string, };
 
@@ -379,7 +379,7 @@ export type LibraryAttachmentAction = "download" | "remove_downloaded";
 
 export type LibraryAttachmentRequest = { item_id: string, attachment_ids: Array<string>, action: LibraryAttachmentAction, };
 
-export type LibraryOperationKind = "add" | "refresh" | "space_add" | "space_update" | "attachments";
+export type LibraryOperationKind = "add" | "refresh" | "space_add" | "attachments";
 
 export type LibraryPhaseName = "library" | "space";
 
@@ -393,9 +393,7 @@ export type LibraryReportRow = { item_id: string | null, follow_id: string | nul
 
 export type LibraryRefreshReport = { new: number, updated: number, unchanged: number, removed_at_source: number, dropped: number, partial: number, failed: number, conflict: number, rows: Array<LibraryReportRow>, truncated_rows: boolean, };
 
-export type SpaceCopyMode = "reflink" | "copy" | "mixed";
-
-export type SpacePhaseResult = { space_id: string, copy_mode: SpaceCopyMode | null, written: Array<string>, skipped_edited: Array<string>, companion_root_id: string | null, };
+export type SpacePhaseResult = { space_id: string, item_ids: Array<string>, };
 
 export type LibraryOperation = { operation_id: string, kind: LibraryOperationKind, phases: Array<LibraryPhase>, item_ids: Array<string>, report: LibraryRefreshReport | null, space: SpacePhaseResult | null, target: SpaceTarget | null, cancel_requested: boolean, finished: boolean, created_at: string, updated_at: string, };
 
@@ -409,31 +407,15 @@ export type LibraryDocumentRequest = { path: string, expected_revision: string |
 
 export type LibraryMediaRequest = { path: string, expected_revision: string | null, };
 
-export type SpaceCopyState = "up_to_date" | "library_newer" | "edited_in_space" | "removed_at_source" | "missing_in_space" | "not_in_library" | "not_linked";
-
-export type SpaceFollowSummary = { follow_id: string, space_key: string, page_count: number, new_pages: number, changed_pages: number, edited_pages: number, removed_at_source_pages: number, };
-
-export type SpaceCopyRow = { item_id: string | null, logical_id: string, title: string, provider_id: string | null, resource_type: string | null, kind: LibraryItemKind, state: SpaceCopyState, library_newer: boolean, paths: Array<string>, edited: Array<LibraryConflictFile>, copy_mode: SpaceCopyMode | null, library_revision_copied: string | null, current_library_revision: string | null, follow: SpaceFollowSummary | null, };
-
-export type SpaceAddAttemptState = "pending" | "failed";
-
-export type SpaceAddAttempt = { target: SpaceTarget, space_label: string | null, item_id: string | null, follow_id: string | null, title: string, state: SpaceAddAttemptState, error: ErrorResponse | null, operation_id: string, updated_at: string, };
-
-export type SpaceCompanionStatus = { "status": "available", companion_root_id: string, companion_label: string, } | { "status": "unavailable", error: ErrorResponse, };
-
 export type SpaceContextRequest = { target: SpaceTarget, };
 
-export type SpaceContextListing = { target: SpaceTarget, companion: SpaceCompanionStatus, attempts: Array<SpaceAddAttempt>, rows: Array<SpaceCopyRow>, behind: number, diagnostics: Array<ProjectDiagnostic>, };
+export type SpaceContextListing = { target: SpaceTarget, space_label: string, library_root: string, checkout_path: string | null, items: Array<LibraryItemSummary>, repository_paths: Array<string>, diagnostics: Array<ProjectDiagnostic>, };
 
-export type SpaceAddRequest = { target: SpaceTarget, item_ids: Array<string>, follow_ids: Array<string>, };
+export type SpaceAddRequest = { target: SpaceTarget, item_ids: Array<string>, };
 
-export type SpaceAttemptsDismissRequest = { target: SpaceTarget, item_ids: Array<string>, follow_ids: Array<string>, };
+export type SpaceRepositoriesRequest = { target: SpaceTarget, repository_paths: Array<string>, };
 
-export type SpaceUpdateScope = { "scope": "selection", item_ids: Array<string>, follow_ids: Array<string>, } | { "scope": "all", };
-
-export type SpaceUpdateRequest = { target: SpaceTarget, scope: SpaceUpdateScope, replace_edited: Array<LibraryConflictFile>, };
-
-export type SpaceRemoveRequest = { target: SpaceTarget, logical_id: string, confirmed: Array<LibraryConflictFile>, };
+export type SpaceRemoveRequest = { target: SpaceTarget, item_ids: Array<string>, };
 
 export type RepositoryCandidate = { repository_id: string, name: string, root: string, checkout_path: string, common_dir: string, branch: string | null, is_linked_worktree: boolean, is_detached: boolean, provenance: string, };
 
@@ -471,7 +453,7 @@ linked_artifact_urls: Array<string>, focus: boolean, } | { "operation": "open", 
 
 export type ProjectArtifact = { provider_id: string, kind: string, canonical_id: string, original_url: string, canonical_url: string, };
 
-export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate | null, mode: WorkspaceSetupMode, ownership: WorkspaceCheckoutOwnership, branch: string | null, base: string | null, checkout_path: string, companion_path: string, companion_id: string, companion_created_by_operation: boolean, label: string, focus: boolean, artifact: ProjectArtifact | null, linked_artifacts: Array<ProjectArtifact>, effects: Array<string>, warnings: Array<string>, };
+export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate | null, mode: WorkspaceSetupMode, ownership: WorkspaceCheckoutOwnership, branch: string | null, base: string | null, checkout_path: string, label: string, focus: boolean, artifact: ProjectArtifact | null, linked_artifacts: Array<ProjectArtifact>, effects: Array<string>, warnings: Array<string>, };
 
 export type WorkspaceOperationRequest = { operation_id: string, expected_generation: number, };
 
@@ -481,17 +463,17 @@ export type WorkspaceReconcileRequest = { operation_id: string, expected_generat
 
 export type WorkspaceOperationState = "planned" | "running" | "completed" | "partial" | "outcome_unknown" | "cancelled" | "needs_review";
 
-export type WorkspaceOperationStep = "planned" | "validated" | "herdr_requested" | "herdr_observed" | "worktree_ready" | "workspace_verified" | "companion_ready" | "context_preparing" | "context_ready" | "environment_requested" | "environment_ready" | "completed";
+export type WorkspaceOperationStep = "planned" | "validated" | "herdr_requested" | "herdr_observed" | "worktree_ready" | "workspace_verified" | "context_preparing" | "context_ready" | "environment_requested" | "environment_ready" | "completed";
 
 export type WorkspaceOwnedResource = { kind: string, path: string, created_by_operation: boolean, };
 
-export type WorkspaceOperation = { operation_id: string, generation: number, sequence: number, session_id: string, plan: WorkspaceSetupPlan, state: WorkspaceOperationState, step: WorkspaceOperationStep, workspace_id: string | null, tab_id: string | null, pane_id: string | null, companion_id: string | null, owned_resources: Array<WorkspaceOwnedResource>, error: ErrorResponse | null, resume_allowed: boolean, cancel_requested: boolean, updated_at: string, };
+export type WorkspaceOperation = { operation_id: string, generation: number, sequence: number, session_id: string, plan: WorkspaceSetupPlan, state: WorkspaceOperationState, step: WorkspaceOperationStep, workspace_id: string | null, tab_id: string | null, pane_id: string | null, owned_resources: Array<WorkspaceOwnedResource>, error: ErrorResponse | null, resume_allowed: boolean, cancel_requested: boolean, updated_at: string, };
 
 export type ViewerSourceKind = "context" | "review";
 
 export type ViewerKind = "files" | "review";
 
-export type ViewerSourceSelector = { "kind": "files_context" } | { "kind": "files_folder" } | { "kind": "review", repository_id: string, };
+export type ViewerSourceSelector = { "kind": "files_context", } | { "kind": "files_folder", } | { "kind": "files_repository", root_id: string, } | { "kind": "review", repository_id: string, };
 
 export type ViewerSourceOptions = { session_id: string, pane_id: string, tab_id: string, space_id: string, files_context_root_id: string | null, files_folder_root_id: string | null, review_repository_ids: Array<string>, roots: Array<ContextRoot>, reason: string, diagnostics: Array<ProjectDiagnostic>, };
 
@@ -499,9 +481,9 @@ export type ViewerOpenRequest = { tab_id: string, kind: ViewerKind, source_pane_
 
 export type ViewerContext = { session_id: string, viewer_id: string, binding_id: string, tab_id: string, space_id: string, kind: ViewerKind, source_kind: ViewerSourceKind, source_id: string, roots: Array<ContextRoot>, default_root_id: string | null, diagnostics: Array<ProjectDiagnostic>, };
 
-export type ContextRootKind = "repository" | "companion" | "folder" | "library";
+export type ContextRootKind = "repository" | "folder" | "library";
 
-export type ContextRoot = { root_id: string, kind: ContextRootKind, label: string, path: string, repository_id: string, checkout_path: string, companion_id: string | null, };
+export type ContextRoot = { root_id: string, kind: ContextRootKind, label: string, path: string, repository_id: string, checkout_path: string, };
 
 export type ContextDirectoryRequest = { binding_id: string, root_id: string, path: string, offset?: number, revision?: string, };
 
@@ -631,27 +613,25 @@ export type CommentPasteReceipt = { operation_id: string, request_id: string, ba
  */
 user_confirmed: boolean, };
 
-export type WorkspaceTeardownAction = "close_space" | "remove_owned_worktree" | "reconcile_remove_outcome" | "remove_orphaned_companion" | "forget_association";
+export type WorkspaceTeardownAction = "close_space" | "remove_owned_worktree" | "reconcile_remove_outcome";
 
-export type WorkspaceTeardownOwnership = "owned_created" | "borrowed_opened" | "foreign" | "unknown";
+export type WorkspaceTeardownOwnership = "owned_created" | "borrowed_opened" | "unknown";
 
 export type WorkspaceTeardownDirtyState = "clean" | "dirty" | "unknown";
 
 export type WorkspaceTeardownWorkspaceState = "live" | "missing" | "ambiguous";
 
-export type WorkspaceTeardownCompanionState = "owned" | "missing" | "foreign" | "ambiguous";
-
 export type WorkspaceTeardownPreviewRequest = { workspace_id: string, };
 
 export type WorkspaceTeardownExecuteRequest = { operation_id: string, workspace_id: string, expected_endpoint_identity: string, expected_checkout_path: string, action: WorkspaceTeardownAction, confirmation: string, };
 
-export type WorkspaceTeardownPreview = { operation_id: string, workspace_id: string, endpoint_identity: string, repository_key: string | null, repository_root: string | null, checkout_path: string, ownership: WorkspaceTeardownOwnership, workspace_state: WorkspaceTeardownWorkspaceState, companion_state: WorkspaceTeardownCompanionState, is_linked_worktree: boolean, dirty_state: WorkspaceTeardownDirtyState, companion_path: string | null, allowed_actions: Array<WorkspaceTeardownAction>, blockers: Array<string>, warnings: Array<string>, required_confirmation: string | null, };
+export type WorkspaceTeardownPreview = { operation_id: string, workspace_id: string, endpoint_identity: string, repository_key: string | null, repository_root: string | null, checkout_path: string, ownership: WorkspaceTeardownOwnership, workspace_state: WorkspaceTeardownWorkspaceState, is_linked_worktree: boolean, dirty_state: WorkspaceTeardownDirtyState, allowed_actions: Array<WorkspaceTeardownAction>, blockers: Array<string>, warnings: Array<string>, required_confirmation: string | null, };
 
-export type WorkspaceTeardownOutcome = "completed" | "outcome_unknown" | "orphaned_companion" | "retained";
+export type WorkspaceTeardownOutcome = "completed" | "outcome_unknown" | "retained";
 
 export type WorkspaceTeardownResult = { operation_id: string, workspace_id: string, action: WorkspaceTeardownAction, outcome: WorkspaceTeardownOutcome, message: string, };
 
-export type WorkspaceTeardownRecoveryState = "pending" | "outcome_unknown" | "orphaned_companion";
+export type WorkspaceTeardownRecoveryState = "pending" | "outcome_unknown";
 
 export type WorkspaceTeardownRecovery = { operation_id: string, workspace_id: string, checkout_path: string, state: WorkspaceTeardownRecoveryState, };
 

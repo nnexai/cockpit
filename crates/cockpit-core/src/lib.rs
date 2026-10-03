@@ -6,7 +6,6 @@ pub mod ephemeral;
 pub mod comments;
 pub mod config;
 pub mod context;
-pub mod context_assets;
 pub mod context_media;
 pub mod context_search;
 pub mod credentials;

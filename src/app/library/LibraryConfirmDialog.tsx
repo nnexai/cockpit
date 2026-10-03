@@ -1,11 +1,9 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { CockpitClient } from "../../client/CockpitClient";
-import type { LibraryFollowSummary, LibraryOperation, SpaceCopyRow } from "../../protocol/generated/v1";
+import type { LibraryFollowSummary } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { ErrorSlot } from "../ErrorSlot";
-import { errorCode, errorText, followCountText, followTitle, type LibrarySpace } from "./libraryState";
-import { announceLibraryChanged } from "./useLibraryOperation";
+import { errorText, followCountText, followTitle } from "./libraryState";
 import "../projects/setup.css";
 import "../projects/taskSetup.css";
 import "./library.css";
@@ -117,7 +115,7 @@ export type FollowRemoveMode = "stop_following" | "follow";
  * Remove a followed space or query (design §4.10): `Cancel` is focused, `Stop
  * following only` keeps every item, and `Remove` deletes the items only this
  * follow holds from the Library. Items kept manually or held by another follow
- * stay. Space copies are never touched.
+ * stay, as do items selected by a Space.
  */
 export function FollowRemoveDialog({ follow, remove, onClose }: {
   follow: LibraryFollowSummary;
@@ -128,62 +126,8 @@ export function FollowRemoveDialog({ follow, remove, onClose }: {
   const query = follow.source.kind === "jira_query";
   const noun = query ? "query" : "space";
   return <LibraryConfirmDialog title={`Remove ${followTitle(follow)} from the Library?`} safeLabel="Cancel" confirmLabel={`Remove ${noun}`} destructive
-    body={<p>{`Deletes the items only this ${noun} holds (up to ${followCountText(follow)}) from the Library and stops following it. Items you kept in the Library or that another follow holds stay. Copies already in Spaces stay as they are and stop receiving updates. ${query ? "Jira" : "Confluence"} isn't changed.`}</p>}
+    body={<p>{`Deletes items only this ${noun} holds (up to ${followCountText(follow)}) from the Library and stops following it. Items selected by a Space, kept in the Library, or held by another follow stay. ${query ? "Jira" : "Confluence"} isn't changed.`}</p>}
     alternative={{ label: "Stop following only", onConfirm: () => remove("stop_following") }}
     onConfirm={() => remove("follow")} onClose={onClose} />;
 }
 
-export type SpaceCopyConfirmation = { kind: "replace" | "remove"; row: SpaceCopyRow };
-
-/** Why a confirmed replace or removal changed nothing: the copy's files no longer match what was confirmed. */
-export function spaceCopyConflict(space: string): string {
-  return `${space}'s copy changed since it was checked, so nothing was changed. Review it and try again.`;
-}
-
-/**
- * Replace an edited Space copy or remove a copy from one Space (design §4.10).
- * The request confirms exactly the edited files and hashes listed here; if the
- * copy changed since, Cockpit refuses it, the files are kept, and `onConflict`
- * lets the surface reread the Space before the user tries again.
- */
-export function SpaceCopyConfirmDialog({ client, space, confirmation, onReplacing, onConflict, onClose }: {
-  client: CockpitClient;
-  space: LibrarySpace;
-  confirmation: SpaceCopyConfirmation;
-  /** The replace Cockpit just accepted; the surface tracks it like an update it started, so its finish rereads the Space. */
-  onReplacing: (operation: LibraryOperation) => void;
-  onConflict: () => void;
-  onClose: () => void;
-}) {
-  const { kind, row } = confirmation;
-  const edited = row.edited.length > 0;
-  const files = edited ? <ul className="library-progress-files">{row.edited.map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul> : null;
-  const confirm = async () => {
-    try {
-      if (kind === "replace") {
-        if (!row.item_id) throw new Error("This copy has no Library item to replace it from.");
-        onReplacing(await client.librarySpaceUpdate({ target: space.target, scope: { scope: "selection", item_ids: [row.item_id], follow_ids: [] }, replace_edited: row.edited }));
-      } else {
-        await client.librarySpaceRemove({ target: space.target, logical_id: row.logical_id, confirmed: row.edited });
-        // Every surface rereads this Space's copies and its companion files.
-        announceLibraryChanged();
-      }
-      onClose();
-    } catch (cause) {
-      if (errorCode(cause) !== "space_copy_conflict") throw cause;
-      onConflict();
-      onClose();
-    }
-  };
-  if (kind === "replace") {
-    return <LibraryConfirmDialog title={`Replace your edited copy of "${row.title}"?`} safeLabel="Keep my copy" confirmLabel="Replace with Library version" destructive
-      body={<><p>{space.label}'s copy has edits. Replacing it with the Library version discards those edits.</p>{files}</>}
-      onConfirm={confirm} onClose={onClose} />;
-  }
-  const effect = edited
-    ? `Deletes ${space.label}'s copy, including your edits.${row.item_id ? " The Library item stays, but your edits can't be restored from it." : ""}`
-    : `Deletes ${space.label}'s copy.${row.item_id ? " The Library item stays." : ""}`;
-  return <LibraryConfirmDialog title={`Remove "${row.title}" from ${space.label}?`} safeLabel="Cancel" confirmLabel={`Remove from ${space.label}`} destructive
-    body={<><p>{effect}</p>{files}</>}
-    onConfirm={confirm} onClose={onClose} />;
-}

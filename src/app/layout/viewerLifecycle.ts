@@ -44,7 +44,9 @@ function enqueue(current: ViewerOperation, run: () => Promise<void>): Promise<vo
 }
 
 function source(selector: ViewerSelector): ViewerSourceSelector {
-  return selector.kind === "review" ? { kind: "review", repository_id: selector.repositoryId } : { kind: selector.kind };
+  if (selector.kind === "review") return { kind: "review", repository_id: selector.repositoryId };
+  if (selector.kind === "files_repository") return { kind: "files_repository", root_id: selector.rootId };
+  return { kind: selector.kind };
 }
 
 export function viewerErrorCode(error: unknown): string | undefined {

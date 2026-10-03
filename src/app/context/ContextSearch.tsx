@@ -189,7 +189,7 @@ export function ContextSearch({
   return (
     <section className="context-search" aria-label="Search Context">
       <form className="context-search-form" onSubmit={(event) => { event.preventDefault(); void runSearch(); }}>
-        <label htmlFor={queryId}>Search companion</label>
+        <label htmlFor={queryId}>Search contents</label>
         <input
           id={queryId}
           type="search"
@@ -206,7 +206,7 @@ export function ContextSearch({
             setPartialReason(null);
           }}
           maxLength={256}
-          placeholder="Find text in companion files"
+          placeholder="Find text in context files"
         />
         <button type="submit" disabled={searching || !query.trim()}>{searching ? "Searching…" : nextOffset !== null ? "Load more" : "Search"}</button>
       </form>

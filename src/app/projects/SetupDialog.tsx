@@ -154,7 +154,6 @@ export function operationStatusMessage(operation: Pick<WorkspaceOperation, "stat
       return "Creating the worktree and Space…";
     case "worktree_ready":
     case "workspace_verified":
-    case "companion_ready":
       return "Preparing the Space…";
     case "environment_requested":
     case "environment_ready":

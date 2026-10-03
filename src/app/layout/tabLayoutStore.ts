@@ -7,7 +7,7 @@ import { reconcileSnapshot, settleCreation, type FocusEcho, type LayoutEffect, t
 export type { LayoutEffect } from "./reconcile";
 
 export type FocusTriple = { spaceId: string | null; tabId: string | null; paneId: string | null };
-export type ViewerSelector = { kind: "files_context" | "files_folder" } | { kind: "review"; repositoryId: string };
+export type ViewerSelector = { kind: "files_context" | "files_folder" } | { kind: "files_repository"; rootId: string } | { kind: "review"; repositoryId: string };
 export type ViewerSlot<Context = ViewerContext, View = unknown> = {
   status: "opening" | "open" | "error"; selector: ViewerSelector; sourcePaneId: string;
   context: Context | null; viewsBySource: Record<string, View>; error: string | null; requestId?: string;

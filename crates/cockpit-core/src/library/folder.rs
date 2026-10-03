@@ -1,5 +1,5 @@
 use super::*;
-use crate::context_assets::{create_parent, excluded_source_path, git_inventory, git_output,
+use super::folder_io::{create_parent, excluded_source_path, git_inventory, git_output,
     open_absolute_dir_nofollow, read_stable_source_bounded, source_root_revalidate};
 use crate::project_store::atomic_write_bytes;
 use cap_fs_ext::DirExt;
@@ -95,7 +95,7 @@ async fn inventory(configuration: &ProjectConfiguration, input: &str) -> Result<
         files: 0, bytes: 0, skipped_symlinks: 0, skipped_special: 0, skipped_ignored: 0, skipped_other: 0 };
     let mut diagnostics = vec![];
     let mut paths = if is_git {
-        let (paths, gitlinks, excluded, _, _) = git_inventory(configuration, &path).await?;
+        let (paths, gitlinks, excluded) = git_inventory(configuration, &path).await?;
         info.skipped_ignored = excluded.len() as u32;
         info.skipped_other = gitlinks.len() as u32;
         for link in gitlinks {
@@ -196,21 +196,20 @@ impl LibraryService {
             let old = service.entry(&worker_store, &item_id)?;
             if old.is_some() && !request.refresh_existing {
                 let old = old.as_ref().unwrap();
-                if let Some(target) = &request.target { space::prepare_saved_item(&worker_store, &id, target, &old.summary)?; }
                 operations::row(&worker_store, &id, Some(&old.summary), LibraryReportOutcome::Unchanged, Some("Already saved in Library".into()))?;
             } else {
-                service.save_folder(&worker_store, &id, &path.to_string_lossy(), request.label.as_deref(), old, None, request.target.as_ref()).await?;
+                service.save_folder(&worker_store, &id, &path.to_string_lossy(), request.label.as_deref(), old, None).await?;
             }
             if let Some(target) = &request.target {
                 let saved = operations::get(&worker_store, &id)?.item_ids;
-                if !saved.is_empty() { service.copy_saved_items(&worker_store, &id, target, &saved).await?; }
+                service.select_saved_items(&worker_store, &id, target, &saved).await?;
             }
             Ok(())
         });
         Ok(record)
     }
     pub(super) async fn save_folder(&self, store: &Arc<Store>, operation: &str, input: &str,
-        label: Option<&str>, old: Option<LibraryIndexEntry>, confirmed: Option<&[LibraryConflictFile]>, target: Option<&SpaceTarget>) -> Result<(), InspectionError> {
+        label: Option<&str>, old: Option<LibraryIndexEntry>, confirmed: Option<&[LibraryConflictFile]>) -> Result<(), InspectionError> {
         if let Some(old) = &old {
             let check = { let _lock = store.shared()?; store.check_confirmation(old, confirmed) };
             if let Err(e) = check {
@@ -269,12 +268,10 @@ impl LibraryService {
             let old = old.as_ref().unwrap();
             entry.inventory = old.inventory.clone();
             entry.summary.fetched_at = old.summary.fetched_at.clone();
-            if let Some(target) = target { space::prepare_saved_item(store, operation, target, &entry.summary)?; }
             store.update(entry.clone())?;
         } else {
             store.seal(&stage, &mut entry, files)?;
             if operations::cancelled(store, operation)? { return Ok(()); }
-            if let Some(target) = target { space::prepare_saved_item(store, operation, target, &entry.summary)?; }
             if let Err(e) = store.publish(stage, entry.clone(), old.as_ref().map(|e| e.summary.revision.as_str()), confirmed) {
                 if e.code == "library_conflict" {
                     if let Some(old) = old { return self.record_conflict(store, operation, old, e.message); }

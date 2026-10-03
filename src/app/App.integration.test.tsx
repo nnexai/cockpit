@@ -11,6 +11,7 @@ import type * as ContextViewerModule from "./context/ContextViewer";
 import type { ContextViewerProps } from "./context/ContextViewer";
 import type {
   BrowserAssociation,
+  CommentBatch,
   ResourceMutationRequest,
   ResourceMutationResponse,
   ViewerContext,
@@ -23,6 +24,7 @@ import type {
   SpaceGitActionResponse,
 } from "../protocol/generated/v1";
 import { App } from "./App";
+import { FILE_NAVIGATION_EVENT } from "./input/fileNavigation";
 
 const terminalReadyCallbacks = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("./TerminalPane", () => ({
@@ -55,11 +57,12 @@ vi.mock("./TerminalPane", () => ({
   },
 }));
 
+const realViewerClients = vi.hoisted(() => new WeakSet<object>());
 vi.mock("./context/ContextViewer", async importOriginal => {
   const actual = await importOriginal<typeof ContextViewerModule>();
   return {
     ...actual,
-    ContextViewer: (props: ContextViewerProps) => props.context
+    ContextViewer: (props: ContextViewerProps) => props.context && !realViewerClients.has(props.client)
       ? <button type="button" data-testid="files-content">Files content</button>
       : <actual.ContextViewer {...props} />,
   };
@@ -139,9 +142,9 @@ function viewerSources(sessionId: string, paneId: string): ViewerSourceOptions {
   return {
     session_id: sessionId, pane_id: paneId, tab_id: paneId === "pane-2" ? "tab-2" : "tab-1", space_id: "space-1",
     files_context_root_id: null, files_folder_root_id: "folder", review_repository_ids: ["repository"],
-    roots: [{ root_id: "repository", kind: "repository", label: "Repository", path: "/repository", repository_id: "repository", checkout_path: "/repository", companion_id: null },
-      { root_id: "folder", kind: "folder", label: "Files", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }],
-    reason: "Context requires a configured companion directory", diagnostics: [],
+    roots: [{ root_id: "repository", kind: "repository", label: "Repository", path: "/repository", repository_id: "repository", checkout_path: "/repository" },
+      { root_id: "folder", kind: "folder", label: "Files", path: "/folder", repository_id: "folder", checkout_path: "/folder" }],
+    reason: "Library context requires a live Space", diagnostics: [],
   };
 }
 
@@ -232,8 +235,8 @@ class AppFixture {
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
     contextMedia: vi.fn(),
-    librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, companion: { status: "available" as const, companion_root_id: "companion:fixture", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
-    librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(),
+    librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, space_label: "Fixture Space", library_root: "/data/cockpit/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] })),
+    librarySpaceAdd: vi.fn(), librarySpaceRemove: vi.fn(), librarySpaceRepositories: vi.fn(),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -520,7 +523,7 @@ describe("mounted App mutation and session ordering", () => {
     expect(fixture.mutateCalls).not.toHaveBeenCalled();
   });
 
-  it("opens files from the local pane menu without a task companion", async () => {
+  it("opens files from the local pane menu without Library context", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
     openLocalPaneMenu();
@@ -534,6 +537,85 @@ describe("mounted App mutation and session ordering", () => {
     expect(container.querySelector('[data-testid="files-content"]')).not.toBeNull();
     expect(terminal("pane-1")).not.toBeNull();
     expect(fixture.mutateCalls).not.toHaveBeenCalled();
+  });
+
+  it("keeps the actual Files Add context Source focused across delayed pane focus and path typing", async () => {
+    const fixture = new AppFixture();
+    realViewerClients.add(fixture.client);
+    emptyLibrary(fixture);
+    vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
+      version: 1, repository_roots: [], worktree_root: "", companion_root: "", state_root: "", cache_root: "",
+      library_root: "/data/cockpit/library", branch_template: "", checkout_template: "", providers: [], origins: {},
+      limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
+        context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
+        library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,
+        library_attachment_bytes: 1, library_item_attachment_bytes: 1, library_max_items: 1 },
+    });
+    vi.mocked(fixture.client.contextDirectory).mockImplementation(async (_sessionId, _viewerId, request) => ({
+      ...request, entries: [], truncated: false, diagnostics: [],
+    }));
+    const owner: CommentBatch["owner"] = { kind: "viewer", session_id: "session-1", server_instance: snapshot("session-1").server_instance, tab_id: "tab-1", source_kind: "context", source_id: "folder" };
+    vi.mocked(fixture.client.commentBatch).mockResolvedValue({
+      batch_id: "comments", generation: 1, owner, last_known_location: { workspace_id: "space-1", tab_id: "tab-1" },
+      live_attachment: { owner, location: { workspace_id: "space-1", tab_id: "tab-1" }, binding_id: "binding-pane-1", client_id: "client" }, drafts: [], updated_at: "now",
+    });
+    await mount(fixture);
+    openLocalPaneMenu();
+    await settle();
+    click(button("Files"));
+    await settle();
+    const pane = leaf("tab-1:files");
+    const rootSelect = pane.querySelector<HTMLSelectElement>(".context-root-select select")!;
+    act(() => { rootSelect.value = "library"; rootSelect.dispatchEvent(new Event("change", { bubbles: true })); });
+    await settle();
+    const add = [...pane.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find(candidate => candidate.textContent === "Add…")!;
+    expect(add).toBeDefined();
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => { frames.push(callback); return frames.length; });
+    act(() => {
+      add.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      add.focus();
+    });
+    click(add);
+    await settle();
+    const modal = document.body.querySelector<HTMLElement>('[role="dialog"].library-add')!;
+    const sourceLabel = [...modal.querySelectorAll<HTMLLabelElement>("label")].find(candidate => candidate.textContent === "Source")!;
+    const input = document.getElementById(sourceLabel.htmlFor) as HTMLInputElement;
+    expect(pane.contains(input)).toBe(false);
+    expect(document.activeElement).toBe(input);
+    await act(async () => frames.splice(0).forEach(callback => callback(0)));
+    expect(document.activeElement).toBe(input);
+    act(() => {
+      input.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      input.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    });
+    await act(async () => frames.splice(0).forEach(callback => callback(0)));
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("");
+    expect(pane.querySelector('[role="dialog"][aria-label="Go to file"]')).toBeNull();
+    for (const key of "/tmp/context") {
+      act(() => {
+        const keydown = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        input.dispatchEvent(keydown);
+        expect(keydown.defaultPrevented).toBe(false);
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, input.value + key);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true }));
+      });
+      await settle();
+      await act(async () => frames.splice(0).forEach(callback => callback(0)));
+      expect(document.activeElement).toBe(input);
+      expect(pane.querySelector('[role="dialog"][aria-label="Go to file"]')).toBeNull();
+    }
+    act(() => window.dispatchEvent(new CustomEvent(FILE_NAVIGATION_EVENT, { detail: { action: "open-picker" } })));
+    expect(input.value).toBe("/tmp/context");
+    expect(document.activeElement).toBe(input);
+    expect(pane.querySelector('[role="dialog"][aria-label="Go to file"]')).toBeNull();
+    act(() => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await settle();
+    await act(async () => frames.splice(0).forEach(callback => callback(0)));
+    expect(document.body.querySelector(".library-add")).toBeNull();
+    expect(document.activeElement).toBe(add);
   });
 
   it("keeps local pane actions and Commands available for the selected single pane", async () => {
@@ -917,7 +999,7 @@ describe("mounted App mutation and session ordering", () => {
 
 function emptyLibrary(fixture: AppFixture): void {
   vi.mocked(fixture.client.libraryListing).mockResolvedValue({
-    root: { root_id: "library:fixture", kind: "library", label: "Library", path: "/data/cockpit/library", repository_id: "", checkout_path: "", companion_id: null },
+    root: { root_id: "library:fixture", kind: "library", label: "Library", path: "/data/cockpit/library", repository_id: "", checkout_path: "" },
     generation: "1", items: [], follows: [], next_offset: null, diagnostics: [],
   });
 }
@@ -947,7 +1029,7 @@ describe("Library view presentation lifecycle", () => {
     await openLibraryFromPalette();
     expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
     expect(terminal("pane-1")).toBeNull();
-    // The selected Space is the view's `Add to <Space>` target; reading its copies asks Herdr for nothing.
+    // The selected Space is the view's `Add to <Space>` target; reading its selections does not mutate Herdr.
     expect(fixture.client.librarySpaceList).toHaveBeenCalledWith({ target: { session_id: "session-1", space_id: "space-1" } }, expect.any(AbortSignal));
     expect(container.contains(document.activeElement)).toBe(true);
     expect(document.activeElement).not.toBe(invoker);

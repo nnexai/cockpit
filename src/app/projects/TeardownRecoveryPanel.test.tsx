@@ -25,8 +25,8 @@ function preview(actions: WorkspaceTeardownPreview["allowed_actions"], confirmat
   return {
     operation_id: "operation-1", workspace_id: "space-1", endpoint_identity: "endpoint-1",
     repository_key: "repo", repository_root: "/repo", checkout_path: "/worktrees/task",
-    ownership: "owned_created", workspace_state: "missing", companion_state: "owned",
-    is_linked_worktree: true, dirty_state: "unknown", companion_path: "/companions/operation-1",
+    ownership: "owned_created", workspace_state: "missing",
+    is_linked_worktree: true, dirty_state: "unknown",
     allowed_actions: actions, blockers: ["the exact worktree is not live in the requested workspace"],
     warnings: [], required_confirmation: confirmation,
   };
@@ -37,18 +37,15 @@ function result(action: WorkspaceTeardownResult["action"], outcome: WorkspaceTea
 }
 
 describe("TeardownRecoveryPanel", () => {
-  it("reopens an absent-Space record, reconciles an unknown removal, then explicitly cleans the orphan", async () => {
+  it("reopens an absent-Space record and reconciles an unknown removal without additional cleanup", async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
     const workspaceTeardownPreview = vi.fn()
-      .mockResolvedValueOnce(preview(["reconcile_remove_outcome"], null))
-      .mockResolvedValueOnce(preview(["remove_orphaned_companion"], "REMOVE COMPANION"))
-      .mockResolvedValueOnce(preview([], null));
+      .mockResolvedValueOnce(preview(["reconcile_remove_outcome"], null));
     const workspaceTeardownExecute = vi.fn()
-      .mockResolvedValueOnce(result("reconcile_remove_outcome", "orphaned_companion"))
-      .mockResolvedValueOnce(result("remove_orphaned_companion", "completed"));
+      .mockResolvedValueOnce(result("reconcile_remove_outcome", "completed"));
     const client = {
       workspaceTeardownRecoveries: vi.fn(async () => ({
         recoveries: [{ operation_id: "operation-1", workspace_id: "space-1", checkout_path: "/worktrees/task", state: "outcome_unknown" as const }],
@@ -72,18 +69,9 @@ describe("TeardownRecoveryPanel", () => {
     await settle();
     await settle();
 
-    buttons = [...container.querySelectorAll("button")];
-    act(() => buttons.find((button) => button.textContent === "Remove orphaned companion")!.click());
-    const confirmation = container.querySelector<HTMLInputElement>("#teardown-confirmation")!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(confirmation, "REMOVE COMPANION");
-      confirmation.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    buttons = [...container.querySelectorAll("button")];
-    act(() => buttons.filter((button) => button.textContent === "Remove orphaned companion")[1]!.click());
-    await settle();
-
     expect(workspaceTeardownExecute).toHaveBeenNthCalledWith(1, "session-1", expect.objectContaining({ action: "reconcile_remove_outcome" }));
-    expect(workspaceTeardownExecute).toHaveBeenNthCalledWith(2, "session-1", expect.objectContaining({ action: "remove_orphaned_companion", confirmation: "REMOVE COMPANION" }));
+    expect(workspaceTeardownExecute).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("#teardown-confirmation")).toBeNull();
+    expect(container.textContent).toContain("completed");
   });
 });

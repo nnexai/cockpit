@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { LibraryOperation, SpaceContextListing, SpaceCopyRow, SpaceFollowSummary } from "../../protocol/generated/v1";
+import type { LibraryItemSummary, SpaceContextListing } from "../../protocol/generated/v1";
 import { SpaceContextList } from "./SpaceContextList";
 import { useSpaceContextListing } from "./useLibraryOperation";
 
@@ -11,70 +11,77 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const target = { session_id: "session", space_id: "space-x" };
 const space = { target, label: "X", live: true };
-
-function followRow(followId: string, key: string, name: string, counts: Partial<SpaceFollowSummary>): SpaceCopyRow {
-  const follow: SpaceFollowSummary = { follow_id: followId, space_key: key, page_count: 5, new_pages: 0, changed_pages: 0, edited_pages: 0, removed_at_source_pages: 0, ...counts };
-  const behind = follow.new_pages + follow.changed_pages > 0;
-  return {
-    item_id: null, logical_id: followId, title: `${key} · ${name}`, provider_id: "cloud", resource_type: null, kind: "provider_snapshot",
-    state: behind ? "library_newer" : "up_to_date", library_newer: behind, paths: [], edited: [], copy_mode: "reflink",
-    library_revision_copied: null, current_library_revision: null, follow,
-  };
-}
+const item: LibraryItemSummary = {
+  item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
+  canonical_id: "OPS-311", container: null, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
+  document_path: "jira/OPS-311.md", item_path: "jira/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "r1",
+  state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, refs: [{ kind: "manual" }], purge_after: null, issue: null, attachments: [], folder: null, diagnostics: [],
+};
 
 async function settle(): Promise<void> {
-  await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
+  let resolve!: () => void;
+  const promise = new Promise<void>((nextResolve) => { resolve = nextResolve; });
+  await act(async () => { window.setTimeout(resolve, 0); await promise; });
 }
 
-it("shows one aggregate row per followed space, and each row's Update writes only its own follow", async () => {
-  let rows = [
-    followRow("follow:sd", "SD", "Software Development", { new_pages: 1, changed_pages: 1 }),
-    followRow("follow:ops", "OPS", "Operations", { new_pages: 1, changed_pages: 1, edited_pages: 1 }),
-  ];
-  const updated: LibraryOperation = {
-    operation_id: "op-update-sd", kind: "space_update", item_ids: ["source:n", "source:a1"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-    phases: [{ phase: "space", state: "done", done: 2, total: 2, message: null, error: null }],
-    space: { space_id: "space-x", copy_mode: "reflink", written: ["confluence/nnexai.atlassian.net/SD - Software Development/Release Checklist/Release Checklist.md", "confluence/nnexai.atlassian.net/SD - Software Development/Home/Article 1/Article 1.md"], skipped_edited: [], companion_root_id: "companion:x" },
-  };
+function fixture() {
+  let listing: SpaceContextListing = { target, space_label: "api-review", library_root: "/data/library", checkout_path: "/repo", items: [item], repository_paths: [], diagnostics: [] };
   const client = {
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence" }] })),
-    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion: { status: "available", companion_root_id: "companion:x", companion_label: "X" }, attempts: [], rows, behind: rows.filter((row) => row.library_newer).length, diagnostics: [] })),
-    librarySpaceUpdate: vi.fn(async () => {
-      rows = [followRow("follow:sd", "SD", "Software Development", { page_count: 6 }), rows[1]!];
-      return updated;
-    }),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
+    librarySpaceList: vi.fn(async () => listing),
+    librarySpaceRemove: vi.fn(async () => { listing = { ...listing, items: [] }; return listing; }),
   } as unknown as CockpitClient;
   function Harness() {
     const state = useSpaceContextListing(client, target, true);
     return <SpaceContextList client={client} space={space} state={state} onAdd={vi.fn()} />;
   }
+  return { client, Harness };
+}
+
+it("removes only the selected item IDs without a copy confirmation", async () => {
+  const { client, Harness } = fixture();
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  const entry = (title: string) => [...host.querySelectorAll<HTMLElement>("[role='listitem']")].find((candidate) => candidate.querySelector(".context-source-title")?.textContent?.startsWith(title))!;
-  const chips = (title: string) => [...entry(title).querySelectorAll(".library-state")].map((chip) => chip.textContent);
   try {
     await act(async () => root.render(<Harness />));
     await settle();
-    expect([...host.querySelectorAll(".context-source-title")].map((title) => title.textContent)).toEqual(["OPS · Operations · 5 pages", "SD · Software Development · 5 pages"]);
-    expect(chips("SD")).toEqual(["Library newer: 1 new, 1 changed pages"]);
-    expect(chips("OPS")).toEqual(["Library newer: 1 new, 1 changed pages", "1 page edited in Space"]);
-    expect([...entry("SD").querySelectorAll(".context-source-chip:not(.library-state)")].map((chip) => chip.textContent)).toEqual(["Confluence", "followed space"]);
-    // Both follows count toward `Update all`; neither row offers item-only actions.
-    expect([...host.querySelectorAll("button")].map((button) => button.textContent)).toContain("Update all (2)");
-    expect([...entry("SD").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Update"]);
-
-    await act(async () => entry("SD").querySelector("button")!.click());
+    const remove = host.querySelector<HTMLButtonElement>('button[aria-label="Remove Rotate signing keys from api-review"]')!;
+    expect(remove.textContent).toBe("Remove from Space");
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Up to date");
+    await act(async () => remove.click());
     await settle();
-    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(1);
-    expect(client.librarySpaceUpdate).toHaveBeenCalledWith({ target, scope: { scope: "selection", item_ids: [], follow_ids: ["follow:sd"] }, replace_edited: [] });
-    // The reread shows SD current; OPS still has its new and changed pages and its own Update.
-    expect(chips("SD")).toEqual(["Up to date"]);
-    expect(entry("SD").textContent).toContain("SD · Software Development · 6 pages");
-    expect(entry("SD").querySelector("button")).toBeNull();
-    expect(chips("OPS")).toEqual(["Library newer: 1 new, 1 changed pages", "1 page edited in Space"]);
-    expect([...entry("OPS").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Update"]);
-    expect([...host.querySelectorAll("button")].map((button) => button.textContent)).toContain("Update all (1)");
+    expect(host.querySelector("[data-space-item]")).toBeNull();
+    expect(client.librarySpaceRemove).toHaveBeenCalledTimes(1);
+    expect(client.librarySpaceRemove).toHaveBeenCalledWith({ target, item_ids: [item.item_id] });
+    expect(host.textContent).toContain("Nothing selected for api-review yet.");
+    expect(document.body.querySelector(".library-confirm")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("keeps a selected row when removal fails and retries the same selection request", async () => {
+  const { client, Harness } = fixture();
+  vi.mocked(client.librarySpaceRemove).mockRejectedValueOnce(new Error("Disk error"));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Harness />));
+    await settle();
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Remove Rotate signing keys from api-review"]')!.click());
+    await settle();
+    const row = host.querySelector<HTMLElement>("[data-space-item]")!;
+    expect(row.textContent).toContain(item.title);
+    expect(row.querySelector('[role="alert"]')?.textContent).toContain("Couldn't remove Rotate signing keys from api-review. Disk error");
+    const retry = [...row.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry")!;
+    await act(async () => retry.click());
+    await settle();
+    expect(client.librarySpaceRemove).toHaveBeenCalledTimes(2);
+    expect(client.librarySpaceRemove).toHaveBeenLastCalledWith({ target, item_ids: [item.item_id] });
+    expect(host.querySelector("[data-space-item]")).toBeNull();
   } finally {
     await act(async () => root.unmount());
     host.remove();

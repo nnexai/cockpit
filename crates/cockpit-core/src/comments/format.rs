@@ -103,9 +103,15 @@ pub(super) fn format_batch(batch: &CommentBatch, retain_stale_excerpts: bool) ->
             stale_draft_ids.push(draft.draft_id.clone());
         }
 
+        let source_path = if batch.owner.source_identity().0 == cockpit_protocol::context::ViewerSourceKind::Context {
+            &draft.file_ref.absolute_path
+        } else {
+            &draft.file_ref.path
+        };
+
         match &draft.anchor {
             CommentAnchor::WholeFile => {
-                let (path, count) = sanitize(&draft.file_ref.path);
+                let (path, count) = sanitize(source_path);
                 sanitized_controls = sanitized_controls.saturating_add(count);
                 payload.push_str(&path);
                 payload.push_str(" (whole file)\n");
@@ -115,7 +121,7 @@ pub(super) fn format_batch(batch: &CommentBatch, retain_stale_excerpts: bool) ->
                 end_line,
                 selected_lines,
             } => {
-                let (path, count) = sanitize(&draft.file_ref.path);
+                let (path, count) = sanitize(source_path);
                 sanitized_controls = sanitized_controls.saturating_add(count);
                 payload.push_str(&path);
                 payload.push(':');
@@ -225,6 +231,31 @@ mod tests {
             comment_text: "this is a comment".to_owned(),
             source_state: CommentSourceState::Current,
             updated_at: "1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn context_headers_qualify_identical_filenames_by_their_actual_roots() {
+        let paths = ["/library/folders/Guide/README.md", "/selected-repository/README.md", "/folder/README.md"];
+        for path in paths {
+            let mut lines = review_draft(ReviewSide::New, 2, &["source\n"]);
+            lines.file_ref.review = None;
+            lines.file_ref.path = "README.md".to_owned();
+            lines.file_ref.absolute_path = path.to_owned();
+            let mut whole = lines.clone();
+            whole.draft_id = "whole".to_owned();
+            whole.anchor = CommentAnchor::WholeFile;
+            let mut batch = batch(vec![lines, whole]);
+            batch.owner = CommentOwner::Viewer {
+                session_id: "session".to_owned(), server_instance: "server".to_owned(),
+                tab_id: "tab".to_owned(), source_kind: ViewerSourceKind::Context,
+                source_id: "authorized-root".to_owned(),
+            };
+            let preview = format_batch(&batch, false);
+            assert!(preview.payload.starts_with(&format!("{path} (whole file)\n")));
+            assert!(preview.payload.contains(&format!("\n{path}:2\n")));
+            assert!(preview.payload.contains("this is a comment"));
+            assert!(!preview.payload.contains("\nREADME.md"));
         }
     }
 

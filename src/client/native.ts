@@ -6,8 +6,7 @@ import {
   parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest, parseLibraryReplaceRequest,
   parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
-  parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
-  parseSpaceUpdateRequest, parseSpaceRemoveRequest,
+  parseSpaceAddRequest, matchSpaceOperation, parseSpaceRepositoriesRequest, parseSpaceRemoveRequest,
 } from "./libraryProtocol";
 import { parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
@@ -825,14 +824,10 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const response = await invokeAndParse(invoke, "cockpit_library_space_add", { request }, "Space add", parseLibraryOperation);
       return matchSpaceOperation(response, request.target);
     },
-    async librarySpaceAttemptsDismiss(value) {
-      const request = parseSpaceAttemptsDismissRequest(value);
-      await invokeAndParse(invoke, "cockpit_library_space_attempts_dismiss", { request }, "Space attempt dismissal", parseSpaceAttemptsDismissed);
-    },
-    async librarySpaceUpdate(value) {
-      const request = parseSpaceUpdateRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_space_update", { request }, "Space update", parseLibraryOperation);
-      return matchSpaceOperation(response, request.target);
+    async librarySpaceRepositories(value) {
+      const request = parseSpaceRepositoriesRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_space_repositories", { request }, "Space repositories", parseSpaceContextListing);
+      return matchSpaceContextListing(response, request);
     },
     async librarySpaceRemove(value) {
       const request = parseSpaceRemoveRequest(value);

@@ -56,7 +56,6 @@ fn kind_name(kind: ContextRootKind) -> &'static str {
     match kind {
         ContextRootKind::Repository => "repository",
         ContextRootKind::Folder => "folder",
-        ContextRootKind::Companion => "companion",
         ContextRootKind::Library => "library",
     }
 }
@@ -172,7 +171,7 @@ fn from_disk(
         || persisted.files.iter().any(|file| {
             let path = Path::new(&file.path);
             crate::context::reserved_context_path(kind, path).is_some()
-                || (persisted.source == ContextFileIndexSource::Walk && crate::context_assets::excluded_source_path(path))
+                || (persisted.source == ContextFileIndexSource::Walk && crate::library::folder_io::excluded_source_path(path))
         })
     {
         let _ = dir.remove_file(&name);

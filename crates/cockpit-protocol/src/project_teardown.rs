@@ -7,8 +7,6 @@ pub enum WorkspaceTeardownAction {
     CloseSpace,
     RemoveOwnedWorktree,
     ReconcileRemoveOutcome,
-    RemoveOrphanedCompanion,
-    ForgetAssociation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -16,7 +14,6 @@ pub enum WorkspaceTeardownAction {
 pub enum WorkspaceTeardownOwnership {
     OwnedCreated,
     BorrowedOpened,
-    Foreign,
     Unknown,
 }
 
@@ -33,15 +30,6 @@ pub enum WorkspaceTeardownDirtyState {
 pub enum WorkspaceTeardownWorkspaceState {
     Live,
     Missing,
-    Ambiguous,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceTeardownCompanionState {
-    Owned,
-    Missing,
-    Foreign,
     Ambiguous,
 }
 
@@ -75,10 +63,8 @@ pub struct WorkspaceTeardownPreview {
     pub checkout_path: String,
     pub ownership: WorkspaceTeardownOwnership,
     pub workspace_state: WorkspaceTeardownWorkspaceState,
-    pub companion_state: WorkspaceTeardownCompanionState,
     pub is_linked_worktree: bool,
     pub dirty_state: WorkspaceTeardownDirtyState,
-    pub companion_path: Option<String>,
     pub allowed_actions: Vec<WorkspaceTeardownAction>,
     pub blockers: Vec<String>,
     pub warnings: Vec<String>,
@@ -90,7 +76,6 @@ pub struct WorkspaceTeardownPreview {
 pub enum WorkspaceTeardownOutcome {
     Completed,
     OutcomeUnknown,
-    OrphanedCompanion,
     Retained,
 }
 
@@ -99,7 +84,6 @@ pub enum WorkspaceTeardownOutcome {
 pub enum WorkspaceTeardownRecoveryState {
     Pending,
     OutcomeUnknown,
-    OrphanedCompanion,
 }
 
 /// A durable recovery entry. It intentionally contains only journal evidence;

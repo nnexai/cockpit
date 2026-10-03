@@ -295,12 +295,12 @@
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
 }
 .context-resources > header .context-resources-close { display: grid; width: 28px; min-width: 28px; height: 28px; min-height: 28px; place-items: center; padding: 3px; }
 
 /* Library context held by this Space (design §4.8): the source-row anatomy. */
-.space-context { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
+.space-context { display: flex; min-height: 0; flex: 0 0 auto; flex-direction: column; }
 .space-context-bar {
   display: flex;
   min-height: 36px;
@@ -315,7 +315,7 @@
 .space-context-summary strong { color: var(--text-primary); font-weight: 500; }
 .space-context-offline { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .space-context > .context-resource-error { flex: 0 0 auto; margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--border); }
-.context-resource-list { min-height: 72px; flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; font-size: var(--font-size-2xs); }
+.context-resource-list { min-height: 0; margin: 0; padding: 0; list-style: none; font-size: var(--font-size-2xs); }
 .context-resource-loading,
 .context-resource-empty,
 .context-resource-error { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 8px 12px; overflow-wrap: anywhere; font-size: var(--font-size-2xs); }
@@ -323,28 +323,24 @@
 .context-resource-empty { color: var(--text-muted); }
 .context-resource-error { color: var(--blocked); }
 .context-resource-error span { min-width: 12ch; flex: 1 1 20ch; color: var(--text-secondary); }
-.context-source-entry {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 4px 8px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border);
+.space-context-row { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.space-context-title { grid-column: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.space-context-row > button:not(.space-context-title) { grid-column: 2; grid-row: 1 / 3; }
+.space-context-chips { display: flex; flex-wrap: wrap; grid-column: 1; gap: 4px; }
+.context-resources .chip { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--text-secondary); font-size: var(--font-size-2xs); }
+.space-context-row > .context-resource-error { grid-column: 1 / -1; margin: 0; }
+.context-repos { margin: 0; padding: 0; list-style: none; }
+.context-repos > li { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.context-repo-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.context-repository-dialog { width: min(600px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
+.context-repository-options { display: flex; flex-direction: column; max-height: 45vh; overflow: auto; }
+.context-repository-options .task-setup-check { align-items: start; padding: 6px 0; }
+.context-repository-options .task-setup-check > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.context-repository-options code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 600px) {
+  .space-context-row { grid-template-columns: minmax(0, 1fr); }
+  .space-context-row > button:not(.space-context-title) { grid-column: 1; grid-row: auto; justify-self: start; }
+  .context-repos > li { flex-wrap: wrap; }
+  .context-repo-path { flex-basis: 100%; }
+  .space-context-bar { flex-wrap: wrap; }
 }
-.context-source-title { grid-column: 1; min-width: 0; overflow: hidden; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.space-context-actions { display: flex; grid-column: 2; grid-row: 1; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.context-source-summary,
-.context-source-diagnostic,
-.context-source-details { grid-column: 1 / -1; min-width: 0; }
-.context-source-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.context-source-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 4px; padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--text-secondary); font-size: var(--font-size-2xs); line-height: 1.35; overflow-wrap: anywhere; }
-.context-source-diagnostic { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
-.context-source-diagnostic[role="alert"] { color: var(--blocked); }
-.context-source-details { color: var(--text-secondary); }
-.context-source-details > summary { width: fit-content; color: var(--text-muted); cursor: pointer; }
-.context-source-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; margin: 4px 0 0; }
-.context-source-details dt { color: var(--text-muted); }
-.context-source-details dd { min-width: 0; margin: 0; }
-.context-source-details code { overflow-wrap: anywhere; user-select: text; }
-.context-resources button[aria-disabled="true"] { cursor: default; opacity: .6; }

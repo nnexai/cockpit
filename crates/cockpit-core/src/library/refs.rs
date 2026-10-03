@@ -118,16 +118,6 @@ pub(crate) fn set_space_name(follow: &mut LibraryFollowSummary, name: &str) {
     }
 }
 
-/// D11: Jira follows are not offered to Spaces yet. Unknown ids are left for the caller to report.
-pub(crate) fn reject_jira_follows(
-    follows: &[LibraryFollowSummary],
-    ids: &[String],
-) -> Result<(), InspectionError> {
-    for follow in follows.iter().filter(|f| ids.contains(&f.follow_id)) {
-        require_space_key(follow)?;
-    }
-    Ok(())
-}
 
 /// `KEY · Name` for a space follow, the JQL for a query follow.
 pub(crate) fn follow_title(follow: &LibraryFollowSummary) -> String {

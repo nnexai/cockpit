@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { LibraryOperation, SpaceContextListing } from "../../protocol/generated/v1";
+import type { LibraryItemSummary, LibraryOperation, SpaceContextListing } from "../../protocol/generated/v1";
 import { AddContextDialog } from "./AddContextDialog";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -127,116 +127,76 @@ it("keeps focus trapped during add startup and exposes a retry for the same reje
   }
 });
 
-it("adds to the Library and the target Space, keeps a phase-2 failure across reopening, and retries only the Space copy", async () => {
+it("saves to Library then reports a selection failure without a Space retry, retaining the accepted operation across reopening", async () => {
   vi.useFakeTimers();
   const target = { session_id: "session", space_id: "space-1" };
-  const space = { target, label: "api-review", live: true };
-  const libraryPhase = (state: "running" | "done") => ({ phase: "library" as const, state, done: state === "done" ? 1 : 0, total: 1, message: null, error: null });
   const running: LibraryOperation = {
-    operation_id: "op-space", kind: "add", phases: [libraryPhase("running"), { phase: "space", state: "pending", done: 0, total: null, message: null, error: null }], item_ids: [],
+    operation_id: "op-space", kind: "add", phases: [{ phase: "library", state: "running", done: 0, total: 1, message: null, error: null }, { phase: "space", state: "pending", done: 0, total: null, message: null, error: null }], item_ids: [],
     report: null, space: null, target, cancel_requested: false, finished: false, created_at: "", updated_at: "",
   };
   const failed: LibraryOperation = {
     ...running, item_ids: ["source:pr-7"], finished: true,
-    phases: [libraryPhase("done"), { phase: "space", state: "failed", done: 0, total: 1, message: null, error: { code: "source_companion_unavailable", message: "Exactly one verified companion is required" } }],
+    phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }, { phase: "space", state: "failed", done: 0, total: 1, message: null, error: { code: "library_conflict", message: "Space is no longer live" } }],
   };
-  const copied: LibraryOperation = {
-    operation_id: "op-space-retry", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:pr-7"],
-    report: null, space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/github/review/acme-api-7.md"], skipped_edited: [], companion_root_id: "companion:c1" },
-    target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-  };
-  const client = {
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
-    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "github", provider_instance: "https://github.com", title: "Fix token refresh race", canonical_id: "acme/api#7", container_label: "acme/api", existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
-    librarySpaceList: vi.fn(async () => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
-    libraryAdd: vi.fn(async () => running),
-    libraryOperation: vi.fn(async () => failed),
-    librarySpaceAdd: vi.fn(async () => copied),
-  } as unknown as CockpitClient;
-  const open = vi.fn();
-  const onClose = vi.fn();
+  const client = githubClient({ libraryAdd: vi.fn(async () => running), libraryOperation: vi.fn(async () => failed), librarySpaceAdd: vi.fn() });
+  const onOpenItem = vi.fn();
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  const dialog = () => <AddContextDialog client={client} onClose={onClose} space={space} defaultDestination="space" openInSpace={{ companionRootId: "companion:c1", open }} />;
-  const button = (label: string) => [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent === label);
+  const dialog = <AddContextDialog client={client} onClose={vi.fn()} onOpenItem={onOpenItem} space={{ target, label: "api-review", live: true }} />;
   try {
-    await act(async () => root.render(dialog()));
+    await act(async () => root.render(dialog));
     await advance(0);
     const radios = [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")];
     expect(radios.map((radio) => radio.closest("label")?.textContent?.trim())).toEqual(["Library only", "Library and api-review"]);
     expect(radios[1]?.checked).toBe(true);
-    const input = document.body.querySelector<HTMLInputElement>("input[type='text']")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "https://github.com/acme/api/pull/7");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await advance(450);
-    await act(async () => button("Add to Library and api-review")!.click());
+    await typeSource("https://github.com/acme/api/pull/7");
+    await act(async () => dialogButton("Add to Library and api-review")!.click());
     await advance(0);
-    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: "https://github.com/acme/api/pull/7", target }));
-    expect(document.body.textContent).toContain("Saving to Library…");
-
-    // Closing does not cancel; reopening follows the same accepted add.
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ target }));
     await act(async () => root.render(null));
-    expect(document.body.querySelector("[role='dialog']")).toBeNull();
-    await act(async () => root.render(dialog()));
-    await advance(0);
-    expect(document.body.textContent).toContain("Saving to Library…");
+    await act(async () => root.render(dialog));
     await advance(750);
     expect(document.body.textContent).toContain("✓ Saved to Library");
-    expect(document.activeElement).toBe(button("Close"));
-    expect(button("Open in api-review")).toBeUndefined();
-
-    // A failure stays for the next opening too.
+    expect(document.body.querySelector("[role='alert']")?.textContent).toBe("Saved to Library, but couldn't select for api-review. Space is no longer live.");
+    expect(dialogButton("Retry")).toBeUndefined();
+    expect(dialogButton("Retry adding to api-review")).toBeUndefined();
+    expect(document.activeElement).toBe(dialogButton("Close"));
     await act(async () => root.render(null));
-    await act(async () => root.render(dialog()));
+    await act(async () => root.render(dialog));
     await advance(0);
-    expect(document.activeElement).toBe(button("Close"));
-
-    await act(async () => button("Retry adding to api-review")!.click());
-    await advance(0);
-    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:pr-7"], follow_ids: [] });
-    expect(client.libraryAdd).toHaveBeenCalledTimes(1);
-    expect(client.libraryResolve).toHaveBeenCalledTimes(1);
-    expect(document.body.textContent).toContain("✓ Added to api-review · reflinked");
-    const openInSpace = button("Open in api-review")!;
-    expect(document.activeElement).toBe(openInSpace);
-    await act(async () => openInSpace.click());
-    expect(open).toHaveBeenCalledWith("sources/github/review/acme-api-7.md");
-    expect(onClose).toHaveBeenCalled();
-
-    // A success that was shown is not shown again.
-    await act(async () => root.render(null));
-    await act(async () => root.render(dialog()));
-    await advance(0);
-    expect(document.body.querySelector("input[type='text']")).not.toBeNull();
+    expect(document.body.querySelector("[role='alert']")?.textContent).toContain("Saved to Library, but couldn't select for api-review.");
+    await act(async () => dialogButton("Open in Library")!.click());
+    expect(onOpenItem).toHaveBeenCalledWith("source:pr-7");
+    expect(client.librarySpaceAdd).not.toHaveBeenCalled();
+    await act(async () => dialogButton("Add another")!.click());
   } finally {
     await act(async () => root.unmount());
     host.remove();
   }
 });
 
-it("offers only the Library when Herdr isn't live, and copies an already saved item without a provider fetch", async () => {
+it("offers only the Library when Herdr isn't live, and selects an already saved item without a provider fetch", async () => {
   vi.useFakeTimers();
   const target = { session_id: "session", space_id: "space-1" };
   const resolution = { kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: "source:ops-311", existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] };
-  const copied: LibraryOperation = {
-    operation_id: "op-existing", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:ops-311"],
-    report: null, space: { space_id: "space-1", copy_mode: "copy", written: ["sources/jira/issue/ops-311.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+  const selected: LibraryOperation = {
+    operation_id: "op-existing", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: [],
+    report: null, space: { space_id: "space-1", item_ids: ["source:ops-311"] },
     target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
   };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
     providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => resolution),
-    librarySpaceList: vi.fn(async () => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
+    librarySpaceList: vi.fn(async () => ({ target, space_label: "api-review", library_root: "/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] })),
     libraryAdd: vi.fn(),
-    librarySpaceAdd: vi.fn(async () => copied),
+    librarySpaceAdd: vi.fn(async () => selected),
   } as unknown as CockpitClient;
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
+  const onOpenItem = vi.fn();
   const type = async (value: string) => {
     const input = document.body.querySelector<HTMLInputElement>("input[type='text']")!;
     await act(async () => {
@@ -257,16 +217,18 @@ it("offers only the Library when Herdr isn't live, and copies an already saved i
     await act(async () => root.unmount());
 
     const live = createRoot(host);
-    await act(async () => live.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
+    await act(async () => live.render(<AddContextDialog client={client} onClose={vi.fn()} onOpenItem={onOpenItem} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
     await advance(0);
     await type("OPS-311");
     const primary = document.body.querySelector<HTMLButtonElement>("button.setup-primary")!;
-    expect(primary.textContent).toBe("Add to api-review");
+    expect(primary.textContent).toBe("Add to Space");
     await act(async () => primary.click());
     await advance(0);
-    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:ops-311"], follow_ids: [] });
+    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:ops-311"] });
     expect(client.libraryAdd).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("✓ Added to api-review · copied (reflink not supported here)");
+    expect(document.body.textContent).toContain("✓ Added to api-review");
+    await act(async () => dialogButton("Open in Library")!.click());
+    expect(onOpenItem).toHaveBeenCalledWith("source:ops-311");
     await act(async () => live.unmount());
   } finally {
     host.remove();
@@ -276,7 +238,7 @@ it("offers only the Library when Herdr isn't live, and copies an already saved i
 const githubClient = (overrides: Partial<Record<keyof CockpitClient, unknown>>) => ({
   projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
   libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "github", provider_instance: "https://github.com", title: "Fix token refresh race", canonical_id: "acme/api#7", container_label: "acme/api", existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
-  librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
+  librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, space_label: "api-review", library_root: "/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] })),
   ...overrides,
 }) as unknown as CockpitClient;
 
@@ -293,94 +255,73 @@ function dialogButton(label: string): HTMLButtonElement | undefined {
   return [...document.body.querySelectorAll<HTMLButtonElement>("[role='dialog'] button")].find((candidate) => candidate.textContent === label);
 }
 
-it.each(["unavailable", "error"])("falls back to Library only when companion verification is %s, even with a Space default", async (status) => {
+it("disables an existing Library item's Add action when it is already selected in the Space", async () => {
   vi.useFakeTimers();
   const target = { session_id: "session", space_id: "space-1" };
-  const saved: LibraryOperation = {
-    operation_id: `op-no-companion-${status}`, kind: "add", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }],
-    item_ids: ["source:pr-7"], report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-  };
   const client = githubClient({
-    librarySpaceList: vi.fn(async () => {
-      if (status === "error") throw new Error("Space listing disconnected");
-      return { target, companion: { status: "unavailable", error: { code: "source_companion_unavailable", message: "Exactly one verified companion is required" } }, attempts: [], rows: [], behind: 0, diagnostics: [] };
-    }),
-    libraryAdd: vi.fn(async () => saved),
+    libraryResolve: vi.fn(async () => ({ ...jiraResolution, existing_item_id: "source:ops-311" })),
+    providerCredentials: vi.fn(async () => jiraNotStored),
+    librarySpaceList: vi.fn(async () => ({ target, space_label: "api-review", library_root: "/library", checkout_path: null, items: [{ item_id: "source:ops-311" }], repository_paths: [], diagnostics: [] })),
+    libraryAdd: vi.fn(), librarySpaceAdd: vi.fn(),
   });
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   try {
-    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
-    await advance(0);
-    const radios = [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")];
-    expect(radios[0].checked).toBe(true);
-    expect(radios[1].disabled).toBe(true);
-    expect(radios[1].checked).toBe(false);
-    await act(async () => radios[1].click());
-    expect(radios[1].checked).toBe(false);
-    await typeSource("https://github.com/acme/api/pull/7");
-    await act(async () => dialogButton("Add to Library")!.click());
-    await advance(0);
-    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ target: null }));
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} />));
+    await typeSource("https://jira.test/jira/browse/OPS-311");
+    expect(dialogButton("Already in Space")?.disabled).toBe(true);
+    await act(async () => dialogButton("Already in Space")!.click());
+    expect(client.libraryAdd).not.toHaveBeenCalled();
+    expect(client.librarySpaceAdd).not.toHaveBeenCalled();
   } finally {
     await act(async () => root.unmount());
     host.remove();
   }
 });
 
-it("waits for the requested Space companion and preserves an explicit Library choice across Space changes", async () => {
+it("defaults to a live Space before its listing arrives and preserves an explicit Library choice across Space changes", async () => {
   vi.useFakeTimers();
   const target = { session_id: "session", space_id: "space-1" };
-  let verify!: (listing: SpaceContextListing) => void;
-  const listing = new Promise<SpaceContextListing>((resolve) => { verify = resolve; });
+  let load!: (listing: SpaceContextListing) => void;
+  const listing = new Promise<SpaceContextListing>((resolve) => { load = resolve; });
   const client = githubClient({ librarySpaceList: vi.fn(() => listing) });
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  const render = (spaceId: string) => <AddContextDialog client={client} onClose={vi.fn()} space={{ target: { ...target, space_id: spaceId }, label: "api-review", live: true }} defaultDestination="space" />;
+  const render = (spaceId: string) => <AddContextDialog client={client} onClose={vi.fn()} space={{ target: { ...target, space_id: spaceId }, label: "api-review", live: true }} />;
   const radios = () => [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")];
   try {
     await act(async () => root.render(render(target.space_id)));
-    expect(radios()[0].checked).toBe(true);
-    expect(radios()[1].disabled).toBe(true);
-    expect(radios()[1].checked).toBe(false);
-    await act(async () => verify({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] }));
+    expect(radios()[1].checked).toBe(true);
     expect(radios()[1].disabled).toBe(false);
-    expect(radios()[1].checked).toBe(true);
-    await act(async () => root.render(render("space-without-companion")));
-    expect(radios()[0].checked).toBe(true);
-    expect(radios()[1].disabled).toBe(true);
-    expect(radios()[1].checked).toBe(false);
-    await act(async () => root.render(render(target.space_id)));
-    expect(radios()[1].checked).toBe(true);
+    await act(async () => load({ target, space_label: "api-review", library_root: "/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] }));
     await act(async () => radios()[0].click());
-    await act(async () => root.render(render("space-without-companion")));
-    await act(async () => root.render(render(target.space_id)));
-    expect(radios()[1].disabled).toBe(false);
+    await act(async () => root.render(render("other-space")));
     expect(radios()[0].checked).toBe(true);
     expect(radios()[1].checked).toBe(false);
+    expect(radios()[1].disabled).toBe(false);
   } finally {
     await act(async () => root.unmount());
     host.remove();
   }
 });
 
-it("follows an add closed before it was accepted, and keeps what a cancelled add saved and copied", async () => {
+it("follows an add closed before it was accepted, and keeps items a cancelled add saved and selected", async () => {
   vi.useFakeTimers();
   const target = { session_id: "session", space_id: "space-1" };
   let accept!: (operation: LibraryOperation) => void;
   const cancelledAfterSave: LibraryOperation = {
     operation_id: "op-cancelled-after-save", kind: "add", item_ids: ["source:pr-7"], report: null, target, cancel_requested: true, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "library", state: "cancelled", done: 1, total: 2, message: null, error: null }, { phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
-    space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/github/review/acme-api-7.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    space: { space_id: "space-1", item_ids: ["source:pr-7"] },
   };
   const client = githubClient({ libraryAdd: vi.fn(() => new Promise<LibraryOperation>((resolve) => { accept = resolve; })) });
   const open = vi.fn();
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  const dialog = () => <AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" openInSpace={{ companionRootId: "companion:c1", open }} />;
+  const dialog = () => <AddContextDialog client={client} onClose={vi.fn()} onOpenItem={open} space={{ target, label: "api-review", live: true }} defaultDestination="space" />;
   try {
     await act(async () => root.render(dialog()));
     await advance(0);
@@ -397,14 +338,14 @@ it("follows an add closed before it was accepted, and keeps what a cancelled add
     await act(async () => { accept(cancelledAfterSave); });
     await advance(0);
     expect(document.body.textContent).toContain("◐ Saved to Library, then cancelled. Anything not yet saved wasn't added.");
-    expect(document.body.textContent).toContain("✓ Added to api-review · reflinked");
+    expect(document.body.textContent).toContain("✓ Added to api-review");
     expect(document.body.textContent).not.toContain("Nothing was added");
     expect(dialogButton("Retry")).toBeDefined();
     expect(dialogButton("Add another")).toBeDefined();
-    const openInSpace = dialogButton("Open in api-review")!;
-    expect(document.activeElement).toBe(openInSpace);
-    await act(async () => openInSpace.click());
-    expect(open).toHaveBeenCalledWith("sources/github/review/acme-api-7.md");
+    const openInLibrary = dialogButton("Open in Library")!;
+    expect(document.activeElement).toBe(openInLibrary);
+    await act(async () => openInLibrary.click());
+    expect(open).toHaveBeenCalledWith("source:pr-7");
     expect(client.libraryAdd).toHaveBeenCalledTimes(1);
   } finally {
     await act(async () => root.render(null));
@@ -494,82 +435,7 @@ it("keeps a Library failure for retry across reopening, and Add another starts o
   }
 });
 
-it("tells a partial Space copy from one that wrote nothing, and still opens what it wrote", async () => {
-  vi.useFakeTimers();
-  const target = { session_id: "session", space_id: "space-1" };
-  const partlyCopied: LibraryOperation = {
-    operation_id: "op-partly-copied", kind: "add", item_ids: ["source:pr-7", "source:issue-3"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-    phases: [{ phase: "library", state: "done", done: 2, total: 2, message: null, error: null }, { phase: "space", state: "failed", done: 2, total: 2, message: null, error: { code: "library_conflict", message: "Library source changed during copy" } }],
-    space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/github/review/acme-api-7.md"], skipped_edited: [], companion_root_id: "companion:c1" },
-  };
-  const retried: LibraryOperation = { ...partlyCopied, operation_id: "op-partly-retry", kind: "space_add", phases: [{ phase: "space", state: "done", done: 2, total: 2, message: null, error: null }], space: { ...partlyCopied.space!, written: ["sources/github/issue/acme-api-3.md"] } };
-  const client = githubClient({ libraryAdd: vi.fn(async () => partlyCopied), librarySpaceAdd: vi.fn(async () => retried) });
-  const open = vi.fn();
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = createRoot(host);
-  try {
-    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" openInSpace={{ companionRootId: "companion:c1", open }} />));
-    await advance(0);
-    await typeSource("https://github.com/acme/api/pull/7");
-    await act(async () => dialogButton("Add to Library and api-review")!.click());
-    await advance(0);
-    expect([...document.body.querySelectorAll(".library-progress-files code")].map((code) => code.textContent)).toEqual(["sources/github/review/acme-api-7.md"]);
-    expect(document.activeElement).toBe(dialogButton("Close"));
-    expect(dialogButton("Open in api-review")).toBeDefined();
-
-    await act(async () => dialogButton("Retry adding to api-review")!.click());
-    await advance(0);
-    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:pr-7", "source:issue-3"], follow_ids: [] });
-    expect(client.libraryAdd).toHaveBeenCalledTimes(1);
-    expect(document.body.textContent).toContain("✓ Added to api-review · reflinked");
-  } finally {
-    await act(async () => root.unmount());
-    host.remove();
-  }
-});
-
-it("retries an interrupted Space-only copy with the items it asked for, not the fewer it recorded", async () => {
-  vi.useFakeTimers();
-  const target = { session_id: "session", space_id: "space-1" };
-  const interrupted: LibraryOperation = {
-    operation_id: "op-space-interrupted", kind: "space_add", item_ids: [], report: null, space: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
-    phases: [{ phase: "space", state: "failed", done: 0, total: 1, message: null, error: { code: "library_operation_interrupted", message: "Library worker stopped before recording completion" } }],
-  };
-  const copied: LibraryOperation = {
-    ...interrupted, operation_id: "op-space-interrupted-retry", item_ids: ["source:ops-311"], phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
-    space: { space_id: "space-1", copy_mode: "copy", written: ["sources/jira/issue/ops-311.md"], skipped_edited: [], companion_root_id: "companion:c1" },
-  };
-  const client = {
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
-    providerCredentials: vi.fn(async () => jiraNotStored),
-    libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: "source:ops-311", existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
-    librarySpaceList: vi.fn(async () => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
-    libraryAdd: vi.fn(),
-    librarySpaceAdd: vi.fn().mockResolvedValueOnce(interrupted).mockResolvedValueOnce(copied),
-  } as unknown as CockpitClient;
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = createRoot(host);
-  try {
-    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
-    await advance(0);
-    await typeSource("OPS-311");
-    await act(async () => dialogButton("Add to api-review")!.click());
-    await advance(0);
-    expect(document.body.querySelector("[role='alert']")?.textContent).toBe("✕ Not added to api-review. Library worker stopped before recording completion. The Library copy is saved.");
-    await act(async () => dialogButton("Retry adding to api-review")!.click());
-    await advance(0);
-    expect(client.librarySpaceAdd).toHaveBeenNthCalledWith(2, { target, item_ids: ["source:ops-311"], follow_ids: [] });
-    expect(client.libraryAdd).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("✓ Added to api-review · copied (reflink not supported here)");
-  } finally {
-    await act(async () => root.unmount());
-    host.remove();
-  }
-});
-
-it("recognizes a typed folder path, defaults its label, and saves the renamed copy through Library progress", async () => {
+it("recognizes a typed folder path, defaults its label, and saves the renamed capture through Library progress", async () => {
   vi.useFakeTimers();
   const saved: LibraryOperation = {
     operation_id: "op-folder", kind: "add", phases: [{ phase: "library", state: "partial", done: 1, total: 1, message: null, error: null }],
@@ -646,7 +512,7 @@ it("recognizes a Cloud page link, asks for the provider only when several config
   const saved: LibraryOperation = {
     operation_id: "op-page", kind: "add", item_ids: ["source:page-98765"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }, { phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
-    space: { space_id: "space-1", copy_mode: "reflink", written: ["confluence/nnexai.atlassian.net/SD - Software Development/Release checklist/Release checklist.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    space: { space_id: "space-1", item_ids: ["source:page-98765"] },
   };
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: confluenceProviders })),
@@ -793,7 +659,7 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
   const followed: LibraryOperation = {
     operation_id: "op-follow", kind: "add", item_ids: ["source:h", "source:a", "source:t"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "library", state: "done", done: 3, total: 3, message: null, error: null }, { phase: "space", state: "done", done: 3, total: 3, message: null, error: null }],
-    space: { space_id: "space-1", copy_mode: "reflink", written: ["confluence/nnexai.atlassian.net/SD - Software Development/Home/Home.md", "confluence/nnexai.atlassian.net/SD - Software Development/Home/Article/Article.md", "confluence/nnexai.atlassian.net/SD - Software Development/Topic/Topic.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    space: { space_id: "space-1", item_ids: ["source:h", "source:a", "source:t"] },
   };
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[0], confluenceProviders[2]], limits: { library_space_pages: 200 } })),
@@ -838,7 +704,7 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
     expect(document.body.textContent).toContain("✓ Confluence space · SD · Software Development");
     expect(document.body.textContent).toContain("Follow the whole space (SD · Software Development)");
     expect(document.body.textContent).toContain("including every top-level page tree");
-    const primary = button("Follow and add to api-review")!;
+    const primary = button("Add to Library and api-review")!;
     expect(primary.disabled).toBe(false);
     expect(document.activeElement).toBe(primary);
     // Following is the only option for a space; attachment downloads require an explicit opt-in.
@@ -854,7 +720,7 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
       reference_depth: 0, follow: true, follow_mode: null, download_attachments: true, refresh_existing: false,
     });
     expect(document.body.textContent).toContain("✓ Saved to Library · 3 pages");
-    expect(document.body.textContent).toContain("✓ Added to api-review · reflinked");
+    expect(document.body.textContent).toContain("✓ Added to api-review");
   } finally {
     await act(async () => root.unmount());
     host.remove();
@@ -868,10 +734,10 @@ it("offers following a page's whole space, warns when the page limit makes it pa
     operation_id: "op-follow-page", kind: "add", item_ids: ["source:page-98765"], report: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "library", state: "partial", done: 200, total: 312, message: null, error: null }], space: null,
   };
-  const copied: LibraryOperation = {
+  const selected: LibraryOperation = {
     operation_id: "op-follow-space", kind: "space_add", item_ids: [], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
-    space: { space_id: "space-1", copy_mode: "copy", written: ["confluence/nnexai.atlassian.net/SD - Software Development/Home/Home.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    space: { space_id: "space-1", item_ids: ["source:h", "source:a"] },
   };
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[0]], limits: { library_space_pages: 200 } })),
@@ -879,7 +745,12 @@ it("offers following a page's whole space, warns when the page limit makes it pa
       ? { ...pageResolution("cloud"), item_count: 312 }
       : spaceResolution({ existing_follow_id: "follow:sd", item_count: 38 })),
     libraryAdd: vi.fn(async () => saved),
-    librarySpaceAdd: vi.fn(async () => copied),
+    librarySpaceAdd: vi.fn(async () => selected),
+    libraryListing: vi.fn(async (offset: number | null) => ({
+      root: { root_id: "library:fs", kind: "library", label: "Library", path: "/library", repository_id: "", checkout_path: "" }, generation: "1", follows: [], diagnostics: [],
+      items: [{ item_id: offset === null ? "source:h" : "source:a", refs: [{ kind: "follow", follow_id: "follow:sd" }] } as LibraryItemSummary],
+      next_offset: offset === null ? 1 : null,
+    })),
   });
   const host = document.createElement("div");
   document.body.append(host);
@@ -901,7 +772,7 @@ it("offers following a page's whole space, warns when the page limit makes it pa
     expect(document.body.textContent).toContain("◐ Saved to Library, partial");
     await act(async () => root.unmount());
 
-    // A space that is already followed is copied into the Space as a follow, with no Library step.
+    // A followed space selects its saved page IDs without a provider fetch or a new Library save.
     root = createRoot(host);
     await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
     await advance(0);
@@ -909,11 +780,13 @@ it("offers following a page's whole space, warns when the page limit makes it pa
     expect(client.libraryResolve).toHaveBeenLastCalledWith({ input: "https://nnexai.atlassian.net/wiki/spaces/SD", provider_id: "cloud" });
     expect(document.body.textContent).toContain("✓ Already following · SD · Software Development");
     expect(document.body.textContent).not.toContain("including every top-level page tree");
-    await act(async () => dialogButton("Add to api-review")!.click());
+    await act(async () => dialogButton("Add to Space")!.click());
     await advance(0);
-    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: [], follow_ids: ["follow:sd"] });
+    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:h", "source:a"] });
+    expect(client.libraryListing).toHaveBeenCalledWith(null);
+    expect(client.libraryListing).toHaveBeenCalledWith(1);
     expect(client.libraryAdd).toHaveBeenCalledTimes(1);
-    expect(document.body.textContent).toContain("✓ Added to api-review · copied (reflink not supported here)");
+    expect(document.body.textContent).toContain("✓ Added to api-review");
   } finally {
     await act(async () => root.unmount());
     host.remove();
@@ -946,13 +819,13 @@ it("downloads attachments for a page only after its checkbox is checked", async 
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
-it("follows a Jira query: a relative-date query preselects accumulate, shows the count, hides the Space destination and sends follow and follow_mode", async () => {
+it("follows a Jira query: a relative-date query preselects accumulate, shows the count, and saves and selects with the chosen follow mode", async () => {
   vi.useFakeTimers();
   const target = { session_id: "session", space_id: "space-1" };
   const jql = "project = OPS AND updated >= -7d";
   const saved: LibraryOperation = {
-    operation_id: "op-query", kind: "add", phases: [{ phase: "library", state: "done", done: 2, total: 2, message: null, error: null }], item_ids: ["source:ops-1", "source:ops-2"],
-    report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    operation_id: "op-query", kind: "add", phases: [{ phase: "library", state: "done", done: 2, total: 2, message: null, error: null }, { phase: "space", state: "done", done: 2, total: 2, message: null, error: null }], item_ids: ["source:ops-1", "source:ops-2"],
+    report: null, space: { space_id: "space-1", item_ids: ["source:ops-1", "source:ops-2"] }, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
   };
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
@@ -973,15 +846,12 @@ it("follows a Jira query: a relative-date query preselects accumulate, shows the
     expect(document.body.textContent).toContain(`✓ Jira query · ${jql} · 100+ issues`);
     expect(document.body.textContent).toContain("This query uses relative dates");
     expect([...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => [radio.parentElement?.textContent?.trim(), radio.checked]))
-      .toEqual([["Live — mirror the query", false], ["Accumulate — keep every issue that ever matched", true]]);
-    // Jira follows can't go into a Space yet, even with a live target Space.
-    expect(document.body.textContent).toContain("Jira follows can't be added to a Space yet");
-    expect(document.body.textContent).not.toContain("Library and api-review");
+      .toEqual([["Live — mirror the query", false], ["Accumulate — keep every issue that ever matched", true], ["Library only", false], ["Library and api-review", true]]);
     expect(depthSelect()!.value).toBe("0");
     await chooseDepth(depthSelect()!, "2");
-    await act(async () => dialogButton("Follow query")!.click());
+    await act(async () => dialogButton("Add to Library and api-review")!.click());
     await advance(0);
-    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: jql, provider_id: "jira", follow: true, follow_mode: "accumulate", reference_depth: 2, target: null, download_attachments: false }));
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: jql, provider_id: "jira", follow: true, follow_mode: "accumulate", reference_depth: 2, target, download_attachments: false }));
 
     // A preset fills the field; a bare key reads as a query on the Jira provider.
     await act(async () => dialogButton("Add another")!.click());

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// A bounded raster request scoped to the currently verified Context companion.
+/// A bounded raster request scoped to a currently verified Files viewer root.
 /// `path` is always a normalized relative path; it is never a URL or host path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]

@@ -243,9 +243,9 @@ describe("focus fallback", () => {
 });
 
 describe("rendererReasonFor", () => {
-  const chain = "pane is not a supported extension; Open Context requires a source pane at a reviewed companion checkout; Open files requires a safe source pane directory";
+  const chain = "pane is not a supported extension; Open Context requires a live Space for Library context; Open files requires a safe source pane directory";
   it("picks the clause for the requested action", () => {
-    expect(rendererReasonFor("context", chain)).toBe("Requires a source pane at a reviewed companion checkout");
+    expect(rendererReasonFor("context", chain)).toBe("Requires a live Space for Library context");
     expect(rendererReasonFor("files", chain)).toBe("Requires a safe source pane directory");
   });
   it("leaves unmatched chains to the caller's fallback", () => {

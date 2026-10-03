@@ -9,7 +9,7 @@ import { CommentDrafts } from "./CommentDrafts";
 import { SourceLines, type ContextCommentEditorState } from "./ContextViewer";
 
 it("retains prose after a remote deletion and requires explicit source capture to recreate it", async () => {
-  const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
+  const root: ContextRoot = { root_id: "root", kind: "library", label: "Library", path: "/library", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const document = { text: "new source\n", revision: "new-revision" } as ContextDocument;
   const batch: CommentBatch = { batch_id: "batch", generation: 2, owner: { kind: "legacy_pane", session_id: "session", pane_id: "old-pane", terminal_id: "old-terminal", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now" };
@@ -39,7 +39,7 @@ it("retains prose after a remote deletion and requires explicit source capture t
 });
 
 it("retains an open Review editor across refresh but requires explicit current-source capture", async () => {
-  const root = { root_id: "review-source", kind: "repository", companion_id: null } as ContextRoot;
+  const root = { root_id: "review-source", kind: "repository" } as ContextRoot;
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "review", source_kind: "review", source_id: "review-source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const batch: CommentBatch = { batch_id: "batch", generation: 1, drafts: [], owner: { kind: "viewer", session_id: "session", server_instance: "server", tab_id: "tab", source_kind: "review", source_id: "review-source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, updated_at: "now" };
   const upsert = vi.fn(async () => ({ ...batch, generation: 2 }));
@@ -65,7 +65,7 @@ it("retains an open Review editor across refresh but requires explicit current-s
 });
 
 it("opens an inline Review editor from C at the current SourceLines selection", async () => {
-  const root = { root_id: "review-source", kind: "repository", companion_id: null } as ContextRoot;
+  const root = { root_id: "review-source", kind: "repository" } as ContextRoot;
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "review", source_kind: "review", source_id: "review-source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const batch: CommentBatch = { batch_id: "batch", generation: 1, drafts: [], owner: { kind: "viewer", session_id: "session", server_instance: "server", tab_id: "tab", source_kind: "review", source_id: "review-source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, updated_at: "now" };
   const client = { commentBatch: vi.fn(async () => batch) } as unknown as CockpitClient;
@@ -91,7 +91,7 @@ it("opens an inline Review editor from C at the current SourceLines selection", 
 });
 
 it("saves a comment with Ctrl or Command Enter without leaking the shortcut", async () => {
-  const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
+  const root: ContextRoot = { root_id: "root", kind: "library", label: "Library", path: "/library", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const batch: CommentBatch = { batch_id: "batch", generation: 1, owner: { kind: "viewer", session_id: "session", server_instance: "server", tab_id: "tab", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now" };
   const upsert = vi.fn(async () => ({ ...batch, generation: 2 }));
@@ -131,7 +131,7 @@ it("saves a comment with Ctrl or Command Enter without leaking the shortcut", as
 });
 
 it("confirms saved-batch discard inline and resets the active batch", async () => {
-  const root = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" } as ContextRoot;
+  const root = { root_id: "root", kind: "library", label: "Library", path: "/library", repository_id: "repo", checkout_path: "/repo" } as ContextRoot;
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const active = { batch_id: "active", generation: 2, owner: { kind: "viewer", session_id: "session", server_instance: "server", tab_id: "tab", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "1" } as CommentBatch;
   const list = { attachment: { owner: active.owner, location: active.last_known_location, binding_id: "binding", client_id: "client" }, batches: [{ batch_id: "active", generation: 2, owner: active.owner, last_known_location: active.last_known_location, draft_count: 0, updated_at: "1" }], truncated: false } as CommentBatchList;
@@ -157,7 +157,7 @@ it("confirms saved-batch discard inline and resets the active batch", async () =
 });
 
 it.each([0, 1])("refreshes generation %i batches using their persistence state", async (generation) => {
-  const root: ContextRoot = { root_id: "root", kind: "repository", label: "Review", path: "/repo", repository_id: "repo", checkout_path: "/repo", companion_id: null };
+  const root: ContextRoot = { root_id: "root", kind: "repository", label: "Review", path: "/repo", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "review", source_kind: "review", source_id: "root", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const batch: CommentBatch = { batch_id: "batch", generation, owner: { kind: "viewer", session_id: "session", server_instance: "server", tab_id: "tab", source_kind: "review", source_id: "root" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now" };
   const commentBatch = vi.fn(async (_session: string, _viewer: string, request: { batch_id: string | null }) => {
@@ -183,7 +183,7 @@ it.each([0, 1])("refreshes generation %i batches using their persistence state",
   }
 });
 it("reconciles saved missing Context comments after explicit refresh without changing their identity or text", async () => {
-  const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
+  const root: ContextRoot = { root_id: "root", kind: "library", label: "Library", path: "/library", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const draft = {
     draft_id: "saved-draft",
@@ -221,7 +221,7 @@ it("reconciles saved missing Context comments after explicit refresh without cha
 });
 
 it("ignores an in-flight explicit refresh after the comment identity changes", async () => {
-  const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
+  const root: ContextRoot = { root_id: "root", kind: "library", label: "Library", path: "/library", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const draft = {
     draft_id: "saved-draft",
@@ -265,7 +265,7 @@ it("ignores an in-flight explicit refresh after the comment identity changes", a
 });
 
 it("reattaches legacy saved comments only after explicit confirmation of the viewer source", async () => {
-  const root: ContextRoot = { root_id: "folder", kind: "folder", label: "Folder", path: "/repo", repository_id: "repo", checkout_path: "/repo", companion_id: null };
+  const root: ContextRoot = { root_id: "folder", kind: "folder", label: "Folder", path: "/repo", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "folder-source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const legacy: CommentBatch = { batch_id: "legacy", generation: 1, owner: { kind: "legacy_pane", session_id: "session", pane_id: "gone-pane", terminal_id: "gone-terminal", source_kind: "context", source_id: "folder-source" }, last_known_location: { workspace_id: "space", tab_id: "old-tab" }, live_attachment: null, drafts: [], updated_at: "now" };
   const attachment: CommentBatchList["attachment"] = { owner: { kind: "viewer", session_id: "session", server_instance: "server", tab_id: "tab", source_kind: "context", source_id: "folder-source" }, location: { workspace_id: "space", tab_id: "tab" }, binding_id: "binding", client_id: "client" };
@@ -288,7 +288,7 @@ it("reattaches legacy saved comments only after explicit confirmation of the vie
 });
 
 it("surfaces a missing viewer without discarding unsaved prose or reopening it automatically", async () => {
-  const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
+  const root: ContextRoot = { root_id: "root", kind: "library", label: "Library", path: "/library", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const error = new CockpitClientError("http_error", "Viewer no longer exists", { status: 404, operationCode: "viewer_not_found" });
   const commentBatch = vi.fn().mockRejectedValue(error);

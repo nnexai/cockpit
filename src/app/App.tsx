@@ -955,10 +955,10 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     { id: "library:tokens", label: "Provider tokens…", group: "Library", run: () => openLibrary({ kind: "tokens" }) },
     ...rendererActionDefinitions.map(({ id, label, icon, kind }) => {
       const capability = viewerCapability(kind);
-      const fallback = kind === "context" ? "Context requires a configured companion directory" : "Select a terminal with a configured repository";
+      const fallback = kind === "context" ? "Library context requires a live Space" : "Select a terminal with a configured repository";
       const detail = viewerSources?.reason ?? viewerSourcesError ?? (sourcePaneId ? "Loading viewer sources" : "No terminal in this tab");
       const reason = state.sync !== "live" ? "Herdr is not live" : rendererReasonFor(kind, detail) ?? detail ?? fallback;
-      return { id: `renderer:${id}`, label, icon, group: "Pane" as const, disabled: mutationBusy || !capability || state.sync !== "live", reason: kind === "context" && !capability && state.sync === "live" ? "no Space context" : reason, reasonDetail: detail, run: () => openViewer(kind) };
+      return { id: `renderer:${id}`, label, icon, group: "Pane" as const, disabled: mutationBusy || !capability || state.sync !== "live", reason: kind === "context" && !capability && state.sync === "live" ? "Library context unavailable" : reason, reasonDetail: detail, run: () => openViewer(kind) };
     }),
   ];
   const browserToggleShortcut = formatShortcut("toggle-browser");
@@ -1141,7 +1141,7 @@ export function App({ client }: { client: CockpitClient }) {
       if (tab.selectedLeafId !== leafId || pending?.kind !== "tab" || pending.target_id !== tabId) supersedeSelection();
       requestAnimationFrame(() => {
         const host = Array.from(document.querySelectorAll<HTMLElement>("[data-leaf-id]")).find(element => element.dataset.leafId === leafId);
-        if (!host || host.contains(document.activeElement) || layouts.getState().tabs[tabId]?.selectedLeafId !== leafId) return;
+        if (!host || host.contains(document.activeElement) || document.activeElement?.closest('dialog[open], [role="dialog"][aria-modal="true"]') || layouts.getState().tabs[tabId]?.selectedLeafId !== leafId) return;
         (host.querySelector<HTMLElement>('.context-document, .review-diff, .browser-surface, input, [tabindex="0"]') ?? host).focus({ preventScroll: true });
       });
     }

@@ -78,7 +78,7 @@ pub(crate) fn set_target(
     let _lock = store.exclusive()?;
     let mut record = load(store, id)?;
     record.target = Some(target);
-    if matches!(record.kind, LibraryOperationKind::SpaceAdd | LibraryOperationKind::SpaceUpdate) {
+    if record.kind == LibraryOperationKind::SpaceAdd {
         record.phases.clear();
     }
     record.phases.push(LibraryPhase {
@@ -99,10 +99,8 @@ pub(crate) fn begin_space(store: &Store, id: &str, total: u32) -> Result<(), Ins
             phase.state = if record.cancel_requested { LibraryPhaseState::Cancelled }
                 else if partial { LibraryPhaseState::Partial } else { LibraryPhaseState::Done };
         } else {
-            // Items then follows of one Space add each contribute their count.
-            let previous = if phase.state == LibraryPhaseState::Running { phase.total.unwrap_or(0) } else { 0 };
             phase.state = LibraryPhaseState::Running;
-            phase.total = Some(previous + total);
+            phase.total = Some(total);
         }
     }
     record.updated_at = timestamp();
@@ -302,11 +300,6 @@ pub(crate) fn finish(
 ) -> Result<(), InspectionError> {
     let _lock = store.exclusive()?;
     let mut record = load(store, id)?;
-    if record.target.is_some() {
-        if let Err(failure) = &result {
-            super::space::fail_pending_attempts_locked(store, id, failure)?;
-        }
-    }
     let active = record.phases.iter().rposition(|phase| phase.state == LibraryPhaseState::Running)
         .unwrap_or(0);
     let phase = &mut record.phases[active];
@@ -316,9 +309,9 @@ pub(crate) fn finish(
             message: e.message,
         });
         LibraryPhaseState::Failed
-    } else if record.cancel_requested && (phase.phase == LibraryPhaseName::Library || record.kind == LibraryOperationKind::SpaceUpdate) {
+    } else if record.cancel_requested {
         LibraryPhaseState::Cancelled
-    } else if (phase.phase == LibraryPhaseName::Library || matches!(record.kind, LibraryOperationKind::SpaceAdd | LibraryOperationKind::SpaceUpdate))
+    } else if (phase.phase == LibraryPhaseName::Library || record.kind == LibraryOperationKind::SpaceAdd)
         && record.report.as_ref().is_some_and(|r| r.failed + r.conflict + r.partial > 0)
     {
         LibraryPhaseState::Partial

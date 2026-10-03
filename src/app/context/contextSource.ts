@@ -14,7 +14,7 @@ import type {
 } from "../../protocol/generated/v1";
 import { viewerErrorCode } from "../layout/viewerLifecycle";
 
-/** Client-side id of the Library root in every Context root selector; the server root id stays inside the reader. */
+/** Client-side id for the session-independent Library; bound Context roots keep the core-issued id. */
 export const LIBRARY_ROOT_ID = "library";
 
 export type ContextDirectoryRead = { root_id: string; path: string; offset?: number; revision?: string };

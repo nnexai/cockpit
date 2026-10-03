@@ -23,10 +23,9 @@ function relativePath(value: unknown, allowEmpty: boolean): value is string {
 }
 
 function root(value: unknown): value is ContextRoot {
-  return record(value) && identity(value.root_id) && (value.kind === "repository" || value.kind === "companion" || value.kind === "folder")
+  return record(value) && identity(value.root_id) && (value.kind === "repository" || value.kind === "library" || value.kind === "folder")
     && text(value.label) && text(value.path) && identity(value.repository_id)
-    && text(value.checkout_path) && nullableText(value.companion_id)
-    && (value.kind === "companion" ? identity(value.companion_id) : value.companion_id === null);
+    && text(value.checkout_path);
 }
 
 export function parseViewerSourceOptions(value: unknown): ViewerSourceOptions {
@@ -38,7 +37,7 @@ export function parseViewerSourceOptions(value: unknown): ViewerSourceOptions {
   const roots = value.roots;
   if (new Set(roots.map((item) => item.root_id)).size !== roots.length
     || new Set(value.review_repository_ids).size !== value.review_repository_ids.length
-    || (value.files_context_root_id !== null && !roots.some((item) => item.root_id === value.files_context_root_id && item.kind === "companion"))
+    || (value.files_context_root_id !== null && !roots.some((item) => item.root_id === value.files_context_root_id && item.kind === "library"))
     || (value.files_folder_root_id !== null && !roots.some((item) => item.root_id === value.files_folder_root_id && item.kind === "folder"))
     || value.review_repository_ids.some((id) => !roots.some((item) => item.repository_id === id && item.kind === "repository"))) {
     malformed("viewer source root identity");
@@ -54,6 +53,7 @@ export function matchViewerSourceOptions(value: ViewerSourceOptions, sessionId: 
 export function parseViewerSourceSelector(value: unknown): ViewerSourceSelector {
   if (!record(value)) malformed("viewer source selector");
   if (value.kind === "files_context" || value.kind === "files_folder") return { kind: value.kind };
+  if (value.kind === "files_repository" && identity(value.root_id)) return { kind: "files_repository", root_id: value.root_id };
   if (value.kind === "review" && identity(value.repository_id)) return { kind: "review", repository_id: value.repository_id };
   return malformed("viewer source selector");
 }
@@ -86,6 +86,9 @@ export function matchViewerContext(value: ViewerContext, sessionId: string, requ
   const source = request.source;
   if (source.kind === "review" && !value.roots.some((item) => item.kind === "repository" && item.repository_id === source.repository_id)) {
     malformed("viewer context repository identity");
+  }
+  if (source.kind === "files_repository" && !value.roots.some((item) => item.kind === "repository" && item.root_id === source.root_id)) {
+    malformed("viewer context selected repository identity");
   }
   return value;
 }

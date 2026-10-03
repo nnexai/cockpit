@@ -17,7 +17,7 @@ const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 
 impl ContextService {
     /// Read one host-authorized, bounded raster image from a Files viewer's
-    /// pinned Context companion or verified Folder root.
+    /// pinned Library, Repository, or verified Folder root.
     /// It accepts no URL-like input and exposes no path to the browser.
     pub async fn media(
         &self,

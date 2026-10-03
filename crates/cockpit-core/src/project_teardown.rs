@@ -1,5 +1,5 @@
 use cockpit_protocol::project_teardown::{
-    WorkspaceTeardownAction, WorkspaceTeardownCompanionState, WorkspaceTeardownDirtyState,
+    WorkspaceTeardownAction, WorkspaceTeardownDirtyState,
     WorkspaceTeardownExecuteRequest, WorkspaceTeardownOwnership, WorkspaceTeardownPreview,
     WorkspaceTeardownPreviewRequest, WorkspaceTeardownWorkspaceState,
 };
@@ -8,10 +8,9 @@ use cockpit_protocol::projects::{
 };
 
 use crate::InspectionError;
-use crate::project_store::{CompanionManifest, TeardownReceipt, TeardownReceiptState};
+use crate::project_store::{TeardownReceipt, TeardownReceiptState};
 
 pub const REMOVE_WORKTREE_CONFIRMATION: &str = "REMOVE WORKTREE";
-pub const REMOVE_COMPANION_CONFIRMATION: &str = "REMOVE COMPANION";
 
 /// Fresh adapter evidence needed to preview a teardown. This deliberately
 /// carries only provenance and Git status: the integration owner must obtain
@@ -20,7 +19,7 @@ pub const REMOVE_COMPANION_CONFIRMATION: &str = "REMOVE COMPANION";
 #[derive(Debug, Clone)]
 pub struct WorkspaceTeardownEvidence<'a> {
     pub operation: &'a WorkspaceOperation,
-    pub companion: Option<&'a CompanionManifest>,
+    pub session_id: &'a str,
     pub endpoint_identity: &'a str,
     pub repository_key: &'a str,
     pub repository_root: &'a str,
@@ -49,15 +48,8 @@ pub enum WorkspaceTeardownCommand {
         endpoint_identity: String,
         force: bool,
         checkout_path: String,
-        companion_path: String,
-    },
-    ForgetAssociation {
-        operation_id: String,
     },
     ReconcileRemoveOutcome {
-        operation_id: String,
-    },
-    RemoveOrphanedCompanion {
         operation_id: String,
     },
 }
@@ -69,45 +61,39 @@ pub fn preview(
     validate_identity(&request.workspace_id, "workspace_id")?;
     let operation = evidence.operation;
     let checkout_path = operation.plan.checkout_path.clone();
-    let matching_worktrees = evidence
+    let mut matching_worktrees = evidence
         .worktrees
         .iter()
-        .filter(|worktree| worktree.checkout_path == checkout_path)
-        .collect::<Vec<_>>();
+        .filter(|worktree| worktree.checkout_path == checkout_path);
     let (workspace_state, worktree) = if operation.workspace_id.as_deref()
         != Some(request.workspace_id.as_str())
     {
         (WorkspaceTeardownWorkspaceState::Ambiguous, None)
     } else {
-        match matching_worktrees.as_slice() {
-            [] => (WorkspaceTeardownWorkspaceState::Missing, None),
-            [worktree]
+        match (matching_worktrees.next(), matching_worktrees.next()) {
+            (None, _) => (WorkspaceTeardownWorkspaceState::Missing, None),
+            (Some(worktree), None)
                 if worktree.open_workspace_id.as_deref() == Some(request.workspace_id.as_str()) =>
             {
-                (WorkspaceTeardownWorkspaceState::Live, Some(*worktree))
+                (WorkspaceTeardownWorkspaceState::Live, Some(worktree))
             }
-            [_] | [_, _, ..] => (WorkspaceTeardownWorkspaceState::Ambiguous, None),
+            _ => (WorkspaceTeardownWorkspaceState::Ambiguous, None),
         }
     };
-    let companion_state = companion_state(
-        operation,
-        evidence.companion,
-        evidence.endpoint_identity,
-        &request.workspace_id,
-    );
-    let ownership = ownership(operation, companion_state);
+    let ownership = ownership(operation);
     let is_linked_worktree = worktree.is_some_and(|value| value.is_linked_worktree);
     let dirty_state = match worktree.and_then(|value| value.dirty) {
         Some(false) => WorkspaceTeardownDirtyState::Clean,
         Some(true) => WorkspaceTeardownDirtyState::Dirty,
         None => WorkspaceTeardownDirtyState::Unknown,
     };
-    let companion_path = (companion_state == WorkspaceTeardownCompanionState::Owned)
-        .then(|| operation.plan.companion_path.clone());
 
     let mut blockers = Vec::new();
-    let mut warnings = Vec::new();
-    let provenance_confirmed = evidence.endpoint_identity == operation.plan.endpoint_identity
+    let warnings = Vec::new();
+    let provenance_confirmed = operation.operation_id == operation.plan.operation_id
+        && evidence.session_id == operation.session_id
+        && evidence.session_id == operation.plan.session_id
+        && evidence.endpoint_identity == operation.plan.endpoint_identity
         && if operation.plan.mode == cockpit_protocol::projects::WorkspaceSetupMode::Open {
             true
         } else {
@@ -146,48 +132,22 @@ pub fn preview(
         WorkspaceTeardownOwnership::BorrowedOpened => {
             blockers.push("the checkout was opened as borrowed and cannot be removed".to_owned())
         }
-        WorkspaceTeardownOwnership::Foreign => {
-            blockers.push("the companion association belongs to another operation".to_owned())
-        }
         WorkspaceTeardownOwnership::Unknown => {
-            blockers.push("owned worktree and companion provenance is incomplete".to_owned())
+            blockers.push("owned worktree provenance is incomplete".to_owned())
         }
-    }
-    if companion_state == WorkspaceTeardownCompanionState::Missing {
-        warnings
-            .push("the companion is missing; no companion cleanup will be attempted".to_owned());
-    }
-    if workspace_state == WorkspaceTeardownWorkspaceState::Missing
-        && companion_state == WorkspaceTeardownCompanionState::Owned
-    {
-        warnings.push(
-            "the owned companion is orphaned; retain it or explicitly reattach it".to_owned(),
-        );
     }
 
-    let receipt = evidence.receipt.filter(|receipt| {
-        receipt.state != TeardownReceiptState::Completed
-            && receipt_matches(receipt, operation, &evidence, request)
-    });
+    let receipt = evidence.receipt;
     let removal_pending = receipt.is_some_and(|receipt| {
-        matches!(
-            receipt.state,
-            TeardownReceiptState::Pending | TeardownReceiptState::OutcomeUnknown
-        )
+        matches!(receipt.state, TeardownReceiptState::Pending | TeardownReceiptState::OutcomeUnknown)
     });
-    let orphaned_companion =
-        receipt.is_some_and(|receipt| receipt.state == TeardownReceiptState::OrphanedCompanion);
+    let receipt_confirmed = receipt.is_some_and(|receipt| receipt_matches(receipt, operation, &evidence, request));
+    if receipt.is_some() && !receipt_confirmed {
+        blockers.push("the prior teardown receipt belongs to a different target identity".to_owned());
+    }
     if removal_pending {
         blockers.push(
             "a prior worktree removal has an unknown outcome; reconcile it before retrying"
-                .to_owned(),
-        );
-        warnings
-            .push("the companion was retained because Herdr did not confirm removal".to_owned());
-    }
-    if orphaned_companion {
-        warnings.push(
-            "Herdr removal was confirmed but the reviewed companion still needs explicit cleanup"
                 .to_owned(),
         );
     }
@@ -196,23 +156,10 @@ pub fn preview(
     if workspace_state == WorkspaceTeardownWorkspaceState::Live && provenance_confirmed {
         allowed_actions.push(WorkspaceTeardownAction::CloseSpace);
     }
-    if ownership == WorkspaceTeardownOwnership::BorrowedOpened
-        && companion_state != WorkspaceTeardownCompanionState::Ambiguous
-        && provenance_confirmed
-    {
-        allowed_actions.push(WorkspaceTeardownAction::ForgetAssociation);
-    }
-    if removal_pending && provenance_confirmed {
+    if removal_pending && provenance_confirmed && receipt_confirmed {
         allowed_actions.push(WorkspaceTeardownAction::ReconcileRemoveOutcome);
     }
-    let orphan_cleanup_allowed = orphaned_companion
-        && provenance_confirmed
-        && workspace_state == WorkspaceTeardownWorkspaceState::Missing
-        && companion_state == WorkspaceTeardownCompanionState::Owned;
-    if orphan_cleanup_allowed {
-        allowed_actions.push(WorkspaceTeardownAction::RemoveOrphanedCompanion);
-    }
-    let removal_allowed = blockers.is_empty() && companion_path.is_some() && receipt.is_none();
+    let removal_allowed = blockers.is_empty() && !removal_pending;
     if removal_allowed {
         allowed_actions.push(WorkspaceTeardownAction::RemoveOwnedWorktree);
     }
@@ -228,17 +175,13 @@ pub fn preview(
         checkout_path,
         ownership,
         workspace_state,
-        companion_state,
         is_linked_worktree,
         dirty_state,
-        companion_path,
         allowed_actions,
         blockers,
         warnings,
         required_confirmation: if removal_allowed {
             Some(REMOVE_WORKTREE_CONFIRMATION.to_owned())
-        } else if orphan_cleanup_allowed {
-            Some(REMOVE_COMPANION_CONFIRMATION.to_owned())
         } else {
             None
         },
@@ -246,9 +189,8 @@ pub fn preview(
 }
 
 /// Recompute a fresh preview before producing an adapter command. This module
-/// never removes files; the integration owner must execute the returned Herdr
-/// command, confirm the authoritative removal, then delete only the reviewed
-/// owned companion directory through the descriptor-relative store.
+/// never removes files; the integration owner executes the returned Herdr
+/// command and confirms authoritative removal before completing its receipt.
 pub fn command(
     request: &WorkspaceTeardownExecuteRequest,
     evidence: WorkspaceTeardownEvidence<'_>,
@@ -259,7 +201,8 @@ pub fn command(
         },
         evidence,
     )?;
-    if request.expected_endpoint_identity != preview.endpoint_identity
+    if request.operation_id != preview.operation_id
+        || request.expected_endpoint_identity != preview.endpoint_identity
         || request.expected_checkout_path != preview.checkout_path
     {
         return Err(InspectionError::new(
@@ -278,24 +221,8 @@ pub fn command(
             workspace_id: preview.workspace_id,
             endpoint_identity: preview.endpoint_identity,
         }),
-        WorkspaceTeardownAction::ForgetAssociation => {
-            Ok(WorkspaceTeardownCommand::ForgetAssociation {
-                operation_id: preview.operation_id,
-            })
-        }
         WorkspaceTeardownAction::ReconcileRemoveOutcome => {
             Ok(WorkspaceTeardownCommand::ReconcileRemoveOutcome {
-                operation_id: preview.operation_id,
-            })
-        }
-        WorkspaceTeardownAction::RemoveOrphanedCompanion => {
-            if request.confirmation != REMOVE_COMPANION_CONFIRMATION {
-                return Err(InspectionError::new(
-                    "confirmation_required",
-                    "type the required confirmation before removing this companion",
-                ));
-            }
-            Ok(WorkspaceTeardownCommand::RemoveOrphanedCompanion {
                 operation_id: preview.operation_id,
             })
         }
@@ -306,18 +233,11 @@ pub fn command(
                     "type the required confirmation before removing this worktree",
                 ));
             }
-            let companion_path = preview.companion_path.ok_or_else(|| {
-                InspectionError::new(
-                    "teardown_not_allowed",
-                    "the reviewed companion is no longer owned",
-                )
-            })?;
             Ok(WorkspaceTeardownCommand::RemoveOwnedWorktree {
                 workspace_id: preview.workspace_id,
                 endpoint_identity: preview.endpoint_identity,
                 force: false,
                 checkout_path: preview.checkout_path,
-                companion_path,
             })
         }
     }
@@ -330,7 +250,14 @@ fn receipt_matches(
     request: &WorkspaceTeardownPreviewRequest,
 ) -> bool {
     receipt.operation_id == operation.operation_id
+        && receipt.operation_id == operation.plan.operation_id
         && receipt.workspace_id == request.workspace_id
+        && operation.workspace_id.as_deref() == Some(receipt.workspace_id.as_str())
+        && receipt.session_id == operation.session_id
+        && receipt.session_id == operation.plan.session_id
+        && evidence.session_id == receipt.session_id
+        && receipt.repository_key == evidence.repository_key
+        && receipt.repository_root == evidence.repository_root
         && receipt.endpoint_identity == operation.plan.endpoint_identity
         && receipt.checkout_path == operation.plan.checkout_path
         && evidence.endpoint_identity == receipt.endpoint_identity
@@ -347,55 +274,9 @@ fn receipt_matches(
         }
 }
 
-fn companion_state(
-    operation: &WorkspaceOperation,
-    companion: Option<&CompanionManifest>,
-    endpoint_identity: &str,
-    workspace_id: &str,
-) -> WorkspaceTeardownCompanionState {
-    let Some(companion) = companion else {
-        return WorkspaceTeardownCompanionState::Missing;
-    };
-    if companion.cockpit_operation_id != operation.operation_id {
-        return WorkspaceTeardownCompanionState::Foreign;
-    }
-    let companion_owned = operation.companion_id.as_deref()
-        == Some(companion.cockpit_operation_id.as_str())
-        && operation.owned_resources.iter().any(|resource| {
-            resource.kind == "companion"
-                && resource.path == operation.plan.companion_path
-                && resource.created_by_operation
-        });
-    if !companion_owned
-        || companion.ownership != "cockpit"
-        || companion.herdr_session_identity != endpoint_identity
-        || companion.herdr_workspace_id != workspace_id
-        || companion.repository_key
-            != operation
-                .plan
-                .repository
-                .as_ref()
-                .map(|repository| repository.common_dir.as_str())
-                .unwrap_or("")
-        || companion.repository_root
-            != operation
-                .plan
-                .repository
-                .as_ref()
-                .map(|repository| repository.root.as_str())
-                .unwrap_or("")
-        || companion.checkout_path != operation.plan.checkout_path
-    {
-        return WorkspaceTeardownCompanionState::Ambiguous;
-    }
-    WorkspaceTeardownCompanionState::Owned
-}
 
-fn ownership(
-    operation: &WorkspaceOperation,
-    companion_state: WorkspaceTeardownCompanionState,
-) -> WorkspaceTeardownOwnership {
-    let worktree = operation.owned_resources.iter().find(|resource| {
+fn ownership(operation: &WorkspaceOperation) -> WorkspaceTeardownOwnership {
+    let worktree = operation.owned_resources.iter().filter(|resource| {
         resource.kind == "worktree" && resource.path == operation.plan.checkout_path
     });
     if operation.state != WorkspaceOperationState::Completed {
@@ -406,18 +287,13 @@ fn ownership(
     {
         return WorkspaceTeardownOwnership::BorrowedOpened;
     }
-    match worktree {
-        Some(resource) if !resource.created_by_operation => {
+    let mut worktree = worktree;
+    match (worktree.next(), worktree.next()) {
+        (Some(resource), None) if !resource.created_by_operation => {
             WorkspaceTeardownOwnership::BorrowedOpened
         }
-        Some(resource)
-            if resource.created_by_operation
-                && companion_state == WorkspaceTeardownCompanionState::Owned =>
-        {
+        (Some(resource), None) if resource.created_by_operation => {
             WorkspaceTeardownOwnership::OwnedCreated
-        }
-        Some(_) if companion_state == WorkspaceTeardownCompanionState::Foreign => {
-            WorkspaceTeardownOwnership::Foreign
         }
         _ => WorkspaceTeardownOwnership::Unknown,
     }
@@ -481,9 +357,6 @@ mod tests {
                 branch: Some("task".to_owned()),
                 base: None,
                 checkout_path: "/worktrees/task".to_owned(),
-                companion_path: "/companions/operation".to_owned(),
-                companion_id: "operation".to_owned(),
-                companion_created_by_operation: created,
                 label: "Task".to_owned(),
                 focus: true,
                 artifact: None,
@@ -496,17 +369,11 @@ mod tests {
             workspace_id: Some("workspace".to_owned()),
             tab_id: None,
             pane_id: None,
-            companion_id: Some("operation".to_owned()),
             owned_resources: vec![
                 WorkspaceOwnedResource {
                     kind: "worktree".to_owned(),
                     path: "/worktrees/task".to_owned(),
                     created_by_operation: created,
-                },
-                WorkspaceOwnedResource {
-                    kind: "companion".to_owned(),
-                    path: "/companions/operation".to_owned(),
-                    created_by_operation: true,
                 },
             ],
             error: None,
@@ -516,30 +383,13 @@ mod tests {
         }
     }
 
-    fn companion() -> CompanionManifest {
-        CompanionManifest {
-            schema_version: 1,
-            cockpit_operation_id: "operation".to_owned(),
-            herdr_session_identity: "endpoint".to_owned(),
-            herdr_workspace_id: "workspace".to_owned(),
-            repository_key: "/repository/.git".to_owned(),
-            repository_root: "/repository".to_owned(),
-            checkout_path: "/worktrees/task".to_owned(),
-            artifact: None,
-            created_at: "0".to_owned(),
-            updated_at: "0".to_owned(),
-            ownership: "cockpit".to_owned(),
-        }
-    }
-
     fn evidence<'a>(
         operation: &'a WorkspaceOperation,
-        companion: &'a CompanionManifest,
         worktrees: &'a [WorkspaceTeardownWorktree],
     ) -> WorkspaceTeardownEvidence<'a> {
         WorkspaceTeardownEvidence {
             operation,
-            companion: Some(companion),
+            session_id: "session",
             endpoint_identity: "endpoint",
             repository_key: "/repository/.git",
             repository_root: "/repository",
@@ -563,7 +413,9 @@ mod tests {
             workspace_id: "workspace".to_owned(),
             endpoint_identity: "endpoint".to_owned(),
             checkout_path: "/worktrees/task".to_owned(),
-            companion: companion(),
+            session_id: "session".to_owned(),
+            repository_key: "/repository/.git".to_owned(),
+            repository_root: "/repository".to_owned(),
             state,
             updated_at: "0".to_owned(),
         }
@@ -572,13 +424,12 @@ mod tests {
     #[test]
     fn owned_clean_linked_worktree_requires_confirmation() {
         let operation = operation(true);
-        let companion = companion();
         let worktrees = worktrees(Some(false));
         let preview = preview(
             &WorkspaceTeardownPreviewRequest {
                 workspace_id: "workspace".to_owned(),
             },
-            evidence(&operation, &companion, &worktrees),
+            evidence(&operation, &worktrees),
         )
         .expect("preview");
         assert_eq!(preview.ownership, WorkspaceTeardownOwnership::OwnedCreated);
@@ -591,13 +442,12 @@ mod tests {
     #[test]
     fn borrowed_or_dirty_worktrees_are_not_removable() {
         let borrowed = operation(false);
-        let companion = companion();
         let clean_worktrees = worktrees(Some(false));
         let borrowed_preview = preview(
             &WorkspaceTeardownPreviewRequest {
                 workspace_id: "workspace".to_owned(),
             },
-            evidence(&borrowed, &companion, &clean_worktrees),
+            evidence(&borrowed, &clean_worktrees),
         )
         .expect("preview");
         assert!(
@@ -612,7 +462,7 @@ mod tests {
             &WorkspaceTeardownPreviewRequest {
                 workspace_id: "workspace".to_owned(),
             },
-            evidence(&owned, &companion, &dirty_worktrees),
+            evidence(&owned, &dirty_worktrees),
         )
         .expect("preview");
         assert!(
@@ -623,15 +473,12 @@ mod tests {
     }
 
     #[test]
-    fn borrowed_directory_can_close_or_forget_but_never_remove_files() {
+    fn borrowed_directory_can_close_but_never_remove_files() {
         let mut operation = operation(false);
         operation.plan.repository = None;
         operation.plan.ownership =
             cockpit_protocol::projects::WorkspaceCheckoutOwnership::BorrowedDirectory;
         operation.owned_resources[0].kind = "directory".to_owned();
-        let mut companion = companion();
-        companion.repository_key.clear();
-        companion.repository_root.clear();
         let directories = [WorkspaceTeardownWorktree {
             checkout_path: "/worktrees/task".to_owned(),
             open_workspace_id: Some("workspace".to_owned()),
@@ -644,7 +491,7 @@ mod tests {
             },
             WorkspaceTeardownEvidence {
                 operation: &operation,
-                companion: Some(&companion),
+                session_id: "session",
                 endpoint_identity: "endpoint",
                 repository_key: "",
                 repository_root: "",
@@ -659,11 +506,6 @@ mod tests {
                 .contains(&WorkspaceTeardownAction::CloseSpace)
         );
         assert!(
-            preview
-                .allowed_actions
-                .contains(&WorkspaceTeardownAction::ForgetAssociation)
-        );
-        assert!(
             !preview
                 .allowed_actions
                 .contains(&WorkspaceTeardownAction::RemoveOwnedWorktree)
@@ -675,13 +517,12 @@ mod tests {
         let mut operation = operation(true);
         operation.plan.ownership = WorkspaceCheckoutOwnership::BorrowedDirectory;
         operation.owned_resources[0].kind = "directory".to_owned();
-        let companion = companion();
         let worktrees = worktrees(Some(false));
         let preview = preview(
             &WorkspaceTeardownPreviewRequest {
                 workspace_id: "workspace".to_owned(),
             },
-            evidence(&operation, &companion, &worktrees),
+            evidence(&operation, &worktrees),
         )
         .expect("preview");
 
@@ -699,7 +540,6 @@ mod tests {
     #[test]
     fn pending_removal_receipt_blocks_redispatch_and_requires_reconciliation() {
         let operation = operation(true);
-        let companion = companion();
         let worktrees = worktrees(Some(false));
         let receipt = receipt(TeardownReceiptState::OutcomeUnknown);
         let preview = preview(
@@ -708,7 +548,7 @@ mod tests {
             },
             WorkspaceTeardownEvidence {
                 operation: &operation,
-                companion: Some(&companion),
+                session_id: "session",
                 endpoint_identity: "endpoint",
                 repository_key: "/repository/.git",
                 repository_root: "/repository",
@@ -730,33 +570,131 @@ mod tests {
     }
 
     #[test]
-    fn orphan_receipt_requires_explicit_companion_confirmation() {
+    fn reconciled_retained_worktree_requires_new_review_before_removal() {
         let operation = operation(true);
-        let companion = companion();
-        let receipt = receipt(TeardownReceiptState::OrphanedCompanion);
-        let preview = preview(
-            &WorkspaceTeardownPreviewRequest {
+        let worktrees = worktrees(Some(false));
+        let receipt = receipt(TeardownReceiptState::Completed);
+        let mut fresh = evidence(&operation, &worktrees);
+        fresh.receipt = Some(&receipt);
+        let preview = preview(&WorkspaceTeardownPreviewRequest {
+            workspace_id: "workspace".to_owned(),
+        }, fresh).expect("preview");
+        assert!(preview.allowed_actions.contains(&WorkspaceTeardownAction::RemoveOwnedWorktree));
+        assert!(!preview.allowed_actions.contains(&WorkspaceTeardownAction::ReconcileRemoveOutcome));
+    }
+
+    #[test]
+    fn stale_completed_receipt_blocks_fresh_removal() {
+        let operation = operation(true);
+        let worktrees = worktrees(Some(false));
+        let mut receipt = receipt(TeardownReceiptState::Completed);
+        receipt.session_id = "other".to_owned();
+        let mut fresh = evidence(&operation, &worktrees);
+        fresh.receipt = Some(&receipt);
+        let preview = preview(&WorkspaceTeardownPreviewRequest {
+            workspace_id: "workspace".to_owned(),
+        }, fresh).expect("preview");
+        assert!(!preview.allowed_actions.contains(&WorkspaceTeardownAction::RemoveOwnedWorktree));
+    }
+
+    #[test]
+    fn identity_changes_and_incomplete_worktree_receipts_block_removal() {
+        let worktrees = worktrees(Some(false));
+        for mutation in 0..8 {
+            let mut operation = operation(true);
+            match mutation {
+                0 => operation.session_id = "other".to_owned(),
+                1 => operation.plan.session_id = "other".to_owned(),
+                2 => operation.plan.endpoint_identity = "other".to_owned(),
+                3 => operation.plan.repository.as_mut().unwrap().common_dir = "/other/.git".to_owned(),
+                4 => operation.workspace_id = Some("other".to_owned()),
+                5 => operation.owned_resources.clear(),
+                6 => operation.owned_resources[0].path = "/other".to_owned(),
+                7 => operation.owned_resources.push(operation.owned_resources[0].clone()),
+                _ => unreachable!(),
+            }
+            let preview = preview(&WorkspaceTeardownPreviewRequest {
                 workspace_id: "workspace".to_owned(),
-            },
-            WorkspaceTeardownEvidence {
-                operation: &operation,
-                companion: Some(&companion),
-                endpoint_identity: "endpoint",
-                repository_key: "/repository/.git",
-                repository_root: "/repository",
-                worktrees: &[],
-                receipt: Some(&receipt),
-            },
-        )
-        .expect("preview");
-        assert!(
-            preview
-                .allowed_actions
-                .contains(&WorkspaceTeardownAction::RemoveOrphanedCompanion)
-        );
-        assert_eq!(
-            preview.required_confirmation.as_deref(),
-            Some(REMOVE_COMPANION_CONFIRMATION)
-        );
+            }, evidence(&operation, &worktrees)).expect("preview");
+            assert!(!preview.allowed_actions.contains(&WorkspaceTeardownAction::RemoveOwnedWorktree), "mutation {mutation}");
+        }
+    }
+
+    #[test]
+    fn mismatched_unknown_receipt_blocks_both_redispatch_and_reconciliation() {
+        let operation = operation(true);
+        let worktrees = worktrees(Some(false));
+        let mut receipt = receipt(TeardownReceiptState::OutcomeUnknown);
+        receipt.session_id = "other".to_owned();
+        let mut fresh = evidence(&operation, &worktrees);
+        fresh.receipt = Some(&receipt);
+        let preview = preview(&WorkspaceTeardownPreviewRequest {
+            workspace_id: "workspace".to_owned(),
+        }, fresh).expect("preview");
+        assert!(!preview.allowed_actions.contains(&WorkspaceTeardownAction::RemoveOwnedWorktree));
+        assert!(!preview.allowed_actions.contains(&WorkspaceTeardownAction::ReconcileRemoveOutcome));
+    }
+
+    #[test]
+    fn unknown_status_nonlinked_and_ambiguous_worktree_block_removal() {
+        let operation = operation(true);
+        for mutation in 0..3 {
+            let mut worktrees = worktrees(Some(false)).to_vec();
+            match mutation {
+                0 => worktrees[0].dirty = None,
+                1 => worktrees[0].is_linked_worktree = false,
+                2 => worktrees.push(worktrees[0].clone()),
+                _ => unreachable!(),
+            }
+            let preview = preview(&WorkspaceTeardownPreviewRequest {
+                workspace_id: "workspace".to_owned(),
+            }, evidence(&operation, &worktrees)).expect("preview");
+            assert!(!preview.allowed_actions.contains(&WorkspaceTeardownAction::RemoveOwnedWorktree));
+        }
+    }
+
+    #[test]
+    fn removal_requires_matching_full_socket_endpoint_identity() {
+        let endpoint = "unix-socket:/tmp/cockpit-fixture/config/herdr/sessions/fixture/herdr.sock:pid=939432:uid=1000:gid=1000:start=5501986";
+        let mut operation = operation(true);
+        operation.plan.endpoint_identity = endpoint.to_owned();
+        let worktrees = worktrees(Some(false));
+        let fresh = || {
+            let mut fresh = evidence(&operation, &worktrees);
+            fresh.endpoint_identity = endpoint;
+            fresh
+        };
+        let mut request = WorkspaceTeardownExecuteRequest {
+            operation_id: operation.operation_id.clone(),
+            workspace_id: "workspace".to_owned(),
+            expected_endpoint_identity: endpoint.to_owned(),
+            expected_checkout_path: "/worktrees/task".to_owned(),
+            action: WorkspaceTeardownAction::RemoveOwnedWorktree,
+            confirmation: REMOVE_WORKTREE_CONFIRMATION.to_owned(),
+        };
+        assert!(matches!(command(&request, fresh()).expect("full endpoint command"),
+            WorkspaceTeardownCommand::RemoveOwnedWorktree { endpoint_identity, force: false, .. } if endpoint_identity == endpoint));
+        request.expected_endpoint_identity = endpoint.replace("pid=939432", "pid=939433");
+        assert_eq!(command(&request, fresh()).expect_err("foreign endpoint").code, "stale_identity");
+    }
+
+    #[test]
+    fn command_checks_confirmation_and_exact_reviewed_identity() {
+        let operation = operation(true);
+        let worktrees = worktrees(Some(false));
+        let mut request = WorkspaceTeardownExecuteRequest {
+            operation_id: "operation".to_owned(),
+            workspace_id: "workspace".to_owned(),
+            expected_endpoint_identity: "endpoint".to_owned(),
+            expected_checkout_path: "/worktrees/task".to_owned(),
+            action: WorkspaceTeardownAction::RemoveOwnedWorktree,
+            confirmation: String::new(),
+        };
+        assert_eq!(command(&request, evidence(&operation, &worktrees)).unwrap_err().code, "confirmation_required");
+        request.confirmation = REMOVE_WORKTREE_CONFIRMATION.to_owned();
+        assert!(matches!(command(&request, evidence(&operation, &worktrees)).expect("command"),
+            WorkspaceTeardownCommand::RemoveOwnedWorktree { force: false, .. }));
+        request.operation_id = "other".to_owned();
+        assert_eq!(command(&request, evidence(&operation, &worktrees)).unwrap_err().code, "stale_identity");
     }
 }

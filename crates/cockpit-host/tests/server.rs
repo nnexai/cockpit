@@ -422,105 +422,75 @@ async fn library_attachment_route_requires_origin_and_rejects_invalid_request_id
 }
 
 #[tokio::test]
-async fn space_library_routes_fail_closed_and_list_unavailable_companions() {
+async fn space_library_routes_require_origin_shape_and_live_authority() {
     let root = fixture_root();
     let authority = test_authority();
     let router = build_router(service_with_library(&root), &root, authority).unwrap();
     let target = serde_json::json!({"session_id": "session", "space_id": "space"});
-    for (path, body) in [
-        ("/api/v1/library/space/list", serde_json::json!({"target": target})),
-        ("/api/v1/library/space/add", serde_json::json!({"target": target, "item_ids": [], "follow_ids": []})),
-        ("/api/v1/library/space/attempts/dismiss", serde_json::json!({"target": target, "item_ids": [], "follow_ids": []})),
-        ("/api/v1/library/space/update", serde_json::json!({"target": target, "scope": {"scope": "all"}, "replace_edited": []})),
-        ("/api/v1/library/space/remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": []})),
+    for (route, body) in [
+        ("list", serde_json::json!({"target": target})),
+        ("add", serde_json::json!({"target": target, "item_ids": ["source:one"]})),
+        ("remove", serde_json::json!({"target": target, "item_ids": ["source:one"]})),
+        ("repositories", serde_json::json!({"target": target, "repository_paths": []})),
     ] {
+        let path = format!("/api/v1/library/space/{route}");
         let response = router.clone().oneshot(Request::builder()
-            .method("POST").uri(path).header("host", authority.to_string())
+            .method("POST").uri(&path).header("host", authority.to_string())
             .header("origin", "http://untrusted.test").header("content-type", "application/json")
             .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
         assert_eq!(response.status(), 403);
         let mut invalid = body.clone();
         invalid["target"]["space_id"] = serde_json::json!("../invalid");
         let response = router.clone().oneshot(Request::builder()
-            .method("POST").uri(path).header("host", authority.to_string())
+            .method("POST").uri(&path).header("host", authority.to_string())
             .header("origin", format!("http://{authority}")).header("content-type", "application/json")
             .body(axum::body::Body::from(invalid.to_string())).unwrap()).await.unwrap();
         assert_eq!(response.status(), 400);
+        let response = router.clone().oneshot(Request::builder()
+            .method("POST").uri(&path).header("host", authority.to_string())
+            .header("origin", format!("http://{authority}")).header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), 503);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["code"], "space_context_unavailable");
     }
-    let response = router.oneshot(Request::builder()
-        .method("POST").uri("/api/v1/library/space/list").header("host", authority.to_string())
-        .header("origin", format!("http://{authority}")).header("content-type", "application/json")
-        .body(axum::body::Body::from(serde_json::json!({"target": target}).to_string())).unwrap()).await.unwrap();
-    assert_eq!(response.status(), 200);
-    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-    let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(listing["target"], target);
-    assert_eq!(listing["companion"]["status"], "unavailable");
-    assert_eq!(listing["companion"]["error"]["code"], "source_companion_unavailable");
-    assert_eq!(listing["attempts"], serde_json::json!([]));
+    assert!(!root.join("companions").exists());
     assert!(!root.join("state/sources").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
-async fn library_space_confirmation_route_accepts_large_valid_confirmation() {
-    let root = fixture_root();
-    let authority = test_authority();
-    let router = build_router(service_with_library(&root), &root, authority).unwrap();
-    let confirmed = (0..512)
-        .map(|index| serde_json::json!({
-            "path": format!("sources/file-{index}-{}", "x".repeat(200)),
-            "current_hash": format!("sha256:{}", "0".repeat(64)),
-        }))
-        .collect::<Vec<_>>();
-    let body = serde_json::json!({
-        "target": {"session_id": "session", "space_id": "space"},
-        "logical_id": "source:one",
-        "confirmed": confirmed,
-    });
-    let encoded = body.to_string();
-    assert!(encoded.len() > 64 * 1024);
-    let response = router.oneshot(Request::builder()
-        .method("POST").uri("/api/v1/library/space/remove")
-        .header("host", authority.to_string())
-        .header("origin", format!("http://{authority}"))
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(encoded)).unwrap())
-        .await.unwrap();
-    assert_eq!(response.status(), 503);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(error["code"], "source_companion_unavailable");
-    std::fs::remove_dir_all(root).unwrap();
-}
-#[tokio::test]
-async fn space_update_and_remove_validate_scope_confirmation_and_authority() {
+async fn space_selections_reject_old_copy_shapes_and_bounded_requests() {
     let root = fixture_root();
     let authority = test_authority();
     let router = build_router(service_with_library(&root), &root, authority).unwrap();
     let target = serde_json::json!({"session_id": "session", "space_id": "space"});
-    for (route, body, status, code) in [
-        ("update", serde_json::json!({"target": target, "scope": {"scope": "selection", "item_ids": [], "follow_ids": ["follow:one"]}, "replace_edited": []}), 503, "source_companion_unavailable"),
-        ("remove", serde_json::json!({"target": target, "logical_id": "follow:one", "confirmed": []}), 503, "source_companion_unavailable"),
-        ("update", serde_json::json!({"target": target, "scope": {"scope": "all"}, "replace_edited": []}), 503, "source_companion_unavailable"),
-        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": []}), 503, "source_companion_unavailable"),
-        ("update", serde_json::json!({"target": target, "scope": {"scope": "all", "unexpected": true}, "replace_edited": []}), 400, "invalid_library_request"),
-        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": [], "unexpected": true}), 400, "invalid_library_request"),
-        ("update", serde_json::json!({"target": target, "scope": {"scope": "selection", "item_ids": vec!["item"; 5001], "follow_ids": []}, "replace_edited": []}), 400, "invalid_library_request"),
-        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": [{"path": "../outside", "current_hash": format!("sha256:{}", "0".repeat(64))}]}), 400, "invalid_library_request"),
-        ("update", serde_json::json!({"target": target, "scope": {"scope": "all"}, "replace_edited": [{"path": "sources/file.md", "current_hash": "invalid"}]}), 400, "invalid_library_request"),
-        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": [{"path": "sources/file.md", "current_hash": format!("sha256:{}", "0".repeat(64))}]}), 503, "source_companion_unavailable"),
-        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": [{"path": "sources/file.md", "current_hash": "0".repeat(64)}]}), 400, "invalid_library_request"),
+    for (route, body) in [
+        ("add", serde_json::json!({"target": target, "item_ids": [], "follow_ids": []})),
+        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": []})),
+        ("add", serde_json::json!({"target": target, "item_ids": vec!["item"; 5001]})),
+        ("remove", serde_json::json!({"target": target, "item_ids": vec!["item"; 5001]})),
+        ("repositories", serde_json::json!({"target": target, "repository_paths": vec!["/repo"; 65]})),
+        ("repositories", serde_json::json!({"target": target, "repository_paths": [], "unexpected": true})),
     ] {
         let response = router.clone().oneshot(Request::builder()
             .method("POST").uri(format!("/api/v1/library/space/{route}"))
             .header("host", authority.to_string()).header("origin", format!("http://{authority}"))
             .header("content-type", "application/json")
             .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
-        assert_eq!(response.status(), status, "{route}: {body}");
+        assert_eq!(response.status(), 400, "{route}: {body}");
         let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(error["code"], code);
+        assert_eq!(error["code"], "invalid_library_request");
+    }
+    for route in ["update", "attempts/dismiss"] {
+        let response = router.clone().oneshot(Request::builder()
+            .method("POST").uri(format!("/api/v1/library/space/{route}"))
+            .header("host", authority.to_string()).header("origin", format!("http://{authority}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("{}")).unwrap()).await.unwrap();
+        assert_eq!(response.status(), 404);
     }
     assert!(!root.join("companions").exists());
     std::fs::remove_dir_all(root).unwrap();

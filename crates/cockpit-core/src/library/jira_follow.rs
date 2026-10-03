@@ -670,7 +670,6 @@ impl LibraryService {
                     TraversalBudget::Query,
                     &LibraryInclusionHolder::Follow { follow_id: follow.follow_id.clone() },
                     &LibraryItemRef::Follow { follow_id: follow.follow_id.clone() },
-                    None,
                     &skip,
                 )
                 .await?;

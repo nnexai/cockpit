@@ -31,7 +31,7 @@ fn open_regular(dir: &Dir, name: &str) -> Result<cap_std::fs::File, InspectionEr
     Ok(file)
 }
 fn stored_name(title: &str, id: &str, used: &mut BTreeSet<String>) -> String {
-    let mut base = crate::context_assets::readable_name(title);
+    let mut base = super::folder_io::readable_name(title);
     let stem = base.split('.').next().unwrap_or_default().to_ascii_lowercase();
     if matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
         || (stem.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem.ends_with(|c: char| c.is_ascii_digit()))
@@ -237,7 +237,7 @@ impl LibraryService {
                 result = self.sources.download_attachment(&asset.source.provider_id, &asset.source.resource_type, &asset.source.canonical_id, &refs[index], &siblings, &dest, &dest_path, budget) => result,
             };
             if operations::cancelled(store, operation)? { return Ok(None); }
-            let actual = crate::context_assets::open_absolute_dir_nofollow(&dest_path).map_err(|_| unsafe_download())?;
+            let actual = super::folder_io::open_absolute_dir_nofollow(&dest_path).map_err(|_| unsafe_download())?;
             #[cfg(unix)]
             {
                 use cap_std::fs::MetadataExt;

@@ -42,8 +42,8 @@ struct CommentEvidence {
     workspace_id: String,
     tab_id: String,
     root_id: String,
-    companion_id: String,
-    companion_path: String,
+    source_id: String,
+    root_path: String,
     source_kind: ViewerSourceKind,
     review: Option<crate::review::ReviewCommentEvidence>,
 }
@@ -409,8 +409,8 @@ impl CommentsService {
                 workspace_id: value.workspace_id.clone(),
                 tab_id: value.tab_id.clone(),
                 root_id: value.source_id.clone(),
-                companion_id: value.source_id.clone(),
-                companion_path: value.checkout_path.clone(),
+                source_id: value.source_id.clone(),
+                root_path: value.checkout_path.clone(),
                 source_kind: ViewerSourceKind::Review,
                 review: Some(value),
             }
@@ -424,9 +424,9 @@ impl CommentsService {
                 terminal_id: value.terminal_id,
                 workspace_id: value.workspace_id,
                 tab_id: value.tab_id,
+                source_id: value.root_id.clone(),
                 root_id: value.root_id,
-                companion_id: value.companion_id,
-                companion_path: value.companion_path,
+                root_path: value.root_path,
                 source_kind: authorization.context.source_kind,
                 review: None,
             }
@@ -436,7 +436,7 @@ impl CommentsService {
             server_instance: evidence.server_instance.clone(),
             tab_id: evidence.tab_id.clone(),
             source_kind: evidence.source_kind,
-            source_id: evidence.companion_id.clone(),
+            source_id: evidence.source_id.clone(),
         };
         let attachment = CommentAttachment {
             owner,
@@ -581,7 +581,7 @@ impl CommentsService {
                 ));
             }
         };
-        let absolute_path = Path::new(&evidence.companion_path)
+        let absolute_path = Path::new(&evidence.root_path)
             .join(&document.path)
             .to_string_lossy()
             .into_owned();
@@ -755,8 +755,8 @@ impl CommentsService {
                 || current.workspace_id != evidence.workspace_id
                 || current.tab_id != evidence.tab_id
                 || current.root_id != evidence.root_id
-                || current.companion_id != evidence.companion_id
-                || current.companion_path != evidence.companion_path
+                || current.root_id != evidence.source_id
+                || current.root_path != evidence.root_path
             {
                 return Err(InspectionError::new(
                     "comments_detached",
@@ -826,7 +826,13 @@ fn captured_roots_match(batch: &CommentBatch, evidence: &CommentEvidence) -> boo
     batch
         .drafts
         .iter()
-        .all(|draft| draft.file_ref.root_id == evidence.root_id)
+        .all(|draft| {
+            draft.file_ref.root_id == evidence.root_id
+                && (evidence.source_kind == ViewerSourceKind::Review
+                    || (Path::new(&draft.file_ref.path).components().all(|component| matches!(component, std::path::Component::Normal(_)))
+                        && Path::new(&draft.file_ref.absolute_path).strip_prefix(&evidence.root_path)
+                            .is_ok_and(|relative| relative == Path::new(&draft.file_ref.path))))
+        })
 }
 
 fn require_original_source(
@@ -898,7 +904,7 @@ mod tests {
                 server_instance: "server".to_owned(),
                 tab_id: "tab".to_owned(),
                 source_kind: ViewerSourceKind::Context,
-                source_id: "companion".to_owned(),
+                source_id: "library".to_owned(),
             },
             location: CommentLocation {
                 workspace_id: "workspace".to_owned(),
@@ -921,8 +927,8 @@ mod tests {
             workspace_id: "workspace".to_owned(),
             tab_id: "tab".to_owned(),
             root_id: root_id.to_owned(),
-            companion_id: "companion".to_owned(),
-            companion_path: "/companion".to_owned(),
+            source_id: "library".to_owned(),
+            root_path: "/library".to_owned(),
         }
     }
 
@@ -938,7 +944,7 @@ mod tests {
                 review: None,
                 root_id: "root-a".to_owned(),
                 path: "notes.md".to_owned(),
-                absolute_path: "/companion/notes.md".to_owned(),
+                absolute_path: "/library/notes.md".to_owned(),
                 revision: "rev".to_owned(),
                 content_hash: None,
             },
@@ -949,6 +955,11 @@ mod tests {
         });
         assert!(captured_roots_match(&batch, &evidence("root-a")));
         assert!(!captured_roots_match(&batch, &evidence("root-b")));
+        let mut moved = evidence("root-a");
+        moved.root_path = "/another-library".to_owned();
+        assert!(!captured_roots_match(&batch, &moved));
+        batch.drafts[0].file_ref.absolute_path = "/arbitrary/notes.md".to_owned();
+        assert!(!captured_roots_match(&batch, &evidence("root-a")));
     }
 
     #[test]
@@ -983,7 +994,7 @@ mod tests {
             pane_id: "pane".to_owned(),
             terminal_id: "terminal".to_owned(),
             source_kind: ViewerSourceKind::Context,
-            source_id: "companion".to_owned(),
+            source_id: "library".to_owned(),
         };
         assert!(!same_attachment(&batch, &attachment, &evidence));
         assert_eq!(require_owner(&batch, &attachment, &evidence).expect_err("legacy detached").code, "comments_detached");

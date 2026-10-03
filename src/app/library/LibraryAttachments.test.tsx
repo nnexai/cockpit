@@ -131,7 +131,7 @@ it("keeps metadata-only selection local, polls an explicit download, then opens 
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   let item = page;
-  const listing = (): LibraryListing => ({ root: { root_id: "library:fs", kind: "library", label: "Library", path: "/library", repository_id: "", checkout_path: "", companion_id: null }, generation: item.revision, items: [item], follows: [], next_offset: null, diagnostics: [] });
+  const listing = (): LibraryListing => ({ root: { root_id: "library:fs", kind: "library", label: "Library", path: "/library", repository_id: "", checkout_path: "" }, generation: item.revision, items: [item], follows: [], next_offset: null, diagnostics: [] });
   const operation: LibraryOperation = { operation_id: "s7-ui-download", kind: "attachments", item_ids: [page.item_id], phases: [{ phase: "library", state: "running", done: 0, total: 1, message: null, error: null }], report: null, space: null, target: null, cancel_requested: false, finished: false, created_at: "", updated_at: "" };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers })), libraryListing: vi.fn(async () => listing()),
@@ -163,26 +163,26 @@ it("keeps metadata-only selection local, polls an explicit download, then opens 
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); }
 });
 
-it.each(["library", "companion"] as const)("resolves a page-relative image through the %s reader with the shared attachment layout", async (kind) => {
+it.each(["library", "folder"] as const)("resolves a page-relative image through the %s reader with the shared attachment layout", async (kind) => {
   const host = document.createElement("div"); document.body.append(host);
   const mounted = createRoot(host);
-  const rootId = kind === "library" ? "library" : "companion";
+  const rootId = kind === "library" ? "library" : "folder";
   const serverRootId = kind === "library" ? "library:fs" : rootId;
   const prefix = kind === "library" ? page.item_path : "confluence/wiki.test/SD - Software Development/Release";
   const path = `${prefix}/Release.md`;
-  const root = { root_id: serverRootId, kind, label: kind, path: `/${kind}`, repository_id: "", checkout_path: "", companion_id: kind === "companion" ? "c1" : null };
+  const root = { root_id: serverRootId, kind, label: kind, path: `/${kind}`, repository_id: "", checkout_path: "" };
   const documentRead = async () => ({ binding_id: "binding", root_id: serverRootId, path, revision: "r1", content_hash: null, bytes: 100, media_type: "text/markdown", text: "# Release\n\n![Flow](_files/flow.png)", truncated: false, diagnostics: [] });
   const media = { binding_id: "binding", root_id: serverRootId, path: `${prefix}/_files/flow.png`, revision: "r1", content_hash: null, bytes: 68, mime_type: "image/png", width: 1, height: 1, data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLq9wAAAABJRU5ErkJggg==" };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers })),
-    libraryListing: vi.fn(async () => ({ root, generation: "1", items: [page], follows: [], next_offset: null, diagnostics: [] })),
+    libraryListing: vi.fn(async () => ({ root: { root_id: "library:fs", kind: "library", label: "Library", path: "/library", repository_id: "", checkout_path: "" }, generation: "1", items: [page], follows: [], next_offset: null, diagnostics: [] })),
     libraryDocument: vi.fn(documentRead), contextDocument: vi.fn(documentRead),
     contextDirectory: vi.fn(async (_session: string, _viewer: string, request: { path: string }) => ({ binding_id: "binding", root_id: rootId, path: request.path, entries: [], truncated: false, diagnostics: [] })),
     libraryMedia: vi.fn(async () => media), contextMedia: vi.fn(async () => media),
   } as unknown as CockpitClient;
   function Harness() {
     const [view, onChange] = useState<ContextViewState>(() => ({ ...createContextViewState(), rootId, path, files: { [`${rootId}\u0000${path}`]: { rootId, path, mode: "auto", selectionStart: null, selectionEnd: null, scrollTop: 0 } } }));
-    return <ContextViewer client={client} context={kind === "library" ? null : { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "c1", default_root_id: rootId, roots: [root], diagnostics: [] }} value={view} onChange={onChange} />;
+    return <ContextViewer client={client} context={kind === "library" ? null : { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "folder-source", default_root_id: rootId, roots: [root], diagnostics: [] }} value={view} onChange={onChange} />;
   }
   vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:shared-layout"), revokeObjectURL: vi.fn() });
   try {
@@ -202,7 +202,7 @@ it.each(["pdf", "svg", "html"])("never activates a downloaded %s attachment as a
   const item = { ...page, attachments: [{ ...page.attachments[0]!, stored_name: name, state: "downloaded" as const, relative_path: `_files/${name}` }] };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers })),
-    libraryListing: vi.fn(async () => ({ root: { root_id: "library:fs", kind: "library", label: "Library", path: "/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] })),
+    libraryListing: vi.fn(async () => ({ root: { root_id: "library:fs", kind: "library", label: "Library", path: "/library", repository_id: "", checkout_path: "" }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] })),
     libraryDocument: vi.fn(async () => ({ binding_id: "library", root_id: "library:fs", path, revision: "r1", content_hash: null, bytes: 100, media_type: extension === "html" ? "text/html" : extension === "svg" ? "image/svg+xml" : "application/pdf", text: extension === "pdf" ? null : '<svg onload="window.attachmentExecuted=true"><script>window.attachmentExecuted=true</script></svg>', truncated: false, diagnostics: [] })),
     libraryMedia: vi.fn(),
   } as unknown as CockpitClient;

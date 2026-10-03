@@ -3,12 +3,7 @@ import type { CockpitClient } from "../../client/CockpitClient";
 import type { LibraryItemSummary, LibraryListing, LibraryOperation, ProjectProvider, SpaceContextListing, SpaceTarget } from "../../protocol/generated/v1";
 import { errorText, sameSpaceTarget } from "./libraryState";
 
-/**
- * Every mounted Library surface rereads its listing when any of them finishes an
- * operation. The event's `detail` is the finished operation, or null for a
- * change without one (a removal), so a Context pane can expand the files a
- * Space copy wrote into its companion root.
- */
+/** Every mounted Library surface rereads its listing after a completed operation or selection change. */
 export const LIBRARY_CHANGED_EVENT = "cockpit:library-changed";
 
 export function announceLibraryChanged(operation: LibraryOperation | null = null): void {
@@ -46,9 +41,9 @@ function notifyTracker(): void {
   for (const listener of trackerListeners) listener();
 }
 
-// Space adds and updates copy saved items into a Space; the Library items themselves don't change.
+// Selecting Library items for a Space does not change the items themselves.
 function pendingLibraryItemIds(): Set<string> {
-  return new Set([...tracked.values()].filter(({ operation }) => !operation.finished && operation.kind !== "space_add" && operation.kind !== "space_update").flatMap(({ operation }) => operation.item_ids));
+  return new Set([...tracked.values()].filter(({ operation }) => !operation.finished && operation.kind !== "space_add").flatMap(({ operation }) => operation.item_ids));
 }
 
 function storeOperation(operation: LibraryOperation, foreground = false): void {
@@ -290,12 +285,7 @@ export type SpaceListingState = {
   reload: () => void;
 };
 
-/**
- * Reads one Space's Library copies and durable add attempts while `active`
- * (design §4.8, D10). A listing is kept only for the Space that asked for it:
- * changing the target drops it, and a late response for another Space is
- * ignored. While an attempt is pending it rereads until the attempt settles.
- */
+/** Reads live Library and repository selections for one target Space. */
 export function useSpaceContextListing(client: CockpitClient, target: SpaceTarget | null, active: boolean): SpaceListingState {
   const sessionId = target?.session_id ?? null;
   const spaceId = target?.space_id ?? null;
@@ -322,12 +312,6 @@ export function useSpaceContextListing(client: CockpitClient, target: SpaceTarge
     return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, reload);
   }, [active, reload, sessionId, spaceId]);
   const listing = state.listing && target && sameSpaceTarget(state.listing.target, target) ? state.listing : null;
-  const attemptPending = listing?.attempts.some((attempt) => attempt.state === "pending") ?? false;
-  useEffect(() => {
-    if (!active || !attemptPending) return;
-    const timer = window.setTimeout(reload, POLL_MS);
-    return () => window.clearTimeout(timer);
-  }, [active, attemptPending, listing, reload]);
   const status = !listing && state.status === "ready" ? "loading" : state.status;
   return { status, listing, error: state.error, received: state.received, reload };
 }
