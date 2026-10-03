@@ -87,11 +87,12 @@
 .limits-provider header > span, .limits-account h4 > span { font-weight: 400; color: var(--text-muted); font-size: var(--font-size-2xs); }
 .limits-account h4 { margin: 8px 0 0; font-size: var(--font-size-2xs); font-weight: 500; }
 .limits-account ul { list-style: none; margin: 2px 0 0; padding: 0; }
-.limits-row { display: grid; grid-template-columns: 44px minmax(72px, 1fr) 40px 104px; gap: 8px; align-items: center; padding: 2px 0; }
+.limits-row { display: grid; grid-template-columns: 44px minmax(48px, 1fr) 36px 84px 52px; gap: 8px; align-items: center; padding: 2px 0; }
 .limits-row-label { overflow-wrap: anywhere; color: var(--text-muted); }
 .limits-row-meter .limits-meter { display: block; width: auto; }
-.limits-row-detail { display: flex; justify-content: flex-end; gap: 8px; min-width: 0; white-space: nowrap; }
 .limits-row-value { text-align: right; }
+.limits-runout, .limits-reset { white-space: nowrap; }
+.limits-row .limits-runout, .limits-row .limits-reset { text-align: right; }
 .limits-reset { color: var(--text-muted); font-size: var(--font-size-2xs); }
 .limits-provider p, .limits-offline { margin: 6px 0 0; }
 .limits-error { color: var(--blocked); }
@@ -104,6 +105,6 @@
   .limits-window, .limits-chip-meter, .limits-age { display: inline-block; }
 }
 @media (max-width: 480px) {
-  .limits-row { grid-template-columns: 44px 40px minmax(0, 1fr); gap: 8px; }
-  .limits-row-meter { display: none; }
+  .limits-row { grid-template-columns: 44px 36px minmax(0, 1fr); gap: 8px; }
+  .limits-row-meter, .limits-row .limits-reset { display: none; }
 }

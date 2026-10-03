@@ -52,7 +52,7 @@ it("opens a readable credit popup, restores the pointer trigger on Escape, and l
     await act(async () => trigger.click());
     const popup = host.querySelector<HTMLElement>(".limits-popup")!;
     expect(document.activeElement).toBe(popup);
-    expect(popup.textContent).toContain("4 of 8,000 AI credits used · 0.05%");
+    expect(popup.querySelector(".limits-row-value")!.getAttribute("title")).toBe("4 of 8,000 AI credits used · 0.05%");
     expect(popup.textContent).toContain("Monthly");
     expect(popup.textContent).toContain("Not signed in to OMP");
     await act(async () => movePointer(trigger, outside));

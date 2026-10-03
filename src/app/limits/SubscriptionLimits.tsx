@@ -123,11 +123,9 @@ export function SubscriptionLimits({ snapshot, link, now, open, onOpenChange, su
             return <li key={`${limit.id}:${limitIndex}`} className="limits-row">
               <span className="limits-row-label">{windowLabel(limit.window, limit.tier)}</span>
               <span className="limits-row-meter"><Meter limit={limit} stale={stale} expected={pace?.expected} /></span>
-              <span className="limits-row-value">{formatLimitValue(limit, limit.unit !== "percent")}</span>
-              <span className="limits-row-detail">
-                {pace?.runsOutMs != null ? <span className="limits-runout">out in {formatSpan(pace.runsOutMs)}</span> : null}
-                {reset && limit.resets_at_ms !== null ? <span className="limits-reset" title={reset}>{limit.resets_at_ms > now ? `in ${formatSpan(limit.resets_at_ms - now)}` : "reset"}</span> : null}
-              </span>
+              <span className="limits-row-value" title={formatLimitValue(limit, true)}>{formatLimitValue(limit)}</span>
+              <span className="limits-runout">{pace?.runsOutMs != null ? `out ${formatSpan(pace.runsOutMs)}` : null}</span>
+              <span className="limits-reset" title={reset ?? undefined}>{limit.resets_at_ms === null ? null : limit.resets_at_ms > now ? `in ${formatSpan(limit.resets_at_ms - now)}` : "reset"}</span>
             </li>;
           })}</ul>
         </div>)}

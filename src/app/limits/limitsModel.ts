@@ -90,8 +90,9 @@ export interface Pace {
   runsOutMs: number | null;
 }
 
-// Needs a known window length and reset; very early in a window the rate is too noisy to project.
-const MIN_ELAPSED = 0.05;
+// Needs a known window length and reset. The tick shows from 5% elapsed; a time-to-exhaustion is only
+// projected from 20% elapsed, since the burn rate over a small slice of the window is too noisy.
+const MIN_ELAPSED = 0.05, MIN_PROJECT = 0.2;
 
 export function limitPace(limit: QuotaLimit, used: number | null, now: number): Pace | null {
   const length = windowDuration(limit.window) * 1000;
@@ -100,7 +101,7 @@ export function limitPace(limit: QuotaLimit, used: number | null, now: number): 
   const expected = clamp(1 - remaining / length);
   if (expected < MIN_ELAPSED) return null;
   const toExhaust = used > 0 && used < 1 ? (1 - used) * expected * length / used : null;
-  return { expected, runsOutMs: toExhaust !== null && toExhaust < remaining ? toExhaust : null };
+  return { expected, runsOutMs: expected >= MIN_PROJECT && toExhaust !== null && toExhaust < remaining ? toExhaust : null };
 }
 
 export function formatSpan(ms: number): string {
