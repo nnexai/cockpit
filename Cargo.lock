@@ -806,6 +806,7 @@ dependencies = [
  "cockpit-providers",
  "cockpit-secrets",
  "futures-util",
+ "gtk",
  "serde",
  "serde_json",
  "tauri",

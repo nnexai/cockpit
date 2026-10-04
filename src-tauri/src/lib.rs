@@ -1918,6 +1918,16 @@ pub fn run() {
             main_window
                 .set_decorations(window_config.decorations)
                 .expect("failed to apply configured window decorations");
+            #[cfg(target_os = "linux")]
+            {
+                use gtk::prelude::WidgetExt as _;
+
+                // The opaque webview paints the content; skip GTK's redundant background fill.
+                main_window
+                    .gtk_window()
+                    .expect("failed to access the native GTK window")
+                    .set_app_paintable(true);
+            }
             main_window
                 .show()
                 .expect("failed to show the configured native window");

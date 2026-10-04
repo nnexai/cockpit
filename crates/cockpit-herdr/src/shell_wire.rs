@@ -1,8 +1,9 @@
-//! Generation-1 Herdr endpoint metadata. The binary layout is frozen in Herdr
-//! v0.9.2's protocol/wire.rs; only commands and popup metadata are retained.
+//! Generation-1 Herdr endpoint metadata, including the optional frozen v0.9.3
+//! surface-delta layout. Only commands and popup metadata are retained.
 use std::path::Path;
 use std::time::Duration;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 use cockpit_core::InspectionError;
 use cockpit_protocol::herdr_shell::{
     HerdrCommand, HerdrCommandAction, HerdrPopup, HerdrPopupSize, HerdrShellState, HerdrShellStatus,
@@ -17,6 +18,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_HANDSHAKE_FRAMES: usize = 256;
 const SNAPSHOT_CODEC: &str = "shell.snapshot.v1";
 const SURFACE_CODEC: &str = "shell.surface.v1";
+const DELTA_CODEC: &str = "endpoint.surface-delta.v1";
+const MAX_DELTA_SPANS: usize = 4096;
 
 fn malformed(message: impl Into<String>) -> InspectionError {
     InspectionError::new("shell_malformed", message)
@@ -62,6 +65,8 @@ pub(crate) struct ShellConnection {
     welcomed: bool,
     snapshot_revision: Option<u64>,
     surface: Option<SurfaceMetadata>,
+    delta_negotiated: bool,
+    delta_scratch: Vec<u8>,
 }
 
 pub(crate) async fn connect(
@@ -76,7 +81,7 @@ pub(crate) async fn connect(
             "generation": 1, "cell_width_px": 8, "cell_height_px": 16,
             "surface_size": {"cols": 120, "rows": 40}, "surface_active": true,
             "pixel_mouse": false, "direct_graphics": false, "endpoint_keybindings": false,
-            "mouse_capture": false, "surface_reuse": false, "surface_delta": false,
+            "mouse_capture": false, "surface_reuse": false, "surface_delta": true,
             "surface_scroll": false, "snapshot_codecs": [SNAPSHOT_CODEC],
             "surface_codecs": [SURFACE_CODEC], "input_codecs": ["shell.input.semantic.v1"],
             "blob_codecs": ["shell.blob.v1"]
@@ -109,6 +114,8 @@ pub(crate) async fn connect(
             welcomed: false,
             snapshot_revision: None,
             surface: None,
+            delta_negotiated: false,
+            delta_scratch: Vec::new(),
         };
         for _ in 0..MAX_HANDSHAKE_FRAMES {
             connection.next().await?;
@@ -133,7 +140,7 @@ impl ShellConnection {
     /// adapter's subscription select does not lose the framing boundary.
     pub(crate) async fn next(&mut self) -> Result<bool, InspectionError> {
         let bytes = self.reader.read(&mut self.socket).await?;
-        let message = decode_message(bytes)?;
+        let message = decode_message(bytes, self.delta_negotiated, &mut self.delta_scratch)?;
         let changed = self.apply(message)?;
         self.reader.reset();
         Ok(changed)
@@ -160,6 +167,10 @@ impl ShellConnection {
                 }
                 // v0.9.2 welcome has no boot ID; socket peer credentials establish
                 // provenance, then the first snapshot establishes the boot ID.
+                self.delta_negotiated = welcome
+                    .capabilities
+                    .iter()
+                    .any(|value| value == "surface_delta");
                 self.welcomed = true;
                 Ok(false)
             }
@@ -222,6 +233,51 @@ impl ShellConnection {
                 self.surface = Some(surface);
                 Ok(changed)
             }
+            Message::Delta {
+                base_projection_revision,
+                base_surface_revision,
+                surface,
+                popup_update,
+            } => {
+                self.require_welcome()?;
+                let baseline = self
+                    .surface
+                    .as_ref()
+                    .ok_or_else(|| malformed("Herdr shell delta has no full baseline"))?;
+                let boot_id = self
+                    .boot_id
+                    .as_deref()
+                    .ok_or_else(|| malformed("Herdr shell delta preceded its snapshot"))?;
+                check_identity(&surface.boot_id, boot_id)?;
+                if base_projection_revision != baseline.projection_revision
+                    || base_surface_revision != baseline.surface_revision
+                    || surface.surface_revision <= base_surface_revision
+                    || surface.projection_revision < base_projection_revision
+                    || (surface.width, surface.height) != (baseline.width, baseline.height)
+                {
+                    return Err(malformed("Herdr shell delta does not match its baseline"));
+                }
+                match (surface.popup.as_ref(), popup_update) {
+                    (None, None) | (Some(_), Some(PopupCellsUpdate::Replace)) => {}
+                    (Some(popup), Some(PopupCellsUpdate::Patch))
+                        if baseline.popup.as_ref().is_some_and(|previous| {
+                            previous.terminal_id == popup.terminal_id
+                                && baseline.popup_dimensions == surface.popup_dimensions
+                        }) => {}
+                    _ => {
+                        return Err(malformed(
+                            "Herdr shell popup delta does not match its baseline",
+                        ));
+                    }
+                }
+                let changed = Some(surface.projection_revision) == self.snapshot_revision
+                    && self.state.popup != surface.popup;
+                if changed {
+                    self.state.popup = surface.popup.clone();
+                }
+                self.surface = Some(surface);
+                Ok(changed)
+            }
             Message::Patch {
                 boot_id,
                 projection_revision,
@@ -247,7 +303,7 @@ impl ShellConnection {
                     ));
                 }
                 surface.surface_revision = surface_revision;
-                // Patches carry no popup metadata; only complete surfaces can close it.
+                // Legacy patches carry no popup metadata; full surfaces and deltas do.
                 Ok(false)
             }
             Message::Error(message) => {
@@ -332,6 +388,8 @@ struct Welcome {
     surface_codec: String,
     input_codec: String,
     blob_codec: String,
+    #[serde(default)]
+    capabilities: Vec<String>,
     #[serde(default)]
     error: Option<WelcomeError>,
 }
@@ -435,12 +493,25 @@ struct SurfaceMetadata {
     boot_id: String,
     projection_revision: u64,
     surface_revision: u64,
+    width: u16,
+    height: u16,
     popup: Option<HerdrPopup>,
+    popup_dimensions: Option<(u16, u16)>,
+}
+enum PopupCellsUpdate {
+    Patch,
+    Replace,
 }
 enum Message {
     Welcome(Welcome),
     Snapshot(Snapshot),
     Surface(SurfaceMetadata),
+    Delta {
+        base_projection_revision: u64,
+        base_surface_revision: u64,
+        surface: SurfaceMetadata,
+        popup_update: Option<PopupCellsUpdate>,
+    },
     Patch {
         boot_id: String,
         projection_revision: u64,
@@ -456,6 +527,7 @@ enum Message {
 // assets. Borrowed strings and blobs refer directly to the reusable frame buffer.
 struct Decoder<'a> {
     bytes: &'a [u8],
+    delta: bool,
 }
 impl<'a> Decoder<'a> {
     fn value<T: Deserialize<'a>>(&mut self) -> Result<T, InspectionError> {
@@ -480,6 +552,13 @@ impl<'a> Decoder<'a> {
             return Err(malformed("Shell collection length exceeds its frame"));
         }
         Ok(count as usize)
+    }
+    fn bounded_count(&mut self, limit: usize) -> Result<usize, InspectionError> {
+        let count = self.count()?;
+        if self.delta && count > limit {
+            return Err(malformed("Shell delta collection exceeds its limit"));
+        }
+        Ok(count)
     }
     fn variant(&mut self, variants: u32) -> Result<u32, InspectionError> {
         let tag: u32 = self.value()?;
@@ -511,6 +590,10 @@ impl<'a> Decoder<'a> {
     }
     fn cells(&mut self) -> Result<usize, InspectionError> {
         let count = self.count()?;
+        self.cell_values(count)?;
+        Ok(count)
+    }
+    fn cell_values(&mut self, count: usize) -> Result<(), InspectionError> {
         if count > self.bytes.len() / 6 {
             return Err(malformed("Shell cell count exceeds its frame"));
         }
@@ -524,20 +607,63 @@ impl<'a> Decoder<'a> {
                 let _: u32 = self.value()?;
             }
         }
-        Ok(count)
+        Ok(())
     }
-    fn frame(&mut self) -> Result<(), InspectionError> {
-        let cells = self.cells()?;
+    fn frame(&mut self) -> Result<(u16, u16), InspectionError> {
+        let cells = if self.delta {
+            self.count()?
+        } else {
+            self.cells()?
+        };
         let width: u16 = self.value()?;
         let height: u16 = self.value()?;
-        if cells != usize::from(width) * usize::from(height) {
+        if self.delta {
+            Self::grid_size(width, height)?;
+            if cells != 0 {
+                return Err(malformed("Shell delta metadata contains cells"));
+            }
+        } else if cells != usize::from(width) * usize::from(height) {
             return Err(malformed("Shell grid dimensions do not match its cells"));
         }
         self.cursor()?;
-        for _ in 0..self.count()? {
+        for _ in 0..self.bounded_count(65_536)? {
             self.text()?;
         }
-        self.blob()
+        self.blob()?;
+        Ok((width, height))
+    }
+    fn grid_size(width: u16, height: u16) -> Result<usize, InspectionError> {
+        let cells = usize::from(width) * usize::from(height);
+        if width > 4096 || height > 4096 || cells > 1_000_000 {
+            return Err(malformed("Shell delta dimensions exceed their limit"));
+        }
+        Ok(cells)
+    }
+    fn rows(&mut self, width: u16, height: u16) -> Result<(), InspectionError> {
+        let budget = Self::grid_size(width, height)?;
+        let count = self.bounded_count(MAX_DELTA_SPANS.min(budget))?;
+        let row_width = usize::from(width);
+        let mut previous_end = 0;
+        let mut total_cells = 0;
+        for _ in 0..count {
+            let x: u16 = self.value()?;
+            let y: u16 = self.value()?;
+            let cells = self.count()?;
+            if cells == 0 || y >= height || x >= width || cells > row_width - usize::from(x) {
+                return Err(malformed("Shell delta span is outside its row"));
+            }
+            let start = usize::from(y) * row_width + usize::from(x);
+            if start < previous_end {
+                return Err(malformed("Shell delta spans overlap or are not sorted"));
+            }
+            total_cells += cells;
+            if total_cells > budget {
+                return Err(malformed("Shell delta cell budget exceeded"));
+            }
+            self.cell_values(cells)?;
+            previous_end = start + cells;
+        }
+        Ok(())
     }
     fn rect(&mut self) -> Result<(), InspectionError> {
         for _ in 0..4 {
@@ -546,7 +672,7 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
     fn panes(&mut self) -> Result<(), InspectionError> {
-        for _ in 0..self.count()? {
+        for _ in 0..self.bounded_count(4096)? {
             self.text()?;
             self.number()?;
             self.rect()?;
@@ -568,12 +694,12 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
     fn splits(&mut self) -> Result<(), InspectionError> {
-        for _ in 0..self.count()? {
+        for _ in 0..self.bounded_count(4096)? {
             self.variant(2)?;
             let _: u16 = self.value()?;
             self.rect()?;
             self.rect()?;
-            for _ in 0..self.count()? {
+            for _ in 0..self.bounded_count(4096)? {
                 self.flag()?;
             }
         }
@@ -592,9 +718,9 @@ impl<'a> Decoder<'a> {
             },
         }))
     }
-    fn popup(&mut self) -> Result<Option<HerdrPopup>, InspectionError> {
+    fn popup(&mut self) -> Result<(Option<HerdrPopup>, Option<(u16, u16)>), InspectionError> {
         if !self.flag()? {
-            return Ok(None);
+            return Ok((None, None));
         }
         let popup = HerdrPopup {
             terminal_id: self.text()?.to_owned(),
@@ -602,12 +728,12 @@ impl<'a> Decoder<'a> {
             width: self.popup_size()?,
             height: self.popup_size()?,
         };
-        self.frame()?;
+        let dimensions = self.frame()?;
         self.flag()?;
         self.flag()?;
         let _: u32 = self.value()?;
         let _: u32 = self.value()?;
-        Ok(Some(popup))
+        Ok((Some(popup), Some(dimensions)))
     }
     fn asset_key(&mut self) -> Result<(), InspectionError> {
         match self.variant(2)? {
@@ -629,11 +755,11 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
     fn graphics(&mut self) -> Result<(), InspectionError> {
-        for _ in 0..self.count()? {
+        for _ in 0..self.bounded_count(4096)? {
             self.asset_key()?;
             self.blob()?;
         }
-        for _ in 0..self.count()? {
+        for _ in 0..self.bounded_count(65_536)? {
             self.asset_key()?;
             let _: u32 = self.value()?;
             let _: u16 = self.value()?;
@@ -644,18 +770,44 @@ impl<'a> Decoder<'a> {
             let _: i32 = self.value()?;
             let _: u32 = self.value()?;
         }
-        for _ in 0..self.count()? {
+        for _ in 0..self.bounded_count(65_536)? {
             self.asset_key()?;
         }
         Ok(())
     }
+    fn surface(&mut self) -> Result<SurfaceMetadata, InspectionError> {
+        let boot_id = self.text()?.to_owned();
+        let projection_revision = self.number()?;
+        let surface_revision = self.number()?;
+        let (width, height) = self.frame()?;
+        self.panes()?;
+        self.splits()?;
+        let (popup, popup_dimensions) = self.popup()?;
+        self.graphics()?;
+        Ok(SurfaceMetadata {
+            boot_id,
+            projection_revision,
+            surface_revision,
+            width,
+            height,
+            popup,
+            popup_dimensions,
+        })
+    }
 }
 
-fn decode_message(bytes: &[u8]) -> Result<Message, InspectionError> {
+fn decode_message(
+    bytes: &[u8],
+    delta_negotiated: bool,
+    scratch: &mut Vec<u8>,
+) -> Result<Message, InspectionError> {
     if bytes.is_empty() || bytes.len() > MAX_FRAME_SIZE {
         return Err(malformed("Invalid shell frame size"));
     }
-    let mut decoder = Decoder { bytes };
+    let mut decoder = Decoder {
+        bytes,
+        delta: false,
+    };
     let tag: u32 = decoder.value()?;
     let message = match tag {
         3 => Message::Shutdown(decoder.optional_text()?.map(str::to_owned)),
@@ -683,22 +835,7 @@ fn decode_message(bytes: &[u8]) -> Result<Message, InspectionError> {
             let _: u16 = decoder.value()?;
             Message::Ignored
         }
-        13 => {
-            let boot_id = decoder.text()?.to_owned();
-            let projection_revision = decoder.number()?;
-            let surface_revision = decoder.number()?;
-            decoder.frame()?;
-            decoder.panes()?;
-            decoder.splits()?;
-            let popup = decoder.popup()?;
-            decoder.graphics()?;
-            Message::Surface(SurfaceMetadata {
-                boot_id,
-                projection_revision,
-                surface_revision,
-                popup,
-            })
-        }
+        13 => Message::Surface(decoder.surface()?),
         14 => {
             decoder.variant(4)?;
             decoder.text()?;
@@ -756,6 +893,7 @@ fn decode_message(bytes: &[u8]) -> Result<Message, InspectionError> {
             match kind {
                 "endpoint.welcome.v1" => Message::Welcome(json(data)?),
                 SNAPSHOT_CODEC => Message::Snapshot(json(data)?),
+                DELTA_CODEC if delta_negotiated => decode_delta(data, scratch)?,
                 _ if kind.starts_with("shell.snapshot.")
                     || kind.starts_with("shell.surface.")
                     || kind.starts_with("endpoint.welcome.")
@@ -786,12 +924,74 @@ fn decode_message(bytes: &[u8]) -> Result<Message, InspectionError> {
     Ok(message)
 }
 
+fn decode_delta(data: &str, scratch: &mut Vec<u8>) -> Result<Message, InspectionError> {
+    if data.len() > MAX_FRAME_SIZE {
+        return Err(malformed("Shell delta exceeds its frame limit"));
+    }
+    // The estimate includes at most two spare bytes and is bounded by the
+    // already checked outer frame. Reuse this buffer across successive deltas.
+    let capacity = base64::decoded_len_estimate(data.len());
+    if scratch.capacity() < capacity {
+        scratch.reserve_exact(capacity - scratch.len());
+    }
+    scratch.resize(capacity, 0);
+    let length = STANDARD_NO_PAD
+        .decode_slice(data, scratch.as_mut_slice())
+        .map_err(|error| malformed(format!("Invalid shell delta base64: {error}")))?;
+    scratch.truncate(length);
+    let mut decoder = Decoder {
+        bytes: scratch,
+        delta: true,
+    };
+    let base_projection_revision = decoder.number()?;
+    let base_surface_revision = decoder.number()?;
+    let surface = decoder.surface()?;
+    decoder.rows(surface.width, surface.height)?;
+    let popup_update = if decoder.flag()? {
+        let (width, height) = surface
+            .popup_dimensions
+            .ok_or_else(|| malformed("Shell delta popup cells have no popup metadata"))?;
+        let variant: u32 = decoder.value()?;
+        match variant {
+            0 => {
+                decoder.rows(width, height)?;
+                Some(PopupCellsUpdate::Patch)
+            }
+            1 => {
+                let count = decoder.count()?;
+                if count != Decoder::grid_size(width, height)? {
+                    return Err(malformed(
+                        "Shell delta popup replacement dimensions do not match",
+                    ));
+                }
+                decoder.cell_values(count)?;
+                Some(PopupCellsUpdate::Replace)
+            }
+            _ => return Err(malformed("Invalid shell delta popup update variant")),
+        }
+    } else {
+        None
+    };
+    if !decoder.bytes.is_empty() {
+        return Err(malformed("Trailing bytes in shell delta"));
+    }
+    Ok(Message::Delta {
+        base_projection_revision,
+        base_surface_revision,
+        surface,
+        popup_update,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn encode(value: impl serde::Serialize) -> Vec<u8> {
         bincode::serde::encode_to_vec(value, bincode::config::standard()).unwrap()
+    }
+    fn decode(bytes: &[u8]) -> Result<Message, InspectionError> {
+        decode_message(bytes, true, &mut Vec::new())
     }
     fn empty_surface(boot_id: &str, revision: u64, popup: Option<(&str, &str)>) -> Vec<u8> {
         let mut bytes = encode((13_u32, boot_id, 1_u64, revision));
@@ -813,6 +1013,629 @@ mod tests {
     fn append_empty_frame(bytes: &mut Vec<u8>) {
         bytes.extend(encode((0_u64, 0_u16, 0_u16, false, 0_u64, 0_u64)));
     }
+
+    #[derive(Clone)]
+    enum PopupUpdate {
+        Patch(Vec<(u16, u16, usize)>),
+        Replace(usize),
+        Invalid,
+    }
+    #[derive(Clone)]
+    struct DeltaFixture {
+        boot: &'static str,
+        base_projection: u64,
+        base_revision: u64,
+        projection: u64,
+        revision: u64,
+        dimensions: (u16, u16),
+        metadata_cells: u64,
+        popup: bool,
+        popup_id: &'static str,
+        popup_dimensions: (u16, u16),
+        popup_metadata_cells: u64,
+        rows: Vec<(u16, u16, usize)>,
+        popup_update: Option<PopupUpdate>,
+    }
+    impl Default for DeltaFixture {
+        fn default() -> Self {
+            Self {
+                boot: "boot",
+                base_projection: 1,
+                base_revision: 1,
+                projection: 1,
+                revision: 2,
+                dimensions: (3, 2),
+                metadata_cells: 0,
+                popup: false,
+                popup_metadata_cells: 0,
+                popup_id: "popup",
+                popup_dimensions: (2, 1),
+                rows: vec![(1, 0, 2), (0, 1, 1)],
+                popup_update: None,
+            }
+        }
+    }
+    fn append_cells(bytes: &mut Vec<u8>, count: usize) {
+        bytes.extend(encode(count as u64));
+        for _ in 0..count {
+            bytes.extend(encode(("x", 0_u32, 0_u32, 0_u16, false, None::<u32>)));
+        }
+    }
+    fn append_rows(bytes: &mut Vec<u8>, rows: &[(u16, u16, usize)]) {
+        bytes.extend(encode(rows.len() as u64));
+        for &(x, y, count) in rows {
+            bytes.extend(encode((x, y)));
+            append_cells(bytes, count);
+        }
+    }
+    impl DeltaFixture {
+        fn payload(&self) -> Vec<u8> {
+            let mut bytes = encode((
+                self.base_projection,
+                self.base_revision,
+                self.boot,
+                self.projection,
+                self.revision,
+            ));
+            bytes.extend(encode((
+                self.metadata_cells,
+                self.dimensions.0,
+                self.dimensions.1,
+                false,
+                0_u64,
+                0_u64,
+                0_u64,
+                0_u64,
+                self.popup,
+            )));
+            if self.popup {
+                bytes.extend(encode((
+                    self.popup_id,
+                    "Title",
+                    Some((0_u32, 30_u16)),
+                    Some((1_u32, 50_u8)),
+                    self.popup_metadata_cells,
+                    self.popup_dimensions.0,
+                    self.popup_dimensions.1,
+                    false,
+                    0_u64,
+                    0_u64,
+                    false,
+                    false,
+                    0_u32,
+                    0_u32,
+                )));
+            }
+            bytes.extend(encode((0_u64, 0_u64, 0_u64)));
+            append_rows(&mut bytes, &self.rows);
+            bytes.extend(encode(self.popup_update.is_some()));
+            match &self.popup_update {
+                Some(PopupUpdate::Patch(rows)) => {
+                    bytes.extend(encode(0_u32));
+                    append_rows(&mut bytes, rows);
+                }
+                Some(PopupUpdate::Replace(count)) => {
+                    bytes.extend(encode(1_u32));
+                    append_cells(&mut bytes, *count);
+                }
+                Some(PopupUpdate::Invalid) => bytes.extend(encode(2_u32)),
+                None => {}
+            }
+            bytes
+        }
+        fn control(&self) -> Vec<u8> {
+            delta_control(&self.payload())
+        }
+        fn baseline(&self) -> Vec<u8> {
+            let mut bytes = encode((13_u32, self.boot, self.base_projection, self.base_revision));
+            append_cells(
+                &mut bytes,
+                usize::from(self.dimensions.0) * usize::from(self.dimensions.1),
+            );
+            bytes.extend(encode((
+                self.dimensions.0,
+                self.dimensions.1,
+                false,
+                0_u64,
+                0_u64,
+                0_u64,
+                0_u64,
+                self.popup,
+            )));
+            if self.popup {
+                bytes.extend(encode((
+                    self.popup_id,
+                    "Title",
+                    Some((0_u32, 30_u16)),
+                    Some((1_u32, 50_u8)),
+                )));
+                append_cells(
+                    &mut bytes,
+                    usize::from(self.popup_dimensions.0) * usize::from(self.popup_dimensions.1),
+                );
+                bytes.extend(encode((
+                    self.popup_dimensions.0,
+                    self.popup_dimensions.1,
+                    false,
+                    0_u64,
+                    0_u64,
+                    false,
+                    false,
+                    0_u32,
+                    0_u32,
+                )));
+            }
+            bytes.extend(encode((0_u64, 0_u64, 0_u64)));
+            bytes
+        }
+    }
+    fn delta_control(payload: &[u8]) -> Vec<u8> {
+        encode((20_u32, DELTA_CODEC, STANDARD_NO_PAD.encode(payload)))
+    }
+
+    #[test]
+    fn delta_rejects_every_truncation_and_trailing_bytes() {
+        let fixture = DeltaFixture {
+            popup: true,
+            popup_update: Some(PopupUpdate::Replace(2)),
+            ..DeltaFixture::default()
+        };
+        let payload = fixture.payload();
+        for end in 0..payload.len() {
+            assert_eq!(
+                decode(&delta_control(&payload[..end])).err().unwrap().code,
+                "shell_malformed"
+            );
+        }
+        let control = fixture.control();
+        for end in 0..control.len() {
+            assert_eq!(
+                decode(&control[..end]).err().unwrap().code,
+                "shell_malformed"
+            );
+        }
+        let mut trailing = payload;
+        trailing.push(0);
+        assert_eq!(
+            decode(&delta_control(&trailing)).err().unwrap().code,
+            "shell_malformed"
+        );
+        let mut trailing = control;
+        trailing.push(0);
+        assert_eq!(decode(&trailing).err().unwrap().code, "shell_malformed");
+        for data in ["!", "Zg==", "Zh"] {
+            assert_eq!(
+                decode(&encode((20_u32, DELTA_CODEC, data)))
+                    .err()
+                    .unwrap()
+                    .code,
+                "shell_malformed"
+            );
+        }
+    }
+
+    #[test]
+    fn delta_rejects_invalid_grids_spans_and_popup_updates() {
+        let default = DeltaFixture::default();
+        let invalid = [
+            DeltaFixture {
+                dimensions: (4097, 1),
+                ..default.clone()
+            },
+            DeltaFixture {
+                dimensions: (1001, 1000),
+                ..default.clone()
+            },
+            DeltaFixture {
+                metadata_cells: 1,
+                ..default.clone()
+            },
+            DeltaFixture {
+                popup: true,
+                popup_metadata_cells: 1,
+                ..default.clone()
+            },
+            DeltaFixture {
+                rows: vec![(0, 0, 0)],
+                ..default.clone()
+            },
+            DeltaFixture {
+                rows: vec![(3, 0, 1)],
+                ..default.clone()
+            },
+            DeltaFixture {
+                rows: vec![(0, 2, 1)],
+                ..default.clone()
+            },
+            DeltaFixture {
+                rows: vec![(2, 0, 2)],
+                ..default.clone()
+            },
+            DeltaFixture {
+                rows: vec![(0, 1, 1), (0, 0, 1)],
+                ..default.clone()
+            },
+            DeltaFixture {
+                rows: vec![(0, 0, 2), (1, 0, 1)],
+                ..default.clone()
+            },
+            DeltaFixture {
+                rows: vec![(0, 0, 1); 7],
+                ..default.clone()
+            },
+            DeltaFixture {
+                dimensions: (4096, 2),
+                rows: vec![(0, 0, 1); 4097],
+                ..default.clone()
+            },
+            DeltaFixture {
+                popup_update: Some(PopupUpdate::Replace(2)),
+                ..default.clone()
+            },
+            DeltaFixture {
+                popup: true,
+                popup_update: Some(PopupUpdate::Replace(1)),
+                ..default.clone()
+            },
+            DeltaFixture {
+                popup: true,
+                popup_update: Some(PopupUpdate::Patch(vec![(1, 0, 2)])),
+                ..default.clone()
+            },
+            DeltaFixture {
+                popup: true,
+                popup_update: Some(PopupUpdate::Invalid),
+                ..default
+            },
+        ];
+        for fixture in invalid {
+            assert_eq!(
+                decode(&fixture.control()).err().unwrap().code,
+                "shell_malformed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn delta_popup_continuity_survives_legacy_patch_and_projection_interleave() {
+        let fixture = DeltaFixture::default();
+        let mut connection = connection("boot");
+        assert!(
+            !connection
+                .apply(decode(&fixture.baseline()).unwrap())
+                .unwrap()
+        );
+        let open = DeltaFixture {
+            popup: true,
+            popup_update: Some(PopupUpdate::Replace(2)),
+            ..fixture.clone()
+        };
+        assert!(connection.apply(decode(&open.control()).unwrap()).unwrap());
+        let popup = connection.state.popup.clone().unwrap();
+        assert_eq!(popup.terminal_id, "popup");
+        assert_eq!(popup.title, "Title");
+        assert_eq!(popup.width, Some(HerdrPopupSize::Cells { value: 30 }));
+        assert_eq!(popup.height, Some(HerdrPopupSize::Percent { value: 50 }));
+        let full = decode(&empty_surface("boot", 2, Some(("popup", "Title")))).unwrap();
+        let mut full_connection = self::connection("boot");
+        assert!(full_connection.apply(full).unwrap());
+        assert_eq!(connection.state.popup, full_connection.state.popup);
+        let patch = encode((19_u32, "boot", 1_u64, 2_u64, 3_u64, 0_u64, 0_u64, false));
+        assert!(!connection.apply(decode(&patch).unwrap()).unwrap());
+        let update = DeltaFixture {
+            base_revision: 3,
+            revision: 4,
+            popup_update: Some(PopupUpdate::Patch(vec![(0, 0, 1)])),
+            ..open
+        };
+        assert!(
+            !connection
+                .apply(decode(&update.control()).unwrap())
+                .unwrap()
+        );
+        assert_eq!(connection.state.popup.as_ref(), Some(&popup));
+        let close = DeltaFixture {
+            base_revision: 4,
+            revision: 5,
+            projection: 2,
+            ..fixture
+        };
+        assert!(!connection.apply(decode(&close.control()).unwrap()).unwrap());
+        assert_eq!(connection.state.popup.as_ref(), Some(&popup));
+        let snapshot = json(r#"{"boot_id":"boot","revision":2,"commands":[]}"#).unwrap();
+        assert!(connection.apply(Message::Snapshot(snapshot)).unwrap());
+        assert_eq!(connection.state.popup, None);
+        assert!(
+            full_connection
+                .apply(decode(&empty_surface("boot", 5, None)).unwrap())
+                .unwrap()
+        );
+        assert_eq!(connection.state.popup, full_connection.state.popup);
+        // A snapshot can also arrive first; the matching delta then publishes
+        // immediately rather than waiting for another snapshot.
+        let snapshot = json(r#"{"boot_id":"boot","revision":3,"commands":[]}"#).unwrap();
+        assert!(!connection.apply(Message::Snapshot(snapshot)).unwrap());
+        let reopen = DeltaFixture {
+            base_projection: 2,
+            base_revision: 5,
+            projection: 3,
+            revision: 6,
+            popup: true,
+            popup_update: Some(PopupUpdate::Replace(2)),
+            ..DeltaFixture::default()
+        };
+        assert!(
+            connection
+                .apply(decode(&reopen.control()).unwrap())
+                .unwrap()
+        );
+        assert_eq!(connection.state.popup.as_ref(), Some(&popup));
+    }
+
+    #[tokio::test]
+    async fn delta_rejects_absent_baseline_identity_and_revision_chain_changes() {
+        let default = DeltaFixture::default();
+        let mut absent = connection("boot");
+        assert_eq!(
+            absent
+                .apply(decode(&default.control()).unwrap())
+                .err()
+                .unwrap()
+                .code,
+            "shell_malformed"
+        );
+        let mut unwelcomed = connection("boot");
+        unwelcomed.welcomed = false;
+        assert_eq!(
+            unwelcomed
+                .apply(decode(&default.control()).unwrap())
+                .err()
+                .unwrap()
+                .code,
+            "shell_unsupported"
+        );
+        for (fixture, code) in [
+            (
+                DeltaFixture {
+                    boot: "other",
+                    ..default.clone()
+                },
+                "shell_identity_mismatch",
+            ),
+            (
+                DeltaFixture {
+                    base_revision: 2,
+                    ..default.clone()
+                },
+                "shell_malformed",
+            ),
+            (
+                DeltaFixture {
+                    base_projection: 2,
+                    ..default.clone()
+                },
+                "shell_malformed",
+            ),
+            (
+                DeltaFixture {
+                    revision: 1,
+                    ..default.clone()
+                },
+                "shell_malformed",
+            ),
+            (
+                DeltaFixture {
+                    projection: 0,
+                    ..default.clone()
+                },
+                "shell_malformed",
+            ),
+            (
+                DeltaFixture {
+                    dimensions: (2, 3),
+                    rows: Vec::new(),
+                    ..default.clone()
+                },
+                "shell_malformed",
+            ),
+        ] {
+            let mut connection = connection("boot");
+            connection
+                .apply(decode(&default.baseline()).unwrap())
+                .unwrap();
+            assert_eq!(
+                connection
+                    .apply(decode(&fixture.control()).unwrap())
+                    .err()
+                    .unwrap()
+                    .code,
+                code
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn delta_popup_patch_requires_matching_grid_baseline() {
+        let base = DeltaFixture::default();
+        let open = DeltaFixture {
+            popup: true,
+            popup_update: Some(PopupUpdate::Replace(2)),
+            ..base.clone()
+        };
+        let next = DeltaFixture {
+            base_revision: 2,
+            revision: 3,
+            popup_update: Some(PopupUpdate::Patch(Vec::new())),
+            ..open.clone()
+        };
+        for invalid in [
+            DeltaFixture {
+                popup_id: "other-popup",
+                ..next.clone()
+            },
+            DeltaFixture {
+                popup_dimensions: (1, 2),
+                ..next.clone()
+            },
+            DeltaFixture {
+                popup_update: None,
+                ..next.clone()
+            },
+        ] {
+            let mut connection = connection("boot");
+            connection.apply(decode(&base.baseline()).unwrap()).unwrap();
+            connection.apply(decode(&open.control()).unwrap()).unwrap();
+            let popup = connection.state.popup.clone();
+            assert_eq!(
+                connection
+                    .apply(decode(&invalid.control()).unwrap())
+                    .err()
+                    .unwrap()
+                    .code,
+                "shell_malformed"
+            );
+            assert_eq!(connection.state.popup, popup);
+            assert_eq!(connection.surface.as_ref().unwrap().surface_revision, 2);
+        }
+        let mut connection = connection("boot");
+        connection.apply(decode(&base.baseline()).unwrap()).unwrap();
+        let missing = DeltaFixture {
+            popup: true,
+            popup_update: Some(PopupUpdate::Patch(Vec::new())),
+            ..base
+        };
+        assert_eq!(
+            connection
+                .apply(decode(&missing.control()).unwrap())
+                .err()
+                .unwrap()
+                .code,
+            "shell_malformed"
+        );
+        assert_eq!(connection.state.popup, None);
+        assert_eq!(connection.surface.as_ref().unwrap().surface_revision, 1);
+    }
+
+    #[tokio::test]
+    async fn delta_popup_replace_authorizes_new_or_resized_grid_and_patch_preserves_it() {
+        let base = DeltaFixture::default();
+        let mut connection = connection("boot");
+        connection.apply(decode(&base.baseline()).unwrap()).unwrap();
+        let open = DeltaFixture {
+            popup: true,
+            popup_update: Some(PopupUpdate::Replace(2)),
+            ..base
+        };
+        assert!(connection.apply(decode(&open.control()).unwrap()).unwrap());
+        let patch = DeltaFixture {
+            base_revision: 2,
+            revision: 3,
+            popup_update: Some(PopupUpdate::Patch(vec![(0, 0, 1)])),
+            ..open
+        };
+        assert!(!connection.apply(decode(&patch.control()).unwrap()).unwrap());
+        let replace = DeltaFixture {
+            base_revision: 3,
+            revision: 4,
+            popup_id: "other-popup",
+            popup_update: Some(PopupUpdate::Replace(2)),
+            ..patch
+        };
+        assert!(
+            connection
+                .apply(decode(&replace.control()).unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            connection.state.popup.as_ref().unwrap().terminal_id,
+            "other-popup"
+        );
+        let resize = DeltaFixture {
+            base_revision: 4,
+            revision: 5,
+            popup_dimensions: (2, 2),
+            popup_update: Some(PopupUpdate::Replace(4)),
+            ..replace
+        };
+        assert!(
+            !connection
+                .apply(decode(&resize.control()).unwrap())
+                .unwrap()
+        );
+        let patch = DeltaFixture {
+            base_revision: 5,
+            revision: 6,
+            popup_update: Some(PopupUpdate::Patch(vec![(1, 1, 1)])),
+            ..resize
+        };
+        assert!(!connection.apply(decode(&patch.control()).unwrap()).unwrap());
+        assert_eq!(connection.surface.as_ref().unwrap().surface_revision, 6);
+    }
+
+    #[tokio::test]
+    async fn delta_popup_patch_tracks_full_surface_actual_grid_not_size_preferences() {
+        let full = DeltaFixture {
+            popup: true,
+            popup_update: Some(PopupUpdate::Patch(vec![(1, 0, 1)])),
+            ..DeltaFixture::default()
+        };
+        let mut connection = connection("boot");
+        assert!(connection.apply(decode(&full.baseline()).unwrap()).unwrap());
+        assert!(!connection.apply(decode(&full.control()).unwrap()).unwrap());
+        let invalid = DeltaFixture {
+            base_revision: 2,
+            revision: 3,
+            popup_dimensions: (1, 2),
+            popup_update: Some(PopupUpdate::Patch(Vec::new())),
+            ..full.clone()
+        };
+        assert_eq!(
+            connection
+                .apply(decode(&invalid.control()).unwrap())
+                .err()
+                .unwrap()
+                .code,
+            "shell_malformed"
+        );
+        assert_eq!(connection.surface.as_ref().unwrap().surface_revision, 2);
+        let replacement = DeltaFixture {
+            popup_update: Some(PopupUpdate::Replace(2)),
+            ..invalid
+        };
+        assert!(
+            !connection
+                .apply(decode(&replacement.control()).unwrap())
+                .unwrap()
+        );
+        let valid = DeltaFixture {
+            base_revision: 3,
+            revision: 4,
+            popup_dimensions: (1, 2),
+            popup_update: Some(PopupUpdate::Patch(vec![(0, 1, 1)])),
+            ..full
+        };
+        assert!(!connection.apply(decode(&valid.control()).unwrap()).unwrap());
+    }
+
+    #[tokio::test]
+    async fn delta_popup_metadata_without_cell_update_is_rejected() {
+        let base = DeltaFixture::default();
+        let mut connection = connection("boot");
+        connection.apply(decode(&base.baseline()).unwrap()).unwrap();
+        let invalid = DeltaFixture {
+            popup: true,
+            ..base
+        };
+        assert_eq!(
+            connection
+                .apply(decode(&invalid.control()).unwrap())
+                .err()
+                .unwrap()
+                .code,
+            "shell_malformed"
+        );
+        assert_eq!(connection.state.popup, None);
+    }
     fn connection(boot_id: &str) -> ShellConnection {
         let (socket, _peer) = UnixStream::pair().unwrap();
         ShellConnection {
@@ -829,6 +1652,8 @@ mod tests {
             welcomed: true,
             snapshot_revision: Some(1),
             surface: None,
+            delta_negotiated: true,
+            delta_scratch: Vec::new(),
         }
     }
 
@@ -838,13 +1663,13 @@ mod tests {
         assert!(frame_length(0_u32.to_le_bytes()).is_err());
         let valid = empty_surface("boot", 1, Some(("popup", "Title")));
         for end in 0..valid.len() {
-            assert!(decode_message(&valid[..end]).is_err());
+            assert!(decode(&valid[..end]).is_err());
         }
         let mut trailing = valid;
         trailing.push(0);
-        assert!(decode_message(&trailing).is_err());
-        assert!(decode_message(&encode((13_u32, "boot", 1_u64, 1_u64, u64::MAX))).is_err());
-        assert!(decode_message(&encode(21_u32)).is_err());
+        assert!(decode(&trailing).is_err());
+        assert!(decode(&encode((13_u32, "boot", 1_u64, 1_u64, u64::MAX))).is_err());
+        assert!(decode(&encode(21_u32)).is_err());
     }
 
     #[test]
@@ -875,14 +1700,81 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unnegotiated_surface_extensions() {
-        for kind in [
-            "shell.snapshot.v2",
-            "endpoint.surface-reuse.v1",
-            "endpoint.surface-delta.v1",
-            "endpoint.surface-scroll.v1",
+    fn delta_requires_advertised_capability_and_other_extensions_remain_unsupported() {
+        let valid = DeltaFixture::default().control();
+        assert!(matches!(decode(&valid).unwrap(), Message::Delta { .. }));
+        assert_eq!(
+            decode_message(&valid, false, &mut Vec::new())
+                .err()
+                .unwrap()
+                .code,
+            "shell_unsupported"
+        );
+        for negotiated in [false, true] {
+            for kind in [
+                "shell.snapshot.v2",
+                "endpoint.surface-reuse.v1",
+                "endpoint.surface-delta.v2",
+                "endpoint.surface-scroll.v1",
+            ] {
+                assert_eq!(
+                    decode_message(&encode((20_u32, kind, "{}")), negotiated, &mut Vec::new())
+                        .err()
+                        .unwrap()
+                        .code,
+                    "shell_unsupported"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn welcome_without_delta_capability_preserves_full_surface_behavior() {
+        for capabilities in [
+            None,
+            Some(vec!["surface_delta.v2"]),
+            Some(vec!["surface_delta"]),
         ] {
-            assert!(decode_message(&encode((20_u32, kind, "{}"))).is_err());
+            let mut welcome = serde_json::json!({
+                "generation": 1, "snapshot_codec": SNAPSHOT_CODEC, "surface_codec": SURFACE_CODEC,
+                "input_codec": "shell.input.semantic.v1", "blob_codec": "shell.blob.v1",
+            });
+            if let Some(capabilities) = &capabilities {
+                welcome["capabilities"] = serde_json::json!(capabilities);
+            }
+            let mut connection = connection("boot");
+            connection.welcomed = false;
+            connection
+                .apply(
+                    decode(&encode((
+                        20_u32,
+                        "endpoint.welcome.v1",
+                        welcome.to_string(),
+                    )))
+                    .unwrap(),
+                )
+                .unwrap();
+            let negotiated = capabilities == Some(vec!["surface_delta"]);
+            assert_eq!(connection.delta_negotiated, negotiated);
+            let fixture = DeltaFixture::default();
+            connection
+                .apply(decode(&fixture.baseline()).unwrap())
+                .unwrap();
+            let result = decode_message(
+                &fixture.control(),
+                connection.delta_negotiated,
+                &mut connection.delta_scratch,
+            );
+            if negotiated {
+                assert!(!connection.apply(result.unwrap()).unwrap());
+            } else {
+                assert_eq!(result.err().unwrap().code, "shell_unsupported");
+                assert!(
+                    !connection
+                        .apply(decode(&empty_surface("boot", 2, None)).unwrap())
+                        .unwrap()
+                );
+            }
         }
     }
 
@@ -891,7 +1783,7 @@ mod tests {
         let mut connection = connection("expected");
         assert!(
             connection
-                .apply(decode_message(&empty_surface("other", 1, None)).unwrap())
+                .apply(decode(&empty_surface("other", 1, None)).unwrap())
                 .is_err()
         );
         let snapshot = r#"{"boot_id":"other","revision":1,"commands":[]}"#;
@@ -907,7 +1799,7 @@ mod tests {
         let mut connection = connection("boot");
         assert!(
             connection
-                .apply(decode_message(&empty_surface("boot", 1, Some(("popup", "Title")))).unwrap())
+                .apply(decode(&empty_surface("boot", 1, Some(("popup", "Title")))).unwrap())
                 .unwrap()
         );
         let popup = connection.state.popup.as_ref().unwrap();
@@ -915,11 +1807,11 @@ mod tests {
         assert_eq!(popup.width, Some(HerdrPopupSize::Cells { value: 30 }));
         assert_eq!(popup.height, Some(HerdrPopupSize::Percent { value: 50 }));
         let patch = encode((19_u32, "boot", 1_u64, 1_u64, 2_u64, 0_u64, 0_u64, false));
-        assert!(!connection.apply(decode_message(&patch).unwrap()).unwrap());
+        assert!(!connection.apply(decode(&patch).unwrap()).unwrap());
         assert!(connection.state.popup.is_some());
         assert!(
             connection
-                .apply(decode_message(&empty_surface("boot", 3, None)).unwrap())
+                .apply(decode(&empty_surface("boot", 3, None)).unwrap())
                 .unwrap()
         );
         assert_eq!(connection.state.popup, None);
