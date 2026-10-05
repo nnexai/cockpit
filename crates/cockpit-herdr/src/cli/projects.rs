@@ -407,7 +407,7 @@ fn sanitized_env(env: &BTreeMap<String, String>) -> Result<Value, InspectionErro
     Ok(Value::Object(result))
 }
 
-fn parse_tab_result(value: &Value, workspace_id: &str) -> Result<String, InspectionError> {
+pub(super) fn parse_tab_result(value: &Value, workspace_id: &str) -> Result<String, InspectionError> {
     let result = object(value, "tab result")?;
     if required_string(result, "type", "tab result")? != "tab_created" {
         return Err(InspectionError::new(

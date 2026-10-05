@@ -8,6 +8,9 @@
   "permissions": [
     "allow-cockpit-status",
     "allow-cockpit-quota-status",
+    "allow-orchestration-snapshot",
+    "allow-orchestration-mutate",
+    "allow-orchestration-wait",
     "allow-cockpit-widget-subscribe",
     "allow-cockpit-widget-report",
     "allow-cockpit-widget-content",

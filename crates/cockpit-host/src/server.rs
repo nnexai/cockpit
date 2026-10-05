@@ -10,6 +10,7 @@ use std::{
 #[path = "browser_view.rs"]
 pub mod browser_view;
 use crate::browser_runtime::BrowserRuntime;
+use crate::OrchestrationRuntime;
 use axum::{
     Extension, Json, Router,
     body::Body,
@@ -54,6 +55,7 @@ mod context;
 mod context_media;
 mod credentials;
 mod projects;
+mod orchestration;
 mod review;
 mod library;
 mod viewer;
@@ -77,6 +79,7 @@ pub struct ServerConfig {
     pub static_dir: PathBuf,
     pub service: CockpitService,
     pub browser_runtime: Option<Arc<BrowserRuntime>>,
+    pub orchestration_runtime: Option<Arc<OrchestrationRuntime>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -155,6 +158,7 @@ pub fn build_router(
         static_dir,
         expected_authority,
         None,
+        None,
     ))
 }
 
@@ -163,6 +167,7 @@ fn build_router_with_validated_root(
     static_dir: PathBuf,
     expected_authority: SocketAddr,
     browser_runtime: Option<Arc<BrowserRuntime>>,
+    orchestration_runtime: Option<Arc<OrchestrationRuntime>>,
 ) -> Router {
     let expected_authority = expected_authority.to_string();
     let expected_origin = format!("http://{expected_authority}");
@@ -237,11 +242,13 @@ fn build_router_with_validated_root(
         .merge(credentials::routes())
         .merge(browser_view::routes())
         .merge(widgets::routes())
+        .merge(orchestration::routes())
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(static_service)
         .with_state(service)
         .layer(Extension(browser_runtime))
+        .layer(Extension(orchestration_runtime))
         .layer(middleware::from_fn(
             move |request: Request<Body>, next: Next| {
                 let allowed = authority_headers_match(
@@ -1123,17 +1130,26 @@ pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
     let actual = listener.local_addr().map_err(ServerError::Serve)?;
     let projects = config.service.projects().ok().cloned();
     let browser_runtime = config.browser_runtime.clone();
+    let orchestration_runtime = config.orchestration_runtime.clone();
+    if let (Some(orchestration), Some(browser)) = (&orchestration_runtime, &browser_runtime) {
+        orchestration.start_owner(browser.is_owner().await).await;
+    }
     let router = build_router_with_validated_root(
         config.service,
         static_dir,
         actual,
         browser_runtime.clone(),
+        orchestration_runtime.clone(),
     );
     println!("listening http://{actual}");
     std::io::stdout().flush().map_err(ServerError::Serve)?;
-    axum::serve(listener, router)
+    let shutdown_orchestration = orchestration_runtime.clone();
+    let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
+            if let Some(runtime) = shutdown_orchestration {
+                runtime.shutdown().await;
+            }
             if let Some(projects) = projects {
                 projects.shutdown().await;
             }
@@ -1142,7 +1158,9 @@ pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
             }
         })
         .await
-        .map_err(ServerError::Serve)
+        .map_err(ServerError::Serve);
+    if let Some(runtime) = orchestration_runtime { runtime.shutdown().await; }
+    result
 }
 
 async fn shutdown_signal() {

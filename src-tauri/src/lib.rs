@@ -4,6 +4,7 @@ mod context_media;
 mod context_search;
 mod credentials;
 mod projects;
+mod orchestration;
 mod requests;
 mod review;
 mod library;
@@ -1869,6 +1870,13 @@ pub fn run() {
         .clone();
     let library = Arc::new(cockpit_core::library::LibraryService::new(project_config.clone(), sources)
         .with_herdr(inspector.clone()));
+    let orchestration_runtime = Arc::new(cockpit_host::OrchestrationRuntime::new(
+        &project_config, inspector.clone(), shutdown_projects.clone(), library.clone(), None,
+    ).expect("failed to initialize orchestration"));
+    tauri::async_runtime::block_on(async {
+        orchestration_runtime.start_owner(browser_runtime.is_owner().await).await;
+    });
+    let service = service.with_orchestration(orchestration_runtime.service.clone());
     let contexts = cockpit_core::context::ContextService::new(
         project_config.clone(),
         inspector.source_adapter(),
@@ -1907,6 +1915,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(service)
         .manage(browser_runtime.clone())
+        .manage(orchestration_runtime.clone())
         .manage(StreamRegistry::new())
         .setup(move |app| {
             let main_window = app
@@ -1939,6 +1948,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            orchestration::orchestration_snapshot,
+            orchestration::orchestration_mutate,
+            orchestration::orchestration_wait,
             cockpit_widget_subscribe,
             cockpit_widget_report,
             cockpit_widget_content,
@@ -2038,8 +2050,10 @@ pub fn run() {
                 }
                 let projects = shutdown_projects.clone();
                 let browser_runtime = browser_runtime.clone();
+                let orchestration_runtime = orchestration_runtime.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
+                    orchestration_runtime.shutdown().await;
                     // Stop the owned helper before waiting on workspace
                     // operations that may be waiting on an external Herdr
                     // response. Neither shutdown path may keep app exit open.

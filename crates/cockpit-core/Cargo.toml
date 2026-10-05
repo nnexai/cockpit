@@ -8,6 +8,7 @@ license.workspace = true
 async-trait.workspace = true
 cockpit-protocol = { path = "../cockpit-protocol" }
 tokio.workspace = true
+tokio-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -25,6 +26,7 @@ percent-encoding.workspace = true
 parking_lot.workspace = true
 html5ever = "=0.35.0"
 markup5ever_rcdom = "=0.35.0"
+time = { version = "=0.3.55", features = ["formatting", "parsing"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libproc = "0.14.11"

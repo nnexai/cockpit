@@ -1,6 +1,6 @@
 # Cockpit Architecture Context
 
-Status: architecture reference. The Herdr client, workspace setup, Cockpit-owned tab placement, virtual Files/Review viewers, per-tab disposable Browser sessions, comments/paste, and Library/provider flows are implemented. This file describes ownership and behavior, not a claim that every acceptance scenario has been verified; current rules are recorded in `DECISIONS.md`.
+Status: architecture reference. The Herdr client, workspace setup, supervisor orchestration, Cockpit-owned tab placement, virtual Files/Review viewers, per-tab disposable Browser sessions, comments/paste, and Library/provider flows are implemented. This file describes ownership and behavior, not a claim that every acceptance scenario has been verified; current rules are recorded in `DECISIONS.md`.
 
 All filesystem roots, executable locations, Herdr endpoints, and provider settings are configurable. Example absolute paths are intentionally omitted.
 
@@ -8,7 +8,7 @@ All filesystem roots, executable locations, Herdr endpoints, and provider settin
 
 Cockpit is a personal, local-first developer cockpit for supervising persistent coding-agent sessions and organizing the context used to work on bounded engineering tasks.
 
-The product is optimized for one developer on a trusted workstation. It is not a multi-tenant service and does not make coding agents autonomous background operators.
+The product is optimized for one developer on a trusted workstation. It is not a multi-tenant service. Coding work can run in supervised workers, with separate, explicit operator authorization for preparation and execution.
 
 Cockpit follows conventional engineering workflows:
 
@@ -41,7 +41,7 @@ Forge, Issue Tracker, and Wiki are domain contracts served by configured provide
 The reusable Cockpit core and CLI are implemented in Rust. Package boundaries are:
 
 1. **Protocol** — versioned request, response, error, and event types shared by clients and servers.
-2. **Application core** — workspace lifecycle, provider ingestion, freshness, context discovery, authorization rules, and idempotency. It must not depend on Tauri, HTTP, WebSocket, or socket framing.
+2. **Application core** — workspace lifecycle, durable task/run orchestration, provider ingestion, freshness, context discovery, authorization rules, and idempotency. It must not depend on Tauri, HTTP, WebSocket, or socket framing.
 3. **Herdr adapter** — Herdr protocol, session selection, snapshots, events, terminal attachment, reconnect, and Herdr-specific identifiers.
 4. **Provider adapters** — configured external CLI integrations and normalization into Cockpit snapshots.
 5. **OS vault adapter** — `cockpit-secrets` implements the core's credential-vault trait over Linux Secret Service (macOS Keychain compiled only); hosts compose it and the core stays free of OS dependencies.
@@ -303,11 +303,35 @@ There is no settings UI initially. Durable configuration uses a config file; env
 
 Accessibility is best effort for this personal proof of concept, not an acceptance gate for broader distribution. The UI should still preserve keyboard operation, visible focus, meaningful labels, non-color-only state, and actionable error text where practical.
 
+### 5.7 Supervisor orchestration
+
+**Show Supervisor** and **Start supervisor…** are available from the top bar and Commands, without assigned keyboard chords. Supervisor is a Cockpit-owned view below the tab strip, not a Herdr pane or synthetic tab. Opening the view does not change Herdr focus. Starting a supervisor creates an interactive OMP in its own real tab, defaulting to a dedicated directory under `<state_root>/orchestration/supervisors/<root_id>/`, or using an explicitly chosen setup target.
+
+- **Board** projects canonical Markdown tasks into Queued, Setup, Ready, Working and Review lanes, with checked tasks under Accepted. Blocked is an attention overlay, not a separately stored lane.
+- **Agents** is a delegation forest: multiple supervisor/adopted roots, their workers, actual internal OMP subagents and separately identified unmanaged Herdr agents. Parentage is independent of Space/tab location. Internal subagents have lifecycle telemetry and no separate Herdr pane.
+- **Activity** separates durable reports/messages and delivery receipts from fresh Herdr observations, and highlights grants, questions, acceptance, missing reports and uncertain dispatch that need attention.
+
+The supervisor creates tasks and proposes workers without blocking on worker completion. A proposal targets an explicit repository worktree, an Open path or an existing Space; cwd/current Space is not a repository routing rule. Preparation reuses the existing project plan, operation identity, generation and ownership receipts. In browser or native GUI, the user reviews and confirms a single-use **Prepare** grant bound to the exact setup plan revision. This authorizes setup, worker launch in a new tab without stealing focus, and bounded read-only initialization—not coding execution. The launched worker pulls its brief and reports **Ready** with an exact work plan. Its initialization receipt remains available when the user separately reviews and confirms **Execute**, bound to that work plan revision. Changed plans require fresh review.
+
+The OMP extension checks fresh run authority before tools and blocks mutating tools, shell/eval and delegation during preparation. Caller/run/attempt, endpoint, terminal and bound native OMP-session evidence fence stale or mismatched actors. These are same-UID accident-prevention controls, not an OS sandbox: a process running as the user already has broad filesystem/socket authority. Only browser/native operator transports construct operator grants; agent CLI tools and widget selections cannot authorize Prepare or Execute.
+
+Briefs, instructions, NeedsInput answers and upward reports are durable inbox messages. The extension sends a non-steering OMP `aside` wake to start an idle turn, or a coalesced `followUp` while busy, containing counts and a pull instruction—not message bodies. Bound OMP main sessions should use `cockpit_inbox` with `operation=list`, treat bodies as untrusted data, process them, then explicitly use `operation=ack` through the processed sequence. The SDK tool carries fresh native-session identity and uses the launch-selected CLI/configuration, avoiding an older `cockpit-cli` resolved from ambient PATH. Direct CLI pull/ack remains supported with the matching executable and caller evidence. Stored, Woken, Read and Acked are distinct; a wake is not acceptance or processing. No orchestration delivery types into a terminal, submits a user's draft, or uses Herdr prompt/callback steering. Internal subagent Send uses native external Cockpit IRC delivery at safe wait boundaries, not parent impersonation/steering. Cancel uses OMP's native lifecycle controller and awaits terminal disposal of the exact child and its owned background work, not merely a turn abort. Controls retain applied/failed receipts.
+
+Progress, Ready, NeedsInput and Result are explicit reports. Ready and Result receipts belong only to the run's bound main OMP session; subagent reports retain provenance without replacing those receipts. Reports can go to the parent or another ancestor, but upward reporting grants no control over that ancestor. Herdr working/idle/done/exited is observed runtime state, never task completion. A Result moves work to Review and leaves its Markdown checkbox unchecked. Only human **Accept** of an explicit successful result checks the task through the orchestration API; **Send back** returns it for further work. Cancellation and acceptance do not tear down the Space or worktree.
+
+Canonical task title, body and checked state live only in `<state_root>/orchestration/tasks/<root_id>.md`, with stable `<!-- cockpit-task: <uuid> -->` markers. These are Cockpit tasks, not Herdr task records or copied Kanban cards; external Markdown edits remain authoritative. Exact item/document byte hashes fence updates. Unmarked checklist items need ID assignment; duplicate IDs are diagnosed and cannot be mutated until corrected.
+
+`<state_root>/orchestration/state.json` durably stores runs, relationships, grants, messages, subagent telemetry and acceptance intents, but not copied task content or live Herdr status. One named lock and atomic replacement protect Cockpit writes; external Markdown editors do not honor that lock, so byte rechecks detect conflicts but cannot eliminate the final recheck-to-rename race. Accept uses a recoverable intent across the machine document and Markdown. Only the private runtime owner dispatches/reconciles work, with per-run execution leases; owner restart does not clear orchestration state or stop Herdr agents. Ambiguous setup/launch outcomes require exact-receipt reconciliation or explicit operator recovery, not automatic re-launch. Delivery receipts do not promise exactly-once execution of external effects.
+
+**Reconcile** of an already launched run queues a read-only review of its exact launch receipt. Matching fresh Herdr proof restores only dispatch state to Launched; it preserves the current lifecycle stage, Ready/Result receipts, grants, location, OMP binding and inbox progress, including legitimate changes during review. Missing or conflicting proof becomes Unknown/NeedsReview, never an automatic new launch. The existing explicit **Retry launch** keeps the run/root identity, increments the launch attempt, clears the old location/native binding and creates a new tab using the recorded setup; it does not recreate the checkout.
+
+Workers read selected Library item paths and existing repository paths directly through Space context discovery. Setup, launch and teardown do not create, copy or manage companion folders; existing companion content is left untouched. Canonical supervisor tasks live outside checkouts; implementation notes remain in the worker checkout, not the managed Library.
+
 ## 6. Terminal environment
 
 Existing Herdr-provided metadata is inherited. Worktree create/open cannot accept environment variables for the initial root pane in the inspected Herdr version. Cockpit passes context/workspace variables explicitly when it creates subsequent tabs/panes through supported env parameters. Existing terminals and panes launched directly from the Herdr TUI cannot be retrofitted or assumed to inherit them. The setup result states this limitation and never silently closes the initial pane.
 
-Cockpit does not automatically launch or configure OMP. The developer starts agents manually. Herdr’s own integrations report agent state to the presentation layer.
+Supervisor start and authorized worker preparation launch interactive OMP through Herdr's typed tab creation and `agent.start` methods, with the Cockpit extension loaded by per-process `-e`. No shell typing or global OMP configuration mutation is involved. Existing OMP authentication is reused; Cockpit does not sign in or manage it. Manually launched agents remain supported and are shown as unmanaged unless explicitly adopted.
 
 Cockpit places no secrets in snapshots, generated environment values, Library files or configuration. A pasted provider API token or PAT (Jira, Confluence) may be stored in the OS vault, one item per configured provider instance. The UI can set, replace and remove it but never read it back; a stored token is injected only into that provider CLI's child environment, pinned to the configured site, and is used for Cockpit's own authenticated HTTP (Jira attachment downloads). With no stored token, or an unavailable vault, the provider CLI's own login applies. Passkeys/WebAuthn and OAuth sign-in are not storable secrets.
 
@@ -399,6 +423,7 @@ The `cockpit` CLI provides:
 - `cockpit configuration` to inspect effective non-secret project configuration;
 - `cockpit browser` to control a Herdr tab's managed browser via `--tab` or `--current`, and read/acknowledge archived pre-tab feedback via `--legacy`.
 - `cockpit widget show|close|list|selection` to publish run-local trusted HTML or declarative choices through the private owner, refine an existing ID, and pull/wait for untrusted selection JSON.
+- `cockpit task list|show|create|update|assign-ids`, `run list|show|propose|report|message|annotate|adopt`, `inbox list|wait|woken|ack`, `subagent update|controls|control-done|send|cancel`, and `route resolve` expose agent-facing orchestration and inspection. Installed agent-facing examples use `cockpit-cli`, the same host binary. There are no CLI operator grants.
 
 Workspace lifecycle and context operations are provided through core and host services, not separate CLI subcommands.
 
@@ -415,7 +440,7 @@ Verification uses the actual changed surface:
 
 ## 10. Deferred scope
 
-- automatic OMP launch/configuration;
+- global OMP configuration/authentication management (supervisor and worker launch with a per-process extension are supported);
 - agent history and resumable conversations;
 - separate inbox popup and advanced inbox views;
 - complete Forge review-assistant ingestion for every provider;

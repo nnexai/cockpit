@@ -231,6 +231,9 @@ class AppFixture {
     setProviderCredential: vi.fn(async () => { throw new Error("Unexpected provider credentials in terminal fixture"); }),
     clearProviderCredential: vi.fn(async () => { throw new Error("Unexpected provider credentials in terminal fixture"); }),
     repositories: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    orchestrationSnapshot: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
+    orchestrationMutate: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
+    orchestrationWait: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     planWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     startWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     workspaceOperation: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
@@ -630,6 +633,7 @@ describe("mounted App mutation and session ordering", () => {
     vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
       version: 1, repository_roots: [], worktree_root: "", companion_root: "", state_root: "", cache_root: "",
       library_root: "/data/cockpit/library", branch_template: "", checkout_template: "", providers: [], origins: {},
+      orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
         context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
         library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,

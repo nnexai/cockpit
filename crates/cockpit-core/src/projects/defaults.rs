@@ -18,6 +18,22 @@ const MAX_LINKED_ARTIFACTS: usize = 4;
 use super::ProjectService;
 
 impl ProjectService {
+    /// Read-only forge-origin suggestions for orchestration routing. This does
+    /// not open the operation store, select a repository, or fetch provider
+    /// metadata: configured routes must be resolved before calling it.
+    pub async fn forge_repository_candidates(
+        configuration: &ProjectConfiguration,
+        artifact: &ProjectArtifact,
+    ) -> Result<Vec<String>, InspectionError> {
+        if repositories::provider_is_repository_independent(configuration, &artifact.provider_id) {
+            return Ok(Vec::new());
+        }
+        let catalog = RepositoryCatalog::new(configuration.clone());
+        let repository_list = catalog.list().await?;
+        Ok(matching_repositories(configuration, artifact, repository_list.repositories)
+            .await.into_iter().map(|repository| repository.repository_id).collect())
+    }
+
     pub async fn resolve_defaults(
         &self,
         request: &WorkspaceDefaultsRequest,

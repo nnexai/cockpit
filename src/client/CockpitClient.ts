@@ -1,4 +1,14 @@
 import type {
+  OrchestrationSnapshotRequest, OrchestrationSnapshot,
+  OrchestrationMutationRequest, OrchestrationMutationResponse,
+  OrchestrationWaitRequest, OrchestrationWaitResponse,
+} from "../protocol/generated/v1";
+export type {
+  OrchestrationSnapshotRequest, OrchestrationSnapshot,
+  OrchestrationMutationRequest, OrchestrationMutationResponse,
+  OrchestrationWaitRequest, OrchestrationWaitResponse,
+} from "../protocol/generated/v1";
+import type {
   WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent,
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
 } from "../protocol/generated/v1";
@@ -308,6 +318,9 @@ export interface TerminalStream extends ClosableStream {
 
 export interface CockpitClient {
   status(): Promise<StatusResponse>;
+  orchestrationSnapshot(request: OrchestrationSnapshotRequest): Promise<OrchestrationSnapshot>;
+  orchestrationMutate(request: OrchestrationMutationRequest): Promise<OrchestrationMutationResponse>;
+  orchestrationWait(request: OrchestrationWaitRequest): Promise<OrchestrationWaitResponse>;
   /** Cached subscription limits; provider CLIs own authentication and collection. */
   quotaStatus(request: QuotaStatusRequest, signal?: AbortSignal): Promise<QuotaStatusResponse>;
   browserAction(request: BrowserRequest): Promise<BrowserResponse>;

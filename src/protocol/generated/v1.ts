@@ -311,7 +311,11 @@ export type ProjectLimits = { catalog_depth: number, catalog_entries: number, gi
 
 export type ProjectProvider = { id: string, base_url: string, executable: string, login?: string, };
 
-export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, cache_root: string, library_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, origins: { [key in string]: string }, };
+export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, cache_root: string, library_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, orchestration: OrchestrationConfiguration, origins: { [key in string]: string }, };
+
+export type OrchestrationConfiguration = { omp_extension: string | null, model: string | null, extra_args: Array<string>, routes: Array<OrchestrationRoute>, };
+
+export type OrchestrationRoute = { provider: string, instance: string, project_id_prefix: string, repository_id: string, };
 
 export type LibraryItemKind = "provider_snapshot" | "folder_copy";
 
@@ -865,3 +869,99 @@ export type WidgetSelectResponse = { at_ms: number, };
 export type WidgetChoicesSpec = { prompt: string | null, choices: Array<WidgetChoice>, };
 
 export type WidgetChoice = { id: string, label: string, detail: string | null, };
+
+export type OrchestrationSnapshotRequest = { session_id: string, root_id: string | null, };
+
+export type OrchestrationWaitRequest = { after_revision: number, after_tasks_token: string, timeout_ms: number, };
+
+export type OrchestrationWaitResponse = { revision: number, tasks_token: string, changed: boolean, };
+
+export type OrchestrationMutationRequest = { session_id: string, expected_revision: number | null, action: OrchestrationAction, };
+
+export type OrchestrationMutationResponse = { revision: number, result: OrchestrationActionResult, };
+
+export type OrchestrationSnapshot = { session_id: string, revision: number, tasks_token: string, roots: Array<RootSummary>, board: TaskBoard | null, runs: Array<Run>, messages: Array<Message>, subagents: Array<Subagent>, intents: Array<TaskIntent>, runtime: RuntimeObservation, unmanaged_agents: Array<UnmanagedAgent>, attention: Array<Attention>, };
+
+export type UnmanagedAgent = { workspace_id: string, workspace_label: string, tab_id: string, tab_label: string, pane_id: string, agent_name: string, agent_status: string | null, state_changed_at: string | null, };
+
+export type RootSummary = { root_id: string, label: string, kind: RunKind, open_runs: number, needs_you: number, };
+
+export type TaskBoard = { root_id: string, path: string, doc_revision: string, unidentified_items: number, diagnostics: Array<ErrorResponse>, tasks: Array<TaskView>, };
+
+export type Task = { task_id: string, title: string, body: string, checked: boolean, line: number, task_revision: string, diagnostic: string | null, };
+
+export type TaskView = { task: Task, lane: TaskLane, current_run_id: string | null, };
+
+export type TaskLane = "queued" | "setup" | "ready" | "working" | "review" | "accepted";
+
+export type RunKind = "supervisor" | "adopted" | "worker";
+
+export type RunStage = "proposed" | "awaiting_prepare" | "preparing" | "initializing" | "ready" | "working" | "reported" | "active" | "closed";
+
+export type CloseReason = "accepted" | "cancelled" | "superseded" | "failed";
+
+export type DispatchStep = "planning" | "plan_failed" | "setup_pending" | "setup_running" | "setup_unknown" | "launch_intent" | "launch_unknown" | "launched" | "needs_review";
+
+export type DispatchTarget = { "target": "setup", request: WorkspaceSetupRequest, } | { "target": "existing_space", workspace_id: string, };
+
+export type SetupSummary = { operation_id: string | null, generation: number | null, workspace_id: string | null, checkout_path: string, repository_id: string | null, branch: string | null, base: string | null, ownership: WorkspaceCheckoutOwnership | null, effects: Array<string>, warnings: Array<string>, };
+
+export type PlanRecord = { plan_revision: string, text: string, created_at: string, };
+
+export type Grant = { grant_id: string, scope: GrantScope, plan_revision: string, origin: OperatorOrigin, granted_at: string, };
+
+export type GrantScope = "prepare" | "execute";
+
+export type OperatorOrigin = "browser" | "native";
+
+export type RunLocation = { boot_id: string | null, terminal_id: string | null, native_session_id: string | null, endpoint_identity: string, session_id: string, workspace_id: string, tab_id: string, pane_id: string, launch_tag: string, };
+
+export type Run = { session_id: string, prepare_brief: string, run_id: string, kind: RunKind, label: string, root_id: string, parent_run_id: string | null, task_id: string | null, attempt: number, task_revision_at_propose: string | null, stage: RunStage, close_reason: CloseReason | null, dispatch: DispatchState | null, target: DispatchTarget | null, setup: SetupSummary | null, prepare_plan: PlanRecord | null, init_receipt: Report | null, work_plan: PlanRecord | null, grants: Array<Grant>, last_report: Report | null, result: Report | null, annotations: Array<Annotation>, location: RunLocation | null, bound_omp_session: string | null, supersedes_run_id: string | null, created_at: string, updated_at: string, };
+
+export type DispatchState = { launch_tag: string | null, endpoint_identity: string | null, recovery: WorkspaceRecoveryAction | null, agent_started: boolean, step: DispatchStep, launch_attempt: number, error: ErrorResponse | null, updated_at: string, };
+
+export type Annotation = { by: ActorRef, text: string, at: string, };
+
+export type ActorRef = { "type": "operator" } | { "type": "run", run_id: string, } | { "type": "dispatcher" };
+
+export type ReportKind = "progress" | "ready" | "result" | "needs_input";
+
+export type ReportOutcome = "succeeded" | "failed";
+
+export type Report = { message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, at: string, };
+
+export type MessageKind = "prepare_brief" | "work_brief" | "supervisor_brief" | "instruction" | "answer" | "cancel_request" | "subagent_control" | "report" | "observation";
+
+export type DeliveryStage = "stored" | "woken" | "read" | "acked";
+
+export type Message = { message_id: string, to_run_id: string, seq: number, from: ActorRef, kind: MessageKind, text: string, report: Report | null, stale: boolean, escalated_from: string | null, from_subagent_id: string | null, stage: DeliveryStage, woken_omp_session: string | null, created_at: string, acked_at: string | null, };
+
+export type SubagentStatus = "running" | "done" | "failed" | "cancelled";
+
+export type Subagent = { run_id: string, subagent_id: string, parent_subagent_id: string | null, role: string | null, label: string, status: SubagentStatus, summary: string | null, last_control: SubagentControlState | null, updated_at: string, };
+
+export type ControlStage = "stored" | "applied" | "failed";
+
+export type SubagentControlState = { seq: number, op: SubagentOp, stage: ControlStage, error: string | null, at: string, };
+
+export type AgentKind = "main" | "subagent";
+
+export type IntentState = "pending" | "conflict";
+
+export type TaskIntent = { intent_id: string, root_id: string, task_id: string, run_id: string, expected_task_revision: string, state: IntentState, };
+
+export type Presence = "present" | "missing" | "endpoint_changed" | "unobserved";
+
+export type RunObservation = { run_id: string, presence: Presence, workspace_id: string | null, workspace_label: string | null, tab_id: string | null, tab_label: string | null, pane_id: string | null, agent_status: string | null, state_changed_at: string | null, };
+
+export type RuntimeObservation = { "status": "fresh", endpoint_identity: string, observed_at: string, runs: Array<RunObservation>, } | { "status": "unavailable", error: ErrorResponse, };
+
+export type AttentionKind = "awaits_prepare" | "awaits_execute" | "plan_changed" | "to_accept" | "needs_input" | "runtime_blocked" | "brief_unread" | "idle_without_report" | "exited_without_report" | "dispatch_unknown" | "intent_conflict";
+
+export type Attention = { kind: AttentionKind, run_id: string | null, task_id: string | null, message_seq: number | null, since: string, };
+
+export type OrchestrationAction = { "action": "task_create", root_id: string, title: string, body: string, } | { "action": "task_update", root_id: string, task_id: string, expected_task_revision: string, title: string | null, body: string | null, } | { "action": "tasks_assign_ids", root_id: string, expected_doc_revision: string, } | { "action": "supervisor_start", target: DispatchTarget | null, label: string | null, } | { "action": "run_bind_session", omp_session_id: string, } | { "action": "run_adopt", label: string, } | { "action": "run_propose", task_id: string, parent_run_id: string | null, label: string | null, target: DispatchTarget, prepare_brief: string, supersedes_run_id: string | null, } | { "action": "grant_prepare", run_id: string, plan_revision: string, } | { "action": "grant_execute", run_id: string, plan_revision: string, note: string | null, } | { "action": "accept", run_id: string, expected_task_revision: string, } | { "action": "send_back", run_id: string, text: string, } | { "action": "cancel_run", run_id: string, } | { "action": "retry_launch", run_id: string, } | { "action": "reconcile_run", run_id: string, recovery: WorkspaceRecoveryAction | null, } | { "action": "intent_resolve", intent_id: string, apply: boolean, } | { "action": "report", message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, to_run_id: string | null, } | { "action": "message_send", message_id: string, to_run_id: string, kind: MessageKind, text: string, } | { "action": "annotate", run_id: string, text: string, } | { "action": "inbox_pull", after_seq: number, limit: number, } | { "action": "inbox_woken", through_seq: number, omp_session_id: string, } | { "action": "inbox_ack", through_seq: number, } | { "action": "subagent_update", subagent_id: string, parent_subagent_id: string | null, role: string | null, label: string, status: SubagentStatus, summary: string | null, } | { "action": "subagent_control", run_id: string, subagent_id: string, op: SubagentOp, } | { "action": "subagent_control_done", seq: number, applied: boolean, error: string | null, };
+
+export type SubagentOp = { "op": "cancel" } | { "op": "send", text: string, };
+
+export type OrchestrationActionResult = { "result": "task", task: Task, } | { "result": "task_ids", assigned: number, doc_revision: string, } | { "result": "run", run_id: string, attempt: number, } | { "result": "message", to_run_id: string, seq: number, duplicate: boolean, stale: boolean, } | { "result": "inbox", messages: Array<Message>, read_through_seq: number, } | { "result": "done" };

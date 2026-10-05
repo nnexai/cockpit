@@ -34,6 +34,7 @@ mod config;
 mod extensions;
 mod operations;
 mod projects;
+mod orchestration;
 mod transport;
 mod shell;
 

@@ -1,4 +1,9 @@
 import {
+  matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest,
+  parseOrchestrationMutationRequest, parseOrchestrationMutationResponse,
+  parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
+} from "./orchestrationProtocol";
+import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest,
   parseWidgetRemoveResponse, parseWidgetSelectRequest, parseWidgetSelectResponse,
 } from "./widgetProtocol";
@@ -683,6 +688,18 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
 
 export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channelFactory: NativeChannelFactory = defaultChannel): CockpitClient {
   return {
+    async orchestrationSnapshot(value) {
+      const request = parseOrchestrationSnapshotRequest(value);
+      return invokeAndParse(invoke, "orchestration_snapshot", { request }, "orchestration snapshot", response => matchOrchestrationSnapshot(response, request));
+    },
+    async orchestrationMutate(value) {
+      const request = parseOrchestrationMutationRequest(value);
+      return invokeAndParse(invoke, "orchestration_mutate", { request }, "orchestration mutation", parseOrchestrationMutationResponse);
+    },
+    async orchestrationWait(value) {
+      const request = parseOrchestrationWaitRequest(value);
+      return invokeAndParse(invoke, "orchestration_wait", { request }, "orchestration wait", parseOrchestrationWaitResponse);
+    },
     projectConfiguration() { return invokeAndParse(invoke, "cockpit_project_configuration", undefined, "project configuration", parseProjectConfiguration); },
     providerCredentials() { return invokeAndParse(invoke, "cockpit_provider_credentials", undefined, "provider credentials", parseProviderCredentialStatusList); },
     async setProviderCredential(value) {

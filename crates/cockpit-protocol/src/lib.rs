@@ -13,6 +13,7 @@ pub mod context_search;
 pub mod project_defaults;
 pub mod project_teardown;
 pub mod projects;
+pub mod orchestration;
 pub mod quota;
 pub mod review;
 pub mod sources;

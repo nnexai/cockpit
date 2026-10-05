@@ -77,6 +77,10 @@ class InstallPaths:
         return self.data_home / "icons" / "hicolor" / "256x256" / "apps" / f"{APPLICATION_ID}.png"
 
     @property
+    def omp_extension(self) -> Path:
+        return self.app_root / "omp" / "cockpit-orchestration.ts"
+
+    @property
     def receipt(self) -> Path:
         return self.app_root / RECEIPT_NAME
 
@@ -343,6 +347,7 @@ def receipt_paths(paths: InstallPaths, include_application: bool = True, include
             "cli_launcher": str(paths.cli_launcher),
             "desktop": str(paths.desktop),
             "icon": str(paths.icon),
+            "omp_extension": str(paths.omp_extension),
         }
     )
     if include_application and paths.application is not None:
@@ -382,10 +387,14 @@ def load_receipt(paths: InstallPaths) -> dict[str, object] | None:
     current_paths = receipt_paths(paths)
     historical_paths = receipt_paths(paths, include_binary=True)
     previous_paths = receipt_paths(paths, include_application=False, include_binary=True)
+    # Existing receipts predate the bundled per-process OMP integration.
+    old_current_paths = {key: value for key, value in current_paths.items() if key != "omp_extension"}
+    old_historical_paths = {key: value for key, value in historical_paths.items() if key != "omp_extension"}
+    old_previous_paths = {key: value for key, value in previous_paths.items() if key != "omp_extension"}
     legacy_paths = legacy_receipt_paths(paths)
-    current = receipt.get("schema") == (4 if paths.application is not None else 3) and receipt.get("paths") == current_paths
-    old_bundle = paths.application is not None and receipt.get("schema") == 3 and receipt.get("paths") == historical_paths
-    previous = receipt.get("schema") == 2 and receipt.get("paths") == previous_paths
+    current = receipt.get("schema") == (4 if paths.application is not None else 3) and receipt.get("paths") in (current_paths, old_current_paths)
+    old_bundle = paths.application is not None and receipt.get("schema") == 3 and receipt.get("paths") in (historical_paths, old_historical_paths)
+    previous = receipt.get("schema") == 2 and receipt.get("paths") == old_previous_paths
     legacy = receipt.get("schema") == 1 and receipt.get("paths") == legacy_paths
     if receipt.get("application_id") != APPLICATION_ID or not (current or old_bundle or previous or legacy):
         raise InstallError(f"installer receipt at {paths.receipt} does not belong to this destination")
@@ -496,6 +505,8 @@ def _recover_pending(paths: InstallPaths) -> None:
         raise InstallError(f"unrecognized pending installer transaction at {paths.pending}")
     expected = receipt_paths(paths)
     allowed = set(expected) | {"receipt"}
+    if "omp_extension" not in targets:
+        allowed.discard("omp_extension")
     if paths.application is not None and "binary" in targets:
         allowed.add("binary")
     if "legacy_binary" in targets:
@@ -606,8 +617,8 @@ def ensure_application_destination(paths: InstallPaths, receipt: dict[str, objec
     owns_application = bool(
         receipt
         and (
-            (receipt.get("schema") == 4 and receipt.get("paths") == receipt_paths(paths))
-            or (receipt.get("schema") == 3 and receipt.get("paths") == receipt_paths(paths, include_binary=True))
+            (receipt.get("schema") == 4 and receipt.get("paths") in (receipt_paths(paths), {key: value for key, value in receipt_paths(paths).items() if key != "omp_extension"}))
+            or (receipt.get("schema") == 3 and receipt.get("paths") in (receipt_paths(paths, include_binary=True), {key: value for key, value in receipt_paths(paths, include_binary=True).items() if key != "omp_extension"}))
         )
     )
     if not owns_application or bundle_identifier(paths.application) != APPLICATION_ID:
@@ -635,6 +646,10 @@ def ensure_installable(paths: InstallPaths) -> None:
             expected["cli_binary"] = paths.cli_binary
         if paths.application is not None and receipt.get("schema") in {3, 4}:
             expected["application"] = paths.application
+        if isinstance(receipt_paths_value, dict) and "omp_extension" in receipt_paths_value:
+            expected["omp_extension"] = paths.omp_extension
+        elif _is_present(paths.omp_extension):
+            raise InstallError(f"refusing to overwrite an unowned OMP extension: {paths.omp_extension}")
         changed: list[str] = []
         for name, path in expected.items():
             expected_hash = hashes.get(name)
@@ -658,7 +673,7 @@ def ensure_installable(paths: InstallPaths) -> None:
         if changed:
             raise InstallError("refusing to replace modified installed files: " + ", ".join(dict.fromkeys(changed)))
         return
-    conflicts = [path for path in (paths.binary, paths.launcher, paths.cli_binary, paths.cli_launcher, paths.desktop, paths.icon) if _is_present(path)]
+    conflicts = [path for path in (paths.binary, paths.launcher, paths.cli_binary, paths.cli_launcher, paths.desktop, paths.icon, paths.omp_extension) if _is_present(path)]
     if paths.application is not None and _is_present(paths.application):
         conflicts.append(paths.application)
     if conflicts:
@@ -715,6 +730,9 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
             raise InstallError(f"{label} binary is missing or not executable: {candidate}")
     if not icon.is_file():
         raise InstallError(f"Tauri icon is missing: {icon}")
+    extension = PROJECT_ROOT / "integrations" / "omp" / "cockpit-orchestration.ts"
+    if not extension.is_file():
+        raise InstallError(f"Cockpit OMP integration is missing: {extension}")
     source_manifest: list[dict[str, object]] | None = None
     if paths.application is not None:
         if bundle is None:
@@ -740,7 +758,7 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
         targets["binary"] = paths.binary
     elif raw_gui_migration:
         targets["legacy_binary"] = paths.binary
-    targets.update({"cli_binary": paths.cli_binary, "icon": paths.icon, "desktop": paths.desktop})
+    targets.update({"cli_binary": paths.cli_binary, "icon": paths.icon, "desktop": paths.desktop, "omp_extension": paths.omp_extension})
     if paths.application is not None:
         targets["application"] = paths.application
     targets.update({"launcher": paths.launcher, "cli_launcher": paths.cli_launcher})
@@ -765,6 +783,7 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
             _stage_file(binary, stages["binary"], 0o755)
         _stage_file(cli_binary, stages["cli_binary"], 0o755)
         _stage_file(icon, stages["icon"], 0o644)
+        _stage_file(extension, stages["omp_extension"], 0o644)
         atomic_text(stages["desktop"], desktop_contents(paths))
         _stage_symlink(paths.gui_executable, stages["launcher"])
         _stage_symlink(paths.cli_binary, stages["cli_launcher"])
@@ -783,6 +802,7 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
             "cli_binary": sha256(stages["cli_binary"]),
             "icon": sha256(stages["icon"]),
             "desktop": sha256(stages["desktop"]),
+            "omp_extension": sha256(stages["omp_extension"]),
         }
         if "binary" in stages:
             artifact_hashes["binary"] = sha256(stages["binary"])
@@ -908,6 +928,8 @@ def _owned_artifacts(paths: InstallPaths, receipt: dict[str, object]) -> list[tu
     owned.extend((("desktop", paths.desktop, hashes.get("desktop")), ("icon", paths.icon, hashes.get("icon"))))
     if isinstance(hashes.get("cli_binary"), str):
         owned.extend((("cli_launcher", paths.cli_launcher, "cli_launcher"), ("cli_binary", paths.cli_binary, hashes["cli_binary"])))
+    if isinstance(hashes.get("omp_extension"), str):
+        owned.append(("omp_extension", paths.omp_extension, hashes["omp_extension"]))
     if paths.application is not None and isinstance(hashes.get("application"), str):
         owned.append(("application", paths.application, hashes["application"]))
     return owned
@@ -948,7 +970,7 @@ def uninstall(paths: InstallPaths) -> bool:
         if _is_present(path):
             _remove_known(path)
     paths.receipt.unlink(missing_ok=True)
-    for directory in (paths.binary.parent, paths.app_root):
+    for directory in (paths.binary.parent, paths.omp_extension.parent, paths.app_root):
         try:
             directory.rmdir()
         except OSError:
@@ -983,6 +1005,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"macOS application: {paths.application}")
     print(f"native binary: {paths.gui_executable}")
     print(f"CLI binary: {paths.cli_binary}")
+    print(f"per-process OMP integration: {paths.omp_extension}")
     return 0
 
 

@@ -41,6 +41,26 @@ pub struct ProjectProvider {
     pub login: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestrationConfiguration {
+    pub omp_extension: Option<String>,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub routes: Vec<OrchestrationRoute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestrationRoute {
+    pub provider: String,
+    pub instance: String,
+    pub project_id_prefix: String,
+    pub repository_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectConfiguration {
@@ -55,6 +75,8 @@ pub struct ProjectConfiguration {
     pub checkout_template: String,
     pub providers: Vec<ProjectProvider>,
     pub limits: ProjectLimits,
+    #[serde(default)]
+    pub orchestration: OrchestrationConfiguration,
     pub origins: BTreeMap<String, String>,
 }
 

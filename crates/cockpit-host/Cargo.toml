@@ -26,6 +26,7 @@ serde_json.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 base64.workspace = true
 percent-encoding.workspace = true
 tower.workspace = true

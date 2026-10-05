@@ -609,45 +609,42 @@ mod tests {
     }
 
     fn configuration(providers: &[(&str, &str)]) -> ProjectConfiguration {
-        ProjectConfiguration {
-            version: 1,
-            repository_roots: vec![],
-            worktree_root: "worktrees".into(),
-            companion_root: "companions".into(),
-            state_root: "state".into(),
-            cache_root: "cache".into(),
-            library_root: "library".into(),
-            branch_template: "{repo}/{task_id}".into(),
-            checkout_template: "{repo}-{task_id}".into(),
-            providers: providers
-                .iter()
-                .map(|(id, base_url)| ProjectProvider {
-                    id: (*id).into(),
-                    base_url: (*base_url).into(),
-                    executable: (*id).into(),
-                    login: None,
-                })
-                .collect(),
-            limits: ProjectLimits {
-                catalog_depth: 1,
-                catalog_entries: 1,
-                git_timeout_ms: 1000,
-                git_output_bytes: 65536,
-                operation_timeout_ms: 1000,
-                context_preview_bytes: 1024,
-                context_preview_lines: 100,
-                context_directory_entries: 1,
-                context_tree_depth: 1,
-                library_folder_files: 512,
-                library_folder_bytes: 32 * 1024 * 1024,
-                library_file_bytes: 4 * 1024 * 1024,
-                library_space_pages: 200,
-                library_attachment_bytes: 25 * 1024 * 1024,
-                library_item_attachment_bytes: 100 * 1024 * 1024,
-                library_max_items: 20_000,
-            },
-            origins: BTreeMap::new(),
-        }
+        ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![],
+        worktree_root: "worktrees".into(),
+        companion_root: "companions".into(),
+        state_root: "state".into(),
+        cache_root: "cache".into(),
+        library_root: "library".into(),
+        branch_template: "{repo}/{task_id}".into(),
+        checkout_template: "{repo}-{task_id}".into(),
+        providers: providers
+            .iter()
+            .map(|(id, base_url)| ProjectProvider {
+                id: (*id).into(),
+                base_url: (*base_url).into(),
+                executable: (*id).into(),
+                login: None,
+            })
+            .collect(),
+        limits: ProjectLimits {
+            catalog_depth: 1,
+            catalog_entries: 1,
+            git_timeout_ms: 1000,
+            git_output_bytes: 65536,
+            operation_timeout_ms: 1000,
+            context_preview_bytes: 1024,
+            context_preview_lines: 100,
+            context_directory_entries: 1,
+            context_tree_depth: 1,
+            library_folder_files: 512,
+            library_folder_bytes: 32 * 1024 * 1024,
+            library_file_bytes: 4 * 1024 * 1024,
+            library_space_pages: 200,
+            library_attachment_bytes: 25 * 1024 * 1024,
+            library_item_attachment_bytes: 100 * 1024 * 1024,
+            library_max_items: 20_000,
+        },
+        origins: BTreeMap::new(), }
     }
 
     fn service(vault: &Arc<MemoryVault>, jira_url: &str) -> ProviderCredentials {

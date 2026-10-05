@@ -3,6 +3,9 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "cockpit_status",
             "cockpit_quota_status",
+            "orchestration_snapshot",
+            "orchestration_mutate",
+            "orchestration_wait",
             "cockpit_widget_subscribe",
             "cockpit_widget_report",
             "cockpit_widget_content",

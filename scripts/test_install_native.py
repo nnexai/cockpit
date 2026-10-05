@@ -86,6 +86,36 @@ class NativeInstallTests(unittest.TestCase):
         self.assertEqual(receipt["schema"], 3)
         self.assertEqual(receipt["status"], "installed")
         self.assertEqual(receipt["artifact_sha256"]["cli_binary"], installer.sha256(self.paths.cli_binary))
+        self.assertEqual(self.paths.omp_extension.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(receipt["artifact_sha256"]["omp_extension"], installer.sha256(self.paths.omp_extension))
+
+    def test_modified_extension_is_never_overwritten_or_removed(self) -> None:
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+        self.paths.omp_extension.write_text("local extension modifications\n", encoding="utf-8")
+        with self.assertRaisesRegex(installer.InstallError, "modified installed files: omp_extension"):
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+        self.assertFalse(installer.uninstall(self.paths))
+        self.assertEqual(self.paths.omp_extension.read_text(encoding="utf-8"), "local extension modifications\n")
+
+    def test_pre_extension_receipt_migrates_without_claiming_foreign_file(self) -> None:
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+        receipt = json.loads(self.paths.receipt.read_text(encoding="utf-8"))
+        del receipt["paths"]["omp_extension"]
+        del receipt["artifact_sha256"]["omp_extension"]
+        self.paths.receipt.write_text(json.dumps(receipt), encoding="utf-8")
+        with self.assertRaisesRegex(installer.InstallError, "unowned OMP extension"):
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+        self.paths.omp_extension.unlink()
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+        self.assertTrue(self.paths.omp_extension.is_file())
+
+    def test_uninstall_removes_owned_extension_without_managing_omp_configuration(self) -> None:
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+        configuration = self.root / "omp-config.yml"
+        configuration.write_text("extensions: []\n", encoding="utf-8")
+        self.assertTrue(installer.uninstall(self.paths))
+        self.assertFalse(self.paths.omp_extension.exists())
+        self.assertEqual(configuration.read_text(encoding="utf-8"), "extensions: []\n")
 
     def test_macos_install_copies_complete_bundle_and_records_manifest(self) -> None:
         paths = self.mac_paths()

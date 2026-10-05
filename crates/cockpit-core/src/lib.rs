@@ -19,6 +19,7 @@ mod project_store;
 pub mod project_teardown;
 mod repository_cache;
 pub mod projects;
+pub mod orchestration;
 pub mod quota;
 pub mod repositories;
 pub mod review;
@@ -137,6 +138,7 @@ pub struct CockpitService {
     adapter: Arc<dyn HerdrAdapter>,
     compatibility: Arc<RwLock<CompatibilityCache>>,
     projects: Option<Arc<projects::ProjectService>>,
+    orchestration: Option<Arc<orchestration::OrchestrationService>>,
     contexts: Option<Arc<context::ContextService>>,
     viewers: Option<Arc<viewer::ViewerService>>,
     comments: Option<Arc<comments::CommentsService>>,
@@ -204,6 +206,7 @@ impl CockpitService {
             adapter,
             compatibility: Arc::new(RwLock::new(CompatibilityCache::default())),
             projects: None,
+            orchestration: None,
             contexts: None,
             viewers: None,
             comments: None,
@@ -227,6 +230,17 @@ impl CockpitService {
                 "Project operations are not configured in this host",
             )
         })
+    }
+
+    pub fn with_orchestration(mut self, service: Arc<orchestration::OrchestrationService>) -> Self {
+        self.orchestration = Some(service);
+        self
+    }
+
+    pub fn orchestration(&self) -> Result<&Arc<orchestration::OrchestrationService>, InspectionError> {
+        self.orchestration.as_ref().ok_or_else(|| InspectionError::new(
+            "orchestration_unavailable", "Supervisor orchestration is not configured in this host",
+        ))
     }
 
     pub fn with_contexts(mut self, contexts: context::ContextService) -> Self {

@@ -1,4 +1,9 @@
 import {
+  matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest,
+  parseOrchestrationMutationRequest, parseOrchestrationMutationResponse,
+  parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
+} from "./orchestrationProtocol";
+import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest,
   parseWidgetRemoveResponse, parseWidgetSelectRequest, parseWidgetSelectResponse,
 } from "./widgetProtocol";
@@ -725,6 +730,23 @@ export function createBrowserClient(
   webSocketFactory: BrowserWebSocketFactory = defaultWebSocket,
 ): CockpitClient {
   return {
+    async orchestrationSnapshot(value) {
+      const body = parseOrchestrationSnapshotRequest(value);
+      const query = body.root_id === null ? "" : `?root_id=${encodeURIComponent(body.root_id)}`;
+      return getJson(request, `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration${query}`, "orchestration snapshot", response => matchOrchestrationSnapshot(response, body));
+    },
+    async orchestrationMutate(value) {
+      const body = parseOrchestrationMutationRequest(value);
+      return getJson(request, `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/mutations`, "orchestration mutation", parseOrchestrationMutationResponse, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
+    async orchestrationWait(value) {
+      const body = parseOrchestrationWaitRequest(value);
+      return getJson(request, "/api/v1/orchestration/wait", "orchestration wait", parseOrchestrationWaitResponse, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
     projectConfiguration() { return getJson(request, "/api/v1/project/configuration", "project configuration", parseProjectConfiguration); },
     providerCredentials() { return getJson(request, "/api/v1/provider-credentials", "provider credentials", parseProviderCredentialStatusList); },
     async setProviderCredential(value) {

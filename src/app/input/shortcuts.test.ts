@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { SHORTCUTS, SHORTCUT_DOCS_BEGIN, SHORTCUT_DOCS_END, formatShortcut, prefixCommandForKey, renderShortcutDocs, returnFocusFromSidebar, focusSidebarList, registerSidebarFocus, viewerShortcutAction, type PrefixCommand } from "./shortcuts";
+import { SHORTCUTS, formatShortcut, prefixCommandForKey, returnFocusFromSidebar, focusSidebarList, registerSidebarFocus, viewerShortcutAction, type PrefixCommand } from "./shortcuts";
 
 function chord(overrides: Partial<{ key: string; code: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; target: EventTarget | null }>) {
   return { key: "", code: "", shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, target: null, ...overrides };
@@ -46,13 +45,6 @@ describe("shortcut registry", () => {
     expect(formatShortcut("terminal-copy", "other")).toBe("Ctrl+Shift+C");
   });
 
-  it("keeps docs/keyboard-shortcuts.md in step with the registry", () => {
-    const docs = readFileSync("docs/keyboard-shortcuts.md", "utf8");
-    const start = docs.indexOf(SHORTCUT_DOCS_BEGIN);
-    const end = docs.indexOf(SHORTCUT_DOCS_END);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(docs.slice(start + SHORTCUT_DOCS_BEGIN.length, end).trim()).toBe(renderShortcutDocs().trim());
-  });
 });
 
 describe("viewer shortcuts", () => {

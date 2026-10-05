@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
+use cockpit_protocol::projects::{OrchestrationConfiguration, ProjectConfiguration, ProjectLimits, ProjectProvider};
 use serde::Deserialize;
 
 use crate::InspectionError;
@@ -65,6 +65,7 @@ struct TomlConfiguration {
     window: Option<TomlWindow>,
     browser: Option<TomlBrowser>,
     quota: Option<TomlQuota>,
+    orchestration: Option<OrchestrationConfiguration>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -419,6 +420,14 @@ pub fn load_project_configuration(
         );
     }
 
+    let orchestration_from_file = file.orchestration.is_some();
+    let mut orchestration = file.orchestration.unwrap_or_default();
+    if let Some(extension) = env::var_os("COCKPIT_OMP_EXTENSION") {
+        orchestration.omp_extension = Some(path_text(Path::new(&extension), "omp_extension")?);
+    }
+    validate_orchestration(&orchestration)?;
+    origins.insert("orchestration".into(), origin(orchestration_from_file, &file_origin, false));
+
     Ok(ProjectConfiguration {
         version: file.version.unwrap_or(CONFIG_VERSION),
         repository_roots: roots,
@@ -431,6 +440,7 @@ pub fn load_project_configuration(
         checkout_template,
         providers,
         limits,
+        orchestration,
         origins,
     })
 }
@@ -524,9 +534,9 @@ pub fn load_window_configuration(
     })
 }
 
-fn load_file_configuration(
-    config_path: Option<&Path>,
-) -> Result<(TomlConfiguration, String), InspectionError> {
+/// The same invocation/environment/default resolution used by every config loader.
+/// A missing implicit default means no file; an explicit path is never guessed.
+pub fn configuration_path(config_path: Option<&Path>) -> Result<Option<PathBuf>, InspectionError> {
     let path = if let Some(path) = config_path {
         Some(path.to_owned())
     } else if let Some(path) = env::var_os("COCKPIT_CONFIG") {
@@ -536,14 +546,16 @@ fn load_file_configuration(
         match default.try_exists() {
             Ok(true) => Some(default),
             Ok(false) => None,
-            Err(_) => {
-                return Err(InspectionError::new(
-                    "config_unavailable",
-                    "Cannot inspect the default Cockpit configuration",
-                ));
-            }
+            Err(_) => return Err(InspectionError::new("config_unavailable", "Cannot inspect the default Cockpit configuration")),
         }
     };
+    Ok(path)
+}
+
+fn load_file_configuration(
+    config_path: Option<&Path>,
+) -> Result<(TomlConfiguration, String), InspectionError> {
+    let path = configuration_path(config_path)?;
     let Some(path) = path else {
         return Ok((TomlConfiguration::default(), "default".into()));
     };
@@ -633,6 +645,56 @@ fn validate_paths(paths: &[String], field: &str) -> Result<(), InspectionError> 
                 format!("{field} must be an absolute path without parent traversal"),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_orchestration(configuration: &OrchestrationConfiguration) -> Result<(), InspectionError> {
+    if let Some(path) = &configuration.omp_extension {
+        validate_text(path, "omp_extension")?;
+        if !Path::new(path).is_absolute() {
+            return Err(InspectionError::new("invalid_omp_extension", "omp_extension must be absolute"));
+        }
+    }
+    if let Some(model) = &configuration.model {
+        validate_text(model, "orchestration_model")?;
+        if model.starts_with('-') {
+            return Err(InspectionError::new("invalid_orchestration_model", "model cannot be an option"));
+        }
+    }
+    validate_orchestration_args(&configuration.extra_args)?;
+    if configuration.routes.len() > 256 {
+        return Err(InspectionError::new("invalid_orchestration_routes", "At most 256 routes are supported"));
+    }
+    for route in &configuration.routes {
+        validate_text(&route.provider, "route_provider")?;
+        validate_text(&route.instance, "route_instance")?;
+        validate_text(&route.project_id_prefix, "route_project_id_prefix")?;
+        validate_text(&route.repository_id, "route_repository_id")?;
+        let url = url::Url::parse(&route.instance).map_err(|_| InspectionError::new("invalid_route_instance", "instance must be an HTTP(S) origin"))?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
+            || !url.username().is_empty() || url.password().is_some()
+            || url.query().is_some() || url.fragment().is_some() || url.path() != "/"
+        {
+            return Err(InspectionError::new("invalid_route_instance", "instance must be an HTTP(S) origin without credentials or a path"));
+        }
+    }
+    Ok(())
+}
+
+/// Only process options that do not load code, resume sessions, or bypass grants.
+pub(crate) fn validate_orchestration_args(args: &[String]) -> Result<(), InspectionError> {
+    if args.len() > 16 {
+        return Err(InspectionError::new("invalid_orchestration_args", "At most 16 OMP arguments are supported"));
+    }
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--no-extensions" | "--no-skills" | "--no-rules" => {}
+            "--thinking" if args.get(index + 1).is_some_and(|value| matches!(value.as_str(), "off" | "minimal" | "low" | "medium" | "high")) => index += 1,
+            _ => return Err(InspectionError::new("invalid_orchestration_args", "Only --no-extensions, --no-skills, --no-rules and --thinking LEVEL are supported")),
+        }
+        index += 1;
     }
     Ok(())
 }
@@ -767,10 +829,11 @@ fn origin(from_file: bool, file_origin: &str, _secret: bool) -> String {
 mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use cockpit_protocol::projects::OrchestrationConfiguration;
 
     use super::{
         load_browser_configuration, load_project_configuration, load_window_configuration,
-        validate_template,
+        validate_orchestration, validate_orchestration_args, validate_template,
     };
 
     #[test]
@@ -1036,6 +1099,25 @@ mod tests {
         );
         assert_eq!(configuration.origins.get("library_root").map(String::as_str), Some("default"));
         let _ = fs::remove_file(path);
+    }
+    #[test]
+    fn orchestration_options_reject_code_loading_and_auto_approval() {
+        for args in [
+            vec!["--extension".into(), "/tmp/unreviewed.ts".into()],
+            vec!["--resume".into(), "previous-session".into()],
+            vec!["--yolo".into()],
+            vec!["--thinking".into(), "off --yolo".into()],
+        ] {
+            assert_eq!(validate_orchestration_args(&args).unwrap_err().code, "invalid_orchestration_args");
+        }
+        assert!(validate_orchestration_args(&["--no-extensions".into(), "--thinking".into(), "off".into()]).is_ok());
+        let configuration: OrchestrationConfiguration = toml::from_str(
+            "model = 'tiny'\nextra_args = ['--no-extensions', '--no-skills', '--no-rules']\n[[routes]]\nprovider = 'jira'\ninstance = 'https://issues.example'\nproject_id_prefix = 'APP-'\nrepository_id = 'api'\n"
+        ).unwrap();
+        assert!(validate_orchestration(&configuration).is_ok());
+        let mut unsafe_route = configuration;
+        unsafe_route.routes[0].instance = "https://user:secret@issues.example/path".into();
+        assert_eq!(validate_orchestration(&unsafe_route).unwrap_err().code, "invalid_route_instance");
     }
 }
 

@@ -242,9 +242,7 @@ impl ProjectStore {
         name: &str,
         code: &'static str,
     ) -> Result<LockGuard, InspectionError> {
-        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains('\0') {
-            return Err(InspectionError::new("unsafe_path", "invalid lock name"));
-        }
+        validate_lock_name(name)?;
         self.acquire_file_lock(name, code)
             .map(|file| LockGuard { _file: file })
     }
@@ -440,6 +438,16 @@ impl ProjectStore {
     ) -> Result<Option<ExecutionLease>, InspectionError> {
         validate_operation_id(operation_id)?;
         self.try_acquire_file_lock(&lease_name(operation_id), "execution_lease")
+            .map(|file| file.map(|file| ExecutionLease { _file: file }))
+    }
+
+
+    pub(crate) fn try_acquire_named_execution_lease(
+        &self,
+        name: &str,
+    ) -> Result<Option<ExecutionLease>, InspectionError> {
+        validate_lock_name(name)?;
+        self.try_acquire_file_lock(name, "execution_lease")
             .map(|file| file.map(|file| ExecutionLease { _file: file }))
     }
 
@@ -781,6 +789,17 @@ pub(crate) fn atomic_write_json<T: Serialize>(dir: &Dir, name: &str, value: &T) 
 }
 
 pub(crate) fn atomic_write_bytes(dir: &Dir, name: &str, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_bytes_checked(dir, name, bytes, || Ok(()))
+}
+
+/// Run the caller's final precondition after the temporary file is durable and
+/// immediately before replacing the destination.
+pub(crate) fn atomic_write_bytes_checked(
+    dir: &Dir,
+    name: &str,
+    bytes: &[u8],
+    before_rename: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
     let tmp = format!(".{}.tmp", Uuid::new_v4());
     let mut options = OpenOptions::new();
     options
@@ -804,8 +823,19 @@ pub(crate) fn atomic_write_bytes(dir: &Dir, name: &str, bytes: &[u8]) -> io::Res
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
+    if let Err(error) = before_rename() {
+        let _ = dir.remove_file(&tmp);
+        return Err(error);
+    }
     dir.rename(&tmp, dir, name)?;
     dir.open(".")?.sync_all()
+}
+
+fn validate_lock_name(name: &str) -> Result<(), InspectionError> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err(InspectionError::new("unsafe_path", "invalid lock name"));
+    }
+    Ok(())
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(dir: &Dir, name: &str) -> Result<T, InspectionError> {
@@ -817,6 +847,15 @@ pub(crate) fn read_json_bounded<T: for<'de> Deserialize<'de>>(
     name: &str,
     max_bytes: u64,
 ) -> Result<T, InspectionError> {
+    let bytes = read_bytes_bounded(dir, name, max_bytes)?;
+    serde_json::from_slice(&bytes).map_err(|e| InspectionError::new("state_corrupt", e.to_string()))
+}
+
+pub(crate) fn read_bytes_bounded(
+    dir: &Dir,
+    name: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>, InspectionError> {
     let metadata = dir.symlink_metadata(name).map_err(io_error("state_read"))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes {
         return Err(InspectionError::new(
@@ -845,7 +884,7 @@ pub(crate) fn read_json_bounded<T: for<'de> Deserialize<'de>>(
             "state record exceeded its bounded size while reading",
         ));
     }
-    serde_json::from_slice(&bytes).map_err(|e| InspectionError::new("state_corrupt", e.to_string()))
+    Ok(bytes)
 }
 fn validate_operation_id(value: &str) -> Result<(), InspectionError> {
     if Uuid::parse_str(value).is_err() {

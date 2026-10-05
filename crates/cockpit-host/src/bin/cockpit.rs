@@ -26,6 +26,9 @@ use cockpit_host::{
     server::{ServerConfig, serve},
 };
 
+#[path = "../cli_orchestration.rs"]
+mod cli_orchestration;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "cockpit",
@@ -65,6 +68,16 @@ pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     Widget(WidgetArgs),
     /// Print the live Library context selected by a Herdr Space.
     Context(ContextArgs),
+    /// Read and edit canonical supervisor tasks.
+    Task(cli_orchestration::TaskArgs),
+    /// Propose workers and report or message within the run forest.
+    Run(cli_orchestration::RunArgs),
+    /// Pull durable inbox messages; acknowledge only after processing.
+    Inbox(cli_orchestration::InboxArgs),
+    /// Publish and control OMP subagents.
+    Subagent(cli_orchestration::SubagentArgs),
+    /// Resolve configured artifact-to-project routing without guessing focus.
+    Route(cli_orchestration::RouteArgs),
 }
 #[derive(Debug, Clone, Args)]
 struct HerdrArgs {
@@ -200,6 +213,13 @@ struct CliError {
 impl From<String> for CliError {
     fn from(text: String) -> Self {
         Self { exit: 1, text: format!("cockpit: {text}") }
+    }
+}
+
+impl From<cli_orchestration::CliError> for CliError {
+    fn from(error: cli_orchestration::CliError) -> Self {
+        let response = cockpit_protocol::v1::ErrorResponse { code: error.code, message: error.message };
+        Self { exit: 1, text: serde_json::to_string(&response).expect("error response serialization") }
     }
 }
 
@@ -408,7 +428,21 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
             } else {
                 None
             };
-            let service = make_service(args.herdr, mode, projects)?;
+            let service = make_service(args.herdr.clone(), mode, projects.clone())?;
+            let orchestration_runtime = if let Some(configuration) = projects.as_ref() {
+                let herdr_config = HerdrCliConfig::from_options(
+                    args.herdr.herdr.clone(), args.herdr.herdr_session.clone(), args.herdr.herdr_socket.clone(),
+                ).map_err(|error| error.to_string())?;
+                Some(Arc::new(cockpit_host::OrchestrationRuntime::new(
+                    configuration, Arc::new(HerdrCliAdapter::new(herdr_config)),
+                    service.projects().map_err(|error| error.to_string())?.clone(),
+                    service.library().map_err(|error| error.to_string())?.clone(),
+                    args.project.config.clone(),
+                ).map_err(|error| error.to_string())?))
+            } else { None };
+            let service = match &orchestration_runtime {
+                Some(runtime) => service.with_orchestration(runtime.service.clone()), None => service,
+            };
             let service = match quota {
                 Some(quota) => service.with_quota(quota),
                 None => service,
@@ -418,6 +452,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
                 static_dir: args.static_dir,
                 service,
                 browser_runtime,
+                orchestration_runtime,
             })
             .await
             .map_err(|error| error.to_string())
@@ -433,6 +468,8 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Browser(args) => run_browser(args).await,
         Command::Widget(_) => unreachable!("widget commands use their own exit-status contract"),
         Command::Context(args) => run_context(args).await,
+        Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Subagent(_) | Command::Route(_) =>
+            unreachable!("orchestration commands preserve their structured error contract"),
     }
 }
 fn inherited_session_from_socket(path: &std::path::Path) -> Option<String> {
@@ -965,6 +1002,11 @@ async fn main() -> ExitCode {
     };
     let result = match cli.command {
         Command::Widget(args) => run_widget(args).await,
+        Command::Task(args) => args.run().await.map(|()| 0).map_err(CliError::from),
+        Command::Run(args) => args.run().await.map(|()| 0).map_err(CliError::from),
+        Command::Inbox(args) => args.run().await.map(|()| 0).map_err(CliError::from),
+        Command::Subagent(args) => args.run().await.map(|()| 0).map_err(CliError::from),
+        Command::Route(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         command => run_legacy(Cli { command }).await.map(|()| 0).map_err(CliError::from),
     };
     match result {

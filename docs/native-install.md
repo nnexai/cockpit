@@ -1,6 +1,6 @@
 # Native user-local install
 
-`scripts/install-native.py` builds and installs both Cockpit surfaces: the graphical Tauri application and the `cockpit-cli` terminal tool. It installs only files owned by Cockpit. It never uses `sudo`, starts Cockpit, stops a running Cockpit process, or changes configuration.
+`scripts/install-native.py` builds and installs both Cockpit surfaces: the graphical Tauri application and the `cockpit-cli` terminal tool, plus the bundled per-process OMP orchestration extension. It installs only files owned by Cockpit. It never uses `sudo`, starts Cockpit, stops a running Cockpit process, or changes Cockpit or global OMP configuration/authentication.
 
 Run this from the repository root:
 
@@ -13,6 +13,8 @@ On Linux, the default build invokes `bunx tauri build --no-bundle`, then builds 
 On macOS, the build uses `bunx tauri build --bundles app` and installs the complete `target/release/bundle/macos/Cockpit.app` bundle at `~/Applications/Cockpit.app`. The CLI is installed under `$XDG_DATA_HOME/cockpit/bin`, defaulting to `~/Library/Application Support/cockpit/bin`. The graphical launcher points into the installed bundle; no second raw graphical binary is installed.
 
 Both platforms install `cockpit` and `cockpit-cli` launchers under `$XDG_BIN_HOME`, or `~/.local/bin` by default. Updates stage artifacts on their destination filesystems and journal publication and rollback. Individual replacements are atomic; a multi-artifact update is not one atomic filesystem operation. Existing processes are not stopped or restarted.
+
+The installer also receipt-owns `$XDG_DATA_HOME/cockpit/omp/cockpit-orchestration.ts` (under `PREFIX/share/cockpit/omp/` for a prefix install). This is a Cockpit artifact, not a globally registered OMP extension. Supervisor/worker launches pass an explicit per-process `-e` path through Herdr `agent.start`; manually started OMP processes are not reconfigured. Hosts embed the same integration and, by default, materialize it in a private `<state_root>/orchestration/omp/` directory. `COCKPIT_OMP_EXTENSION` or `[orchestration] omp_extension` can select another explicit path. Existing OMP authentication is reused; install does not copy credentials, sign in, or edit OMP settings.
 
 After changing browser paths or installing an update, fully restart any
 existing `cockpit` or `cockpit serve` process before testing. Browser
@@ -87,7 +89,7 @@ python3 scripts/install-native.py --uninstall
 python3 scripts/install-native.py --prefix /tmp/cockpit-native-check --uninstall
 ```
 
-Uninstall uses the receipt to remove only owned launchers, desktop files, application artifacts and CLI. macOS receipts include the bundle's files, modes and symlink identities. Updates and uninstall refuse modified artifacts or path substitutions; configuration and unrelated files remain untouched. Verified legacy raw-binary macOS installations migrate through the same journaled transaction rather than an untracked deletion.
+Uninstall uses the receipt to remove only owned launchers, desktop files, application artifacts, CLI and bundled OMP extension. macOS receipts include the bundle's files, modes and symlink identities. Updates and uninstall refuse modified artifacts or path substitutions; configuration, runtime orchestration/task records, OMP authentication/settings and unrelated files remain untouched. Verified legacy raw-binary macOS installations migrate through the same journaled transaction rather than an untracked deletion.
 
 ## Inline Space browser
 
