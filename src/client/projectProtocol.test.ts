@@ -1,6 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { parseWorkspaceOperation, parseWorkspaceSetupRequest, parseWorkspaceDefaults } from "./projectProtocol";
+import { parseProjectConfiguration, parseWorkspaceOperation, parseWorkspaceSetupRequest, parseWorkspaceDefaults } from "./projectProtocol";
 import { parseWorkspaceTeardownPreview, parseWorkspaceTeardownExecuteRequest, parseWorkspaceTeardownResult, parseWorkspaceTeardownRecoveryList } from "./projectTeardownProtocol";
+
+function configuration(providers: unknown[]) {
+  return {
+    version: 1, repository_roots: [], worktree_root: "/worktrees", companion_root: "/companions", state_root: "/state", cache_root: "/cache",
+    library_root: "/library", notes_root: "/notes", branch_template: "{task}", checkout_template: "{task}", providers, origins: {},
+    orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
+    limits: {
+      catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
+      context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
+      library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,
+      library_attachment_bytes: 1, library_item_attachment_bytes: 1, library_max_items: 1,
+    },
+  };
+}
+
+describe("provider configuration protocol", () => {
+  it("accepts every explicit kind, optional forge executable/login and HTTP deployment", () => {
+    const providers = [
+      { id: "forge", kind: "github", base_url: "https://github.test", executable: "/custom/forge-wrapper" },
+      { id: "lab", kind: "gitlab", base_url: "https://gitlab.test", executable: "glab" },
+      { id: "tea", kind: "gitea", base_url: "https://gitea.test", executable: "tea", login: "fixture" },
+      { id: "tracker", kind: "jira", base_url: "https://team.atlassian.net", deployment: "cloud" },
+      { id: "wiki", kind: "confluence", base_url: "https://wiki.test/confluence", deployment: "data_center" },
+    ];
+    expect(parseProjectConfiguration(configuration(providers)).providers).toEqual(providers);
+    expect(parseProjectConfiguration(configuration([{ id: "optional", kind: "jira", base_url: "https://jira.test" }])).providers[0]?.executable).toBeUndefined();
+  });
+
+  it.each([
+    { executable: "jira" },
+    { kind: null },
+    { kind: "unknown" },
+    { kind: { toString: (): string => "jira" } },
+    { kind: "jira", executable: null },
+    { kind: "jira", executable: 42 },
+    { kind: "jira", deployment: null },
+    { kind: "jira", deployment: "server" },
+    { kind: "jira", deployment: 42 },
+  ])("rejects missing kinds and malformed optional provider fields: %j", (fields) => {
+    expect(() => parseProjectConfiguration(configuration([{ id: "invalid", base_url: "https://jira.test", ...fields }]))).toThrow("Invalid project configuration");
+  });
+});
 
 const repository = {
   repository_id: "repo-1",

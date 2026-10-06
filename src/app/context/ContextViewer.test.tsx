@@ -467,7 +467,7 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
   const client = {
     contextDirectory: vi.fn(async (): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: "folder", path: "", truncated: false, diagnostics: [], entries: [] })),
     libraryListing: vi.fn(async () => currentListing),
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" }] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "gitlab", kind: "gitlab" as const, base_url: "https://gitlab.test", executable: "/usr/bin/glab" }] })),
     libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: documentText, truncated: false, diagnostics: [] })),
     contextDocument: vi.fn(),
     commentBatch: vi.fn(),
@@ -684,7 +684,7 @@ it("keeps an issued Library root's viewer authority and item selection through c
     contextDocument: vi.fn(async (_session: string, _viewer: string, request: { binding_id: string; root_id: string; path: string }) => ({ ...request, revision: "r1", content_hash: "sha256:keys", bytes: 6, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
     contextFileIndex: vi.fn(async (_session: string, _viewer: string, request: { binding_id: string; root_id: string }): Promise<ContextFileIndex> => ({ ...request, files: [{ path: item.document_path!, bytes: 6 }], truncated: false, source: "walk", state: "cached", diagnostics: [] })),
     libraryListing: vi.fn(async () => library),
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test", deployment: "data_center" as const }] })),
     libraryDocument: vi.fn(),
     libraryFileIndex: vi.fn(),
     commentBatch: vi.fn(async () => batch),

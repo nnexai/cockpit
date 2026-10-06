@@ -780,6 +780,8 @@ dependencies = [
  "cap-std",
  "cockpit-core",
  "cockpit-protocol",
+ "parking_lot",
+ "quick-xml",
  "reqwest",
  "serde",
  "serde_json",

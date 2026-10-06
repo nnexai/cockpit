@@ -1,68 +1,58 @@
 use std::collections::BTreeSet;
-use std::ffi::OsString;
 use std::path::Path;
-use std::process::Output;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
-use cockpit_core::credentials::{ProviderCredential, ProviderCredentials};
+use cockpit_core::credentials::ProviderCredentials;
 use cockpit_core::jira_query::{
-    format_wall_minute, instant_seconds, is_normalized_jql, wall_minute,
+    format_wall_minute, instant_seconds, jira_query_input, wall_minute,
 };
-use cockpit_core::process::{StagingBudget, run_bounded_command};
+use cockpit_core::process::StagingBudget;
 use cockpit_core::repositories::{is_jira_key, resolve_jira_url};
 use cockpit_core::sources::{
     AttachmentRef, DownloadedAttachment, FrontmatterField, FrontmatterValue, IssueListing,
     IssueQuery, IssueRow, SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata,
     SourceProvider, SourceRef,
 };
-use cockpit_protocol::credentials::ProviderAuthKind;
-use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, ProjectProvider};
+use cockpit_protocol::projects::{
+    ProjectConfiguration, ProjectDiagnostic, ProjectProvider, ProviderDeployment, ProviderKind,
+};
 use cockpit_protocol::sources::SourceCapability;
 use serde_json::Value;
-use tokio::process::Command;
 use url::Url;
 
-use crate::CredentialHandle;
 use crate::jira_attachments::{
-    AttachmentDownloader, DOWNLOADED_NAME, issue_attachments, partial_diagnostic,
+    DOWNLOADED_NAME, download_issue_attachment, issue_attachments, partial_diagnostic,
     valid_attachment_id,
 };
 use crate::jira_wiki::wiki_to_markdown;
+use crate::site_http::{FailureKind, HttpFailure, MAX_JSON_BYTES, Service, SiteHttp};
 
 const MAX_ISSUE_BYTES: usize = 1024 * 1024;
 const MAX_DOCUMENT_DEPTH: usize = 48;
 
-pub(crate) fn executable(value: &str) -> bool {
-    Path::new(value)
-        .file_name()
-        .is_some_and(|name| name == "jira")
-}
+const ISSUE_FIELDS: &str = "summary,description,issuetype,status,priority,assignee,reporter,created,updated,comment,attachment,parent,subtasks,issuelinks";
+const SEARCH_FIELDS: &str = "updated,status,issuetype,assignee";
+const PAGE: u32 = 100;
+const MAX_COMMENTS: u64 = 1000;
 
-/// Read-only Jira work items through the owner's configured `jira` CLI
-/// (ankitpokhrel/jira-cli). By default the CLI owns the site login and token.
-/// When a token is stored in Cockpit's OS vault for this provider, Cockpit
-/// hands it to the CLI through the child environment, pinned to the
-/// configured site (`JIRA_SERVER`); the CLI still needs its `jira init`
-/// config file for the installation type. Cockpit only asks for one work
-/// item's raw API record and checks that the answer came from the
-/// configured site.
+/// Read-only Jira work items using the token stored in Cockpit's OS vault.
 #[derive(Debug)]
 pub struct JiraSourceProvider {
     provider: ProjectProvider,
     base_url: Url,
-    limits: (usize, Duration),
-    credentials: CredentialHandle,
-    downloader: AttachmentDownloader,
+    deployment: ProviderDeployment,
+    http: SiteHttp,
 }
 
 impl JiraSourceProvider {
     pub fn configured(
         configuration: &ProjectConfiguration,
         provider_id: &str,
+        credentials: Arc<ProviderCredentials>,
     ) -> Result<Self, InspectionError> {
         let provider = configuration
             .providers
@@ -74,6 +64,12 @@ impl JiraSourceProvider {
                     "Jira provider is not configured",
                 )
             })?;
+        if provider.kind != ProviderKind::Jira || provider.deployment.is_none() {
+            return Err(InspectionError::new(
+                "source_provider_invalid",
+                "Jira provider requires kind jira and a resolved deployment",
+            ));
+        }
         let base_url = Url::parse(&provider.base_url).map_err(|_| {
             InspectionError::new("source_provider_invalid", "Jira site URL is invalid")
         })?;
@@ -89,23 +85,19 @@ impl JiraSourceProvider {
                 "Jira site URL must be credential-free HTTP(S)",
             ));
         }
-        let limits = (
-            (configuration.limits.git_output_bytes as usize).max(64 * 1024),
+        let http = SiteHttp::new(
+            base_url.clone(),
+            provider_id,
+            Service::Jira,
             Duration::from_millis(configuration.limits.operation_timeout_ms as u64),
+            credentials,
         );
         Ok(Self {
             provider: provider.clone(),
-            downloader: AttachmentDownloader::new(base_url.clone(), limits.1),
             base_url,
-            limits,
-            credentials: CredentialHandle::none(),
+            deployment: provider.deployment.unwrap(),
+            http,
         })
-    }
-
-    /// Use the token stored in Cockpit for this provider, when there is one.
-    pub fn with_credentials(mut self, credentials: Arc<ProviderCredentials>) -> Self {
-        self.credentials = CredentialHandle(credentials);
-        self
     }
 
     fn key(&self, request: &SourceFetchRequest) -> Result<String, InspectionError> {
@@ -129,66 +121,108 @@ impl JiraSourceProvider {
         Ok(resolve_jira_url(&self.provider, &request.artifact_url)?.canonical_id)
     }
 
-    async fn run(&self, call: &JiraCall<'_>) -> Result<CliRun, InspectionError> {
-        let mut command = Command::new(&self.provider.executable);
-        command
-            .args(jira_args(call)?)
-            .env("NO_COLOR", "1")
-            .env("TERM", "dumb");
-        let credential = self.credentials.0.for_cli(&self.provider.id).await;
-        if let Some(credential) = &credential {
-            for (name, value) in credential_env(&self.base_url, credential) {
-                command.env(name, value);
-            }
+    fn api(&self) -> &'static str {
+        match self.deployment {
+            ProviderDeployment::Cloud => "3",
+            ProviderDeployment::DataCenter => "2",
         }
-        let output = run_bounded_command(
-            command,
-            self.limits.0,
-            self.limits.0,
-            self.limits.1,
-            "Jira source",
-        )
-        .await
-        .map_err(|error| match error.code.as_str() {
-            "execution_timeout" => InspectionError::new(
-                "source_provider_timeout",
-                "Jira CLI request exceeded the configured deadline",
-            ),
-            "bounded_output" => InspectionError::new(
-                "source_truncated",
-                "Jira CLI response exceeded Cockpit's explicit process limit",
-            ),
-            "execution_failed" => {
-                InspectionError::new("source_cli_unavailable", "Jira CLI could not be started")
-            }
-            _ => InspectionError::new("source_provider_failed", "Jira CLI request failed"),
-        })?;
-        Ok(CliRun {
-            output,
-            injected: credential.is_some(),
-        })
     }
 
-    /// One `issue list` call: at most `limit` rows, newest first. The CLI's
-    /// "No result found" failure is an empty answer, not an error.
-    async fn run_list(&self, jql: &str, limit: u32) -> Result<Vec<IssueRow>, ListFailure> {
-        let run = self.run(&JiraCall::List { jql, limit }).await?;
-        let output = &run.output;
-        if output.status.success() {
-            return Ok(parse_issue_rows(&output.stdout, limit)?);
-        }
-        if String::from_utf8_lossy(&output.stderr).contains(NO_RESULT) {
-            return Ok(Vec::new());
-        }
-        let error = run.failure();
-        let rejected = error.code == "source_not_found"
-            || String::from_utf8_lossy(&output.stderr).contains("400 Bad Request");
-        Err(ListFailure { error, rejected })
+    /// Page only through Cockpit-built endpoints, never server-provided URLs.
+    async fn search(
+        &self,
+        jql: &str,
+        max: u32,
+        cancel: &AtomicBool,
+    ) -> Result<IssueListing, ListFailure> {
+        let mut rows = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut tokens = BTreeSet::new();
+        let mut token: Option<String> = None;
+        let mut start = 0u64;
+        let complete = loop {
+            if cancel.load(Ordering::Relaxed) {
+                break false;
+            }
+            let start_text = if self.deployment == ProviderDeployment::DataCenter {
+                start.to_string()
+            } else {
+                String::new()
+            };
+            let continuation = match self.deployment {
+                ProviderDeployment::Cloud => token.as_deref().map(|token| ("nextPageToken", token)),
+                ProviderDeployment::DataCenter => Some(("startAt", start_text.as_str())),
+            };
+            let query = [
+                ("jql", jql), ("fields", SEARCH_FIELDS), ("maxResults", "100"),
+                continuation.unwrap_or(("nextPageToken", "")),
+            ];
+            let segments: &[&str] = match self.deployment {
+                ProviderDeployment::Cloud => &["rest", "api", "3", "search", "jql"],
+                ProviderDeployment::DataCenter => &["rest", "api", "2", "search"],
+            };
+            let pairs = if continuation.is_some() { &query[..] } else { &query[..3] };
+            let value = self.http.get_json(self.http.endpoint(segments, pairs), MAX_JSON_BYTES).await?;
+            let page = search_rows(&value)?;
+            let count = page.len() as u64;
+            let done = match self.deployment {
+                ProviderDeployment::Cloud => {
+                    let next = match value.get("nextPageToken") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(next)) if !next.is_empty() => Some(next.clone()),
+                        _ => return Err(list_contract("Jira search continuation is malformed").into()),
+                    };
+                    let last = match value.get("isLast") {
+                        None => false,
+                        Some(Value::Bool(last)) => *last,
+                        _ => return Err(list_contract("Jira search completion flag is malformed").into()),
+                    };
+                    if value.get("isLast") == Some(&Value::Bool(false)) && next.is_none() {
+                        return Err(list_contract("Jira search omitted a continuation token for a non-last page").into());
+                    }
+                    if !last && count == 0 && (next.is_some() || value.get("isLast").is_some()) {
+                        return Err(list_contract("Jira search returned an empty non-last page").into());
+                    }
+                    if !last && let Some(next) = &next {
+                        if !tokens.insert(next.clone()) {
+                            return Err(list_contract("Jira search repeated a continuation token").into());
+                        }
+                    }
+                    token = next;
+                    last || token.is_none()
+                }
+                ProviderDeployment::DataCenter => {
+                    let returned_start = value.get("startAt").and_then(Value::as_u64)
+                        .ok_or_else(|| list_contract("Jira search has no page offset"))?;
+                    let total = value.get("total").and_then(Value::as_u64)
+                        .ok_or_else(|| list_contract("Jira search has no total"))?;
+                    if returned_start != start {
+                        return Err(list_contract("Jira search returned a different page offset").into());
+                    }
+                    start = start.checked_add(count)
+                        .ok_or_else(|| list_contract("Jira search offset overflowed"))?;
+                    start >= total
+                }
+            };
+            let fresh = unique_new(page, &mut seen);
+            if count != 0 && fresh.is_empty() && !done {
+                return Err(list_contract("Jira search made no progress").into());
+            }
+            rows.extend(fresh);
+            if rows.len() > max as usize {
+                rows.truncate(max as usize);
+                break false;
+            }
+            if done {
+                break true;
+            }
+            if count == 0 || rows.len() == max as usize {
+                break false;
+            }
+        };
+        Ok(IssueListing { rows, complete })
     }
-
-    /// Newest-first windowed listing of `jql`. Paging is by narrowing
-    /// `updated`, never by offset (the CLI ignores `from` on Cloud): each
-    /// window is the query with `updated < <oldest minute seen + 1 min>`.
+    /// Newest-first token/offset listing, preserving the follow watermark overlap.
     async fn list_jql(
         &self,
         jql: &str,
@@ -196,7 +230,10 @@ impl JiraSourceProvider {
         max: u32,
         cancel: &AtomicBool,
     ) -> Result<IssueListing, InspectionError> {
-        if !is_normalized_jql(jql) || jql.len() > 2048 {
+        if jql.len() > 2048
+            || !jira_query_input(jql)
+                .is_ok_and(|input| input.is_some_and(|input| input.jql == jql))
+        {
             return Err(list_contract("Jira query is not a normalized query"));
         }
         let since = match updated_since {
@@ -210,48 +247,12 @@ impl JiraSourceProvider {
             }
             None => None,
         };
-        let mut rows: Vec<IssueRow> = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut upper: Option<String> = None;
-        let complete = loop {
-            if cancel.load(Ordering::Relaxed) {
-                break false;
-            }
-            let mut body = if since.is_some() || upper.is_some() {
-                format!("({jql})")
-            } else {
-                jql.to_owned()
-            };
-            if let Some(since) = &since {
-                body.push_str(&format!(" AND updated >= \"{since}\""));
-            }
-            if let Some(upper) = &upper {
-                body.push_str(&format!(" AND updated < \"{upper}\""));
-            }
-            let window = self.run_list(&body, PAGE).await.map_err(|failure| failure.error)?;
-            let full = window.len() == PAGE as usize;
-            let oldest = window
-                .iter()
-                .filter_map(|row| wall_minute(&row.updated))
-                .min();
-            let fresh = unique_new(window, &mut seen);
-            let progressed = !fresh.is_empty();
-            rows.extend(fresh);
-            if rows.len() > max as usize {
-                rows.truncate(max as usize);
-                break false;
-            }
-            if !full {
-                break true;
-            }
-            // A full window with nothing new means more than a page of
-            // issues share one minute, which windowing cannot split.
-            let Some(oldest) = oldest.filter(|_| progressed) else {
-                break false;
-            };
-            upper = Some(format_wall_minute(oldest + 1));
+        let body = if let Some(since) = since {
+            format!("({jql}) AND updated >= \"{since}\" ORDER BY updated DESC")
+        } else {
+            format!("{jql} ORDER BY updated DESC")
         };
-        Ok(IssueListing { rows, complete })
+        self.search(&body, max, cancel).await.map_err(|failure| failure.error)
     }
 
     /// Metadata for specific keys, 100 per call. A batch Jira rejects is
@@ -263,6 +264,9 @@ impl JiraSourceProvider {
         cancel: &AtomicBool,
     ) -> Result<IssueListing, InspectionError> {
         let mut requested = BTreeSet::new();
+        if keys.iter().any(|key| !is_jira_key(key)) {
+            return Err(list_contract("Jira work item key is malformed"));
+        }
         let unique: Vec<&String> = keys.iter().filter(|key| requested.insert(key.as_str())).collect();
         let mut stack: Vec<Vec<&String>> = unique
             .chunks(PAGE as usize)
@@ -279,9 +283,10 @@ impl JiraSourceProvider {
             }
             let names: Vec<&str> = part.iter().map(|key| key.as_str()).collect();
             let jql = format!("key in ({})", names.join(", "));
-            match self.run_list(&jql, part.len() as u32).await {
-                Ok(found) => {
-                    // Moved issues answer under a new key; ignore them.
+            match self.search(&jql, PAGE, cancel).await {
+                Ok(listing) => {
+                    complete &= listing.complete;
+                    let found = listing.rows;
                     let found = found
                         .into_iter()
                         .filter(|row| requested.contains(row.key.as_str()))
@@ -304,17 +309,17 @@ impl JiraSourceProvider {
         Ok(IssueListing { rows, complete })
     }
 
-    async fn issue(&self, key: &str) -> Result<Value, InspectionError> {
-        let run = self.run(&JiraCall::View { key }).await?;
-        if !run.output.status.success() {
-            return Err(run.failure());
-        }
-        let output = run.output;
-        let value: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
-            InspectionError::new(
-                "source_provider_contract",
-                "Jira CLI did not return a JSON work item",
-            )
+    async fn issue(&self, key: &str, fields: &str) -> Result<Value, InspectionError> {
+        let url = self.http.endpoint(&["rest", "api", self.api(), "issue", key], &[("fields", fields)]);
+        let value = self.http.get_json(url, MAX_JSON_BYTES).await.map_err(|failure| {
+            if failure.kind == FailureKind::NotFound {
+                InspectionError::new(
+                    "source_not_found",
+                    "Jira work item does not exist or is not visible to the stored token",
+                )
+            } else {
+                failure.error
+            }
         })?;
         if value.get("key").and_then(Value::as_str) != Some(key) {
             return Err(InspectionError::new(
@@ -322,8 +327,7 @@ impl JiraSourceProvider {
                 "Jira returned a different work item",
             ));
         }
-        // The CLI's own site configuration decides where it connects; the
-        // record's API URL proves the answer came from the configured site.
+        // The API record must independently identify this site and work item.
         let from_site = value
             .get("self")
             .and_then(Value::as_str)
@@ -354,10 +358,60 @@ impl JiraSourceProvider {
         if !from_site {
             return Err(InspectionError::new(
                 "source_identity_mismatch",
-                "Jira CLI is connected to a different site than the configured provider",
+                "Jira answered for a different site",
             ));
         }
         Ok(value)
+    }
+
+    async fn complete_comments(&self, key: &str, issue: &mut Value) -> Result<(), InspectionError> {
+        let Some(comment) = issue.get("fields").and_then(|fields| fields.get("comment")) else {
+            return Ok(());
+        };
+        let embedded = comment.get("comments").and_then(Value::as_array)
+            .ok_or_else(|| list_contract("Jira comment page is malformed"))?;
+        let total = comment.get("total").and_then(Value::as_u64).unwrap_or(embedded.len() as u64);
+        if total <= embedded.len() as u64 {
+            return Ok(());
+        }
+        let mut start = total.saturating_sub(MAX_COMMENTS);
+        let mut comments = Vec::new();
+        let mut ids = BTreeSet::new();
+        while start < total {
+            let start_text = start.to_string();
+            let url = self.http.endpoint(
+                &["rest", "api", self.api(), "issue", key, "comment"],
+                &[("startAt", &start_text), ("maxResults", "100")],
+            );
+            let page = self.http.get_json(url, MAX_JSON_BYTES).await.map_err(InspectionError::from)?;
+            if page.get("startAt").and_then(Value::as_u64) != Some(start) {
+                return Err(list_contract("Jira comments returned a different page offset"));
+            }
+            let list = page.get("comments").and_then(Value::as_array)
+                .ok_or_else(|| list_contract("Jira comment page is malformed"))?;
+            if list.len() > PAGE as usize {
+                return Err(list_contract("Jira comment page exceeded the requested limit"));
+            }
+            if list.is_empty() {
+                break;
+            }
+            for comment in list {
+                let id = comment.get("id").and_then(Value::as_str)
+                    .ok_or_else(|| list_contract("Jira comment has no ID"))?;
+                if !ids.insert(id.to_owned()) {
+                    return Err(list_contract("Jira comments repeated an ID"));
+                }
+            }
+            let remaining = (MAX_COMMENTS as usize).saturating_sub(comments.len());
+            comments.extend(list.iter().take(remaining).cloned());
+            start = start.checked_add(list.len() as u64)
+                .ok_or_else(|| list_contract("Jira comment offset overflowed"))?;
+            if comments.len() == MAX_COMMENTS as usize {
+                break;
+            }
+        }
+        issue["fields"]["comment"]["comments"] = Value::Array(comments);
+        Ok(())
     }
 
     fn browse_url(&self, key: &str) -> String {
@@ -383,7 +437,7 @@ impl SourceProvider for JiraSourceProvider {
         request: &SourceFetchRequest,
     ) -> Result<SourceMetadata, InspectionError> {
         let key = self.key(request)?;
-        let issue = self.issue(&key).await?;
+        let issue = self.issue(&key, "summary").await?;
         Ok(SourceMetadata {
             title: summary(&issue)?,
             source_branch: None,
@@ -398,7 +452,8 @@ impl SourceProvider for JiraSourceProvider {
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError> {
         let key = self.key(request)?;
-        let issue = self.issue(&key).await?;
+        let mut issue = self.issue(&key, ISSUE_FIELDS).await?;
+        self.complete_comments(&key, &mut issue).await?;
         let title = summary(&issue)?;
         let source_url = self.browse_url(&key);
         let (body, complete) = issue_markdown(&issue, &source_url)?;
@@ -470,8 +525,7 @@ impl SourceProvider for JiraSourceProvider {
                 "selected source provider does not support this operation",
             ));
         }
-        // No CLI login can fetch bytes, so a missing token or vault is final.
-        self.credentials.0.required(&self.provider.id).await.map(|_| ())
+        self.http.require_credentials().await
     }
 
     async fn download_attachment(
@@ -489,10 +543,7 @@ impl SourceProvider for JiraSourceProvider {
                 "Jira attachment download needs a valid issue key and attachment id",
             ));
         }
-        let credential = self.credentials.0.required(&self.provider.id).await?;
-        self.downloader
-            .download(&credential.authorization(), attachment, budget.bytes, dest)
-            .await?;
+        download_issue_attachment(&self.http, attachment, budget.bytes, dest).await?;
         Ok(DownloadedAttachment {
             attachment_id: attachment.id.clone(),
             file_name: DOWNLOADED_NAME.into(),
@@ -500,216 +551,7 @@ impl SourceProvider for JiraSourceProvider {
     }
 }
 
-/// A finished `jira` process and whether Cockpit passed it a stored token.
-struct CliRun {
-    output: Output,
-    injected: bool,
-}
-
-impl CliRun {
-    fn failure(&self) -> InspectionError {
-        classify_failure(&self.output.stderr, self.injected)
-    }
-}
-
-/// The child environment for a stored credential. `JIRA_SERVER` pins the CLI
-/// to the configured site whatever its config file names; every variable is
-/// set explicitly so an inherited `JIRA_*` value cannot change the auth.
-fn credential_env(base_url: &Url, credential: &ProviderCredential) -> Vec<(&'static str, String)> {
-    let mut env = vec![
-        ("JIRA_SERVER", base_url.as_str().trim_end_matches('/').to_owned()),
-        (
-            "JIRA_AUTH_TYPE",
-            match credential.kind() {
-                ProviderAuthKind::Bearer => "bearer",
-                ProviderAuthKind::Basic => "basic",
-            }
-            .to_owned(),
-        ),
-    ];
-    if credential.kind() == ProviderAuthKind::Basic {
-        env.push((
-            "JIRA_LOGIN",
-            credential.username().unwrap_or_default().to_owned(),
-        ));
-    }
-    env.push(("JIRA_API_TOKEN", credential.token().to_owned()));
-    env
-}
-
-/// `injected` is true when Cockpit passed a stored token: a rejection is then
-/// about that token, and a missing config file needs `jira init` even so.
-fn classify_failure(stderr: &[u8], injected: bool) -> InspectionError {
-    let text = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-    let config_missing = || {
-        InspectionError::new(
-            "source_auth_required",
-            "jira-cli needs its configuration file (`jira init`) even with a Cockpit token",
-        )
-    };
-    if injected && text.contains("missing configuration file") {
-        config_missing()
-    } else if text.contains("400 bad request") {
-        InspectionError::new(
-            "source_provider_failed",
-            "Jira rejected the request (400); check the query",
-        )
-    } else if text.contains("404") || text.contains("does not exist") {
-        InspectionError::new(
-            "source_not_found",
-            "Jira work item does not exist or is not visible to the configured login",
-        )
-    } else if injected
-        && (text.contains("401")
-            || text.contains("403")
-            || text.contains("unauthorized")
-            || text.contains("token"))
-    {
-        InspectionError::new(
-            "source_auth_failed",
-            "Jira rejected the token stored in Cockpit for this site",
-        )
-    } else if injected && text.contains("config") {
-        config_missing()
-    } else if text.contains("401")
-        || text.contains("403")
-        || text.contains("unauthorized")
-        || text.contains("token")
-        || text.contains("config")
-    {
-        InspectionError::new(
-            "source_auth_required",
-            "Jira CLI is not logged in to this site; run `jira init`",
-        )
-    } else {
-        InspectionError::new("source_provider_failed", "Jira CLI request failed")
-    }
-}
-
-const NO_RESULT: &str = "No result found for given query";
-const LIST_COLUMNS: &str = "key,updated,status,type,assignee";
-const LIST_DELIMITER: char = '\u{1f}';
-const GUARD_PREFIX: &str = "project IS NOT EMPTY AND (";
-/// The CLI answers at most this many rows per call.
-const PAGE: u32 = 100;
-const MAX_LIST_JQL_BYTES: usize = 4096;
-
-/// The only CLI calls Cockpit makes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JiraCall<'a> {
-    View { key: &'a str },
-    /// `jql` is the query body; the builder wraps it in the guard group
-    /// `project IS NOT EMPTY AND (<jql>)` that keeps the CLI from adding its
-    /// configured default project. `limit` is 1..=100.
-    List { jql: &'a str, limit: u32 },
-}
-
-fn refused(message: &str) -> InspectionError {
-    InspectionError::new(
-        "source_provider_contract",
-        format!("refused Jira CLI argv: {message}"),
-    )
-}
-
-/// Render one typed call as the argv after the executable. Invalid values are
-/// refused here, before any process exists.
-pub fn jira_args(call: &JiraCall) -> Result<Vec<OsString>, InspectionError> {
-    let strings: Vec<String> = match call {
-        JiraCall::View { key } => {
-            if !is_jira_key(key) {
-                return Err(refused("Jira work item key is malformed"));
-            }
-            vec!["issue".into(), "view".into(), (*key).into(), "--raw".into()]
-        }
-        JiraCall::List { jql, limit } => {
-            if !(1..=PAGE).contains(limit) {
-                return Err(refused("Jira list limit must be 1–100"));
-            }
-            vec![
-                "issue".into(),
-                "list".into(),
-                "--jql".into(),
-                format!("{GUARD_PREFIX}{jql})"),
-                "--plain".into(),
-                "--no-headers".into(),
-                "--columns".into(),
-                LIST_COLUMNS.into(),
-                "--delimiter".into(),
-                LIST_DELIMITER.to_string(),
-                "--order-by".into(),
-                "updated".into(),
-                "--paginate".into(),
-                format!("0:{limit}"),
-            ]
-        }
-    };
-    let argv: Vec<OsString> = strings.into_iter().map(OsString::from).collect();
-    allowlisted_argv(&argv)?;
-    Ok(argv)
-}
-
-fn guarded_jql_allowed(value: &str) -> bool {
-    value.len() <= MAX_LIST_JQL_BYTES
-        && is_normalized_jql(value)
-        && value
-            .strip_prefix(GUARD_PREFIX)
-            .and_then(|rest| rest.strip_suffix(')'))
-            .is_some_and(|inner| !inner.is_empty() && is_normalized_jql(inner))
-}
-
-/// The exhaustive allowlist, applied to the complete argv right before spawn.
-/// Anything the typed builder cannot produce is refused.
-pub fn allowlisted_argv(argv: &[OsString]) -> Result<(), InspectionError> {
-    let mut strings = Vec::with_capacity(argv.len());
-    for arg in argv {
-        let Some(text) = arg.to_str() else {
-            return Err(refused("non-UTF-8 argument"));
-        };
-        if text.contains('\0') {
-            return Err(refused("NUL in argument"));
-        }
-        strings.push(text);
-    }
-    let delimiter = LIST_DELIMITER.to_string();
-    let allowed = match strings.as_slice() {
-        ["issue", "view", key, "--raw"] => is_jira_key(key),
-        [
-            "issue",
-            "list",
-            "--jql",
-            jql,
-            "--plain",
-            "--no-headers",
-            "--columns",
-            LIST_COLUMNS,
-            "--delimiter",
-            separator,
-            "--order-by",
-            "updated",
-            "--paginate",
-            paginate,
-        ] => {
-            *separator == delimiter
-                && guarded_jql_allowed(jql)
-                && paginate
-                    .strip_prefix("0:")
-                    .and_then(|limit| {
-                        limit.parse::<u32>().ok().filter(|parsed| {
-                            (1..=PAGE).contains(parsed) && parsed.to_string() == limit
-                        })
-                    })
-                    .is_some()
-        }
-        _ => false,
-    };
-    if allowed {
-        Ok(())
-    } else {
-        Err(refused("not an allowlisted read call"))
-    }
-}
-
-/// `YYYY-MM-DD HH:MM:SS`, the CLI's plain `updated` format.
+/// Stable plain `updated` format persisted by Jira follow.
 fn listed_updated(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 19
@@ -724,48 +566,53 @@ fn list_contract(message: &str) -> InspectionError {
     InspectionError::new("source_provider_contract", message)
 }
 
-/// Parse the plain listing: one line per issue, five cells split on the
-/// unit separator. Blank lines are skipped; any other malformed row rejects
-/// the whole answer rather than guessing.
-fn parse_issue_rows(stdout: &[u8], limit: u32) -> Result<Vec<IssueRow>, InspectionError> {
-    let text = std::str::from_utf8(stdout)
-        .map_err(|_| list_contract("Jira CLI listing is not UTF-8"))?;
-    let mut rows = Vec::new();
-    for line in text.lines().map(|line| line.trim_end_matches('\r')) {
-        if line.is_empty() {
-            continue;
+/// Reject the whole answer if any row is malformed; never guess listing data.
+fn search_rows(value: &Value) -> Result<Vec<IssueRow>, InspectionError> {
+    let issues = value.get("issues").and_then(Value::as_array)
+        .ok_or_else(|| list_contract("Jira search has no issues array"))?;
+    if issues.len() > PAGE as usize {
+        return Err(list_contract("Jira search exceeded the requested limit"));
+    }
+    issues.iter().map(|issue| {
+        let key = issue.get("key").and_then(Value::as_str)
+            .filter(|key| is_jira_key(key))
+            .ok_or_else(|| list_contract("Jira search row has no valid key"))?;
+        let iso = field_str(issue, "updated")
+            .filter(|value| instant_seconds(value).is_some())
+            .ok_or_else(|| list_contract("Jira search row has no valid update time"))?;
+        let updated = format!("{} {}", &iso[..10], &iso[11..19]);
+        if !listed_updated(&updated) {
+            return Err(list_contract("Jira search row has no valid update time"));
         }
-        let cells: Vec<&str> = line.split(LIST_DELIMITER).collect();
-        let [key, updated, status, issue_type, assignee] = cells.as_slice() else {
-            return Err(list_contract("Jira CLI listing row does not have 5 cells"));
+        let name = |field: &str| field_name(issue, field, "name")
+            .map(str::trim).filter(|name| !name.is_empty())
+            .ok_or_else(|| list_contract("Jira search row has no status or issue type"));
+        let assignee = match issue.get("fields").and_then(|fields| fields.get("assignee")) {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(value.get("displayName").and_then(Value::as_str)
+                .map(str::trim).filter(|name| !name.is_empty())
+                .ok_or_else(|| list_contract("Jira search row has a malformed assignee"))?.to_owned()),
         };
-        let (status, issue_type, assignee) = (status.trim(), issue_type.trim(), assignee.trim());
-        if !is_jira_key(key)
-            || !listed_updated(updated)
-            || status.is_empty()
-            || issue_type.is_empty()
-        {
-            return Err(list_contract("Jira CLI listing row is malformed"));
-        }
-        rows.push(IssueRow {
-            key: (*key).into(),
-            updated: (*updated).into(),
-            status: status.into(),
-            issue_type: issue_type.into(),
-            assignee: (!assignee.is_empty()).then(|| assignee.into()),
-        });
-    }
-    if rows.len() > limit as usize {
-        return Err(list_contract("Jira CLI listing exceeded the requested limit"));
-    }
-    Ok(rows)
+        Ok(IssueRow {
+            key: key.to_owned(),
+            updated,
+            status: name("status")?.to_owned(),
+            issue_type: name("issuetype")?.to_owned(),
+            assignee,
+        })
+    }).collect()
 }
 
-/// A failed `issue list` call. `rejected` means Jira refused the query
-/// itself (400 or not found), which is what a key batch bisects on.
+/// Only a rejected query (HTTP 400) triggers key-batch bisection.
 struct ListFailure {
     error: InspectionError,
     rejected: bool,
+}
+
+impl From<HttpFailure> for ListFailure {
+    fn from(failure: HttpFailure) -> Self {
+        Self { rejected: failure.kind == FailureKind::Rejected, error: failure.error }
+    }
 }
 
 impl From<InspectionError> for ListFailure {
@@ -1251,7 +1098,7 @@ fn marked_text(node: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_failure, document_markdown_at, issue_fields, issue_markdown};
+    use super::{document_markdown_at, issue_fields, issue_markdown};
     use serde_json::json;
 
     #[test]
@@ -1358,85 +1205,4 @@ mod tests {
         assert_eq!(super::table(&table, 0, 0), "|  |\n| --- |\n| first |\n| second |");
     }
 
-    #[test]
-    fn classifies_missing_items_and_logins() {
-        assert_eq!(
-            classify_failure(b"Issue does not exist ... 404 Not Found", false).code,
-            "source_not_found"
-        );
-        assert_eq!(
-            classify_failure(b"401 Unauthorized", false).code,
-            "source_auth_required"
-        );
-        assert_eq!(classify_failure(b"boom", false).code, "source_provider_failed");
-        let injected = |stderr: &[u8]| classify_failure(stderr, true);
-        assert_eq!(injected(b"401 Unauthorized").code, "source_auth_failed");
-        assert_eq!(injected(b"403 Forbidden").code, "source_auth_failed");
-        assert_eq!(
-            injected(b"Missing configuration file. Run 'jira init'").code,
-            "source_auth_required"
-        );
-        assert!(injected(b"Missing configuration file.").message.contains("jira init"));
-        assert_eq!(injected(b"404 Not Found").code, "source_not_found");
-        assert_eq!(injected(b"boom").code, "source_provider_failed");
-    }
-
-    fn argv(items: &[&str]) -> Vec<std::ffi::OsString> {
-        items.iter().map(std::ffi::OsString::from).collect()
-    }
-
-    #[test]
-    fn list_rows_split_on_the_separator_and_bad_rows_reject_the_answer() {
-        let good = "OPS-2\x1f2026-09-28 11:28:44\x1fIn Progress\x1fStory\x1fAnn Lee\n\
-                    OPS-1\x1f2026-09-24 18:41:22\x1fTo Do\x1fTask\x1f\n\n";
-        let rows = super::parse_issue_rows(good.as_bytes(), 100).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].assignee.as_deref(), Some("Ann Lee"));
-        assert_eq!(rows[0].status, "In Progress");
-        assert_eq!(rows[1].assignee, None);
-        for bad in [
-            "OPS-1\x1f2026-09-24 18:41:22\x1fTo Do\x1fTask\n",
-            "ops-1\x1f2026-09-24 18:41:22\x1fTo Do\x1fTask\x1f\n",
-            "OPS-1\x1f2026-09-24T18:41:22\x1fTo Do\x1fTask\x1f\n",
-            "OPS-1\x1f2026-02-30 18:41:22\x1fTo Do\x1fTask\x1f\n",
-            "OPS-1\x1f2026-09-24 18:41:22\x1f\x1fTask\x1f\n",
-            "OPS-1\x1f2026-09-24 18:41:22\x1fTo Do\x1fTask\x1fa\x1fb\n",
-        ] {
-            assert!(super::parse_issue_rows(bad.as_bytes(), 100).is_err(), "{bad:?}");
-        }
-        assert!(super::parse_issue_rows(good.as_bytes(), 1).is_err());
-    }
-
-    #[test]
-    fn only_builder_argv_passes_the_allowlist() {
-        use super::{JiraCall, allowlisted_argv, jira_args};
-        let view = jira_args(&JiraCall::View { key: "OPS-7" }).unwrap();
-        assert_eq!(view, argv(&["issue", "view", "OPS-7", "--raw"]));
-        let list = jira_args(&JiraCall::List { jql: "project = OPS", limit: 100 }).unwrap();
-        assert_eq!(list[3], "project IS NOT EMPTY AND (project = OPS)");
-        assert_eq!(list.last().unwrap(), "0:100");
-        assert!(jira_args(&JiraCall::List { jql: "project = OPS", limit: 101 }).is_err());
-        assert!(jira_args(&JiraCall::List { jql: "a) OR (b", limit: 5 }).is_err());
-        assert!(jira_args(&JiraCall::View { key: "--raw" }).is_err());
-
-        let mut without_guard = list.clone();
-        without_guard[3] = "project = OPS".into();
-        let mut reordered = list.clone();
-        reordered.swap(4, 5);
-        let mut other_delimiter = list.clone();
-        other_delimiter[9] = ",".into();
-        let mut extra = list.clone();
-        extra.push("--raw".into());
-        for refused in [
-            without_guard,
-            reordered,
-            other_delimiter,
-            extra,
-            argv(&["issue", "delete", "OPS-1"]),
-            argv(&["issue", "view", "OPS-1"]),
-            argv(&["me"]),
-        ] {
-            assert!(allowlisted_argv(&refused).is_err(), "{refused:?}");
-        }
-    }
 }

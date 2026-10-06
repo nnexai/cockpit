@@ -117,7 +117,7 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
     page && (version || editedDetail || updatedBy) ? [item.source_revision ? `Version ${item.source_revision}` : null, editedDetail ? `edited ${editedDetail.text}` : null, updatedBy ? `by ${updatedBy}` : null].filter(Boolean).join(" ") : null,
   ].filter(Boolean).join(" · ");
   const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded");
-  // A Confluence page downloads through its CLI; a Jira issue only with a token stored in Cockpit (jira-cli has no download command).
+  // Both providers download over Cockpit HTTP with a stored token; the Jira issue cue gates its download controls.
   const credentials = actions.credentials;
   const jira = credentials?.attachmentAccess(item) ?? null;
   const attachments = page || jira === "stored" ? actions.attachments : undefined;

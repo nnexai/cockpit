@@ -6,6 +6,7 @@ import type {
   LibraryReportOutcome,
   LibraryResolution,
   ProjectProvider,
+  ProviderKind,
   ProviderCredentialStatus,
   SpaceTarget,
 } from "../../protocol/generated/v1";
@@ -22,33 +23,29 @@ export function sameSpaceTarget(left: SpaceTarget | null | undefined, right: Spa
   return Boolean(left && right && left.session_id === right.session_id && left.space_id === right.space_id);
 }
 
-/** Provider families Cockpit can snapshot into the Library, keyed by CLI executable. */
-export type ProviderFamily = { key: "gitlab" | "github" | "gitea" | "jira" | "confluence" | "other"; name: string; review: string };
+/** Provider families Cockpit can snapshot into the Library, keyed by explicit provider kind. */
+export type ProviderFamily = { key: ProviderKind | "other"; name: string; review: string };
 
-const FAMILIES: Record<string, ProviderFamily> = {
-  glab: { key: "gitlab", name: "GitLab", review: "MR" },
-  gh: { key: "github", name: "GitHub", review: "PR" },
-  tea: { key: "gitea", name: "Gitea", review: "PR" },
+const FAMILIES: Record<ProviderKind, ProviderFamily> = {
+  gitlab: { key: "gitlab", name: "GitLab", review: "MR" },
+  github: { key: "github", name: "GitHub", review: "PR" },
+  gitea: { key: "gitea", name: "Gitea", review: "PR" },
   jira: { key: "jira", name: "Jira", review: "issue" },
   confluence: { key: "confluence", name: "Confluence", review: "page" },
 };
 
-export function executableName(executable: string): string {
-  return executable.slice(Math.max(executable.lastIndexOf("/"), executable.lastIndexOf("\\")) + 1);
-}
-
 export function providerFamily(providers: readonly ProjectProvider[], providerId: string | null): ProviderFamily {
   const provider = providers.find((candidate) => candidate.id === providerId);
-  const family = provider ? FAMILIES[executableName(provider.executable)] : undefined;
+  const family = provider ? FAMILIES[provider.kind] : undefined;
   return family ?? { key: "other", name: providerId ?? "Source", review: "review" };
 }
 
 export function jiraProviders(providers: readonly ProjectProvider[]): ProjectProvider[] {
-  return providers.filter((provider) => executableName(provider.executable) === "jira");
+  return providers.filter((provider) => provider.kind === "jira");
 }
 
 export function confluenceProviders(providers: readonly ProjectProvider[]): ProjectProvider[] {
-  return providers.filter((provider) => executableName(provider.executable) === "confluence");
+  return providers.filter((provider) => provider.kind === "confluence");
 }
 
 /** A Library item or lookup result that is a Confluence page. */
@@ -57,9 +54,8 @@ export function isConfluencePage(item: Pick<LibraryItemSummary, "kind" | "resour
 }
 
 /**
- * Whether Cockpit can fetch a Jira issue's attachment bytes, which it does only with a token stored in Cockpit
- * (jira-cli has no download command). Null for anything that isn't a Jira issue; `loading` until the token
- * states were read (`statuses` null).
+ * Whether Cockpit can fetch a Jira issue's attachment bytes with a token stored in Cockpit.
+ * Null for anything that isn't a Jira issue; `loading` until the token states were read (`statuses` null).
  */
 export function jiraAttachmentAccess(item: Pick<LibraryItemSummary, "kind" | "resource_type" | "provider_id">, providers: readonly ProjectProvider[], statuses: readonly ProviderCredentialStatus[] | null): "stored" | "needs_token" | "loading" | null {
   if (item.kind !== "provider_snapshot" || item.resource_type !== "issue" || providerFamily(providers, item.provider_id).key !== "jira") return null;
@@ -81,15 +77,6 @@ export function instanceHost(instance: string | null): string {
 /** A Confluence site as the design names it: `nnexai.atlassian.net`, not `nnexai.atlassian.net/wiki`. */
 export function confluenceSite(instance: string | null): string {
   return instanceHost(instance).replace(/\/wiki$/, "");
-}
-
-/** An Atlassian Cloud site (`*.atlassian.net`): its API takes an email and API token (Basic); Data Center takes a bearer PAT. */
-export function isAtlassianCloud(instance: string | null): boolean {
-  try {
-    return !!instance && new URL(instance).hostname.toLowerCase().endsWith(".atlassian.net");
-  } catch {
-    return false;
-  }
 }
 
 /** A bare Jira work-item key such as `OPS-311`. */
@@ -689,7 +676,7 @@ export function lookupFailure(error: unknown, input: string, providers: readonly
   }
   const provider = selected ?? providerForInput(providers, input, host);
   const family = provider ? providerFamily(providers, provider.id) : null;
-  const executable = provider ? executableName(provider.executable) : "The provider CLI";
+  const executable = provider?.executable?.split(/[\\/]/).pop() ?? "The provider CLI";
   const confluence = family?.key === "confluence";
   // Only Jira and Confluence take a stored token; the host reports every other provider as unsupported.
   const credentialProviderId = provider && (family?.key === "jira" || confluence) ? provider.id : undefined;
@@ -707,12 +694,10 @@ export function lookupFailure(error: unknown, input: string, providers: readonly
     case "library_folder_unavailable":
       return { title: "Folder unavailable", detail: message, retry: true };
     case "source_cli_unavailable":
-      return confluence
-        ? { title: `✕ ${executable} isn't installed`, detail: "Install it with brew install pchuri/tap/confluence-cli, configure a read-only profile, then retry.", retry: true }
-        : { title: `✕ ${executable} isn't installed`, detail: `Install ${executable} and sign in with it, then retry.`, retry: true };
+      return { title: `✕ ${executable} isn't installed`, detail: `Install ${executable} and sign in with it, then retry.`, retry: true };
     case "source_auth_failed":
       return credentialProviderId
-        ? { title: `✕ ${family?.name} sign-in failed`, detail: `${host} rejected the credentials for the ${executable} CLI. Store a token for this site in Cockpit, or sign in with the CLI${confluence ? "'s read-only profile" : ""}, then retry.`, retry: true, credentialProviderId }
+        ? { title: `✕ ${family?.name} sign-in failed`, detail: `${host} rejected the token stored in Cockpit for this site. Replace it in Provider tokens, then retry.`, retry: true, credentialProviderId }
         : { title: `✕ ${family?.name ?? "Provider"} sign-in failed`, detail: `${host} rejected the ${executable} CLI's credentials. Sign in with the CLI, then retry.`, retry: true };
     case "source_auth_required":
       return { title: `✕ ${family?.name ?? "Provider"} sign-in required`, detail: message, retry: true, credentialProviderId };

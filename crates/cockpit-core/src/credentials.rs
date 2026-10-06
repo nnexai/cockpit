@@ -1,9 +1,9 @@
 //! Provider credentials kept in an OS vault behind [`CredentialVault`].
 //!
 //! Write-only by design: a credential can be set, replaced, cleared and
-//! reported as present, and it reaches provider processes and native HTTP only
-//! through [`ProviderCredentials::for_cli`] and [`ProviderCredentials::required`].
-//! Nothing here returns a token or username to a transport, and every error
+//! reported as present, and it reaches native HTTP only through
+//! [`ProviderCredentials::required`].
+//! The status/set/clear API never returns a token or username, and every error
 //! message is a fixed string.
 //!
 //! A vault item is identified by the provider id and the configured site
@@ -392,21 +392,7 @@ impl ProviderCredentials {
         }
     }
 
-    /// A provider process's credential. "Not stored", "vault unavailable",
-    /// an unknown provider and an unsupported provider all yield `None`, so
-    /// the CLI keeps its own login. A failure is not cached.
-    pub async fn for_cli(&self, provider_id: &str) -> Option<Arc<ProviderCredential>> {
-        let slot = self
-            .slots
-            .iter()
-            .find(|slot| slot.provider_id == provider_id)?;
-        if !slot.supports_any() {
-            return None;
-        }
-        self.load(slot).await.ok().flatten()
-    }
-
-    /// The credential for native HTTP, which has no CLI login to fall back to.
+    /// The credential for native HTTP; absent or unavailable tokens are errors.
     pub async fn required(
         &self,
         provider_id: &str,
@@ -592,7 +578,7 @@ fn instance(base_url: &str) -> Option<String> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use cockpit_protocol::projects::ProjectLimits;
+    use cockpit_protocol::projects::{ProjectLimits, ProviderKind, ProviderDeployment};
 
     use super::*;
 
@@ -601,9 +587,9 @@ mod tests {
     const TOKEN: &str = "s3cr3t-token-value";
 
     fn kinds(provider: &ProjectProvider) -> &'static [ProviderAuthKind] {
-        match provider.id.as_str() {
-            "jira" => BOTH,
-            "confluence" => BEARER,
+        match provider.kind {
+            ProviderKind::Jira => BOTH,
+            ProviderKind::Confluence => BEARER,
             _ => &[],
         }
     }
@@ -622,9 +608,15 @@ mod tests {
             .iter()
             .map(|(id, base_url)| ProjectProvider {
                 id: (*id).into(),
+                kind: match *id {
+                    "jira" => ProviderKind::Jira,
+                    "confluence" => ProviderKind::Confluence,
+                    _ => ProviderKind::Gitlab,
+                },
                 base_url: (*base_url).into(),
-                executable: (*id).into(),
+                executable: (*id == "gitlab").then(|| "glab".into()),
                 login: None,
+                deployment: (*id != "gitlab").then_some(ProviderDeployment::Cloud),
             })
             .collect(),
         limits: ProjectLimits {
@@ -759,7 +751,7 @@ mod tests {
             (status.state, status.kind),
             (ProviderCredentialState::NotStored, None)
         );
-        assert!(credentials.for_cli("jira").await.is_none());
+        assert_eq!(credentials.required("jira").await.unwrap_err().code, "source_credential_required");
         // Clearing an absent item is success.
         credentials
             .clear(clear_request("jira"))
@@ -837,7 +829,6 @@ mod tests {
             state_of(&credentials, "gitlab").await.state,
             ProviderCredentialState::Unsupported
         );
-        assert!(credentials.for_cli("gitlab").await.is_none());
         assert_eq!(
             credentials.required("gitlab").await.unwrap_err().code,
             "credential_provider_unsupported"
@@ -849,20 +840,20 @@ mod tests {
         let vault = Arc::new(MemoryVault::new());
         let old = service(&vault, "https://old.atlassian.net");
         old.set(bearer("jira")).await.expect("set");
-        assert!(old.for_cli("jira").await.is_some());
+        assert!(old.required("jira").await.is_ok());
 
         let moved = service(&vault, "https://new.atlassian.net");
         assert_eq!(
             state_of(&moved, "jira").await.state,
             ProviderCredentialState::NotStored
         );
-        assert!(moved.for_cli("jira").await.is_none());
+        assert_eq!(moved.required("jira").await.unwrap_err().code, "source_credential_required");
         // The old site's item is untouched and still usable for that site.
         assert!(
             service(&vault, "https://old.atlassian.net/")
-                .for_cli("jira")
+                .required("jira")
                 .await
-                .is_some()
+                .is_ok()
         );
     }
 
@@ -880,7 +871,7 @@ mod tests {
         vault
             .set(account, "l", &secret("https://other.atlassian.net", 1))
             .unwrap();
-        assert!(credentials.for_cli("jira").await.is_none());
+        assert_eq!(credentials.required("jira").await.unwrap_err().code, "source_credential_required");
         assert_eq!(
             state_of(&credentials, "jira").await.state,
             ProviderCredentialState::NotStored
@@ -893,14 +884,14 @@ mod tests {
         ] {
             let fresh = service(&vault, "https://team.atlassian.net");
             vault.set(account, "l", &raw).unwrap();
-            assert!(fresh.for_cli("jira").await.is_none(), "{raw}");
+            assert_eq!(fresh.required("jira").await.unwrap_err().code, "source_credential_required");
         }
 
         vault
             .set(account, "l", &secret("https://team.atlassian.net", 1))
             .unwrap();
         let fresh = service(&vault, "https://team.atlassian.net");
-        assert_eq!(fresh.for_cli("jira").await.expect("stored").token(), TOKEN);
+        assert_eq!(fresh.required("jira").await.expect("stored").token(), TOKEN);
     }
 
     #[tokio::test]
@@ -915,7 +906,6 @@ mod tests {
             state_of(&credentials, "jira").await.state,
             ProviderCredentialState::VaultUnavailable
         );
-        assert!(credentials.for_cli("jira").await.is_none());
         assert_eq!(
             credentials.required("jira").await.unwrap_err().code,
             "credential_vault_unavailable"
@@ -924,7 +914,7 @@ mod tests {
         vault.set_failing(false);
         assert_eq!(
             credentials
-                .for_cli("jira")
+                .required("jira")
                 .await
                 .expect("recovered")
                 .token(),
@@ -987,7 +977,7 @@ mod tests {
         // Served from the cache: no vault access needed.
         vault.set_failing(true);
         assert_eq!(
-            credentials.for_cli("jira").await.expect("cached").token(),
+            credentials.required("jira").await.expect("cached").token(),
             TOKEN
         );
         assert_eq!(
@@ -1007,10 +997,10 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "credential_vault_unavailable");
-        assert!(credentials.for_cli("jira").await.is_none());
+        assert_eq!(credentials.required("jira").await.unwrap_err().code, "credential_vault_unavailable");
         vault.set_failing(false);
         assert_eq!(
-            credentials.for_cli("jira").await.expect("original").token(),
+            credentials.required("jira").await.expect("original").token(),
             TOKEN
         );
 
@@ -1024,7 +1014,7 @@ mod tests {
             .await
             .expect("replace");
         assert_eq!(
-            credentials.for_cli("jira").await.expect("replaced").token(),
+            credentials.required("jira").await.expect("replaced").token(),
             "replacement"
         );
 
@@ -1033,7 +1023,6 @@ mod tests {
             .await
             .expect("clear");
         vault.set_failing(true);
-        assert!(credentials.for_cli("jira").await.is_none());
         assert_eq!(
             credentials.required("jira").await.unwrap_err().code,
             "source_credential_required",
@@ -1074,7 +1063,6 @@ mod tests {
             credentials.required("jira").await.unwrap_err().code,
             "credential_vault_timeout"
         );
-        assert!(credentials.for_cli("jira").await.is_none());
         assert_eq!(
             credentials.set(bearer("jira")).await.unwrap_err().code,
             "credential_vault_timeout"

@@ -1,15 +1,14 @@
 //! Attachments of a Jira work item: metadata from its raw API record, and
 //! bytes fetched natively.
 //!
-//! jira-cli 1.7.0 has no attachment command, so the listing is what
-//! `fields.attachment[]` reports (name, size, media type, content link).
-//! Bytes are downloaded only on request, by Cockpit's own HTTP client with
-//! the token stored in its OS vault (`download`); with no stored token they
-//! stay "not requested".
+//! Metadata is what `fields.attachment[]` reports (name, size, media type,
+//! content link). Bytes are downloaded only on request by Cockpit's HTTP
+//! client with the token stored in its OS vault.
 
 mod download;
 
-pub(crate) use download::{AttachmentDownloader, DOWNLOADED_NAME};
+pub(crate) use download::download_issue_attachment;
+pub(crate) use crate::site_http::DOWNLOADED_NAME;
 
 use cockpit_core::sources::SourceAttachment;
 use cockpit_protocol::projects::ProjectDiagnostic;

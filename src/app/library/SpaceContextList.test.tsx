@@ -27,7 +27,7 @@ async function settle(): Promise<void> {
 function fixture() {
   let listing: SpaceContextListing = { target, space_label: "api-review", library_root: "/data/library", checkout_path: "/repo", items: [item], repository_paths: [], diagnostics: [] };
   const client = {
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test", deployment: "data_center" as const }] })),
     librarySpaceList: vi.fn(async () => listing),
     librarySpaceRemove: vi.fn(async () => { listing = { ...listing, items: [] }; return listing; }),
   } as unknown as CockpitClient;

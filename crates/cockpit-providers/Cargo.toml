@@ -13,9 +13,13 @@ serde.workspace = true
 serde_json.workspace = true
 url.workspace = true
 reqwest.workspace = true
+quick-xml = { version = "0.41", features = ["escape-html"] }
 sha2.workspace = true
 cockpit-core = { path = "../cockpit-core" }
 cockpit-protocol = { path = "../cockpit-protocol" }
+
+[dev-dependencies]
+parking_lot.workspace = true
 
 [lints]
 workspace = true

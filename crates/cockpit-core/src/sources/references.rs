@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use cockpit_protocol::projects::ProjectConfiguration;
+use cockpit_protocol::projects::{ProjectConfiguration, ProviderKind};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
@@ -19,7 +19,7 @@ use super::{
 };
 use crate::InspectionError;
 use crate::repositories::{
-    confluence_provider_for_input, is_jira_executable, is_jira_key, jira_artifact, resolve_artifact,
+    confluence_provider_for_input, is_jira_key, jira_artifact, resolve_artifact,
 };
 
 pub const MAX_REFERENCE_DEPTH: u32 = 5;
@@ -127,7 +127,7 @@ fn without_query_and_fragment(url: &str) -> &str {
 fn is_jira_issue(configuration: &ProjectConfiguration, asset: &SourceAsset) -> bool {
     asset.source.resource_type == "issue"
         && configuration.providers.iter().any(|provider| {
-            provider.id == asset.source.provider_id && is_jira_executable(&provider.executable)
+            provider.id == asset.source.provider_id && provider.kind == ProviderKind::Jira
         })
 }
 
@@ -677,7 +677,7 @@ impl SourceService {
         match target {
             ReferenceTarget::JiraKey { provider_id, key } => {
                 let Some(provider) = configuration.providers.iter().find(|provider| {
-                    provider.id == *provider_id && is_jira_executable(&provider.executable)
+                    provider.id == *provider_id && provider.kind == ProviderKind::Jira
                 }) else {
                     return failure(
                         "source_provider_unsupported",
@@ -846,7 +846,7 @@ mod tests {
     use super::*;
     use crate::sources::FrontmatterField;
 
-    fn configuration(providers: &[(&str, &str, &str)]) -> ProjectConfiguration {
+    fn configuration(providers: &[(&str, &str, ProviderKind)]) -> ProjectConfiguration {
         ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![],
         worktree_root: "worktrees".into(),
         companion_root: "companions".into(),
@@ -858,11 +858,14 @@ mod tests {
         checkout_template: "{repo}-{task_id}".into(),
         providers: providers
             .iter()
-            .map(|(id, base_url, executable)| ProjectProvider {
+            .map(|(id, base_url, kind)| ProjectProvider {
                 id: (*id).into(),
+                kind: *kind,
                 base_url: (*base_url).into(),
-                executable: (*executable).into(),
+                executable: (*kind == ProviderKind::Gitea).then(|| "custom-forge-client".into()),
                 login: None,
+                deployment: (*kind == ProviderKind::Jira)
+                    .then_some(cockpit_protocol::projects::ProviderDeployment::DataCenter),
             })
             .collect(),
         limits: ProjectLimits {
@@ -931,7 +934,7 @@ mod tests {
 
     #[test]
     fn jira_references_come_from_fields_description_and_comments_with_clean_boundaries() {
-        let configuration = configuration(&[("jira", "https://jira.test", "/usr/bin/jira")]);
+        let configuration = configuration(&[("jira", "https://jira.test", ProviderKind::Jira)]);
         let mut issue = asset(
             "jira",
             "https://jira.test",
@@ -990,9 +993,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn jira_reference_extraction_uses_kind_not_provider_id_or_executable() {
+        let mut configuration = configuration(&[("jira", "https://jira.test", ProviderKind::Gitea)]);
+        configuration.providers[0].executable = Some("/usr/local/bin/jira".into());
+        let issue = asset("jira", "https://jira.test", "issue", "OPS-1", "## Description\n\nSee OPS-2");
+        assert!(asset_references(&configuration, &issue).is_empty());
+        configuration.providers[0].kind = ProviderKind::Jira;
+        configuration.providers[0].executable = None;
+        configuration.providers[0].deployment =
+            Some(cockpit_protocol::projects::ProviderDeployment::DataCenter);
+        assert_eq!(
+            keys(&asset_references(&configuration, &issue)),
+            vec![("OPS-2".into(), "description".into())]
+        );
+    }
+
     #[tokio::test]
     async fn an_incomplete_source_keeps_its_references_incomplete_when_expanded() {
-        let configuration = configuration(&[("jira", "https://jira.test", "/usr/bin/jira")]);
+        let configuration = configuration(&[("jira", "https://jira.test", ProviderKind::Jira)]);
         let body = "## Description\n\nsee OPS-2\n";
         let mut issue = asset("jira", "https://jira.test", "issue", "OPS-1", body);
         assert!(!references_truncated(&asset_references(
@@ -1052,8 +1071,8 @@ mod tests {
         tea: &[(&str, &str)],
     ) -> (SourceService, SourceRef, Arc<AtomicBool>) {
         let configuration = configuration(&[
-            ("jira", "https://jira.test", "/usr/bin/jira"),
-            ("tea", "https://forge.test/gitea", "/usr/bin/tea"),
+            ("jira", "https://jira.test", ProviderKind::Jira),
+            ("tea", "https://forge.test/gitea", ProviderKind::Gitea),
         ]);
         let mut jira_assets = BTreeMap::new();
         for (key, body) in jira {
@@ -1104,7 +1123,7 @@ mod tests {
     }
 
     fn seed(source: &SourceRef, text: &str) -> ReferenceSeed {
-        let configuration = configuration(&[("jira", "https://jira.test", "/usr/bin/jira")]);
+        let configuration = configuration(&[("jira", "https://jira.test", ProviderKind::Jira)]);
         let seed_asset = asset(
             "jira",
             "https://jira.test",

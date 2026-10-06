@@ -2932,9 +2932,11 @@ mod tests {
         checkout_template: "{repo}-{task_id}".to_owned(),
         providers: vec![ProjectProvider {
             id: "test".to_owned(),
+            kind: cockpit_protocol::projects::ProviderKind::Gitea,
             base_url: "https://example.test/".to_owned(),
-            executable: "false".to_owned(),
+            executable: Some("false".to_owned()),
             login: None,
+            deployment: None,
         }],
         limits: ProjectLimits {
             catalog_depth: 2,

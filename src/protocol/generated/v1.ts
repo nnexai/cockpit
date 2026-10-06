@@ -309,7 +309,15 @@ export type TerminalStreamMessage = { "type": "mouse_mode", session_id: string, 
 
 export type ProjectLimits = { catalog_depth: number, catalog_entries: number, git_timeout_ms: number, git_output_bytes: number, operation_timeout_ms: number, context_preview_bytes: number, context_preview_lines: number, context_directory_entries: number, context_tree_depth: number, library_folder_files: number, library_folder_bytes: number, library_file_bytes: number, library_space_pages: number, library_attachment_bytes: number, library_item_attachment_bytes: number, library_max_items: number, };
 
-export type ProjectProvider = { id: string, base_url: string, executable: string, login?: string, };
+export type ProviderKind = "github" | "gitlab" | "gitea" | "jira" | "confluence";
+
+export type ProviderDeployment = "cloud" | "data_center";
+
+export type ProjectProvider = { id: string, kind: ProviderKind, base_url: string, executable?: string, login?: string,
+/**
+ * Jira/Confluence only; always resolved after configuration loading.
+ */
+deployment?: ProviderDeployment, };
 
 export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, cache_root: string, library_root: string, notes_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, orchestration: OrchestrationConfiguration, origins: { [key in string]: string }, };
 

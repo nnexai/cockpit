@@ -13,7 +13,7 @@ use cockpit_protocol::project_teardown::{
     WorkspaceTeardownRecoveryState, WorkspaceTeardownResult,
 };
 use cockpit_protocol::projects::{
-    ProjectArtifact, ProjectConfiguration, RepositoryCandidate, RepositoryListResponse,
+    ProjectArtifact, ProjectConfiguration, ProviderKind, RepositoryCandidate, RepositoryListResponse,
     WorkspaceCheckoutOwnership, WorkspaceOperation, WorkspaceOperationRequest,
     WorkspaceOperationState, WorkspaceOperationStep, WorkspaceOwnedResource,
     WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode, WorkspaceSetupPlan,
@@ -2091,11 +2091,7 @@ fn validate_review_metadata(
         .providers
         .iter()
         .find(|provider| provider.id == artifact.provider_id)
-        .is_some_and(|provider| {
-            Path::new(&provider.executable)
-                .file_name()
-                .is_some_and(|name| name == "glab")
-        });
+        .is_some_and(|provider| provider.kind == ProviderKind::Gitlab);
     if is_gitlab && metadata.source_commit.is_none() {
         return Err(InspectionError::new(
             "source_commit_unavailable",
@@ -2653,6 +2649,43 @@ mod tests {
         origins: BTreeMap::new(), }
     }
 
+    #[test]
+    fn review_commit_requirement_uses_gitlab_kind_not_executable() {
+        let mut configuration = configuration(Path::new("."));
+        configuration.providers = vec![cockpit_protocol::projects::ProjectProvider {
+            id: "forge".into(),
+            kind: ProviderKind::Gitlab,
+            base_url: "https://forge.test".into(),
+            executable: Some("custom-gitlab-client".into()),
+            login: None,
+            deployment: None,
+        }];
+        let artifact = ProjectArtifact {
+            provider_id: "forge".into(),
+            kind: "review".into(),
+            canonical_id: "acme/repo!42".into(),
+            original_url: "https://forge.test/acme/repo/-/merge_requests/42".into(),
+            canonical_url: "https://forge.test/acme/repo/-/merge_requests/42".into(),
+        };
+        let mut metadata = SourceMetadata {
+            title: "Review".into(),
+            source_branch: Some("feature".into()),
+            source_url: Some(artifact.canonical_url.clone()),
+            source_commit: None,
+            description: None,
+        };
+        assert_eq!(
+            validate_review_metadata(&configuration, &artifact, &metadata).unwrap_err().code,
+            "source_commit_unavailable"
+        );
+        metadata.source_commit = Some("a".repeat(40));
+        validate_review_metadata(&configuration, &artifact, &metadata).unwrap();
+        metadata.source_commit = None;
+        configuration.providers[0].kind = ProviderKind::Gitea;
+        configuration.providers[0].executable = Some("/usr/local/bin/glab".into());
+        validate_review_metadata(&configuration, &artifact, &metadata).unwrap();
+    }
+
     fn git(root: &Path, args: &[&str]) {
         let output = std::process::Command::new("git")
             .current_dir(root)
@@ -2717,8 +2750,8 @@ mod tests {
             git(&repository, &["remote", "add", "origin", "https://unrelated.test/local/repo.git"]);
             let mut configuration = configuration(&root);
             configuration.providers = vec![
-                cockpit_protocol::projects::ProjectProvider { id: "tea".into(), base_url: "https://forge.test".into(), executable: "tea".into(), login: None },
-                cockpit_protocol::projects::ProjectProvider { id: "jira".into(), base_url: "https://jira.test".into(), executable: "jira".into(), login: None },
+                cockpit_protocol::projects::ProjectProvider { id: "tea".into(), kind: ProviderKind::Gitea, base_url: "https://forge.test".into(), executable: Some("tea".into()), login: None, deployment: None },
+                cockpit_protocol::projects::ProjectProvider { id: "jira".into(), kind: ProviderKind::Jira, base_url: "https://jira.test".into(), executable: None, login: None, deployment: Some(cockpit_protocol::projects::ProviderDeployment::DataCenter) },
             ];
             let calls = Arc::new(AtomicUsize::new(0));
             let providers = configuration.providers.iter().map(|provider| Arc::new(SetupProvider {

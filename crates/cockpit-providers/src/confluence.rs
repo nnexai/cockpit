@@ -1,493 +1,109 @@
-//! Read-only Confluence pages through the owner's configured `confluence`
-//! CLI (pchuri/confluence-cli). By default the CLI owns the site login and
-//! credential, selected by `ProjectProvider.login` as its profile name. When
-//! a token is stored in Cockpit's OS vault for this provider, Cockpit gives
-//! it to the CLI through the child environment instead (the CLI then ignores
-//! the profile), pinned to the configured site. Every process is built by
-//! [`confluence_args`] from a typed [`ConfluenceCall`] and checked by
-//! [`allowlisted_argv`] immediately before spawn; nothing else is ever run.
+//! Read-only Confluence Cloud v2 and Data Center v1 through Cockpit's HTTP client.
 
-use std::ffi::OsString;
-use std::sync::Arc;
-use std::path::{Component, Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cap_fs_ext::{FollowSymlinks, MetadataExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
-use cap_std::fs::{Dir, OpenOptions};
+use cap_std::fs::Dir;
 use cockpit_core::InspectionError;
-use cockpit_core::credentials::{ProviderCredential, ProviderCredentials};
-use cockpit_core::process::{run_bounded_command, run_bounded_staging_command, StagingBudget};
-use cockpit_core::repositories::is_confluence_executable;
+use cockpit_core::credentials::ProviderCredentials;
+use cockpit_core::process::StagingBudget;
 use cockpit_core::sources::{
     AttachmentRef, ConfluencePage, DownloadedAttachment, FrontmatterField, FrontmatterValue,
     ProviderResolution, SourceAsset, SourceAttachment, SourceContainer, SourceFetchRequest,
     SourceMetadata, SourceProvider, SourceRef, SpacePage, SpacePageListing, SpaceSummary,
-    confluence_attachment_pattern, confluence_page_url,
+    confluence_page_url,
 };
-use cockpit_protocol::credentials::ProviderAuthKind;
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
+use cockpit_protocol::projects::{ProviderDeployment, ProviderKind};
 use cockpit_protocol::sources::SourceCapability;
 use serde_json::Value;
-use tokio::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use url::Url;
 
-use crate::CredentialHandle;
+use crate::confluence_storage::{StorageContext, storage_to_markdown};
+use crate::site_http::{DOWNLOADED_NAME, MAX_JSON_BYTES, Service, SiteHttp};
 
-
-
-/// Library provider bodies are bounded like every other source asset.
-const MAX_BODY_BYTES: usize = 1024 * 1024;
-const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
-const MAX_STDERR_BYTES: usize = 64 * 1024;
 const MAX_ATTACHMENTS: usize = 256;
 const MAX_TITLE_CHARS: usize = 255;
 const MAX_FIELD_CHARS: usize = 256;
-const NOT_DOWNLOADED: &str = "not downloaded";
-
-pub(crate) fn executable(value: &str) -> bool {
-    is_confluence_executable(value)
-}
-
-/// `expand` values allowed in `api content/<id>` and `api content/search`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContentExpand {
-    Ancestors,
-    Version,
-    Space,
-    HistoryLastUpdated,
-    MetadataLabels,
-}
-
-impl ContentExpand {
-    const ALL: [Self; 5] = [
-        Self::Ancestors,
-        Self::Version,
-        Self::Space,
-        Self::HistoryLastUpdated,
-        Self::MetadataLabels,
-    ];
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Ancestors => "ancestors",
-            Self::Version => "version",
-            Self::Space => "space",
-            Self::HistoryLastUpdated => "history.lastUpdated",
-            Self::MetadataLabels => "metadata.labels",
-        }
-    }
-}
-
-/// Continuation of a CQL search: Cloud cursors or Data Center offsets.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SearchPage {
-    Cursor(String),
-    Start(u64),
-}
-
-/// The four `api` endpoint templates (D16); always `-X GET`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfluenceApi {
-    Content {
-        page_id: String,
-        expand: Vec<ContentExpand>,
-    },
-    Labels {
-        page_id: String,
-    },
-    Space {
-        space_key: String,
-    },
-    Search {
-        space_key: String,
-        limit: u8,
-        expand: Vec<ContentExpand>,
-        page: Option<SearchPage>,
-    },
-}
-
-/// Every Confluence CLI invocation Cockpit may make (examples §6).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfluenceCall {
-    Spaces,
-    Info {
-        page_id: String,
-    },
-    Read {
-        page_id: String,
-    },
-    Find {
-        space_key: String,
-        title: String,
-    },
-    Attachments {
-        page_id: String,
-    },
-    DownloadAttachment {
-        page_id: String,
-        pattern: String,
-        dest: PathBuf,
-    },
-    Api(ConfluenceApi),
-}
+const MAX_SPACES: usize = 10_000;
 
 fn contract(message: &str) -> InspectionError {
     InspectionError::new("source_provider_contract", message)
 }
-
+fn identity(message: &str) -> InspectionError {
+    InspectionError::new("source_identity_mismatch", message)
+}
 fn page_id_valid(value: &str) -> bool {
     (1..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
 }
-
+fn attachment_id_valid(value: &str) -> bool {
+    page_id_valid(value.strip_prefix("att").unwrap_or(value))
+}
 fn space_key_valid(value: &str) -> bool {
     (1..=255).contains(&value.len())
         && value
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'~' | b'_' | b'-'))
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'~'))
 }
-
 fn title_valid(value: &str) -> bool {
-    let count = value.chars().count();
-    (1..=MAX_TITLE_CHARS).contains(&count) && !value.chars().any(char::is_control)
+    (1..=MAX_TITLE_CHARS).contains(&value.chars().count()) && !value.chars().any(char::is_control)
 }
-
-fn cursor_valid(value: &str) -> bool {
-    (1..=1024).contains(&value.len())
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(byte, b'.' | b'_' | b'~' | b'%' | b'+' | b'=' | b'/' | b'-')
+fn bounded_field(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && value.chars().count() <= MAX_FIELD_CHARS
+                && !value.chars().any(char::is_control)
         })
-}
-
-fn pattern_valid(value: &str) -> bool {
-    title_valid(value) && !value.contains('*') && value.trim() == value
-}
-fn download_destination_valid(value: &Path) -> bool {
-    value.is_absolute()
-        && value.to_str().is_some_and(|text| text.len() <= 4096 && !text.chars().any(char::is_control))
-        && value
-            .components()
-            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
-        && value.components().count() > 1
-}
-
-fn download_capability_error() -> InspectionError {
-    InspectionError::new(
-        "source_capability_unavailable",
-        "this confluence-cli version cannot download attachments safely",
-    )
-}
-
-fn saved_file_name(saved_to: &str, destination: &Path) -> Result<String, InspectionError> {
-    let path = Path::new(saved_to);
-    let Some(name) = path.file_name().filter(|name| !name.is_empty()) else {
-        return Err(download_capability_error());
-    };
-    if !path.is_absolute()
-        || path.parent() != Some(destination)
-        || path.components().count() != destination.components().count() + 1
-        || !path
-            .components()
-            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
-    {
-        return Err(download_capability_error());
-    }
-    name.to_str()
-        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
         .map(str::to_owned)
-        .ok_or_else(download_capability_error)
 }
-
-fn dest_valid(value: &Path) -> bool {
-    value.is_absolute()
-        && value
-            .to_str()
-            .is_some_and(|text| text.len() <= 4096 && !text.chars().any(char::is_control))
-        && value
-            .components()
-            .skip(1)
-            .all(|component| matches!(component, Component::Normal(_)))
-        && value.components().count() > 1
-}
-
-fn profile_valid(value: &str) -> bool {
-    (1..=128).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        && !value.starts_with('-')
-}
-
-fn expand_value(expand: &[ContentExpand]) -> Result<String, InspectionError> {
-    let unique = expand
-        .iter()
-        .enumerate()
-        .all(|(index, value)| !expand[..index].contains(value));
-    if expand.is_empty() || !unique {
-        return Err(contract("Confluence expand must be a non-empty set"));
+fn id_text(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => number.as_u64().map(|number| number.to_string()),
+        _ => None,
     }
-    Ok(expand
-        .iter()
-        .map(|value| value.as_str())
-        .collect::<Vec<_>>()
-        .join(","))
 }
-
-fn search_cql(space_key: &str) -> String {
-    format!("space=\"{space_key}\" and type=page")
+fn required_id(value: Option<&Value>) -> Result<String, InspectionError> {
+    id_text(value)
+        .filter(|id| page_id_valid(id))
+        .ok_or_else(|| contract("Confluence returned an invalid content id"))
 }
-
-/// Render one typed call as the argv after `--profile <login>`. Invalid
-/// values are refused here, before any process exists.
-pub fn confluence_args(call: &ConfluenceCall) -> Result<Vec<OsString>, InspectionError> {
-    let page = |page_id: &str| {
-        if page_id_valid(page_id) {
-            Ok(page_id.to_owned())
-        } else {
-            Err(contract("Confluence page id must be 1–20 digits"))
-        }
-    };
-    let key = |space_key: &str| {
-        if space_key_valid(space_key) {
-            Ok(space_key.to_owned())
-        } else {
-            Err(contract("Confluence space key is malformed"))
-        }
-    };
-    let strings: Vec<String> = match call {
-        ConfluenceCall::Spaces => vec!["spaces".into(), "--all".into(), "--json".into()],
-        ConfluenceCall::Info { page_id } => vec!["info".into(), page(page_id)?, "--json".into()],
-        ConfluenceCall::Read { page_id } => vec![
-            "read".into(),
-            page(page_id)?,
-            "--format".into(),
-            "markdown".into(),
-        ],
-        ConfluenceCall::Find { space_key, title } => {
-            if !title_valid(title) {
-                return Err(contract("Confluence title must be 1–255 characters"));
-            }
-            vec![
-                "find".into(),
-                "--space".into(),
-                key(space_key)?,
-                "--json".into(),
-                "--".into(),
-                title.clone(),
-            ]
-        }
-        ConfluenceCall::Attachments { page_id } => {
-            vec!["attachments".into(), page(page_id)?, "--json".into()]
-        }
-        ConfluenceCall::DownloadAttachment {
-            page_id,
-            pattern,
-            dest,
-        } => {
-            if !pattern_valid(pattern) {
-                return Err(contract("Confluence attachment pattern is unsafe"));
-            }
-            if !dest_valid(dest) {
-                return Err(contract(
-                    "Confluence download destination must be an absolute private directory",
-                ));
-            }
-            vec![
-                "attachments".into(),
-                page(page_id)?,
-                "--download".into(),
-                "--dest".into(),
-                dest.to_string_lossy().into_owned(),
-                format!("--pattern={pattern}"),
-                "--json".into(),
-            ]
-        }
-        ConfluenceCall::Api(api) => {
-            let (endpoint, fields) = match api {
-                ConfluenceApi::Content { page_id, expand } => (
-                    format!("content/{}", page(page_id)?),
-                    vec![format!("expand={}", expand_value(expand)?)],
-                ),
-                ConfluenceApi::Labels { page_id } => {
-                    (format!("content/{}/label", page(page_id)?), Vec::new())
-                }
-                ConfluenceApi::Space { space_key } => (
-                    format!("space/{}", key(space_key)?),
-                    vec!["expand=homepage".into()],
-                ),
-                ConfluenceApi::Search {
-                    space_key,
-                    limit,
-                    expand,
-                    page: continuation,
-                } => {
-                    if !(1..=100).contains(limit) {
-                        return Err(contract("Confluence search limit must be 1–100"));
-                    }
-                    let mut fields = vec![
-                        format!("cql={}", search_cql(&key(space_key)?)),
-                        format!("limit={limit}"),
-                        format!("expand={}", expand_value(expand)?),
-                    ];
-                    match continuation {
-                        Some(SearchPage::Cursor(cursor)) if cursor_valid(cursor) => {
-                            fields.push(format!("cursor={cursor}"))
-                        }
-                        Some(SearchPage::Cursor(_)) => {
-                            return Err(contract("Confluence search cursor is malformed"));
-                        }
-                        Some(SearchPage::Start(start)) => fields.push(format!("start={start}")),
-                        None => {}
-                    }
-                    ("content/search".into(), fields)
-                }
-            };
-            let mut argv = vec![endpoint, "-X".into(), "GET".into()];
-            for field in fields {
-                argv.push("-f".into());
-                argv.push(field);
-            }
-            let mut rendered = vec!["api".to_owned()];
-            rendered.extend(argv);
-            rendered
-        }
-    };
-    Ok(strings.into_iter().map(OsString::from).collect())
+fn results(value: &Value) -> Result<&[Value], InspectionError> {
+    value
+        .get("results")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| contract("Confluence response has no results list"))
 }
-
-fn refused(message: &str) -> InspectionError {
-    InspectionError::new(
-        "source_provider_contract",
-        format!("refused Confluence CLI argv: {message}"),
-    )
+fn required_title(value: &Value) -> Result<String, InspectionError> {
+    value
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|title| title_valid(title))
+        .map(str::to_owned)
+        .ok_or_else(|| contract("Confluence title is missing or malformed"))
 }
-
-fn expand_allowed(value: &str) -> bool {
-    let parts: Vec<&str> = value.split(',').collect();
-    !parts.is_empty()
-        && parts.iter().enumerate().all(|(index, part)| {
-            ContentExpand::ALL
-                .iter()
-                .any(|expand| expand.as_str() == *part)
-                && !parts[..index].contains(part)
-        })
-}
-
-fn api_allowed(args: &[&str]) -> bool {
-    let [endpoint, method_flag, method, rest @ ..] = args else {
-        return false;
-    };
-    if *method_flag != "-X" || *method != "GET" || rest.len() % 2 != 0 {
-        return false;
-    }
-    let mut fields = Vec::new();
-    for pair in rest.chunks(2) {
-        if pair[0] != "-f" {
-            return false;
-        }
-        let Some((name, value)) = pair[1].split_once('=') else {
-            return false;
-        };
-        fields.push((name, value));
-    }
-    let segments: Vec<&str> = endpoint.split('/').collect();
-    match segments.as_slice() {
-        ["content", "search"] => {
-            let (fixed, continuation) = match fields.as_slice() {
-                [a, b, c] => ([*a, *b, *c], None),
-                [a, b, c, d] => ([*a, *b, *c], Some(*d)),
-                _ => return false,
-            };
-            let [("cql", cql), ("limit", limit), ("expand", expand)] = fixed else {
-                return false;
-            };
-            let template = cql
-                .strip_prefix("space=\"")
-                .and_then(|rest| rest.strip_suffix("\" and type=page"))
-                .is_some_and(space_key_valid);
-            template
-                && limit
-                    .parse::<u8>()
-                    .is_ok_and(|parsed| (1..=100).contains(&parsed) && parsed.to_string() == *limit)
-                && expand_allowed(expand)
-                && continuation.is_none_or(|(name, value)| match name {
-                    "cursor" => cursor_valid(value),
-                    "start" => value
-                        .parse::<u64>()
-                        .is_ok_and(|start| start.to_string() == value),
-                    _ => false,
-                })
-        }
-        ["content", id] => {
-            page_id_valid(id)
-                && matches!(fields.as_slice(), [("expand", expand)] if expand_allowed(expand))
-        }
-        ["content", id, "label"] => page_id_valid(id) && fields.is_empty(),
-        ["space", key] => space_key_valid(key) && fields.as_slice() == [("expand", "homepage")],
-        _ => false,
+fn take_storage(value: &mut Value) -> Option<String> {
+    match value.pointer_mut("/body/storage/value")?.take() {
+        Value::String(storage) => Some(storage),
+        _ => None,
     }
 }
 
-/// The exhaustive allowlist, applied to the complete argv right before spawn.
-/// Anything the typed builder cannot produce is refused.
-pub fn allowlisted_argv(argv: &[OsString]) -> Result<(), InspectionError> {
-    let mut strings = Vec::with_capacity(argv.len());
-    for arg in argv {
-        let Some(text) = arg.to_str() else {
-            return Err(refused("non-UTF-8 argument"));
-        };
-        if text.contains('\0') {
-            return Err(refused("NUL in argument"));
-        }
-        strings.push(text);
-    }
-    let ["--profile", profile, rest @ ..] = strings.as_slice() else {
-        return Err(refused("every call names its profile first"));
-    };
-    if !profile_valid(profile) {
-        return Err(refused("profile name is malformed"));
-    }
-    let allowed = match rest {
-        ["spaces", "--all", "--json"] => true,
-        ["info", id, "--json"] | ["attachments", id, "--json"] => page_id_valid(id),
-        ["read", id, "--format", "markdown"] => page_id_valid(id),
-        ["find", "--space", key, "--json", "--", title] => {
-            space_key_valid(key) && title_valid(title)
-        }
-        [
-            "attachments",
-            id,
-            "--download",
-            "--dest",
-            dest,
-            pattern,
-            "--json",
-        ] => {
-            page_id_valid(id)
-                && dest_valid(Path::new(dest))
-                && pattern
-                    .strip_prefix("--pattern=")
-                    .is_some_and(pattern_valid)
-        }
-        ["api", api @ ..] => api_allowed(api),
-        _ => false,
-    };
-    if allowed {
-        Ok(())
-    } else {
-        Err(refused("not an allowlisted read call"))
-    }
-}
-
-/// A recognized Confluence input, before any CLI call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfluenceInput {
     Page {
         page_id: String,
     },
-    /// `/display/<KEY>/<title>`: resolved with `Find`, then proved with `Info`.
+    /// A display URL is resolved by its exact space and title.
     Display {
         space_key: String,
         title: String,
@@ -496,15 +112,12 @@ pub enum ConfluenceInput {
         space_key: String,
     },
 }
-
 fn unrecognized() -> InspectionError {
     InspectionError::new(
         "library_input_unrecognized",
         "not a Confluence page or space URL, page id or space key",
     )
 }
-
-/// `+` is a space and `%XX` a byte, like the CLI's `extractPageId`.
 fn decode_title(segment: &str) -> Option<String> {
     let bytes = segment.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -523,13 +136,11 @@ fn decode_title(segment: &str) -> Option<String> {
     }
     String::from_utf8(decoded).ok()
 }
-
 fn within_instance(base: &Url, url: &Url) -> bool {
     let base_path = base.path().trim_end_matches('/');
     url.scheme() == base.scheme()
         && url.username().is_empty()
         && url.password().is_none()
-        && url.host_str().is_some()
         && url
             .host_str()
             .zip(base.host_str())
@@ -539,8 +150,7 @@ fn within_instance(base: &Url, url: &Url) -> bool {
             || url.path() == base_path
             || url.path().starts_with(&format!("{base_path}/")))
 }
-
-/// Recognize a Confluence input for one configured instance. Pure: no CLI.
+/// Recognize a Confluence input for one configured instance without network access.
 pub fn parse_confluence_input(base: &Url, input: &str) -> Result<ConfluenceInput, InspectionError> {
     let input = input.trim();
     if input.is_empty() || input.len() > 8192 || input.chars().any(char::is_control) {
@@ -565,8 +175,7 @@ pub fn parse_confluence_input(base: &Url, input: &str) -> Result<ConfluenceInput
         return Err(unrecognized());
     }
     if !within_instance(base, &url) {
-        return Err(InspectionError::new(
-            "source_identity_mismatch",
+        return Err(identity(
             "URL does not belong to the configured Confluence instance",
         ));
     }
@@ -607,8 +216,6 @@ pub fn parse_confluence_input(base: &Url, input: &str) -> Result<ConfluenceInput
             })
         }
         ["display", key, rest @ ..] if space_key_valid(key) => {
-            // Child pages may appear as /display/KEY/Parent/Child; the page
-            // is the last segment.
             let title = rest
                 .iter()
                 .rev()
@@ -625,158 +232,41 @@ pub fn parse_confluence_input(base: &Url, input: &str) -> Result<ConfluenceInput
     }
 }
 
-/// Map a failed CLI run to a stable error without echoing CLI output.
-fn classify_failure(stderr: &[u8]) -> InspectionError {
-    let text = String::from_utf8_lossy(stderr);
-    let parsed: Option<Value> = serde_json::from_str(text.trim()).ok();
-    let code = parsed
-        .as_ref()
-        .and_then(|value| value.get("code"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let status = parsed.as_ref().and_then(|value| {
-        ["status", "statusCode", "code"]
-            .iter()
-            .find_map(|name| value.get(*name).and_then(Value::as_u64))
-    });
-    let message = parsed
-        .as_ref()
-        .and_then(|value| value.get("error"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| text.to_string());
-    let auth = || {
-        InspectionError::new(
-            "source_auth_failed",
-            "Confluence sign-in failed for the configured profile",
-        )
-    };
-    let not_found = || InspectionError::new("source_not_found", "Confluence page was not found");
-    let profile_missing = (message.contains("Profile \"") && message.contains("not found"))
-        || message.contains("No configuration found");
-    if code == "AUTH_FAILED" || matches!(status, Some(401 | 403)) || profile_missing {
-        return auth();
-    }
-    if code == "NOT_FOUND" || status == Some(404) || message.starts_with("Page not found") {
-        return not_found();
-    }
-    if parsed.is_none() {
-        if ["status code 401", "status code 403", "401 Unauthorized"]
-            .iter()
-            .any(|needle| text.contains(needle))
-        {
-            return auth();
-        }
-        if text.contains("status code 404") {
-            return not_found();
-        }
-    }
-    if code == "NETWORK" {
-        return InspectionError::new(
-            "source_provider_failed",
-            "Confluence could not be reached from the configured profile",
-        );
-    }
-    InspectionError::new("source_provider_failed", "Confluence CLI request failed")
-}
-
-fn bounded_field(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| {
-            !value.is_empty()
-                && value.chars().count() <= MAX_FIELD_CHARS
-                && !value.chars().any(char::is_control)
-        })
-        .map(str::to_owned)
-}
-
-fn id_text(value: Option<&Value>) -> Option<String> {
-    match value? {
-        Value::String(text) => Some(text.clone()),
-        Value::Number(number) => number.as_u64().map(|number| number.to_string()),
-        _ => None,
-    }
-}
-
-/// `info --json`, reduced to the identity facts Cockpit relies on.
 #[derive(Debug)]
-struct PageInfo {
+struct PageRecord {
     page_id: String,
     title: String,
     space_key: String,
+    space_name: Option<String>,
     version: Option<u64>,
+    last_modified: Option<String>,
+    last_modified_by: Option<String>,
+    ancestors: Vec<(String, String)>,
     url: String,
+    storage: Option<String>,
 }
-
-/// Read-only Confluence pages from one configured instance.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Continuation {
+    Cursor(String),
+    Start(u64),
+}
 #[derive(Debug)]
 pub struct ConfluenceSourceProvider {
     provider_id: String,
-    executable: String,
-    login: Option<String>,
     base_url: Url,
-    /// Normalized like `sources::site_authority`.
     instance: String,
     host: String,
     port: Option<u16>,
     base_path: String,
-    timeout: Duration,
-    credentials: CredentialHandle,
-}
-
-/// Inherited settings that would add to or replace a stored token's auth.
-const INHERITED_AUTH: [&str; 4] = [
-    "CONFLUENCE_COOKIE",
-    "CONFLUENCE_TLS_CLIENT_CERT",
-    "CONFLUENCE_TLS_CLIENT_KEY",
-    "CONFLUENCE_TLS_CA_CERT",
-];
-
-/// Give `command` a stored credential through its environment: the site is
-/// named explicitly (`CONFLUENCE_DOMAIN` selects env-only mode, so no profile
-/// is read). Cloud's `/wiki` is the API prefix; any other base path is a
-/// context path that belongs to the domain. Inherited cookie and TLS settings
-/// are removed so they cannot add to the token's auth.
-fn inject_credential(command: &mut Command, base_url: &Url, credential: &ProviderCredential) {
-    let host = base_url.host_str().unwrap_or_default().to_ascii_lowercase();
-    let authority = match base_url.port() {
-        Some(port) => format!("{host}:{port}"),
-        None => host,
-    };
-    let path = base_url.path().trim_end_matches('/');
-    let (domain, api_path) = if path == "/wiki" {
-        (authority, "/wiki/rest/api")
-    } else {
-        (format!("{authority}{path}"), "/rest/api")
-    };
-    for name in INHERITED_AUTH {
-        command.env_remove(name);
-    }
-    command
-        .env("CONFLUENCE_DOMAIN", domain)
-        .env("CONFLUENCE_PROTOCOL", base_url.scheme())
-        .env("CONFLUENCE_API_PATH", api_path);
-    match credential.kind() {
-        ProviderAuthKind::Bearer => {
-            command
-                .env("CONFLUENCE_AUTH_TYPE", "bearer")
-                .env_remove("CONFLUENCE_EMAIL")
-                .env_remove("CONFLUENCE_USERNAME");
-        }
-        ProviderAuthKind::Basic => {
-            command
-                .env("CONFLUENCE_AUTH_TYPE", "basic")
-                .env("CONFLUENCE_EMAIL", credential.username().unwrap_or_default());
-        }
-    }
-    command.env("CONFLUENCE_API_TOKEN", credential.token());
+    deployment: ProviderDeployment,
+    http: SiteHttp,
 }
 
 impl ConfluenceSourceProvider {
     pub fn configured(
         configuration: &ProjectConfiguration,
         provider_id: &str,
+        credentials: Arc<ProviderCredentials>,
     ) -> Result<Self, InspectionError> {
         let provider = configuration
             .providers
@@ -791,15 +281,20 @@ impl ConfluenceSourceProvider {
         let invalid = || {
             InspectionError::new(
                 "source_provider_invalid",
-                "Confluence base URL must be credential-free HTTP(S) without query or fragment",
+                "Confluence requires a deployment and a credential-free HTTP(S) base URL",
             )
         };
+        if provider.kind != ProviderKind::Confluence {
+            return Err(invalid());
+        }
+        let deployment = provider.deployment.ok_or_else(invalid)?;
         let base_url = Url::parse(&provider.base_url).map_err(|_| invalid())?;
         if !matches!(base_url.scheme(), "http" | "https")
             || !base_url.username().is_empty()
             || base_url.password().is_some()
             || base_url.query().is_some()
             || base_url.fragment().is_some()
+            || deployment == ProviderDeployment::Cloud && base_url.path() != "/wiki"
         {
             return Err(invalid());
         }
@@ -814,343 +309,356 @@ impl ConfluenceSourceProvider {
             base_url.scheme(),
             port.map(|port| format!(":{port}")).unwrap_or_default()
         );
+        let http = SiteHttp::new(
+            base_url.clone(),
+            &provider.id,
+            Service::Confluence,
+            Duration::from_millis(configuration.limits.operation_timeout_ms.into()),
+            credentials,
+        );
         Ok(Self {
             provider_id: provider.id.clone(),
-            executable: provider.executable.clone(),
-            login: provider.login.clone(),
             base_url,
             instance,
             host,
             port,
             base_path,
-            timeout: Duration::from_millis(configuration.limits.operation_timeout_ms.into()),
-            credentials: CredentialHandle::none(),
+            deployment,
+            http,
         })
     }
-
-    /// Use the token stored in Cockpit for this provider, when there is one.
-    pub fn with_credentials(mut self, credentials: Arc<ProviderCredentials>) -> Self {
-        self.credentials = CredentialHandle(credentials);
-        self
+    fn cloud(&self) -> bool {
+        self.deployment == ProviderDeployment::Cloud
     }
-
-    fn url_in_instance(&self, input: &str) -> bool {
-        Url::parse(input).is_ok_and(|url| within_instance(&self.base_url, &url))
+    fn endpoint(&self, tail: &[&str], query: &[(&str, &str)]) -> Url {
+        let mut segments = if self.cloud() {
+            vec!["api", "v2"]
+        } else {
+            vec!["rest", "api"]
+        };
+        segments.extend_from_slice(tail);
+        self.http.endpoint(&segments, query)
     }
-
-    /// Run one allowlisted call; returns stdout.
-    async fn run(
-        &self,
-        call: &ConfluenceCall,
-        stdout_limit: usize,
-    ) -> Result<Vec<u8>, InspectionError> {
-        self.run_with_staging(call, stdout_limit, None).await
+    async fn json(&self, tail: &[&str], query: &[(&str, &str)]) -> Result<Value, InspectionError> {
+        self.http
+            .get_json(self.endpoint(tail, query), MAX_JSON_BYTES)
+            .await
+            .map_err(Into::into)
     }
-
-    async fn run_with_staging(
-        &self,
-        call: &ConfluenceCall,
-        stdout_limit: usize,
-        staging: Option<(&Dir, StagingBudget)>,
-    ) -> Result<Vec<u8>, InspectionError> {
-        let login = self.login.as_deref().ok_or_else(|| {
-            InspectionError::new(
-                "source_login_unconfigured",
-                "Confluence sources require the confluence-cli profile name as the provider login",
-            )
-        })?;
-        let mut argv: Vec<OsString> = vec!["--profile".into(), login.into()];
-        argv.extend(confluence_args(call)?);
-        allowlisted_argv(&argv)?;
-        let mut command = Command::new(&self.executable);
-        command
-            .args(&argv)
-            .env("CONFLUENCE_READ_ONLY", "true")
-            .env("CONFLUENCE_CLI_ANALYTICS", "false");
-        if let Some(credential) = self.credentials.0.for_cli(&self.provider_id).await {
-            inject_credential(&mut command, &self.base_url, &credential);
-        }
-        let output = match staging {
-            Some((dir, budget)) => run_bounded_staging_command(
-                command, stdout_limit, MAX_STDERR_BYTES, self.timeout, "Confluence CLI", dir, budget,
-            ).await,
-            None => run_bounded_command(
-                command, stdout_limit, MAX_STDERR_BYTES, self.timeout, "Confluence CLI",
-            ).await,
-        }
-        .map_err(|error| match error.code.as_str() {
-            "execution_timeout" => InspectionError::new(
-                "source_provider_timeout",
-                "Confluence CLI request exceeded the configured deadline",
-            ),
-            "bounded_output" => InspectionError::new(
-                "source_truncated",
-                "Confluence CLI response exceeded Cockpit's explicit process limit",
-            ),
-            "execution_failed" => InspectionError::new(
-                "source_cli_unavailable",
-                "Confluence CLI (confluence-cli) is not installed or could not be started",
-            ),
-            "source_attachment_size" => InspectionError::new(
-                "source_attachment_size",
-                "Attachment download exceeded its staging budget or created an unsafe entry",
-            ),
-            _ => InspectionError::new("source_provider_failed", "Confluence CLI request failed"),
-        })?;
-        if !output.status.success() {
-            return Err(classify_failure(&output.stderr));
-        }
-        Ok(output.stdout)
-    }
-
-    async fn json(&self, call: &ConfluenceCall) -> Result<Value, InspectionError> {
-        let stdout = self.run(call, MAX_JSON_BYTES).await?;
-        serde_json::from_slice(&stdout)
-            .map_err(|_| contract("Confluence CLI did not return the documented JSON"))
-    }
-
-    async fn download_attachment_file(
-        &self,
-        page_id: &str,
-        attachment: &AttachmentRef,
-        siblings: &[AttachmentRef],
-        dest: &Dir,
-        dest_path: &Path,
-        budget: StagingBudget,
-    ) -> Result<DownloadedAttachment, InspectionError> {
-        if !page_id_valid(page_id)
-            || attachment.id.is_empty()
-            || attachment.id.len() > MAX_FIELD_CHARS
-            || attachment.id.chars().any(char::is_control)
-            || !title_valid(&attachment.title)
-            || !download_destination_valid(dest_path)
-            || siblings.iter().any(|sibling| sibling.id == attachment.id)
-        {
-            return Err(contract("Confluence attachment request is malformed"));
-        }
-        if dest
-            .entries()
-            .map_err(|_| download_capability_error())?
-            .next()
-            .is_some()
-        {
-            return Err(download_capability_error());
-        }
-        let expected_dir = dest.dir_metadata().map_err(|_| download_capability_error())?;
-        let actual_dir = std::fs::metadata(dest_path).map_err(|_| download_capability_error())?;
-        #[cfg(unix)]
-        if (MetadataExt::dev(&expected_dir), MetadataExt::ino(&expected_dir))
-            != (MetadataExt::dev(&actual_dir), MetadataExt::ino(&actual_dir))
-        {
-            return Err(download_capability_error());
-        }
-        #[cfg(not(unix))]
-        return Err(download_capability_error());
-        let pattern = confluence_attachment_pattern(&attachment.title);
-        let stdout = self
-            .run_with_staging(
-                &ConfluenceCall::DownloadAttachment {
-                    page_id: page_id.to_owned(),
-                    pattern,
-                    dest: dest_path.to_owned(),
-                },
-                MAX_JSON_BYTES,
-                Some((dest, budget)),
-            )
-            .await?;
-        let result: Value =
-            serde_json::from_slice(&stdout).map_err(|_| download_capability_error())?;
-        let destination = result
-            .get("destination")
-            .and_then(Value::as_str)
-            .ok_or_else(download_capability_error)?;
-        if Path::new(destination) != dest_path {
-            return Err(download_capability_error());
-        }
-        let entries = result
-            .get("attachments")
-            .and_then(Value::as_array)
-            .ok_or_else(download_capability_error)?;
-        let mut selected: Option<String> = None;
-        let mut reported_names = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let id = entry
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(download_capability_error)?;
-            let saved_to = entry
-                .get("savedTo")
-                .and_then(Value::as_str)
-                .ok_or_else(download_capability_error)?;
-            let name = saved_file_name(saved_to, dest_path)?;
-            let title = entry
-                .get("title")
-                .and_then(Value::as_str)
-                .ok_or_else(download_capability_error)?;
-            if id == attachment.id {
-                if selected.is_some() || title != attachment.title {
-                    return Err(download_capability_error());
-                }
-                selected = Some(name.clone());
-            }
-            reported_names.push(name);
-        }
-        let file_name = selected.ok_or_else(download_capability_error)?;
-        if reported_names
-            .iter()
-            .enumerate()
-            .any(|(index, name)| reported_names[..index].contains(name))
-        {
-            return Err(download_capability_error());
-        }
-        for name in reported_names.iter().filter(|name| *name != &file_name) {
-            match dest.remove_file(name) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err(download_capability_error()),
-            }
-        }
-        let metadata = dest
-            .symlink_metadata(&file_name)
-            .map_err(|_| download_capability_error())?;
-        if !metadata.file_type().is_file() {
-            return Err(download_capability_error());
-        }
-        let mut options = OpenOptions::new();
-        options
-            .read(true)
-            .follow(FollowSymlinks::No)
-            .nonblock(true);
-        let file = dest
-            .open_with(&file_name, &options)
-            .map_err(|_| download_capability_error())?;
-        let opened = file.metadata().map_err(|_| download_capability_error())?;
-        if !opened.is_file() || opened.len() != metadata.len()
-            || {
-                #[cfg(unix)]
-                {
-                    MetadataExt::nlink(&opened) != 1
-                }
-                #[cfg(windows)]
-                {
-                    opened.number_of_links() != 1
-                }
-                #[cfg(not(any(unix, windows)))]
-                {
-                    false
-                }
-            }
-        {
-            return Err(download_capability_error());
-        }
-        drop(file);
-        Ok(DownloadedAttachment {
-            attachment_id: attachment.id.clone(),
-            file_name,
-        })
-    }
-
-    fn search_continuation(
+    /// Validate a server continuation, retaining only the cursor/offset. All requests
+    /// are rebuilt from the trusted endpoint and original filters.
+    fn continuation(
         &self,
         value: &Value,
-        space_key: &str,
-        limit: u8,
-        expand: &str,
-    ) -> Result<Option<SearchPage>, InspectionError> {
-        let Some(next) = value.pointer("/_links/next").and_then(Value::as_str) else {
+        tail: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<Option<Continuation>, InspectionError> {
+        let Some(next) = value.pointer("/_links/next").filter(|next| !next.is_null()) else {
             return Ok(None);
         };
-        if next.is_empty() || next.len() > 8192 {
-            return Err(contract("Confluence search continuation is malformed"));
+        let link = next
+            .as_str()
+            .filter(|link| !link.is_empty())
+            .ok_or_else(|| contract("Confluence returned a malformed continuation"))?;
+        let url = self.http.link(link).map_err(InspectionError::from)?;
+        if url.path() != self.endpoint(tail, &[]).path() || url.fragment().is_some() {
+            return Err(contract(
+                "Confluence continuation changed the requested endpoint",
+            ));
         }
-        let base = value
-            .pointer("/_links/base")
-            .and_then(Value::as_str)
-            .and_then(|base| Url::parse(base).ok())
-            .filter(|base| within_instance(&self.base_url, base))
-            .ok_or_else(|| contract("Confluence search continuation has an invalid base"))?;
-        let url = base
-            .join(next)
-            .map_err(|_| contract("Confluence search continuation is malformed"))?;
-        let expected_path = format!("{}/rest/api/content/search", self.base_path);
-        if url.scheme() != self.base_url.scheme()
-            || !url.host_str().is_some_and(|host| host.eq_ignore_ascii_case(&self.host))
-            || url.port() != self.port
-            || !(url.path() == expected_path || url.path() == "/rest/api/content/search")
-            || url.fragment().is_some()
-            || url.username() != ""
-            || url.password().is_some()
-        {
-            return Err(contract("Confluence search continuation leaves the configured search endpoint"));
-        }
-        let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
-        let expected_cql = search_cql(space_key);
-        let mut cql = None;
-        let mut found_limit = None;
-        let mut found_expand = None;
-        let mut cursor = None;
-        let mut start = None;
-        let mut next_flag = false;
-        for (name, value) in pairs {
-            match name.as_str() {
-                "cql" if cql.is_none() => cql = Some(value),
-                "limit" if found_limit.is_none() => found_limit = Some(value),
-                "expand" if found_expand.is_none() => found_expand = Some(value),
-                "cursor" if cursor.is_none() => cursor = Some(value),
-                // Cloud cursor links also carry `next=true` and a `start` offset.
-                "next" if !next_flag && value == "true" => next_flag = true,
-                "start" if start.is_none() => {
-                    start = Some(value.parse::<u64>().ok()
-                        .filter(|start| start.to_string() == value)
-                        .ok_or_else(|| contract("Confluence search offset is malformed"))?);
+        let token_key = if self.cloud() { "cursor" } else { "start" };
+        let mut token = None;
+        let mut names = BTreeSet::new();
+        for (key, val) in url.query_pairs() {
+            if !names.insert(key.to_string()) {
+                return Err(contract("Confluence continuation repeated a parameter"));
+            }
+            if key == token_key {
+                if val.is_empty() || val.len() > 4096 || val.chars().any(char::is_control) {
+                    return Err(contract("Confluence continuation is malformed"));
                 }
-                _ => return Err(contract("Confluence search continuation has altered query parameters")),
+                token =
+                    Some(if self.cloud() {
+                        Continuation::Cursor(val.into_owned())
+                    } else {
+                        Continuation::Start(val.parse().map_err(|_| {
+                            contract("Confluence continuation has an invalid offset")
+                        })?)
+                    });
+            } else if !query.iter().any(|(expected_key, expected_value)| {
+                *expected_key == key && *expected_value == val
+            }) {
+                return Err(contract(
+                    "Confluence continuation changed the requested filters",
+                ));
             }
         }
-        let continuation = cursor.map(SearchPage::Cursor).or(start.map(SearchPage::Start));
-        if cql.as_deref() != Some(expected_cql.as_str())
-            || found_limit.as_deref() != Some(limit.to_string().as_str())
-            || found_expand.as_deref() != Some(expand)
-        {
-            return Err(contract("Confluence search continuation has altered query parameters"));
-        }
-        let continuation = continuation
-            .ok_or_else(|| contract("Confluence search continuation has no cursor or offset"))?;
-        if let SearchPage::Cursor(cursor) = &continuation
-            && !cursor_valid(cursor)
-        {
-            return Err(contract("Confluence search cursor is malformed"));
-        }
-        Ok(Some(continuation))
+        token
+            .map(Some)
+            .ok_or_else(|| contract("Confluence continuation has no cursor or offset"))
     }
-
-    fn listing_page(item: &Value, space_key: &str) -> Result<SpacePage, InspectionError> {
-        let page_id = id_text(item.get("id"))
-            .filter(|id| page_id_valid(id))
-            .ok_or_else(|| contract("Confluence search result has an invalid page id"))?;
-        if item.get("type").and_then(Value::as_str).is_some_and(|kind| kind != "page")
-            || item.pointer("/space/key").and_then(Value::as_str).is_some_and(|key| key != space_key)
-        {
-            return Err(contract("Confluence search returned a page outside the requested space"));
+    async fn paged_json(
+        &self,
+        tail: &[&str],
+        query: &[(&str, &str)],
+        next: Option<&Continuation>,
+    ) -> Result<Value, InspectionError> {
+        let mut pairs = query
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect::<Vec<_>>();
+        match next {
+            Some(Continuation::Cursor(cursor)) => pairs.push(("cursor".into(), cursor.clone())),
+            Some(Continuation::Start(start)) => pairs.push(("start".into(), start.to_string())),
+            None if !self.cloud() => pairs.push(("start".into(), "0".into())),
+            None => {}
         }
-        let title = item.get("title").and_then(Value::as_str)
-            .filter(|title| title_valid(title))
-            .ok_or_else(|| contract("Confluence search result has an invalid title"))?
+        let borrowed = pairs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        self.json(tail, &borrowed).await
+    }
+    fn check_next(
+        next: &Option<Continuation>,
+        seen: &mut BTreeSet<Continuation>,
+        rows: usize,
+    ) -> Result<(), InspectionError> {
+        if let Some(next) = next {
+            if let Continuation::Start(start) = next {
+                let previous = match seen.last() {
+                    Some(Continuation::Start(value)) => *value,
+                    _ => 0,
+                };
+                if previous.checked_add(rows as u64) != Some(*start) {
+                    return Err(contract(
+                        "Confluence pagination skipped or repeated an offset",
+                    ));
+                }
+            }
+            if rows == 0 || matches!(next, Continuation::Start(0)) || !seen.insert(next.clone()) {
+                return Err(contract("Confluence pagination failed to advance"));
+            }
+        }
+        Ok(())
+    }
+    fn web_url(&self, value: &Value) -> Result<String, InspectionError> {
+        let webui = value
+            .pointer("/_links/webui")
+            .and_then(Value::as_str)
+            .filter(|link| !link.is_empty())
+            .ok_or_else(|| contract("Confluence page has no web URL"))?;
+        let url = self
+            .http
+            .link(webui)
+            .map_err(|_| identity("Confluence answered for a different site"))?;
+        if url.fragment().is_some() {
+            return Err(identity("Confluence answered with an invalid page URL"));
+        }
+        Ok(url.to_string())
+    }
+    fn dc_record(
+        &self,
+        value: &Value,
+        expected_id: Option<&str>,
+        full: bool,
+    ) -> Result<PageRecord, InspectionError> {
+        let page_id = required_id(value.get("id"))?;
+        if expected_id.is_some_and(|expected| expected != page_id) {
+            return Err(identity("Confluence returned a different page"));
+        }
+        if value.get("type").and_then(Value::as_str) != Some("page") {
+            return Err(InspectionError::new(
+                "source_capability_unavailable",
+                "only Confluence pages can be added",
+            ));
+        }
+        let space_key = value
+            .pointer("/space/key")
+            .and_then(Value::as_str)
+            .filter(|key| space_key_valid(key))
+            .ok_or_else(|| contract("Confluence page has no valid space key"))?
             .to_owned();
-        let version = item.pointer("/version/number").and_then(Value::as_u64)
-            .or_else(|| item.get("version").and_then(Value::as_u64))
-            .ok_or_else(|| contract("Confluence search result has an invalid version"))?;
-        let ancestors = item.get("ancestors").and_then(Value::as_array)
-            .ok_or_else(|| contract("Confluence search result has invalid ancestors"))?
-            .iter().map(|ancestor| {
-                id_text(ancestor.get("id")).filter(|id| page_id_valid(id))
-                    .ok_or_else(|| contract("Confluence search result has an invalid ancestor id"))
-            }).collect::<Result<Vec<_>, _>>()?;
-        let position = item.get("position").and_then(Value::as_i64)
-            .or_else(|| item.pointer("/extensions/position").and_then(Value::as_i64));
-        Ok(SpacePage { page_id, title, version, ancestors, position })
+        let ancestors = if full {
+            value
+                .get("ancestors")
+                .and_then(Value::as_array)
+                .ok_or_else(|| contract("Confluence page has no ancestors list"))?
+                .iter()
+                .map(|ancestor| {
+                    let id = required_id(ancestor.get("id"))?;
+                    let title = bounded_field(ancestor.get("title").and_then(Value::as_str))
+                        .unwrap_or_else(|| id.clone());
+                    Ok((id, title))
+                })
+                .collect::<Result<Vec<_>, InspectionError>>()?
+        } else {
+            Vec::new()
+        };
+        let person = |pointer| {
+            value.pointer(pointer).and_then(|person: &Value| {
+                bounded_field(
+                    person
+                        .get("displayName")
+                        .or_else(|| person.get("publicName"))
+                        .and_then(Value::as_str),
+                )
+            })
+        };
+        Ok(PageRecord {
+            page_id,
+            title: required_title(value)?,
+            space_key,
+            space_name: bounded_field(value.pointer("/space/name").and_then(Value::as_str)),
+            version: value.pointer("/version/number").and_then(Value::as_u64),
+            last_modified: bounded_field(
+                value
+                    .pointer("/history/lastUpdated/when")
+                    .or_else(|| value.pointer("/version/when"))
+                    .and_then(Value::as_str),
+            ),
+            last_modified_by: person("/history/lastUpdated/by").or_else(|| person("/version/by")),
+            ancestors,
+            url: self.web_url(value)?,
+            storage: None,
+        })
     }
-
+    async fn cloud_space(&self, id: &str) -> Result<Value, InspectionError> {
+        let value = self.json(&["spaces", id], &[]).await?;
+        if id_text(value.get("id")).as_deref() != Some(id) {
+            return Err(identity("Confluence returned a different space"));
+        }
+        Self::space_summary(&value)?;
+        Ok(value)
+    }
+    async fn space_by_key(&self, key: &str) -> Result<Value, InspectionError> {
+        if !space_key_valid(key) {
+            return Err(contract("Confluence space key is malformed"));
+        }
+        let value = if self.cloud() {
+            let found = self.json(&["spaces"], &[("keys", key)]).await?;
+            let rows = results(&found)?;
+            if rows.len() != 1
+                || self
+                    .continuation(&found, &["spaces"], &[("keys", key)])?
+                    .is_some()
+            {
+                return Err(InspectionError::new(
+                    "source_not_found",
+                    "Confluence space does not exist or is not visible to the stored token",
+                ));
+            }
+            rows[0].clone()
+        } else {
+            self.json(&["space", key], &[("expand", "homepage")])
+                .await?
+        };
+        if value.get("key").and_then(Value::as_str) != Some(key) {
+            return Err(identity("Confluence returned a different space"));
+        }
+        Self::space_summary(&value)?;
+        Ok(value)
+    }
+    fn cloud_record(
+        &self,
+        value: &Value,
+        space: &Value,
+        expected_id: Option<&str>,
+    ) -> Result<PageRecord, InspectionError> {
+        let page_id = required_id(value.get("id"))?;
+        if expected_id.is_some_and(|id| id != page_id) {
+            return Err(identity("Confluence returned a different page"));
+        }
+        if required_id(value.get("spaceId"))? != required_id(space.get("id"))? {
+            return Err(identity("Confluence returned a page in a different space"));
+        }
+        let summary = Self::space_summary(space)?;
+        Ok(PageRecord {
+            page_id,
+            title: required_title(value)?,
+            space_key: summary.key,
+            space_name: Some(summary.name),
+            version: value.pointer("/version/number").and_then(Value::as_u64),
+            last_modified: bounded_field(
+                value.pointer("/version/createdAt").and_then(Value::as_str),
+            ),
+            last_modified_by: None,
+            ancestors: Vec::new(),
+            url: self.web_url(value)?,
+            storage: None,
+        })
+    }
+    async fn info(&self, page_id: &str) -> Result<PageRecord, InspectionError> {
+        if !page_id_valid(page_id) {
+            return Err(contract("Confluence page id must be 1–20 digits"));
+        }
+        if self.cloud() {
+            let value = self.json(&["pages", page_id], &[]).await?;
+            if id_text(value.get("id")).as_deref() != Some(page_id) {
+                return Err(identity("Confluence returned a different page"));
+            }
+            let space_id = required_id(value.get("spaceId"))?;
+            let space = self.cloud_space(&space_id).await?;
+            self.cloud_record(&value, &space, Some(page_id))
+        } else {
+            let value = self
+                .json(&["content", page_id], &[("expand", "space,version")])
+                .await?;
+            self.dc_record(&value, Some(page_id), false)
+        }
+    }
+    fn page(&self, info: PageRecord) -> ConfluencePage {
+        ConfluencePage {
+            canonical_url: confluence_page_url(&self.instance, &info.page_id),
+            page_id: info.page_id,
+            title: info.title,
+            space_key: info.space_key,
+            version: info.version,
+            source_url: info.url,
+        }
+    }
+    async fn find(&self, space_key: &str, title: &str) -> Result<PageRecord, InspectionError> {
+        let not_found = || {
+            InspectionError::new(
+                "source_not_found",
+                "Confluence page does not exist or is not visible to the stored token",
+            )
+        };
+        let record = if self.cloud() {
+            let space = self.space_by_key(space_key).await?;
+            let id = required_id(space.get("id"))?;
+            let query = [
+                ("space-id", id.as_str()),
+                ("title", title),
+                ("status", "current"),
+                ("limit", "2"),
+            ];
+            let value = self.json(&["pages"], &query).await?;
+            let rows = results(&value)?;
+            if rows.len() != 1 || self.continuation(&value, &["pages"], &query)?.is_some() {
+                return Err(not_found());
+            }
+            self.cloud_record(&rows[0], &space, None)?
+        } else {
+            let query = [
+                ("spaceKey", space_key),
+                ("title", title),
+                ("type", "page"),
+                ("expand", "space,version"),
+                ("limit", "2"),
+            ];
+            let value = self.json(&["content"], &query).await?;
+            let rows = results(&value)?;
+            if rows.len() != 1 || self.continuation(&value, &["content"], &query)?.is_some() {
+                return Err(not_found());
+            }
+            self.dc_record(&rows[0], None, false)?
+        };
+        if record.title != title || record.space_key != space_key {
+            return Err(not_found());
+        }
+        Ok(record)
+    }
     fn check_authority(&self, request: &SourceFetchRequest) -> Result<(), InspectionError> {
         let authority = &request.authority;
         if request.provider_id != self.provider_id
@@ -1161,177 +669,52 @@ impl ConfluenceSourceProvider {
             || !authority.owner.is_empty()
             || !authority.repository.is_empty()
         {
-            return Err(InspectionError::new(
-                "source_identity_mismatch",
+            return Err(identity(
                 "Confluence request does not match the configured Confluence instance",
             ));
         }
         Ok(())
     }
-
-    /// `Info` is the instance proof: the id must echo and the page URL must
-    /// lie inside the configured instance.
-    async fn info(&self, page_id: &str) -> Result<PageInfo, InspectionError> {
-        let value = self
-            .json(&ConfluenceCall::Info {
-                page_id: page_id.into(),
-            })
-            .await?;
-        if id_text(value.get("id")).as_deref() != Some(page_id) {
-            return Err(InspectionError::new(
-                "source_identity_mismatch",
-                "Confluence returned a different page",
-            ));
-        }
-        let url = value
-            .get("url")
-            .and_then(Value::as_str)
-            .filter(|url| self.url_in_instance(url))
-            .ok_or_else(|| {
-                InspectionError::new(
-                    "source_identity_mismatch",
-                    "Confluence CLI is connected to a different site than the configured provider",
-                )
-            })?;
-        if value
-            .get("type")
-            .and_then(Value::as_str)
-            .is_some_and(|kind| kind != "page")
-        {
-            return Err(InspectionError::new(
-                "source_capability_unavailable",
-                "only Confluence pages can be added",
-            ));
-        }
-        let title = value
-            .get("title")
-            .and_then(Value::as_str)
-            .filter(|title| title_valid(title))
-            .ok_or_else(|| contract("Confluence page title is missing or malformed"))?;
-        let space_key = value
-            .get("spaceKey")
-            .and_then(Value::as_str)
-            .or_else(|| value.pointer("/space/key").and_then(Value::as_str))
-            .filter(|key| space_key_valid(key))
-            .ok_or_else(|| contract("Confluence page has no valid space key"))?;
-        let version = match value.get("version") {
-            None | Some(Value::Null) => None,
-            Some(version) => Some(
-                version
-                    .as_u64()
-                    .or_else(|| version.get("number").and_then(Value::as_u64))
-                    .ok_or_else(|| contract("Confluence page version is malformed"))?,
-            ),
-        };
-        Ok(PageInfo {
-            page_id: page_id.into(),
-            title: title.into(),
-            space_key: space_key.into(),
-            version,
-            url: url.into(),
-        })
-    }
-
-    fn page(&self, info: PageInfo) -> ConfluencePage {
-        ConfluencePage {
-            canonical_url: confluence_page_url(&self.instance, &info.page_id),
-            page_id: info.page_id,
-            space_key: info.space_key,
-            title: info.title,
-            version: info.version,
-            source_url: info.url,
-        }
-    }
-
-    /// DC `/display/<KEY>/<title>`: `Find`, then `Info` must agree on
-    /// space and title.
-    async fn find(&self, space_key: &str, title: &str) -> Result<PageInfo, InspectionError> {
-        let found = self
-            .json(&ConfluenceCall::Find {
-                space_key: space_key.into(),
-                title: title.into(),
-            })
-            .await?;
-        let not_found =
-            || InspectionError::new("source_not_found", "Confluence page was not found");
-        let page_id = id_text(found.get("id"))
-            .filter(|id| page_id_valid(id))
-            .ok_or_else(not_found)?;
-        let info = self.info(&page_id).await.map_err(|error| {
-            if error.code == "source_capability_unavailable" {
-                not_found()
-            } else {
-                error
+    fn requested_page(&self, request: &SourceFetchRequest) -> Result<String, InspectionError> {
+        self.check_authority(request)?;
+        match parse_confluence_input(&self.base_url, &request.artifact_url)? {
+            ConfluenceInput::Page { page_id } if request.artifact_url.starts_with("http") => {
+                Ok(page_id)
             }
-        })?;
-        if info.space_key != space_key || info.title != title {
-            return Err(not_found());
+            _ => Err(contract("Confluence fetch requires an authorized page URL")),
         }
-        Ok(info)
     }
-
     fn fields_and_container(
         &self,
-        info: &PageInfo,
-        content: &Value,
+        info: &PageRecord,
         labels: &[String],
     ) -> (Vec<FrontmatterField>, SourceContainer) {
-        let space_name = bounded_field(content.pointer("/space/name").and_then(Value::as_str));
-        let ancestors: Vec<(String, String)> = content
-            .get("ancestors")
-            .and_then(Value::as_array)
-            .map(|ancestors| {
-                ancestors
-                    .iter()
-                    .filter_map(|ancestor| {
-                        let id = id_text(ancestor.get("id")).filter(|id| page_id_valid(id))?;
-                        let title = bounded_field(ancestor.get("title").and_then(Value::as_str))
-                            .unwrap_or_else(|| id.clone());
-                        Some((id, title))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let last_modified = bounded_field(
-            content
-                .pointer("/history/lastUpdated/when")
-                .or_else(|| content.pointer("/version/when"))
-                .and_then(Value::as_str),
-        );
-        // A display name only; account ids and e-mail addresses are never read.
-        let person = |pointer: &str| {
-            content.pointer(pointer).and_then(|by| {
-                bounded_field(
-                    by.get("displayName")
-                        .or_else(|| by.get("publicName"))
-                        .and_then(Value::as_str),
-                )
-            })
-        };
-        let last_modified_by = person("/history/lastUpdated/by").or_else(|| person("/version/by"));
         let text = |key: &str, value: String| FrontmatterField {
             key: key.into(),
             value: FrontmatterValue::String(value),
         };
         let mut fields = vec![text("space_key", info.space_key.clone())];
-        if let Some(name) = &space_name {
+        if let Some(name) = &info.space_name {
             fields.push(text("space_name", name.clone()));
         }
         fields.push(text("page_id", info.page_id.clone()));
-        if let Some((parent, _)) = ancestors.last() {
+        if let Some((parent, _)) = info.ancestors.last() {
             fields.push(text("parent_id", parent.clone()));
         }
-        if !ancestors.is_empty() {
+        if !info.ancestors.is_empty() {
             fields.push(FrontmatterField {
                 key: "ancestors".into(),
                 value: FrontmatterValue::Strings(
-                    ancestors.iter().map(|(_, title)| title.clone()).collect(),
+                    info.ancestors
+                        .iter()
+                        .map(|(_, title)| title.clone())
+                        .collect(),
                 ),
             });
             fields.push(FrontmatterField {
                 key: "ancestor_ids".into(),
                 value: FrontmatterValue::Strings(
-                    ancestors.iter().map(|(id, _)| id.clone()).collect(),
+                    info.ancestors.iter().map(|(id, _)| id.clone()).collect(),
                 ),
             });
         }
@@ -1341,11 +724,11 @@ impl ConfluenceSourceProvider {
                 value: FrontmatterValue::Number(version),
             });
         }
-        if let Some(value) = last_modified {
-            fields.push(text("last_modified", value));
+        if let Some(value) = &info.last_modified {
+            fields.push(text("last_modified", value.clone()));
         }
-        if let Some(value) = last_modified_by {
-            fields.push(text("last_modified_by", value));
+        if let Some(value) = &info.last_modified_by {
+            fields.push(text("last_modified_by", value.clone()));
         }
         if !labels.is_empty() {
             fields.push(FrontmatterField {
@@ -1353,7 +736,7 @@ impl ConfluenceSourceProvider {
                 value: FrontmatterValue::Strings(labels.to_vec()),
             });
         }
-        let label = match &space_name {
+        let label = match &info.space_name {
             Some(name) => format!("{} · {name}", info.space_key),
             None => info.space_key.clone(),
         };
@@ -1365,76 +748,439 @@ impl ConfluenceSourceProvider {
             },
         )
     }
-
-    fn attachments(&self, value: &Value) -> Result<(Vec<SourceAttachment>, bool), InspectionError> {
-        let list = value
-            .get("attachments")
-            .and_then(Value::as_array)
-            .ok_or_else(|| contract("Confluence attachments output lacks an attachment list"))?;
-        let mut attachments = Vec::new();
-        for item in list.iter().take(MAX_ATTACHMENTS) {
-            let id = id_text(item.get("id"))
-                .filter(|id| bounded_field(Some(id)).as_deref() == Some(id.as_str()))
-                .ok_or_else(|| contract("Confluence attachment id is malformed"))?;
-            let title = item
-                .get("title")
-                .and_then(Value::as_str)
-                .filter(|title| title_valid(title))
-                .ok_or_else(|| contract("Confluence attachment title is malformed"))?;
-            attachments.push(SourceAttachment {
-                id,
-                title: title.into(),
-                media_type: bounded_field(item.get("mediaType").and_then(Value::as_str)),
-                size: item
-                    .get("fileSize")
-                    .and_then(Value::as_u64)
-                    .filter(|size| *size > 0),
-                source_url: item
-                    .get("downloadLink")
-                    .and_then(Value::as_str)
-                    .filter(|url| self.url_in_instance(url))
-                    .map(str::to_owned),
-                source_revision: item
-                    .get("version")
-                    .and_then(Value::as_u64)
-                    .map(|version| version.to_string()),
-                path: None,
-                not_downloaded: Some(NOT_DOWNLOADED.into()),
-            });
-        }
-        Ok((attachments, list.len() <= MAX_ATTACHMENTS))
-    }
-
-    async fn labels(&self, page_id: &str) -> Result<(Vec<String>, bool), InspectionError> {
-        let value = self
-            .json(&ConfluenceCall::Api(ConfluenceApi::Labels {
-                page_id: page_id.into(),
-            }))
-            .await?;
-        let results = value
-            .get("results")
-            .and_then(Value::as_array)
-            .ok_or_else(|| contract("Confluence labels output lacks results"))?;
-        let labels = results
+    async fn labels(&self, id: &str) -> Result<(Vec<String>, bool), InspectionError> {
+        let tail = if self.cloud() {
+            vec!["pages", id, "labels"]
+        } else {
+            vec!["content", id, "label"]
+        };
+        let query = [("limit", if self.cloud() { "250" } else { "200" })];
+        let value = self.json(&tail, &query).await?;
+        let rows = results(&value)?;
+        let complete =
+            rows.len() <= MAX_ATTACHMENTS && self.continuation(&value, &tail, &query)?.is_none();
+        let mut labels = rows
             .iter()
-            .filter_map(|label| bounded_field(label.get("name").and_then(Value::as_str)))
-            .take(256)
-            .collect::<Vec<_>>();
-        let complete = value.pointer("/_links/next").is_none() && results.len() <= 256;
+            .take(MAX_ATTACHMENTS)
+            .map(|row| {
+                bounded_field(row.get("name").and_then(Value::as_str))
+                    .ok_or_else(|| contract("Confluence returned an invalid label"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        labels.sort();
+        labels.dedup();
         Ok((labels, complete))
     }
-
-    fn requested_page(&self, request: &SourceFetchRequest) -> Result<String, InspectionError> {
-        self.check_authority(request)?;
-        match parse_confluence_input(&self.base_url, &request.artifact_url)? {
-            ConfluenceInput::Page { page_id } if request.artifact_url.starts_with("http") => {
-                Ok(page_id)
+    fn attachment(&self, value: &Value) -> Result<SourceAttachment, InspectionError> {
+        let id = id_text(value.get("id"))
+            .filter(|id| attachment_id_valid(id))
+            .ok_or_else(|| contract("Confluence attachment id is malformed"))?;
+        let download = value
+            .get("downloadLink")
+            .or_else(|| value.pointer("/_links/download"))
+            .and_then(Value::as_str);
+        let source_url = download
+            .map(|link| {
+                self.http
+                    .link(link)
+                    .map(|url| url.to_string())
+                    .map_err(InspectionError::from)
+            })
+            .transpose()?;
+        Ok(SourceAttachment {
+            id,
+            title: required_title(value)?,
+            media_type: bounded_field(
+                value
+                    .get("mediaType")
+                    .or_else(|| value.pointer("/metadata/mediaType"))
+                    .and_then(Value::as_str),
+            ),
+            size: value
+                .get("fileSize")
+                .or_else(|| value.pointer("/extensions/fileSize"))
+                .and_then(Value::as_u64),
+            source_url,
+            source_revision: value
+                .pointer("/version/number")
+                .and_then(Value::as_u64)
+                .map(|v| v.to_string()),
+            path: None,
+            not_downloaded: Some("not downloaded".into()),
+        })
+    }
+    async fn attachments(
+        &self,
+        id: &str,
+    ) -> Result<(Vec<SourceAttachment>, bool), InspectionError> {
+        let tail = if self.cloud() {
+            vec!["pages", id, "attachments"]
+        } else {
+            vec!["content", id, "child", "attachment"]
+        };
+        let query = if self.cloud() {
+            vec![("limit", "250")]
+        } else {
+            vec![("limit", "200"), ("expand", "version")]
+        };
+        let mut next = None;
+        let mut seen = BTreeSet::new();
+        let mut ids = BTreeSet::new();
+        let mut attachments = Vec::new();
+        loop {
+            let value = self.paged_json(&tail, &query, next.as_ref()).await?;
+            let rows = results(&value)?;
+            let continuation = self.continuation(&value, &tail, &query)?;
+            Self::check_next(&continuation, &mut seen, rows.len())?;
+            for row in rows {
+                if attachments.len() == MAX_ATTACHMENTS {
+                    return Ok((attachments, false));
+                }
+                let attachment = self.attachment(row)?;
+                if !ids.insert(attachment.id.clone()) {
+                    return Err(contract("Confluence repeated an attachment id"));
+                }
+                attachments.push(attachment);
             }
-            _ => Err(InspectionError::new(
-                "library_input_unrecognized",
-                "Confluence fetches need a page URL carrying the page id",
-            )),
+            if continuation.is_none() {
+                return Ok((attachments, true));
+            }
+            if attachments.len() == MAX_ATTACHMENTS {
+                return Ok((attachments, false));
+            }
+            next = continuation;
         }
+    }
+    async fn ancestor_rows(&self, page_id: &str) -> Result<Vec<Value>, InspectionError> {
+        self.ancestor_rows_until_cancelled(page_id, None)
+            .await
+            .map(|(rows, _)| rows)
+    }
+    async fn ancestor_rows_until_cancelled(
+        &self,
+        page_id: &str,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<(Vec<Value>, bool), InspectionError> {
+        let tail = ["pages", page_id, "ancestors"];
+        let query = [("limit", "250")];
+        let mut rows = Vec::new();
+        let mut next = None;
+        let mut seen = BTreeSet::new();
+        let mut ids = BTreeSet::new();
+        loop {
+            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                return Ok((rows, false));
+            }
+            let value = self.paged_json(&tail, &query, next.as_ref()).await?;
+            let page = results(&value)?;
+            next = self.continuation(&value, &tail, &query)?;
+            Self::check_next(&next, &mut seen, page.len())?;
+            for ancestor in page {
+                let id = required_id(ancestor.get("id"))?;
+                if id == page_id || !ids.insert(id) {
+                    return Err(contract("Confluence returned cyclic or repeated ancestors"));
+                }
+                rows.push(ancestor.clone());
+            }
+            if rows.len() > MAX_SPACES {
+                return Err(InspectionError::new(
+                    "source_truncated",
+                    "Confluence ancestry exceeds Cockpit's limit",
+                ));
+            }
+            if next.is_none() {
+                return Ok((rows, true));
+            }
+        }
+    }
+    async fn ancestor_titles(
+        &self,
+        rows: &[Value],
+    ) -> Result<Vec<(String, String)>, InspectionError> {
+        let page_ids = rows
+            .iter()
+            .filter(|row| row.get("type").and_then(Value::as_str) == Some("page"))
+            .map(|row| required_id(row.get("id")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let pages = async {
+            let mut titles = BTreeMap::new();
+            for chunk in page_ids.chunks(250) {
+                let ids = chunk.join(",");
+                let query = [("id", ids.as_str()), ("limit", "250")];
+                let value = self.json(&["pages"], &query).await?;
+                if self.continuation(&value, &["pages"], &query)?.is_some() {
+                    return Err(contract("Confluence ancestor title response is incomplete"));
+                }
+                for page in results(&value)? {
+                    let id = required_id(page.get("id"))?;
+                    if !chunk.contains(&id) || titles.insert(id, required_title(page)?).is_some() {
+                        return Err(contract("Confluence returned an unexpected ancestor page"));
+                    }
+                }
+                if chunk.iter().any(|id| !titles.contains_key(id)) {
+                    return Err(contract("Confluence omitted an ancestor page"));
+                }
+            }
+            Ok::<_, InspectionError>(titles)
+        };
+        let folders = async {
+            let mut titles = BTreeMap::new();
+            for row in rows
+                .iter()
+                .filter(|row| row.get("type").and_then(Value::as_str) == Some("folder"))
+            {
+                let id = required_id(row.get("id"))?;
+                let folder = self.json(&["folders", &id], &[]).await?;
+                if id_text(folder.get("id")).as_deref() != Some(id.as_str()) {
+                    return Err(identity("Confluence returned a different folder"));
+                }
+                titles.insert(id, required_title(&folder)?);
+            }
+            Ok::<_, InspectionError>(titles)
+        };
+        let (mut titles, mut folders) = tokio::try_join!(pages, folders)?;
+        let mut ancestors = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id = required_id(row.get("id"))?;
+            let title = match row.get("type").and_then(Value::as_str) {
+                Some("page") => titles
+                    .remove(&id)
+                    .ok_or_else(|| contract("Confluence omitted an ancestor title"))?,
+                Some("folder") => folders
+                    .remove(&id)
+                    .ok_or_else(|| contract("Confluence omitted an ancestor folder"))?,
+                _ => id.clone(),
+            };
+            ancestors.push((id, title));
+        }
+        Ok(ancestors)
+    }
+    async fn display_name(&self, account: Option<&str>) -> Result<Option<String>, InspectionError> {
+        let Some(account) = account.filter(|id| !id.is_empty()) else {
+            return Ok(None);
+        };
+        let url = self
+            .http
+            .endpoint(&["rest", "api", "user"], &[("accountId", account)]);
+        match self.http.get_json(url, MAX_JSON_BYTES).await {
+            Ok(person) => Ok(bounded_field(
+                person
+                    .get("displayName")
+                    .or_else(|| person.get("publicName"))
+                    .and_then(Value::as_str),
+            )),
+            Err(failure)
+                if matches!(
+                    failure.status,
+                    Some(reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND)
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(failure) => Err(failure.into()),
+        }
+    }
+    async fn fetch_record(
+        &self,
+        id: &str,
+    ) -> Result<(PageRecord, Vec<String>, bool, Vec<SourceAttachment>, bool), InspectionError> {
+        if self.cloud() {
+            let page_endpoint = ["pages", id];
+            let (
+                mut content,
+                ancestor_rows,
+                (labels, labels_complete),
+                (attachments, attachments_complete),
+            ) = tokio::try_join!(
+                self.json(&page_endpoint, &[("body-format", "storage")]),
+                self.ancestor_rows(id),
+                self.labels(id),
+                self.attachments(id)
+            )?;
+            if id_text(content.get("id")).as_deref() != Some(id) {
+                return Err(identity("Confluence returned a different page"));
+            }
+            let parent = id_text(content.get("parentId"));
+            let last_ancestor = ancestor_rows
+                .last()
+                .map(|row| required_id(row.get("id")))
+                .transpose()?;
+            if parent != last_ancestor {
+                return Err(contract(
+                    "Confluence ancestor chain does not match the page parent",
+                ));
+            }
+            let space_id = required_id(content.get("spaceId"))?;
+            let (space, ancestors, editor) = tokio::try_join!(
+                self.cloud_space(&space_id),
+                self.ancestor_titles(&ancestor_rows),
+                self.display_name(content.pointer("/version/authorId").and_then(Value::as_str))
+            )?;
+            let mut record = self.cloud_record(&content, &space, Some(id))?;
+            record.ancestors = ancestors;
+            record.last_modified_by = editor;
+            record.storage = take_storage(&mut content);
+            Ok((
+                record,
+                labels,
+                labels_complete,
+                attachments,
+                attachments_complete,
+            ))
+        } else {
+            let content_endpoint = ["content", id];
+            let (mut content, (labels, labels_complete), (attachments, attachments_complete)) = tokio::try_join!(
+                self.json(
+                    &content_endpoint,
+                    &[(
+                        "expand",
+                        "ancestors,version,space,history.lastUpdated,body.storage"
+                    )]
+                ),
+                self.labels(id),
+                self.attachments(id)
+            )?;
+            let mut record = self.dc_record(&content, Some(id), true)?;
+            record.storage = take_storage(&mut content);
+            Ok((
+                record,
+                labels,
+                labels_complete,
+                attachments,
+                attachments_complete,
+            ))
+        }
+    }
+    fn space_summary(value: &Value) -> Result<SpaceSummary, InspectionError> {
+        let key = value
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|key| space_key_valid(key))
+            .ok_or_else(|| contract("Confluence space key is missing or malformed"))?;
+        let name = bounded_field(value.get("name").and_then(Value::as_str))
+            .ok_or_else(|| contract("Confluence space name is missing or malformed"))?;
+        Ok(SpaceSummary {
+            key: key.into(),
+            name,
+        })
+    }
+    fn listing_page(value: &Value, key: &str) -> Result<SpacePage, InspectionError> {
+        if value.get("type").and_then(Value::as_str) != Some("page")
+            || value.pointer("/space/key").and_then(Value::as_str) != Some(key)
+        {
+            return Err(contract(
+                "Confluence search returned a page outside the requested space",
+            ));
+        }
+        let ancestors = value
+            .get("ancestors")
+            .and_then(Value::as_array)
+            .ok_or_else(|| contract("Confluence search result has invalid ancestors"))?
+            .iter()
+            .map(|ancestor| required_id(ancestor.get("id")))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(SpacePage {
+            page_id: required_id(value.get("id"))?,
+            title: required_title(value)?,
+            version: value
+                .pointer("/version/number")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| contract("Confluence search result has an invalid version"))?,
+            ancestors,
+            position: value
+                .get("position")
+                .or_else(|| value.pointer("/extensions/position"))
+                .and_then(Value::as_i64),
+        })
+    }
+    async fn cloud_listing_ancestors(
+        &self,
+        rows: &[Value],
+        pages: &mut Vec<SpacePage>,
+        cancel: &AtomicBool,
+    ) -> Result<bool, InspectionError> {
+        let by_id = rows
+            .iter()
+            .map(|row| Ok((required_id(row.get("id"))?, row)))
+            .collect::<Result<BTreeMap<_, _>, InspectionError>>()?;
+        let mut chains: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut parent_chains: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut finished = 0;
+        'pages: for page in pages.iter_mut() {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let mut path = Vec::new();
+            let mut visiting = BTreeSet::new();
+            let mut current = page.page_id.clone();
+            let mut chain;
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    break 'pages;
+                }
+                if let Some(cached) = chains.get(&current) {
+                    chain = cached.clone();
+                    break;
+                }
+                if !visiting.insert(current.clone()) {
+                    return Err(contract("Confluence listed a cyclic page hierarchy"));
+                }
+                let row = by_id
+                    .get(&current)
+                    .ok_or_else(|| contract("Confluence omitted a listed page"))?;
+                let parent = id_text(row.get("parentId"));
+                if parent.is_none() {
+                    chain = Vec::new();
+                    chains.insert(current.clone(), chain.clone());
+                    break;
+                }
+                let parent = parent
+                    .filter(|parent| page_id_valid(parent))
+                    .ok_or_else(|| contract("Confluence returned an invalid parent id"))?;
+                if row.get("parentType").and_then(Value::as_str) == Some("page")
+                    && by_id.contains_key(&parent)
+                {
+                    path.push((current, parent.clone()));
+                    current = parent;
+                } else {
+                    chain = if let Some(cached) = parent_chains.get(&parent) {
+                        cached.clone()
+                    } else {
+                        let (rows, complete) = self
+                            .ancestor_rows_until_cancelled(&current, Some(cancel))
+                            .await?;
+                        if !complete || cancel.load(Ordering::Relaxed) {
+                            break 'pages;
+                        }
+                        let ancestors = rows
+                            .iter()
+                            .map(|row| required_id(row.get("id")))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if ancestors.last() != Some(&parent) {
+                            return Err(contract(
+                                "Confluence ancestor chain does not match the page parent",
+                            ));
+                        }
+                        parent_chains.insert(parent, ancestors.clone());
+                        ancestors
+                    };
+                    chains.insert(current.clone(), chain.clone());
+                    break;
+                }
+            }
+            for (child, parent) in path.into_iter().rev() {
+                chain.push(parent);
+                chains.insert(child, chain.clone());
+            }
+            if chain.iter().any(|id| id == &page.page_id) {
+                return Err(contract("Confluence listed a cyclic page hierarchy"));
+            }
+            page.ancestors = chain;
+            finished += 1;
+        }
+        let complete = finished == pages.len();
+        pages.truncate(finished);
+        Ok(complete)
     }
 }
 
@@ -1443,110 +1189,161 @@ impl SourceProvider for ConfluenceSourceProvider {
     fn provider_id(&self) -> &str {
         &self.provider_id
     }
-
     fn capabilities(&self) -> Vec<SourceCapability> {
         vec![SourceCapability::Wiki]
     }
     async fn list_spaces(&self) -> Result<Vec<SpaceSummary>, InspectionError> {
-        let value = self.json(&ConfluenceCall::Spaces).await?;
-        let spaces = value.get("spaces").and_then(Value::as_array)
-            .or_else(|| value.as_array())
-            .ok_or_else(|| contract("Confluence spaces output lacks a space list"))?;
-        spaces.iter().map(|space| {
-            let key = space.get("key").and_then(Value::as_str)
-                .filter(|key| space_key_valid(key))
-                .ok_or_else(|| contract("Confluence space key is missing or malformed"))?;
-            let name = space.get("name").and_then(Value::as_str)
-                .filter(|name| bounded_field(Some(name)).as_deref() == Some(*name))
-                .ok_or_else(|| contract("Confluence space name is missing or malformed"))?;
-            Ok(SpaceSummary { key: key.to_owned(), name: name.to_owned() })
-        }).collect()
+        let tail = if self.cloud() { "spaces" } else { "space" };
+        let query = [
+            ("limit", if self.cloud() { "250" } else { "200" }),
+            ("status", "current"),
+        ];
+        let mut spaces = BTreeMap::new();
+        let mut next = None;
+        let mut seen = BTreeSet::new();
+        loop {
+            let value = self.paged_json(&[tail], &query, next.as_ref()).await?;
+            let rows = results(&value)?;
+            next = self.continuation(&value, &[tail], &query)?;
+            Self::check_next(&next, &mut seen, rows.len())?;
+            for row in rows {
+                let summary = Self::space_summary(row)?;
+                if spaces.insert(summary.key.clone(), summary).is_some() {
+                    return Err(contract("Confluence repeated a space key"));
+                }
+                if spaces.len() > MAX_SPACES {
+                    return Err(InspectionError::new(
+                        "source_truncated",
+                        "Confluence returned more than 10000 spaces",
+                    ));
+                }
+            }
+            if next.is_none() {
+                return Ok(spaces.into_values().collect());
+            }
+        }
     }
-
     async fn list_space_pages(
         &self,
         space_key: &str,
         max_pages: u32,
         cancel: &AtomicBool,
     ) -> Result<SpacePageListing, InspectionError> {
-        if !space_key_valid(space_key) {
-            return Err(contract("Confluence space key is malformed"));
-        }
-        let space = self.json(&ConfluenceCall::Api(ConfluenceApi::Space {
-            space_key: space_key.to_owned(),
-        })).await?;
-        if space.get("key").and_then(Value::as_str) != Some(space_key) {
-            return Err(InspectionError::new(
-                "source_identity_mismatch",
-                "Confluence returned a different space",
-            ));
-        }
-        let space_name = space.get("name").and_then(Value::as_str)
-            .filter(|name| bounded_field(Some(name)).as_deref() == Some(*name))
-            .ok_or_else(|| contract("Confluence space name is missing or malformed"))?
-            .to_owned();
-        let homepage_id = id_text(space.pointer("/homepage/id"))
-            .filter(|id| page_id_valid(id));
-        let expand = vec![ContentExpand::Version, ContentExpand::Ancestors, ContentExpand::Space];
-        let expand_text = expand_value(&expand)?;
+        let space = self.space_by_key(space_key).await?;
+        let summary = Self::space_summary(&space)?;
+        let homepage_id = id_text(if self.cloud() {
+            space.get("homepageId")
+        } else {
+            space.pointer("/homepage/id")
+        })
+        .filter(|id| page_id_valid(id));
+        let space_id = if self.cloud() {
+            Some(required_id(space.get("id"))?)
+        } else {
+            None
+        };
+        let tail = if let Some(id) = &space_id {
+            vec!["spaces", id.as_str(), "pages"]
+        } else {
+            vec!["content", "search"]
+        };
+        let cql = format!("space=\"{space_key}\" and type=page");
+        let query = if self.cloud() {
+            vec![("depth", "all"), ("limit", "250"), ("status", "current")]
+        } else {
+            vec![
+                ("cql", cql.as_str()),
+                ("limit", "100"),
+                ("expand", "version,ancestors,space"),
+            ]
+        };
+        let mut next = None;
+        let mut seen = BTreeSet::new();
+        let mut ids = BTreeSet::new();
         let mut pages = Vec::new();
+        let mut raw = Vec::new();
         let mut total = None;
-        let mut continuation = None;
         let mut complete = false;
-        while (pages.len() as u64) < u64::from(max_pages) {
-            if cancel.load(Ordering::Relaxed) { break; }
-            let remaining = (u64::from(max_pages) - pages.len() as u64).min(100) as u8;
-            let result = self.json(&ConfluenceCall::Api(ConfluenceApi::Search {
-                space_key: space_key.to_owned(),
-                limit: remaining,
-                expand: expand.clone(),
-                page: continuation.take(),
-            })).await?;
-            let results = result.get("results").and_then(Value::as_array)
-                .ok_or_else(|| contract("Confluence page search output lacks results"))?;
-            if total.is_none() {
-                total = result.get("totalSize").or_else(|| result.get("total"))
+        while pages.len() < max_pages as usize && !cancel.load(Ordering::Relaxed) {
+            let value = self.paged_json(&tail, &query, next.as_ref()).await?;
+            let rows = results(&value)?;
+            if !self.cloud() && total.is_none() {
+                total = value
+                    .get("totalSize")
+                    .or_else(|| value.get("total"))
                     .and_then(Value::as_u64);
             }
-            for result_page in results {
-                if pages.len() as u64 >= u64::from(max_pages) { break; }
-                pages.push(Self::listing_page(result_page, space_key)?);
-            }
-            let next = self.search_continuation(&result, space_key, remaining, &expand_text)?;
-            match next {
-                Some(next) if !results.is_empty() => continuation = Some(next),
-                Some(_) => return Err(contract("Confluence search continuation has an empty page")),
-                None => {
-                    complete = total.is_none_or(|total| pages.len() as u64 >= total);
+            next = self.continuation(&value, &tail, &query)?;
+            Self::check_next(&next, &mut seen, rows.len())?;
+            let mut capped = false;
+            for row in rows {
+                if pages.len() == max_pages as usize {
+                    capped = true;
                     break;
                 }
+                let page = if self.cloud() {
+                    if required_id(row.get("spaceId"))?.as_str()
+                        != space_id.as_deref().unwrap_or_default()
+                    {
+                        return Err(contract("Confluence listed a page from a different space"));
+                    }
+                    SpacePage {
+                        page_id: required_id(row.get("id"))?,
+                        title: required_title(row)?,
+                        version: row
+                            .pointer("/version/number")
+                            .and_then(Value::as_u64)
+                            .ok_or_else(|| contract("Confluence page version is malformed"))?,
+                        ancestors: Vec::new(),
+                        position: row.get("position").and_then(Value::as_i64),
+                    }
+                } else {
+                    Self::listing_page(row, space_key)?
+                };
+                if !ids.insert(page.page_id.clone()) {
+                    return Err(contract("Confluence repeated a page id"));
+                }
+                pages.push(page);
+                if self.cloud() {
+                    raw.push(row.clone());
+                }
+            }
+            if next.is_none() {
+                complete = !capped && total.is_none_or(|total| pages.len() as u64 >= total);
+                break;
             }
         }
-        if cancel.load(Ordering::Relaxed)
-            || (pages.len() as u64) >= u64::from(max_pages) && !complete
+        if self.cloud()
+            && !self
+                .cloud_listing_ancestors(&raw, &mut pages, cancel)
+                .await?
         {
             complete = false;
         }
-        Ok(SpacePageListing { space_name, homepage_id, pages, total, complete })
-    }
-
-    async fn page_space(&self, page_id: &str) -> Result<Option<String>, InspectionError> {
-        if !page_id_valid(page_id) {
-            return Err(contract("Confluence page id must be 1–20 digits"));
+        if cancel.load(Ordering::Relaxed) {
+            complete = false;
         }
+        pages.sort_by(|left, right| left.page_id.cmp(&right.page_id));
+        Ok(SpacePageListing {
+            space_name: summary.name,
+            homepage_id,
+            pages,
+            total,
+            complete,
+        })
+    }
+    async fn page_space(&self, page_id: &str) -> Result<Option<String>, InspectionError> {
         match self.info(page_id).await {
             Ok(info) => Ok(Some(info.space_key)),
             Err(error) if error.code == "source_not_found" => Ok(None),
             Err(error) => Err(error),
         }
     }
-
     async fn metadata(
         &self,
         request: &SourceFetchRequest,
     ) -> Result<SourceMetadata, InspectionError> {
-        let page_id = self.requested_page(request)?;
-        let info = self.info(&page_id).await?;
+        let info = self.info(&self.requested_page(request)?).await?;
         Ok(SourceMetadata {
             title: info.title,
             source_branch: None,
@@ -1555,7 +1352,6 @@ impl SourceProvider for ConfluenceSourceProvider {
             description: None,
         })
     }
-
     async fn resolve_input(&self, input: &str) -> Result<ProviderResolution, InspectionError> {
         let info = match parse_confluence_input(&self.base_url, input)? {
             ConfluenceInput::Space { space_key } => {
@@ -1566,121 +1362,25 @@ impl SourceProvider for ConfluenceSourceProvider {
         };
         Ok(ProviderResolution::ConfluencePage(self.page(info)))
     }
-
     async fn fetch(
         &self,
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError> {
         let page_id = self.requested_page(request)?;
-        // The expanded content response carries identity, version, ancestry,
-        // and the site base, so do not spawn a redundant `info` process.
-        let content = self
-            .json(&ConfluenceCall::Api(ConfluenceApi::Content {
-                page_id: page_id.clone(),
-                expand: vec![
-                    ContentExpand::Ancestors,
-                    ContentExpand::Version,
-                    ContentExpand::Space,
-                    ContentExpand::HistoryLastUpdated,
-                ],
-            }))
-            .await?;
-        if id_text(content.get("id")).as_deref() != Some(page_id.as_str()) {
-            return Err(InspectionError::new(
-                "source_identity_mismatch",
-                "Confluence returned a different page",
-            ));
-        }
-        if content
-            .get("type")
-            .and_then(Value::as_str)
-            .is_some_and(|kind| kind != "page")
-        {
-            return Err(InspectionError::new(
-                "source_capability_unavailable",
-                "only Confluence pages can be added",
-            ));
-        }
-        let title = content.get("title")
-            .and_then(Value::as_str)
-            .filter(|title| title_valid(title))
-            .ok_or_else(|| contract("Confluence page title is missing or malformed"))?;
-        let space_key = content.pointer("/space/key")
-            .and_then(Value::as_str)
-            .filter(|key| space_key_valid(key))
-            .ok_or_else(|| contract("Confluence page has no valid space key"))?;
-        let version = content.get("version").and_then(|version| {
-            version.as_u64().or_else(|| version.get("number").and_then(Value::as_u64))
-        });
-        let base = content.pointer("/_links/base")
-            .and_then(Value::as_str)
-            .and_then(|base| Url::parse(base).ok())
-            .filter(|base| {
-                base.query().is_none()
-                    && base.fragment().is_none()
-                    && within_instance(&self.base_url, base)
-            })
-            .ok_or_else(|| InspectionError::new(
-                "source_identity_mismatch",
-                "Confluence CLI is connected to a different site than the configured provider",
-            ))?;
-        let webui = content.pointer("/_links/webui")
-            .and_then(Value::as_str)
-            .filter(|path| !path.is_empty())
-            .ok_or_else(|| contract("Confluence page has no web URL"))?;
-        let mut directory = base.clone();
-        directory.set_path(&format!("{}/", base.path().trim_end_matches('/')));
-        directory.set_query(None);
-        directory.set_fragment(None);
-        let url = directory.join(webui.trim_start_matches('/'))
-            .ok()
-            .filter(|url| {
-                url.query().is_none()
-                    && url.fragment().is_none()
-                    && self.url_in_instance(url.as_str())
-            })
-            .ok_or_else(|| InspectionError::new(
-                "source_identity_mismatch",
-                "Confluence CLI is connected to a different site than the configured provider",
-            ))?;
-        let info = PageInfo {
-            page_id: page_id.clone(),
-            title: title.to_owned(),
-            space_key: space_key.to_owned(),
-            version,
-            url: url.to_string(),
-        };
-        let body_future = async {
-            let bytes = self
-                .run(
-                    &ConfluenceCall::Read {
-                        page_id: page_id.clone(),
-                    },
-                    MAX_BODY_BYTES + 1,
-                )
-                .await?;
-            String::from_utf8(bytes)
-                .map_err(|_| contract("Confluence page Markdown is not UTF-8"))
-        };
-        let attachment_call = ConfluenceCall::Attachments {
-            page_id: page_id.clone(),
-        };
-        let attachment_future = self.json(&attachment_call);
-        let ((labels, labels_complete), mut body, attachment_list) = tokio::try_join!(
-            self.labels(&page_id),
-            body_future,
-            attachment_future
+        let (info, labels, labels_complete, attachments, attachments_complete) =
+            self.fetch_record(&page_id).await?;
+        let storage = info
+            .storage
+            .as_deref()
+            .ok_or_else(|| contract("Confluence page has no storage body"))?;
+        let body = storage_to_markdown(
+            storage,
+            &StorageContext {
+                instance: &self.instance,
+                space_key: &info.space_key,
+                attachments: &attachments,
+            },
         )?;
-        if body.ends_with('\n') {
-            body.pop();
-        }
-        if body.len() > MAX_BODY_BYTES {
-            return Err(InspectionError::new(
-                "source_truncated",
-                "Confluence page exceeds Cockpit's source body limit",
-            ));
-        }
-        let (attachments, attachments_complete) = self.attachments(&attachment_list)?;
         let mut diagnostics = Vec::new();
         if !labels_complete {
             diagnostics.push(ProjectDiagnostic {
@@ -1696,7 +1396,7 @@ impl SourceProvider for ConfluenceSourceProvider {
                 path: None,
             });
         }
-        let (fields, container) = self.fields_and_container(&info, &content, &labels);
+        let (fields, container) = self.fields_and_container(&info, &labels);
         Ok(vec![SourceAsset {
             source: SourceRef {
                 provider_id: self.provider_id.clone(),
@@ -1704,8 +1404,8 @@ impl SourceProvider for ConfluenceSourceProvider {
                 resource_type: "page".into(),
                 canonical_id: page_id,
             },
-            title: info.title.clone(),
-            source_url: Some(info.url.clone()),
+            title: info.title,
+            source_url: Some(info.url),
             original_url: None,
             source_revision: info.version.map(|version| version.to_string()),
             complete: true,
@@ -1716,29 +1416,74 @@ impl SourceProvider for ConfluenceSourceProvider {
             attachments,
         }])
     }
-
     async fn attachment_downloads(&self, resource_type: &str) -> Result<(), InspectionError> {
-        if resource_type == "page" {
-            Ok(())
-        } else {
-            Err(InspectionError::new(
+        if resource_type != "page" {
+            return Err(InspectionError::new(
                 "source_capability_unavailable",
                 "selected source provider does not support this operation",
-            ))
+            ));
         }
+        self.http.require_credentials().await
     }
-
     async fn download_attachment(
         &self,
         page_id: &str,
         attachment: &AttachmentRef,
-        siblings: &[AttachmentRef],
+        _siblings: &[AttachmentRef],
         dest: &Dir,
-        dest_path: &Path,
+        _dest_path: &Path,
         budget: StagingBudget,
     ) -> Result<DownloadedAttachment, InspectionError> {
-        self.download_attachment_file(page_id, attachment, siblings, dest, dest_path, budget)
+        if !page_id_valid(page_id)
+            || !attachment_id_valid(&attachment.id)
+            || !title_valid(&attachment.title)
+        {
+            return Err(contract("Confluence attachment identity is malformed"));
+        }
+        let value = if self.cloud() {
+            self.json(&["attachments", &attachment.id], &[]).await?
+        } else {
+            self.json(
+                &["content", &attachment.id],
+                &[("expand", "container,version")],
+            )
+            .await?
+        };
+        let owner = if self.cloud() {
+            value.get("pageId")
+        } else {
+            value.pointer("/container/id")
+        };
+        if id_text(value.get("id")).as_deref() != Some(attachment.id.as_str())
+            || id_text(owner).as_deref() != Some(page_id)
+            || value.get("title").and_then(Value::as_str) != Some(&attachment.title)
+            || !self.cloud() && value.get("type").and_then(Value::as_str) != Some("attachment")
+        {
+            return Err(identity("Confluence returned a different attachment"));
+        }
+        let current = self.attachment(&value)?;
+        let source = current
+            .source_url
+            .ok_or_else(|| contract("Confluence attachment has no download URL"))?;
+        if attachment
+            .bytes
+            .zip(current.size)
+            .is_some_and(|(old, new)| old != new)
+        {
+            return Err(InspectionError::new(
+                "source_attachment_size",
+                "Confluence attachment size changed",
+            ));
+        }
+        let url = self.http.link(&source).map_err(InspectionError::from)?;
+        self.http
+            .download(url, budget.bytes, current.size.or(attachment.bytes), dest)
             .await
+            .map_err(InspectionError::from)?;
+        Ok(DownloadedAttachment {
+            attachment_id: attachment.id.clone(),
+            file_name: DOWNLOADED_NAME.into(),
+        })
     }
 }
 

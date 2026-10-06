@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
+use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, ProviderKind};
 use cockpit_protocol::sources::SourceCapability;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -135,8 +135,8 @@ pub struct FetchedAssets {
     pub diagnostics: Vec<ProjectDiagnostic>,
 }
 
-/// A Confluence page identity proved by the selected provider: `Info` answered
-/// for this id from the configured instance.
+/// A Confluence page identity proved by the selected provider's response for
+/// this id from the configured instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfluencePage {
     /// Decimal page id, 1–20 digits.
@@ -144,7 +144,7 @@ pub struct ConfluencePage {
     pub space_key: String,
     pub title: String,
     pub version: Option<u64>,
-    /// The page URL reported by the CLI, validated against the configured
+    /// The page URL reported by the provider, validated against the configured
     /// instance's scheme, host, port and path prefix.
     pub source_url: String,
     /// [`confluence_page_url`] for the provider instance; the fetch URL for
@@ -237,65 +237,6 @@ pub fn confluence_page_url(provider_instance: &str, page_id: &str) -> String {
         "{}/pages/viewpage.action?pageId={page_id}",
         provider_instance.trim_end_matches('/')
     )
-}
-
-/// D21 `--pattern`: the attachment title with every `*`, `?` and leading or
-/// trailing whitespace character replaced by `?`, so the CLI glob never widens
-/// beyond single-character wildcards.
-pub fn confluence_attachment_pattern(title: &str) -> String {
-    let whitespace = |c: &char| matches!(*c, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}');
-    let leading = title.chars().take_while(whitespace).count();
-    let trailing = title.chars().rev().take_while(whitespace).count();
-    let count = title.chars().count();
-    title
-        .chars()
-        .enumerate()
-        .map(|(index, c)| {
-            if matches!(c, '*' | '?') || index < leading || index >= count.saturating_sub(trailing) {
-                '?'
-            } else {
-                c
-            }
-        })
-        .collect()
-}
-
-/// The CLI's `globToRegExp` match: anchored, case-insensitive (JavaScript
-/// non-Unicode `i` canonicalization), over UTF-16 code units; `?` is one unit
-/// and `*` any run.
-pub fn confluence_glob_matches(pattern: &str, title: &str) -> bool {
-    fn fold(unit: u16) -> u16 {
-        let Some(c) = char::from_u32(unit as u32) else {
-            return unit;
-        };
-        let mut upper = c.to_uppercase();
-        match (upper.next(), upper.next()) {
-            (Some(u), None) if u.len_utf16() == 1 && !(unit >= 128 && (u as u32) < 128) => u as u16,
-            _ => unit,
-        }
-    }
-    let pattern: Vec<u16> = pattern.encode_utf16().collect();
-    let title: Vec<u16> = title.encode_utf16().map(fold).collect();
-    let (mut p, mut t) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-    while t < title.len() {
-        if p < pattern.len() && pattern[p] == u16::from(b'*') {
-            star = Some((p, t));
-            p += 1;
-        } else if p < pattern.len()
-            && (pattern[p] == u16::from(b'?') || fold(pattern[p]) == title[t])
-        {
-            p += 1;
-            t += 1;
-        } else if let Some((star_p, star_t)) = star {
-            p = star_p + 1;
-            t = star_t + 1;
-            star = Some((star_p, star_t + 1));
-        } else {
-            return false;
-        }
-    }
-    pattern[p..].iter().all(|unit| *unit == u16::from(b'*'))
 }
 
 fn capability_unavailable<T>() -> Result<T, InspectionError> {
@@ -991,7 +932,7 @@ impl SourceService {
     /// D21: one attachment through the selected provider into `dest`, a fresh
     /// private directory at `dest_path`. The result must name the requested
     /// attachment and one path component; the caller verifies the file.
-    /// `budget` covers all predicted matches, including discarded siblings.
+    /// `budget` covers the requested attachment's bytes and one output file.
     /// `canonical_id` is a Confluence page id for `"page"` and a Jira key for
     /// `"issue"`; any other resource type is refused.
     pub async fn download_attachment(
@@ -1227,7 +1168,7 @@ pub(crate) fn confluence_instance_authority(
                 "selected Confluence provider is not configured",
             )
         })?;
-    if !crate::repositories::is_confluence_executable(&provider.executable)
+    if provider.kind != ProviderKind::Confluence
         || !confluence_url_belongs_to_instance(&provider.base_url, &page.source_url)
         || !confluence_page_id(&page.page_id)
         || !confluence_space_key(&page.space_key)
@@ -1309,7 +1250,7 @@ fn validate_asset(asset: &SourceAsset) -> Result<(), InspectionError> {
     }
     Ok(())
 }
-/// `YYYY-MM-DD HH:MM:SS`, the jira-cli plain listing format.
+/// `YYYY-MM-DD HH:MM:SS`, the persisted Jira wall-time format retained from legacy listings.
 fn issue_updated(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 19
@@ -1770,9 +1711,11 @@ mod tests {
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
             id: "tea".into(),
+            kind: ProviderKind::Gitea,
             base_url: "https://forge.test/gitea".into(),
-            executable: "tea".into(),
+            executable: Some("tea".into()),
             login: None,
+            deployment: None,
         }],
         limits: ProjectLimits {
             catalog_depth: 1,

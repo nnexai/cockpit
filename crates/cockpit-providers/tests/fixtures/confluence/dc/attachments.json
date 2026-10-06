@@ -1,14 +1,17 @@
 {
-  "attachmentCount": 1,
-  "attachments": [
+  "results": [
     {
-      "id": "att524310",
+      "id": "524310",
+      "type": "attachment",
       "title": "release-flow.png",
-      "mediaType": "image/png",
-      "fileSize": 2048,
-      "fileSizeFormatted": "2 KB",
-      "version": 1,
-      "downloadLink": "https://confluence.example.com/download/attachments/524301/release-flow.png?version=1&modificationDate=1790000000000&api=v2"
+      "container": { "id": "524301" },
+      "metadata": { "mediaType": "image/png" },
+      "extensions": { "fileSize": 2048 },
+      "version": { "number": 1 },
+      "_links": { "download": "/confluence/download/attachments/524301/release-flow.png?version=1" }
     }
-  ]
+  ],
+  "start": 0,
+  "limit": 200,
+  "size": 1
 }

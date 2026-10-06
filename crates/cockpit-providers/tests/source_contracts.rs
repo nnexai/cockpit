@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cockpit_core::sources::{SourceFetchRequest, SourceProvider, instance_authority};
-use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
-use cockpit_providers::{
-    github::GithubSourceProvider, gitlab::GitlabSourceProvider, jira::JiraSourceProvider,
+use cockpit_protocol::projects::{
+    ProjectConfiguration, ProjectLimits, ProjectProvider, ProviderKind,
 };
+use cockpit_providers::{github::GithubSourceProvider, gitlab::GitlabSourceProvider};
 use serde_json::{Value, json};
 
 static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
@@ -20,7 +20,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(executable: &str, base: &str) -> Self {
+    fn new(kind: ProviderKind, executable: &str, base: &str) -> Self {
         let root = std::env::temp_dir().join(format!(
             "cockpit-provider-contract-{}-{}",
             std::process::id(),
@@ -67,9 +67,6 @@ elif name == 'glab':
         print(json.dumps(data['gitlab_issue']))
     else:
         print(json.dumps(data['gitlab_project']))
-else:
-    assert name == 'jira' and args == ['issue', 'view', 'OPS-7', '--raw']
-    print(json.dumps(data['jira']))
 "#,
         )
         .unwrap();
@@ -85,9 +82,11 @@ else:
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
             id: "fixture".into(),
+            kind,
             base_url: base.into(),
-            executable: command.to_string_lossy().into_owned(),
+            executable: Some(command.to_string_lossy().into_owned()),
             login: None,
+            deployment: None,
         }],
         limits: ProjectLimits {
             catalog_depth: 1,
@@ -140,7 +139,7 @@ impl Drop for Fixture {
 #[tokio::test]
 async fn github_prs_preserve_head_and_paginate_both_comment_kinds_without_inventing_fork_branches()
 {
-    let mut fixture = Fixture::new("gh", "https://github.com");
+    let mut fixture = Fixture::new(ProviderKind::Github, "gh", "https://github.com");
     let provider = GithubSourceProvider::configured(&fixture.config, "fixture").unwrap();
     let request = fixture.request("https://github.com/other/repo/pull/7");
     assert_eq!(request.authority.owner, "other");
@@ -197,7 +196,7 @@ async fn github_prs_preserve_head_and_paginate_both_comment_kinds_without_invent
 
 #[tokio::test]
 async fn github_issue_canonical_url_is_verified_too() {
-    let mut fixture = Fixture::new("gh", "https://github.com");
+    let mut fixture = Fixture::new(ProviderKind::Github, "gh", "https://github.com");
     fixture.data["artifact"] = json!({"number":7,"title":"Issue","body":"Issue body","url":"https://github.com/other/repo/issues/7","updatedAt":"2026-09-26T12:00:00Z"});
     fixture.save();
     let provider = GithubSourceProvider::configured(&fixture.config, "fixture").unwrap();
@@ -218,7 +217,7 @@ async fn github_issue_canonical_url_is_verified_too() {
 
 #[tokio::test]
 async fn self_hosted_gitlab_issue_and_review_keep_port_base_path_and_cross_repository_identity() {
-    let mut fixture = Fixture::new("glab", "https://gitlab.test:9443/subfolder");
+    let mut fixture = Fixture::new(ProviderKind::Gitlab, "glab", "https://gitlab.test:9443/subfolder");
     let provider = GitlabSourceProvider::configured(&fixture.config, "fixture").unwrap();
     for (path, kind, separator, record) in [
         ("issues", "issue", '#', "gitlab_issue"),
@@ -260,80 +259,10 @@ async fn self_hosted_gitlab_issue_and_review_keep_port_base_path_and_cross_repos
     }
 }
 
-#[tokio::test]
-async fn on_prem_jira_keeps_wiki_markup_and_rejects_wrong_api_authority() {
-    let mut fixture = Fixture::new("jira", "https://jira.internal.test/jira");
-    let provider = JiraSourceProvider::configured(&fixture.config, "fixture").unwrap();
-    let request = fixture.request("https://jira.internal.test/jira/browse/OPS-7");
-    assert!(request.authority.owner.is_empty());
-    assert!(request.authority.repository.is_empty());
-    let assets = provider.fetch(&request).await.unwrap();
-    let asset = &assets[0];
-    assert_eq!(
-        asset.source.provider_instance,
-        "https://jira.internal.test/jira"
-    );
-    assert_eq!(asset.container.as_ref().unwrap().id, "OPS");
-    assert_eq!(
-        asset.source_url.as_deref(),
-        Some(request.artifact_url.as_str())
-    );
-    assert!(
-        asset
-            .body
-            .contains("\n## Description\n\n#### Legacy heading\n\n```\nunchanged\n```\n")
-    );
-    assert!(asset.body.contains("\n> Legacy comment\n"));
-    assert!(asset.diagnostics.is_empty());
-    fixture.data["jira"]["fields"]["description"] = json!({"type":"doc","content":[]});
-    fixture.save();
-    let adf = provider.fetch(&request).await.unwrap();
-    assert!(adf[0].diagnostics.is_empty());
-    assert!(adf[0].body.contains("\n> Legacy comment\n"));
-    for url in [
-        "https://jira.internal.test/elsewhere/rest/api/2/issue/10007",
-        "https://other.test/jira/rest/api/2/issue/10007",
-        "http://jira.internal.test/jira/rest/api/2/issue/10007",
-        "https://jira.internal.test:9443/jira/rest/api/2/issue/10007",
-        "https://jira.internal.test/jira/rest/api/2/issue/99999",
-    ] {
-        fixture.data["jira"]["self"] = json!(url);
-        fixture.save();
-        assert_eq!(
-            provider.fetch(&request).await.unwrap_err().code,
-            "source_identity_mismatch"
-        );
-    }
-}
-
-#[tokio::test]
-async fn jira_lists_attachment_metadata_without_downloading() {
-    let mut fixture = Fixture::new("jira", "https://jira.internal.test/jira");
-    fixture.data["jira"]["fields"]["attachment"] = json!([
-        {"id": "10100", "filename": "trace.log", "size": 2048, "mimeType": "text/plain",
-         "content": "https://jira.internal.test/jira/secure/attachment/10100/trace.log"},
-        {"id": "10101", "filename": "bad\nname"}
-    ]);
-    fixture.save();
-    let provider = JiraSourceProvider::configured(&fixture.config, "fixture").unwrap();
-    let request = fixture.request("https://jira.internal.test/jira/browse/OPS-7");
-    let assets = provider.fetch(&request).await.unwrap();
-    let asset = &assets[0];
-    assert_eq!(asset.attachments.len(), 1);
-    let attachment = &asset.attachments[0];
-    assert_eq!(
-        (attachment.id.as_str(), attachment.title.as_str(), attachment.size),
-        ("10100", "trace.log", Some(2048))
-    );
-    assert_eq!(attachment.media_type.as_deref(), Some("text/plain"));
-    assert!(attachment.path.is_none());
-    assert_eq!(attachment.not_downloaded.as_deref(), Some("not_requested"));
-    assert!(asset.diagnostics.iter().any(|d| d.code == "source_attachments_partial"));
-}
 
 #[test]
 fn instance_authority_uses_artifact_repository_for_nested_wiki_pages() {
-    let fixture = Fixture::new("tea", "https://forge.test:9443/gitea");
+    let fixture = Fixture::new(ProviderKind::Gitea, "tea", "https://forge.test:9443/gitea");
     let url = "https://forge.test:9443/gitea/other/repo/wiki/design:proposal/details";
     let authority = instance_authority(&fixture.config, "fixture", url).unwrap();
     assert_eq!(authority.owner, "other");

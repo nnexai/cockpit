@@ -8,7 +8,9 @@ use cockpit_core::{
 };
 use cockpit_host::server::{build_router, validate_bind, validate_static_root};
 use cockpit_protocol::{
-    projects::{ProjectConfiguration, ProjectLimits, ProjectProvider},
+    projects::{
+        ProjectConfiguration, ProjectLimits, ProjectProvider, ProviderDeployment, ProviderKind,
+    },
     v1::{
         AgentSummary, CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
         PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
@@ -1024,9 +1026,11 @@ fn credential_service(root: &std::path::Path) -> (CockpitService, Arc<MemoryVaul
     let mut config = project_configuration(root);
     config.providers = vec![ProjectProvider {
         id: "jira".to_owned(),
+        kind: ProviderKind::Jira,
         base_url: "https://example.atlassian.net".to_owned(),
-        executable: "jira".to_owned(),
+        executable: None,
         login: None,
+        deployment: Some(ProviderDeployment::Cloud),
     }];
     let vault = Arc::new(MemoryVault::new());
     let credentials = ProviderCredentials::new(

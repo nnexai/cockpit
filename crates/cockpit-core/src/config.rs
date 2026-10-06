@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use cockpit_protocol::projects::{OrchestrationConfiguration, ProjectConfiguration, ProjectLimits, ProjectProvider};
+use cockpit_protocol::projects::{OrchestrationConfiguration, ProjectConfiguration, ProjectLimits, ProjectProvider, ProviderKind, ProviderDeployment};
 use serde::Deserialize;
 
 use crate::InspectionError;
@@ -417,15 +417,23 @@ pub fn load_project_configuration(
     }
 
     let providers_from_file = file.providers.is_some();
-    let providers = file.providers.unwrap_or_default();
+    let mut providers = file.providers.unwrap_or_default();
     if providers.len() > 128 {
         return Err(InspectionError::new(
             "invalid_providers",
             "providers cannot contain more than 128 entries",
         ));
     }
-    for provider in &providers {
+    for provider in &mut providers {
+        let explicit_deployment = provider.deployment.is_some();
         validate_provider(provider)?;
+        if matches!(provider.kind, ProviderKind::Jira | ProviderKind::Confluence) {
+            provider.deployment = Some(resolved_deployment(provider)?);
+            origins.insert(
+                format!("providers.{}.deployment", provider.id),
+                if explicit_deployment { "toml" } else { "default" }.into(),
+            );
+        }
     }
     let provider_origin = if providers_from_file {
         "toml"
@@ -439,18 +447,19 @@ pub fn load_project_configuration(
             provider_origin.into(),
         );
         origins.insert(
-            format!("providers.{}.executable", provider.id),
+            format!("providers.{}.kind", provider.id),
             provider_origin.into(),
         );
-        origins.insert(
-            format!("providers.{}.login", provider.id),
-            if provider.login.is_some() {
-                "toml"
-            } else {
-                "default"
-            }
-            .into(),
-        );
+        if !matches!(provider.kind, ProviderKind::Jira | ProviderKind::Confluence) {
+            origins.insert(
+                format!("providers.{}.executable", provider.id),
+                provider_origin.into(),
+            );
+            origins.insert(
+                format!("providers.{}.login", provider.id),
+                if provider.login.is_some() { "toml" } else { "default" }.into(),
+            );
+        }
     }
 
     let orchestration_from_file = file.orchestration.is_some();
@@ -876,7 +885,32 @@ fn validate_template(
 fn validate_provider(provider: &ProjectProvider) -> Result<(), InspectionError> {
     validate_text(&provider.id, "provider_id")?;
     validate_text(&provider.base_url, "provider_base_url")?;
-    validate_text(&provider.executable, "provider_executable")?;
+    if matches!(provider.kind, ProviderKind::Jira | ProviderKind::Confluence) {
+        if provider.executable.is_some() {
+            return Err(InspectionError::new(
+                "invalid_provider_executable",
+                "Jira and Confluence use Cockpit's HTTP client; remove executable",
+            ));
+        }
+        if provider.login.is_some() {
+            return Err(InspectionError::new(
+                "invalid_provider_login",
+                "Jira and Confluence use tokens stored in Cockpit; remove login",
+            ));
+        }
+    } else {
+        let executable = provider.executable.as_deref().ok_or_else(|| InspectionError::new(
+            "invalid_provider_executable",
+            "GitHub, GitLab and Gitea providers require executable",
+        ))?;
+        validate_text(executable, "provider_executable")?;
+        if provider.deployment.is_some() {
+            return Err(InspectionError::new(
+                "invalid_provider_deployment",
+                "deployment is only supported for Jira and Confluence",
+            ));
+        }
+    }
     let parsed = url::Url::parse(&provider.base_url).map_err(|_| {
         InspectionError::new(
             "invalid_provider_base_url",
@@ -895,6 +929,15 @@ fn validate_provider(provider: &ProjectProvider) -> Result<(), InspectionError> 
             "provider base_url must be credential-free HTTP(S)",
         ));
     }
+    if provider.kind == ProviderKind::Confluence
+        && resolved_deployment(provider)? == ProviderDeployment::Cloud
+        && parsed.path() != "/wiki"
+    {
+        return Err(InspectionError::new(
+            "invalid_provider_base_url",
+            "Confluence Cloud base_url must have exactly the /wiki path",
+        ));
+    }
     if let Some(login) = &provider.login {
         if login.is_empty() || login.len() > 256 || login.chars().any(char::is_control) {
             return Err(InspectionError::new(
@@ -904,6 +947,22 @@ fn validate_provider(provider: &ProjectProvider) -> Result<(), InspectionError> 
         }
     }
     Ok(())
+}
+
+fn resolved_deployment(provider: &ProjectProvider) -> Result<ProviderDeployment, InspectionError> {
+    if let Some(deployment) = provider.deployment {
+        return Ok(deployment);
+    }
+    let url = url::Url::parse(&provider.base_url).map_err(|_| InspectionError::new(
+        "invalid_provider_base_url",
+        "provider base_url must be an absolute URL",
+    ))?;
+    // URL parsing canonicalizes DNS hosts to ASCII lowercase.
+    Ok(if url.host_str().is_some_and(|host| host.ends_with(".atlassian.net")) {
+        ProviderDeployment::Cloud
+    } else {
+        ProviderDeployment::DataCenter
+    })
 }
 
 fn origin(from_file: bool, file_origin: &str, _secret: bool) -> String {
@@ -1321,17 +1380,17 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!("cockpit-provider-{nonce}.toml"));
-        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\n").expect("legacy provider");
-        let legacy = load_project_configuration(Some(&path), None).expect("optional login");
-        assert_eq!(legacy.providers[0].login, None);
+        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nkind = 'gitea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\n").expect("provider without login");
+        let configured = load_project_configuration(Some(&path), None).expect("optional login");
+        assert_eq!(configured.providers[0].login, None);
         assert_eq!(
-            legacy
+            configured
                 .origins
                 .get("providers.tea.login")
                 .map(String::as_str),
             Some("default")
         );
-        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\nlogin = 'fixture'\n").expect("configured provider");
+        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nkind = 'gitea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\nlogin = 'fixture'\n").expect("configured provider");
         let configured = load_project_configuration(Some(&path), None).expect("login");
         assert_eq!(configured.providers[0].login.as_deref(), Some("fixture"));
         assert_eq!(
@@ -1341,7 +1400,7 @@ mod tests {
                 .map(String::as_str),
             Some("toml")
         );
-        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\nlogin = ''\n").expect("bad provider");
+        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nkind = 'gitea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\nlogin = ''\n").expect("bad provider");
         assert_eq!(
             load_project_configuration(Some(&path), None)
                 .expect_err("empty login")
@@ -1349,6 +1408,57 @@ mod tests {
             "invalid_provider_login"
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn provider_kind_and_transport_configuration_are_explicit() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-provider-transport-{nonce}.toml"));
+        let cases = [
+            ("", "https://jira.example", "executable = 'jira'\n", "invalid_config"),
+            ("jira", "https://jira.example", "executable = 'jira'\n", "invalid_provider_executable"),
+            ("confluence", "https://wiki.example", "login = 'default'\n", "invalid_provider_login"),
+            ("gitlab", "https://gitlab.example", "", "invalid_provider_executable"),
+            ("gitea", "https://forge.example", "executable = 'tea'\ndeployment = 'cloud'\n", "invalid_provider_deployment"),
+            ("confluence", "https://team.atlassian.net", "", "invalid_provider_base_url"),
+            ("confluence", "https://team.atlassian.net/wiki/", "", "invalid_provider_base_url"),
+            ("confluence", "https://wiki.example/confluence", "deployment = 'cloud'\n", "invalid_provider_base_url"),
+        ];
+        for (kind, base, extra, code) in cases {
+            let kind = if kind.is_empty() { String::new() } else { format!("kind = '{kind}'\n") };
+            fs::write(&path, format!("version = 1\n[[providers]]\nid = 'test'\n{kind}base_url = '{base}'\n{extra}")).expect("write provider");
+            let error = load_project_configuration(Some(&path), None).expect_err("invalid provider");
+            assert_eq!(error.code, code);
+            if kind.is_empty() {
+                assert!(error.message.contains("kind"), "missing kind error must name the field");
+            }
+        }
+        fs::remove_file(path).expect("remove provider config");
+    }
+
+    #[test]
+    fn atlassian_deployment_resolution_and_origins_are_independent_of_credentials() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-provider-deployment-{nonce}.toml"));
+        let cases = [
+            ("jira", "https://TEAM.ATLASSIAN.NET", "", super::ProviderDeployment::Cloud, "default"),
+            ("jira", "https://jira.example/jira", "", super::ProviderDeployment::DataCenter, "default"),
+            ("jira", "https://team.atlassian.net", "deployment = 'data_center'\n", super::ProviderDeployment::DataCenter, "toml"),
+            ("jira", "https://jira.example/jira", "deployment = 'cloud'\n", super::ProviderDeployment::Cloud, "toml"),
+            ("confluence", "https://team.atlassian.net/wiki", "", super::ProviderDeployment::Cloud, "default"),
+            ("confluence", "https://wiki.example/confluence", "", super::ProviderDeployment::DataCenter, "default"),
+        ];
+        for (kind, base, extra, deployment, origin) in cases {
+            fs::write(&path, format!("version = 1\n[[providers]]\nid = 'custom'\nkind = '{kind}'\nbase_url = '{base}'\n{extra}")).expect("write provider");
+            let configuration = load_project_configuration(Some(&path), None).expect("valid provider");
+            assert_eq!(configuration.providers[0].deployment, Some(deployment));
+            assert_eq!(configuration.providers[0].executable, None);
+            assert_eq!(configuration.origins.get("providers.custom.kind").map(String::as_str), Some("toml"));
+            assert_eq!(configuration.origins.get("providers.custom.deployment").map(String::as_str), Some(origin));
+            assert!(!configuration.origins.contains_key("providers.custom.executable"));
+            assert!(!configuration.origins.contains_key("providers.custom.login"));
+        }
+        fs::remove_file(path).expect("remove provider config");
     }
 
     #[test]

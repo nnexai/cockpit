@@ -6,7 +6,7 @@ import { EMAIL_COLON_MESSAGE } from "../../client/credentialProtocol";
 import { UiIcon } from "../UiIcon";
 import { LibraryConfirmDialog, trapDialogKeys, useRestoreFocus } from "./LibraryConfirmDialog";
 import { StatePill } from "./StatePill";
-import { confluenceSite, errorText, executableName, instanceHost, isAtlassianCloud, providerFamily, type StateShape, type StateTone } from "./libraryState";
+import { confluenceSite, errorText, instanceHost, providerFamily, type StateShape, type StateTone } from "./libraryState";
 import "../projects/setup.css";
 import "../projects/taskSetup.css";
 import "./library.css";
@@ -16,12 +16,12 @@ const KIND_LABEL: Record<ProviderAuthKind, string> = {
   basic: "Email and API token (Basic)",
 };
 
-/** The state pill of one provider row (design D12). `cli` is the provider CLI whose own login applies without a token. */
-export function credentialPill(status: ProviderCredentialStatus | undefined, cli: string): { shape: StateShape; tone: StateTone; word: string } {
+/** The state pill of one provider row (design D12). */
+export function credentialPill(status: ProviderCredentialStatus | undefined): { shape: StateShape; tone: StateTone; word: string } {
   switch (status?.state) {
     case "stored": return { shape: "check", tone: "idle", word: status.kind === "basic" ? "Token stored · email + token" : "Token stored · PAT" };
-    case "not_stored": return { shape: "dot-ring", tone: "muted", word: `Using the ${cli} login` };
-    case "vault_unavailable": return { shape: "close", tone: "blocked", word: `Keyring unavailable – using the ${cli} login` };
+    case "not_stored": return { shape: "dot-ring", tone: "muted", word: "No token stored" };
+    case "vault_unavailable": return { shape: "close", tone: "blocked", word: "Keyring unavailable" };
     case "unsupported": return { shape: "slash-ring", tone: "muted", word: "Not supported" };
     default: return { shape: "slash-ring", tone: "muted", word: "Status unknown" };
   }
@@ -40,10 +40,10 @@ function providerLabel(provider: ProjectProvider, providers: readonly ProjectPro
   return `${family.name} · ${family.key === "confluence" ? confluenceSite(provider.base_url) : instanceHost(provider.base_url)}`;
 }
 
-/** The kind a form opens with: the stored one when replacing; else Basic (email and API token) for an Atlassian Cloud site and Bearer (Data Center PAT) elsewhere. Both stay selectable. */
+/** The stored kind when replacing; else Basic for Cloud deployment and Bearer for Data Center. Both stay selectable. */
 function defaultKind(provider: ProjectProvider | undefined, status: ProviderCredentialStatus): ProviderAuthKind {
   if (status.kind && status.supported_kinds.includes(status.kind)) return status.kind;
-  if (provider && isAtlassianCloud(provider.base_url) && status.supported_kinds.includes("basic")) return "basic";
+  if (provider?.deployment === "cloud" && status.supported_kinds.includes("basic")) return "basic";
   return status.supported_kinds.includes("bearer") ? "bearer" : status.supported_kinds[0]!;
 }
 
@@ -149,7 +149,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
     accept(status);
     setRemoving(null);
     if (editing?.providerId === provider.id) cancel();
-    setNotice(`Removed the token for ${load.status === "ready" ? providerLabel(provider, load.providers) : provider.id}. Cockpit uses the ${executableName(provider.executable)} login again.`);
+    setNotice(`Removed the token for ${load.status === "ready" ? providerLabel(provider, load.providers) : provider.id}. Cockpit can't read ${load.status === "ready" ? providerFamily(load.providers, provider.id).name : provider.kind} from this site until a token is stored again.`);
   };
   const canSave = hasToken && !saving && editing !== null && (editing.kind === "bearer" || editing.username.trim().length > 0);
   // On the body: a Context viewer is a size container and would clip a fixed overlay to its pane.
@@ -157,7 +157,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
     <section ref={dialogRef} className="setup-dialog task-setup library-credentials" role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={(event) => trapDialogKeys(event, onClose)}>
       <header className="task-setup-header"><h2 id={titleId}>Provider tokens</h2><button type="button" className="task-setup-close" onClick={onClose} aria-label="Close provider tokens"><UiIcon name="close" /></button></header>
       <div className="task-setup-body">
-        <p className="task-setup-note library-credentials-intro">A stored token is kept in this computer's keyring and can't be read back, only replaced or removed. Without one, Cockpit uses each provider CLI's own login.</p>
+        <p className="task-setup-note library-credentials-intro">A stored token is kept in this computer's keyring and can't be read back, only replaced or removed. Jira and Confluence require one for Cockpit to read from the site.</p>
         {load.status === "loading" ? <p className="task-setup-note" role="status">Reading provider tokens…</p> : null}
         {load.status === "error" ? <div className="library-refusal" role="alert">
           <strong>✕ Provider tokens unavailable</strong>
@@ -168,7 +168,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
         {load.status === "ready" ? <ul className="library-credentials-list" aria-label="Providers">
           {load.providers.map((provider) => {
             const status = load.statuses.find((candidate) => candidate.provider_id === provider.id);
-            const pill = credentialPill(status, executableName(provider.executable));
+            const pill = credentialPill(status);
             const label = providerLabel(provider, load.providers);
             const supported = (status?.supported_kinds.length ?? 0) > 0;
             const form = editing?.providerId === provider.id ? editing : null;
@@ -210,7 +210,7 @@ export function ProviderCredentialsDialog({ client, focusProviderId = null, onCh
       <footer className="task-setup-footer"><button type="button" className="setup-primary" onClick={onClose}>Done</button></footer>
     </section>
     {removing && load.status === "ready" ? <LibraryConfirmDialog title="Remove this token?" safeLabel="Keep token" confirmLabel="Remove token" destructive
-      body={<p>{`Deletes the token Cockpit stored for ${providerLabel(removing, load.providers)} from the keyring. ${providerFamily(load.providers, removing.id).name} isn't changed, and Cockpit uses the ${executableName(removing.executable)} login again.`}</p>}
+      body={<p>{`Deletes the token Cockpit stored for ${providerLabel(removing, load.providers)} from the keyring. ${providerFamily(load.providers, removing.id).name} isn't changed. Cockpit can't read ${providerFamily(load.providers, removing.id).name} from this site until a token is stored again.`}</p>}
       onConfirm={() => remove(removing)} onClose={() => setRemoving(null)} /> : null}
   </div>, document.body);
 }

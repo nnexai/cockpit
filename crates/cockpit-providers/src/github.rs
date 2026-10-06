@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -19,11 +18,6 @@ const MAX_ISSUE_BYTES: usize = 1024 * 1024;
 const COMMENTS_PER_PAGE: usize = 100;
 const MAX_COMMENT_PAGES: usize = 5;
 
-pub(crate) fn executable(value: &str) -> bool {
-    Path::new(value)
-        .file_name()
-        .is_some_and(|name| name == "gh")
-}
 
 /// Read-only GitHub issue and pull request access through the owner's authenticated `gh` CLI.
 /// The provider is intentionally restricted to github.com; a configured
@@ -66,7 +60,12 @@ impl GithubSourceProvider {
         }
         Ok(Self {
             provider_id: provider.id.clone(),
-            executable: provider.executable.clone(),
+            executable: provider.executable.clone().ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_invalid",
+                    "GitHub provider requires a configured executable",
+                )
+            })?,
             base_url,
             limits: (
                 configuration.limits.git_output_bytes as usize,
@@ -743,7 +742,9 @@ mod tests {
         GithubKind, GithubSourceProvider, MAX_ISSUE_BYTES, MAX_COMMENT_PAGES,
     };
     use cockpit_core::sources::{FrontmatterValue, SourceAuthority, SourceFetchRequest};
-    use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
+    use cockpit_protocol::projects::{
+        ProjectConfiguration, ProjectLimits, ProjectProvider, ProviderKind,
+    };
     use url::Url;
 
     fn authority() -> SourceAuthority {
@@ -777,9 +778,11 @@ mod tests {
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
             id: "github".into(),
+            kind: ProviderKind::Github,
             base_url: base_url.into(),
-            executable: "gh".into(),
+            executable: Some("gh".into()),
             login: None,
+            deployment: None,
         }],
         limits: ProjectLimits {
             catalog_depth: 1,

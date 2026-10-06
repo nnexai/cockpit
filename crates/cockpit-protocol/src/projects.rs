@@ -30,15 +30,39 @@ pub struct ProjectLimits {
     pub library_max_items: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    Github,
+    Gitlab,
+    Gitea,
+    Jira,
+    Confluence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderDeployment {
+    Cloud,
+    DataCenter,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectProvider {
     pub id: String,
+    pub kind: ProviderKind,
     pub base_url: String,
-    pub executable: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub executable: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub login: Option<String>,
+    /// Jira/Confluence only; always resolved after configuration loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub deployment: Option<ProviderDeployment>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
@@ -260,4 +284,34 @@ pub struct WorkspaceOperation {
     pub resume_allowed: bool,
     pub cancel_requested: bool,
     pub updated_at: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProjectProvider, ProviderDeployment, ProviderKind};
+    use serde_json::json;
+
+    #[test]
+    fn provider_wire_shape_requires_explicit_kind_and_omits_absent_cli_fields() {
+        let value = json!({
+            "id": "custom-id",
+            "kind": "jira",
+            "base_url": "https://jira.example/jira",
+            "deployment": "data_center"
+        });
+        let provider: ProjectProvider = serde_json::from_value(value.clone()).expect("provider");
+        assert_eq!(provider.kind, ProviderKind::Jira);
+        assert_eq!(provider.deployment, Some(ProviderDeployment::DataCenter));
+        assert!(provider.executable.is_none());
+        assert!(provider.login.is_none());
+        assert_eq!(serde_json::to_value(provider).expect("serialize"), value);
+        for invalid in [
+            json!({"id": "jira", "base_url": "https://jira.example", "executable": "jira"}),
+            json!({"id": "jira", "kind": "unknown", "base_url": "https://jira.example"}),
+            json!({"id": "jira", "kind": "jira", "base_url": "https://jira.example", "deployment": "unknown"}),
+            json!({"id": "jira", "kind": "jira", "base_url": "https://jira.example", "profile": "default"}),
+        ] {
+            assert!(serde_json::from_value::<ProjectProvider>(invalid).is_err());
+        }
+    }
 }

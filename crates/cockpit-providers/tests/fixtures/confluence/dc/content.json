@@ -45,6 +45,12 @@
       "title": "Engineering Home"
     }
   ],
+  "body": {
+    "storage": {
+      "representation": "storage",
+      "value": "<h1>Release checklist</h1><p>Check the deployment before shipping.</p>"
+    }
+  },
   "_links": {
     "webui": "/display/ENG/Release+Checklist",
     "tinyui": "/x/DQAI",

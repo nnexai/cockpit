@@ -58,7 +58,7 @@ it("shows a Confluence page's path, version, last editor and freshness, and list
       { attachment_id: "source:page-98765#attachment:a2", original_name: "Q3/plan?.pdf", stored_name: "Q3_plan_.pdf", media_type: "application/pdf", bytes: 1_200_000, version: "3", state: "not_downloaded", relative_path: null },
     ],
   };
-  const providers = [{ id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence", login: "default" }];
+  const providers = [{ id: "cloud", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki", deployment: "cloud" as const }];
   const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: true, refreshBusy: false };
   const host = document.createElement("div");
   document.body.append(host);

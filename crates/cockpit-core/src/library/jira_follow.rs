@@ -14,13 +14,12 @@ use crate::{
     InspectionError,
     jira_query::{JiraQueryInput, has_relative_dates, instant_seconds, jira_query_input},
     project_store::timestamp,
-    repositories::is_jira_executable,
     sources::{
         IssueListing, IssueQuery, IssueRow, ReferenceSeed, RelatedAsset, SourceAuthority, SourceRef,
         TraversalBudget, site_authority,
     },
 };
-use cockpit_protocol::library::*;
+use cockpit_protocol::{library::*, projects::ProviderKind};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -116,7 +115,7 @@ struct Pending {
 impl LibraryService {
     fn jira_site(&self, provider_id: &str) -> Result<SourceAuthority, InspectionError> {
         let jira = self.configuration.providers.iter().any(|provider| {
-            provider.id == provider_id && is_jira_executable(&provider.executable)
+            provider.id == provider_id && provider.kind == ProviderKind::Jira
         });
         if !jira {
             return Err(error(
@@ -140,7 +139,7 @@ impl LibraryService {
             .configuration
             .providers
             .iter()
-            .filter(|provider| is_jira_executable(&provider.executable))
+            .filter(|provider| provider.kind == ProviderKind::Jira)
             .map(|provider| provider.id.as_str())
             .collect::<Vec<_>>();
         if jira.is_empty() {
@@ -1130,9 +1129,11 @@ mod tests {
         let mut configuration = base.service.configuration.clone();
         configuration.providers = vec![ProjectProvider {
             id: "jira".into(),
+            kind: ProviderKind::Jira,
             base_url: BASE.into(),
-            executable: "/usr/local/bin/jira".into(),
-            login: Some("read-only".into()),
+            executable: None,
+            login: None,
+            deployment: Some(cockpit_protocol::projects::ProviderDeployment::DataCenter),
         }];
         let mut site = Site::default();
         for (key, minute) in [("OPS-1", 1), ("OPS-2", 2), ("OPS-3", 3), ("OPS-4", 4)] {
@@ -1142,6 +1143,29 @@ mod tests {
         let sources = Arc::new(SourceService::new(&configuration, vec![provider.clone()]).unwrap());
         base.service = LibraryService::new(configuration, sources);
         Fixture { base, provider }
+    }
+
+    #[test]
+    fn jira_query_and_follow_authority_use_kind_not_executable_or_id() {
+        let mut f = fixture();
+        assert_eq!(
+            f.base.service.jira_site("jira").unwrap().provider_instance,
+            BASE
+        );
+        let (_, provider_id) = f.base.service.jira_query("project = OPS", None).unwrap().unwrap();
+        assert_eq!(provider_id, "jira");
+        assert!(f.base.service.jira_query("OPS", None).unwrap().is_none());
+        assert!(f.base.service.jira_query("OPS", Some("jira")).unwrap().is_some());
+        let provider = &mut f.base.service.configuration.providers[0];
+        provider.kind = ProviderKind::Gitea;
+        provider.executable = Some("/usr/local/bin/jira".into());
+        provider.deployment = None;
+        assert_eq!(
+            f.base.service.jira_site("jira").unwrap_err().code,
+            "source_provider_unsupported"
+        );
+        assert!(f.base.service.jira_query("project = OPS", Some("jira")).unwrap().is_none());
+        assert!(!f.base.service.is_jira_provider("jira"));
     }
     async fn follow(
         service: &LibraryService,

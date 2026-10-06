@@ -27,7 +27,7 @@ use crate::{
 };
 use cockpit_protocol::{
     library::*,
-    projects::{ProjectConfiguration, ProjectDiagnostic},
+    projects::{ProjectConfiguration, ProjectDiagnostic, ProviderKind},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -190,7 +190,7 @@ impl LibraryService {
     }
     fn is_jira_provider(&self, provider_id: &str) -> bool {
         self.configuration.providers.iter().any(|provider| {
-            provider.id == provider_id && crate::repositories::is_jira_executable(&provider.executable)
+            provider.id == provider_id && provider.kind == ProviderKind::Jira
         })
     }
     fn request(
@@ -231,7 +231,7 @@ impl LibraryService {
             if page_id
                 && (selected.is_some()
                     || self.configuration.providers.iter().any(|provider| {
-                        crate::repositories::is_confluence_executable(&provider.executable)
+                        provider.kind == ProviderKind::Confluence
                     }))
             {
                 return Err(error(
@@ -240,7 +240,7 @@ impl LibraryService {
                 ));
             }
             if self.configuration.providers.iter().any(|provider| {
-                crate::repositories::is_confluence_executable(&provider.executable)
+                provider.kind == ProviderKind::Confluence
                     && confluence_input_matches_instance(&provider.base_url, input)
             }) {
                 return Err(error(
@@ -865,7 +865,7 @@ impl LibraryService {
             let confluence = entry.summary.provider_id.as_deref().is_some_and(|provider_id| {
                 self.configuration.providers.iter().any(|provider| {
                     provider.id == provider_id
-                        && crate::repositories::is_confluence_executable(&provider.executable)
+                        && provider.kind == ProviderKind::Confluence
                 })
             });
             if confluence && entry.summary.resource_type.as_deref() != Some("page") {
@@ -994,7 +994,7 @@ impl LibraryService {
         })?;
         let is_confluence = self.configuration.providers.iter().any(|provider| {
             provider.id == asset.source.provider_id
-                && crate::repositories::is_confluence_executable(&provider.executable)
+                && provider.kind == ProviderKind::Confluence
         });
         if is_confluence && asset.source.resource_type != "page" {
             return Err(error(
@@ -1544,9 +1544,11 @@ mod tests {
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
             id: "tea".into(),
+            kind: ProviderKind::Gitea,
             base_url: "https://forge.test/gitea".into(),
-            executable: "tea".into(),
+            executable: Some("tea".into()),
             login: None,
+            deployment: None,
         }],
         limits: ProjectLimits {
             catalog_depth: 1,
@@ -2386,9 +2388,11 @@ mod confluence {
         let mut configuration = base.service.configuration.clone();
         configuration.providers = vec![ProjectProvider {
             id: "confluence".into(),
+            kind: ProviderKind::Confluence,
             base_url: base_url.into(),
-            executable: "/usr/local/bin/confluence".into(),
-            login: Some("read-only".into()),
+            executable: None,
+            login: None,
+            deployment: Some(cockpit_protocol::projects::ProviderDeployment::DataCenter),
         }];
         let provider = Arc::new(FakeConfluence {
             base_url: base_url.into(),
@@ -2593,6 +2597,33 @@ mod confluence {
             )
             .unwrap_err()
             .code,
+            "source_identity_mismatch"
+        );
+    }
+
+    #[test]
+    fn confluence_page_authority_requires_confluence_kind() {
+        let mut fixture = fixture("https://acme.atlassian.net/wiki", false);
+        let canonical = confluence_page_url("https://acme.atlassian.net/wiki", "123456");
+        let page = ConfluencePage {
+            page_id: "123456".into(),
+            space_key: "SD".into(),
+            title: "Release checklist".into(),
+            version: Some(1),
+            source_url: "https://acme.atlassian.net/wiki/spaces/SD/pages/123456/Release".into(),
+            canonical_url: canonical.clone(),
+        };
+        confluence_instance_authority(
+            &fixture.service.configuration, "confluence", &page, &canonical,
+        ).unwrap();
+        let provider = &mut fixture.service.configuration.providers[0];
+        provider.kind = ProviderKind::Gitea;
+        provider.executable = Some("/usr/local/bin/confluence".into());
+        provider.deployment = None;
+        assert_eq!(
+            confluence_instance_authority(
+                &fixture.service.configuration, "confluence", &page, &canonical,
+            ).unwrap_err().code,
             "source_identity_mismatch"
         );
     }

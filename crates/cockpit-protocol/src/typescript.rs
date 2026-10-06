@@ -110,7 +110,7 @@ use crate::herdr_shell::{
 use crate::project_defaults::{LinkedArtifact, WorkspaceDefaults, WorkspaceDefaultsRequest};
 use crate::projects::{
     OrchestrationConfiguration, OrchestrationRoute, ProjectArtifact, ProjectConfiguration,
-    ProjectDiagnostic, ProjectLimits, ProjectProvider, RepositoryCandidate, RepositoryListResponse,
+    ProjectDiagnostic, ProjectLimits, ProjectProvider, ProviderKind, ProviderDeployment, RepositoryCandidate, RepositoryListResponse,
     WorkspaceCheckoutOwnership, WorkspaceOperation, WorkspaceOperationRequest,
     WorkspaceOperationState, WorkspaceOperationStep, WorkspaceOwnedResource,
     WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode, WorkspaceSetupPlan,
@@ -297,6 +297,8 @@ pub fn render_v1() -> String {
         TerminalOwnershipState::decl(&config),
         TerminalStreamMessage::decl(&config),
         ProjectLimits::decl(&config),
+        ProviderKind::decl(&config),
+        ProviderDeployment::decl(&config),
         ProjectProvider::decl(&config),
         ProjectConfiguration::decl(&config),
         OrchestrationConfiguration::decl(&config),

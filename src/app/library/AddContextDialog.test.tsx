@@ -27,7 +27,7 @@ it("resolves a Jira key on the configured site, adds to the Library only, and of
     report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
   };
   const client = {
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test/jira", deployment: "data_center" as const }] })),
     providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     libraryAdd: vi.fn(async () => saved),
@@ -80,7 +80,7 @@ it("keeps focus trapped during add startup and exposes a retry for the same reje
   let rejectStart!: (cause: Error) => void;
   const firstStart = new Promise<LibraryOperation>((_resolve, reject) => { rejectStart = reject; });
   const client = {
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test/jira", deployment: "data_center" as const }] })),
     providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
     libraryAdd: vi.fn().mockReturnValueOnce(firstStart).mockResolvedValueOnce(saved),
@@ -186,7 +186,7 @@ it("offers only the Library when Herdr isn't live, and selects an already saved 
     target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
   };
   const client = {
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test/jira", deployment: "data_center" as const }] })),
     providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => resolution),
     librarySpaceList: vi.fn(async () => ({ target, space_label: "api-review", library_root: "/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] })),
@@ -236,7 +236,7 @@ it("offers only the Library when Herdr isn't live, and selects an already saved 
 });
 
 const githubClient = (overrides: Partial<Record<keyof CockpitClient, unknown>>) => ({
-  projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
+  projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", kind: "github" as const, base_url: "https://github.com", executable: "gh" }] })),
   libraryResolve: vi.fn(async () => ({ kind: "artifact", provider_id: "github", provider_instance: "https://github.com", title: "Fix token refresh race", canonical_id: "acme/api#7", container_label: "acme/api", existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] })),
   librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, space_label: "api-review", library_root: "/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] })),
   ...overrides,
@@ -486,10 +486,10 @@ it("recognizes a typed folder path, defaults its label, and saves the renamed ca
 const CLOUD_PAGE = "https://nnexai.atlassian.net/wiki/spaces/SD/pages/98765/Release+checklist";
 const DC_DISPLAY = "https://confluence.example.com/confluence/display/ENG/Release+Checklist";
 const confluenceProviders = [
-  { id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "/opt/homebrew/bin/confluence", login: "default" },
-  { id: "cloud-reader", base_url: "https://nnexai.atlassian.net/wiki/", executable: "confluence", login: "reader" },
-  { id: "dc", base_url: "https://confluence.example.com/confluence", executable: "confluence", login: "dc" },
-  { id: "github", base_url: "https://github.com", executable: "gh" },
+  { id: "cloud", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki", deployment: "cloud" as const },
+  { id: "cloud-reader", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki/", deployment: "cloud" as const },
+  { id: "dc", kind: "confluence" as const, base_url: "https://confluence.example.com/confluence", deployment: "data_center" as const },
+  { id: "github", kind: "github" as const, base_url: "https://github.com", executable: "gh" },
 ];
 
 function pageResolution(providerId: string | null) {
@@ -614,13 +614,13 @@ it("refuses a bare page id without a Confluence provider, and resolves ids and D
   }
 });
 
-it("explains a Confluence sign-in failure and a missing confluence CLI without creating an item", async () => {
+it("explains a Confluence token rejection and HTTP failure without creating an item", async () => {
   vi.useFakeTimers();
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: confluenceProviders.slice(2) })),
     libraryResolve: vi.fn()
-      .mockRejectedValueOnce(Object.assign(new Error("Confluence rejected the profile"), { code: "source_auth_failed" }))
-      .mockRejectedValueOnce(Object.assign(new Error("confluence executable not found"), { code: "source_cli_unavailable" })),
+      .mockRejectedValueOnce(Object.assign(new Error("Confluence rejected the stored token"), { code: "source_auth_failed" }))
+      .mockRejectedValueOnce(Object.assign(new Error("Confluence could not be reached"), { code: "source_provider_failed" })),
     libraryAdd: vi.fn(),
   });
   const host = document.createElement("div");
@@ -632,11 +632,12 @@ it("explains a Confluence sign-in failure and a missing confluence CLI without c
     await typeSource(DC_DISPLAY);
     const alert = () => document.body.querySelector("[role='alert']")!;
     expect(alert().querySelector("strong")?.textContent).toBe("✕ Confluence sign-in failed");
-    expect(alert().textContent).toContain("confluence.example.com rejected the credentials for the confluence CLI. Store a token for this site in Cockpit, or sign in with the CLI's read-only profile, then retry.");
+    expect(alert().textContent).toContain("confluence.example.com rejected the token stored in Cockpit for this site. Replace it in Provider tokens, then retry.");
+    expect(alert().textContent).not.toContain("CLI");
     await act(async () => dialogButton("Retry lookup")!.click());
     await advance(450);
-    expect(alert().querySelector("strong")?.textContent).toBe("✕ confluence isn't installed");
-    expect(alert().textContent).toContain("Install it with brew install pchuri/tap/confluence-cli, configure a read-only profile, then retry.");
+    expect(alert().querySelector("strong")?.textContent).toBe("✕ Lookup failed");
+    expect(alert().textContent).toContain("source_provider_failed: Confluence could not be reached");
     expect(dialogButton("Add to Library")!.disabled).toBe(true);
     expect(client.libraryAdd).not.toHaveBeenCalled();
   } finally {
@@ -664,7 +665,7 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[0], confluenceProviders[2]], limits: { library_space_pages: 200 } })),
     libraryConfluenceSpaces: vi.fn(async (request: { provider_id: string }) => {
-      if (request.provider_id === "dc") throw Object.assign(new Error("Confluence rejected the profile"), { code: "source_auth_failed" });
+      if (request.provider_id === "dc") throw Object.assign(new Error("Confluence rejected the stored token"), { code: "source_auth_failed" });
       return [spaceResolution({}), spaceResolution({ title: "Operations", canonical_id: "OPS", container_label: "OPS · Operations", existing_follow_id: "follow:ops" })];
     }),
     libraryAdd: vi.fn(async () => followed),
@@ -828,7 +829,7 @@ it("follows a Jira query: a relative-date query preselects accumulate, shows the
     report: null, space: { space_id: "space-1", item_ids: ["source:ops-1", "source:ops-2"] }, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
   };
   const client = githubClient({
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test/jira", deployment: "data_center" as const }] })),
     providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async () => ({
       kind: "jira_query", provider_id: "jira", provider_instance: "https://jira.test/jira", title: jql, canonical_id: jql, container_label: null, existing_item_id: null, existing_follow_id: null,
@@ -880,7 +881,7 @@ it("offers Follow references with per-source defaults, honors a stored depth, an
   };
   const jiraIssue = (key: string, extra: Record<string, unknown> = {}) => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: key, canonical_id: key, container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [], ...extra });
   const client = {
-    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test/jira", deployment: "data_center" as const }] })),
     providerCredentials: vi.fn(async () => jiraNotStored),
     libraryResolve: vi.fn(async ({ input }: { input: string }) => input.endsWith("OPS-2") ? jiraIssue("OPS-2", { reference_depth: 2 }) : input.includes("browse/OPS-3") ? jiraIssue("OPS-3", { existing_item_id: "source:ops-3", reference_depth: 3 }) : jiraIssue("OPS-1")),
     libraryAdd: vi.fn(async () => saved),
@@ -920,7 +921,7 @@ it("offers Follow references with per-source defaults, honors a stored depth, an
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
-const jiraProviderConfig = { providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] };
+const jiraProviderConfig = { providers: [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test/jira", deployment: "data_center" as const }] };
 const jiraResolution = { kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: "Rotate signing keys", canonical_id: "OPS-311", container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [] };
 
 it("offers the provider token dialog from a credential failure, with the entry form open for the failing provider", async () => {

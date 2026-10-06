@@ -3,16 +3,16 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ProviderCredentialSetRequest, ProviderCredentialStatus } from "../../protocol/generated/v1";
+import type { ProjectProvider, ProviderCredentialSetRequest, ProviderCredentialStatus } from "../../protocol/generated/v1";
 import { ProviderCredentialsDialog } from "./ProviderCredentialsDialog";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const TOKEN = "s3cr3t-token-VALUE-0123456789";
-const providers = [
-  { id: "jira", base_url: "https://jira.corp.test/tracker", executable: "/usr/bin/jira" },
-  { id: "wiki", base_url: "https://team.atlassian.net/wiki", executable: "confluence" },
-  { id: "gitlab", base_url: "https://gitlab.test", executable: "glab" },
+const providers: ProjectProvider[] = [
+  { id: "jira", kind: "jira" as const, base_url: "https://jira.corp.test/tracker", deployment: "data_center" as const },
+  { id: "wiki", kind: "confluence" as const, base_url: "https://team.atlassian.net/wiki", deployment: "cloud" as const },
+  { id: "gitlab", kind: "gitlab" as const, base_url: "https://gitlab.test", executable: "glab" },
 ];
 const status = (id: string, state: ProviderCredentialStatus["state"], kind: ProviderCredentialStatus["kind"] = null): ProviderCredentialStatus => ({
   provider_id: id, state, kind, supported_kinds: id === "gitlab" ? [] : ["bearer", "basic"],
@@ -75,7 +75,8 @@ it("shows each provider's state and offers a token only where the provider suppo
   expect(rows[0]).toContain("Token stored · email + token");
   expect(rows[0]).toContain("Replace token…");
   expect(rows[1]).toContain("Confluence · team.atlassian.net");
-  expect(rows[1]).toContain("Keyring unavailable – using the confluence login");
+  expect(rows[1]).toContain("Keyring unavailable");
+  expect(rows[1]).not.toContain("login");
   expect(rows[2]).toContain("Not supported");
   expect(rows[2]).not.toContain("token…");
   expect(button("Remove token for Jira · jira.corp.test/tracker")).toBeDefined();
@@ -116,7 +117,7 @@ it("empties the field when the host rejects the token, keeps the form open and s
   expect(button("Save token")!.disabled).toBe(true);
   expect(document.body.querySelector("[role='alert']")?.textContent).toBe("The credential vault is unavailable");
   expect(document.body.innerHTML).not.toContain(TOKEN);
-  expect(document.body.textContent).toContain("Using the jira login");
+  expect(document.body.textContent).toContain("No token stored");
 });
 
 it("needs a username for the Basic kind before it can be submitted, and sends it with the token", async () => {
@@ -141,14 +142,16 @@ it("asks before removing a token, then shows the provider as not stored", async 
   await act(async () => button("Remove token for Jira · jira.corp.test/tracker")!.click());
   expect(clear).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain("Remove this token?");
+  expect(document.body.textContent).toContain("Cockpit can't read Jira from this site until a token is stored again.");
   await act(async () => button("Keep token")!.click());
   expect(clear).not.toHaveBeenCalled();
   await act(async () => button("Remove token for Jira · jira.corp.test/tracker")!.click());
   await act(async () => button("Remove token")!.click());
   await flush();
   expect(clear).toHaveBeenCalledWith({ provider_id: "jira" });
-  expect(document.body.textContent).toContain("Using the jira login");
-  expect(document.body.textContent).toContain("Removed the token for Jira · jira.corp.test/tracker. Cockpit uses the jira login again.");
+  expect(document.body.textContent).toContain("No token stored");
+  expect(document.body.textContent).toContain("Removed the token for Jira · jira.corp.test/tracker. Cockpit can't read Jira from this site until a token is stored again.");
+  expect(document.body.textContent).not.toContain("login");
   expect(button("Remove token for Jira · jira.corp.test/tracker")).toBeUndefined();
 });
 
@@ -161,7 +164,7 @@ it("reports a failed status read with a retry instead of an empty list", async (
   expect(document.activeElement).toBe(button("Retry"));
   await act(async () => button("Retry")!.click());
   await flush();
-  expect(document.body.textContent).toContain("Using the jira login");
+  expect(document.body.textContent).toContain("No token stored");
 });
 
 it("opens a replacement in the kind that is stored", async () => {
@@ -177,7 +180,7 @@ it("opens a replacement in the kind that is stored", async () => {
 });
 
 it("opens Atlassian Cloud on Basic and Data Center on Bearer, and keeps both kinds selectable", async () => {
-  const cloud = { id: "cloud", base_url: "https://team.atlassian.net", executable: "/usr/bin/jira" };
+  const cloud = { id: "cloud", kind: "jira" as const, base_url: "https://team.atlassian.net", deployment: "cloud" as const };
   const { client } = fakeClient([status("cloud", "not_stored"), status("jira", "not_stored")], { providers: [cloud, providers[0]!] });
   await render(client);
   const kinds = () => [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio'][name$='-kind']")].map((radio) => [radio.parentElement!.textContent!.trim(), radio.checked]);
@@ -190,6 +193,18 @@ it("opens Atlassian Cloud on Basic and Data Center on Bearer, and keeps both kin
   await act(async () => button("Store token for Jira · jira.corp.test/tracker")!.click());
   expect(kinds()).toEqual([["Personal access token (Bearer)", true], ["Email and API token (Basic)", false]]);
   expect(usernameInput()).toBeNull();
+});
+
+it.each([
+  { base_url: "https://jira.corp.test/tracker", deployment: "cloud" as const, basic: true },
+  { base_url: "https://team.atlassian.net", deployment: "data_center" as const, basic: false },
+])("defaults auth from resolved $deployment deployment, not the hostname $base_url", async ({ base_url, deployment, basic }) => {
+  const provider = { id: "override", kind: "jira" as const, base_url, deployment };
+  const { client } = fakeClient([status("override", "not_stored")], { providers: [provider] });
+  await render(client, "override");
+  const radios = [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio'][name$='-kind']")];
+  expect(radios.map((radio) => radio.checked)).toEqual([!basic, basic]);
+  expect(usernameInput() !== null).toBe(basic);
 });
 
 it("says an email with a colon isn't allowed, before anything is sent and without clearing the token", async () => {

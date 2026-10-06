@@ -33,7 +33,7 @@ Herdr owns live sessions, Spaces, tabs, real terminal existence/membership, focu
 | Provider authority and fetch | `crates/cockpit-core/src/sources.rs` and `crates/cockpit-providers/src/` | Configured-instance and canonical-identity fixtures |
 | Durable Library storage, provider snapshots, reference sets and followed spaces/queries | `crates/cockpit-core/src/library.rs`, `library/{store,refs,follow,jira_follow,space}.rs`, `jira_query.rs`, `crates/cockpit-providers/src/{confluence,jira,jira_wiki}.rs` | Paged enumeration, ancestor/move detection, exclusion/removal safety, schema upgrades, selection retention, listing-failure/empty/truncated never dropping members and tombstone purge |
 | Reference-depth traversal and inclusion state | `crates/cockpit-core/src/sources/references.rs` (extraction, resolution, `collect_related`, caps), `library/related.rs` (saving related items, inclusions, single-import lifecycle), `library/{refs,jira_follow}.rs`, `crates/cockpit-providers/src/jira.rs` (`issue_fields`), `crates/cockpit-protocol/src/library.rs`, `src/app/library/{AddContextDialog,LibraryDetails}.tsx`, `src/client/libraryProtocol.ts` | Fake-provider traversal with cycles and caps, live follow never dropping on incomplete pass, old data reads as depth 0; live Jira/Confluence graph in a disposable Library |
-| Provider tokens: vault, injection and native Jira download | `crates/cockpit-core/src/credentials.rs`, `crates/cockpit-secrets/`, `crates/cockpit-providers/src/{jira,confluence,jira_attachments}.rs` (and `jira_attachments/download.rs`), `src/app/library/ProviderCredentialsDialog.tsx` | `MemoryVault` service tests, the fake HTTP redirect/downgrade tests, and an isolated `dbus-run-session` gnome-keyring smoke |
+| Provider tokens and HTTP reads/downloads | `crates/cockpit-core/src/credentials.rs`, `crates/cockpit-secrets/`, `crates/cockpit-providers/src/{site_http,jira,confluence,confluence_storage,jira_attachments}.rs`, `src/app/library/ProviderCredentialsDialog.tsx` | `MemoryVault` service tests, fake HTTP pagination/redirect/downgrade tests, and an isolated `dbus-run-session` gnome-keyring smoke |
 | Library HTTP/native transport | `crates/cockpit-host/src/server/library.rs`, `src-tauri/src/library.rs` | Equivalent browser/native DTOs and owned-runtime smoke |
 | Tea JSON and CLI behavior | `crates/cockpit-providers/src/tea.rs` | Real Tea against a localhost fixture with a fake login |
 | Local diff and frozen sources | `crates/cockpit-core/src/review.rs` | Real Git fixtures; compare index and working files before/after |
@@ -144,69 +144,63 @@ Create a uniquely named Herdr session with isolated XDG config/state, a fixture 
 
 ## Local provider configuration
 
-A provider selects an executable and an existing CLI login/profile by name. Cockpit performs no remote writes; a token can optionally be stored in the OS vault (see Provider tokens below), and without one the CLI's own login applies. For example, in a task-specific Cockpit TOML configuration:
+Every provider declares `kind` (`github`, `gitlab`, `gitea`, `jira` or `confluence`); neither the provider id nor an executable basename selects its adapter. GitHub, GitLab and Gitea require a CLI `executable` and retain their external CLI login; Gitea can name an existing Tea `login`. Jira and Confluence use Cockpit's GET-only HTTP client and require a token stored in the OS vault. They reject `executable` and `login`: remove those fields when migrating an existing configuration. Cockpit performs no remote writes.
+
+For example, in a task-specific Cockpit TOML configuration:
 
 ```toml
 [[providers]]
+id = "jira"
+kind = "jira"
+base_url = "https://nnexai.atlassian.net"     # deployment defaults to cloud
+
+[[providers]]
+id = "confluence"
+kind = "confluence"
+base_url = "https://nnexai.atlassian.net/wiki"
+
+[[providers]]
+id = "wiki-dc"
+kind = "confluence"
+base_url = "https://confluence.example.com/confluence"  # defaults to data_center
+
+[[providers]]
+id = "gitlab"
+kind = "gitlab"
+base_url = "https://gitlab.com"
+executable = "glab"
+
+[[providers]]
+id = "github"
+kind = "github"
+base_url = "https://github.com"
+executable = "gh"
+
+[[providers]]
 id = "my-forge"
+kind = "gitea"
 base_url = "https://forge.example/gitea"
 executable = "tea"
 login = "my-existing-tea-login"
 ```
 
-GitLab (`glab`) and Jira (`jira`, ankitpokhrel/jira-cli) use the CLI's own login:
+`deployment` applies only to Jira and Confluence: use `cloud` or `data_center` explicitly to override the default. Without it, a host ending in `.atlassian.net` (case-insensitive) resolves to Cloud; other hosts resolve to Data Center. Authentication kind does not select deployment. Confluence Cloud requires base path exactly `/wiki`; Data Center keeps a configured context path such as `/confluence` or `/jira`. The loader records `kind` and the resolved deployment's `toml`/`default` origins. No Jira initialization file or Confluence profile is used. This is a clean configuration cutover: existing providers need `kind`, and the user's configuration is not automatically rewritten.
 
-```toml
-[[providers]]
-id = "gitlab"
-base_url = "https://gitlab.com"
-executable = "glab"
+Page links must belong to the configured instance. Confluence imports preserve page identity, version, ancestors, labels, editor display names and attachment metadata; `body.storage` is converted to Markdown locally for both deployments. An explicit refresh can change Markdown compared with historical CLI output; follow refresh skips unchanged versions, so it does not mass-rewrite pages. Attachment metadata stays not downloaded by default. Explicit Jira/Confluence page/issue or follow downloads use the shared HTTP transport and ID-based private no-follow staging with per-file and aggregate byte budgets, safe stored names and atomic publication; partial files are removed on failure. `Remove downloaded` deletes stored binaries only. Selected context reads these files directly from the Library. PNG/JPEG preview is supported; PDF has no active renderer and SVG/HTML are never executed. Jira lists bounded `fields.attachment[]` metadata; malformed or beyond-256 entries produce a `source_attachments_partial` diagnostic.
 
-[[providers]]
-id = "jira"
-base_url = "https://your-site.atlassian.net"
-executable = "jira"
-```
-
-Confluence pages use the installed `confluence` CLI and an existing profile; the provider's base URL must include the site's context path when present:
-
-```toml
-[[providers]]
-id = "confluence"
-base_url = "https://example.atlassian.net/wiki"
-executable = "confluence"
-login = "my-existing-confluence-profile"
-```
-
-Cockpit invokes the read-operation allowlist and passes `CONFLUENCE_READ_ONLY=true` and `CONFLUENCE_CLI_ANALYTICS=false`. Page links must belong to the configured instance. Confluence imports preserve page body, identity, version, ancestor, label, editor-display-name, and attachment metadata. Attachments stay not downloaded by default; explicit page/per-follow downloads use the CLI's attachment operation in private staging with exact-name prediction, safe stored names, no-follow regular-file checks, per-file limits, and a periodically monitored aggregate staging budget (not a hard filesystem quota). `Remove downloaded` deletes stored binaries only. Selected context reads these files directly from the Library. PNG/JPEG preview is supported; PDF has no active renderer and SVG/HTML are never executed. Verified against Confluence CLI 2.25.2; Data Center protocol behavior is fixture-verified, not live-validated. Jira issues list attachments from `fields.attachment[]` (`jira_attachments.rs`: name, size, media type, same-site content link; malformed or beyond-256 entries produce a `source_attachments_partial` diagnostic) and download them only with a token stored in Cockpit, because jira-cli has no attachment command: `jira_attachments/download.rs` fetches `/rest/api/2/attachment/{id}` and its same-origin `content` URL over HTTP into the same staging and budget rules. Without a token the panel shows a `Provider token…` action and downloads fail with `source_credential_required`. Jira download is fake-server verified only, not live-verified.
-
-Provider authority is resolved against the selected configured provider instance; forge owner/repository identity comes from the artifact's canonical identifier, and Jira authority comes from the configured site. API-returned canonical URLs are checked against that authority. A checkout's primary repository origin does not constrain Library imports. Tokens live only in the OS vault when stored through Cockpit; otherwise provider CLIs and the user's external credential setup own tokens and logins. A missing login, unavailable adapter or unsupported artifact returns an explicit failure.
+Provider authority is resolved against the selected configured provider instance; forge owner/repository identity comes from the artifact's canonical identifier, and Jira authority comes from the configured site. API-returned canonical URLs are checked against that authority. A checkout's primary repository origin does not constrain Library imports. Jira and Confluence never fall back to CLI credentials: a missing stored token fails with `source_credential_required`, an unavailable vault with `credential_vault_unavailable`. Forge tokens/logins remain owned by their CLIs. An unavailable adapter or unsupported artifact returns an explicit failure.
 
 ## Provider tokens
 
 Jira and Confluence accept a token stored in the OS vault (Linux Secret Service; the macOS Keychain backend is compiled but unverified). In the Library, open the token dialog from `Provider tokens…` in the toolbar `⋯` menu, the command palette (`Library: Provider tokens…`), or an item header's `⋯` menu (Jira and Confluence items); or from `Provider token…` on a provider row, in the Add dialog's sign-in failure, or in a Jira item's attachments panel. A Jira issue whose files need a token but has none also says so on its header's state line, with the same entry point. Choose `Personal access token (Bearer)` (Data Center) or `Email and API token (Basic)` (Cloud), paste the token and save; it can be replaced or removed but never read back, and the dialog shows only `Token stored` and its kind. One item exists per provider id and `base_url`, so editing `base_url` makes an old token not apply. glab, gh and tea report `unsupported`.
 
-New token forms default to Basic for `*.atlassian.net` and Bearer otherwise; both remain selectable, and replacement forms retain the stored kind. A colon in the Basic email is rejected with a specific inline message before submission, without clearing the entered token. Closing a Library dialog returns focus to its opener, or the nearest surviving ancestor if the opener disappeared (for example, after storing a token from the attachments header). Jira attachment headers make no download-state claim until the token status has loaded.
+New token forms default to Basic for resolved `deployment = "cloud"` and Bearer for `data_center`, including explicit deployment overrides; both remain selectable, and replacement forms retain the stored kind. A colon in the Basic email is rejected with a specific inline message before submission, without clearing the entered token. Closing a Library dialog returns focus to its opener, or the nearest surviving ancestor if the opener disappeared (for example, after storing a token from the attachments header). Jira attachment headers make no download-state claim until the token status has loaded.
 
-A stored token is injected only into that provider's CLI child environment; with none stored, or the vault unavailable, the CLI keeps its own login (the `Keyring unavailable` status can take 20 s to appear when no keyring daemon runs). Vault values are cached per process, so edits made in Seahorse/KWallet appear after a restart. Jira also still needs the user's `jira init` config file (installation type lives there).
+The token is the only Jira/Confluence credential. Cockpit sends its Basic or Bearer `Authorization` header only to the configured origin; no token is injected into a Jira/Confluence child process, because none is spawned. Missing tokens show `No token stored`, and vault failures show `Keyring unavailable`; removing a token prevents reads until one is stored again. Vault calls time out at 20 s and values are cached per process, so edits made in Seahorse/KWallet appear after a restart.
 
-| Jira env | Value |
-| --- | --- |
-| `JIRA_SERVER` | `base_url` without a trailing `/` (pins the CLI to the site) |
-| `JIRA_AUTH_TYPE` | `bearer` or `basic` |
-| `JIRA_LOGIN` | username (basic only) |
-| `JIRA_API_TOKEN` | the token |
+The shared GET-only client uses Jira Cloud REST v3 (enhanced-search token paging), Jira Data Center REST v2 (offset paging), Confluence Cloud v2 under `/wiki` and Data Center REST v1 under its context path. JSON follows only same-origin redirects and validates the final on-site path; downloads may follow cross-origin media redirects without Authorization. Both cap redirects at three and refuse HTTPS-to-HTTP downgrades. JSON continuation URLs are never requested directly: the adapter validates the endpoint and rebuilds the request from its paging token/offset.
 
-| Confluence env | Value |
-| --- | --- |
-| `CONFLUENCE_DOMAIN` | `host[:port]` plus the base path, unless the path is exactly `/wiki` |
-| `CONFLUENCE_PROTOCOL` | the `base_url` scheme |
-| `CONFLUENCE_API_PATH` | `/wiki/rest/api` for a `/wiki` base path, else `/rest/api` |
-| `CONFLUENCE_AUTH_TYPE` | `bearer` or `basic` |
-| `CONFLUENCE_EMAIL` | username (basic only) |
-| `CONFLUENCE_API_TOKEN` | the token |
-
-Confluence env mode ignores `--profile` (still passed) and removes inherited `CONFLUENCE_COOKIE` and `CONFLUENCE_TLS_*`; `CONFLUENCE_READ_ONLY` stays `true`. Cockpit's own HTTP (Jira attachments) sends `Authorization` only to the configured origin, follows at most three redirects, and drops the header on any cross-origin hop and refuses https to http. Verified: live Jira Cloud and Confluence Cloud through a private gnome-keyring in the browser build and native Tauri commands. Not verified: a live Jira attachment download (fake-server tests only), Jira Data Center Bearer, macOS Keychain.
+Live verification (2026-10-06): the internal adapters read Jira Cloud and Confluence Cloud through stored Basic tokens in a private Linux keyring and disposable Library. Exercised issue/comments import and refresh, JQL follow and refresh, cross-provider references, page metadata/storage conversion (including a 700,692-byte storage page), spaces enumeration, and Confluence attachment download, 32×32 PNG preview and removal. A clean Confluence space follow imported all 66 readable pages; refresh reported 66 unchanged with no partial/failed results. Clearing either token blocked new reads while existing items remained; fixture files/logs contained no raw token or Basic credential. The native host type-checked but this cutover was not exercised in a native window. Live Data Center behavior (including Jira Bearer PAT), a live Jira attachment download, and macOS Keychain remain unverified; local HTTP fixtures cover Cloud/Data Center contracts.
 
 Jira attachment metadata from `rest/api/2/attachment/{id}` must identify the requested attachment: a supplied `id` must match exactly, including when the content link names the requested id. Data Center responses may omit `id`; only then can a same-site link below the configured base path establish identity through `/secure/attachment/{id}/…` (with a file path) or `/rest/api/{version}/attachment/content/{id}` (with no extra path suffix). Null, malformed and mismatched supplied ids are rejected rather than treated as missing. This does not change redirect, credential, byte-budget or private no-follow staging rules.
 

@@ -66,7 +66,12 @@ impl TeaSourceProvider {
         }
         Ok(Self {
             provider_id: provider.id.clone(),
-            executable: provider.executable.clone(),
+            executable: provider.executable.clone().ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_invalid",
+                    "Tea provider requires a configured executable",
+                )
+            })?,
             base_url,
             login,
             limits: (

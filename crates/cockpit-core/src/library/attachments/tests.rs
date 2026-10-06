@@ -186,7 +186,7 @@ fn attachment(id: &str, title: &str, bytes: &[u8]) -> (SourceAttachment, Vec<u8>
 fn fixture(attachments: Vec<(SourceAttachment, Vec<u8>)>, file_cap: u64, page_cap: u64) -> (base::Fixture, Arc<Provider>) {
     let mut f = base::fixture();
     let mut config = f.service.configuration.clone();
-    config.providers = vec![ProjectProvider { id: "confluence".into(), base_url: SITE.into(), executable: "confluence".into(), login: None }];
+    config.providers = vec![ProjectProvider { id: "confluence".into(), kind: cockpit_protocol::projects::ProviderKind::Confluence, base_url: SITE.into(), executable: None, login: None, deployment: Some(cockpit_protocol::projects::ProviderDeployment::Cloud) }];
     config.limits.library_attachment_bytes = file_cap; config.limits.library_item_attachment_bytes = page_cap;
     let provider = Arc::new(Provider {
         page_id: NEXT_PAGE_ID.fetch_add(1, Ordering::Relaxed).to_string(),
@@ -278,11 +278,18 @@ async fn metadata_disk_and_page_caps_discard_or_skip_without_excess_calls() {
 }
 
 #[tokio::test]
-async fn predicted_overmatch_skips_cli_and_svg_is_not_media() {
+async fn id_addressed_download_ignores_glob_like_siblings_and_svg_is_not_media() {
     let (f,p) = fixture(vec![attachment("a", "x*y.png", b"12345"), attachment("b", "xzy.png", b"12345")], 8, 8);
     let old = save(&f).await;
-    action(&f.service, &old, &["a"], LibraryAttachmentAction::Download).await;
-    assert_eq!(p.calls.load(Ordering::SeqCst), 0); assert_eq!(item(&f.service).await.attachments[0].state, LibraryAttachmentState::Failed);
+    let operation = action(&f.service, &old, &["a"], LibraryAttachmentAction::Download).await;
+    assert_eq!(operation.phases[0].state, LibraryPhaseState::Done);
+    assert_eq!(p.calls.load(Ordering::SeqCst), 1);
+    let after = item(&f.service).await;
+    assert_eq!(after.attachments[0].state, LibraryAttachmentState::Downloaded);
+    assert_eq!(bytes(&f, &after, 0), b"12345");
+    assert_eq!(after.attachments[1].state, LibraryAttachmentState::NotDownloaded);
+    assert!(after.attachments[1].relative_path.is_none());
+    staging_empty(&f);
     let (f,_) = fixture(vec![attachment("a", "active.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>")], 1024, 1024);
     let old = save(&f).await; action(&f.service, &old, &["a"], LibraryAttachmentAction::Download).await;
     let after = item(&f.service).await;

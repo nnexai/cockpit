@@ -4,7 +4,7 @@ use cockpit_protocol::project_defaults::{
     LinkedArtifact, WorkspaceDefaults, WorkspaceDefaultsRequest,
 };
 use cockpit_protocol::projects::{
-    ProjectArtifact, ProjectConfiguration, ProjectProvider, RepositoryCandidate,
+    ProjectArtifact, ProjectConfiguration, ProjectProvider, ProviderKind, RepositoryCandidate,
 };
 
 use crate::InspectionError;
@@ -163,7 +163,7 @@ async fn linked_work_items(
     let jira: Vec<&ProjectProvider> = configuration
         .providers
         .iter()
-        .filter(|provider| repositories::is_jira_executable(&provider.executable))
+        .filter(|provider| provider.kind == ProviderKind::Jira)
         .collect();
     if jira.is_empty() {
         return Vec::new();

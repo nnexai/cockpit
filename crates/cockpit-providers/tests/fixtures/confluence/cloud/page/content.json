@@ -1,70 +1,18 @@
 {
   "id": "123456789",
-  "type": "page",
   "status": "current",
   "title": "Release Checklist",
-  "space": {
-    "id": 98314,
-    "key": "SD",
-    "name": "Software Development",
-    "type": "onboarding",
-    "status": "current",
-    "_links": {
-      "webui": "/spaces/SD",
-      "self": "https://nnexai.atlassian.net/wiki/rest/api/space/SD"
-    }
-  },
-  "history": {
-    "latest": true,
-    "lastUpdated": {
-      "by": {
-        "type": "known",
-        "accountId": "<account-id>",
-        "accountType": "atlassian",
-        "email": "",
-        "publicName": "<display-name>",
-        "displayName": "<display-name>"
-      },
-      "when": "2026-09-25T14:03:11.000Z",
-      "number": 7
-    }
-  },
+  "spaceId": "98314",
+  "parentId": "98765",
+  "parentType": "page",
+  "position": 1,
   "version": {
-    "by": {
-      "type": "known",
-      "accountId": "<account-id>",
-      "displayName": "<display-name>",
-      "publicName": "<display-name>"
-    },
-    "when": "2026-09-25T14:03:11.000Z",
     "number": 7,
-    "minorEdit": false
+    "createdAt": "2026-09-25T14:03:11.000Z",
+    "authorId": "fixture-account-id"
   },
-  "ancestors": [
-    {
-      "id": "65601",
-      "type": "page",
-      "status": "current",
-      "title": "Software Development Home"
-    },
-    {
-      "id": "77001",
-      "type": "folder",
-      "status": "current",
-      "title": "Runbooks"
-    },
-    {
-      "id": "98765",
-      "type": "page",
-      "status": "current",
-      "title": "Engineering"
-    }
-  ],
+  "body": { "storage": { "representation": "storage", "value": "<h1>Release checklist</h1><p>Check the deployment before shipping.</p>" } },
   "_links": {
-    "webui": "/spaces/SD/pages/123456789/Release+Checklist",
-    "tinyui": "/x/FQAH",
-    "base": "https://nnexai.atlassian.net/wiki",
-    "context": "/wiki",
-    "self": "https://nnexai.atlassian.net/wiki/rest/api/content/123456789"
+    "webui": "/spaces/SD/pages/123456789/Release+Checklist"
   }
 }

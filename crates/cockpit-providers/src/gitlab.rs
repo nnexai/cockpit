@@ -68,7 +68,12 @@ impl GitlabSourceProvider {
         cli_hostname(&base_url)?;
         Ok(Self {
             provider_id: provider.id.clone(),
-            executable: provider.executable.clone(),
+            executable: provider.executable.clone().ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_invalid",
+                    "GitLab provider requires a configured executable",
+                )
+            })?,
             base_url,
             limits: (
                 (configuration.limits.git_output_bytes as usize).max(1),

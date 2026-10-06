@@ -1,6 +1,0 @@
-{
-  "error": "Profile \"__cockpit_invalid_profile__\" not found!",
-  "code": "VALIDATION",
-  "status": null,
-  "details": null
-}

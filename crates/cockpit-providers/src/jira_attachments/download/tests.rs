@@ -1,158 +1,29 @@
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener};
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use cockpit_core::InspectionError;
 use cockpit_core::credentials::{MemoryVault, ProviderCredentials};
 use cockpit_core::process::StagingBudget;
 use cockpit_core::sources::{AttachmentRef, SourceProvider};
 use cockpit_protocol::credentials::{ProviderAuthKind, ProviderCredentialSetRequest};
-use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
+use cockpit_protocol::projects::{
+    ProjectConfiguration, ProjectLimits, ProjectProvider, ProviderDeployment, ProviderKind,
+};
 use serde_json::json;
 
-use super::*;
 use crate::credential_kinds;
 use crate::jira::JiraSourceProvider;
+use crate::site_http::test_server::{Length, Reply, Server};
+use cap_std::fs::Dir;
 
 const BEARER: &str = "pat-secret-91c4";
 const API_TOKEN: &str = "api-token-1";
 const MEDIA_SECRET: &str = "media-query-secret-5d2e";
 /// base64 of `me@example.test:api-token-1`.
 const BASIC: &str = "Basic bWVAZXhhbXBsZS50ZXN0OmFwaS10b2tlbi0x";
-
-// ---- a loopback HTTP/1.1 server -------------------------------------------
-
-#[derive(Clone, Debug)]
-struct Seen {
-    path: String,
-    authorization: Option<String>,
-}
-
-enum Length {
-    /// `Content-Length` matches the body.
-    Exact,
-    /// `Content-Length` says this much, whatever the body holds.
-    Declared(usize),
-    /// No length: the body ends when the connection closes.
-    Close,
-}
-
-struct Reply {
-    status: u16,
-    location: Option<String>,
-    body: Vec<u8>,
-    length: Length,
-}
-
-impl Reply {
-    fn status(status: u16) -> Self {
-        Self {
-            status,
-            location: None,
-            body: Vec::new(),
-            length: Length::Exact,
-        }
-    }
-    fn json(value: serde_json::Value) -> Self {
-        Self {
-            body: serde_json::to_vec(&value).unwrap(),
-            ..Self::status(200)
-        }
-    }
-    fn bytes(body: &[u8]) -> Self {
-        Self {
-            body: body.to_vec(),
-            ..Self::status(200)
-        }
-    }
-    fn redirect(status: u16, location: &str) -> Self {
-        Self {
-            location: Some(location.into()),
-            ..Self::status(status)
-        }
-    }
-    fn length(mut self, length: Length) -> Self {
-        self.length = length;
-        self
-    }
-}
-
-struct Server {
-    addr: SocketAddr,
-    seen: Arc<Mutex<Vec<Seen>>>,
-}
-
-impl Server {
-    /// `handler` gets the request and this server's own address.
-    fn start(handler: impl Fn(&Seen, SocketAddr) -> Reply + Send + Sync + 'static) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let handler = Arc::new(handler);
-        let log = seen.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let (handler, log) = (handler.clone(), log.clone());
-                std::thread::spawn(move || {
-                    let mut stream = stream.unwrap();
-                    let mut head = Vec::new();
-                    let mut byte = [0u8; 1];
-                    while !head.ends_with(b"\r\n\r\n") {
-                        if stream.read(&mut byte).unwrap_or(0) == 0 {
-                            return;
-                        }
-                        head.push(byte[0]);
-                    }
-                    let head = String::from_utf8_lossy(&head).into_owned();
-                    let mut lines = head.split("\r\n");
-                    let path = lines.next().unwrap().split(' ').nth(1).unwrap().to_owned();
-                    let authorization = lines.find_map(|line| {
-                        let (name, value) = line.split_once(": ")?;
-                        name.eq_ignore_ascii_case("authorization")
-                            .then(|| value.to_owned())
-                    });
-                    let request = Seen {
-                        path,
-                        authorization,
-                    };
-                    log.lock().unwrap().push(request.clone());
-                    let reply = handler(&request, addr);
-                    let mut out = format!("HTTP/1.1 {} X\r\nConnection: close\r\n", reply.status);
-                    if let Some(location) = &reply.location {
-                        out.push_str(&format!("Location: {location}\r\n"));
-                    }
-                    match reply.length {
-                        Length::Exact => {
-                            out.push_str(&format!("Content-Length: {}\r\n", reply.body.len()))
-                        }
-                        Length::Declared(length) => {
-                            out.push_str(&format!("Content-Length: {length}\r\n"))
-                        }
-                        Length::Close => {}
-                    }
-                    out.push_str("\r\n");
-                    let _ = stream.write_all(out.as_bytes());
-                    let _ = stream.write_all(&reply.body);
-                });
-            }
-        });
-        Self { addr, seen }
-    }
-
-    fn seen(&self) -> Vec<Seen> {
-        self.seen.lock().unwrap().clone()
-    }
-
-    fn count(&self, prefix: &str) -> usize {
-        self.seen()
-            .iter()
-            .filter(|seen| seen.path.starts_with(prefix))
-            .count()
-    }
-}
 
 // ---- provider and destination fixtures -------------------------------------
 
@@ -190,40 +61,46 @@ impl Drop for Dest {
 }
 
 fn configuration(base_url: &str) -> ProjectConfiguration {
-    ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![],
-    worktree_root: "/tmp/w".into(),
-    companion_root: "/tmp/c".into(),
-    state_root: "/tmp/s".into(),
-    cache_root: "/tmp/k".into(),
-    library_root: "/tmp/l".into(),
-    notes_root: "/tmp/notes".into(),
-    branch_template: "{repo}/{task_id}".into(),
-    checkout_template: "{repo}-{task_id}".into(),
-    providers: vec![ProjectProvider {
-        id: "jira".into(),
-        base_url: base_url.into(),
-        executable: "/nonexistent/jira".into(),
-        login: None,
-    }],
-    limits: ProjectLimits {
-        catalog_depth: 1,
-        catalog_entries: 1,
-        git_timeout_ms: 5000,
-        git_output_bytes: 1024 * 1024,
-        operation_timeout_ms: 20_000,
-        context_preview_bytes: 1024,
-        context_preview_lines: 100,
-        context_directory_entries: 100,
-        context_tree_depth: 4,
-        library_folder_files: 512,
-        library_folder_bytes: 32 * 1024 * 1024,
-        library_file_bytes: 4 * 1024 * 1024,
-        library_space_pages: 200,
-        library_attachment_bytes: 25 * 1024 * 1024,
-        library_item_attachment_bytes: 100 * 1024 * 1024,
-        library_max_items: 20_000,
-    },
-    origins: Default::default(), }
+    ProjectConfiguration {
+        version: 1,
+        orchestration: Default::default(),
+        repository_roots: vec![],
+        worktree_root: "/tmp/w".into(),
+        companion_root: "/tmp/c".into(),
+        state_root: "/tmp/s".into(),
+        cache_root: "/tmp/k".into(),
+        library_root: "/tmp/l".into(),
+        notes_root: "/tmp/notes".into(),
+        branch_template: "{repo}/{task_id}".into(),
+        checkout_template: "{repo}-{task_id}".into(),
+        providers: vec![ProjectProvider {
+            id: "jira".into(),
+            base_url: base_url.into(),
+            kind: ProviderKind::Jira,
+            executable: None,
+            login: None,
+            deployment: Some(ProviderDeployment::DataCenter),
+        }],
+        limits: ProjectLimits {
+            catalog_depth: 1,
+            catalog_entries: 1,
+            git_timeout_ms: 5000,
+            git_output_bytes: 1024 * 1024,
+            operation_timeout_ms: 20_000,
+            context_preview_bytes: 1024,
+            context_preview_lines: 100,
+            context_directory_entries: 100,
+            context_tree_depth: 4,
+            library_folder_files: 512,
+            library_folder_bytes: 32 * 1024 * 1024,
+            library_file_bytes: 4 * 1024 * 1024,
+            library_space_pages: 200,
+            library_attachment_bytes: 25 * 1024 * 1024,
+            library_item_attachment_bytes: 100 * 1024 * 1024,
+            library_max_items: 20_000,
+        },
+        origins: Default::default(),
+    }
 }
 
 enum Stored {
@@ -243,9 +120,8 @@ async fn jira_at(base_url: &str, stored: Stored) -> (JiraSourceProvider, Arc<Mem
     ));
     let (kind, username, token) = match stored {
         Stored::Nothing => {
-            let provider = JiraSourceProvider::configured(&configuration, "jira")
-                .unwrap()
-                .with_credentials(credentials);
+            let provider =
+                JiraSourceProvider::configured(&configuration, "jira", credentials).unwrap();
             return (provider, vault);
         }
         Stored::Bearer => (ProviderAuthKind::Bearer, None, BEARER),
@@ -264,9 +140,7 @@ async fn jira_at(base_url: &str, stored: Stored) -> (JiraSourceProvider, Arc<Mem
         })
         .await
         .unwrap();
-    let provider = JiraSourceProvider::configured(&configuration, "jira")
-        .unwrap()
-        .with_credentials(credentials);
+    let provider = JiraSourceProvider::configured(&configuration, "jira", credentials).unwrap();
     (provider, vault)
 }
 
@@ -614,53 +488,6 @@ async fn invalid_supplied_metadata_ids_do_not_fall_back_to_matching_paths() {
         assert_eq!(server.seen().len(), 1);
         assert!(dest.entries().is_empty());
     }
-}
-
-#[test]
-fn hop_policy_refuses_downgrade_and_unsupported_targets() {
-    let https = Url::parse("https://jira.example.test/jira/a").unwrap();
-    let http = Url::parse("http://jira.example.test/jira/a").unwrap();
-
-    assert_eq!(
-        next_hop(&https, "/jira/b?x=1").unwrap().as_str(),
-        "https://jira.example.test/jira/b?x=1"
-    );
-    assert_eq!(
-        next_hop(&https, "https://media.example.test/f")
-            .unwrap()
-            .as_str(),
-        "https://media.example.test/f"
-    );
-    assert_eq!(
-        next_hop(&http, "https://jira.example.test/b")
-            .unwrap()
-            .scheme(),
-        "https"
-    );
-    for refused in [
-        "http://jira.example.test/b",
-        "ftp://jira.example.test/b",
-        "file:///etc/passwd",
-        "https://user:pw@jira.example.test/b",
-        "https://user@jira.example.test/b",
-    ] {
-        let error = next_hop(&https, refused).expect_err(refused);
-        assert_eq!(error.code, "source_provider_contract");
-        clean(&error);
-    }
-    assert!(next_hop(&https, "http://[::").is_err());
-}
-
-#[test]
-fn origin_is_scheme_host_and_effective_port() {
-    let site = Url::parse("https://Jira.Example.test/jira").unwrap();
-    let same = |other: &str| same_origin(&Url::parse(other).unwrap(), &site);
-    assert!(same("https://jira.example.test/x"));
-    assert!(same("https://jira.example.test:443/x"));
-    assert!(!same("https://jira.example.test:8443/x"));
-    assert!(!same("http://jira.example.test/x"));
-    assert!(!same("https://jira.example.test.evil.test/x"));
-    assert!(!same("https://media.example.test/x"));
 }
 
 #[tokio::test]

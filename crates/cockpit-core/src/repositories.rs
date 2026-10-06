@@ -5,8 +5,8 @@ use std::process::Output;
 use std::time::{Duration, Instant};
 
 use cockpit_protocol::projects::{
-    ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectProvider, RepositoryCandidate,
-    RepositoryListResponse,
+    ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectProvider, ProviderKind,
+    RepositoryCandidate, RepositoryListResponse,
 };
 use percent_encoding::percent_decode_str;
 use sha2::{Digest, Sha256};
@@ -581,11 +581,11 @@ pub fn resolve_artifact(
     let provider = config
         .providers
         .iter()
-        .filter(|provider| !is_confluence_executable(&provider.executable))
+        .filter(|provider| provider.kind != ProviderKind::Confluence)
         .find(|provider| provider_matches(&parsed, &provider.base_url))
         .ok_or_else(|| {
             let confluence = config.providers.iter().any(|provider| {
-                is_confluence_executable(&provider.executable)
+                provider.kind == ProviderKind::Confluence
                     && provider_matches(&parsed, &provider.base_url)
             });
             InspectionError::new(
@@ -603,14 +603,23 @@ pub fn resolve_artifact(
             "configured provider URL is invalid",
         )
     })?;
-    if is_gitlab_executable(&provider.executable) {
-        return resolve_gitlab_artifact(&provider.id, &base, original_url);
-    }
-    if is_github_executable(&provider.executable) {
-        return resolve_github_artifact(provider, &base, &parsed, original_url);
-    }
-    if is_jira_executable(&provider.executable) {
-        return resolve_jira_artifact(provider, &base, &parsed, original_url);
+    match provider.kind {
+        ProviderKind::Gitlab => {
+            return resolve_gitlab_artifact(&provider.id, &base, original_url);
+        }
+        ProviderKind::Github => {
+            return resolve_github_artifact(provider, &base, &parsed, original_url);
+        }
+        ProviderKind::Jira => {
+            return resolve_jira_artifact(provider, &base, &parsed, original_url);
+        }
+        ProviderKind::Confluence => {
+            return Err(InspectionError::new(
+                "unsupported_artifact",
+                "Confluence pages are resolved through the selected Confluence provider",
+            ));
+        }
+        ProviderKind::Gitea => {}
     }
     let relative = parsed
         .path()
@@ -837,18 +846,6 @@ fn raw_url_path(value: &str) -> Option<&str> {
     Some(&value[path_start..path_end])
 }
 
-fn is_gitlab_executable(executable: &str) -> bool {
-    Path::new(executable)
-        .file_name()
-        .is_some_and(|name| name == "glab")
-}
-
-fn is_github_executable(executable: &str) -> bool {
-    Path::new(executable)
-        .file_name()
-        .is_some_and(|name| name == "gh")
-}
-
 fn resolve_github_artifact(
     provider: &ProjectProvider,
     base: &Url,
@@ -918,19 +915,6 @@ fn resolve_github_artifact(
     })
 }
 
-pub fn is_jira_executable(executable: &str) -> bool {
-    Path::new(executable)
-        .file_name()
-        .is_some_and(|name| name == "jira")
-}
-
-/// pchuri/confluence-cli, selected by executable file name.
-pub fn is_confluence_executable(executable: &str) -> bool {
-    Path::new(executable)
-        .file_name()
-        .is_some_and(|name| name == "confluence")
-}
-
 /// The Confluence provider that owns `input`: the explicitly selected
 /// provider when it is a Confluence provider, otherwise the single Confluence
 /// provider whose configured base URL (scheme, host, port, path prefix)
@@ -944,7 +928,7 @@ pub fn confluence_provider_for_input(
     let confluence = configuration
         .providers
         .iter()
-        .filter(|provider| is_confluence_executable(&provider.executable));
+        .filter(|provider| provider.kind == ProviderKind::Confluence);
     if let Some(selected) = selected {
         return confluence
             .filter(|provider| provider.id == selected)
@@ -971,10 +955,7 @@ pub fn provider_is_repository_independent(
         .providers
         .iter()
         .find(|provider| provider.id == provider_id)
-        .is_some_and(|provider| {
-            is_jira_executable(&provider.executable)
-                || is_confluence_executable(&provider.executable)
-        })
+        .is_some_and(|provider| matches!(provider.kind, ProviderKind::Jira | ProviderKind::Confluence))
 }
 
 /// A Jira issue key: an uppercase project key, a dash and a positive number.
@@ -1194,7 +1175,9 @@ fn diagnostic(code: &str, message: &str, path: Option<&str>) -> ProjectDiagnosti
 #[cfg(test)]
 mod tests {
     use super::resolve_artifact;
-    use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
+    use cockpit_protocol::projects::{
+        ProjectConfiguration, ProjectLimits, ProjectProvider, ProviderDeployment, ProviderKind,
+    };
     use std::collections::BTreeMap;
 
     fn config() -> ProjectConfiguration {
@@ -1209,9 +1192,11 @@ mod tests {
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
             id: "gitea".into(),
+            kind: ProviderKind::Gitea,
             base_url: "https://git.example.test/".into(),
-            executable: "tea".into(),
+            executable: Some("tea".into()),
             login: None,
+            deployment: None,
         }],
         limits: ProjectLimits {
             catalog_depth: 3,
@@ -1336,13 +1321,46 @@ mod tests {
     }
 
     #[test]
+    fn forge_resolution_and_repository_authority_use_explicit_kind() {
+        let mut config = config();
+        // A CLI executable may have a different provider's former basename.
+        config.providers[0].executable = Some("/usr/local/bin/jira".into());
+        let artifact = resolve_artifact(&config, "https://git.example.test/acme/app/issues/42").unwrap();
+        assert_eq!(artifact.canonical_id, "acme/app#42");
+        assert!(!super::provider_is_repository_independent(&config, "gitea"));
+
+        config.providers[0].kind = ProviderKind::Gitlab;
+        config.providers[0].executable = Some("custom-gitlab-client".into());
+        let artifact = resolve_artifact(
+            &config,
+            "https://git.example.test/acme/team/app/-/issues/42",
+        ).unwrap();
+        assert_eq!(artifact.canonical_id, "acme/team/app#42");
+        assert_eq!(artifact.kind, "issue");
+
+        for kind in [
+            ProviderKind::Github, ProviderKind::Gitlab, ProviderKind::Gitea,
+            ProviderKind::Jira, ProviderKind::Confluence,
+        ] {
+            config.providers[0].kind = kind;
+            assert_eq!(
+                super::provider_is_repository_independent(&config, "gitea"),
+                matches!(kind, ProviderKind::Jira | ProviderKind::Confluence)
+            );
+        }
+        assert!(!super::provider_is_repository_independent(&config, "unknown"));
+    }
+
+    #[test]
     fn github_provider_resolves_public_issues_and_pull_requests() {
         let mut config = config();
         config.providers = vec![ProjectProvider {
             id: "github".into(),
+            kind: ProviderKind::Github,
             base_url: "https://github.com/".into(),
-            executable: "gh".into(),
+            executable: Some("custom-github-client".into()),
             login: None,
+            deployment: None,
         }];
         let artifact =
             resolve_artifact(&config, "https://github.com/nnexai/cockpit/issues/4").unwrap();
@@ -1372,13 +1390,15 @@ mod tests {
     }
 
     #[test]
-    fn github_executable_rejects_enterprise_provider_base() {
+    fn github_kind_rejects_enterprise_provider_base() {
         let mut config = config();
         config.providers = vec![ProjectProvider {
             id: "github".into(),
+            kind: ProviderKind::Github,
             base_url: "https://github.example.com/".into(),
-            executable: "/usr/local/bin/gh".into(),
+            executable: Some("/usr/local/bin/custom-github-client".into()),
             login: None,
+            deployment: None,
         }];
         let error = resolve_artifact(
             &config,
@@ -1392,9 +1412,11 @@ mod tests {
         let mut config = config();
         config.providers = vec![ProjectProvider {
             id: "jira".into(),
+            kind: ProviderKind::Jira,
             base_url: "https://team.atlassian.test".into(),
-            executable: "/usr/bin/jira".into(),
+            executable: None,
             login: None,
+            deployment: Some(ProviderDeployment::DataCenter),
         }];
         config
     }
@@ -1455,21 +1477,27 @@ mod tests {
         config.providers = vec![
             ProjectProvider {
                 id: "wiki".into(),
+                kind: ProviderKind::Confluence,
                 base_url: "https://acme.atlassian.test/wiki".into(),
-                executable: "/opt/bin/confluence".into(),
-                login: Some("reader".into()),
+                executable: None,
+                login: None,
+                deployment: Some(ProviderDeployment::Cloud),
             },
             ProjectProvider {
                 id: "dc".into(),
+                kind: ProviderKind::Confluence,
                 base_url: "https://confluence.example.test/confluence".into(),
-                executable: "confluence".into(),
-                login: Some("dc".into()),
+                executable: None,
+                login: None,
+                deployment: Some(ProviderDeployment::DataCenter),
             },
             ProjectProvider {
                 id: "gitea".into(),
+                kind: ProviderKind::Gitea,
                 base_url: "https://git.example.test".into(),
-                executable: "tea".into(),
+                executable: Some("custom-forge-client".into()),
                 login: None,
+                deployment: None,
             },
         ];
         // Four segments would be a Gitea issue shape if Confluence fell through.

@@ -1,6 +1,6 @@
 //! Explicit attachment acquisition and complete-item D2 republication.
 use super::{LibraryService, SaveOptions, operations, store::{self, LibraryIndexEntry, MarkerFile, Stage, Store, error}};
-use crate::{InspectionError, sources::{AttachmentRef, SourceAsset, SourceAttachment, SourceContainer, SourceRef, FrontmatterField, content_revision, confluence_attachment_pattern, confluence_glob_matches}};
+use crate::{InspectionError, sources::{AttachmentRef, SourceAsset, SourceAttachment, SourceContainer, SourceRef, FrontmatterField, content_revision}};
 use cap_fs_ext::{DirExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, OpenOptions};
 use cockpit_protocol::library::*;
@@ -126,7 +126,6 @@ impl LibraryService {
         if asset.attachments.iter().any(|a| !ids.insert(a.id.clone())) {
             return Err(error("source_provider_contract", "Attachment ids are not unique"));
         }
-        let refs: Vec<_> = asset.attachments.iter().map(|a| AttachmentRef { id: a.id.clone(), title: a.title.clone(), bytes: a.size }).collect();
         let mut used = old.into_iter().flat_map(|e| &e.summary.attachments)
             .filter_map(|a| a.relative_path.as_deref().and_then(|p| p.strip_prefix("_files/")))
             .map(str::to_ascii_lowercase).collect::<BTreeSet<_>>();
@@ -194,31 +193,19 @@ impl LibraryService {
                 failures.push(format!("{}: over limit", a.title));
                 continue;
             }
-            // Only Confluence pages have filename-glob siblings; any other
-            // download is exactly this one attachment.
-            let page = asset.source.resource_type == "page";
-            let matched: Vec<&AttachmentRef> = if page {
-                let pattern = confluence_attachment_pattern(&a.title);
-                refs.iter().filter(|r| confluence_glob_matches(&pattern, &r.title)).collect()
-            } else {
-                vec![&refs[index]]
+            // ID-addressed downloads acquire only the selected attachment.
+            // An unknown size reserves the full per-file allowance.
+            let budget = crate::process::StagingBudget {
+                bytes: a.size.unwrap_or(per_file),
+                max_files: 1,
             };
-            // Unknown sizes reserve the full per-file allowance. Checked
-            // addition refuses overflowing match sets rather than truncating
-            // the allowance passed to the in-flight monitor.
-            let budget = matched.into_iter().try_fold(crate::process::StagingBudget { bytes: 0, max_files: 0 }, |budget, r| {
-                Some(crate::process::StagingBudget {
-                    bytes: budget.bytes.checked_add(r.bytes.unwrap_or(per_file))?,
-                    max_files: budget.max_files + 1,
-                })
-            });
             let remaining = per_page.saturating_sub(total);
-            let Some(budget) = budget.filter(|budget| budget.bytes <= per_file && budget.bytes <= remaining) else {
+            if budget.bytes > per_file || budget.bytes > remaining {
                 if previous.is_some_and(|p| p.state == LibraryAttachmentState::Downloaded) {
-                    return Err(error("source_attachment_size", "Attachment replacement matches siblings over the limit; the previous page and attachments were retained"));
+                    return Err(error("source_attachment_size", "Attachment replacement exceeds limits; the previous page and attachments were retained"));
                 }
                 a.not_downloaded = Some("failed".into()); prepared.partial = true;
-                failures.push(format!("{}: name matches other attachments over the limit", a.title));
+                failures.push(format!("{}: download allowance exceeds remaining limits", a.title));
                 continue;
             };
             if downloads.is_none() { downloads = Some(store.stage()?); }
@@ -227,14 +214,14 @@ impl LibraryService {
             rustix::fs::mkdirat(&downloads.dir, &dl, rustix::fs::Mode::from_raw_mode(0o700)).map_err(|e| io(e.into()))?;
             let dest = downloads.dir.open_dir_nofollow(&dl).map_err(io)?;
             let dest_path = store.path.join(".cockpit/staging").join(&downloads.name).join(&dl);
-            let siblings: Vec<_> = refs.iter().filter(|r| page && r.id != a.id).cloned().collect();
+            let attachment = AttachmentRef { id: a.id.clone(), title: a.title.clone(), bytes: a.size };
             let result = tokio::select! {
                 biased;
                 cancelled = wait_for_cancellation(store, operation) => {
                     cancelled?;
                     return Ok(None);
                 }
-                result = self.sources.download_attachment(&asset.source.provider_id, &asset.source.resource_type, &asset.source.canonical_id, &refs[index], &siblings, &dest, &dest_path, budget) => result,
+                result = self.sources.download_attachment(&asset.source.provider_id, &asset.source.resource_type, &asset.source.canonical_id, &attachment, &[], &dest, &dest_path, budget) => result,
             };
             if operations::cancelled(store, operation)? { return Ok(None); }
             let actual = super::folder_io::open_absolute_dir_nofollow(&dest_path).map_err(|_| unsafe_download())?;

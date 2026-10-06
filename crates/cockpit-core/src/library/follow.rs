@@ -12,7 +12,7 @@ use crate::{
         confluence_page_url, site_authority,
     },
 };
-use cockpit_protocol::{library::*, projects::ProjectDiagnostic};
+use cockpit_protocol::{library::*, projects::{ProjectDiagnostic, ProviderKind}};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -94,8 +94,7 @@ impl LibraryService {
         provider_id: &str,
     ) -> Result<crate::sources::SourceAuthority, InspectionError> {
         let confluence = self.configuration.providers.iter().any(|provider| {
-            provider.id == provider_id
-                && crate::repositories::is_confluence_executable(&provider.executable)
+            provider.id == provider_id && provider.kind == ProviderKind::Confluence
         });
         if !confluence {
             return Err(error(
@@ -607,8 +606,8 @@ impl LibraryService {
 
 
     /// D20: only a complete, non-partial run reaches here. A page absent from
-    /// the enumeration is removed at source only when `Info` says it no longer
-    /// exists or now lives in another space.
+    /// the enumeration is removed at source only when the provider confirms it
+    /// no longer exists or now lives in another space.
     async fn confirm_absent_pages(
         &self,
         store: &Arc<Store>,
@@ -1099,15 +1098,38 @@ mod tests {
         let mut configuration = base.service.configuration.clone();
         configuration.providers = vec![ProjectProvider {
             id: "confluence".into(),
+            kind: ProviderKind::Confluence,
             base_url: base_url.into(),
-            executable: "/usr/local/bin/confluence".into(),
-            login: Some("read-only".into()),
+            executable: None,
+            login: None,
+            deployment: Some(if cloud {
+                cockpit_protocol::projects::ProviderDeployment::Cloud
+            } else {
+                cockpit_protocol::projects::ProviderDeployment::DataCenter
+            }),
         }];
         configuration.limits.library_space_pages = page_limit;
         let provider = Arc::new(FakeSpaces::new(base_url, cloud));
         let sources = Arc::new(SourceService::new(&configuration, vec![provider.clone()]).unwrap());
         base.service = LibraryService::new(configuration, sources);
         Fixture { base, provider }
+    }
+
+    #[test]
+    fn confluence_follow_authority_uses_kind_not_executable_or_id() {
+        let mut f = fixture(CLOUD, true, 200);
+        assert_eq!(
+            f.base.service.confluence_site("confluence").unwrap().provider_instance,
+            CLOUD
+        );
+        let provider = &mut f.base.service.configuration.providers[0];
+        provider.kind = ProviderKind::Gitea;
+        provider.executable = Some("/usr/local/bin/confluence".into());
+        provider.deployment = None;
+        assert_eq!(
+            f.base.service.confluence_site("confluence").unwrap_err().code,
+            "source_provider_unsupported"
+        );
     }
     fn follow_request(key: &str, target: Option<SpaceTarget>) -> LibraryAddRequest {
         LibraryAddRequest {

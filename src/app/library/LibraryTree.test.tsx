@@ -9,7 +9,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const onNotice = vi.fn();
 
-const providers: ProjectProvider[] = [{ id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence", login: "default" }];
+const providers: ProjectProvider[] = [{ id: "cloud", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki", deployment: "cloud" as const }];
 const home = { id: "1", title: "Engineering home" };
 const processPage = { id: "10", title: "Release process" };
 
@@ -319,7 +319,7 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
 });
 
 it("shows a followed Jira query as a container titled by its JQL, marks unreferenced issues, and offers Keep in Library only for issues without their own reference", async () => {
-  const jira: ProjectProvider[] = [{ id: "jira", base_url: "https://jira.test", executable: "jira", login: "default" }];
+  const jira: ProjectProvider[] = [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test", deployment: "data_center" as const }];
   const issue = (key: string, overrides: Partial<LibraryItemSummary>) => page({
     item_id: `source:${key}`, provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue", canonical_id: key, container: { container_id: "OPS", label: "OPS" }, title: `Issue ${key}`,
     document_path: `jira/jira.test/OPS/${key}/Issue.md`, item_path: `jira/jira.test/OPS/${key}`, source_url: `https://jira.test/browse/${key}`, ...overrides,
@@ -370,9 +370,9 @@ it("shows a followed Jira query as a container titled by its JQL, marks unrefere
 
 it("offers Provider token… on a Jira or Confluence instance row, opens it for that provider, and reads token states only when an issue's menu opens", async () => {
   const config: ProjectProvider[] = [
-    { id: "jira", base_url: "https://team.atlassian.net", executable: "jira" },
-    { id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence", login: "default" },
-    { id: "gitlab", base_url: "https://gitlab.test", executable: "glab" },
+    { id: "jira", kind: "jira" as const, base_url: "https://team.atlassian.net", deployment: "cloud" as const },
+    { id: "cloud", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki", deployment: "cloud" as const },
+    { id: "gitlab", kind: "gitlab" as const, base_url: "https://gitlab.test", executable: "glab" },
   ];
   const issue = page({
     item_id: "source:ops-1", provider_id: "jira", provider_instance: "https://team.atlassian.net", resource_type: "issue", canonical_id: "OPS-1", container: null, title: "Crash",
@@ -430,7 +430,7 @@ it("offers Provider token… on a Jira or Confluence instance row, opens it for 
 });
 
 it("lists a Jira issue's attachments under an Attachments group, and leaves an issue without attachments a plain row", async () => {
-  const jira: ProjectProvider[] = [{ id: "jira", base_url: "https://jira.test", executable: "jira" }];
+  const jira: ProjectProvider[] = [{ id: "jira", kind: "jira" as const, base_url: "https://jira.test", deployment: "data_center" as const }];
   const issue = (key: string, attachments: LibraryItemSummary["attachments"]) => page({
     item_id: `issue:${key}`, provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue", canonical_id: key, container: { container_id: "OPS", label: "OPS" },
     title: key, document_path: `jira/jira.test/OPS/${key}/${key}.md`, item_path: `jira/jira.test/OPS/${key}`, attachments,
@@ -453,8 +453,8 @@ it("lists a Jira issue's attachments under an Attachments group, and leaves an i
 
 const site = "https://nnexai.atlassian.net";
 const jiraProviders: ProjectProvider[] = [
-  { id: "confluence", base_url: `${site}/wiki`, executable: "confluence", login: "default" },
-  { id: "jira", base_url: site, executable: "jira" },
+  { id: "confluence", kind: "confluence" as const, base_url: `${site}/wiki`, deployment: "cloud" as const },
+  { id: "jira", kind: "jira" as const, base_url: site, deployment: "cloud" as const },
 ];
 const query: LibraryFollowSummary = {
   follow_id: "follow:jql", provider_id: "jira", provider_instance: site, source: { kind: "jira_query", jql: "project = SCRUM AND resolution = Unresolved ORDER BY created DESC", mode: "live" },

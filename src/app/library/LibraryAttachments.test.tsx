@@ -18,7 +18,7 @@ const page: LibraryItemSummary = {
     { attachment_id: "large", original_name: "large.bin", stored_name: "large.bin", media_type: null, bytes: 100_000_000, version: "1", state: "over_limit", relative_path: null },
   ],
 };
-const providers = [{ id: "confluence", base_url: "https://wiki.test", executable: "confluence" }];
+const providers = [{ id: "confluence", kind: "confluence" as const, base_url: "https://wiki.test", deployment: "data_center" as const }];
 async function flush() { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); }
 
 it("downloads only chosen rows, keeps over-limit rows inert, and removes only downloaded bytes", async () => {
@@ -62,7 +62,7 @@ it("lists a Jira issue's attachments read-only, with no download controls", asyn
   const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false, attachments };
   const issue: LibraryItemSummary = { ...page, item_id: "issue:ops1", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue", canonical_id: "OPS-1", container: { container_id: "OPS", label: "OPS" }, title: "Crash", document_path: "jira/jira.test/OPS/OPS-1/Crash.md", item_path: "jira/jira.test/OPS/OPS-1", attachments: [{ attachment_id: "10100", original_name: "trace.log", stored_name: "trace.log", media_type: "text/plain", bytes: 2048, version: null, state: "not_downloaded", relative_path: null }] };
   try {
-    await act(async () => root.render(<LibraryItemHeader item={issue} providers={[{ id: "jira", base_url: "https://jira.test", executable: "jira" }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
+    await act(async () => root.render(<LibraryItemHeader item={issue} providers={[{ id: "jira", kind: "jira" as const, base_url: "https://jira.test", deployment: "data_center" as const }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
     await act(async () => host.querySelector<HTMLButtonElement>(".library-attachments-toggle")!.click());
     expect(host.querySelector('[aria-label="Attachments"]')?.textContent).toContain("trace.log");
     expect(host.querySelector(".library-attachments")?.textContent).toContain("2 KB");
@@ -80,7 +80,7 @@ it.each(["loading", "needs_token", "stored"] as const)("gates a Jira issue's att
   const issue: LibraryItemSummary = { ...page, item_id: "issue:ops1", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue", canonical_id: "OPS-1", container: { container_id: "OPS", label: "OPS" }, title: "Crash", document_path: "jira/jira.test/OPS/OPS-1/Crash.md", item_path: "jira/jira.test/OPS/OPS-1", attachments: [{ attachment_id: "10100", original_name: "trace.log", stored_name: "trace.log", media_type: "text/plain", bytes: 2048, version: null, state: "not_downloaded", relative_path: null }] };
   const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".library-attachments button")].find((node) => node.textContent === name);
   try {
-    await act(async () => root.render(<LibraryItemHeader item={issue} providers={[{ id: "jira", base_url: "https://jira.test", executable: "jira" }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
+    await act(async () => root.render(<LibraryItemHeader item={issue} providers={[{ id: "jira", kind: "jira" as const, base_url: "https://jira.test", deployment: "data_center" as const }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
     // Token states are read once the item's attachments are in view, only while they are unknown.
     expect(credentials.ensure).toHaveBeenCalledTimes(access === "loading" ? 1 : 0);
     await act(async () => host.querySelector<HTMLButtonElement>(".library-attachments-toggle")!.click());
@@ -105,18 +105,18 @@ it.each(["loading", "needs_token", "stored"] as const)("gates a Jira issue's att
 });
 
 it.each([
-  { access: "needs_token" as const, executable: "jira", provider: "jira", cue: true, menu: true },
-  { access: "stored" as const, executable: "jira", provider: "jira", cue: false, menu: true },
-  { access: null, executable: "confluence", provider: "confluence", cue: false, menu: true },
-  { access: null, executable: "glab", provider: "gitlab", cue: false, menu: false },
-])("offers Provider tokens… for $executable (token $access): cue $cue, menu entry $menu", async ({ access, executable, provider, cue, menu }) => {
+  { access: "needs_token" as const, provider: "jira" as const, cue: true, menu: true },
+  { access: "stored" as const, provider: "jira" as const, cue: false, menu: true },
+  { access: null, provider: "confluence" as const, cue: false, menu: true },
+  { access: null, provider: "gitlab" as const, cue: false, menu: false },
+])("offers Provider tokens… for $provider (token $access): cue $cue, menu entry $menu", async ({ access, provider, cue, menu }) => {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   const credentials = { statuses: null, ensure: vi.fn(), open: vi.fn(), attachmentAccess: vi.fn(() => access) };
   const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false, attachments: { start: vi.fn(), open: vi.fn(), busy: false, active: null }, credentials };
   const item: LibraryItemSummary = { ...page, item_id: `${provider}:1`, provider_id: provider, provider_instance: "https://x.test", resource_type: "issue", canonical_id: "OPS-1", container: null, title: "Crash", attachments: [{ ...page.attachments[0]! }] };
   try {
-    await act(async () => root.render(<LibraryItemHeader item={item} providers={[{ id: provider, base_url: "https://x.test", executable }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
+    await act(async () => root.render(<LibraryItemHeader item={item} providers={[{ id: provider, kind: provider, base_url: "https://x.test", ...(provider === "gitlab" ? { executable: "glab" } : { deployment: "data_center" as const }) }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
     const cueButton = host.querySelector<HTMLButtonElement>(".library-token-cue button");
     expect(cueButton !== null).toBe(cue);
     if (cueButton) { await act(async () => cueButton.click()); expect(credentials.open).toHaveBeenCalledWith(provider); }

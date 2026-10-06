@@ -75,9 +75,21 @@ mod tests {
     use super::*;
     use cockpit_protocol::projects::OrchestrationRoute;
 
+    fn configuration() -> ProjectConfiguration {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-routing-config-{}-{nonce}.toml", std::process::id()));
+        std::fs::write(&path, "version = 1\n").expect("write isolated routing configuration");
+        let configuration = crate::config::load_project_configuration(Some(&path), None);
+        std::fs::remove_file(path).expect("remove routing configuration");
+        configuration.expect("isolated routing configuration")
+    }
+
     #[test]
     fn configured_routes_require_instance_and_preserve_ambiguity() {
-        let mut config = crate::config::load_project_configuration(None, None).unwrap();
+        let mut config = configuration();
         config.orchestration.routes = vec![
             OrchestrationRoute {
                 provider: "jira".into(),
@@ -109,7 +121,7 @@ mod tests {
     }
     #[test]
     fn forge_fallback_preserves_all_distinct_matches() {
-        let mut config = crate::config::load_project_configuration(None, None).unwrap();
+        let mut config = configuration();
         config.orchestration.routes.clear();
         let artifact = ProjectArtifact {
             provider_id: "github".into(),

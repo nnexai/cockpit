@@ -1,89 +1,154 @@
-//! Loopback Confluence REST v1 fixture for running the real confluence-cli.
-//!
-//! Binds `127.0.0.1:0`, serves synthetic pages only, and writes a private
-//! temporary CLI configuration (`authType: none`, `readOnly: true`). The
-//! `confluence` wrapper it creates logs argv only and drops every inherited
-//! `CONFLUENCE_*` variable except the two read-only settings Cockpit must
-//! pass, and the credential variables Cockpit sets when it injects [`TOKEN`]
-//! (whose names, never values, it logs to `envnames.jsonl`). It points
-//! `CONFLUENCE_CONFIG_DIR`, `HOME` and `NETRC` at the temporary directory so
-//! no real profile, token or netrc is read.
-
+//! Synthetic Cloud v2 / Data Center v1 fixture. No CLI, profiles or ambient auth.
+use parking_lot::Mutex;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
-use serde_json::{Value, json};
-
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
-pub const PROFILE: &str = "cockpit-fake";
-/// The token the harness stores in Cockpit for the fixture site.
-pub const TOKEN: &str = "cockpit-fixture-token-7f3a";
-
+pub const TOKEN: &str = "cockpit-confluence-http-fixture-token";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// `forceCloud`, API under `/wiki/rest/api`, page URLs `/wiki/spaces/<K>/pages/<id>/<title>`.
     Cloud,
-    /// API under `/rest/api`, page URLs `/display/<K>/<title>`.
     DataCenter,
 }
-
-#[derive(Debug, Clone)]
+impl Mode {
+    pub fn context(self) -> &'static str {
+        match self {
+            Self::Cloud => "/wiki",
+            Self::DataCenter => "/confluence",
+        }
+    }
+    pub fn api(self) -> &'static str {
+        match self {
+            Self::Cloud => "/wiki/api/v2",
+            Self::DataCenter => "/confluence/rest/api",
+        }
+    }
+}
+#[derive(Clone)]
 pub struct Page {
     pub id: String,
     pub title: String,
-    pub space_key: String,
-    pub space_name: String,
     pub version: u64,
-    /// Storage-format XHTML; the CLI converts it to Markdown.
     pub storage: String,
-    /// `(id, type, title)`, root first.
+    /// Root-to-parent `(id, type, title)`.
     pub ancestors: Vec<(String, String, String)>,
     pub labels: Vec<String>,
-    /// `(id, title, media type, bytes)`.
     pub attachments: Vec<(String, String, String, u64)>,
 }
-
-#[derive(Default)]
+impl Page {
+    pub fn new(id: &str, title: &str, ancestors: &[(&str, &str, &str)]) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            version: 7,
+            storage: "<h1>Overview</h1><p>Hello <strong>world</strong>.</p>".into(),
+            ancestors: ancestors
+                .iter()
+                .map(|(id, kind, title)| (id.to_string(), kind.to_string(), title.to_string()))
+                .collect(),
+            labels: vec!["release".into(), "engineering".into()],
+            attachments: vec![(
+                "att557057".into(),
+                "release-flow.png".into(),
+                "image/png".into(),
+                4,
+            )],
+        }
+    }
+}
+#[derive(Clone)]
+pub struct Response {
+    pub status: u16,
+    pub body: Vec<u8>,
+    pub content_type: &'static str,
+    pub location: Option<String>,
+    pub declared_length: Option<usize>,
+}
+impl Response {
+    pub fn json(status: u16, value: Value) -> Self {
+        Self {
+            status,
+            body: serde_json::to_vec(&value).unwrap(),
+            content_type: "application/json",
+            location: None,
+            declared_length: None,
+        }
+    }
+    pub fn bytes(bytes: &[u8]) -> Self {
+        Self {
+            status: 200,
+            body: bytes.to_vec(),
+            content_type: "application/octet-stream",
+            location: None,
+            declared_length: None,
+        }
+    }
+    pub fn redirect(location: String) -> Self {
+        Self {
+            status: 302,
+            body: Vec::new(),
+            content_type: "application/octet-stream",
+            location: Some(location),
+            declared_length: None,
+        }
+    }
+}
+#[derive(Clone)]
+pub struct Request {
+    pub method: String,
+    pub target: String,
+    pub authorized: bool,
+    pub authorization_present: bool,
+}
 pub struct State {
     pub pages: BTreeMap<String, Page>,
-    /// Every request line as `METHOD path?query`.
-    pub requests: Vec<String>,
-    /// Answer every request with HTTP 401.
+    pub space_keys: Vec<String>,
+    pub requests: Vec<Request>,
     pub unauthorized: bool,
-    /// Every request line's `Authorization` header, parallel to `requests`.
-    pub authorizations: Vec<Option<String>>,
-    /// Answer HTTP 401 unless the request carries exactly this `Authorization`.
-    pub required_authorization: Option<String>,
-    /// Report this `_links.base` instead of the server's own origin.
-    pub links_base: Option<String>,
+    pub user_status: u16,
+    pub page_size: usize,
+    pub next_override: Option<String>,
+    pub overrides: BTreeMap<String, Response>,
+    pub download_redirect: Option<String>,
+    pub download_body: Vec<u8>,
+    pub cancel_after_path: Option<(String, Arc<AtomicBool>)>,
+    pub labels_unbounded: bool,
+    pub attachments_unbounded: bool,
 }
-
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            pages: BTreeMap::new(),
+            space_keys: vec!["ENG".into()],
+            requests: Vec::new(),
+            unauthorized: false,
+            user_status: 200,
+            page_size: 2,
+            next_override: None,
+            overrides: BTreeMap::new(),
+            download_redirect: None,
+            download_body: vec![1, 2, 3, 4],
+            cancel_after_path: None,
+            labels_unbounded: false,
+            attachments_unbounded: false,
+        }
+    }
+}
 pub struct FakeConfluence {
     pub mode: Mode,
     pub port: u16,
-    pub root: PathBuf,
     pub state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
-
 impl FakeConfluence {
-    pub fn start(mode: Mode, cli: &Path) -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "cockpit-fake-confluence-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        for directory in ["config", "home", "bin"] {
-            std::fs::create_dir_all(root.join(directory)).unwrap();
-        }
+    pub fn start(mode: Mode) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -99,490 +164,336 @@ impl FakeConfluence {
                             let state = state.clone();
                             std::thread::spawn(move || serve(stream, mode, port, &state));
                         }
-                        Err(_) => std::thread::sleep(Duration::from_millis(5)),
+                        Err(_) => std::thread::sleep(Duration::from_millis(2)),
                     }
                 }
             })
         };
-        let api_path = match mode {
-            Mode::Cloud => "/wiki/rest/api",
-            Mode::DataCenter => "/rest/api",
-        };
-        let mut profile = json!({
-            "domain": format!("127.0.0.1:{port}"),
-            "protocol": "http",
-            "apiPath": api_path,
-            "authType": "none",
-            "readOnly": true,
-        });
-        if mode == Mode::Cloud {
-            profile["forceCloud"] = json!(true);
-        }
-        std::fs::write(
-            root.join("config/config.json"),
-            serde_json::to_vec_pretty(&json!({
-                "activeProfile": PROFILE,
-                "profiles": { PROFILE: profile },
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let wrapper = root.join("bin/confluence");
-        std::fs::write(
-            &wrapper,
-            format!(
-                r#"#!/usr/bin/env python3
-import json, os, sys
-with open({log:?}, 'a') as log:
-    log.write(json.dumps(sys.argv[1:]) + '\n')
-if os.environ.get('CONFLUENCE_READ_ONLY') != 'true' or os.environ.get('CONFLUENCE_CLI_ANALYTICS') != 'false':
-    sys.stderr.write('Cockpit did not pass the read-only environment\n')
-    sys.exit(97)
-env = {{key: value for key, value in os.environ.items() if not key.startswith('CONFLUENCE_')}}
-injected = {{key: value for key, value in os.environ.items()
-            if key in ('CONFLUENCE_DOMAIN', 'CONFLUENCE_PROTOCOL', 'CONFLUENCE_API_PATH',
-                       'CONFLUENCE_AUTH_TYPE', 'CONFLUENCE_EMAIL', 'CONFLUENCE_API_TOKEN')
-            and os.environ.get('CONFLUENCE_API_TOKEN') == {token:?}}}
-with open({names:?}, 'a') as log:
-    log.write(json.dumps(sorted(injected)) + '\n')
-env.update(injected)
-env.update({{
-    'CONFLUENCE_READ_ONLY': 'true',
-    'CONFLUENCE_CLI_ANALYTICS': 'false',
-    'CONFLUENCE_CONFIG_DIR': {config:?},
-    'HOME': {home:?},
-    'XDG_CONFIG_HOME': {home:?} + '/.config',
-    'NETRC': {home:?} + '/netrc-absent',
-}})
-os.execve({cli:?}, [{cli:?}] + sys.argv[1:], env)
-"#,
-                log = root.join("argv.jsonl").to_str().unwrap(),
-                config = root.join("config").to_str().unwrap(),
-                home = root.join("home").to_str().unwrap(),
-                cli = cli.to_str().unwrap(),
-                token = TOKEN,
-                names = root.join("envnames.jsonl").to_str().unwrap(),
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self {
             mode,
             port,
-            root,
             state,
             stop,
             thread: Some(thread),
         }
     }
-
-    /// The provider `base_url` for this instance.
     pub fn base_url(&self) -> String {
-        match self.mode {
-            Mode::Cloud => format!("http://127.0.0.1:{}/wiki", self.port),
-            Mode::DataCenter => format!("http://127.0.0.1:{}", self.port),
-        }
+        format!("http://127.0.0.1:{}{}", self.port, self.mode.context())
     }
-
-    pub fn executable(&self) -> String {
-        self.root.join("bin/confluence").to_str().unwrap().into()
-    }
-
     pub fn add_page(&self, page: Page) {
-        self.state
-            .lock()
-            .unwrap()
-            .pages
-            .insert(page.id.clone(), page);
+        self.state.lock().pages.insert(page.id.clone(), page);
     }
-
-    pub fn update_page(&self, id: &str, change: impl FnOnce(&mut Page)) {
-        change(self.state.lock().unwrap().pages.get_mut(id).unwrap());
+    pub fn requests(&self) -> Vec<Request> {
+        self.state.lock().requests.clone()
     }
-
-    /// Logged argv, one call per entry; never the environment.
-    pub fn argv(&self) -> Vec<Vec<String>> {
-        std::fs::read_to_string(self.root.join("argv.jsonl"))
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-
-    /// Names of the credential variables each call received from Cockpit.
-    pub fn env_names(&self) -> Vec<Vec<String>> {
-        std::fs::read_to_string(self.root.join("envnames.jsonl"))
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-
-    pub fn requests(&self) -> Vec<String> {
-        self.state.lock().unwrap().requests.clone()
+    pub fn count(&self, path: &str) -> usize {
+        self.requests()
+            .iter()
+            .filter(|request| request.target.split('?').next() == Some(path))
+            .count()
     }
 }
-
 impl Drop for FakeConfluence {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            thread.join().unwrap();
         }
-        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
-
 fn web_title(title: &str) -> String {
-    title
-        .bytes()
-        .map(|byte| match byte {
-            b' ' => "+".to_owned(),
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
-                (byte as char).to_string()
-            }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
+    url::form_urlencoded::byte_serialize(title.as_bytes())
+        .collect::<String>()
+        .replace("%20", "+")
 }
-
-fn page_json(page: &Page, mode: Mode, base: &str) -> Value {
-    let webui = match mode {
-        Mode::Cloud => format!(
-            "/spaces/{}/pages/{}/{}",
-            page.space_key,
-            page.id,
-            web_title(&page.title)
-        ),
-        Mode::DataCenter => format!("/display/{}/{}", page.space_key, web_title(&page.title)),
+pub fn page_json(page: &Page, mode: Mode) -> Value {
+    let webui = if mode == Mode::Cloud {
+        format!("/spaces/ENG/pages/{}/{}", page.id, web_title(&page.title))
+    } else {
+        format!("/display/ENG/{}", web_title(&page.title))
     };
-    let by = json!({
-        "type": "known",
-        "accountId": "<account-id>",
-        "email": "<email>",
-        "displayName": "Fixture Author",
-        "publicName": "Fixture Author",
-    });
-    json!({
-        "id": page.id,
-        "type": "page",
-        "status": "current",
-        "title": page.title,
-        "space": { "key": page.space_key, "name": page.space_name, "type": "global" },
-        "history": {
-            "latest": true,
-            "createdBy": by,
-            "createdDate": "2026-09-01T08:00:00.000Z",
-            "lastUpdated": { "by": by, "when": "2026-09-25T14:03:11.000Z", "number": page.version },
-        },
-        "version": { "by": by, "when": "2026-09-25T14:03:11.000Z", "number": page.version, "minorEdit": false },
-        "position": page.ancestors.len() as i64,
-        "ancestors": page.ancestors.iter().map(|(id, kind, title)| json!({
-            "id": id, "type": kind, "status": "current", "title": title,
-        })).collect::<Vec<_>>(),
-        "body": { "storage": { "value": page.storage, "representation": "storage" } },
-        "_links": {
-            "base": base,
-            "context": if mode == Mode::Cloud { "/wiki" } else { "" },
-            "webui": webui,
-            "self": format!("{base}/rest/api/content/{}", page.id),
-        },
-    })
-}
-
-/// Undo `escapeCql` for one double-quoted literal starting at `rest`.
-fn cql_literal(rest: &str) -> Option<(String, &str)> {
-    let mut value = String::new();
-    let mut chars = rest.char_indices();
-    while let Some((index, character)) = chars.next() {
-        match character {
-            '\\' => value.push(chars.next()?.1),
-            '"' => return Some((value, &rest[index + 1..])),
-            other => value.push(other),
-        }
+    let parent = page.ancestors.last();
+    if mode == Mode::Cloud {
+        json!({"id":page.id,"title":page.title,"spaceId":"99","status":"current",
+            "parentId":parent.map(|(id,_,_)|id),"parentType":parent.map(|(_,kind,_)|kind),"position":1,
+            "version":{"number":page.version,"createdAt":"2026-09-25T14:03:11.000Z","authorId":"private-account-id"},
+            "body":{"storage":{"value":page.storage,"representation":"storage"}},"_links":{"webui":webui}})
+    } else {
+        json!({"id":page.id,"type":"page","title":page.title,"status":"current","space":{"key":"ENG","name":"Engineering"},
+            "position":1,"version":{"number":page.version,"when":"2026-09-25T14:03:11.000Z","by":{"displayName":"Fixture Author"}},
+            "history":{"lastUpdated":{"when":"2026-09-25T14:03:11.000Z","by":{"displayName":"Fixture Author"}}},
+            "ancestors":page.ancestors.iter().map(|(id,kind,title)|json!({"id":id,"type":kind,"title":title})).collect::<Vec<_>>(),
+            "body":{"storage":{"value":page.storage,"representation":"storage"}},"_links":{"webui":webui}})
     }
-    None
 }
-
-
-/// Deterministic binary body returned for one attachment id.
-pub fn attachment_payload(id: &str, size: usize) -> Vec<u8> {
-    let seed = format!("fixture bytes for attachment {id}\n").into_bytes();
-    seed.iter().copied().cycle().take(size).collect()
+fn space(mode: Mode, key: &str) -> Value {
+    if mode == Mode::Cloud {
+        json!({"id":"99","key":key,"name":"Engineering","homepageId":"10"})
+    } else {
+        json!({"id":"99","key":key,"name":"Engineering","homepage":{"id":"10"}})
+    }
 }
-
-fn respond_bytes(stream: &mut TcpStream, body: &[u8]) {
-    let _ = write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
+fn attachment_json(page: &Page, attachment: &(String, String, String, u64), mode: Mode) -> Value {
+    let (id, title, media, size) = attachment;
+    let download = format!(
+        "/rest/api/content/{}/child/attachment/{id}/download",
+        page.id
     );
-    let _ = stream.write_all(body);
-    let _ = stream.flush();
+    if mode == Mode::Cloud {
+        json!({"id":id,"title":title,"pageId":page.id,"mediaType":media,"fileSize":size,"version":{"number":2},"downloadLink":download})
+    } else {
+        json!({"id":id,"type":"attachment","title":title,"container":{"id":page.id},"metadata":{"mediaType":media},"extensions":{"fileSize":size},"version":{"number":2},"_links":{"download":format!("/confluence{download}")}})
+    }
 }
-fn respond(stream: &mut TcpStream, status: u16, body: &Value) {
-    let body = serde_json::to_vec(body).unwrap();
-    let reason = match status {
-        200 => "OK",
-        401 => "Unauthorized",
-        404 => "Not Found",
-        _ => "Bad Request",
+fn paged(
+    rows: Vec<Value>,
+    mode: Mode,
+    url: &url::Url,
+    query: &BTreeMap<String, String>,
+    state: &State,
+    size: usize,
+) -> Response {
+    let start = query
+        .get(if mode == Mode::Cloud {
+            "cursor"
+        } else {
+            "start"
+        })
+        .map(|value| value.parse::<usize>().unwrap())
+        .unwrap_or(0);
+    let stop = (start + size).min(rows.len());
+    let mut value = json!({"results": rows[start..stop], "size": stop-start});
+    if mode == Mode::DataCenter {
+        value["totalSize"] = json!(rows.len());
+    }
+    if stop < rows.len() {
+        let mut next = url.clone();
+        next.set_query(None);
+        for (key, val) in query {
+            if key != "start" && key != "cursor" {
+                next.query_pairs_mut().append_pair(key, val);
+            }
+        }
+        next.query_pairs_mut().append_pair(
+            if mode == Mode::Cloud {
+                "cursor"
+            } else {
+                "start"
+            },
+            &stop.to_string(),
+        );
+        value["_links"] = json!({"next":state.next_override.clone().unwrap_or_else(|| format!("{}?{}",next.path(),next.query().unwrap()))});
+    }
+    Response::json(200, value)
+}
+fn route(mode: Mode, url: &url::Url, state: &State) -> Response {
+    let path = url.path();
+    let query = url.query_pairs().into_owned().collect::<BTreeMap<_, _>>();
+    if let Some(response) = state
+        .overrides
+        .get(url.as_str())
+        .or_else(|| state.overrides.get(path))
+    {
+        return response.clone();
+    }
+    if state.unauthorized {
+        return Response::json(401, json!({"message":"Unauthorized"}));
+    }
+    if path == format!("{}/rest/api/user", mode.context()) {
+        return Response::json(
+            state.user_status,
+            json!({"displayName":"Fixture Author","accountId":"private-account-id"}),
+        );
+    }
+    let download_path = format!("{}/rest/api/content/", mode.context());
+    if path.starts_with(&download_path) && path.ends_with("/download") {
+        return state
+            .download_redirect
+            .clone()
+            .map(Response::redirect)
+            .unwrap_or_else(|| Response::bytes(&state.download_body));
+    }
+    let Some(relative) = path
+        .strip_prefix(mode.api())
+        .and_then(|path| path.strip_prefix('/'))
+    else {
+        return Response::json(404, json!({}));
     };
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = stream.write_all(&body);
-    let _ = stream.flush();
+    let parts = relative.split('/').collect::<Vec<_>>();
+    let rows = match parts.as_slice() {
+        ["spaces"] | ["space"] => {
+            let rows = state
+                .space_keys
+                .iter()
+                .filter(|key| query.get("keys").is_none_or(|wanted| wanted == *key))
+                .map(|key| space(mode, key))
+                .collect();
+            return paged(rows, mode, url, &query, state, state.page_size);
+        }
+        ["spaces", "99"] | ["space", "ENG"] => return Response::json(200, space(mode, "ENG")),
+        ["folders", id] => {
+            let found = state
+                .pages
+                .values()
+                .flat_map(|page| page.ancestors.iter())
+                .find(|(aid, kind, _)| aid == id && kind == "folder");
+            return found
+                .map(|(id, _, title)| Response::json(200, json!({"id":id,"title":title})))
+                .unwrap_or_else(|| Response::json(404, json!({})));
+        }
+        ["spaces", "99", "pages"] | ["content", "search"] => state
+            .pages
+            .values()
+            .map(|page| page_json(page, mode))
+            .collect(),
+        ["pages", id] | ["content", id] => {
+            if let Some(page) = state.pages.get(*id) {
+                return Response::json(200, page_json(page, mode));
+            }
+            for page in state.pages.values() {
+                for attachment in &page.attachments {
+                    if attachment.0 == *id {
+                        return Response::json(200, attachment_json(page, attachment, mode));
+                    }
+                }
+            }
+            return Response::json(404, json!({}));
+        }
+        ["attachments", id] => {
+            for page in state.pages.values() {
+                for attachment in &page.attachments {
+                    if attachment.0 == *id {
+                        return Response::json(200, attachment_json(page, attachment, mode));
+                    }
+                }
+            }
+            return Response::json(404, json!({}));
+        }
+        ["pages", id, "ancestors"] => {
+            let Some(page) = state.pages.get(*id) else {
+                return Response::json(404, json!({}));
+            };
+            let rows = page
+                .ancestors
+                .iter()
+                .map(|(id, kind, _)| json!({"id":id,"type":kind}))
+                .collect();
+            return paged(rows, mode, url, &query, state, 250);
+        }
+        ["pages", id, "labels"] | ["content", id, "label"] => {
+            let Some(page) = state.pages.get(*id) else {
+                return Response::json(404, json!({}));
+            };
+            let rows = page
+                .labels
+                .iter()
+                .map(|name| json!({"name":name}))
+                .collect::<Vec<_>>();
+            let count = if state.labels_unbounded {
+                rows.len()
+            } else {
+                query.get("limit").unwrap().parse().unwrap()
+            };
+            return paged(rows, mode, url, &query, state, count);
+        }
+        ["pages", id, "attachments"] | ["content", id, "child", "attachment"] => {
+            let Some(page) = state.pages.get(*id) else {
+                return Response::json(404, json!({}));
+            };
+            let rows = page
+                .attachments
+                .iter()
+                .map(|att| attachment_json(page, att, mode))
+                .collect::<Vec<_>>();
+            let count = if state.attachments_unbounded {
+                rows.len()
+            } else {
+                query.get("limit").unwrap().parse().unwrap()
+            };
+            return paged(rows, mode, url, &query, state, count);
+        }
+        ["pages"] | ["content"] => state
+            .pages
+            .values()
+            .filter(|page| {
+                query.get("title").is_none_or(|title| &page.title == title)
+                    && query
+                        .get("id")
+                        .is_none_or(|ids| ids.split(',').any(|id| id == page.id))
+            })
+            .map(|page| page_json(page, mode))
+            .collect::<Vec<_>>(),
+        _ => return Response::json(404, json!({})),
+    };
+    let size = if query.contains_key("id") || query.contains_key("title") {
+        query
+            .get("limit")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(250)
+    } else {
+        state.page_size
+    };
+    paged(rows, mode, url, &query, state, size)
 }
-
 fn serve(mut stream: TcpStream, mode: Mode, port: u16, state: &Mutex<State>) {
-    let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line).is_err() {
+    let mut first = String::new();
+    if reader.read_line(&mut first).is_err() || first.is_empty() {
         return;
     }
     let mut authorization = None;
     loop {
-        let mut header = String::new();
-        match reader.read_line(&mut header) {
-            Ok(0) | Err(_) => break,
-            Ok(_) if header == "\r\n" => break,
-            Ok(_) => {
-                if let Some((name, value)) = header.split_once(':')
-                    && name.eq_ignore_ascii_case("authorization")
-                {
-                    authorization = Some(value.trim().to_owned());
-                }
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+            break;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            if key.eq_ignore_ascii_case("authorization") {
+                authorization = Some(value.trim().to_string());
             }
         }
     }
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default().to_owned();
-    let target = parts.next().unwrap_or_default().to_owned();
+    let mut words = first.split_whitespace();
+    let method = words.next().unwrap().to_string();
+    let target = words.next().unwrap().to_string();
     let url = url::Url::parse(&format!("http://127.0.0.1:{port}{target}")).unwrap();
-    let query: BTreeMap<String, String> = url.query_pairs().into_owned().collect();
-    let mut state = state.lock().unwrap();
-    state.requests.push(format!("{method} {target}"));
-    state.authorizations.push(authorization.clone());
-    if state.unauthorized
-        || state
-            .required_authorization
-            .as_ref()
-            .is_some_and(|required| authorization.as_ref() != Some(required))
-    {
-        respond(
-            &mut stream,
-            401,
-            &json!({"code": 401, "message": "Unauthorized"}),
-        );
-        return;
-    }
-    let mut download_path = url.path();
-    if mode == Mode::Cloud {
-        download_path = download_path.strip_prefix("/wiki").unwrap_or(download_path);
-    }
-    let download_segments: Vec<&str> = download_path.trim_start_matches('/').split('/').collect();
-    if method == "GET"
-        && download_segments.len() == 4
-        && download_segments[0] == "download"
-        && download_segments[1] == "attachments"
-    {
-        let page_id = download_segments[2];
-        let requested_title = download_segments[3];
-        let body = state.pages.get(page_id).and_then(|page| {
-            page.attachments.iter().find_map(|(id, title, _, size)| {
-                (web_title(title) == requested_title)
-                    .then(|| attachment_payload(id, *size as usize))
-            })
+    let response = {
+        let mut state = state.lock();
+        state.requests.push(Request {
+            method,
+            target,
+            authorized: authorization.as_deref() == Some(&format!("Bearer {TOKEN}")),
+            authorization_present: authorization.is_some(),
         });
-        if let Some(body) = body {
-            respond_bytes(&mut stream, &body);
-        } else {
-            respond(&mut stream, 404, &json!({"message": "attachment not found"}));
+        if let Some((path, cancel)) = &state.cancel_after_path {
+            if path == url.path() {
+                cancel.store(true, Ordering::Relaxed);
+            }
         }
-        return;
-    }
-    let api = match mode {
-        Mode::Cloud => "/wiki/rest/api/",
-        Mode::DataCenter => "/rest/api/",
+        route(mode, &url, &state)
     };
-    let base = state.links_base.clone().unwrap_or_else(|| match mode {
-        Mode::Cloud => format!("http://127.0.0.1:{port}/wiki"),
-        Mode::DataCenter => format!("http://127.0.0.1:{port}"),
-    });
-    let not_found = |id: &str| {
-        json!({
-            "statusCode": 404,
-            "message": format!("com.atlassian.confluence.api.service.exceptions.api.NotFoundException: No content found with id : {id}"),
-        })
+    let reason = match response.status {
+        200 => "OK",
+        302 => "Found",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        _ => "Error",
     };
-    let Some(path) = url.path().strip_prefix(api) else {
-        respond(
-            &mut stream,
-            404,
-            &json!({"statusCode": 404, "message": "unknown path"}),
-        );
-        return;
-    };
-    if method != "GET" {
-        respond(
-            &mut stream,
-            400,
-            &json!({"statusCode": 400, "message": "read-only fixture"}),
-        );
-        return;
+    let mut headers = format!(
+        "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        response.status,
+        response.content_type,
+        response.declared_length.unwrap_or(response.body.len())
+    );
+    if let Some(location) = response.location {
+        headers.push_str(&format!("Location: {location}\r\n"));
     }
-    let segments: Vec<&str> = path.split('/').collect();
-    match segments.as_slice() {
-        ["space"] => {
-            let mut spaces = BTreeMap::new();
-            for page in state.pages.values() {
-                spaces.entry(page.space_key.clone()).or_insert_with(|| page.space_name.clone());
-            }
-            let results: Vec<_> = spaces.iter().map(|(key, name)| json!({
-                "key": key, "name": name, "type": "global"
-            })).collect();
-            respond(&mut stream, 200, &json!({
-                "results": results, "start": 0, "limit": 100, "size": results.len(),
-                "_links": {"base": base, "context": if mode == Mode::Cloud { "/wiki" } else { "" }},
-            }));
-        }
-        ["space", key] => {
-            let page = state.pages.values().find(|page| page.space_key == *key);
-            match page {
-                Some(page) => {
-                    let homepage = state.pages.values()
-                        .find(|candidate| candidate.space_key == *key && candidate.ancestors.is_empty())
-                        .unwrap_or(page);
-                    respond(&mut stream, 200, &json!({
-                        "key": key,
-                        "name": page.space_name,
-                        "homepage": {"id": homepage.id, "type": "page", "title": homepage.title},
-                        "_links": {"base": base, "context": if mode == Mode::Cloud { "/wiki" } else { "" }},
-                    }));
-                }
-                None => respond(&mut stream, 404, &not_found(key)),
-            }
-        }
-        ["content", "search"] if query.get("cql").is_some_and(|cql| cql.contains("type=page")) => {
-            let cql = query.get("cql").cloned().unwrap_or_default();
-            let key = cql.strip_prefix("space=\"").and_then(|rest| rest.strip_suffix("\" and type=page"));
-            let Some(key) = key else {
-                respond(&mut stream, 400, &json!({"message":"invalid cql"}));
-                return;
-            };
-            let all: Vec<_> = state.pages.values().filter(|page| page.space_key == key).collect();
-            let start = query.get("start").or_else(|| query.get("cursor"))
-                .and_then(|value| value.parse::<usize>().ok()).unwrap_or(0);
-            let request_limit = query.get("limit").and_then(|value| value.parse::<usize>().ok()).unwrap_or(2);
-            let limit = request_limit.min(2);
-            let results: Vec<_> = all.iter().skip(start).take(limit)
-                .map(|page| page_json(page, mode, &base)).collect();
-            let next_start = start + results.len();
-            let next = if next_start < all.len() {
-                let param = if mode == Mode::Cloud { "cursor" } else { "start" };
-                Some(format!("{}?cql={}&limit={request_limit}&expand=version%2Cancestors%2Cspace&{param}={next_start}",
-                    if mode == Mode::Cloud { "/wiki/rest/api/content/search" } else { "/rest/api/content/search" },
-                    url::form_urlencoded::byte_serialize(cql.as_bytes()).collect::<String>()))
-            } else { None };
-            respond(&mut stream, 200, &json!({
-                "results": results, "start": start, "limit": request_limit, "size": results.len(),
-                "totalSize": all.len(), "cqlQuery": cql,
-                "_links": {"base": base, "context": if mode == Mode::Cloud { "/wiki" } else { "" }, "next": next},
-            }));
-        }
-        ["search"] => {
-            let cql = query.get("cql").cloned().unwrap_or_default();
-            let found = cql
-                .strip_prefix("title = \"")
-                .and_then(cql_literal)
-                .and_then(|(title, rest)| {
-                    let (space, _) = cql_literal(rest.strip_prefix(" AND space = \"")?)?;
-                    Some((title, space))
-                })
-                .and_then(|(title, space)| {
-                    state
-                        .pages
-                        .values()
-                        .find(|page| page.title == title && page.space_key == space)
-                        .cloned()
-                });
-            let results = found
-                .map(|page| {
-                    vec![json!({"content": page_json(&page, mode, &base), "title": page.title})]
-                })
-                .unwrap_or_default();
-            respond(
-                &mut stream,
-                200,
-                &json!({"results": results, "start": 0, "limit": 1, "size": results.len()}),
-            );
-        }
-        ["content", id] => match state.pages.get(*id) {
-            Some(page) => respond(&mut stream, 200, &page_json(page, mode, &base)),
-            None => respond(&mut stream, 404, &not_found(id)),
-        },
-        ["content", id, "label"] => match state.pages.get(*id) {
-            Some(page) => {
-                let results: Vec<_> = page
-                    .labels
-                    .iter()
-                    .enumerate()
-                    .map(|(index, name)| json!({"prefix": "global", "name": name, "id": format!("{}", 9000 + index)}))
-                    .collect();
-                respond(
-                    &mut stream,
-                    200,
-                    &json!({"results": results, "start": 0, "limit": 200, "size": results.len()}),
-                );
-            }
-            None => respond(&mut stream, 404, &not_found(id)),
-        },
-        ["content", page_id, "child", "attachment", attachment_id, "download"] => {
-            let body = state.pages.get(*page_id).and_then(|page| {
-                page.attachments.iter().find_map(|(id, _, _, size)| {
-                    (id == attachment_id).then(|| attachment_payload(id, *size as usize))
-                })
-            });
-            if let Some(body) = body {
-                respond_bytes(&mut stream, &body);
-            } else {
-                respond(&mut stream, 404, &json!({"message": "attachment not found"}));
-            }
-        }
-        ["content", id, "child", "attachment"] => match state.pages.get(*id) {
-            Some(page) => {
-                let results: Vec<_> = page
-                    .attachments
-                    .iter()
-                    .map(|(attachment, title, media_type, bytes)| {
-                        json!({
-                            "id": attachment,
-                            "type": "attachment",
-                            "title": title,
-                            "metadata": {"mediaType": media_type},
-                            "extensions": {"mediaType": media_type, "fileSize": bytes},
-                            "version": {"number": 1},
-                            "_links": {"download": format!("/download/attachments/{id}/{}?version=1", web_title(title))},
-                        })
-                    })
-                    .collect();
-                respond(
-                    &mut stream,
-                    200,
-                    &json!({"results": results, "start": 0, "limit": 50, "size": results.len()}),
-                );
-            }
-            None => respond(&mut stream, 404, &not_found(id)),
-        },
-        _ => respond(
-            &mut stream,
-            404,
-            &json!({"statusCode": 404, "message": "unknown endpoint"}),
-        ),
-    }
+    headers.push_str("\r\n");
+    let _ = stream.write_all(headers.as_bytes());
+    let _ = stream.write_all(&response.body);
+    let _ = stream.flush();
 }

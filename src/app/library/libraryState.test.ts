@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { LibraryFollowSummary, LibraryItemState, LibraryItemSummary, ProjectProvider, ProviderCredentialStatus } from "../../protocol/generated/v1";
-import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraAttachmentAccess, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, lookupFailure, nestUnderParents, parseLibraryTime, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
+import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceProviders, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraAttachmentAccess, jiraProviders, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, lookupFailure, nestUnderParents, parseLibraryTime, providerFamily, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
 
 const providers: ProjectProvider[] = [
-  { id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
-  { id: "github", base_url: "https://github.com", executable: "gh" },
-  { id: "jira", base_url: "https://jira.test/jira/", executable: "jira" },
+  { id: "gitlab", kind: "gitlab" as const, base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
+  { id: "github", kind: "github" as const, base_url: "https://github.com", executable: "gh" },
+  { id: "jira", kind: "jira" as const, base_url: "https://jira.test/jira/", deployment: "data_center" as const },
 ];
+
+it("classifies arbitrary provider ids and forge wrappers only by explicit kind", () => {
+  const configured: ProjectProvider[] = [
+    { id: "jira", kind: "gitlab", base_url: "https://forge.test", executable: "/custom/provider-wrapper" },
+    { id: "tickets", kind: "jira", base_url: "https://jira.test", deployment: "data_center" },
+    { id: "knowledge", kind: "confluence", base_url: "https://wiki.test", deployment: "data_center" },
+    { id: "forge", kind: "gitea", base_url: "https://tea.test", executable: "gh" },
+  ];
+  expect(configured.map((provider) => providerFamily(configured, provider.id).name)).toEqual(["GitLab", "Jira", "Confluence", "Gitea"]);
+  expect(jiraProviders(configured).map((provider) => provider.id)).toEqual(["tickets"]);
+  expect(confluenceProviders(configured).map((provider) => provider.id)).toEqual(["knowledge"]);
+  expect(providerFamily(configured, "missing")).toEqual({ key: "other", name: "missing", review: "review" });
+});
 
 function item(overrides: Partial<LibraryItemSummary>): LibraryItemSummary {
   return {
@@ -134,8 +147,8 @@ describe("Attachment summaries", () => {
 describe("Confluence page recognition", () => {
   const withConfluence: ProjectProvider[] = [
     ...providers,
-    { id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "/opt/homebrew/bin/confluence", login: "default" },
-    { id: "dc", base_url: "https://confluence.example.com/confluence/", executable: "confluence", login: "dc" },
+    { id: "cloud", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki", deployment: "cloud" as const },
+    { id: "dc", kind: "confluence" as const, base_url: "https://confluence.example.com/confluence/", deployment: "data_center" as const },
   ];
   const recognized = (input: string) => {
     const page = confluencePageInput(input, withConfluence);
@@ -163,8 +176,8 @@ describe("Confluence page recognition", () => {
 describe("Confluence space recognition", () => {
   const withConfluence: ProjectProvider[] = [
     ...providers,
-    { id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence", login: "default" },
-    { id: "dc", base_url: "https://confluence.example.com/confluence/", executable: "confluence", login: "dc" },
+    { id: "cloud", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki", deployment: "cloud" as const },
+    { id: "dc", kind: "confluence" as const, base_url: "https://confluence.example.com/confluence/", deployment: "data_center" as const },
   ];
   const recognized = (input: string, configured = withConfluence) => {
     const space = confluenceSpaceInput(input, configured);
@@ -185,7 +198,7 @@ describe("Confluence space recognition", () => {
 });
 
 describe("Followed spaces in the tree", () => {
-  const confluence: ProjectProvider[] = [{ id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence" }];
+  const confluence: ProjectProvider[] = [{ id: "cloud", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki", deployment: "cloud" as const }];
   const follow = (overrides: Partial<LibraryFollowSummary>): LibraryFollowSummary => ({
     follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", source: { kind: "confluence_space", space_key: "SD", space_name: "Software Development" },
     include_attachments: false, item_count: 0, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh", ...overrides,
@@ -242,13 +255,14 @@ describe("provider token entry points", () => {
   });
 
   it("offers the token dialog for Jira and Confluence credential failures only", () => {
-    const confluence: ProjectProvider = { id: "wiki", base_url: "https://wiki.test", executable: "confluence", login: "default" };
+    const confluence: ProjectProvider = { id: "wiki", kind: "confluence" as const, base_url: "https://wiki.test", deployment: "data_center" as const };
     const all = [...providers, confluence];
     const jira = providers[2]!;
     const rejected = (code: string) => Object.assign(new Error("Refused by the host."), { code });
     expect(lookupFailure(rejected("source_credential_required"), "OPS-1", all, jira)).toMatchObject({ title: "✕ A token is needed", detail: "Refused by the host.", credentialProviderId: "jira" });
     expect(lookupFailure(rejected("source_auth_required"), "OPS-1", all, jira)).toMatchObject({ title: "✕ Jira sign-in required", credentialProviderId: "jira" });
-    expect(lookupFailure(rejected("source_auth_failed"), "12345", all, confluence)).toMatchObject({ title: "✕ Confluence sign-in failed", credentialProviderId: "wiki" });
+    expect(lookupFailure(rejected("source_auth_failed"), "12345", all, confluence)).toMatchObject({ title: "✕ Confluence sign-in failed", detail: "wiki.test rejected the token stored in Cockpit for this site. Replace it in Provider tokens, then retry.", credentialProviderId: "wiki" });
+    expect(lookupFailure(rejected("source_auth_failed"), "OPS-1", all, jira).detail).toBe("jira.test rejected the token stored in Cockpit for this site. Replace it in Provider tokens, then retry.");
     // GitLab has no stored token: the failure points at the CLI and offers no dialog.
     const gitlab = lookupFailure(rejected("source_auth_failed"), "https://gitlab.test/platform/api/-/issues/1", all);
     expect(gitlab.credentialProviderId).toBeUndefined();
@@ -259,8 +273,8 @@ describe("provider token entry points", () => {
 describe("Jira and Confluence on one host", () => {
   const site = "https://nnexai.atlassian.net";
   const shared: ProjectProvider[] = [
-    { id: "confluence", base_url: `${site}/wiki`, executable: "confluence", login: "default" },
-    { id: "jira", base_url: site, executable: "jira" },
+    { id: "confluence", kind: "confluence" as const, base_url: `${site}/wiki`, deployment: "cloud" as const },
+    { id: "jira", kind: "jira" as const, base_url: site, deployment: "cloud" as const },
   ];
   const query: LibraryFollowSummary = {
     follow_id: "follow:jql", provider_id: "jira", provider_instance: site, source: { kind: "jira_query", jql: "resolution = Unresolved", mode: "live" },
@@ -302,7 +316,7 @@ describe("nesting items under their parent", () => {
   });
 
   it("keeps other providers' child order, including numeric Confluence page ids", () => {
-    const configured = [...providers, { id: "confluence", base_url: "https://wiki.test", executable: "confluence" }];
+    const configured = [...providers, { id: "confluence", kind: "confluence" as const, base_url: "https://wiki.test", deployment: "data_center" as const }];
     for (const [provider_id, resource_type] of [["gitlab", "issue"], ["confluence", "page"]]) {
       const keyed = (key: string, parent: string | null) => item({ item_id: key, canonical_id: key, parent_item_id: parent, provider_id, resource_type });
       expect(shape(nestUnderParents([keyed("2", null), keyed("10", "2"), keyed("4", "2")], configured)))
@@ -310,10 +324,10 @@ describe("nesting items under their parent", () => {
     }
   });
 
-  it("recognizes Jira through its executable when the provider has a custom id", () => {
+  it("recognizes Jira through its kind when the provider has a custom id", () => {
     const keyed = (key: string, parent: string | null) => item({ item_id: key, canonical_id: key, parent_item_id: parent, provider_id: "company" });
     expect(shape(nestUnderParents([keyed("OPS-2", null), keyed("OPS-10", "OPS-2"), keyed("OPS-4", "OPS-2")],
-      [{ id: "company", base_url: "https://jira.test", executable: "/usr/bin/jira" }])))
+      [{ id: "company", kind: "jira" as const, base_url: "https://jira.test", deployment: "data_center" as const }])))
       .toEqual([["OPS-2", ["OPS-4", "OPS-10"]]]);
   });
 
