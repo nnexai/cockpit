@@ -1,3 +1,5 @@
+const BROWSER_USER_AGENT_HOOK: &str = include_str!("../../../browser-runtime/browser-user-agent.cjs");
+
 use async_trait::async_trait;
 use cap_fs_ext::DirExt;
 use cap_std::fs::MetadataExt;
@@ -682,8 +684,10 @@ impl BrowserService {
                 "browser receipt identity is inconsistent",
             ));
         }
+        let paths = cleanup::derived_paths(&self.root, &key);
+        let hook_path = paths[1].0.join("browser-user-agent.cjs");
         let (working_directory, profile_path, config_path, artifacts) = cleanup::create_artifacts(
-            &self.root, &key, &launch_configuration(&self.configuration)?,
+            &self.root, &key, &launch_configuration(&self.configuration, &hook_path)?,
         )?;
         let receipt = BrowserReceipt {
             association_key: key.clone(),
@@ -1577,6 +1581,7 @@ fn receipt_config_executable(receipt: &BrowserReceipt) -> Result<Option<String>,
 
 fn launch_configuration(
     configuration: &BrowserConfiguration,
+    hook_path: &Path,
 ) -> Result<Value, InspectionError> {
     let mut config = serde_json::json!({"browser": {"launchOptions": {}}});
     if let Some(path) = &configuration.chromium_executable {
@@ -1592,14 +1597,7 @@ fn launch_configuration(
         "--remote-debugging-port=0",
         "--force-dark-mode"
     ]);
-    // Retain the actual headless nature of the private browser while giving
-    // site operators an attributable Cockpit product identity.
-    config["browser"]["contextOptions"] = serde_json::json!({
-        "userAgent": format!(
-            "Cockpit/{} (personal embedded browser; headless Chromium)",
-            env!("CARGO_PKG_VERSION")
-        )
-    });
+    config["browser"]["initPage"] = serde_json::json!([path_string(hook_path)?]);
     Ok(config)
 }
 

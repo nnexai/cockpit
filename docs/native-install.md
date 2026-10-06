@@ -106,6 +106,9 @@ repair the named prerequisite and retry the browser view without restarting Herd
 On initial attachment, an empty `about:blank` is replaced with a loopback-only
 start page before screencast capture begins, guaranteeing a paintable first
 frame. Non-empty pages and later user navigation are left unchanged.
+The owned Playwright CLI daemon initializes a narrow native user-agent policy before page navigation. It reads the running Chromium's `Browser.getVersion.userAgent` and replaces only the `HeadlessChrome/` token with `Chrome/`; it does not pin a Chrome version. The policy applies to the initial page, CLI-created pages and popups, and embedded child frames including nested cross-site frames, before navigation; it remains with the CLI browser rather than the capture helper, including while the inline view is hidden. Chromium's executable, headless mode, launch/security/viewport settings, and JPEG capture are unchanged. This change does not claim general anti-bot acceptance, video/audio/DRM correctness, or performance parity.
+
+Close and reopen Browser associations created before this policy so their saved launch configuration contains the daemon hook. Existing associations remain eligible for close and cleanup; they are not silently restarted.
 
 Interact with the browser surface to acquire control; clicking a terminal returns keyboard control through Herdr. Address and annotation editors keep their own keyboard input. Other clients observe until they explicitly take control. Agents can still change the page through Playwright.
 

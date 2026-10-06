@@ -72,6 +72,18 @@ async fn close_disposes_only_its_tab_and_preserves_other_stores_and_vault() {
 }
 
 #[tokio::test]
+async fn missing_user_agent_hook_rejects_browser_operations_before_navigation() {
+    let f = Fixture::new();
+    let receipt = f.receipt("w1:t1").await;
+    fs::remove_file(Path::new(&receipt.working_directory).join("browser-user-agent.cjs")).unwrap();
+    let error = f.service.execute(BrowserRequest {
+        target: f.target("w1:t1"),
+        action: BrowserAction::Open { url: Some("https://must-not-navigate.test/".into()) },
+    }).await.unwrap_err();
+    assert_eq!(error.code, "browser_artifact_unproven");
+}
+
+#[tokio::test]
 async fn cleanup_unlinks_nested_symlinks_without_touching_their_targets() {
     let f = Fixture::new(); let a = f.receipt("w1:t1").await;
     let outside = f.root.join("outside"); fs::create_dir(&outside).unwrap(); fs::write(outside.join("keep"), b"outside").unwrap();

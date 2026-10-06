@@ -48,8 +48,9 @@ pub(super) fn open_artifact(parent: &Dir, name: &std::ffi::OsStr, directory: boo
     Ok(OpenArtifact::File(file))
 }
 pub(super) fn verify_artifacts(root: &Path, receipt: &BrowserReceipt) -> Result<(), InspectionError> {
+    let paths = derived_paths(root, &receipt.association_key);
     let identities = [&receipt.artifacts.profile, &receipt.artifacts.workspace, &receipt.artifacts.config];
-    for (index, (path, directory)) in derived_paths(root, &receipt.association_key).iter().enumerate() {
+    for (index, (path, directory)) in paths.iter().enumerate() {
         let verified = (|| -> io::Result<bool> {
             let parent = crate::project_store::open_dir_nofollow_absolute(path.parent().expect("derived parent"))?;
             Ok(open_artifact(&parent, path.file_name().expect("derived name"), *directory)?.identity()? == *identities[index])
@@ -57,6 +58,20 @@ pub(super) fn verify_artifacts(root: &Path, receipt: &BrowserReceipt) -> Result<
         if !verified.unwrap_or(false) {
             return Err(InspectionError::new("browser_artifact_unproven", format!("Browser artifact no longer matches its creation proof: {}", path.display())));
         }
+    }
+    let workspace_parent = crate::project_store::open_dir_nofollow_absolute(paths[1].0.parent().expect("workspace parent")).map_err(|_| {
+        InspectionError::new("browser_artifact_unproven", "Browser workspace no longer matches its creation proof")
+    })?;
+    let workspace = match open_artifact(&workspace_parent, paths[1].0.file_name().expect("workspace name"), true).map_err(|_| {
+        InspectionError::new("browser_artifact_unproven", "Browser workspace no longer matches its creation proof")
+    })? {
+        OpenArtifact::Directory(directory) => directory,
+        OpenArtifact::File(_) => unreachable!(),
+    };
+    for name in ["browser-user-agent.cjs", "browser-user-agent.json"] {
+        open_artifact(&workspace, std::ffi::OsStr::new(name), false).map_err(|_| {
+            InspectionError::new("browser_artifact_unproven", format!("Browser artifact is missing or unsafe: {}", paths[1].0.join(name).display()))
+        })?;
     }
     Ok(())
 }
@@ -106,7 +121,12 @@ pub(super) fn create_artifacts(root: &Path, key: &str, config: &Value) -> Result
             let id = opened.identity().map_err(io_error)?;
             created.push((index, opened, id));
             match &mut created.last_mut().expect("created artifact").1 {
-                OpenArtifact::Directory(dir) if index == 1 => dir.create_dir(".playwright").map_err(io_error)?,
+                OpenArtifact::Directory(dir) if index == 1 => {
+                    dir.create_dir(".playwright").map_err(io_error)?;
+                    write_owned_file(dir, "browser-user-agent.cjs", super::BROWSER_USER_AGENT_HOOK.as_bytes())?;
+                    let profile_path = paths[0].0.to_str().ok_or_else(|| InspectionError::new("invalid_browser_path", "browser profile path is not UTF-8"))?;
+                    write_binding_file(dir, "browser-user-agent.json", profile_path)?;
+                }
                 OpenArtifact::File(file) => {
                     serde_json::to_writer(&mut *file, config).map_err(|e| InspectionError::new("browser_state_write", e.to_string()))?;
                     file.flush().and_then(|_| file.sync_all()).map_err(io_error)?;
@@ -125,6 +145,27 @@ pub(super) fn create_artifacts(root: &Path, key: &str, config: &Value) -> Result
         return Err(error);
     }
     Ok((paths[1].0.clone(), paths[0].0.clone(), paths[2].0.clone(), ArtifactIdentities { profile: created[0].2.clone(), workspace: created[1].2.clone(), config: created[2].2.clone() }))
+}
+
+fn write_owned_file(directory: &Dir, name: &str, bytes: &[u8]) -> Result<(), InspectionError> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.write(true).create_new(true).follow(cap_fs_ext::FollowSymlinks::No);
+    let mut file = directory.open_with(Path::new(name), &options).map_err(io_error)?;
+    file.write_all(bytes).and_then(|_| file.flush()).and_then(|_| file.sync_all()).map_err(io_error)
+}
+
+#[derive(serde::Serialize)]
+struct UserAgentBinding<'a> {
+    profile_path: &'a str,
+}
+
+fn write_binding_file(directory: &Dir, name: &str, profile_path: &str) -> Result<(), InspectionError> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.write(true).create_new(true).follow(cap_fs_ext::FollowSymlinks::No);
+    let mut file = directory.open_with(Path::new(name), &options).map_err(io_error)?;
+    serde_json::to_writer(&mut file, &UserAgentBinding { profile_path })
+        .map_err(|error| InspectionError::new("browser_state_write", error.to_string()))?;
+    file.flush().and_then(|_| file.sync_all()).map_err(io_error)
 }
 
 impl BrowserService {
