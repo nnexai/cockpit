@@ -282,7 +282,17 @@ fn paged(
             },
             &stop.to_string(),
         );
-        value["_links"] = json!({"next":state.next_override.clone().unwrap_or_else(|| format!("{}?{}",next.path(),next.query().unwrap()))});
+        let cloud_cql = mode == Mode::Cloud
+            && url.path() == "/wiki/rest/api/content/search";
+        if cloud_cql {
+            next.query_pairs_mut().append_pair("next", "true").append_pair("start", &stop.to_string());
+        }
+        let path = if cloud_cql {
+            next.path().strip_prefix("/wiki").unwrap()
+        } else {
+            next.path()
+        };
+        value["_links"] = json!({"next":state.next_override.clone().unwrap_or_else(|| format!("{path}?{}",next.query().unwrap()))});
     }
     Response::json(200, value)
 }
@@ -312,6 +322,17 @@ fn route(mode: Mode, url: &url::Url, state: &State) -> Response {
             .clone()
             .map(Response::redirect)
             .unwrap_or_else(|| Response::bytes(&state.download_body));
+    }
+    if path == format!("{}/rest/api/content/search", mode.context()) {
+        let cql = query.get("cql").map(String::as_str).unwrap_or_default();
+        let ids = cql.split_once("id IN (")
+            .and_then(|(_, tail)| tail.split_once(')'))
+            .map(|(ids, _)| ids.split(',').map(str::trim).collect::<Vec<_>>());
+        let rows = state.pages.values()
+            .filter(|page| ids.as_ref().is_none_or(|ids| ids.contains(&page.id.as_str())))
+            .map(|page| page_json(page, Mode::DataCenter))
+            .collect();
+        return paged(rows, mode, url, &query, state, state.page_size);
     }
     let Some(relative) = path
         .strip_prefix(mode.api())

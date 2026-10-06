@@ -34,7 +34,7 @@ fn issue(site: &str) -> Value {
 fn query() -> IssueQuery<'static> {
     IssueQuery::Jql {
         jql: "project = OPS",
-        updated_since: None,
+        updated_window: None,
     }
 }
 
@@ -92,11 +92,11 @@ async fn cloud_token_pages_same_minute_rows_and_enforces_max() {
 }
 
 #[tokio::test]
-async fn cloud_probe_preserves_wall_time_overlap_and_exact_jql() {
+async fn cloud_window_uses_exact_epoch_bounds_without_wall_timezone() {
     let fixture = FakeJira::new(Cloud, "", true, |request, _, _| {
         assert_eq!(
             request.query("jql").as_deref(),
-            Some("(project = OPS) AND updated >= \"2026-03-01 02:29\" ORDER BY updated DESC")
+            Some("(project = OPS) AND updated >= 1772328000000 AND updated < 1772331600000 ORDER BY updated ASC, key ASC")
         );
         (200, json!({"issues":[],"isLast":true}))
     })
@@ -106,7 +106,7 @@ async fn cloud_probe_preserves_wall_time_overlap_and_exact_jql() {
         .list_issues(
             &IssueQuery::Jql {
                 jql: "project = OPS",
-                updated_since: Some("2026-03-01T02:30:10.000+0100"),
+                updated_window: Some((1772328000000, 1772331600000)),
             },
             100,
             &AtomicBool::new(false),
@@ -540,7 +540,7 @@ async fn invalid_query_or_key_fails_without_network() {
     .await;
     let invalid = IssueQuery::Jql {
         jql: "project = OPS ORDER BY updated",
-        updated_since: None,
+        updated_window: None,
     };
     assert_eq!(
         fixture
@@ -579,7 +579,7 @@ async fn quoted_order_by_text_is_not_an_ordering_clause() {
         .list_issues(
             &IssueQuery::Jql {
                 jql: "summary ~ \"ORDER BY\"",
-                updated_since: None,
+                updated_window: None,
             },
             100,
             &AtomicBool::new(false),
@@ -674,4 +674,62 @@ async fn configured_provider_requires_explicit_jira_kind_and_deployment() {
         );
     }
     assert!(fixture.requests().is_empty());
+}
+
+#[tokio::test]
+async fn window_bounds_are_frozen_for_cloud_and_dc_paging() {
+    for deployment in [Cloud, DataCenter] {
+        let fixture = FakeJira::new(deployment, "", true, move |request, _, _| {
+            assert_eq!(request.query("jql").as_deref(), Some(
+                "(project = OPS) AND updated >= 1772328000123 AND updated < 1772331600456 ORDER BY updated ASC, key ASC"
+            ));
+            let second = request.query("nextPageToken").is_some()
+                || request.query("startAt").as_deref() == Some("1");
+            if deployment == Cloud {
+                if second {
+                    (200, json!({"issues":[row(2)],"isLast":true}))
+                } else {
+                    (200, json!({"issues":[row(1)],"isLast":false,"nextPageToken":"frozen"}))
+                }
+            } else {
+                (200, json!({"issues":[row(if second {2} else {1})],"startAt":if second {1} else {0},"total":2}))
+            }
+        }).await;
+        let listing = fixture.provider.list_issues(
+            &IssueQuery::Jql { jql: "project = OPS", updated_window: Some((1772328000123, 1772331600456)) },
+            100, &AtomicBool::new(false),
+        ).await.unwrap();
+        assert!(listing.complete);
+        assert_eq!(listing.rows.len(), 2);
+        assert_eq!(fixture.requests().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn invalid_windows_do_not_send_requests() {
+    let fixture = FakeJira::new(Cloud, "", true, |_, _, _| panic!("invalid interval sent")).await;
+    for bounds in [(-1, 1), (1, 1), (2, 1)] {
+        let error = fixture.provider.list_issues(
+            &IssueQuery::Jql { jql: "project = OPS", updated_window: Some(bounds) },
+            100, &AtomicBool::new(false),
+        ).await.unwrap_err();
+        assert_eq!(error.code, "source_provider_contract");
+    }
+    assert!(fixture.requests().is_empty());
+}
+
+#[tokio::test]
+async fn cancellation_while_last_metadata_response_arrives_remains_incomplete() {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let fixture = FakeJira::new(Cloud, "", true, move |_, _, _| {
+        signal.store(true, Ordering::Relaxed);
+        (200, json!({"issues":[row(1)],"isLast":true}))
+    }).await;
+    let listing = fixture.provider.list_issues(
+        &IssueQuery::Jql { jql: "project = OPS", updated_window: Some((1, 2)) },
+        100, &cancel,
+    ).await.unwrap();
+    assert_eq!(listing.rows.len(), 1);
+    assert!(!listing.complete);
 }

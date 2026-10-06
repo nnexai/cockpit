@@ -212,7 +212,12 @@ impl LibraryService {
                 relation: related.relation.clone(),
                 depth: related.depth,
             };
-            let lease = match store.lease(&id) {
+            let acquired = if crate::sources::lane::current() == crate::sources::lane::RequestLane::Background {
+                store.lease(&id)
+            } else {
+                super::sync::manual_lease(store, &id).await
+            };
+            let lease = match acquired {
                 Ok(lease) => lease,
                 Err(failure) => {
                     out.not_saved
@@ -221,6 +226,16 @@ impl LibraryService {
                 }
             };
             let old = self.entry(store, &id)?;
+            // The traversal/skip predicate is only a discovery snapshot. A
+            // removal can commit while fetch is awaiting, before this item lease.
+            let allowed = {
+                let _lock = store.shared()?;
+                Store::reference_allowed(&store.index()?, &super::asset_entry(&related.asset, old.as_ref()).summary, reference)
+            };
+            if !allowed {
+                out.reached.remove(&id);
+                continue;
+            }
             match self
                 .save_asset_with(
                     store,
@@ -235,17 +250,43 @@ impl LibraryService {
                 .await
             {
                 Ok(()) => out.saved += 1,
-                Err(failure) => out
-                    .not_saved
-                    .push(format!("{label}: {}", clip(&failure.message))),
-            }
-            store.mutate_index(|index| {
-                if let Some(entry) = index.items.iter_mut().find(|e| e.summary.item_id == id) {
-                    refs::insert_ref(&mut entry.summary, reference.clone());
-                    refs::set_inclusion(&mut entry.summary, inclusion.clone());
+                Err(failure) => {
+                    if failure.code == "library_follow_excluded" {
+                        out.reached.remove(&id);
+                        continue;
+                    }
+                    let partial_manifest = failure.code == "source_attachments_partial";
+                    out.not_saved.push(format!("{label}: {}", clip(&failure.message)));
+                    if partial_manifest {
+                        continue;
+                    }
                 }
-                Ok(())
+            }
+            let changed = store.mutate_index_if(|index| {
+                if index.items.iter().find(|e| e.summary.item_id == id)
+                    .is_none_or(|entry| !Store::reference_allowed(index, &entry.summary, reference))
+                {
+                    return Ok((false, false));
+                }
+                let mut changed = false;
+                if let Some(entry) = index.items.iter_mut().find(|e| e.summary.item_id == id) {
+                    changed = !entry.summary.refs.contains(reference) || entry.summary.purge_after.is_some()
+                        || !entry.summary.included_by.iter().flatten().any(|old| old == &inclusion);
+                    if changed {
+                        refs::insert_ref(&mut entry.summary, reference.clone());
+                        refs::set_inclusion(&mut entry.summary, inclusion.clone());
+                    }
+                }
+                Ok((changed, changed))
             })?;
+            if changed && crate::sources::lane::current() == crate::sources::lane::RequestLane::Background {
+                let receipt = operations::get(store, operation)?;
+                if receipt.report.as_ref().is_some_and(|report| report.new + report.updated == 0) {
+                    operations::add_total(store, operation, 1)?;
+                    operations::row(store, operation, None, LibraryReportOutcome::Updated,
+                        Some("Related inclusion reconciled".into()))?;
+                }
+            }
             drop(lease);
         }
         Ok(out)

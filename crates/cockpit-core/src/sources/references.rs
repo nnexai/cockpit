@@ -441,7 +441,10 @@ impl SourceService {
             return result;
         }
         let limits = budget.limits();
-        let deadline = Instant::now() + limits.time;
+        let time = limits.time.saturating_mul(
+            if super::lane::current() == super::lane::RequestLane::Background { 10 } else { 1 },
+        );
+        let deadline = Instant::now() + time;
         let mut visited: BTreeSet<String> =
             seeds.iter().map(|seed| source_id(&seed.source)).collect();
         let mut seen_targets = BTreeSet::new();
@@ -510,9 +513,9 @@ impl SourceService {
                         continue;
                     };
                     let service = self.clone();
-                    set.spawn(async move {
+                    set.spawn(super::lane::inherit(async move {
                         (index, service.resolve_confluence(&provider_id, &url).await)
-                    });
+                    }));
                 }
                 while let Some(joined) = set.join_next().await {
                     if let Ok((index, classified)) = joined {
@@ -563,8 +566,7 @@ impl SourceService {
                 if self.stop_requested(cancel, deadline, &mut result) {
                     break;
                 }
-                let per_call = self
-                    .operation_timeout
+                let per_call = self.deadline()
                     .min(deadline.saturating_duration_since(Instant::now()));
                 let mut set = JoinSet::new();
                 for (slot, candidate) in chunk.iter().enumerate() {
@@ -576,12 +578,12 @@ impl SourceService {
                     };
                     let request = candidate.prepared.request.clone();
                     let expected = candidate.prepared.expected.clone();
-                    set.spawn(async move {
+                    set.spawn(super::lane::inherit(async move {
                         (
                             slot,
                             fetch_related(provider, request, expected, per_call).await,
                         )
-                    });
+                    }));
                 }
                 let mut fetched: Vec<Option<Result<SourceAsset, InspectionError>>> =
                     chunk.iter().map(|_| None).collect();

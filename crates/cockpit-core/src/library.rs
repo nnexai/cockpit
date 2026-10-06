@@ -12,6 +12,12 @@ mod layout;
 mod reader;
 pub(crate) mod store;
 pub mod space;
+mod sync;
+pub use sync::{LibrarySyncRuntime, LibrarySyncTick};
+#[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
+mod sync_safety_tests;
 
 use crate::{
     InspectionError,
@@ -34,7 +40,7 @@ use std::{
     path::Path,
     sync::{Arc, OnceLock},
 };
-use store::{Lease, LibraryIndexEntry, Store, error};
+use store::{LibraryIndexEntry, Store, error};
 /// The listing page of `entries` from `offset`, with each Jira issue's
 /// `parent_item_id` set to the Library item of its parent issue.
 ///
@@ -511,7 +517,7 @@ impl LibraryService {
             });
             (fetch, primary_id)
         };
-        let lease = store.lease(&primary_id)?;
+        let lease = sync::manual_lease(&store, &primary_id).await?;
         let (record, operation_lease) =
             operations::create(&store, LibraryOperationKind::Add, None)?;
         let record = if let Some(target) = &request.target {
@@ -759,12 +765,11 @@ impl LibraryService {
         let handle = operations::runtime()?;
         let store = self.open()?;
         let (entries, follows) = self.select(&store, request)?;
-        let leases: Vec<Lease> = entries
-            .iter()
-            .map(|e| e.summary.item_id.as_str())
-            .chain(follows.iter().map(|f| f.follow_id.as_str()))
-            .map(|id| store.lease(id))
-            .collect::<Result<_, _>>()?;
+        let mut leases = Vec::with_capacity(entries.len() + follows.len());
+        for id in entries.iter().map(|e| e.summary.item_id.as_str())
+            .chain(follows.iter().map(|f| f.follow_id.as_str())) {
+            leases.push(sync::manual_lease(&store, id).await?);
+        }
         let (record, operation_lease) = operations::create(
             &store,
             LibraryOperationKind::Refresh,
@@ -797,7 +802,7 @@ impl LibraryService {
     ) -> Result<LibraryOperation, InspectionError> {
         let handle = operations::runtime()?;
         let store = self.open()?;
-        let lease = store.lease(&request.item_id)?;
+        let lease = sync::manual_lease(&store, &request.item_id).await?;
         let entry = self
             .entry(&store, &request.item_id)?
             .ok_or_else(|| error("library_item_not_found", "Library item does not exist"))?;
@@ -983,6 +988,13 @@ impl LibraryService {
         options: SaveOptions<'_>,
     ) -> Result<(), InspectionError> {
         let SaveOptions { confirmed, reference, reason, download_all, attachment_request, issue_row } = options;
+        // A truncated manifest is not an attachment deletion. Unattended saves
+        // must retain the entire previous snapshot and retry the candidate.
+        if crate::sources::lane::current() == crate::sources::lane::RequestLane::Background
+            && asset.diagnostics.iter().any(|diagnostic| diagnostic.code == "source_attachments_partial")
+        {
+            return Err(error("source_attachments_partial", "Attachment manifest is incomplete; saved content was retained"));
+        }
         if let Some(old) = &old {
             asset.original_url = old.summary.original_url.clone();
         }
@@ -1127,7 +1139,11 @@ impl LibraryService {
         if equal && confirmed.is_none() {
             // Preserve the snapshot timestamp: provenance refreshes do not rewrite files.
             entry.summary.fetched_at = old.as_ref().and_then(|e| e.summary.fetched_at.clone());
-            store.update(entry.clone())?;
+            let quiet = crate::sources::lane::current() == crate::sources::lane::RequestLane::Background
+                && old.as_ref().is_some_and(|old| old.summary.source_revision == entry.summary.source_revision
+                    && old.summary.issue == entry.summary.issue
+                    && old.references == entry.references && old.relations_captured == entry.relations_captured);
+            if !quiet { store.update_for_reference(entry.clone(), reference.as_ref())?; }
         } else {
             let stage = match prepared {
                 Some(prepared) => store.stage_asset_into(prepared.stage, &mut entry, &asset, prepared.files)?,
@@ -1136,11 +1152,12 @@ impl LibraryService {
             if operations::cancelled(store, operation)? {
                 return Ok(());
             }
-            if let Err(e) = store.publish(
+            if let Err(e) = store.publish_for_reference(
                 stage,
                 entry.clone(),
                 old.as_ref().map(|e| e.summary.revision.as_str()),
                 confirmed,
+                reference.as_ref(),
             ) {
                 if e.code == "library_conflict" {
                     if let Some(old) = old {

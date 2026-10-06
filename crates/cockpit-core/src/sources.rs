@@ -13,6 +13,7 @@ use tokio::time::timeout;
 
 use crate::InspectionError;
 use crate::repositories::is_jira_key;
+pub mod lane;
 pub mod references;
 pub use references::{
     MAX_ASSET_REFERENCES, MAX_REFERENCE_DEPTH, ReferenceSeed, ReferenceTarget, RelatedAsset,
@@ -165,7 +166,7 @@ pub struct SpaceSummary {
     pub name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpacePage {
     pub page_id: String,
     pub title: String,
@@ -177,6 +178,7 @@ pub struct SpacePage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpacePageListing {
+    /// Required for full space inventory; empty for metadata-only delta/batch checks.
     pub space_name: String,
     pub homepage_id: Option<String>,
     pub pages: Vec<SpacePage>,
@@ -184,9 +186,17 @@ pub struct SpacePageListing {
     pub complete: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageAux {
+    pub labels: Vec<String>,
+    pub labels_complete: bool,
+    pub attachments: Vec<SourceAttachment>,
+    pub attachments_complete: bool,
+}
+
 /// One row of a Jira issue listing. `updated` is the CLI's plain format,
 /// `YYYY-MM-DD HH:MM:SS`, which is what a listing is compared against.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IssueRow {
     pub key: String,
     pub updated: String,
@@ -205,10 +215,10 @@ pub struct IssueListing {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueQuery<'a> {
-    /// `updated_since` is a view-format ISO instant (probe lower bound).
+    /// Frozen epoch-millisecond interval, inclusive lower and exclusive upper.
     Jql {
         jql: &'a str,
-        updated_since: Option<&'a str>,
+        updated_window: Option<(i64, i64)>,
     },
     Keys(&'a [String]),
 }
@@ -402,6 +412,11 @@ fn normalized_provider_instance(value: &str) -> Result<ProviderInstance, Inspect
 pub trait SourceProvider: Send + Sync {
     fn provider_id(&self) -> &str;
     fn capabilities(&self) -> Vec<SourceCapability>;
+    /// Shared HTTP-origin cooldown.
+    fn blocked_until_ms(&self) -> Option<i64> { None }
+    /// Remaining transport-authoritative rolling origin budget in this lane.
+    /// `None` means this provider does not expose HTTP request accounting.
+    fn background_requests_remaining(&self) -> Option<u32> { None }
     async fn metadata(
         &self,
         _request: &SourceFetchRequest,
@@ -428,6 +443,26 @@ pub trait SourceProvider: Send + Sync {
         _max_pages: u32,
         _cancel: &std::sync::atomic::AtomicBool,
     ) -> Result<SpacePageListing, InspectionError> {
+        capability_unavailable()
+    }
+    async fn list_page_changes(
+        &self,
+        _space_key: &str,
+        _lower_ms: i64,
+        _upper_ms: i64,
+        _max_pages: u32,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        capability_unavailable()
+    }
+    async fn page_versions(
+        &self,
+        _ids: &[String],
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        capability_unavailable()
+    }
+    async fn page_aux(&self, _page_id: &str) -> Result<PageAux, InspectionError> {
         capability_unavailable()
     }
     /// A metadata listing of Jira issues for a query or a set of keys.
@@ -512,6 +547,17 @@ fn remember_read<T>(reads: &mut Vec<(String, Instant, T)>, key: String, value: T
 }
 
 impl SourceService {
+    fn deadline(&self) -> Duration {
+        self.operation_timeout.saturating_mul(
+            if lane::current() == lane::RequestLane::Background { 10 } else { 1 },
+        )
+    }
+    pub fn blocked_until_ms(&self, provider_id: &str) -> Option<i64> {
+        self.selected_provider(provider_id).ok()?.blocked_until_ms()
+    }
+    pub fn background_requests_remaining(&self, provider_id: &str) -> Option<u32> {
+        self.selected_provider(provider_id).ok()?.background_requests_remaining()
+    }
     pub fn new(
         configuration: &ProjectConfiguration,
         providers: Vec<Arc<dyn SourceProvider>>,
@@ -583,7 +629,7 @@ impl SourceService {
                     "selected source provider is unavailable",
                 )
             })?;
-        let metadata = timeout(self.operation_timeout, provider.metadata(&request))
+        let metadata = timeout(self.deadline(), provider.metadata(&request))
             .await
             .map_err(|_| {
                 InspectionError::new(
@@ -656,7 +702,7 @@ impl SourceService {
         if recent.is_some() {
             return;
         }
-        if let Ok(Ok(assets)) = timeout(self.operation_timeout, provider.fetch(&request)).await {
+        if let Ok(Ok(assets)) = timeout(self.deadline(), provider.fetch(&request)).await {
             remember_read(
                 &mut self
                     .recent
@@ -692,7 +738,7 @@ impl SourceService {
                     "selected source provider is unavailable",
                 )
             })?;
-        let resolution = timeout(self.operation_timeout, provider.resolve_input(input.trim()))
+        let resolution = timeout(self.deadline(), provider.resolve_input(input.trim()))
             .await
             .map_err(|_| {
                 InspectionError::new(
@@ -740,7 +786,7 @@ impl SourceService {
         provider_id: &str,
     ) -> Result<Vec<SpaceSummary>, InspectionError> {
         let provider = self.selected_provider(provider_id)?;
-        let spaces = timeout(self.operation_timeout, provider.list_spaces())
+        let spaces = timeout(self.deadline(), provider.list_spaces())
             .await
             .map_err(|_| {
                 InspectionError::new(
@@ -782,7 +828,7 @@ impl SourceService {
         let provider = self.selected_provider(provider_id)?;
         let calls = max_pages.div_ceil(100).saturating_add(2);
         let listing = timeout(
-            self.operation_timeout.saturating_mul(calls),
+            self.deadline().saturating_mul(calls),
             provider.list_space_pages(space_key, max_pages, cancel),
         )
         .await
@@ -819,6 +865,56 @@ impl SourceService {
         Ok(listing)
     }
 
+    pub async fn list_page_changes(
+        &self, provider_id: &str, space_key: &str, lower_ms: i64, upper_ms: i64,
+        max_pages: u32, cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        if !confluence_space_key(space_key) || lower_ms < 0 || lower_ms >= upper_ms || max_pages == 0 {
+            return Err(InspectionError::new("source_provider_contract", "invalid bounded page interval"));
+        }
+        let listing = timeout(self.deadline().saturating_mul(max_pages.div_ceil(100).saturating_add(2)),
+            self.selected_provider(provider_id)?.list_page_changes(space_key, lower_ms, upper_ms, max_pages, cancel))
+            .await.map_err(|_| InspectionError::new("source_fetch_timeout", "page delta exceeded the configured deadline"))??;
+        validate_page_listing(&listing, max_pages as usize + 1)?;
+        Ok(listing)
+    }
+    pub async fn page_versions(
+        &self, provider_id: &str, ids: &[String], cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        let unique = ids.iter().collect::<std::collections::BTreeSet<_>>();
+        if ids.is_empty() || ids.len() > 10_000 || unique.len() != ids.len()
+            || !ids.iter().all(|id| confluence_page_id(id)) {
+            return Err(InspectionError::new("source_provider_contract", "page checks require bounded unique ids"));
+        }
+        let listing = timeout(self.deadline().saturating_mul((ids.len() as u32).div_ceil(100).saturating_add(2)),
+            self.selected_provider(provider_id)?.page_versions(ids, cancel))
+            .await.map_err(|_| InspectionError::new("source_fetch_timeout", "page checks exceeded the configured deadline"))??;
+        validate_page_listing(&listing, ids.len())?;
+        if listing.pages.iter().any(|page| !unique.contains(&page.page_id)) {
+            return Err(InspectionError::new("source_provider_contract", "page check returned an unsolicited identity"));
+        }
+        Ok(listing)
+    }
+    pub async fn page_aux(&self, provider_id: &str, page_id: &str) -> Result<PageAux, InspectionError> {
+        if !confluence_page_id(page_id) {
+            return Err(InspectionError::new("source_provider_contract", "invalid page auxiliary identity"));
+        }
+        let aux = timeout(self.deadline().saturating_mul(8),
+            self.selected_provider(provider_id)?.page_aux(page_id))
+            .await.map_err(|_| InspectionError::new("source_fetch_timeout", "page auxiliary check exceeded the configured deadline"))??;
+        let mut ids = std::collections::BTreeSet::new();
+        if aux.labels.len() > 10_000 || aux.attachments.len() > 256
+            || aux.labels.iter().any(|label| !bounded_text(label, MAX_METADATA_BYTES))
+            || aux.attachments.iter().any(|attachment| attachment.id.is_empty()
+                || !bounded_text(&attachment.id, MAX_METADATA_BYTES)
+                || !ids.insert(&attachment.id)
+                || !bounded_text(&attachment.title, MAX_METADATA_BYTES)
+                || attachment.source_url.as_deref().is_some_and(|url| !bounded_text(url, MAX_URL_BYTES))) {
+            return Err(InspectionError::new("source_provider_contract", "invalid page auxiliary listing"));
+        }
+        Ok(aux)
+    }
+
     /// Metadata listing of Jira issues. The deadline scales with the number
     /// of CLI calls the provider may make (one per 100 rows or keys, twice
     /// over for bisection); the provider stops early when `cancel` is set.
@@ -831,10 +927,10 @@ impl SourceService {
     ) -> Result<IssueListing, InspectionError> {
         let contract = |message: &str| InspectionError::new("source_provider_contract", message);
         let batches = match query {
-            IssueQuery::Jql { jql, updated_since } => {
+            IssueQuery::Jql { jql, updated_window } => {
                 if jql.trim().is_empty()
                     || !bounded_text(jql, MAX_ISSUE_JQL_BYTES)
-                    || updated_since.is_some_and(|since| crate::jira_query::instant_seconds(since).is_none())
+                    || updated_window.is_some_and(|(lower, upper)| lower < 0 || lower >= upper)
                 {
                     return Err(contract("issue listing requires a bounded query"));
                 }
@@ -856,7 +952,7 @@ impl SourceService {
         let provider = self.selected_provider(provider_id)?;
         let calls = batches.saturating_mul(2).saturating_add(2);
         let listing = timeout(
-            self.operation_timeout.saturating_mul(calls),
+            self.deadline().saturating_mul(calls),
             provider.list_issues(query, max, cancel),
         )
         .await
@@ -898,7 +994,7 @@ impl SourceService {
             ));
         }
         let provider = self.selected_provider(provider_id)?;
-        let space = timeout(self.operation_timeout, provider.page_space(page_id))
+        let space = timeout(self.deadline(), provider.page_space(page_id))
             .await
             .map_err(|_| {
                 InspectionError::new(
@@ -959,7 +1055,7 @@ impl SourceService {
         }
         let provider = self.selected_provider(provider_id)?;
         let downloaded = timeout(
-            self.operation_timeout,
+            self.deadline(),
             provider.download_attachment(
                 canonical_id,
                 attachment,
@@ -1033,7 +1129,7 @@ impl SourceService {
         let assets = match reused {
             Some(assets) => assets,
             None => {
-                let assets = timeout(self.operation_timeout, provider.fetch(&request))
+                let assets = timeout(self.deadline(), provider.fetch(&request))
                     .await
                     .map_err(|_| {
                         InspectionError::new(
@@ -1073,6 +1169,22 @@ impl SourceService {
             diagnostics,
         })
     }
+}
+
+fn validate_page_listing(listing: &SpacePageListing, limit: usize) -> Result<(), InspectionError> {
+    let mut ids = std::collections::BTreeSet::new();
+    // Metadata-only delta/batch responses intentionally have no space label.
+    // Full space enumeration validates its required label separately.
+    if listing.pages.len() > limit
+        || (!listing.space_name.is_empty() && !bounded_text(&listing.space_name, MAX_METADATA_BYTES))
+        || listing.homepage_id.as_deref().is_some_and(|id| !confluence_page_id(id))
+        || listing.pages.iter().any(|page| !confluence_page_id(&page.page_id)
+            || !ids.insert(&page.page_id) || !bounded_text(&page.title, MAX_METADATA_BYTES)
+            || page.ancestors.len() > 256
+            || page.ancestors.iter().any(|id| !confluence_page_id(id) || id == &page.page_id)) {
+        return Err(InspectionError::new("source_provider_contract", "invalid page metadata listing"));
+    }
+    Ok(())
 }
 
 fn validate_request(request: &SourceFetchRequest) -> Result<(), InspectionError> {

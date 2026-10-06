@@ -43,7 +43,7 @@ The reusable Cockpit core and CLI are implemented in Rust. Package boundaries ar
 1. **Protocol** — versioned request, response, error, and event types shared by clients and servers.
 2. **Application core** — workspace lifecycle, durable task/run orchestration, provider ingestion, freshness, context discovery, authorization rules, and idempotency. It must not depend on Tauri, HTTP, WebSocket, or socket framing.
 3. **Herdr adapter** — Herdr protocol, session selection, snapshots, events, terminal attachment, reconnect, and Herdr-specific identifiers.
-4. **Provider adapters** — configured external CLI integrations and normalization into Cockpit snapshots.
+4. **Provider adapters** — configured HTTP/CLI integrations and normalization into Cockpit snapshots.
 5. **OS vault adapter** — `cockpit-secrets` implements the core's credential-vault trait over Linux Secret Service (macOS Keychain compiled only); hosts compose it and the core stays free of OS dependencies.
 6. **CLI and gateway hosts** — user-facing commands and `cockpit serve`.
 7. **Client adapters** — Tauri IPC/channels for native use and HTTP/WebSocket for browser use.
@@ -370,7 +370,7 @@ Provider interfaces are capability-based. Issue Tracker and Wiki adapters primar
 
 Forge adapters are initially intended for review-assistant context, not complete forge administration.
 
-Adapters use configured executables and safe argument construction. A missing or unsupported executable creates an explicit unavailable capability rather than silently substituting another provider.
+Forge adapters use configured executables and safe argument construction; missing or unsupported executables create explicit unavailable capabilities. Jira and Confluence use pooled, bounded HTTP reads with credentials stored in the OS vault. Neither path silently substitutes another provider or credential source.
 
 ### 7.2 Hydration and reference depth
 
@@ -393,6 +393,14 @@ The global Context Library is the durable, Cockpit-owned source for provider sna
 Space adds save to the Library first, then select the saved item IDs for a freshly verified Herdr Space. Setup reuses its prevalidated primary and linked assets without fetching them again. A failed selection leaves the saved Library items intact; there is no companion copy, copy retry journal, or Space update phase. The Library UI offers `Add to <Space>` and `Library and <Space>`. Context `Resources` lists selected items and additional repository paths; removing an item or repository from a Space only removes its selection.
 
 `SourceService` is fetch-only: provider lookup, bounded metadata/fetch, setup's short-lived `RecentReads`, and bounded reference traversal (`collect_related`, which returns assets without persisting them). `LibraryService` is the persistence authority for Library content and Space selections.
+
+Jira and Confluence synchronize while the native app or `cockpit serve` is running. One advisory-lock owner per Library root runs the coordinator; short-lived CLI commands never start it. Defaults are hourly changed-since discovery, daily metadata/membership/hierarchy reconciliation and bounded reference scans, and seven-day rolling auxiliary audits. Standalone items receive batched metadata checks; accumulated Jira issues continue to refresh after leaving their original query. Existing configured import limits are unchanged.
+
+Discovery uses fixed UTC lower/upper boundaries with a five-minute lag and thirty-minute overlap. A completed boundary is committed only after complete enumeration and durable enqueueing, not after every body has been fetched. Checkpoints, deduplicated work, retry deadlines, cooldowns and resumable standalone inventory progress live under `<library_root>/.cockpit/sync/`. Reopening coalesces overdue work instead of replaying every missed timer. There is no separate daemon or closed-app synchronization.
+
+Background HTTP shares per-origin pacing across provider instances: one request per second, two requests in flight and a 1,200-request rolling-hour budget by default. Interactive requests take priority; `Retry-After` holds background work. Unchanged scans leave snapshots, the index and operation history alone. Incomplete attachment manifests cannot replace downloaded files, and publication rechecks current follow membership/exclusions under the metadata lock.
+
+Visible mounted Library listings probe their first page's generation roughly once a minute; unchanged generations do not read the remaining pages or rerender the listing. Changed generations are loaded atomically and notify existing Library/context consumers. The global read-only preview retains primary-document selection by item identity through an owned-path rename and rereads only its selected changed snapshot. Manual refresh events and bound viewer/comment authority remain unchanged.
 
 The old `<state_root>/sources` cache is inert: Cockpit never reads, imports, reports, modifies, or deletes it. There is no migration. It remains on disk for manual user removal after confirmation.
 

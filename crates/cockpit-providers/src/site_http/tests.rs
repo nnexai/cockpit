@@ -367,11 +367,15 @@ async fn status_failures_have_fixed_private_codes_for_both_services() {
             (404, FailureKind::NotFound, "source_not_found"),
             (410, FailureKind::NotFound, "source_not_found"),
             (429, FailureKind::RateLimited, "source_rate_limited"),
+            (503, FailureKind::RateLimited, "source_rate_limited"),
             (500, FailureKind::Status, "source_provider_failed"),
         ] {
             let server = Server::start(move |_, _| {
                 let mut reply = Reply::bytes(TOKEN.as_bytes());
                 reply.status = status;
+                if matches!(status, 429 | 503) {
+                    reply = reply.header("Retry-After", "120");
+                }
                 reply
             });
             let (http, _) = transport(
@@ -390,6 +394,7 @@ async fn status_failures_have_fixed_private_codes_for_both_services() {
             assert_eq!(failure.error.code, code);
             assert!(failure.error.message.starts_with(service.name()));
             private(&failure);
+            assert_eq!(server.seen().len(), 1, "authentication and long cooldown failures must not retry");
         }
     }
 }
@@ -587,4 +592,128 @@ async fn unsafe_initial_requests_and_oversized_records_send_nothing() {
     assert!(dest.empty());
     assert!(site.seen().is_empty());
     assert!(foreign.seen().is_empty());
+}
+
+#[tokio::test]
+async fn jira_and_confluence_share_background_budget_without_blocking_manual_work() {
+    let server = Server::start(|_, _| Reply::json(json!({"ok": true})));
+    let base = format!("http://{}", server.addr);
+    let jira = bearer(&format!("{base}/jira")).await;
+    let wiki = transport(
+        &format!("{base}/wiki"), Service::Confluence,
+        Some(ProviderAuthKind::Bearer), Duration::from_secs(2),
+    ).await.0;
+    let policy = lane::BackgroundPolicy { hourly_request_cap: 1, ..Default::default() };
+    lane::scope_background(policy, async {
+        assert_eq!(jira.remaining_background_requests(), 1);
+        assert_eq!(wiki.remaining_background_requests(), 1);
+        jira.get_json(jira.endpoint(&["api"], &[]), MAX_JSON_BYTES).await.unwrap();
+        assert_eq!(jira.remaining_background_requests(), 0);
+        assert_eq!(wiki.remaining_background_requests(), 0);
+        assert_eq!(wiki.remaining_background_requests(), 0, "observation must not consume requests");
+        let failure = wiki.get_json(wiki.endpoint(&["api"], &[]), MAX_JSON_BYTES).await.unwrap_err();
+        assert_eq!(failure.kind, FailureKind::RateLimited);
+        assert_eq!(failure.error.code, "source_rate_limited");
+        assert!(wiki.blocked_until_ms().is_some());
+        assert_eq!(jira.blocked_until_ms(), wiki.blocked_until_ms());
+        private(&failure);
+    }).await;
+    assert_eq!(server.seen().len(), 1);
+    wiki.get_json(wiki.endpoint(&["manual"], &[]), MAX_JSON_BYTES).await.unwrap();
+    assert_eq!(server.seen().len(), 2);
+}
+
+#[tokio::test]
+async fn long_retry_after_blocks_other_provider_and_both_lanes_without_sending() {
+    for status in [429, 503] {
+        let server = Server::start(move |_, _| Reply::status(status).header("Retry-After", "120"));
+        let base = format!("http://{}", server.addr);
+        let jira = bearer(&format!("{base}/jira")).await;
+        let wiki = transport(
+            &format!("{base}/wiki"), Service::Confluence,
+            Some(ProviderAuthKind::Bearer), Duration::from_secs(2),
+        ).await.0;
+        let failure = jira.get_json(jira.endpoint(&["api"], &[]), MAX_JSON_BYTES).await.unwrap_err();
+        assert_eq!(failure.status.unwrap().as_u16(), status);
+        assert!(jira.blocked_until_ms().is_some());
+        assert_eq!(jira.blocked_until_ms(), wiki.blocked_until_ms());
+        let interactive = wiki.get_json(wiki.endpoint(&["api"], &[]), MAX_JSON_BYTES).await.unwrap_err();
+        assert_eq!(interactive.kind, FailureKind::RateLimited);
+        let background = lane::scope(RequestLane::Background, wiki.get_json(wiki.endpoint(&["api"], &[]), MAX_JSON_BYTES)).await.unwrap_err();
+        assert_eq!(background.kind, FailureKind::RateLimited);
+        assert_eq!(server.seen().len(), 1);
+        private(&failure);
+        private(&interactive);
+        private(&background);
+    }
+}
+
+#[tokio::test]
+async fn short_cooldown_retries_are_finite_and_successful_get_can_recover() {
+    for succeeds in [true, false] {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let count = attempts.clone();
+        let server = Server::start(move |_, _| {
+            let attempt = count.fetch_add(1, Ordering::SeqCst);
+            if succeeds && attempt > 0 {
+                Reply::json(json!({"ok": true}))
+            } else {
+                Reply::status(429).header("Retry-After", "0")
+            }
+        });
+        let http = bearer(&format!("http://{}", server.addr)).await;
+        let result = http.get_json(http.endpoint(&["api"], &[]), MAX_JSON_BYTES).await;
+        if succeeds {
+            assert_eq!(result.unwrap(), json!({"ok": true}));
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        } else {
+            assert_eq!(result.unwrap_err().kind, FailureKind::RateLimited);
+            assert_eq!(attempts.load(Ordering::SeqCst), 4);
+        }
+    }
+}
+
+#[tokio::test]
+async fn concurrent_consumers_never_send_before_the_shared_retry_after_floor() {
+    let arrivals = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let recorded = arrivals.clone();
+    let server = Server::start(move |_, _| {
+        let mut times = recorded.lock();
+        times.push(std::time::Instant::now());
+        if times.len() == 1 {
+            Reply::status(429).header("Retry-After", "1")
+        } else {
+            Reply::json(json!({"ok": true}))
+        }
+    });
+    let base = format!("http://{}", server.addr);
+    let jira = Arc::new(bearer(&format!("{base}/jira")).await);
+    let wiki = transport(
+        &format!("{base}/wiki"), Service::Confluence,
+        Some(ProviderAuthKind::Bearer), Duration::from_secs(2),
+    ).await.0;
+    let initial = jira.clone();
+    let request = tokio::spawn(async move {
+        initial.get_json(initial.endpoint(&["api"], &[]), MAX_JSON_BYTES).await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while jira.blocked_until_ms().is_none() {
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    let (interactive, background, initial) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            wiki.get_json(wiki.endpoint(&["manual"], &[]), MAX_JSON_BYTES),
+            lane::scope(RequestLane::Background, wiki.get_json(wiki.endpoint(&["background"], &[]), MAX_JSON_BYTES)),
+            request,
+        )
+    }).await.unwrap();
+    assert!(interactive.is_ok());
+    assert!(background.is_ok());
+    assert!(initial.unwrap().is_ok());
+    let times = arrivals.lock();
+    assert_eq!(times.len(), 4);
+    for sent in &times[1..] {
+        assert!(sent.duration_since(times[0]) >= Duration::from_secs(1));
+    }
 }

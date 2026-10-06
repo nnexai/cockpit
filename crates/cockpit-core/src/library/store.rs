@@ -180,7 +180,7 @@ fn component(value: &str) -> bool {
         )
         && !value.contains('\\')
 }
-fn open_child(parent: &Dir, name: &str) -> Result<Dir, InspectionError> {
+pub(super) fn open_child(parent: &Dir, name: &str) -> Result<Dir, InspectionError> {
     match parent.create_dir(name) {
         Ok(()) => sync(parent)?,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
@@ -560,8 +560,17 @@ impl Store {
     /// `purge_after`, `reference_depth` and `included_by` are ignored: they change
     /// only through `mutate_index` and `add_ref`.
     pub fn update(&self, entry: LibraryIndexEntry) -> Result<(), InspectionError> {
+        self.update_for_reference(entry, None)
+    }
+    /// Revalidate the holder in the same critical section as the metadata save.
+    pub(super) fn update_for_reference(
+        &self,
+        entry: LibraryIndexEntry,
+        reference: Option<&LibraryItemRef>,
+    ) -> Result<(), InspectionError> {
         let _lock = self.exclusive()?;
         let mut index = self.index()?;
+        Self::check_reference(&index, &entry.summary, reference)?;
         let old = index
             .items
             .iter_mut()
@@ -575,15 +584,43 @@ impl Store {
     }
     /// Adds a reference to an existing item, clearing its purge mark.
     pub fn add_ref(&self, item_id: &str, reference: LibraryItemRef) -> Result<(), InspectionError> {
-        self.mutate_index(|index| {
+        self.mutate_index_if(|index| {
             let entry = index
                 .items
-                .iter_mut()
+                .iter()
                 .find(|e| e.summary.item_id == item_id)
                 .ok_or_else(|| error("library_item_not_found", "Library item no longer exists"))?;
+            Self::check_reference(index, &entry.summary, Some(&reference))?;
+            let entry = index.items.iter_mut().find(|e| e.summary.item_id == item_id).unwrap();
+            let changed = !entry.summary.refs.contains(&reference) || entry.summary.purge_after.is_some();
             crate::library::refs::insert_ref(&mut entry.summary, reference);
-            Ok(())
+            Ok(((), changed))
         })
+    }
+    /// Called with the current index under library.lock. Canonical exclusions
+    /// apply only to the follow's own site; Library-id exclusions are global.
+    pub(super) fn reference_allowed(
+        index: &Index,
+        summary: &LibraryItemSummary,
+        reference: &LibraryItemRef,
+    ) -> bool {
+        let LibraryItemRef::Follow { follow_id } = reference else { return true; };
+        index.follows.iter().find(|follow| &follow.follow_id == follow_id).is_some_and(|follow| {
+            !follow.excluded_ids.contains(&summary.item_id)
+                && !(summary.provider_id.as_deref() == Some(follow.provider_id.as_str())
+                    && summary.provider_instance.as_deref() == Some(follow.provider_instance.as_str())
+                    && summary.canonical_id.as_ref().is_some_and(|id| follow.excluded_ids.contains(id)))
+        })
+    }
+    fn check_reference(
+        index: &Index,
+        summary: &LibraryItemSummary,
+        reference: Option<&LibraryItemRef>,
+    ) -> Result<(), InspectionError> {
+        if reference.is_some_and(|reference| !Self::reference_allowed(index, summary, reference)) {
+            return Err(error("library_follow_excluded", "Follow was stopped or this item was excluded"));
+        }
+        Ok(())
     }
     /// Commit presentation and follow-record changes that never touch item files.
     /// The closure must preserve every item's revision, path and inventory.
@@ -593,6 +630,27 @@ impl Store {
     ) -> Result<R, InspectionError> {
         let _lock = self.exclusive()?;
         self.mutate_index_locked(change)
+    }
+    /// Like `mutate_index`, but a metadata-only no-op does not publish a generation.
+    pub(super) fn mutate_index_if<R>(
+        &self,
+        change: impl FnOnce(&mut Index) -> Result<(R, bool), InspectionError>,
+    ) -> Result<R, InspectionError> {
+        let _lock = self.exclusive()?;
+        let mut index = self.index()?;
+        let before = index.items.iter().map(|e|
+            (e.summary.item_id.clone(), e.summary.revision.clone(), e.summary.item_path.clone()))
+            .collect::<Vec<_>>();
+        let (result, changed) = change(&mut index)?;
+        if !changed { return Ok(result); }
+        let after = index.items.iter().map(|e|
+            (e.summary.item_id.clone(), e.summary.revision.clone(), e.summary.item_path.clone()))
+            .collect::<Vec<_>>();
+        if before != after {
+            return Err(error("library_conflict", "Index mutation changed item identity"));
+        }
+        self.commit(&mut index)?;
+        Ok(result)
     }
     /// Caller must already hold the exclusive Library lock.
     pub(super) fn mutate_index_locked<R>(
@@ -734,16 +792,29 @@ impl Store {
     }
     pub fn publish(
         &self,
+        stage: Stage,
+        entry: LibraryIndexEntry,
+        previous: Option<&str>,
+        confirmed: Option<&[LibraryConflictFile]>,
+    ) -> Result<(), InspectionError> {
+        self.publish_for_reference(stage, entry, previous, confirmed, None)
+    }
+    /// The caller holds the item lease; check the current holder under the
+    /// publication lock, after all remote attachment work has finished.
+    pub(super) fn publish_for_reference(
+        &self,
         mut stage: Stage,
         entry: LibraryIndexEntry,
         previous: Option<&str>,
         confirmed: Option<&[LibraryConflictFile]>,
+        reference: Option<&LibraryItemRef>,
     ) -> Result<(), InspectionError> {
         validate_entry(&entry)?;
         verify_entry(&stage.dir, &entry)?;
         let _lock = self.exclusive()?;
         self.recover()?;
         let mut index = self.index()?;
+        Self::check_reference(&index, &entry.summary, reference)?;
         let (target_root, target_name) = self.create_item_parent(&entry.summary.item_path)?;
         sync(&target_root)?;
         let target_name = target_name.to_owned();
@@ -2748,6 +2819,20 @@ mod tests {
         let stage = store.stage_asset(&mut updated, &asset(1, "one changed")).unwrap();
         // ... and a follow adopts the item before the publish lands.
         let follow = LibraryItemRef::Follow { follow_id: "follow:other".into() };
+        store.mutate_index(|index| {
+            index.follows.push(LibraryFollowSummary {
+                follow_id: "follow:other".into(),
+                provider_id: "confluence".into(),
+                provider_instance: "https://x.atlassian.net/wiki".into(),
+                source: LibraryFollowSource::ConfluenceSpace {
+                    space_key: "SD".into(), space_name: "Software Development".into(),
+                },
+                include_attachments: false, item_count: 0, partial: None,
+                excluded_ids: vec![], last_refreshed_at: None,
+                state: LibraryItemState::Fresh, reference_depth: Some(0),
+            });
+            Ok(())
+        }).unwrap();
         store.add_ref(&first.summary.item_id, follow.clone()).unwrap();
         store.publish(stage, updated, Some(&first.summary.revision), None).unwrap();
         let saved = store.index().unwrap().items.remove(0).summary;

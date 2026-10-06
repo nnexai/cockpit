@@ -54,7 +54,7 @@ import { RefreshReport } from "../library/RefreshReport";
 import { ErrorSlot } from "../ErrorSlot";
 import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
 import { PendingPill } from "../library/StatePill";
-import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryListingState } from "../library/useLibraryOperation";
+import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryChangeDetail, type LibraryListingState } from "../library/useLibraryOperation";
 import { useProviderCredentialActions } from "../library/useProviderCredentials";
 import { resolveContextLink } from "./linkResolver";
 import { copyText } from "../library/clipboard";
@@ -764,7 +764,47 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
   const currentRootRef = useRef(activeRootId);
   currentRootRef.current = activeRootId;
   const latestRevisionKeysRef = useRef(new Set<string>());
-  const selectedPath = value.rootId === root?.root_id ? value.path : null;
+  const requestedPath = value.rootId === root?.root_id ? value.path : null;
+  const globalLibrary = context === null && isLibrary;
+  const primarySelectionRef = useRef<{ identity: string; path: string; itemId: string } | null>(null);
+  const previousPrimary = primarySelectionRef.current;
+  const primaryLibraryItem = globalLibrary && requestedPath
+    ? previousPrimary?.identity === identityKey && previousPrimary.path === requestedPath
+      ? library.listing?.items.find((item) => item.item_id === previousPrimary.itemId)
+      : library.listing?.items.find((item) => item.document_path === requestedPath)
+    : undefined;
+  // Only a primary document follows its stable item identity. Arbitrary files and
+  // attachments retain their path identity, including the existing removal rules.
+  const trackingPrimary = globalLibrary && previousPrimary?.identity === identityKey && previousPrimary.path === requestedPath;
+  const selectedPath = trackingPrimary && library.listing
+    ? primaryLibraryItem?.document_path ?? null
+    : requestedPath;
+  const selectedSnapshotRevision = primaryLibraryItem?.revision ?? null;
+  useLayoutEffect(() => {
+    primarySelectionRef.current = globalLibrary && requestedPath && primaryLibraryItem
+      ? { identity: identityKey, path: requestedPath, itemId: primaryLibraryItem.item_id }
+      : null;
+  }, [globalLibrary, identityKey, primaryLibraryItem, requestedPath]);
+  useEffect(() => {
+    if (!globalLibrary || library.status !== "ready" || requestedPath === selectedPath) return;
+    const files = { ...value.files };
+    if (root && requestedPath) {
+      const oldKey = keyFor(root.root_id, requestedPath);
+      setDocuments((current) => {
+        const next = { ...current };
+        delete next[oldKey];
+        return next;
+      });
+    }
+    if (root && requestedPath && selectedPath) {
+      const oldKey = keyFor(root.root_id, requestedPath);
+      const newKey = keyFor(root.root_id, selectedPath);
+      const previous = files[oldKey];
+      delete files[oldKey];
+      if (previous) files[newKey] = { ...previous, path: selectedPath };
+    }
+    onChange({ ...value, path: selectedPath, files });
+  }, [globalLibrary, library.status, onChange, requestedPath, root, selectedPath, value]);
   const selectedKey = root && selectedPath ? keyFor(root.root_id, selectedPath) : null;
   const selectedFileState = selectedKey ? value.files[selectedKey] : undefined;
   const directoryPathForFile = selectedPath?.includes("/") ? selectedPath.slice(0, selectedPath.lastIndexOf("/")) : "";
@@ -773,6 +813,9 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
   // Library files are replaced by provider refreshes; always read the current revision.
   const selectedRevision = isLibrary || Boolean(selectedKey && latestRevisionKeysRef.current.has(selectedKey)) ? null : selectedEntry?.revision ?? selectedFileState?.revision ?? null;
   const documentState = selectedKey ? documents[selectedKey] : undefined;
+  const selectedDocumentIdentity = `${selectedKey ?? ""}\u0000${selectedSnapshotRevision ?? ""}`;
+  const selectedDocumentIdentityRef = useRef(selectedDocumentIdentity);
+  selectedDocumentIdentityRef.current = selectedDocumentIdentity;
   const protectedDirectoryKeys = new Set<string>();
   if (root) {
     protectedDirectoryKeys.add(keyFor(root.root_id, ""));
@@ -796,7 +839,7 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
         expected_revision: document.revision,
         offset: expectedOffset,
       }, controller.signal);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || selectedDocumentIdentityRef.current !== selectedDocumentIdentity) return;
       const offset = data.offset ?? 0;
       if (data.revision !== document.revision || offset !== expectedOffset || data.text === null) throw new Error("Source changed while loading the next page; refresh to revalidate it.");
       setDocuments((current) => retainDocumentState(current, selectedKey, {
@@ -811,12 +854,12 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
         },
       }));
     } catch (error) {
-      if (!controller.signal.aborted) setDocuments((current) => retainDocumentState(current, selectedKey, { status: "error", document: current[selectedKey]?.document ?? document, error: readableError(error) }));
+      if (!controller.signal.aborted && selectedDocumentIdentityRef.current === selectedDocumentIdentity) setDocuments((current) => retainDocumentState(current, selectedKey, { status: "error", document: current[selectedKey]?.document ?? document, error: readableError(error) }));
     } finally {
       if (documentController.current === controller) documentController.current = null;
       setDocumentPageLoading((current) => current === requestKey ? null : current);
     }
-  }, [document, reader, root, selectedKey, selectedPath]);
+  }, [document, reader, root, selectedDocumentIdentity, selectedKey, selectedPath]);
   const knownRevisions = useMemo<ContextKnownRevision[]>(() => Object.values(documents)
     .map((state) => state.document)
     .filter((candidate): candidate is ContextDocument => candidate !== undefined && candidate.root_id === activeRootId)
@@ -948,16 +991,19 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
     const requestIdentity = identityKey;
     const requestBindingId = bindingId;
     const requestRootId = root.root_id;
+    const requestDocumentIdentity = selectedDocumentIdentity;
     setDocumentPageLoading(null);
     setDocuments((current) => retainDocumentState(current, selectedKey, { status: "loading", document: current[selectedKey]?.document }));
     const request: ContextDocumentRead = { root_id: requestRootId, path: selectedPath, expected_revision: selectedRevision };
     void reader.document(request, controller.signal).then((data) => {
       if (!mountedRef.current || controller.signal.aborted || requestId !== documentRequestSequence.current
-        || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
+        || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId
+        || selectedDocumentIdentityRef.current !== requestDocumentIdentity) return;
       setDocuments((current) => retainDocumentState(current, selectedKey, { status: "ready", document: data }));
     }).catch((error: unknown) => {
       if (!mountedRef.current || controller.signal.aborted || requestId !== documentRequestSequence.current
-        || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
+        || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId
+        || selectedDocumentIdentityRef.current !== requestDocumentIdentity) return;
       setDocuments((current) => retainDocumentState(current, selectedKey, { status: "error", document: current[selectedKey]?.document, error: readableError(error) }));
     });
     return () => {
@@ -965,7 +1011,7 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
       if (documentController.current === controller) documentController.current = null;
       documentRequestSequence.current += 1;
     };
-  }, [bindingId, identityKey, reader, refreshGeneration, selectedKey, selectedPath, selectedRevision, root?.root_id]);
+  }, [bindingId, identityKey, reader, refreshGeneration, selectedDocumentIdentity, selectedKey, selectedPath, selectedRevision, root?.root_id]);
 
   const chooseRoot = (nextRoot: ContextRoot) => {
     setRootId(nextRoot.root_id);
@@ -978,6 +1024,7 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
   };
   const openFile = (path: string, revision: string | null) => {
     if (!root) return;
+    primarySelectionRef.current = null;
     const fileKey = keyFor(root.root_id, path);
     if (revision === null) latestRevisionKeysRef.current.add(fileKey);
     else latestRevisionKeysRef.current.delete(fileKey);
@@ -1256,13 +1303,15 @@ export function ContextViewer({ client, context, value, onChange, onViewerError,
     if (!isLibrary) return;
     // Selecting saved Library items does not change their documents or replace action focus.
     const changed = (event: Event) => {
-      const kind = (event as CustomEvent<LibraryOperation | null>).detail?.kind;
-      if (kind === "space_add") return;
+      const kind = (event as CustomEvent<LibraryChangeDetail>).detail?.kind;
+      // A probe publishes the listing first; its selected snapshot drives the
+      // global read. Legacy/manual events still force a disk revalidation.
+      if (kind === "space_add" || globalLibrary && kind === "snapshot_update") return;
       setRefreshGeneration((generation) => generation + 1);
     };
     window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
     return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
-  }, [isLibrary]);
+  }, [globalLibrary, isLibrary]);
   const spaceLive = space?.live ? space : null;
   const spaceListing = useSpaceContextListing(client, spaceLive?.target ?? null, spaceLive !== null);
   const displaySpace = space ? { ...space, label: spaceListing.listing?.space_label ?? space.label } : null;

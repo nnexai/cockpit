@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 const MAX_OPERATION_BYTES: u64 = 4 * 1024 * 1024;
 const RETAIN_FINISHED: usize = 64;
+const RETAIN_BACKGROUND_FINISHED: usize = 16;
+const BACKGROUND_MESSAGE: &str = "Background synchronization";
 const MAX_REPORT_ROWS: usize = 1000;
 
 pub(crate) fn runtime() -> Result<tokio::runtime::Handle, InspectionError> {
@@ -33,6 +35,17 @@ pub(crate) fn create(
     kind: LibraryOperationKind,
     total: Option<u32>,
 ) -> Result<(LibraryOperation, Lease), InspectionError> {
+    create_with_message(store, kind, total, None)
+}
+pub(super) fn create_background(store: &Store) -> Result<(LibraryOperation, Lease), InspectionError> {
+    create_with_message(store, LibraryOperationKind::Refresh, None, Some(BACKGROUND_MESSAGE.into()))
+}
+fn create_with_message(
+    store: &Store,
+    kind: LibraryOperationKind,
+    total: Option<u32>,
+    message: Option<String>,
+) -> Result<(LibraryOperation, Lease), InspectionError> {
     let now = timestamp();
     let record = LibraryOperation {
         operation_id: Uuid::new_v4().to_string(),
@@ -42,7 +55,7 @@ pub(crate) fn create(
             state: LibraryPhaseState::Running,
             done: 0,
             total,
-            message: None,
+            message,
             error: None,
         }],
         item_ids: vec![],
@@ -325,8 +338,20 @@ pub(crate) fn finish(
     }
     record.finished = true;
     record.updated_at = timestamp();
+    // An audit needs a cancellable active receipt while reading upstream, but
+    // a successful no-op is not durable history and must not evict user work.
+    if record.phases.first().and_then(|phase| phase.message.as_deref()) == Some(BACKGROUND_MESSAGE)
+        && record.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done)
+        && record.report.as_ref().is_some_and(|report|
+            report.new + report.updated + report.removed_at_source + report.dropped
+                + report.partial + report.failed + report.conflict == 0) {
+        store.operations.remove_file(name(id)?)
+            .map_err(|e| error("library_unavailable", e.to_string()))?;
+        return Ok(());
+    }
     persist(store, &record)?;
     let mut finished = Vec::new();
+    let mut background_finished = Vec::new();
     for file in store
         .operations
         .entries()
@@ -342,12 +367,18 @@ pub(crate) fn finish(
         }
         let operation = load(store, id)?;
         if operation.finished {
-            finished.push((operation.updated_at.parse::<u128>().unwrap_or(0), filename));
+            let target = if operation.phases.first().and_then(|phase| phase.message.as_deref()) == Some(BACKGROUND_MESSAGE) {
+                &mut background_finished
+            } else { &mut finished };
+            target.push((operation.updated_at.parse::<u128>().unwrap_or(0), filename));
         }
     }
     finished.sort();
+    background_finished.sort();
     let remove = finished.len().saturating_sub(RETAIN_FINISHED);
-    for (_, filename) in finished.into_iter().take(remove) {
+    let background_remove = background_finished.len().saturating_sub(RETAIN_BACKGROUND_FINISHED);
+    for (_, filename) in finished.into_iter().take(remove)
+        .chain(background_finished.into_iter().take(background_remove)) {
         store
             .operations
             .remove_file(filename)
@@ -366,13 +397,13 @@ pub(crate) fn spawn<F>(
 ) where
     F: Future<Output = Result<(), InspectionError>> + Send + 'static,
 {
-    handle.spawn(async move {
+    handle.spawn(crate::sources::lane::inherit(async move {
         let _lease = lease;
         let result = work.await;
         // Persistence failure remains observable when the operation is read again;
         // never claim a successful phase that could not be durably recorded.
         let _ = finish(&store, &id, result);
-    });
+    }));
 }
 
 #[cfg(test)]

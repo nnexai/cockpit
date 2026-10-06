@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     InspectionError,
-    jira_query::{JiraQueryInput, has_relative_dates, instant_seconds, jira_query_input},
+    jira_query::{JiraQueryInput, has_relative_dates, jira_query_input},
     project_store::timestamp,
     sources::{
         IssueListing, IssueQuery, IssueRow, ReferenceSeed, RelatedAsset, SourceAuthority, SourceRef,
@@ -44,7 +44,7 @@ pub(super) fn jira_follow_id(provider_id: &str, provider_instance: &str, jql: &s
     format!("follow:{:x}", hash.finalize())
 }
 
-fn issue_item_id(follow: &LibraryFollowSummary, key: &str) -> String {
+pub(super) fn issue_item_id(follow: &LibraryFollowSummary, key: &str) -> String {
     item_id(&SourceRef {
         provider_id: follow.provider_id.clone(),
         provider_instance: follow.provider_instance.clone(),
@@ -53,7 +53,7 @@ fn issue_item_id(follow: &LibraryFollowSummary, key: &str) -> String {
     })
 }
 
-fn is_issue_of(entry: &LibraryIndexEntry, follow: &LibraryFollowSummary) -> bool {
+pub(super) fn is_issue_of(entry: &LibraryIndexEntry, follow: &LibraryFollowSummary) -> bool {
     entry.summary.provider_id.as_deref() == Some(follow.provider_id.as_str())
         && entry.summary.provider_instance.as_deref() == Some(follow.provider_instance.as_str())
         && entry.summary.resource_type.as_deref() == Some("issue")
@@ -63,7 +63,7 @@ fn is_issue_of(entry: &LibraryIndexEntry, follow: &LibraryFollowSummary) -> bool
 /// matches the row. Compares listing format with listing format. With a
 /// reference depth, an item saved before references were extracted is fetched once;
 /// so is any item saved before the structured relations (its parent issue) were captured.
-fn change_reason(old: &LibraryIndexEntry, row: &IssueRow, depth: u32) -> Option<&'static str> {
+pub(super) fn change_reason(old: &LibraryIndexEntry, row: &IssueRow, depth: u32) -> Option<&'static str> {
     if matches!(
         old.summary.state,
         LibraryItemState::RemovedAtSource | LibraryItemState::Failed | LibraryItemState::Unknown
@@ -80,25 +80,12 @@ fn change_reason(old: &LibraryIndexEntry, row: &IssueRow, depth: u32) -> Option<
     }
 }
 
-/// The newest `source_revision` of the members, as the ISO string the probe takes.
-fn watermark<'a>(members: impl Iterator<Item = &'a LibraryIndexEntry>) -> Option<String> {
-    members
-        .filter_map(|entry| {
-            let revision = entry.summary.source_revision.as_deref()?;
-            Some((instant_seconds(revision)?, revision))
-        })
-        .max_by_key(|(seconds, _)| *seconds)
-        .map(|(_, revision)| revision.to_owned())
-}
-
 /// What a refresh needs to know about the Library before it plans its fetches.
 struct Snapshot {
     items: BTreeMap<String, LibraryIndexEntry>,
     /// Keys of the items holding this follow.
     members: BTreeSet<String>,
     excluded: BTreeSet<String>,
-    /// A previous run did not see the whole query, so it cannot be probed.
-    unsettled: bool,
     /// Reference depth of the follow record (0 when none is stored).
     depth: u32,
 }
@@ -186,7 +173,7 @@ impl LibraryService {
             .sources
             .list_issues(
                 provider_id,
-                &IssueQuery::Jql { jql: &query.jql, updated_since: None },
+                &IssueQuery::Jql { jql: &query.jql, updated_window: None },
                 PREVIEW_ROWS,
                 &AtomicBool::new(false),
             )
@@ -259,7 +246,7 @@ impl LibraryService {
         };
         let handle = operations::runtime()?;
         let store = self.open()?;
-        let lease = store.lease(&follow.follow_id)?;
+        let lease = super::sync::manual_lease(&store, &follow.follow_id).await?;
         let (record, operation_lease) =
             operations::create(&store, LibraryOperationKind::Add, Some(0))?;
         let service = self.clone();
@@ -285,7 +272,6 @@ impl LibraryService {
         let excluded = record
             .map(|f| f.excluded_ids.iter().cloned().collect())
             .unwrap_or_default();
-        let unsettled = record.is_some_and(|f| f.partial.is_some() || f.state == LibraryItemState::Partial);
         let depth = record.and_then(|f| f.reference_depth).unwrap_or(0);
         let members = index
             .items
@@ -299,7 +285,7 @@ impl LibraryService {
             .into_iter()
             .map(|entry| (entry.summary.item_id.clone(), entry))
             .collect();
-        Ok(Snapshot { items, members, excluded, unsettled, depth })
+        Ok(Snapshot { items, members, excluded, depth })
     }
 
     /// A listing that fails is a failed add, or a Failed follow that keeps every member.
@@ -388,25 +374,9 @@ impl LibraryService {
         }
         let limit = self.configuration.limits.library_space_pages.max(1);
 
-        // 2. Listing: everything for live (and for a follow with no members or
-        // an unsettled last run), the changes since the watermark otherwise.
-        let before = self.snapshot(store, &follow)?;
-        // A member saved before relations were captured needs its fetch, so the whole query is listed.
-        let legacy = before.items.values().any(|entry| {
-            is_issue_of(entry, &follow)
-                && refs::has_follow(&entry.summary, &follow.follow_id)
-                && !entry.relations_captured
-        });
-        let since = (!live && !before.unsettled && !legacy)
-            .then(|| {
-                watermark(before.items.values().filter(|entry| {
-                    is_issue_of(entry, &follow)
-                        && refs::has_follow(&entry.summary, &follow.follow_id)
-                        && !refs::related_of(&entry.summary, &follow.follow_id)
-                }))
-            })
-            .flatten();
-        let query = IssueQuery::Jql { jql: &jql, updated_since: since.as_deref() };
+        // 2. Manual refresh always lists the full predicate, including old issues
+        // that have newly become visible or started matching the query.
+        let query = IssueQuery::Jql { jql: &jql, updated_window: None };
         let listing = match self.list_cancellable(store, operation, &follow.provider_id, query, limit).await {
             Ok(Some(listing)) => listing,
             Ok(None) => return Ok(()),
@@ -518,11 +488,6 @@ impl LibraryService {
             };
             pending.push(Pending { key: row.key.clone(), row: Some(row.clone()), old, reason });
         }
-        // Oldest first: the watermark only ever moves past issues that were saved.
-        pending.sort_by(|a, b| {
-            let updated = |p: &Pending| p.row.as_ref().map(|row| row.updated.clone());
-            updated(a).cmp(&updated(b))
-        });
         for key in absent {
             let old = snapshot.items.get(&issue_item_id(&follow, &key)).cloned();
             if old.as_ref().is_some_and(|old| old.summary.state == LibraryItemState::RemovedAtSource) {
@@ -696,8 +661,6 @@ impl LibraryService {
                 reason: "members could not all be checked".into(),
             })
         } else if !live && failures > 0 {
-            // Fetches failed after newer issues may have been saved, so the
-            // watermark can no longer be trusted: the next run lists everything.
             Some(LibraryPartial {
                 unit: "issues".into(),
                 have,
@@ -1037,12 +1000,12 @@ mod tests {
         ) -> Result<IssueListing, InspectionError> {
             let mut site = self.site();
             match query {
-                IssueQuery::Jql { jql, updated_since } => {
-                    site.log.push(format!("jql {jql} since {}", updated_since.unwrap_or("-")));
+                IssueQuery::Jql { jql, updated_window } => {
+                    assert_eq!(*updated_window, None, "manual follows must list the full query");
+                    site.log.push(format!("jql {jql}"));
                     if site.list_error {
                         return Err(error("source_provider_failed", "jira is down"));
                     }
-                    let since = updated_since.and_then(instant_seconds);
                     let rows = site
                         .queries
                         .get(*jql)
@@ -1050,7 +1013,6 @@ mod tests {
                         .flatten()
                         .filter(|key| !site.gone.contains(*key))
                         .filter_map(|key| Some((key, site.issues.get(key)?)))
-                        .filter(|(_, issue)| since.is_none_or(|since| instant_seconds(&iso(issue.minute)).unwrap() >= since))
                         .map(|(key, issue)| row(key, issue))
                         .collect();
                     Ok(IssueListing { rows, complete: !site.truncated })
@@ -1335,37 +1297,106 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accumulate_probes_from_the_watermark_and_never_drops() {
+    async fn accumulate_lists_the_full_query_and_checks_only_members_outside_it() {
         let f = fixture();
         let service = &f.base.service;
-        f.provider.set(OPS, &["OPS-1", "OPS-2", "OPS-3"]);
+        f.provider.set(OPS, &["OPS-1", "OPS-3"]);
         let (_, id) = follow(service, OPS, LibraryFollowMode::Accumulate).await;
-        assert_eq!(f.provider.take_fetched().len(), 3);
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-1", "OPS-3"]));
         f.provider.take_log();
 
-        // Probe from the newest member; the older members are checked by key.
         let report = refresh(service, &id).await;
-        assert_eq!((report.unchanged, report.updated, report.dropped), (3, 0, 0));
-        assert_eq!(f.provider.take_log(), [format!("jql {OPS} since {}", iso(3)), "keys OPS-1,OPS-2".to_owned()]);
+        assert_eq!((report.unchanged, report.updated, report.dropped), (2, 0, 0));
+        assert_eq!(f.provider.take_log(), [format!("jql {OPS}")]);
         assert!(f.provider.take_fetched().is_empty());
+
+        // OPS-2 newly matches despite being older than the newest saved issue.
+        f.provider.set(OPS, &["OPS-1", "OPS-2", "OPS-3"]);
+        let report = refresh(service, &id).await;
+        assert_eq!((report.new, report.unchanged, report.dropped), (1, 2, 0));
+        assert_eq!(f.provider.take_log(), [format!("jql {OPS}")]);
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-2"]));
 
         // OPS-2 is deleted at source and leaves the query; OPS-1 only leaves the query.
         f.provider.set(OPS, &["OPS-3"]);
         f.provider.site().gone.insert("OPS-2".into());
         let report = refresh(service, &id).await;
         assert_eq!((report.removed_at_source, report.dropped), (1, 0));
+        assert_eq!(f.provider.take_log(), [format!("jql {OPS}"), "keys OPS-1,OPS-2".to_owned()]);
         assert_eq!(f.provider.take_fetched(), keys(&["OPS-2"]));
         let items = issues(service).await;
         assert_eq!(items["OPS-2"].state, LibraryItemState::RemovedAtSource);
         assert!(items.values().all(|item| held(item, &id)));
 
-        // A changed issue outside the query is still refreshed; the confirmed one is not asked again.
+        // A changed issue outside the query is still refreshed; the confirmed one is not fetched again.
         f.provider.touch("OPS-1", 9);
-        f.provider.take_log();
         let report = refresh(service, &id).await;
         assert_eq!((report.updated, report.dropped), (1, 0));
         assert_eq!(f.provider.take_fetched(), keys(&["OPS-1"]));
-        assert_eq!(f.provider.take_log(), [format!("jql {OPS} since {}", iso(3)), "keys OPS-1,OPS-2".to_owned()]);
+        assert_eq!(f.provider.take_log(), [format!("jql {OPS}"), "keys OPS-1,OPS-2".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn accumulate_retries_failed_new_issues_after_newer_issues_are_saved() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-3"]);
+        let (_, id) = follow(service, OPS, LibraryFollowMode::Accumulate).await;
+        f.provider.take_fetched();
+        f.provider.take_log();
+
+        f.provider.set(OPS, &["OPS-1", "OPS-2", "OPS-3"]);
+        f.provider.touch("OPS-2", 9);
+        f.provider.site().broken.insert("OPS-1".into());
+        let report = refresh(service, &id).await;
+        assert_eq!((report.new, report.failed, report.dropped), (1, 1, 0));
+        assert_eq!(f.provider.take_log(), [format!("jql {OPS}")]);
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-1", "OPS-2"]));
+        let items = issues(service).await;
+        assert!(!items.contains_key("OPS-1"));
+        assert_eq!(items["OPS-2"].source_revision.as_deref(), Some(iso(9).as_str()));
+        assert_eq!(record(service, &id).await.state, LibraryItemState::Partial);
+
+        f.provider.site().broken.clear();
+        let report = refresh(service, &id).await;
+        assert_eq!((report.new, report.unchanged, report.failed, report.dropped), (1, 2, 0, 0));
+        assert_eq!(f.provider.take_log(), [format!("jql {OPS}")]);
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-1"]));
+        assert!(issues(service).await.values().all(|item| held(item, &id)));
+        assert_eq!(record(service, &id).await.state, LibraryItemState::Fresh);
+    }
+
+    #[tokio::test]
+    async fn accumulate_retries_failed_members_outside_the_query_without_dropping_refs() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1", "OPS-2"]);
+        let (_, id) = follow(service, OPS, LibraryFollowMode::Accumulate).await;
+        f.provider.take_fetched();
+        f.provider.take_log();
+
+        f.provider.set(OPS, &["OPS-2"]);
+        f.provider.touch("OPS-1", 9);
+        f.provider.site().broken.insert("OPS-1".into());
+        let report = refresh(service, &id).await;
+        assert_eq!((report.failed, report.dropped), (1, 0));
+        assert_eq!(f.provider.take_log(), [format!("jql {OPS}"), "keys OPS-1".to_owned()]);
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-1"]));
+        let items = issues(service).await;
+        assert_eq!(items["OPS-1"].state, LibraryItemState::Failed);
+        assert_eq!(items["OPS-1"].issue.as_ref().unwrap().fetched_updated.as_deref(), Some(plain(1).as_str()));
+        assert!(items.values().all(|item| held(item, &id)));
+        assert_eq!(record(service, &id).await.state, LibraryItemState::Partial);
+
+        f.provider.site().broken.clear();
+        let report = refresh(service, &id).await;
+        assert_eq!((report.updated, report.unchanged, report.failed, report.dropped), (1, 1, 0, 0));
+        assert_eq!(f.provider.take_log(), [format!("jql {OPS}"), "keys OPS-1".to_owned()]);
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-1"]));
+        let items = issues(service).await;
+        assert_eq!(items["OPS-1"].issue.as_ref().unwrap().fetched_updated.as_deref(), Some(plain(9).as_str()));
+        assert!(items.values().all(|item| held(item, &id)));
+        assert_eq!(record(service, &id).await.state, LibraryItemState::Fresh);
     }
 
     #[tokio::test]

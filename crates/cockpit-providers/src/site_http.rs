@@ -2,11 +2,13 @@
 //! Error text never includes response bodies, addresses or signed media URLs.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions, OpenOptionsExt};
 use cockpit_core::InspectionError;
+use cockpit_core::sources::lane::{self, RequestLane};
 use cockpit_core::credentials::ProviderCredentials;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue, LOCATION};
 use reqwest::{Client, Response, StatusCode, redirect};
@@ -15,6 +17,26 @@ use tokio::sync::OnceCell;
 use url::Url;
 
 use crate::CredentialHandle;
+
+mod pacing;
+
+struct PacedResponse {
+    response: Response,
+    _permit: pacing::Permit,
+}
+
+impl std::ops::Deref for PacedResponse {
+    type Target = Response;
+    fn deref(&self) -> &Response {
+        &self.response
+    }
+}
+
+impl std::ops::DerefMut for PacedResponse {
+    fn deref_mut(&mut self) -> &mut Response {
+        &mut self.response
+    }
+}
 
 pub(crate) const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const DOWNLOADED_NAME: &str = "download";
@@ -71,6 +93,8 @@ pub(crate) struct SiteHttp {
     timeout: Duration,
     credentials: CredentialHandle,
     client: OnceCell<Client>,
+    pacer: Arc<pacing::Pacer>,
+    observed_block_ms: AtomicI64,
 }
 
 impl SiteHttp {
@@ -82,6 +106,8 @@ impl SiteHttp {
         credentials: Arc<ProviderCredentials>,
     ) -> Self {
         Self {
+            pacer: pacing::origin(&site),
+            observed_block_ms: AtomicI64::new(0),
             site,
             provider_id: provider_id.into(),
             service,
@@ -93,6 +119,20 @@ impl SiteHttp {
 
     pub(crate) fn site(&self) -> &Url {
         &self.site
+    }
+
+    /// Shared cooldown/budget deadline for the scheduler, never response text.
+    pub(crate) fn blocked_until_ms(&self) -> Option<i64> {
+        let observed = self.observed_block_ms.load(Ordering::Relaxed);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+        self.pacer.blocked_until_ms().into_iter()
+            .chain((observed > 0 && observed as u128 > now).then_some(observed)).max()
+    }
+
+    /// Remaining shared-origin rolling-hour budget under the scoped sync policy.
+    /// Observation only: the transport still authoritatively charges each hop.
+    pub(crate) fn remaining_background_requests(&self) -> u32 {
+        self.pacer.remaining_requests(lane::background_policy())
     }
 
     /// Capability preflight without sending a request or retaining a token.
@@ -220,7 +260,7 @@ impl SiteHttp {
         self.save(response, dest, cap, expected).await
     }
 
-    async fn get(&self, start: Url, json: bool) -> Result<Response, HttpFailure> {
+    async fn get(&self, start: Url, json: bool) -> Result<PacedResponse, HttpFailure> {
         if !self.on_site(&start) {
             return Err(self.contract("request is outside the configured site"));
         }
@@ -243,36 +283,78 @@ impl SiteHttp {
         let mut url = start;
         for followed in 0..=MAX_REDIRECTS {
             // Read each time: replacing the stored credential takes effect on the next hop.
-            let credential = self
-                .credentials
-                .0
-                .required(&self.provider_id)
-                .await
-                .map_err(|error| HttpFailure {
-                    kind: FailureKind::Auth,
-                    error,
-                    status: None,
-                })?;
-            let mut authorization =
-                HeaderValue::from_str(&credential.authorization()).map_err(|_| HttpFailure {
-                    kind: FailureKind::Auth,
-                    status: None,
-                    error: InspectionError::new(
-                        "source_auth_failed",
-                        "The token stored in Cockpit cannot be sent as an HTTP header",
-                    ),
-                })?;
-            authorization.set_sensitive(true);
-            let mut request = client
-                .get(url.clone())
-                .header(ACCEPT, if json { "application/json" } else { "*/*" });
-            if same_origin(&url, &self.site) {
-                request = request.header(AUTHORIZATION, authorization);
-            }
-            let response = request
-                .send()
-                .await
-                .map_err(|error| self.transport_error(error))?;
+            let pacer = if same_origin(&url, &self.site) {
+                self.pacer.clone()
+            } else {
+                pacing::origin(&url)
+            };
+            let mut throttled_retries = 0;
+            let mut transport_retried = false;
+            let response = loop {
+                let credential = self
+                    .credentials
+                    .0
+                    .required(&self.provider_id)
+                    .await
+                    .map_err(|error| HttpFailure {
+                        kind: FailureKind::Auth,
+                        error,
+                        status: None,
+                    })?;
+                let mut authorization =
+                    HeaderValue::from_str(&credential.authorization()).map_err(|_| HttpFailure {
+                        kind: FailureKind::Auth,
+                        status: None,
+                        error: InspectionError::new(
+                            "source_auth_failed",
+                            "The token stored in Cockpit cannot be sent as an HTTP header",
+                        ),
+                    })?;
+                authorization.set_sensitive(true);
+                let permit = pacer.acquire(lane::current(), lane::background_policy()).await
+                    .map_err(|()| {
+                        if let Some(until) = pacer.blocked_until_ms() {
+                            self.observed_block_ms.fetch_max(until, Ordering::Relaxed);
+                        }
+                        self.failure(FailureKind::RateLimited, "source_rate_limited", "is temporarily blocked by the shared request budget or cooldown")
+                    })?;
+                let mut request = client
+                    .get(url.clone())
+                    .header(ACCEPT, if json { "application/json" } else { "*/*" });
+                if same_origin(&url, &self.site) {
+                    request = request.header(AUTHORIZATION, authorization);
+                }
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        drop(permit);
+                        if lane::current() == RequestLane::Background && !transport_retried
+                            && (error.is_timeout() || error.is_connect() || error.is_request())
+                        {
+                            transport_retried = true;
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                        return Err(self.transport_error(error));
+                    }
+                };
+                pacer.observe(response.headers());
+                if matches!(response.status().as_u16(), 429 | 503) {
+                    let wait = pacer.throttle(response.headers(), throttled_retries);
+                    if let Some(until) = pacer.blocked_until_ms() {
+                        self.observed_block_ms.fetch_max(until, Ordering::Relaxed);
+                    }
+                    let failure = self.status_error(response.status());
+                    drop(response);
+                    drop(permit);
+                    if throttled_retries >= 3 || wait > pacing::MAX_RETRY_WAIT {
+                        return Err(failure);
+                    }
+                    throttled_retries += 1;
+                    continue;
+                }
+                break PacedResponse { response, _permit: permit };
+            };
             let status = response.status();
             if status.is_success() {
                 if json && !self.on_site(response.url()) {
@@ -315,7 +397,7 @@ impl SiteHttp {
 
     async fn save(
         &self,
-        mut response: Response,
+        mut response: PacedResponse,
         dest: &Dir,
         cap: u64,
         expected: Option<u64>,
@@ -415,7 +497,7 @@ impl SiteHttp {
                 "source_not_found",
                 "has no such item, or the stored token cannot see it",
             ),
-            429 => (
+            429 | 503 => (
                 FailureKind::RateLimited,
                 "source_rate_limited",
                 "rate limited the request",

@@ -87,7 +87,7 @@ impl LibraryService {
     pub async fn start_attachments(&self, request: LibraryAttachmentRequest) -> Result<LibraryOperation, InspectionError> {
         let handle = operations::runtime()?;
         let store = self.open()?;
-        let lease = store.lease(&request.item_id)?;
+        let lease = super::sync::manual_lease(&store, &request.item_id).await?;
         let old = self.entry(&store, &request.item_id)?.ok_or_else(|| error("library_item_not_found", "Library item does not exist"))?;
         let provider = old.summary.provider_id.as_deref().unwrap_or_default();
         let resource_type = old.summary.resource_type.as_deref().unwrap_or_default();

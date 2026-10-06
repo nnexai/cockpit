@@ -12,7 +12,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use cockpit_core::{
     CockpitService,
     browser::BrowserService,
-    config::{load_browser_configuration, load_project_configuration},
+    config::{load_browser_configuration, load_library_sync_configuration, load_project_configuration},
     library::LibraryService,
     projects::ProjectService,
     widget::WidgetService,
@@ -458,7 +458,17 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
                 Some(quota) => service.with_quota(quota),
                 None => service,
             };
-            serve(ServerConfig {
+            // Only the long-lived host owns a scheduler; one-shot CLI service
+            // construction remains side-effect free.
+            let library_sync_runtime = if projects.is_some() {
+                let sync_config = load_library_sync_configuration(args.project.config.as_deref())
+                    .map_err(|error| error.to_string())?;
+                Some(service.library().map_err(|error| error.to_string())?
+                    .start_sync(sync_config).map_err(|error| error.to_string())?)
+            } else {
+                None
+            };
+            let result = serve(ServerConfig {
                 bind: args.bind,
                 static_dir: args.static_dir,
                 service,
@@ -466,7 +476,9 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
                 orchestration_runtime,
             })
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string());
+            drop(library_sync_runtime);
+            result
         }
         Command::Configuration(args) => {
             let configuration = project_configuration(&args)?;

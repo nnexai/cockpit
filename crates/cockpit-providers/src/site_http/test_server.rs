@@ -27,6 +27,7 @@ pub(crate) struct Reply {
     pub(crate) body: Vec<u8>,
     pub(crate) length: Length,
     pub(crate) content_type: Option<String>,
+    pub(crate) headers: Vec<(String, String)>,
 }
 
 impl Reply {
@@ -37,6 +38,7 @@ impl Reply {
             body: Vec::new(),
             length: Length::Exact,
             content_type: None,
+            headers: Vec::new(),
         }
     }
     pub(crate) fn json(value: serde_json::Value) -> Self {
@@ -64,6 +66,10 @@ impl Reply {
     }
     pub(crate) fn content_type(mut self, content_type: &str) -> Self {
         self.content_type = Some(content_type.into());
+        self
+    }
+    pub(crate) fn header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push((name.into(), value.into()));
         self
     }
 }
@@ -132,6 +138,9 @@ impl Server {
                     }
                     if let Some(content_type) = &reply.content_type {
                         out.push_str(&format!("Content-Type: {content_type}\r\n"));
+                    }
+                    for (name, value) in &reply.headers {
+                        out.push_str(&format!("{name}: {value}\r\n"));
                     }
                     match reply.length {
                         Length::Exact => {

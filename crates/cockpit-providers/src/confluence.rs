@@ -12,11 +12,12 @@ use async_trait::async_trait;
 use cap_std::fs::Dir;
 use cockpit_core::InspectionError;
 use cockpit_core::credentials::ProviderCredentials;
+use cockpit_core::jira_query::format_wall_minute;
 use cockpit_core::process::StagingBudget;
 use cockpit_core::sources::{
     AttachmentRef, ConfluencePage, DownloadedAttachment, FrontmatterField, FrontmatterValue,
     ProviderResolution, SourceAsset, SourceAttachment, SourceContainer, SourceFetchRequest,
-    SourceMetadata, SourceProvider, SourceRef, SpacePage, SpacePageListing, SpaceSummary,
+    PageAux, SourceMetadata, SourceProvider, SourceRef, SpacePage, SpacePageListing, SpaceSummary,
     confluence_page_url,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
@@ -353,6 +354,14 @@ impl ConfluenceSourceProvider {
         tail: &[&str],
         query: &[(&str, &str)],
     ) -> Result<Option<Continuation>, InspectionError> {
+        self.continuation_at(value, self.endpoint(tail, &[]), query)
+    }
+    fn continuation_at(
+        &self,
+        value: &Value,
+        endpoint: Url,
+        query: &[(&str, &str)],
+    ) -> Result<Option<Continuation>, InspectionError> {
         let Some(next) = value.pointer("/_links/next").filter(|next| !next.is_null()) else {
             return Ok(None);
         };
@@ -361,11 +370,15 @@ impl ConfluenceSourceProvider {
             .filter(|link| !link.is_empty())
             .ok_or_else(|| contract("Confluence returned a malformed continuation"))?;
         let url = self.http.link(link).map_err(InspectionError::from)?;
-        if url.path() != self.endpoint(tail, &[]).path() || url.fragment().is_some() {
+        if url.path() != endpoint.path() || url.fragment().is_some() {
             return Err(contract(
                 "Confluence continuation changed the requested endpoint",
             ));
         }
+        // Cloud v1 CQL next links also contain informational start/next fields.
+        // Only the opaque cursor is retained; the endpoint and CQL are rebuilt.
+        let cloud_cql = self.cloud()
+            && endpoint.path().strip_prefix(&self.base_path) == Some("/rest/api/content/search");
         let token_key = if self.cloud() { "cursor" } else { "start" };
         let mut token = None;
         let mut names = BTreeSet::new();
@@ -385,6 +398,11 @@ impl ConfluenceSourceProvider {
                             contract("Confluence continuation has an invalid offset")
                         })?)
                     });
+            } else if cloud_cql
+                && (key == "next" && val == "true"
+                    || key == "start" && val.parse::<u64>().is_ok())
+            {
+                // These are pagination metadata, not authority or query filters.
             } else if !query.iter().any(|(expected_key, expected_value)| {
                 *expected_key == key && *expected_value == val
             }) {
@@ -755,21 +773,30 @@ impl ConfluenceSourceProvider {
             vec!["content", id, "label"]
         };
         let query = [("limit", if self.cloud() { "250" } else { "200" })];
-        let value = self.json(&tail, &query).await?;
-        let rows = results(&value)?;
-        let complete =
-            rows.len() <= MAX_ATTACHMENTS && self.continuation(&value, &tail, &query)?.is_none();
-        let mut labels = rows
-            .iter()
-            .take(MAX_ATTACHMENTS)
-            .map(|row| {
-                bounded_field(row.get("name").and_then(Value::as_str))
-                    .ok_or_else(|| contract("Confluence returned an invalid label"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        labels.sort();
-        labels.dedup();
-        Ok((labels, complete))
+        let mut labels = Vec::new();
+        let mut next = None;
+        let mut seen = BTreeSet::new();
+        loop {
+            let value = self.paged_json(&tail, &query, next.as_ref()).await?;
+            let rows = results(&value)?;
+            next = self.continuation(&value, &tail, &query)?;
+            Self::check_next(&next, &mut seen, rows.len())?;
+            for row in rows {
+                if labels.len() == MAX_ATTACHMENTS {
+                    labels.sort();
+                    labels.dedup();
+                    return Ok((labels, false));
+                }
+                labels.push(bounded_field(row.get("name").and_then(Value::as_str))
+                    .ok_or_else(|| contract("Confluence returned an invalid label"))?);
+            }
+            if next.is_none() || labels.len() == MAX_ATTACHMENTS {
+                let complete = next.is_none();
+                labels.sort();
+                labels.dedup();
+                return Ok((labels, complete));
+            }
+        }
     }
     fn attachment(&self, value: &Value) -> Result<SourceAttachment, InspectionError> {
         let id = id_text(value.get("id"))
@@ -833,6 +860,11 @@ impl ConfluenceSourceProvider {
             let continuation = self.continuation(&value, &tail, &query)?;
             Self::check_next(&continuation, &mut seen, rows.len())?;
             for row in rows {
+                if self.cloud() && row.get("pageId").is_some()
+                    && id_text(row.get("pageId")).as_deref() != Some(id)
+                {
+                    return Err(identity("Confluence returned an attachment from a different page"));
+                }
                 if attachments.len() == MAX_ATTACHMENTS {
                     return Ok((attachments, false));
                 }
@@ -1064,9 +1096,11 @@ impl ConfluenceSourceProvider {
             name,
         })
     }
-    fn listing_page(value: &Value, key: &str) -> Result<SpacePage, InspectionError> {
+    fn listing_page(value: &Value, key: Option<&str>) -> Result<SpacePage, InspectionError> {
+        let space_key = value.pointer("/space/key").and_then(Value::as_str);
         if value.get("type").and_then(Value::as_str) != Some("page")
-            || value.pointer("/space/key").and_then(Value::as_str) != Some(key)
+            || !space_key.is_some_and(space_key_valid)
+            || key.is_some_and(|key| space_key != Some(key))
         {
             return Err(contract(
                 "Confluence search returned a page outside the requested space",
@@ -1182,6 +1216,86 @@ impl ConfluenceSourceProvider {
         pages.truncate(finished);
         Ok(complete)
     }
+
+    /// CQL interprets minute dates in an account/server timezone, and neither
+    /// Cloud profile privacy nor DC REST guarantees access to that timezone.
+    /// A frozen UTC ±14h envelope covers every contemporary timezone offset.
+    /// It deliberately discovers extra candidates, never filters on page version
+    /// timestamps (which are not a general lastmodified timestamp).
+    fn change_cql(key: &str, lower_ms: i64, upper_ms: i64) -> Result<String, InspectionError> {
+        if !space_key_valid(key) || lower_ms < 0 || lower_ms >= upper_ms {
+            return Err(contract("Confluence change interval or space key is invalid"));
+        }
+        let lower = lower_ms.div_euclid(60_000) - 14 * 60;
+        let upper = upper_ms.div_euclid(60_000)
+            + i64::from(upper_ms.rem_euclid(60_000) != 0) + 14 * 60;
+        Ok(format!(
+            "type=page AND space=\"{key}\" AND lastmodified >= \"{}\" AND lastmodified < \"{}\" ORDER BY lastmodified ASC",
+            format_wall_minute(lower), format_wall_minute(upper),
+        ))
+    }
+
+    async fn cql_pages(
+        &self,
+        cql: &str,
+        space_key: Option<&str>,
+        cap: usize,
+        cancel: &AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        let query = [("cql", cql), ("limit", "100"), ("expand", "version,ancestors,space")];
+        let segments = ["rest", "api", "content", "search"];
+        let endpoint = self.http.endpoint(&segments, &[]);
+        let mut pages = Vec::new();
+        let mut next = None;
+        let mut seen = BTreeSet::new();
+        let mut ids = BTreeSet::new();
+        let mut total = None;
+        let mut complete = false;
+        while pages.len() < cap && !cancel.load(Ordering::Relaxed) {
+            let start_text = match &next {
+                Some(Continuation::Start(start)) => start.to_string(),
+                _ => "0".into(),
+            };
+            let continuation = match &next {
+                Some(Continuation::Cursor(cursor)) => Some(("cursor", cursor.as_str())),
+                Some(Continuation::Start(_)) => Some(("start", start_text.as_str())),
+                None if !self.cloud() => Some(("start", start_text.as_str())),
+                None => None,
+            };
+            let pairs = [
+                query[0], query[1], query[2],
+                continuation.unwrap_or(("cursor", "")),
+            ];
+            let pairs = if continuation.is_some() { &pairs[..] } else { &pairs[..3] };
+            let value = self.http.get_json(self.http.endpoint(&segments, pairs), MAX_JSON_BYTES).await.map_err(InspectionError::from)?;
+            let rows = results(&value)?;
+            let reported_total = value.get("totalSize").or_else(|| value.get("total")).and_then(Value::as_u64);
+            if let Some(reported) = reported_total {
+                total = Some(total.unwrap_or(0).max(reported));
+            }
+            next = self.continuation_at(&value, endpoint.clone(), &query)?;
+            Self::check_next(&next, &mut seen, rows.len())?;
+            let mut capped = false;
+            for row in rows {
+                let page = Self::listing_page(row, space_key)?;
+                if !ids.insert(page.page_id.clone()) {
+                    return Err(contract("Confluence search repeated a page id"));
+                }
+                if pages.len() == cap {
+                    capped = true;
+                    break;
+                }
+                pages.push(page);
+            }
+            if next.is_none() {
+                complete = !capped && total.is_none_or(|total| pages.len() as u64 >= total);
+                break;
+            }
+        }
+        complete &= !cancel.load(Ordering::Relaxed);
+        pages.sort_by(|left, right| left.page_id.cmp(&right.page_id));
+        Ok(SpacePageListing { space_name: String::new(), homepage_id: None, pages, total, complete })
+    }
 }
 
 #[async_trait]
@@ -1189,6 +1303,120 @@ impl SourceProvider for ConfluenceSourceProvider {
     fn provider_id(&self) -> &str {
         &self.provider_id
     }
+    fn blocked_until_ms(&self) -> Option<i64> {
+        self.http.blocked_until_ms()
+    }
+
+    fn background_requests_remaining(&self) -> Option<u32> {
+        Some(self.http.remaining_background_requests())
+    }
+
+    async fn list_page_changes(
+        &self,
+        space_key: &str,
+        lower_ms: i64,
+        upper_ms: i64,
+        max_pages: u32,
+        cancel: &AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        let cql = Self::change_cql(space_key, lower_ms, upper_ms)?;
+        self.cql_pages(&cql, Some(space_key), max_pages as usize, cancel).await
+    }
+
+    async fn page_versions(
+        &self,
+        page_ids: &[String],
+        cancel: &AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        if page_ids.iter().any(|id| !page_id_valid(id)) {
+            return Err(contract("Confluence page ids must be 1–20 digits"));
+        }
+        let unique = page_ids.iter().cloned().collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+        let mut pages = Vec::new();
+        let mut complete = true;
+        for chunk in unique.chunks(if self.cloud() { 250 } else { 100 }) {
+            if cancel.load(Ordering::Relaxed) {
+                complete = false;
+                break;
+            }
+            if self.cloud() {
+                let ids = chunk.join(",");
+                let query = [("id", ids.as_str()), ("limit", "250"), ("status", "current")];
+                let mut raw = Vec::new();
+                let mut batch = Vec::new();
+                let mut next = None;
+                let mut seen = BTreeSet::new();
+                let mut found = BTreeSet::new();
+                loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        complete = false;
+                        break;
+                    }
+                    let value = self.paged_json(&["pages"], &query, next.as_ref()).await?;
+                    let rows = results(&value)?;
+                    next = self.continuation(&value, &["pages"], &query)?;
+                    Self::check_next(&next, &mut seen, rows.len())?;
+                    for row in rows {
+                        let id = required_id(row.get("id"))?;
+                        if !chunk.contains(&id) || !found.insert(id.clone()) {
+                            return Err(contract("Confluence page batch returned an unexpected or repeated id"));
+                        }
+                        required_id(row.get("spaceId"))?;
+                        batch.push(SpacePage {
+                            page_id: id,
+                            title: required_title(row)?,
+                            version: row.pointer("/version/number").and_then(Value::as_u64)
+                                .ok_or_else(|| contract("Confluence page version is malformed"))?,
+                            ancestors: Vec::new(),
+                            position: row.get("position").and_then(Value::as_i64),
+                        });
+                        raw.push(row.clone());
+                    }
+                    if next.is_none() {
+                        break;
+                    }
+                }
+                complete &= self.cloud_listing_ancestors(&raw, &mut batch, cancel).await?;
+                pages.extend(batch);
+            } else {
+                let cql = format!("type=page AND id IN ({})", chunk.join(","));
+                let listing = self.cql_pages(&cql, None, chunk.len(), cancel).await?;
+                if listing.pages.iter().any(|page| !chunk.contains(&page.page_id)) {
+                    return Err(contract("Confluence page batch returned an unexpected id"));
+                }
+                complete &= listing.complete;
+                pages.extend(listing.pages);
+            }
+            if !complete {
+                break;
+            }
+        }
+        pages.sort_by(|left, right| left.page_id.cmp(&right.page_id));
+        complete &= !cancel.load(Ordering::Relaxed);
+        Ok(SpacePageListing { space_name: String::new(), homepage_id: None, pages, total: None, complete })
+    }
+
+    async fn page_aux(&self, page_id: &str) -> Result<PageAux, InspectionError> {
+        if !page_id_valid(page_id) {
+            return Err(contract("Confluence page id must be 1–20 digits"));
+        }
+        // Check page identity without fetching its body or resolving space/person
+        // metadata; auxiliary collection endpoints alone do not identify the page.
+        let value = if self.cloud() {
+            self.json(&["pages", page_id], &[]).await?
+        } else {
+            self.json(&["content", page_id], &[]).await?
+        };
+        if id_text(value.get("id")).as_deref() != Some(page_id)
+            || !self.cloud() && value.get("type").and_then(Value::as_str) != Some("page")
+        {
+            return Err(identity("Confluence auxiliary read returned a different page"));
+        }
+        let ((labels, labels_complete), (attachments, attachments_complete)) =
+            tokio::try_join!(self.labels(page_id), self.attachments(page_id))?;
+        Ok(PageAux { labels, labels_complete, attachments, attachments_complete })
+    }
+
     fn capabilities(&self) -> Vec<SourceCapability> {
         vec![SourceCapability::Wiki]
     }
@@ -1298,7 +1526,7 @@ impl SourceProvider for ConfluenceSourceProvider {
                         position: row.get("position").and_then(Value::as_i64),
                     }
                 } else {
-                    Self::listing_page(row, space_key)?
+                    Self::listing_page(row, Some(space_key))?
                 };
                 if !ids.insert(page.page_id.clone()) {
                     return Err(contract("Confluence repeated a page id"));
@@ -1385,7 +1613,7 @@ impl SourceProvider for ConfluenceSourceProvider {
         if !labels_complete {
             diagnostics.push(ProjectDiagnostic {
                 code: "source_labels_partial".into(),
-                message: "Confluence returned only the first page of labels".into(),
+                message: format!("only the first {MAX_ATTACHMENTS} labels are listed"),
                 path: None,
             });
         }

@@ -6,12 +6,15 @@ import { errorText, sameSpaceTarget } from "./libraryState";
 /** Every mounted Library surface rereads its listing after a completed operation or selection change. */
 export const LIBRARY_CHANGED_EVENT = "cockpit:library-changed";
 
-export function announceLibraryChanged(operation: LibraryOperation | null = null): void {
-  window.dispatchEvent(new CustomEvent<LibraryOperation | null>(LIBRARY_CHANGED_EVENT, { detail: operation }));
+export type LibraryChangeDetail = LibraryOperation | { kind: "snapshot_update" } | null;
+
+export function announceLibraryChanged(detail: LibraryChangeDetail = null): void {
+  window.dispatchEvent(new CustomEvent<LibraryChangeDetail>(LIBRARY_CHANGED_EVENT, { detail }));
 }
 
 const POLL_MS = 750;
 const MAX_LISTING_PAGES = 200;
+const LISTING_PROBE_MS = 60_000;
 
 type TrackedOperation = { operation: LibraryOperation; stop?: () => void };
 const tracked = new Map<string, TrackedOperation>();
@@ -219,16 +222,19 @@ export type LibraryListingState = {
   reload: () => void;
 };
 
-async function readAllPages(client: CockpitClient): Promise<LibraryListing> {
+async function readAllPages(client: CockpitClient, seed: LibraryListing | null, isCurrent: () => boolean): Promise<LibraryListing | null> {
   // A generation change between pages means the index moved; start over once.
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const first = await client.libraryListing(null);
+    if (!isCurrent()) return null;
+    const first = attempt === 0 && seed ? seed : await client.libraryListing(null);
+    if (!isCurrent()) return null;
     const items: LibraryItemSummary[] = [...first.items];
     let next = first.next_offset;
     let pages = 1;
     let moved = false;
     while (next !== null && pages < MAX_LISTING_PAGES) {
       const page = await client.libraryListing(next);
+      if (!isCurrent()) return null;
       if (page.generation !== first.generation) { moved = true; break; }
       items.push(...page.items);
       next = page.next_offset;
@@ -242,23 +248,45 @@ async function readAllPages(client: CockpitClient): Promise<LibraryListing> {
 /**
  * Reads the whole Library listing while `active`, plus the configured
  * providers used for labels. Nothing is requested while inactive, so a Context
- * pane that never shows the Library root never touches the Library.
+ * pane that never shows the Library root never touches the Library. While active
+ * and visible it checks the first page's generation about once a minute and
+ * rereads every page only when it changed.
  */
 export function useLibraryListing(client: CockpitClient, active: boolean): LibraryListingState {
   const [state, setState] = useState<{ status: LibraryListingState["status"]; listing: LibraryListing | null; error: string | null }>({ status: "idle", listing: null, error: null });
   const [providers, setProviders] = useState<ProjectProvider[]>([]);
   const [revision, setRevision] = useState(0);
-  const reload = useCallback(() => setRevision((value) => value + 1), []);
+  // Explicit reloads invalidate pending probes immediately, before the load effect runs.
+  const newest = useRef(0);
+  const reading = useRef<number | null>(null);
+  const applied = useRef<LibraryListing | null>(null);
+  const listingClient = useRef(client);
+  const announcing = useRef(false);
+  const reload = useCallback(() => {
+    newest.current += 1;
+    setRevision((value) => value + 1);
+  }, []);
   useEffect(() => {
     if (!active) return;
-    let current = true;
+    if (listingClient.current !== client) {
+      listingClient.current = client;
+      applied.current = null;
+    }
+    const id = ++newest.current;
+    const isCurrent = () => id === newest.current;
+    reading.current = id;
     setState((previous) => ({ ...previous, status: "loading" }));
-    readAllPages(client).then((listing) => {
-      if (current) setState({ status: "ready", listing, error: null });
+    readAllPages(client, null, isCurrent).then((listing) => {
+      if (!isCurrent() || !listing) return;
+      reading.current = null;
+      applied.current = listing;
+      setState({ status: "ready", listing, error: null });
     }, (cause: unknown) => {
-      if (current) setState((previous) => ({ status: "error", listing: previous.listing, error: errorText(cause, "The Library could not be read.") }));
+      if (!isCurrent()) return;
+      reading.current = null;
+      setState((previous) => ({ status: "error", listing: previous.listing, error: errorText(cause, "The Library could not be read.") }));
     });
-    return () => { current = false; };
+    return () => { newest.current += 1; };
   }, [active, client, revision]);
   useEffect(() => {
     if (!active) return;
@@ -269,9 +297,56 @@ export function useLibraryListing(client: CockpitClient, active: boolean): Libra
   }, [active, client]);
   useEffect(() => {
     if (!active) return;
-    window.addEventListener(LIBRARY_CHANGED_EVENT, reload);
-    return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, reload);
+    const changed = () => { if (!announcing.current) reload(); };
+    window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
   }, [active, reload]);
+  useEffect(() => {
+    if (!active) return;
+    let stopped = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      if (!stopped) timer = window.setTimeout(() => { void probe(); }, LISTING_PROBE_MS);
+    };
+    const probe = async () => {
+      if (stopped) return;
+      if (document.visibilityState === "hidden") {
+        document.addEventListener("visibilitychange", probe, { once: true });
+        return;
+      }
+      if (reading.current === newest.current) {
+        schedule();
+        return;
+      }
+      let id = newest.current;
+      const isCurrent = () => !stopped && id === newest.current;
+      try {
+        const first = await client.libraryListing(null);
+        if (!isCurrent() || first.generation === applied.current?.generation) return;
+        id = ++newest.current;
+        reading.current = id;
+        const listing = await readAllPages(client, first, isCurrent);
+        if (!isCurrent() || !listing) return;
+        applied.current = listing;
+        setState({ status: "ready", listing, error: null });
+        // The local bridge refreshes other views, not this already-current listing.
+        announcing.current = true;
+        try { announceLibraryChanged({ kind: "snapshot_update" }); }
+        finally { announcing.current = false; }
+      } catch (cause) {
+        if (isCurrent()) setState((previous) => ({ status: "error", listing: previous.listing, error: errorText(cause, "The Library could not be read.") }));
+      } finally {
+        if (reading.current === id) reading.current = null;
+        schedule();
+      }
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", probe);
+    };
+  }, [active, client]);
   return { ...state, providers, reload };
 }
 

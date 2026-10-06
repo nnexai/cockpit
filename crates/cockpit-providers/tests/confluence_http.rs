@@ -7,7 +7,7 @@ use cockpit_core::credentials::{MemoryVault, ProviderCredentials};
 use cockpit_core::process::StagingBudget;
 use cockpit_core::sources::{
     AttachmentRef, FrontmatterValue, ProviderResolution, SourceAsset, SourceAuthority,
-    SourceFetchRequest, SourceProvider, confluence_page_url,
+    SourceFetchRequest, SourceProvider, SourceService, confluence_page_url,
 };
 use cockpit_protocol::credentials::{ProviderAuthKind, ProviderCredentialSetRequest};
 use cockpit_protocol::projects::{
@@ -1276,5 +1276,233 @@ async fn display_results_with_a_different_title_or_space_are_not_accepted() {
                 .code,
             "source_not_found"
         );
+    }
+}
+
+#[tokio::test]
+async fn bounded_cql_delta_freezes_timezone_safe_envelope_and_only_requests_metadata() {
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = fixture(mode);
+        let (provider, _) = provider(&server, true).await;
+        let listing = provider.list_page_changes("ENG", 0, 60_000, 100, &AtomicBool::new(false)).await.unwrap();
+        assert!(listing.complete);
+        assert_eq!(listing.pages.len(), 4);
+        assert_eq!(listing.pages.iter().find(|page| page.page_id == "40").unwrap().ancestors.last().map(String::as_str), Some("30"));
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            let url = Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+            assert_eq!(url.path(), format!("{}/rest/api/content/search", mode.context()));
+            let query = url.query_pairs().into_owned().collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(query["cql"], "type=page AND space=\"ENG\" AND lastmodified >= \"1969-12-31 10:00\" AND lastmodified < \"1970-01-01 14:01\" ORDER BY lastmodified ASC");
+            assert_eq!(query["expand"], "version,ancestors,space");
+            assert!(!query.contains_key("body-format"));
+            assert!(request.authorized);
+        }
+    }
+}
+
+#[tokio::test]
+async fn delta_caps_cancellation_totals_and_changed_filters_never_claim_completion() {
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = fixture(mode);
+        let (provider, _) = provider(&server, true).await;
+        let capped = provider.list_page_changes("ENG", 0, 60_000, 1, &AtomicBool::new(false)).await.unwrap();
+        assert_eq!(capped.pages.len(), 1);
+        assert!(!capped.complete);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let search_path = format!("{}/rest/api/content/search", mode.context());
+        server.state.lock().cancel_after_path = Some((search_path.clone(), cancelled.clone()));
+        let listing = provider.list_page_changes("ENG", 0, 60_000, 100, &cancelled).await.unwrap();
+        assert!(!listing.complete);
+        server.state.lock().cancel_after_path = None;
+        server.state.lock().next_override = Some(format!("{search_path}?{}=2&cql=type%3Dpage",
+            if mode == Mode::Cloud { "cursor" } else { "start" }));
+        assert_eq!(provider.list_page_changes("ENG", 0, 60_000, 100, &AtomicBool::new(false))
+            .await.unwrap_err().code, "source_provider_contract");
+        server.state.lock().next_override = None;
+        let page = server.state.lock().pages["10"].clone();
+        server.state.lock().overrides.insert(search_path, Response::json(200, json!({
+            "results":[page_json(&page, Mode::DataCenter)], "totalSize":2
+        })));
+        assert!(!provider.list_page_changes("ENG", 0, 60_000, 100, &AtomicBool::new(false)).await.unwrap().complete);
+    }
+}
+
+#[tokio::test]
+async fn standalone_versions_batch_deduplicate_and_preserve_hierarchy_without_body_fetches() {
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = FakeConfluence::start(mode);
+        server.state.lock().page_size = 100;
+        for n in 1..=251 {
+            server.add_page(Page::new(&n.to_string(), &format!("Page {n}"), &[]));
+        }
+        let (batch_provider, _) = provider(&server, true).await;
+        let mut ids = (1..=251).map(|n| n.to_string()).collect::<Vec<_>>();
+        ids.push("1".into());
+        ids.push("999".into()); // Completed enumeration may omit inaccessible IDs.
+        let listing = batch_provider.page_versions(&ids, &AtomicBool::new(false)).await.unwrap();
+        assert!(listing.complete);
+        assert_eq!(listing.pages.len(), 251);
+        assert!(listing.space_name.is_empty());
+        let requests = server.requests();
+        assert_eq!(requests.len(), if mode == Mode::Cloud { 2 } else { 3 });
+        for request in requests {
+            let url = Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+            let query = url.query_pairs().into_owned().collect::<std::collections::BTreeMap<_, _>>();
+            if mode == Mode::Cloud {
+                assert_eq!(url.path(), format!("{}/pages", mode.api()));
+                assert!(query["id"].split(',').count() <= 250);
+                assert!(!query.contains_key("body-format"));
+            } else {
+                assert!(query["cql"].starts_with("type=page AND id IN ("));
+                assert_eq!(query["expand"], "version,ancestors,space");
+                assert!(query["cql"].split(',').count() <= 100);
+            }
+        }
+        let server = fixture(mode);
+        let (provider, _) = provider(&server, true).await;
+        let listing = provider.page_versions(&["40".into()], &AtomicBool::new(false)).await.unwrap();
+        assert!(listing.complete);
+        assert_eq!(listing.pages[0].ancestors.last().map(String::as_str), Some("30"));
+        assert!(server.requests().iter().all(|request| !request.target.contains("body-format")));
+    }
+}
+
+#[tokio::test]
+async fn versions_and_delta_invalid_inputs_or_precancellation_are_bodyless_and_safe() {
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = fixture(mode);
+        let (provider, _) = provider(&server, true).await;
+        for (lower, upper) in [(-1, 1), (1, 1), (2, 1)] {
+            assert_eq!(provider.list_page_changes("ENG", lower, upper, 100, &AtomicBool::new(false))
+                .await.unwrap_err().code, "source_provider_contract");
+        }
+        assert_eq!(provider.page_versions(&["../30".into()], &AtomicBool::new(false)).await.unwrap_err().code, "source_provider_contract");
+        assert!(!provider.page_versions(&["30".into()], &AtomicBool::new(true)).await.unwrap().complete);
+        assert!(!provider.list_page_changes("ENG", 0, 1, 100, &AtomicBool::new(true)).await.unwrap().complete);
+        assert!(server.requests().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn auxiliary_only_reads_discover_first_attachment_and_label_changes_without_body() {
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = fixture(mode);
+        let (provider, _) = provider(&server, true).await;
+        let first = provider.page_aux("31").await.unwrap();
+        assert!(first.attachments.is_empty());
+        assert!(first.labels_complete && first.attachments_complete);
+        {
+            let mut state = server.state.lock();
+            let page = state.pages.get_mut("31").unwrap();
+            page.labels.push("audit-added".into());
+            page.attachments.push(("att22".into(), "new.png".into(), "image/png".into(), 4));
+        }
+        let second = provider.page_aux("31").await.unwrap();
+        assert!(second.labels.contains(&"audit-added".into()));
+        assert_eq!(second.attachments[0].id, "att22");
+        assert!(second.labels_complete && second.attachments_complete);
+        for request in server.requests() {
+            let url = Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+            assert!(!url.query_pairs().any(|(key, value)| key == "body-format" || key == "expand" && value.contains("body")));
+            assert!(!url.path().ends_with("/download"));
+        }
+        let page_path = path(&server, if mode == Mode::Cloud { "/pages/31" } else { "/content/31" });
+        server.state.lock().overrides.insert(page_path, Response::json(200, json!({"id":"30","type":"page"})));
+        assert_eq!(provider.page_aux("31").await.unwrap_err().code, "source_identity_mismatch");
+    }
+}
+
+#[tokio::test]
+async fn auxiliary_limits_are_truthful_and_cross_page_attachments_rejected() {
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = fixture(mode);
+        {
+            let mut state = server.state.lock();
+            let page = state.pages.get_mut("31").unwrap();
+            page.labels = (0..257).map(|n| format!("label-{n}")).collect();
+            page.attachments = (0..257).map(|n| (format!("att{n}"), format!("file{n}"), "text/plain".into(), 4)).collect();
+        }
+        let (provider, _) = provider(&server, true).await;
+        let aux = provider.page_aux("31").await.unwrap();
+        assert_eq!(aux.labels.len(), 256);
+        assert_eq!(aux.attachments.len(), 256);
+        assert!(!aux.labels_complete && !aux.attachments_complete);
+        if mode == Mode::Cloud {
+            server.state.lock().overrides.insert(path(&server, "/pages/31/attachments"), Response::json(200, json!({
+                "results":[{"id":"att22","title":"wrong.png","pageId":"30"}]
+            })));
+            assert_eq!(provider.page_aux("31").await.unwrap_err().code, "source_identity_mismatch");
+        }
+    }
+}
+
+#[tokio::test]
+async fn delta_rounds_fractional_bounds_outward_without_moving_query_time() {
+    let server = fixture(Mode::Cloud);
+    let (provider, _) = provider(&server, true).await;
+    let listing = provider.list_page_changes("ENG", 59_999, 60_001, 100, &AtomicBool::new(false)).await.unwrap();
+    assert!(listing.complete);
+    for request in server.requests() {
+        let url = Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+        let cql = url.query_pairs().find(|(key, _)| key == "cql").unwrap().1.into_owned();
+        assert!(cql.contains("lastmodified >= \"1969-12-31 10:00\""));
+        assert!(cql.contains("lastmodified < \"1970-01-01 14:02\""));
+    }
+}
+
+#[tokio::test]
+async fn standalone_versions_do_not_complete_cancelled_or_unexpected_id_responses() {
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = fixture(mode);
+        let (provider, _) = provider(&server, true).await;
+        let endpoint = if mode == Mode::Cloud { path(&server, "/pages") }
+            else { format!("{}/rest/api/content/search", mode.context()) };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        server.state.lock().cancel_after_path = Some((endpoint.clone(), cancellation.clone()));
+        assert!(!provider.page_versions(&["30".into()], &cancellation).await.unwrap().complete);
+        server.state.lock().cancel_after_path = None;
+        let unrelated = server.state.lock().pages["31"].clone();
+        server.state.lock().overrides.insert(endpoint, Response::json(200, json!({
+            "results":[page_json(&unrelated, mode)]
+        })));
+        assert_eq!(provider.page_versions(&["30".into()], &AtomicBool::new(false)).await.unwrap_err().code, "source_provider_contract");
+    }
+}
+
+#[tokio::test]
+async fn source_service_accepts_real_provider_metadata_listings_without_space_names() {
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = fixture(mode);
+        let (http_provider, _) = provider(&server, true).await;
+        let sources = SourceService::new(&configuration(&server), vec![Arc::new(http_provider)]).unwrap();
+        let cancel = AtomicBool::new(false);
+
+        let delta = sources.list_page_changes("wiki", "ENG", 0, 60_000, 100, &cancel).await.unwrap();
+        assert!(delta.complete);
+        assert!(delta.space_name.is_empty());
+        assert_eq!(delta.pages.len(), 4);
+        assert_eq!(delta.pages.iter().find(|page| page.page_id == "40").unwrap().ancestors.last().map(String::as_str), Some("30"));
+
+        let versions = sources.page_versions("wiki", &["30".into(), "40".into()], &cancel).await.unwrap();
+        assert!(versions.complete);
+        assert!(versions.space_name.is_empty());
+        assert_eq!(versions.pages.len(), 2);
+        assert_eq!(versions.pages.iter().find(|page| page.page_id == "40").unwrap().ancestors.last().map(String::as_str), Some("30"));
+
+        let aux = sources.page_aux("wiki", "31").await.unwrap();
+        assert!(aux.labels_complete && aux.attachments_complete);
+        assert!(aux.attachments.is_empty());
+
+        let search = format!("{}/rest/api/content/search", mode.context());
+        server.state.lock().overrides.insert(search, Response::json(200, json!({
+            "results": [], "totalSize": 0
+        })));
+        let empty = sources.list_page_changes("wiki", "ENG", 60_000, 120_000, 100, &cancel).await.unwrap();
+        assert!(empty.complete);
+        assert!(empty.space_name.is_empty());
+        assert!(empty.pages.is_empty());
+        assert!(server.requests().iter().all(|request| !request.target.contains("body-format")));
     }
 }

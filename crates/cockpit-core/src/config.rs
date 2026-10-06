@@ -33,6 +33,64 @@ pub struct QuotaConfiguration {
     pub omp_executable: PathBuf,
 }
 
+/// Eventual upstream synchronization policy, separate from Library item limits.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LibrarySyncConfiguration {
+    pub enabled: bool,
+    pub delta_minutes: u32,
+    pub lag_allowance_minutes: u32,
+    pub overlap_minutes: u32,
+    pub inventory_hours: u32,
+    pub audit_days: u32,
+    pub related_hours: u32,
+    pub background_requests_per_second: u32,
+    pub background_in_flight: u32,
+    pub hourly_request_cap: u32,
+}
+
+impl Default for LibrarySyncConfiguration {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            delta_minutes: 60,
+            lag_allowance_minutes: 5,
+            overlap_minutes: 30,
+            inventory_hours: 24,
+            audit_days: 7,
+            related_hours: 24,
+            background_requests_per_second: 1,
+            background_in_flight: 2,
+            hourly_request_cap: 1200,
+        }
+    }
+}
+
+impl LibrarySyncConfiguration {
+    /// Validate both TOML-loaded and programmatically supplied policies.
+    pub fn validate(&self) -> Result<(), InspectionError> {
+        for (name, value, minimum, maximum) in [
+            ("delta_minutes", self.delta_minutes, 1, 10_080),
+            ("lag_allowance_minutes", self.lag_allowance_minutes, 0, 1440),
+            ("overlap_minutes", self.overlap_minutes, 0, 10_080),
+            ("inventory_hours", self.inventory_hours, 1, 8760),
+            ("audit_days", self.audit_days, 1, 365),
+            ("related_hours", self.related_hours, 1, 8760),
+            ("background_requests_per_second", self.background_requests_per_second, 1, 60),
+            ("background_in_flight", self.background_in_flight, 1, 32),
+            ("hourly_request_cap", self.hourly_request_cap, 1, 100_000),
+        ] {
+            if !(minimum..=maximum).contains(&value) {
+                return Err(InspectionError::new(
+                    "invalid_library_sync_configuration",
+                    format!("library_sync.{name} must be {minimum}–{maximum}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Browser launch settings and paths for tooling Cockpit is allowed to invoke.
 ///
 /// The CLI is resolved from the owner's environment. Its normal browser selection
@@ -72,6 +130,7 @@ struct TomlConfiguration {
     window: Option<TomlWindow>,
     browser: Option<TomlBrowser>,
     quota: Option<TomlQuota>,
+    library_sync: Option<LibrarySyncConfiguration>,
     orchestration: Option<OrchestrationConfiguration>,
 }
 
@@ -568,6 +627,16 @@ pub fn load_quota_configuration(
     })
 }
 
+/// Load the optional `[library_sync]` policy without changing project item limits.
+pub fn load_library_sync_configuration(
+    config_path: Option<&Path>,
+) -> Result<LibrarySyncConfiguration, InspectionError> {
+    let (file, _) = load_file_configuration(config_path)?;
+    let configuration = file.library_sync.unwrap_or_default();
+    configuration.validate()?;
+    Ok(configuration)
+}
+
 fn default_omp_executable(
     path: Option<&OsStr>,
     home: Option<&Path>,
@@ -982,9 +1051,139 @@ mod tests {
 
     use super::{
         default_omp_executable, load_browser_configuration, load_project_configuration,
-        load_quota_configuration, load_window_configuration, validate_orchestration,
-        validate_orchestration_args, validate_template,
+        load_library_sync_configuration, load_quota_configuration, load_window_configuration,
+        validate_orchestration, validate_orchestration_args, validate_template,
+        LibrarySyncConfiguration,
     };
+
+    fn library_sync_fixture() -> PathBuf {
+        std::env::temp_dir().join(format!("cockpit-library-sync-{}.toml", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn library_sync_defaults_and_disabled_policy() {
+        let path = library_sync_fixture();
+        fs::write(&path, "version = 1\n").expect("write sync configuration");
+        let expected = LibrarySyncConfiguration {
+            enabled: true,
+            delta_minutes: 60,
+            lag_allowance_minutes: 5,
+            overlap_minutes: 30,
+            inventory_hours: 24,
+            audit_days: 7,
+            related_hours: 24,
+            background_requests_per_second: 1,
+            background_in_flight: 2,
+            hourly_request_cap: 1200,
+        };
+        assert_eq!(LibrarySyncConfiguration::default(), expected);
+        assert_eq!(load_library_sync_configuration(Some(&path)).expect("sync defaults"), expected);
+        fs::write(&path, "version = 1\n[library_sync]\nenabled = false\n")
+            .expect("write disabled configuration");
+        assert_eq!(
+            load_library_sync_configuration(Some(&path)).expect("disabled policy"),
+            LibrarySyncConfiguration { enabled: false, ..expected },
+        );
+        fs::remove_file(path).expect("remove sync configuration");
+    }
+
+    #[test]
+    fn library_sync_overrides_preserve_configured_item_limits() {
+        let path = library_sync_fixture();
+        fs::write(&path, concat!(
+            "version = 1\n",
+            "[limits]\nlibrary_space_pages = 1000\nlibrary_max_items = 3000\n",
+            "[library_sync]\nenabled = true\ndelta_minutes = 1\n",
+            "lag_allowance_minutes = 0\noverlap_minutes = 30\n",
+            "inventory_hours = 48\naudit_days = 14\nrelated_hours = 72\n",
+            "background_requests_per_second = 3\nbackground_in_flight = 4\n",
+            "hourly_request_cap = 600\n",
+        )).expect("write overridden configuration");
+        assert_eq!(
+            load_library_sync_configuration(Some(&path)).expect("sync overrides"),
+            LibrarySyncConfiguration {
+                enabled: true,
+                delta_minutes: 1,
+                lag_allowance_minutes: 0,
+                overlap_minutes: 30,
+                inventory_hours: 48,
+                audit_days: 14,
+                related_hours: 72,
+                background_requests_per_second: 3,
+                background_in_flight: 4,
+                hourly_request_cap: 600,
+            },
+        );
+        let projects = load_project_configuration(Some(&path), None).expect("project configuration");
+        assert_eq!(projects.limits.library_space_pages, 1000);
+        assert_eq!(projects.limits.library_max_items, 3000);
+        fs::remove_file(path).expect("remove sync configuration");
+    }
+
+    #[test]
+    fn library_sync_cadence_and_budget_boundaries() {
+        let path = library_sync_fixture();
+        for (field, minimum, maximum) in [
+            ("delta_minutes", 1_u32, 10_080),
+            ("lag_allowance_minutes", 0, 1440),
+            ("overlap_minutes", 0, 10_080),
+            ("inventory_hours", 1, 8760),
+            ("audit_days", 1, 365),
+            ("related_hours", 1, 8760),
+            ("background_requests_per_second", 1, 60),
+            ("background_in_flight", 1, 32),
+            ("hourly_request_cap", 1, 100_000),
+        ] {
+            for value in [minimum, maximum] {
+                fs::write(&path, format!("version = 1\n[library_sync]\n{field} = {value}\n"))
+                    .expect("write boundary configuration");
+                load_library_sync_configuration(Some(&path))
+                    .unwrap_or_else(|error| panic!("valid {field}={value}: {error}"));
+            }
+            for value in [minimum.checked_sub(1), Some(maximum + 1)].into_iter().flatten() {
+                fs::write(&path, format!("version = 1\n[library_sync]\n{field} = {value}\n"))
+                    .expect("write invalid boundary");
+                let error = load_library_sync_configuration(Some(&path)).expect_err("out of range");
+                assert_eq!(error.code, "invalid_library_sync_configuration");
+                assert!(error.message.contains(field), "boundary diagnostic names {field}");
+            }
+        }
+        fs::remove_file(path).expect("remove sync configuration");
+    }
+
+    #[test]
+    fn library_sync_rejects_unknown_mistyped_and_oversized_configuration() {
+        let path = library_sync_fixture();
+        for policy in [
+            "delta_minute = 60",
+            "enabled = 'false'",
+            "delta_minutes = -1",
+            "delta_minutes = 4294967296",
+            "delta_minutes = 1.5",
+            "hourly_request_cap = '1200'",
+        ] {
+            fs::write(&path, format!("version = 1\n[library_sync]\n{policy}\n"))
+                .expect("write malformed configuration");
+            assert_eq!(
+                load_library_sync_configuration(Some(&path)).expect_err("malformed sync policy").code,
+                "invalid_config",
+                "{policy}",
+            );
+        }
+        fs::write(&path, "version = 2\n[library_sync]\nenabled = false\n")
+            .expect("write unsupported version");
+        assert_eq!(
+            load_library_sync_configuration(Some(&path)).expect_err("unsupported version").code,
+            "unsupported_config_version",
+        );
+        fs::write(&path, vec![b' '; super::MAX_CONFIG_BYTES + 1])
+            .expect("write oversized configuration");
+        assert_eq!(
+            load_library_sync_configuration(Some(&path)).expect_err("bounded file").code,
+            "config_too_large",
+        );
+        fs::remove_file(path).expect("remove sync configuration");
+    }
 
     fn omp_fixture_root() -> PathBuf {
         let root = std::env::temp_dir().join(format!("cockpit-omp-config-{}", uuid::Uuid::new_v4()));

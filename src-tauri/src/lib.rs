@@ -1813,6 +1813,8 @@ pub fn run() {
     let startup_inspector = Arc::clone(&inspector);
     let project_config = cockpit_core::config::load_project_configuration(None, None)
         .expect("failed to load project configuration");
+    let library_sync_config = cockpit_core::config::load_library_sync_configuration(None)
+        .expect("failed to load Library synchronization configuration");
     let quota_config = cockpit_core::config::load_quota_configuration(None)
         .expect("failed to load quota configuration");
     let quota = Arc::new(cockpit_core::quota::QuotaService::new(
@@ -1916,6 +1918,13 @@ pub fn run() {
             .clone(),
     );
     let service = service.with_comments(comments);
+    // Enter the same Tokio runtime as other native services before spawning.
+    // The event callback retains this guard until exit and cancels it before
+    // shutting down services that background synchronization can use.
+    let mut library_sync_runtime = Some(tauri::async_runtime::block_on(async {
+        library.start_sync(library_sync_config)
+            .expect("failed to initialize Library synchronization")
+    }));
     let shutdown_started = Arc::new(AtomicBool::new(false));
     tauri::Builder::default()
         .manage(service)
@@ -2046,6 +2055,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Cockpit Tauri application")
         .run(move |app, event| {
+            if matches!(&event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+                drop(library_sync_runtime.take());
+            }
             if let tauri::RunEvent::ExitRequested {
                 api, code: None, ..
             } = event

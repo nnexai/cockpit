@@ -53,7 +53,7 @@ pub(super) fn follow_id(provider_id: &str, provider_instance: &str, space_key: &
     format!("follow:{:x}", hash.finalize())
 }
 
-fn page_item_id(follow: &LibraryFollowSummary, page_id: &str) -> String {
+pub(super) fn page_item_id(follow: &LibraryFollowSummary, page_id: &str) -> String {
     item_id(&SourceRef {
         provider_id: follow.provider_id.clone(),
         provider_instance: follow.provider_instance.clone(),
@@ -63,14 +63,14 @@ fn page_item_id(follow: &LibraryFollowSummary, page_id: &str) -> String {
 }
 
 /// A page item of `follow`'s site, whatever its current follow membership.
-fn same_site_page(entry: &LibraryIndexEntry, follow: &LibraryFollowSummary) -> bool {
+pub(super) fn same_site_page(entry: &LibraryIndexEntry, follow: &LibraryFollowSummary) -> bool {
     entry.summary.provider_id.as_deref() == Some(follow.provider_id.as_str())
         && entry.summary.provider_instance.as_deref() == Some(follow.provider_instance.as_str())
         && entry.summary.resource_type.as_deref() == Some("page")
 }
 
 /// Why a listed page needs a fetch, or `None` when the stored item matches it.
-fn change_reason(old: &LibraryIndexEntry, page: &SpacePage) -> Option<String> {
+pub(super) fn change_reason(old: &LibraryIndexEntry, page: &SpacePage) -> Option<String> {
     let ancestors = old.summary.ancestors.iter().map(|a| a.id.as_str());
     if !ancestors.eq(page.ancestors.iter().map(String::as_str)) {
         Some("moved".into())
@@ -232,7 +232,7 @@ impl LibraryService {
         };
         let handle = operations::runtime()?;
         let store = self.open()?;
-        let lease = store.lease(&follow.follow_id)?;
+        let lease = super::sync::manual_lease(&store, &follow.follow_id).await?;
         let (record, operation_lease) =
             operations::create(&store, LibraryOperationKind::Add, Some(0))?;
         let record = match &request.target {
@@ -458,7 +458,12 @@ impl LibraryService {
         let mut jobs = tokio::task::JoinSet::new();
         let mut ordered = Vec::with_capacity(batch.len());
         for (index, work) in batch.iter().enumerate() {
-            match store.lease(&work.item_id) {
+            let lease = if crate::sources::lane::current() == crate::sources::lane::RequestLane::Background {
+                store.lease(&work.item_id)
+            } else {
+                super::sync::manual_lease(store, &work.item_id).await
+            };
+            match lease {
                 Ok(lease) => leases.push(lease),
                 Err(failure) => {
                     operations::follow_row(
@@ -475,7 +480,7 @@ impl LibraryService {
             let request = work.request.clone();
             let canonical_id = work.canonical_id.clone();
             let container = work.container.clone();
-            jobs.spawn(async move {
+            jobs.spawn(crate::sources::lane::inherit(async move {
                 let result = async {
                     let fetched = sources.fetch_assets(request).await?;
                     let asset = fetched
@@ -498,7 +503,7 @@ impl LibraryService {
                     }
                 }.await;
                 (index, result)
-            });
+            }));
             ordered.push(index);
         }
         let mut results = BTreeMap::new();

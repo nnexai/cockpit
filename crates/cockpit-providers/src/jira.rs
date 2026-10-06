@@ -7,9 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
 use cockpit_core::credentials::ProviderCredentials;
-use cockpit_core::jira_query::{
-    format_wall_minute, instant_seconds, jira_query_input, wall_minute,
-};
+use cockpit_core::jira_query::{instant_seconds, jira_query_input, wall_minute};
 use cockpit_core::process::StagingBudget;
 use cockpit_core::repositories::{is_jira_key, resolve_jira_url};
 use cockpit_core::sources::{
@@ -220,13 +218,13 @@ impl JiraSourceProvider {
                 break false;
             }
         };
-        Ok(IssueListing { rows, complete })
+        Ok(IssueListing { rows, complete: complete && !cancel.load(Ordering::Relaxed) })
     }
-    /// Newest-first token/offset listing, preserving the follow watermark overlap.
+    /// Freeze an absolute, timezone-independent interval across all search pages.
     async fn list_jql(
         &self,
         jql: &str,
-        updated_since: Option<&str>,
+        updated_window: Option<(i64, i64)>,
         max: u32,
         cancel: &AtomicBool,
     ) -> Result<IssueListing, InspectionError> {
@@ -236,19 +234,13 @@ impl JiraSourceProvider {
         {
             return Err(list_contract("Jira query is not a normalized query"));
         }
-        let since = match updated_since {
-            Some(since) => {
-                if instant_seconds(since).is_none() {
-                    return Err(list_contract("Jira probe time is not an ISO instant"));
-                }
-                let minute = wall_minute(since)
-                    .ok_or_else(|| list_contract("Jira probe time is not an ISO instant"))?;
-                Some(format_wall_minute(minute - 1))
+        let body = if let Some((lower, upper)) = updated_window {
+            if lower < 0 || lower >= upper {
+                return Err(list_contract("Jira update window must be a nonempty epoch-millisecond interval"));
             }
-            None => None,
-        };
-        let body = if let Some(since) = since {
-            format!("({jql}) AND updated >= \"{since}\" ORDER BY updated DESC")
+            // JQL documents unquoted numeric dates as epoch milliseconds. Quoted
+            // wall-clock dates instead depend on the account/server timezone.
+            format!("({jql}) AND updated >= {lower} AND updated < {upper} ORDER BY updated ASC, key ASC")
         } else {
             format!("{jql} ORDER BY updated DESC")
         };
@@ -428,6 +420,14 @@ impl SourceProvider for JiraSourceProvider {
         &self.provider.id
     }
 
+    fn blocked_until_ms(&self) -> Option<i64> {
+        self.http.blocked_until_ms()
+    }
+
+    fn background_requests_remaining(&self) -> Option<u32> {
+        Some(self.http.remaining_background_requests())
+    }
+
     fn capabilities(&self) -> Vec<SourceCapability> {
         vec![SourceCapability::Issue, SourceCapability::IssueComments]
     }
@@ -511,8 +511,8 @@ impl SourceProvider for JiraSourceProvider {
         cancel: &AtomicBool,
     ) -> Result<IssueListing, InspectionError> {
         match query {
-            IssueQuery::Jql { jql, updated_since } => {
-                self.list_jql(jql, *updated_since, max, cancel).await
+            IssueQuery::Jql { jql, updated_window } => {
+                self.list_jql(jql, *updated_window, max, cancel).await
             }
             IssueQuery::Keys(keys) => self.list_keys(keys, max, cancel).await,
         }
@@ -722,6 +722,9 @@ fn issue_fields(issue: &Value) -> Vec<FrontmatterField> {
             });
         }
     };
+    push_text("issue_id", issue.get("id").and_then(Value::as_str)
+        .filter(|id| (1..=20).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_digit()))
+        .map(str::to_owned));
     push_text("item_type", field_name(issue, "issuetype", "name").map(str::to_owned));
     push_text("status", field_name(issue, "status", "name").map(str::to_owned));
     push_text("priority", field_name(issue, "priority", "name").map(str::to_owned));
@@ -1203,6 +1206,15 @@ mod tests {
             {"type": "tableRow", "content": [{"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "second"}]}]}]}
         ]});
         assert_eq!(super::table(&table, 0, 0), "|  |\n| --- |\n| first |\n| second |");
+    }
+
+    #[test]
+    fn numeric_issue_id_is_preserved_without_weakening_key_authority() {
+        let fields = issue_fields(&json!({"id":"10007","key":"OPS-7","fields":{}}));
+        assert!(fields.iter().any(|field| field.key == "issue_id"
+            && field.value == super::FrontmatterValue::String("10007".into())));
+        let fields = issue_fields(&json!({"id":"not an id","fields":{}}));
+        assert!(!fields.iter().any(|field| field.key == "issue_id"));
     }
 
 }
