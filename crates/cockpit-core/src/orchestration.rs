@@ -1380,7 +1380,15 @@ impl OrchestrationService {
         let locked = self.store.lock()?;
         let mut state = locked.read()?;
         let assignment_recovery = assignments::recover(&locked, &mut state);
-        self.revision.send_replace(state.revision);
+        // Publish committed recovery (including before an error) or externally
+        // changed state, but do not wake the dispatcher for an unchanged revision.
+        self.revision.send_if_modified(|revision| {
+            if *revision == state.revision {
+                return false;
+            }
+            *revision = state.revision;
+            true
+        });
         assignment_recovery?;
         let mut changed = false;
         for intent in state.task_intents.clone() {

@@ -838,6 +838,101 @@ fn failed_result_is_not_accepted_or_checked() {
 }
 
 #[test]
+fn recovery_without_pending_intents_does_not_notify_subscribers() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let receiver = fixture.service.subscribe();
+    let before = fixture.state_bytes();
+    for _ in 0..3 {
+        fixture.service.recover_intents().unwrap();
+        assert!(!receiver.has_changed().unwrap());
+        assert_eq!(fixture.state_bytes(), before);
+    }
+}
+
+#[test]
+fn recovery_observes_external_revision_once() {
+    let fixture = Fixture::new();
+    let external = OrchestrationService::open(&fixture.configuration).unwrap();
+    let mut receiver = external.subscribe();
+    let initial_revision = *receiver.borrow();
+    fixture.root();
+    let revision = fixture.state().revision;
+    assert!(revision > initial_revision);
+    assert!(!receiver.has_changed().unwrap());
+    let before = fixture.state_bytes();
+
+    external.recover_intents().unwrap();
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(*receiver.borrow_and_update(), revision);
+    assert_eq!(fixture.state_bytes(), before);
+    external.recover_intents().unwrap();
+    assert!(!receiver.has_changed().unwrap());
+    assert_eq!(fixture.state_bytes(), before);
+}
+
+#[test]
+fn recovery_publishes_assignment_changes_before_later_recovery_error() {
+    let fixture = Fixture::new();
+    let roots = [fixture.root(), fixture.root()];
+    let task_ids = [id(), id()];
+    let paths = roots
+        .each_ref()
+        .map(|root| fixture.service.base().join("tasks").join(format!("{root}.md")));
+    for index in 0..2 {
+        // A directory in place of Markdown deterministically interrupts the
+        // public assignment after its pending journal has been saved.
+        std::fs::create_dir(&paths[index]).unwrap();
+        assert!(
+            fixture
+                .apply(
+                    &Actor::Operator(OperatorOrigin::Browser),
+                    OrchestrationAction::TaskAssign {
+                        root_id: roots[index].clone(),
+                        task_id: task_ids[index].clone(),
+                        title: format!("Interrupted assignment {index}"),
+                        body: "Durable recovery notification".into(),
+                    },
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(fixture.state().assignment_intents.len(), 2);
+    std::fs::remove_dir(&paths[0]).unwrap();
+    let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+    let mut receiver = reopened.subscribe();
+    let initial_revision = *receiver.borrow();
+
+    assert!(reopened.recover_intents().is_err());
+    let state = fixture.state();
+    assert!(state.revision > initial_revision);
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(*receiver.borrow_and_update(), state.revision);
+    assert_eq!(state.assignment_intents.len(), 1);
+    assert_eq!(state.assignment_intents[0].task_id, task_ids[1]);
+    assert_eq!(fixture.task(&roots[0], &task_ids[0]).title, "Interrupted assignment 0");
+    assert!(state.messages.iter().any(|message| {
+        message.message_id == format!("assign-{}", task_ids[0])
+    }));
+
+    // The remaining I/O error alone is not a change and must not self-notify.
+    let before = fixture.state_bytes();
+    assert!(reopened.recover_intents().is_err());
+    assert!(!receiver.has_changed().unwrap());
+    assert_eq!(fixture.state_bytes(), before);
+
+    std::fs::remove_dir(&paths[1]).unwrap();
+    reopened.recover_intents().unwrap();
+    let state = fixture.state();
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(*receiver.borrow_and_update(), state.revision);
+    assert!(state.assignment_intents.is_empty());
+    assert_eq!(fixture.task(&roots[1], &task_ids[1]).title, "Interrupted assignment 1");
+    reopened.recover_intents().unwrap();
+    assert!(!receiver.has_changed().unwrap());
+}
+
+#[test]
 fn recovery_conflicts_on_changed_task_even_when_externally_checked() {
     for already_checked in [false, true] {
         let fixture = Fixture::new();
@@ -867,6 +962,7 @@ fn recovery_conflicts_on_changed_task_even_when_externally_checked() {
                 .unwrap();
         }
         let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+        let mut receiver = reopened.subscribe();
         reopened.recover_intents().unwrap();
         let state = reopened.store.lock().unwrap().read().unwrap();
         let run = &state.runs[run_index(&state, &run_id).unwrap()];
@@ -880,12 +976,15 @@ fn recovery_conflicts_on_changed_task_even_when_externally_checked() {
             task.task_revision
         );
         assert_eq!(fixture.task(&root, &task.task_id).checked, already_checked);
+        assert!(receiver.has_changed().unwrap());
+        assert_eq!(*receiver.borrow_and_update(), state.revision);
         let recovered_revision = state.revision;
         reopened.recover_intents().unwrap();
         assert_eq!(
             reopened.store.lock().unwrap().read().unwrap().revision,
             recovered_revision
         );
+        assert!(!receiver.has_changed().unwrap());
     }
 }
 
@@ -929,6 +1028,7 @@ fn recovery_applies_unchanged_pending_acceptance_once() {
             }
         }
         let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+        let mut receiver = reopened.subscribe();
         reopened.recover_intents().unwrap();
         assert!(fixture.task(&root, &task.task_id).checked);
         assert_eq!(
@@ -937,8 +1037,11 @@ fn recovery_applies_unchanged_pending_acceptance_once() {
         );
         assert!(fixture.state().task_intents.is_empty());
         let revision = fixture.state().revision;
+        assert!(receiver.has_changed().unwrap());
+        assert_eq!(*receiver.borrow_and_update(), revision);
         reopened.recover_intents().unwrap();
         assert_eq!(fixture.state().revision, revision);
+        assert!(!receiver.has_changed().unwrap());
     }
 }
 
