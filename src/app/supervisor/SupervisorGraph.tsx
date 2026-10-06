@@ -14,22 +14,19 @@ export type SupervisorGraphProps = {
   live: boolean;
   connected: boolean;
   runtimeLive: boolean;
-  busy: boolean;
   scope: ScopeDrafts;
   sharedSpace: string | null | undefined;
   highlightedRun: string | null;
   onHover(run: Run | null): void;
   onSelect(run: Run, subagent: Subagent | null): void;
   onSelectTask?(taskId: string): void;
-  onUnmanaged(paneId: string): void;
   changed(): void;
 };
 
-export function SupervisorGraph({ rows, snapshot, live, connected, runtimeLive, busy, scope, sharedSpace, highlightedRun, onHover, onSelect, onSelectTask, onUnmanaged, changed }: SupervisorGraphProps) {
+export function SupervisorGraph({ rows, snapshot, live, connected, runtimeLive, scope, sharedSpace, highlightedRun, onHover, onSelect, onSelectTask, changed }: SupervisorGraphProps) {
   const headingId = useId();
   const fresh = live && connected && runtimeLive && snapshot.runtime.status === "fresh";
   const observations = fresh && snapshot.runtime.status === "fresh" ? snapshot.runtime.runs : [];
-  const unmanaged = fresh && scope.showUnmanaged ? snapshot.unmanaged_agents : [];
   const visibleRows = useMemo(() => scope.showSubagents ? rows : rows.filter(row => !row.subagent), [rows, scope.showSubagents]);
   const graph = useMemo(() => {
     const nodes = visibleRows.map(row => ({
@@ -68,7 +65,7 @@ export function SupervisorGraph({ rows, snapshot, live, connected, runtimeLive, 
     }
   }
   const roving = useRovingList({
-    rowIds: [...visibleRows.map(row => row.key), ...(onSelectTask ? graph.taskRefs.map(reference => reference.id) : []), ...unmanaged.map(agent => `other:${agent.pane_id}`)],
+    rowIds: [...visibleRows.map(row => row.key), ...(onSelectTask ? graph.taskRefs.map(reference => reference.id) : [])],
     selectedId,
     onEscape: () => {
       scope.selectedRun = null;
@@ -92,7 +89,6 @@ export function SupervisorGraph({ rows, snapshot, live, connected, runtimeLive, 
         }
         changed();
       }} />Subagents</label>
-      <label className="supervisor-graph-subagents"><input type="checkbox" checked={scope.showUnmanaged} onChange={event => { scope.showUnmanaged = event.target.checked; changed(); }} />Other agents</label>
     </div>
     <div className="supervisor-graph-scroll" ref={roving.listRef} {...roving.listProps}>
       {visibleRows.length ? <div className="supervisor-graph-canvas" role="group" aria-label="Agent relationships" style={{ width: graph.width, height: graph.height }}>
@@ -124,18 +120,6 @@ export function SupervisorGraph({ rows, snapshot, live, connected, runtimeLive, 
         const content = <><UiIcon name="file" /><span>{title}</span></>;
         return onSelectTask ? <button key={reference.id} type="button" className={className} data-row-id={reference.id} tabIndex={roving.tabIndexFor(reference.id)} title={title} aria-label={`View task ${reference.task.title} assigned to ${reference.run.label}`} onMouseEnter={() => onHover(reference.run)} onMouseLeave={() => onHover(null)} onClick={() => onSelectTask(reference.task.task_id)}>{content}</button> : <span key={reference.id} className={className} title={title}>{content}</span>;
       })}</div> : null}
-      <section className="supervisor-graph-unmanaged" aria-label="Unmanaged agents">
-        <h3>Other agents <span>Unmanaged · no task relationships</span></h3>
-        {unmanaged.length ? <div className="supervisor-graph-unmanaged-nodes">{unmanaged.map(agent => {
-          const raw = agent.agent_status ?? "unknown";
-          const shape: GlyphShape = raw === "working" || raw === "idle" || raw === "blocked" || raw === "done" ? raw : "unknown";
-          return <button key={agent.pane_id} type="button" className="supervisor-graph-unmanaged-node" data-row-id={`other:${agent.pane_id}`} tabIndex={roving.tabIndexFor(`other:${agent.pane_id}`)} disabled={busy} onClick={() => onUnmanaged(agent.pane_id)} aria-label={`Open ${agent.agent_name} terminal, Space ${agent.workspace_label}, Observed Herdr: ${raw}`} title={`${agent.workspace_label} · ${agent.tab_label} · Observed Herdr: ${raw}`}>
-            <span className="supervisor-graph-node-heading"><StateGlyph shape={shape} /><strong>{agent.agent_name}</strong></span>
-            <span className="supervisor-graph-node-space">Space · {agent.workspace_label}</span>
-            <span className="supervisor-graph-unmanaged-open" aria-hidden="true"><UiIcon name="terminal" /></span>
-          </button>;
-        })}</div> : <p className="supervisor-graph-empty">{fresh ? "No other agents observed." : "Other agents are unobserved while the connection is unavailable."}</p>}
-      </section>
     </div>
   </section>;
 }

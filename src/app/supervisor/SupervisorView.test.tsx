@@ -55,7 +55,7 @@ async function mount(initial: OrchestrationSnapshot, boards?: Map<string, TaskBo
   const client = { orchestrationSnapshot: snapshotCall, orchestrationWait: vi.fn(() => pendingWait), orchestrationMutate: mutation } as unknown as CockpitClient;
   host = document.createElement("div"); document.body.append(host); reactRoot = createRoot(host);
   rerender = async (active = true, runtimeLive = true) => {
-    await act(async () => { reactRoot!.render(<SupervisorView client={client} sessionId="session" session={session} runtimeLive={runtimeLive} active={active} startToken={0} navigationError={null} onClose={onClose} onTerminal={onTerminal} onUnmanagedTerminal={vi.fn(async () => undefined)} onModalChange={vi.fn()} />); });
+    await act(async () => { reactRoot!.render(<SupervisorView client={client} sessionId="session" session={session} runtimeLive={runtimeLive} active={active} startToken={0} navigationError={null} onClose={onClose} onTerminal={onTerminal} onModalChange={vi.fn()} />); });
     await settle();
   };
   await rerender();
@@ -215,6 +215,35 @@ describe("Supervisor truth and canonical task presentation", () => {
     expect(host.textContent).toContain("Agents · 1 connected");
     expect(host.textContent).toContain("Closing this supervisor did not stop them");
     expect(host.textContent).toContain("Tracking closed");
+  });
+  it.each([false, true])("keeps managed graph navigation independent of unmanaged snapshot input (present: %s)", async present => {
+    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const state = snapshot([run(), worker], [task()]);
+    state.subagents = [{ run_id: "root", subagent_id: "research", parent_subagent_id: null, role: "Researcher", label: "Research child", status: "running", summary: null, last_control: null, updated_at: at }];
+    state.unmanaged_agents = present ? [{ workspace_id: "other-space", workspace_label: "Other project", tab_id: "other-tab", tab_label: "Standalone agent", pane_id: "other-pane", agent_name: "Unrelated OMP", agent_status: "working", state_changed_at: at }] : [];
+    const fixture = await mount(state);
+    const graph = host.querySelector<HTMLElement>(".supervisor-graph-band")!;
+    const row = (id: string) => graph.querySelector<HTMLButtonElement>(`[data-row-id="${id}"]`)!;
+    const press = (target: HTMLElement, key: string) => act(() => { target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+    expect([...graph.querySelectorAll("[data-row-id]")].map(node => (node as HTMLElement).dataset.rowId)).toEqual(["root", "root:research", "worker", "task:worker:task-a"]);
+    expect([...graph.querySelectorAll("label")].map(label => label.textContent?.trim())).toEqual(["Subagents"]);
+    expect(graph.querySelector('[aria-label="Unmanaged agents"]')).toBeNull();
+    expect(graph.textContent).not.toContain("Unrelated OMP");
+    act(() => row("root").focus());
+    press(row("root"), "ArrowDown");
+    expect(document.activeElement).toBe(row("root:research"));
+    act(() => row("root:research").click()); await settle();
+    expect(host.querySelector('aside[aria-label="Selected details"]')!.textContent).toContain("Research child");
+    press(row("root:research"), "ArrowDown");
+    expect(document.activeElement).toBe(row("worker"));
+    press(row("worker"), "End");
+    expect(document.activeElement).toBe(row("task:worker:task-a"));
+    act(() => row("task:worker:task-a").click()); await settle();
+    expect(host.querySelector('aside[aria-label="Selected details"]')!.textContent).toContain("Improve search");
+    press(row("task:worker:task-a"), "Home");
+    expect(document.activeElement).toBe(row("root"));
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(fixture.mutation).not.toHaveBeenCalled();
   });
 });
 
