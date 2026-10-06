@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { RowSplitter } from "./RowSplitter";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { ActorRef, OrchestrationSnapshot, Run, SessionSnapshotResponse, Subagent, TaskView } from "../../protocol/generated/v1";
 import { useRovingList } from "../sidebar/useRovingList";
@@ -101,6 +102,8 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   const [hoverRun, setHoverRun] = useState<string | null>(null);
   const [detailSection, setDetailSection] = useState<"overview" | "activity" | "actions">("overview");
   const [narrowView, setNarrowView] = useState<"board" | "agents">("board");
+  const [graphHeight, setGraphHeight] = useState<number | null>(null);
+  const [composerHeight, setComposerHeight] = useState<number | null>(null);
   const startDraft = useRef<StartDraft>({ label: "", location: "existing", spaceId: "", directory: "" });
   const lastSession = useRef(sessionId);
   const seenStart = useRef(0);
@@ -329,8 +332,9 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
       </div>
       {root ? <>
         <div className="supervisor-narrow-switch" aria-label="Workarea view"><button type="button" aria-pressed={narrowView === "board"} onClick={() => setNarrowView("board")}><UiIcon name="grid" />Board</button><button type="button" aria-pressed={narrowView === "agents"} onClick={() => setNarrowView("agents")}><UiIcon name="branch" />Agents</button></div>
-        <div className={`supervisor-graph-surface${narrowView === "agents" ? " is-narrow-active" : ""}`}>
+        <div className={`supervisor-graph-surface${narrowView === "agents" ? " is-narrow-active" : ""}`} style={graphHeight === null ? undefined : { "--graph-height": `${graphHeight}px` } as CSSProperties}>
           <SupervisorGraph rows={forest} snapshot={snapshot} live={!!live} connected={connected} runtimeLive={runtimeLive} busy={busy} scope={scope} sharedSpace={sharedSpace} highlightedRun={hoverRun ?? detailRun?.run_id ?? null} changed={changed} onHover={run => { setHoverRun(run?.run_id ?? null); setHoverSpace(observe(run?.run_id)?.workspace_id ?? null); }} onSelect={(run, subagent) => { const selected = scope.selectedRun === run.run_id && scope.selectedSubagent === (subagent?.subagent_id ?? null); scope.selectedTask = null; scope.selectedRun = selected ? null : run.run_id; scope.selectedSubagent = selected ? null : subagent?.subagent_id ?? null; setDetailSection("overview"); changed(); }} onSelectTask={selectTask} onUnmanaged={paneId => void onUnmanagedTerminal(paneId).catch(cause => setTerminalError(`Could not open terminal. ${cause instanceof Error ? cause.message : "Check status."}`))} />
+          <RowSplitter className="supervisor-graph-splitter" label="Resize agents overview" target={splitter => splitter.previousElementSibling as HTMLElement | null} grow={1} min={80} max={Math.round(window.innerHeight * 0.6)} onChange={setGraphHeight} onReset={() => setGraphHeight(null)} />
         </div>
         <section className={`supervisor-board-surface${narrowView === "board" ? " is-narrow-active" : ""}`} aria-label="Tasks">
           <div className="supervisor-task-list-heading"><h2>Tasks <span>{openTasks.length} open</span></h2><div className="supervisor-task-filters" aria-label="Task filters"><label className={scope.attentionOnly ? "is-active" : ""}><input type="checkbox" checked={scope.attentionOnly} onChange={event => { scope.attentionOnly = event.target.checked; changed(); }} />Needs attention (dims other tasks)</label><label>Space<select aria-label="Task Space" value={scope.spaceFilter} onChange={event => { scope.spaceFilter = event.target.value; changed(); }}><option value="">All Spaces</option>{[...new Map(observations.filter(item => item.workspace_id && item.workspace_label && rootRuns.some(run => run.run_id === item.run_id)).map(item => [item.workspace_id!, item.workspace_label!])).entries()].map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label></div></div>
@@ -362,7 +366,10 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
       </div>}
     </aside> : null}
     </div>
-    {snapshot && root ? <TaskComposer root={root} scope={scope} snapshot={snapshot} canAssign={!!rootState?.verified && root.stage === "active" && !!live} busy={busy || startPending} changed={changed} mutateResult={mutateResult} refresh={refresh} /> : null}
+    {snapshot && root ? <div className={`supervisor-composer-wrap${composerHeight === null ? "" : " is-sized"}`} style={composerHeight === null ? undefined : { "--composer-height": `${composerHeight}px` } as CSSProperties}>
+      <RowSplitter label="Resize task input" target={splitter => splitter.parentElement?.querySelector("textarea") ?? null} grow={-1} min={44} max={Math.round(window.innerHeight * 0.6)} onChange={setComposerHeight} onReset={() => setComposerHeight(null)} />
+      <TaskComposer root={root} scope={scope} snapshot={snapshot} canAssign={!!rootState?.verified && root.stage === "active" && !!live} busy={busy || startPending} changed={changed} mutateResult={mutateResult} refresh={refresh} />
+    </div> : null}
     <div className="supervisor-focus-notice" role="status">{focusNotice}</div>
     {dialog && snapshot && active ? <SupervisorDialogs dialog={dialog} snapshot={snapshot} spaces={runtimeLive ? session?.spaces ?? [] : []} startDraft={startDraft.current} changed={changed} busy={busy} available={connected && (dialog.mode === "edit" || dialog.mode === "close" || runtimeLive && snapshot.runtime.status === "fresh")} mutateResult={mutateResult} onStarted={started} onEdited={taskId => { scope.edits.delete(taskId); changed(); }} onStartUnconfirmed={() => setStartUnknown(true)} onClose={() => setDialog(null)} /> : null}
   </section>;
