@@ -29,7 +29,7 @@ export function SupervisorGraph({ rows, snapshot, live, connected, runtimeLive, 
   const headingId = useId();
   const fresh = live && connected && runtimeLive && snapshot.runtime.status === "fresh";
   const observations = fresh && snapshot.runtime.status === "fresh" ? snapshot.runtime.runs : [];
-  const unmanaged = fresh ? snapshot.unmanaged_agents : [];
+  const unmanaged = fresh && scope.showUnmanaged ? snapshot.unmanaged_agents : [];
   const visibleRows = useMemo(() => scope.showSubagents ? rows : rows.filter(row => !row.subagent), [rows, scope.showSubagents]);
   const graph = useMemo(() => {
     const nodes = visibleRows.map(row => ({
@@ -92,6 +92,7 @@ export function SupervisorGraph({ rows, snapshot, live, connected, runtimeLive, 
         }
         changed();
       }} />Subagents</label>
+      <label className="supervisor-graph-subagents"><input type="checkbox" checked={scope.showUnmanaged} onChange={event => { scope.showUnmanaged = event.target.checked; changed(); }} />Other agents</label>
     </div>
     <div className="supervisor-graph-scroll" ref={roving.listRef} {...roving.listProps}>
       {visibleRows.length ? <div className="supervisor-graph-canvas" role="group" aria-label="Agent relationships" style={{ width: graph.width, height: graph.height }}>

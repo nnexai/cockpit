@@ -6,7 +6,7 @@
 .notes-view button:disabled { cursor:default; opacity:.5; }
 .notes-view button.notes-primary { background:var(--select-fill); border-color:var(--border-strong); color:var(--accent); }
 .notes-view .ui-icon { width:var(--icon-size); height:var(--icon-size); flex:none; }
-.notes-view .notes-icon-button { width:var(--compact-control-size); padding:0; border-color:transparent; background:transparent; flex:none; }
+.notes-view .notes-icon-button { width:var(--compact-control-size); height:var(--compact-control-size); min-height:var(--compact-control-size); padding:0; border-color:transparent; background:transparent; color:var(--text-secondary); flex:none; }
 .notes-view input:not([type=checkbox]):not([type=radio]),.notes-view select,.notes-view textarea { background:var(--surface); border:1px solid var(--border); color:var(--text-primary); border-radius:var(--radius-control); min-width:0; padding:7px 9px; }
 .notes-view input[type=checkbox],.notes-view input[type=radio] { width:16px; height:16px; accent-color:var(--accent); flex:none; }
 .notes-view textarea:focus-visible,.notes-view .cm-editor:focus-within { outline:2px solid var(--focus-strong); outline-offset:-2px; }

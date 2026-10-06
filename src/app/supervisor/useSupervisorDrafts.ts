@@ -10,13 +10,14 @@ export type ScopeDrafts = {
   selectedRun: string | null;
   selectedSubagent: string | null;
   showSubagents: boolean;
+  showUnmanaged: boolean;
   attentionOnly: boolean;
   spaceFilter: string;
   disclosures: Record<"completed" | "agents" | "history" | "diagnostics" | "archive", boolean>;
 };
 export function newTextDraft(): TextDraft { return { text: "", operation: null, notice: null, error: null }; }
 export function newScopeDrafts(): ScopeDrafts {
-  return { task: newTextDraft(), messages: new Map(), edits: new Map(), selectedTask: null, selectedRun: null, selectedSubagent: null, showSubagents: true, attentionOnly: false, spaceFilter: "", disclosures: { completed: false, agents: false, history: false, diagnostics: false, archive: false } };
+  return { task: newTextDraft(), messages: new Map(), edits: new Map(), selectedTask: null, selectedRun: null, selectedSubagent: null, showSubagents: true, showUnmanaged: true, attentionOnly: false, spaceFilter: "", disclosures: { completed: false, agents: false, history: false, diagnostics: false, archive: false } };
 }
 export function messageDraft(scope: ScopeDrafts, key: string): TextDraft {
   let draft = scope.messages.get(key);
