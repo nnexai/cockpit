@@ -6,6 +6,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { UiIcon } from "../UiIcon";
 
 export const NotesEditorScope = createContext("");
 const editorSessions = new Map<string, { state: EditorState; scrollTop: number; preview: boolean }>();
@@ -41,7 +42,7 @@ export function MarkdownEditor({ value, onChange, label, draftKey = label, onSav
         return false;
       } }),
       EditorView.updateListener.of(update => { if (update.docChanged) callbacks.current.onChange(update.state.doc.toString()); }),
-      EditorView.theme({ "&": { height: "100%", fontSize: "13px", backgroundColor: "transparent" }, ".cm-scroller": { overflow: "auto", fontFamily: "'IBM Plex Mono', monospace" }, ".cm-content": { padding: "12px 0", minHeight: "100px" }, ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "#727983" }, "&.cm-focused": { outline: "none" } }),
+      EditorView.theme({ "&": { height: "100%", fontSize: "var(--font-size-sm)", backgroundColor: "transparent" }, ".cm-scroller": { overflow: "auto", fontFamily: "var(--font-mono)" }, ".cm-content": { padding: "16px 0", minHeight: "100px" }, ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--text-muted)" }, "&.cm-focused": { outline: "none" } }),
     ];
     const saved = editorSessions.get(sessionKey);
     let state = saved ? saved.state.update({ effects: StateEffect.reconfigure.of(extensions) }).state : EditorState.create({ doc: value, extensions });
@@ -61,7 +62,7 @@ export function MarkdownEditor({ value, onChange, label, draftKey = label, onSav
     if (editor && editor.state.doc.toString() !== value) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value } });
   }, [value]);
   return <div className="notes-editor" data-editor-label={label}>
-    <div className="notes-editor-toolbar"><span>Markdown</span><button type="button" aria-pressed={preview} onClick={() => { setPreview(!preview); const saved = editorSessions.get(sessionKey); if (saved) editorSessions.set(sessionKey, { ...saved, preview: !preview }); }}>{preview ? "Source" : "Preview"}</button></div>
+    <div className="notes-editor-toolbar"><span>markdown</span><div className="notes-editor-modes" aria-label="Markdown display"><button type="button" aria-label="Source" title="Source" aria-pressed={!preview} onClick={() => { setPreview(false); const saved = editorSessions.get(sessionKey); if (saved) editorSessions.set(sessionKey, { ...saved, preview: false }); }}><UiIcon name="code" /></button><button type="button" aria-label="Preview" title="Preview" aria-pressed={preview} onClick={() => { setPreview(true); const saved = editorSessions.get(sessionKey); if (saved) editorSessions.set(sessionKey, { ...saved, preview: true }); }}><UiIcon name="eye" /></button></div></div>
     {preview ? <div className="notes-preview-scroll"><MarkdownPreview content={value} /></div> : <div className="notes-editor-host" ref={host} />}
   </div>;
 }

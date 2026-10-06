@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { DispatchTarget, OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, Run, SpaceSummary, Subagent, TaskView } from "../../protocol/generated/v1";
 import { useRestoreFocus } from "../library/LibraryConfirmDialog";
+import { ErrorSlot } from "../ErrorSlot";
+import { UiIcon } from "../UiIcon";
 import type { EditDraft } from "./useSupervisorDrafts";
 import "../projects/setup.css";
 
@@ -79,7 +81,7 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
   const descendants = dialogRun ? snapshot.runs.filter(run => run.root_id === dialogRun.root_id && run.run_id !== dialogRun.run_id && run.stage !== "closed") : [];
   const currentTask = editedTaskId ? snapshot.board?.tasks.find(task => task.task.task_id === editedTaskId) : null;
   return createPortal(<div className="setup-overlay" role="presentation"><section ref={ref} className="supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={locked} tabIndex={-1} onKeyDown={keys}>
-    <h2 id={titleId}>{title}</h2><form id={formId} onSubmit={event => { event.preventDefault(); void submit(); }}>
+    <header className="supervisor-dialog-header"><span className="supervisor-dialog-icon"><UiIcon name={mode === "start" ? "plus" : mode === "edit" ? "edit" : mode === "retry" || mode === "setup_recovery" ? "refresh" : mode === "close" ? "close" : "stop"} /></span><h2 id={titleId}>{title}</h2></header><form id={formId} onSubmit={event => { event.preventDefault(); void submit(); }}>
       {dialog.mode === "start" ? <>
         <p>An OMP supervisor manages tasks and delegates work for you.</p>
         <label>Name (optional)<input value={startDraft.label} disabled={locked} onChange={event => { startDraft.label = event.target.value; changed(); }} /></label>
@@ -98,7 +100,8 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
         <p>Setup for {dialog.run.label} needs review before launch. Existing resources are kept.</p><p>{dialog.run.dispatch?.recovery === "accept_existing_worktree" ? "Confirm using the existing worktree receipt rather than creating another worktree." : dialog.run.dispatch?.recovery === "retry_environment" ? "Explicitly retry the uncertain setup operation after reviewing its recorded effects." : "Check and reconcile the existing setup only. No new launch is requested by this confirmation."}</p>
         {dialog.run.prepare_plan ? <details><summary>Exact setup plan</summary><p className="supervisor-exact-text">{dialog.run.prepare_plan.text}</p></details> : null}{dialog.run.setup ? <><p>{dialog.run.setup.checkout_path}</p><ul>{dialog.run.setup.effects.map((effect, index) => <li key={index}>{effect}</li>)}</ul>{dialog.run.setup.warnings.map((warning, index) => <p className="supervisor-warning" key={index}>{warning}</p>)}</> : null}
       </>}
-      {error ? <p className="supervisor-error" role="alert">{error}</p> : null}
-    </form>{!available ? <p className="supervisor-warning">Reconnect before applying this change. You can keep editing or close this dialog without losing your draft.</p> : null}<footer><button type="button" data-initial={mode !== "start" && mode !== "edit" || undefined} disabled={locked} onClick={close}>{mode === "close" ? "Keep tracking" : mode === "retry" ? "Back" : "Cancel"}</button><button type="submit" form={formId} data-primary disabled={locked || !available || unconfirmed && mode !== "edit"}>{pending ? "Working…" : mode === "retry" ? "Restart anyway" : mode === "edit" ? "Save task" : title}</button></footer>
+    </form>
+    <ErrorSlot placement="dialog" message={error} className="supervisor-dialog-error-slot" />
+    {!available ? <p className="supervisor-dialog-unavailable">Reconnect before applying this change. You can keep editing or close this dialog without losing your draft.</p> : null}<footer><button type="button" data-initial={mode !== "start" && mode !== "edit" || undefined} disabled={locked} onClick={close}>{mode === "close" ? "Keep tracking" : mode === "retry" ? "Back" : "Cancel"}</button><button type="submit" form={formId} data-primary disabled={locked || !available || unconfirmed && mode !== "edit"}>{pending ? "Working…" : mode === "retry" ? "Restart anyway" : mode === "edit" ? "Save task" : title}</button></footer>
   </section></div>, document.body);
 }

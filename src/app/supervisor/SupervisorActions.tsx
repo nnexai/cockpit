@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from "react";
 import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, PlanRecord, Report, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
 import { StateGlyph, type GlyphShape } from "../sidebar/StateGlyph";
+import { UiIcon } from "../UiIcon";
 import { messageDraft, type ScopeDrafts, type TextDraft } from "./useSupervisorDrafts";
 
 export type Mutation = (action: OrchestrationAction) => Promise<OrchestrationActionResult | null>;
@@ -45,7 +46,9 @@ export function taskStatus(task: TaskView, run: Run | undefined, snapshot: Orche
   return run ? "Queued" : snapshot.messages.some(message => message.message_id === `assign-${task.task.task_id}` && message.to_run_id === snapshot.board?.root_id) ? "Assigned · waiting for agent" : "Queued · not assigned";
 }
 export function ReportedEvidence({ report, source, showBody = false }: { report: Report | null | undefined; source: string; showBody?: boolean }) {
-  return <p className="supervisor-evidence"><span>Reported · {source}</span> {report ? <>{showBody || report.outcome === "failed" ? <span className="supervisor-report-summary">{report.summary}</span> : null}<time dateTime={report.at} title={new Date(report.at).toLocaleString()}>{new Date(report.at).toLocaleTimeString()}</time></> : <span>No progress reported yet</span>}</p>;
+  const minutes = report ? Math.max(0, Math.floor((Date.now() - Date.parse(report.at)) / 60_000)) : 0;
+  const age = minutes < 1 ? "just now" : minutes < 60 ? `${minutes}m ago` : minutes < 1440 ? `${Math.floor(minutes / 60)}h ago` : `${Math.floor(minutes / 1440)}d ago`;
+  return <p className="supervisor-evidence"><span>Reported · {source}</span> {report ? <>{showBody || report.outcome === "failed" ? <span className="supervisor-report-summary">{report.summary}</span> : null}<time dateTime={report.at} title={new Date(report.at).toLocaleString()}>{age}</time></> : <span>No progress reported yet</span>}</p>;
 }
 export function ObservedEvidence({ run, observed, snapshot, live }: { run: Run; observed: RunObservation | undefined; snapshot: OrchestrationSnapshot; live: boolean }) {
   if (run.stage === "closed") return null;
@@ -81,7 +84,7 @@ export function TextAction({ label, submitLabel, draft, changed, busy, submit, s
     <div className="supervisor-action-row"><button type="submit" disabled={busy || pending || !draft.text.trim() || !!draft.operation && !retryable}>{pending ? "Sending…" : draft.operation ? retryable ? "Retry same message" : "Check previous action first" : submitLabel}</button></div>
     {draft.operation && !pending ? <p>{retryable ? "Resolve the previous message before editing this draft; retry keeps the same delivery identity." : "After checking the previous control receipt or history, explicitly unlock the retained draft only if a new request is still needed."}</p> : null}
     {draft.operation && !pending && !retryable ? <button type="button" disabled={busy} onClick={() => { draft.operation = null; draft.error = null; changed(); }}>I reviewed the previous action; unlock draft</button> : null}
-    {draft.error ? <p id={errorId} className="supervisor-error" role="alert">{draft.error}</p> : null}{draft.notice ? <p role="status">{draft.notice}</p> : null}
+    <div className={`supervisor-feedback${draft.error ? " is-error" : ""}`} id={errorId} role={draft.error ? "alert" : "status"}>{draft.error || draft.notice ? <><UiIcon name={draft.error ? "info" : "check"} /><span>{draft.error ?? draft.notice}</span></> : null}</div>
   </form>;
 }
 export function AgentRecovery({ run, state, busy, connected, runtimeLive, onCheck, onRestart, onCloseTracking, onTerminal }: {
@@ -93,10 +96,10 @@ export function AgentRecovery({ run, state, busy, connected, runtimeLive, onChec
     <div className="supervisor-status-heading"><strong>{run.label}</strong><span className="supervisor-state"><StateGlyph shape={state.blocked ? "blocked" : state.verified ? "live" : "unknown"} tone={recovery ? "warning" : state.kind === "offline" || state.kind === "closed" ? "muted" : undefined} />{state.label}</span></div>
     {state.kind !== "ready" ? <p role={recovery ? "alert" : "status"}>{state.detail}</p> : null}
     <div className="supervisor-action-row">
-      {state.terminal ? <button type="button" disabled={busy || !connected || !runtimeLive} onClick={onTerminal}>Open terminal</button> : null}
+      {state.terminal ? <button type="button" disabled={busy || !connected || !runtimeLive} onClick={onTerminal}><UiIcon name="terminal" />Open terminal</button> : null}
       {state.kind !== "ready" && state.kind !== "closed" ? <button type="button" disabled={busy} onClick={onCheck}>{state.kind === "offline" ? "Check connection" : "Check status"}</button> : null}
       {recovery && run.stage !== "reported" && run.dispatch ? <button type="button" disabled={busy || !connected || !runtimeLive || !state.restartable} onClick={onRestart}>{run.dispatch.step === "plan_failed" ? "Retry setup" : run.dispatch.step === "setup_unknown" ? "Recover setup…" : "Restart agent…"}</button> : null}
-      {run.stage !== "closed" ? <button type="button" disabled={busy || !connected} onClick={onCloseTracking}>Close tracking…</button> : null}
+      {run.stage !== "closed" ? <button type="button" aria-label="Close tracking…" title="Close tracking…" disabled={busy || !connected} onClick={onCloseTracking}><UiIcon name="close" />Close tracking…</button> : null}
     </div>
     {run.stage === "reported" && recovery ? <p>The explicit result must be reviewed or sent back before restarting.</p> : recovery && !state.restartable ? <p>{run.dispatch ? "Restart requires a current terminal observation. Check status first." : "No supported launch receipt is available for restart. Start a new tracked agent; this agent's tasks and history stay here."}</p> : null}
   </section>;
@@ -111,7 +114,11 @@ function PlanOverride({ run, plan, scope, busy, mutateResult, note, changed }: {
   }}><h4>{scope === "prepare" ? "Prepare" : "Execute"} override · exact plan</h4><pre className="supervisor-plan">{plan.text}</pre><p>This deliberate operator action replaces the supervisor's decision for this exact plan. Same-user policy, not an OS sandbox.</p>{scope === "execute" ? <label>Optional execution note<textarea value={note.text} onChange={event => { note.text = event.target.value; changed(); }} readOnly={busy} /></label> : null}{stale ? <><p className="supervisor-warning">The plan changed. Review its current text before overriding.</p><button disabled={busy} onClick={() => { setReviewed(plan.plan_revision); setArmed(null); }}>Reviewed current plan</button></> : armed ? <><p>Authorize this exact plan?</p><button disabled={busy || armed !== plan.plan_revision} onClick={() => { const action: OrchestrationAction = scope === "prepare" ? { action: "grant_prepare", run_id: run.run_id, plan_revision: armed } : { action: "grant_execute", run_id: run.run_id, plan_revision: armed, note: note.text || null }; void mutateResult(action).then(result => { setArmed(null); if (!result) setReviewed(null); }); }}>Confirm {scope} override</button><button disabled={busy} onClick={() => setArmed(null)}>Back</button></> : <button disabled={busy} onClick={() => setArmed(plan.plan_revision)}>Override {scope}…</button>}</section>;
 }
 export function RunDiagnostics({ run, snapshot }: { run: Run; snapshot: OrchestrationSnapshot }) {
-  return <div className="supervisor-diagnostics"><h3>{run.label} · durable records</h3><p>Launch receipts and saved reports are not current process proof.</p><details><summary>Run, binding, setup and exact plans</summary><pre className="supervisor-plan">{JSON.stringify(run, null, 2)}</pre></details><details><summary>Inbox delivery and provenance</summary>{snapshot.messages.filter(message => message.to_run_id === run.run_id || message.from.type === "run" && message.from.run_id === run.run_id).map(message => <details key={message.message_id}><summary>{message.kind.replaceAll("_", " ")} · {message.stage}{message.stale ? " · stale" : ""} · {message.created_at}</summary><pre className="supervisor-plan">{JSON.stringify(message, null, 2)}</pre></details>)}</details></div>;
+  return <div className="supervisor-diagnostics">
+    <h3>{run.label} · durable records</h3><p>Launch receipts and saved reports are not current process proof.</p>
+    <section className="supervisor-detail-group"><h4>Run, binding, setup and exact plans</h4><pre className="supervisor-plan">{JSON.stringify(run, null, 2)}</pre></section>
+    <section className="supervisor-detail-group"><h4>Inbox delivery and provenance</h4>{snapshot.messages.filter(message => message.to_run_id === run.run_id || message.from.type === "run" && message.from.run_id === run.run_id).map(message => <details key={message.message_id}><summary>{message.kind.replaceAll("_", " ")} · {message.stage}{message.stale ? " · stale" : ""} · {message.created_at}</summary><pre className="supervisor-plan">{JSON.stringify(message, null, 2)}</pre></details>)}</section>
+  </div>;
 }
 function RequestStop({ task, supervisor, scope, changed, busy, mutateResult }: { task: TaskView; supervisor: Run; scope: ScopeDrafts; changed(): void; busy: boolean; mutateResult: Mutation }) {
   const [confirm, setConfirm] = useState(false);
@@ -129,8 +136,8 @@ function RequestStop({ task, supervisor, scope, changed, busy, mutateResult }: {
   };
   return <section>{confirm ? <><p>Ask the supervisor to stop this task? Existing files and Spaces stay.</p><button type="button" disabled={busy} onClick={() => void request()}>{draft.operation ? "Retry same stop request" : "Request stop"}</button><button type="button" disabled={busy} onClick={() => setConfirm(false)}>Keep working</button></> : <button type="button" disabled={busy} onClick={() => setConfirm(true)}>Request stop…</button>}{draft.notice ? <p role="status">{draft.notice}</p> : null}{draft.error ? <p className="supervisor-error" role="alert">{draft.error}</p> : null}</section>;
 }
-export function SupervisorActions({ snapshot, run, task, subagent, scope, changed, busy, live, mutateResult, onTerminal, onEditTask, onCancelSubagent, onCloseTracking }: {
-  snapshot: OrchestrationSnapshot; run: Run | null; task: TaskView | null; subagent?: Subagent | null;
+export function SupervisorActions({ snapshot, run, task, subagent, section = "overview", scope, changed, busy, live, mutateResult, onTerminal, onEditTask, onCancelSubagent, onCloseTracking }: {
+  snapshot: OrchestrationSnapshot; run: Run | null; task: TaskView | null; subagent?: Subagent | null; section?: "overview" | "activity" | "actions";
   scope: ScopeDrafts; changed(): void; busy: boolean; live: boolean; mutateResult: Mutation;
   onTerminal(run: Run): void; onEditTask(task: TaskView): void; onCancelSubagent(run: Run, subagent: Subagent): void; onCloseTracking(run: Run): void;
 }) {
@@ -141,35 +148,43 @@ export function SupervisorActions({ snapshot, run, task, subagent, scope, change
   const canRequestStop = supervisor && agentState(snapshot, supervisor, live, live).verified && task && !task.task.checked && (!run || run.stage !== "closed");
   const childDraft = run && subagent ? messageDraft(scope, `subagent:${run.run_id}:${subagent.subagent_id}`) : null;
   return <div className="supervisor-task-detail">
-    {task ? <><h3>Task description</h3><p className="supervisor-exact-text">{task.task.body}</p>{task.task.diagnostic ? <p className="supervisor-error">{task.task.diagnostic}</p> : null}</> : null}
-    {run ? <>
-      <p>{subagent ? `${subagent.role ?? "OMP subagent"} · In ${run.label} · no terminal` : `${run.kind === "worker" ? "Task agent" : "Supervisor"} · ${snapshot.runs.find(parent => parent.run_id === run.parent_run_id)?.label ?? "Root agent"}`}</p>
-      {subagent ? <>
-        <p>OMP events · {subagent.status} · <time dateTime={subagent.updated_at}>{new Date(subagent.updated_at).toLocaleString()}</time></p>
-        <p className="supervisor-exact-text">{subagent.summary ?? "No summary reported."}</p>
-        {subagent.last_control ? <details><summary>Last control · {subagent.last_control.op.op} · {subagent.last_control.stage}</summary><p>A stored request is not applied control. Applied delivery is not task completion.</p>{subagent.last_control.op.op === "send" ? <p className="supervisor-exact-text">{subagent.last_control.op.text}</p> : null}{subagent.last_control.error ? <p className="supervisor-error">{subagent.last_control.error}</p> : null}<time dateTime={subagent.last_control.at}>{new Date(subagent.last_control.at).toLocaleString()}</time></details> : <p>No control receipt. No child terminal is assumed.</p>}
-      </> : <>
-        <ReportedEvidence report={run.last_report} source={run.label} showBody /><ObservedEvidence run={run} observed={observed} snapshot={snapshot} live={live} />
-        {run.result ? <details><summary>Result · {run.result.outcome ?? "reported"}</summary><p className="supervisor-exact-text">{run.result.summary}</p><p>Explicit report from {run.label} · <time dateTime={run.result.at}>{new Date(run.result.at).toLocaleString()}</time>{run.close_reason === "accepted" ? " · Accepted" : " · Awaiting review"}</p></details> : null}
-        {run.work_plan ? <details><summary>Work plan</summary><p className="supervisor-exact-text">{run.work_plan.text}</p></details> : null}
-        {run.init_receipt ? <details><summary>Initialization report</summary><p className="supervisor-exact-text">{run.init_receipt.summary}</p><p>Reported by {run.label} · {run.init_receipt.at}</p></details> : null}
-        {run.last_report?.kind === "needs_input" && run.kind === "worker" ? <p>Waiting for supervisor · {run.last_report.summary}</p> : null}
-      </>}
-      {canTerminal ? <button type="button" disabled={busy || !live} onClick={() => onTerminal(run)}>{subagent ? "Open parent terminal" : "Open terminal"}</button> : null}
-    </> : <p>No worker progress reported yet.</p>}
-    <details className="supervisor-more-actions"><summary>More actions</summary>
-      {task ? <button type="button" disabled={busy || !live || !!task.task.diagnostic} onClick={() => onEditTask(task)}>Edit task…</button> : null}
-      {canRequestStop && task && supervisor ? <RequestStop task={task} supervisor={supervisor} scope={scope} changed={changed} busy={busy || !live} mutateResult={mutateResult} /> : null}
-      {run ? subagent && childDraft ? <>
-        <TextAction label="Message to subagent" submitLabel="Send message" draft={childDraft} changed={changed} busy={busy || !controls || subagent.status !== "running"} submit={text => mutateResult({ action: "subagent_control", run_id: run.run_id, subagent_id: subagent.subagent_id, op: { op: "send", text } })} success="Control request stored. Check its receipt for applied delivery." retryable={false} />
-        <button type="button" disabled={busy || !controls || subagent.status !== "running"} onClick={() => onCancelSubagent(run, subagent)}>Cancel subagent…</button>
-      </> : <>
-        <TextAction label="Follow-up to agent" submitLabel="Send follow-up" draft={messageDraft(scope, `followup:${run.run_id}`)} changed={changed} busy={busy || !controls} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: run.run_id, kind: "instruction", text })} success="Follow-up sent. Waiting for the agent." />
-        <TextAction label="Durable note" submitLabel="Save note" draft={messageDraft(scope, `note:${run.run_id}`)} changed={changed} busy={busy || !live} submit={text => mutateResult({ action: "annotate", run_id: run.run_id, text })} success="Note saved." doneResult retryable={false} />
-        {run.stage === "reported" ? <details><summary>Operator result review override</summary><p>The supervisor normally reviews this result. Acceptance uses the exact current canonical task revision, not runtime Done.</p><button type="button" disabled={busy || !live || !task || !!task.task.diagnostic || task.current_run_id !== run.run_id} onClick={() => { if (task) void mutateResult({ action: "accept", run_id: run.run_id, expected_task_revision: task.task.task_revision }); }}>Accept explicit result</button><TextAction label="Requested changes" submitLabel="Send back" draft={messageDraft(scope, `sendback:${run.run_id}`)} changed={changed} busy={busy || !live} submit={text => mutateResult({ action: "send_back", run_id: run.run_id, text })} success="Changes sent back." doneResult retryable={false} /></details> : null}
-        {run.stage !== "closed" ? <button type="button" disabled={busy || !live} onClick={() => onCloseTracking(run)}>Close agent tracking…</button> : null}
-        {run.stage === "awaiting_prepare" || run.stage === "ready" ? <details><summary>Operator plan override</summary><p>The supervisor handles routine authorization. Use this only for deliberate intervention.</p><PlanOverride run={run} scope={run.stage === "awaiting_prepare" ? "prepare" : "execute"} plan={run.stage === "awaiting_prepare" ? run.prepare_plan : run.work_plan} busy={busy || !live} mutateResult={mutateResult} note={messageDraft(scope, `execute-note:${run.run_id}`)} changed={changed} /></details> : null}
+    <div className="supervisor-detail-section" hidden={section !== "overview"}>
+      {task ? <section className="supervisor-detail-group"><h3>Task description</h3><p className="supervisor-exact-text">{task.task.body}</p>{task.task.diagnostic ? <p className="supervisor-error">{task.task.diagnostic}</p> : null}</section> : null}
+      {run ? <section className="supervisor-detail-group">
+        <h3>{subagent ? "Subagent" : "Agent"}</h3>
+        <p>{subagent ? `${subagent.role ?? "OMP subagent"} · In ${run.label} · no terminal` : `${run.kind === "worker" ? "Task agent" : "Supervisor"} · ${snapshot.runs.find(parent => parent.run_id === run.parent_run_id)?.label ?? "Root agent"}`}</p>
+        {subagent ? <>
+          <p>OMP events · {subagent.status} · <time dateTime={subagent.updated_at}>{new Date(subagent.updated_at).toLocaleString()}</time></p>
+          <p className="supervisor-exact-text">{subagent.summary ?? "No summary reported."}</p>
+        </> : <>
+          <ReportedEvidence report={run.last_report} source={run.label} showBody /><ObservedEvidence run={run} observed={observed} snapshot={snapshot} live={live} />
+          {run.last_report?.kind === "needs_input" && run.kind === "worker" ? <p>Waiting for supervisor · {run.last_report.summary}</p> : null}
+        </>}
+        {canTerminal ? <button type="button" disabled={busy || !live} onClick={() => onTerminal(run)}>{subagent ? "Open parent terminal" : "Open terminal"}</button> : null}
+      </section> : <p>No worker progress reported yet.</p>}
+    </div>
+    <div className="supervisor-detail-section" hidden={section !== "activity"}>
+      {run ? subagent ? <section className="supervisor-detail-group">
+        {subagent.last_control ? <><h3>Last control · {subagent.last_control.op.op} · {subagent.last_control.stage}</h3><p>A stored request is not applied control. Applied delivery is not task completion.</p>{subagent.last_control.op.op === "send" ? <p className="supervisor-exact-text">{subagent.last_control.op.text}</p> : null}{subagent.last_control.error ? <p className="supervisor-error">{subagent.last_control.error}</p> : null}<time dateTime={subagent.last_control.at}>{new Date(subagent.last_control.at).toLocaleString()}</time></> : <><h3>Last control</h3><p>No control receipt. No child terminal is assumed.</p></>}
+      </section> : <>
+        {run.result ? <section className="supervisor-detail-group"><h3>Result · {run.result.outcome ?? "reported"}</h3><p className="supervisor-exact-text">{run.result.summary}</p><p>Explicit report from {run.label} · <time dateTime={run.result.at}>{new Date(run.result.at).toLocaleString()}</time>{run.close_reason === "accepted" ? " · Accepted" : " · Awaiting review"}</p></section> : null}
+        {run.work_plan ? <section className="supervisor-detail-group"><h3>Work plan</h3><p className="supervisor-exact-text">{run.work_plan.text}</p></section> : null}
+        {run.init_receipt ? <section className="supervisor-detail-group"><h3>Initialization report</h3><p className="supervisor-exact-text">{run.init_receipt.summary}</p><p>Reported by {run.label} · {run.init_receipt.at}</p></section> : null}
       </> : null}
-    </details>
+    </div>
+    <div className="supervisor-detail-section" hidden={section !== "actions"}>
+      {task ? <section className="supervisor-detail-group"><h3>Edit task</h3><button type="button" disabled={busy || !live || !!task.task.diagnostic} onClick={() => onEditTask(task)}>Edit task…</button></section> : null}
+      {canRequestStop && task && supervisor ? <section className="supervisor-detail-group"><h3>Request stop</h3><RequestStop task={task} supervisor={supervisor} scope={scope} changed={changed} busy={busy || !live} mutateResult={mutateResult} /></section> : null}
+      {run ? subagent && childDraft ? <>
+        <section className="supervisor-detail-group"><h3>Message to subagent</h3><TextAction label="Message to subagent" submitLabel="Send message" draft={childDraft} changed={changed} busy={busy || !controls || subagent.status !== "running"} submit={text => mutateResult({ action: "subagent_control", run_id: run.run_id, subagent_id: subagent.subagent_id, op: { op: "send", text } })} success="Control request stored. Check its receipt for applied delivery." retryable={false} /></section>
+        <section className="supervisor-detail-group"><h3>Cancel subagent</h3><button type="button" disabled={busy || !controls || subagent.status !== "running"} onClick={() => onCancelSubagent(run, subagent)}>Cancel subagent…</button></section>
+      </> : <>
+        <section className="supervisor-detail-group"><h3>Follow-up to agent</h3><TextAction label="Follow-up to agent" submitLabel="Send follow-up" draft={messageDraft(scope, `followup:${run.run_id}`)} changed={changed} busy={busy || !controls} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: run.run_id, kind: "instruction", text })} success="Follow-up sent. Waiting for the agent." /></section>
+        <section className="supervisor-detail-group"><h3>Durable note</h3><TextAction label="Durable note" submitLabel="Save note" draft={messageDraft(scope, `note:${run.run_id}`)} changed={changed} busy={busy || !live} submit={text => mutateResult({ action: "annotate", run_id: run.run_id, text })} success="Note saved." doneResult retryable={false} /></section>
+        {run.stage === "reported" ? <section className="supervisor-detail-group"><h3>Operator result review override</h3><p>The supervisor normally reviews this result. Acceptance uses the exact current canonical task revision, not runtime Done.</p><button type="button" disabled={busy || !live || !task || !!task.task.diagnostic || task.current_run_id !== run.run_id} onClick={() => { if (task) void mutateResult({ action: "accept", run_id: run.run_id, expected_task_revision: task.task.task_revision }); }}>Accept explicit result</button><TextAction label="Requested changes" submitLabel="Send back" draft={messageDraft(scope, `sendback:${run.run_id}`)} changed={changed} busy={busy || !live} submit={text => mutateResult({ action: "send_back", run_id: run.run_id, text })} success="Changes sent back." doneResult retryable={false} /></section> : null}
+        {run.stage !== "closed" ? <section className="supervisor-detail-group"><h3>Close agent tracking</h3><button type="button" disabled={busy || !live} onClick={() => onCloseTracking(run)}>Close agent tracking…</button></section> : null}
+        {run.stage === "awaiting_prepare" || run.stage === "ready" ? <section className="supervisor-detail-group"><h3>Operator plan override</h3><p>The supervisor handles routine authorization. Use this only for deliberate intervention.</p><PlanOverride run={run} scope={run.stage === "awaiting_prepare" ? "prepare" : "execute"} plan={run.stage === "awaiting_prepare" ? run.prepare_plan : run.work_plan} busy={busy || !live} mutateResult={mutateResult} note={messageDraft(scope, `execute-note:${run.run_id}`)} changed={changed} /></section> : null}
+      </> : null}
+    </div>
   </div>;
 }

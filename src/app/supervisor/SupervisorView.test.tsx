@@ -132,13 +132,23 @@ describe("Supervisor truth and canonical task presentation", () => {
     expect(host.textContent).toContain("Reported · Search agent");
     expect(host.textContent).toContain("Observed · Herdr");
     expect(host.querySelector("[role=tablist]")).toBeNull();
+    expect(host.querySelector('[aria-label="Agent relationships"]')).not.toBeNull();
+    expect(host.querySelector('nav[aria-label="Supervisor panels"]')).not.toBeNull();
     expect(host.querySelector("aside")).toBeNull();
     const row = host.querySelector<HTMLButtonElement>("[data-row-id=task-a]")!;
     act(() => row.focus());
     act(() => row.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true })));
     expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
+    act(() => row.click()); await settle();
+    const detail = host.querySelector('aside[aria-label="Selected details"]')!;
+    expect(detail.textContent).toContain("Which test should I use?");
+    expect(detail.textContent).toContain("Waiting for supervisor");
+    expect(detail.textContent).toContain("Reported · Search agent");
+    expect(detail.textContent).toContain("Observed · Herdr");
+    expect(detail.querySelector('nav[aria-label="Detail sections"] button[aria-pressed="true"]')!.textContent).toBe("Overview");
   });
-  it.each(["progress", "ready", "result"] as const)("keeps ordinary %s report text in expanded detail, not the default task row", async kind => {
+  it.each(["progress", "ready", "result"] as const)("keeps ordinary %s report text in the selected overview, not the task card", async kind => {
     const text = "Exact technical report: revision abc123, repository /tmp/worker-checkout.\nKeep every detail unchanged.";
     const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: kind === "result" ? "reported" : kind === "ready" ? "ready" : "working", last_report: { message_id: "report", kind, outcome: kind === "result" ? "succeeded" : null, summary: text, plan: null, at } });
     if (kind === "result") worker.result = worker.last_report;
@@ -149,8 +159,13 @@ describe("Supervisor truth and canonical task presentation", () => {
     expect(evidence.querySelector("time")).not.toBeNull();
     expect(evidence.textContent).not.toContain(text);
     expect(row.querySelector(".supervisor-task-detail")).toBeNull();
+    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
     act(() => row.querySelector<HTMLButtonElement>("[data-row-id=task-a]")!.click()); await settle();
-    expect(row.querySelector(".supervisor-task-detail")!.textContent).toContain(text);
+    const detail = host.querySelector('aside[aria-label="Selected details"]')!;
+    expect(detail.textContent).toContain(text);
+    expect(detail.querySelector('nav[aria-label="Detail sections"] button[aria-pressed="true"]')!.textContent).toBe("Overview");
+    expect(row.textContent).not.toContain(text);
+    expect(row.querySelector(".supervisor-task-detail")).toBeNull();
   });
   it("retains literal root questions and explicit reported failures on the primary surface", async () => {
     const question = "Which repository should I use?";
@@ -171,6 +186,8 @@ describe("Supervisor truth and canonical task presentation", () => {
     const state = snapshot([run(), finished, pending], [completed, unproved]);
     state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed(), observed("finished-worker", { actual_omp: false, workspace_label: "Named checkout", tab_label: "ck-internal-launch-tag" }), observed("pending-worker", { actual_omp: false })] };
     await mount(state);
+    expect(button("Show completed tasks").getAttribute("aria-expanded")).toBe("false");
+    act(() => button("Show completed tasks").click()); await settle();
     const closedRow = host.querySelector('[data-row-id="completed-task"]')!.closest("li")!;
     expect(closedRow.querySelector(".supervisor-task-stage")!.textContent).toBe("Completed");
     expect(closedRow.querySelector(".supervisor-observed")).toBeNull();
@@ -186,7 +203,7 @@ describe("Supervisor truth and canonical task presentation", () => {
     await mount(snapshot([run({ stage: "closed", close_reason: "cancelled" })], [task()]));
     expect(host.textContent).toContain("Start an agent to manage your tasks");
     expect(host.querySelector("[data-task-composer]")).toBeNull();
-    expect(host.textContent).toContain("Closed tracking · 1");
+    expect(button("Closed tracking · 1").getAttribute("aria-expanded")).toBe("false");
     expect(button("Start agent").disabled).toBe(false);
   });
   it("does not count closed or missing tracking as connected agents and keeps surviving descendants controllable", async () => {
@@ -336,19 +353,19 @@ describe("Supervisor direct actions and scoped drafts", () => {
     expect(fixture.mutation.mock.calls[1][0].action).toEqual({ action: "task_assignment_resolve", root_id: "root", task_id: "task-a", expected_task_revision: null, assign: false });
     expect(state.board!.tasks[0].task.body).toBe(task().task.body);
   });
-  it("expands task detail and moves roving focus without requesting a terminal; editing cancellation retains the draft", async () => {
+  it("opens task detail and moves lane focus without requesting a terminal; editing cancellation retains the draft", async () => {
     const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working" });
     const next = task({ task: { ...task().task, task_id: "task-b", title: "Update docs" }, current_run_id: null, lane: "queued" });
     const state = snapshot([run(), worker], [task(), next]);
     const fixture = await mount(state);
     const first = host.querySelector<HTMLButtonElement>("[data-row-id=task-a]")!;
     act(() => first.focus());
-    act(() => first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    act(() => first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
     expect(document.activeElement).toBe(host.querySelector("[data-row-id=task-b]"));
     expect(first.getAttribute("aria-expanded")).toBe("false");
     act(() => first.click()); await settle();
-    const more = host.querySelector<HTMLDetailsElement>(".supervisor-more-actions")!;
-    act(() => { more.open = true; });
+    act(() => button("Actions").click()); await settle();
+    expect(button("Actions").getAttribute("aria-pressed")).toBe("true");
     act(() => button("Edit task…").click()); await settle();
     const title = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
     enter(title, "Retained edit draft");
@@ -370,13 +387,74 @@ describe("Supervisor direct actions and scoped drafts", () => {
     expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("Retained edit draft");
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
+  it("navigates populated board lanes while preserving native button activation and Escape focus return", async () => {
+    const queuedFirst = task({ task: { ...task().task, task_id: "queued-a", title: "First queued task" }, lane: "queued", current_run_id: null });
+    const queuedSecond = task({ task: { ...task().task, task_id: "queued-b", title: "Second queued task" }, lane: "queued", current_run_id: null });
+    const readyFirst = task({ task: { ...task().task, task_id: "ready-a", title: "First ready task" }, lane: "ready", current_run_id: null });
+    const readySecond = task({ task: { ...task().task, task_id: "ready-b", title: "Second ready task" }, lane: "ready", current_run_id: null });
+    const working = task({ task: { ...task().task, task_id: "working-a", title: "Working task" }, lane: "working", current_run_id: null });
+    const fixture = await mount(snapshot([run()], [queuedFirst, readyFirst, queuedSecond, working, readySecond]));
+    const card = (id: string) => host.querySelector<HTMLButtonElement>(`li.supervisor-task button[data-row-id="${id}"]`)!;
+    const press = (target: HTMLElement, key: string) => {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      act(() => target.dispatchEvent(event));
+      return event;
+    };
+    expect([...host.querySelectorAll(".supervisor-lane")].map(lane => lane.getAttribute("aria-label"))).toEqual(["Queued tasks", "Preparing tasks", "Ready tasks", "Working tasks", "Review tasks", "Done tasks"]);
+    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
+    act(() => card("queued-a").focus());
+    expect(press(card("queued-a"), "ArrowDown").defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(card("queued-b"));
+    expect(card("queued-b").tabIndex).toBe(0);
+    expect(card("queued-a").tabIndex).toBe(-1);
+    expect(press(card("queued-b"), "ArrowRight").defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(card("ready-b"));
+    expect(card("ready-b").tabIndex).toBe(0);
+    expect(card("queued-b").tabIndex).toBe(-1);
+    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
+    expect(press(card("ready-b"), "ArrowUp").defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(card("ready-a"));
+    expect(press(card("ready-a"), "ArrowDown").defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(card("ready-b"));
+    expect(press(card("ready-b"), "ArrowRight").defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(card("working-a"));
+    expect(card("working-a").getAttribute("aria-expanded")).toBe("false");
+
+    for (const key of ["Enter", " "]) {
+      const target = card("working-a");
+      expect(target.tagName).toBe("BUTTON");
+      expect(target.type).toBe("button");
+      expect(press(target, key).defaultPrevented).toBe(false);
+      const release = new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true });
+      act(() => target.dispatchEvent(release));
+      expect(release.defaultPrevented).toBe(false);
+      expect(target.getAttribute("aria-expanded")).toBe("false");
+      // jsdom does not synthesize a native button click from keyboard events.
+      act(() => target.click()); await settle();
+      expect(target.getAttribute("aria-expanded")).toBe("true");
+      expect(host.querySelector('aside[aria-label="Selected details"]')!.textContent).toContain("Working task");
+      const overview = button("Overview");
+      act(() => overview.focus());
+      expect(document.activeElement).toBe(overview);
+      expect(press(overview, "Escape").defaultPrevented).toBe(true);
+      await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+      expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
+      expect(target.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(target);
+    }
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(fixture.onClose).not.toHaveBeenCalled();
+  });
   it("attributes automatic grants to the supervisor and keeps raw bootstrap text out of History", async () => {
     const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working", grants: [{ grant_id: "grant", scope: "execute", plan_revision: "technical-hash-not-a-summary", origin: "supervisor", supervisor_run_id: "root", omp_session_id: "native", granted_at: at }] });
     worker.annotations = [{ at, by: { type: "run", run_id: "root" }, text: "Acceptance requested for Result result-secret at task revision revision-secret; origin Supervisor, main session native-secret." }];
     const state = snapshot([run(), worker], [task()]);
     state.messages = [{ message_id: "brief", to_run_id: "root", seq: 1, from: { type: "dispatcher" }, kind: "supervisor_brief", text: "RAW BOOTSTRAP POLICY", report: null, stale: false, escalated_from: null, from_subagent_id: null, stage: "stored", woken_omp_session: null, created_at: at, acked_at: null }];
     await mount(state);
-    const history = [...host.querySelectorAll("details")].find(detail => detail.querySelector(":scope > summary")?.textContent === "History")!;
+    act(() => button("Activity").click()); await settle();
+    expect(button("Activity").getAttribute("aria-pressed")).toBe("true");
+    const history = host.querySelector('section[aria-label="History"]')!;
     expect(history.textContent).toContain("Execution authorized · Project supervisor");
     expect(history.textContent).not.toContain("RAW BOOTSTRAP POLICY");
     expect(history.textContent).not.toContain("technical-hash-not-a-summary");
