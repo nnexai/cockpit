@@ -8,6 +8,10 @@ The original concept put tasks, agent relationships and incoming questions in re
 
 The repair is implemented. This table inventories the changed surfaces and their review focus; it does **not** claim every secondary control received an individual live run. Exercised scenarios and limits are recorded below. Removed surfaces retain their historical entry so the scope remains auditable.
 
+Readability refinement: task lanes retain a 220px minimum (or the available width on very narrow boards) rather than squeezing five columns into a medium-width workarea. The board scrolls horizontally; lane order, keyboard navigation and the collapsed Done lane remain unchanged. Cards separate identity/state from evidence, long labels and failure reports wrap within the card, and detail reports use body-sized text with more section spacing. Graph geometry, colors and orchestration behavior are unchanged.
+
+Verified in the browser build on a disposable Herdr fixture with explicitly injected sample orchestration content: 1024px dense board and selected details, 1280px keyboard navigation/activation/Escape, 480px full-width details, and long unbroken Space labels/failure reports plus a Needs you question. Cards and narrow detail prose had no horizontal content overflow; open lanes measured 220px and detail reports 14px. `bun run build` and all 34 Supervisor tests passed. Sample content verifies presentation, not live orchestration transitions; no native run was performed for this CSS-only refinement.
+
 | # | Surface / where to find it | Shipped behavior or defect | Current repair / review focus | Source |
 |---|---|---|---|---|
 | 1 | Workbench tab-strip header: Supervisor | Opens a separate workarea; adjacent plus creates another start entry. | One consistent Supervisor entry; no unrelated duplicate plus. | [App](../src/app/App.tsx) |
