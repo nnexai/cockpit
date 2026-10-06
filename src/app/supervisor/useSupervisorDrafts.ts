@@ -3,7 +3,6 @@ import { useRef, useState } from "react";
 export type TextDraft = { text: string; operation: { id: string; text: string } | null; notice: string | null; error: string | null };
 export type EditDraft = { title: string; body: string; revision: string };
 export type ScopeDrafts = {
-  task: TextDraft;
   messages: Map<string, TextDraft>;
   edits: Map<string, EditDraft>;
   selectedTask: string | null;
@@ -17,7 +16,7 @@ export type ScopeDrafts = {
 };
 export function newTextDraft(): TextDraft { return { text: "", operation: null, notice: null, error: null }; }
 export function newScopeDrafts(): ScopeDrafts {
-  return { task: newTextDraft(), messages: new Map(), edits: new Map(), selectedTask: null, selectedRun: null, selectedSubagent: null, showSubagents: true, showUnmanaged: true, attentionOnly: false, spaceFilter: "", disclosures: { completed: false, agents: false, history: false, diagnostics: false, archive: false } };
+  return { messages: new Map(), edits: new Map(), selectedTask: null, selectedRun: null, selectedSubagent: null, showSubagents: true, showUnmanaged: true, attentionOnly: false, spaceFilter: "", disclosures: { completed: false, agents: false, history: false, diagnostics: false, archive: false } };
 }
 export function messageDraft(scope: ScopeDrafts, key: string): TextDraft {
   let draft = scope.messages.get(key);

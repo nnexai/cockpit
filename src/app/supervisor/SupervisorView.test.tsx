@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { OrchestrationSnapshot, OrchestrationWaitResponse, Run, RunObservation, SessionSnapshotResponse, TaskBoard, TaskView } from "../../protocol/generated/v1";
 import { agentState, taskStatus } from "./SupervisorActions";
-import { SupervisorView, taskTitle } from "./SupervisorView";
+import { SupervisorView } from "./SupervisorView";
 
 const at = "2026-10-06T12:00:00Z";
 function run(overrides: Partial<Run> = {}): Run {
@@ -44,10 +44,9 @@ async function mount(initial: OrchestrationSnapshot, boards?: Map<string, TaskBo
   let state = initial;
   const onTerminal = vi.fn(async () => undefined);
   const onClose = vi.fn();
-  const snapshotCall = vi.fn<CockpitClient["orchestrationSnapshot"]>(async request => ({ ...state, board: boards?.get(request.root_id ?? "root") ?? state.board }));
+  const snapshotCall = vi.fn<CockpitClient["orchestrationSnapshot"]>(async request => ({ ...state, board: request.root_id ? boards?.get(request.root_id) ?? state.board : state.board }));
   const mutation = vi.fn<CockpitClient["orchestrationMutate"]>(async request => {
     state = { ...state, revision: state.revision + 1 };
-    if (request.action.action === "task_assign") return { revision: state.revision, result: { result: "task_assigned", task: { task_id: request.action.task_id, title: request.action.title, body: request.action.body, checked: false, line: 1, task_revision: "assigned-revision", diagnostic: null }, to_run_id: request.action.root_id, seq: 1, duplicate: false } };
     if (request.action.action === "message_send") return { revision: state.revision, result: { result: "message", to_run_id: request.action.to_run_id, seq: 1, duplicate: false, stale: false } };
     if (request.action.action === "supervisor_start") return { revision: state.revision, result: { result: "run", run_id: "new-root", attempt: 1 } };
     return { revision: state.revision, result: { result: "done" } };
@@ -202,7 +201,6 @@ describe("Supervisor truth and canonical task presentation", () => {
   it("keeps closed-only tracking in the archive and opens with a real empty Start agent state", async () => {
     await mount(snapshot([run({ stage: "closed", close_reason: "cancelled" })], [task()]));
     expect(host.textContent).toContain("Start an agent to manage your tasks");
-    expect(host.querySelector("[data-task-composer]")).toBeNull();
     expect(button("Closed tracking · 1").getAttribute("aria-expanded")).toBe("false");
     expect(button("Start agent").disabled).toBe(false);
   });
@@ -212,23 +210,73 @@ describe("Supervisor truth and canonical task presentation", () => {
     const state = snapshot([closed, worker], [task()]);
     if (state.runtime.status === "fresh") state.runtime.runs[0] = observed("root", { presence: "missing", actual_omp: false, pane_id: null });
     await mount(state);
-    expect(host.querySelector("[data-task-composer]")).toBeNull();
     act(() => button("View saved task context").click()); await settle();
     expect(host.textContent).toContain("Worker agents need control");
     expect(host.textContent).toContain("Agents · 1 connected");
     expect(host.textContent).toContain("Closing this supervisor did not stop them");
     expect(host.textContent).toContain("Tracking closed");
   });
-  it("bounds UTF-8 title metadata without touching full task instructions", () => {
-    const text = `${"界".repeat(140)}\n\nExact body:  keep  spaces`;
-    const title = taskTitle(text);
-    expect(new TextEncoder().encode(title).length).toBeLessThanOrEqual(256);
-    expect(title.endsWith("…")).toBe(true);
-    expect(text).toContain("Exact body:  keep  spaces");
-  });
 });
 
 describe("Supervisor direct actions and scoped drafts", () => {
+  it.each(["connected", "unavailable", "closed", "offline", "disconnected"] as const)("omits the bottom task input for %s supervisors and keeps the agents splitter", async mode => {
+    const state = snapshot([run(mode === "closed" ? { stage: "closed", close_reason: "cancelled" } : {})]);
+    if (mode === "unavailable") state.runtime = { status: "unavailable", error: { code: "herdr_unavailable", message: "offline" } };
+    const fixture = await mount(state);
+    if (mode === "closed") { act(() => button("Closed tracking · 1").click()); await settle(); act(() => button("View Project supervisor tasks and history").click()); await settle(); }
+    if (mode === "offline") await rerender(true, false);
+    if (mode === "disconnected") {
+      await rerender(false);
+      fixture.snapshotCall.mockRejectedValue(new Error("transport offline"));
+      await rerender(true);
+    }
+    expect(host.querySelector("textarea")).toBeNull();
+    expect(host.querySelector('[aria-label="Resize task input"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Resize agents overview"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("Give task");
+    expect(host.textContent).not.toContain("Or give work directly in the supervisor's terminal.");
+    expect(host.textContent).not.toContain("Assigned to Project supervisor");
+    expect(fixture.mutation).not.toHaveBeenCalled();
+  });
+  it("focuses task rows on opening and falls back to Start agent after the last focused task is removed", async () => {
+    const first = task({ lane: "queued", current_run_id: null });
+    const second = task({ task: { ...task().task, task_id: "task-b", title: "Update docs" }, lane: "queued", current_run_id: null });
+    const state = snapshot([run()], [first, second]);
+    state.assignment_intents = [{ root_id: "root", task_id: "pending-task", state: "pending" }];
+    const fixture = await mount(state);
+    expect(document.activeElement).toBe(host.querySelector('[data-row-id="task-a"]'));
+    expect(host.textContent).not.toContain("The focused task changed elsewhere.");
+    fixture.replace({ ...state, revision: 2, board: board("root", [second]) });
+    act(() => button("Check assignment status").click()); await settle();
+    expect(document.activeElement).toBe(host.querySelector('[data-row-id="task-b"]'));
+    expect(host.textContent).toContain("The focused task changed elsewhere.");
+    fixture.replace({ ...state, revision: 3, board: board("root") });
+    act(() => button("Check assignment status").click()); await settle();
+    expect(document.activeElement).toBe(button("Start agent"));
+  });
+  it("waits for the initial selected-root board before focusing a task", async () => {
+    const state = snapshot();
+    state.board = null;
+    const fixture = await mount(state, new Map([["root", board("root", [task({ lane: "queued", current_run_id: null })])]]));
+    expect(fixture.snapshotCall.mock.calls.map(([request]) => request.root_id)).toEqual([null, "root"]);
+    expect(document.activeElement).toBe(host.querySelector('[data-row-id="task-a"]'));
+    expect(host.textContent).not.toContain("The focused task changed elsewhere.");
+  });
+  it.each([true, false])("restores focus after an answered question with task rows present: %s", async hasTask => {
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const tasks = hasTask ? [task({ lane: "queued", current_run_id: null })] : [];
+    const fixture = await mount(snapshot([supervisor], tasks));
+    const answer = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    act(() => answer.focus());
+    enter(answer, "Use the existing checkout");
+    fixture.mutation.mockImplementationOnce(async () => {
+      fixture.replace({ ...snapshot([run()], tasks), revision: 2 });
+      return { revision: 2, result: { result: "message", to_run_id: "root", seq: 1, duplicate: false, stale: false } };
+    });
+    act(() => button("Send answer").click()); await settle();
+    expect(host.querySelector('[aria-label="Needs you"]')).toBeNull();
+    expect(document.activeElement).toBe(hasTask ? host.querySelector('[data-row-id="task-a"]') : button("Start agent"));
+  });
   it("starts one new agent tab in the current Space without a setup wizard or focus request", async () => {
     const empty = snapshot([]); empty.board = null;
     const fixture = await mount(empty);
@@ -237,6 +285,7 @@ describe("Supervisor direct actions and scoped drafts", () => {
     expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "supervisor_start", target: { target: "existing_space", workspace_id: "space" }, label: null });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button("Start agent"));
   });
   it("derives startup waiting from fresh proof and removes it once an empty supervisor is bound", async () => {
     const empty = snapshot([]); empty.board = null;
@@ -258,6 +307,7 @@ describe("Supervisor direct actions and scoped drafts", () => {
     expect(status.textContent).not.toContain("Managing tasks");
     expect(host.textContent).not.toContain("Waiting for OMP to start and connect.");
     expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button("Start agent"));
   });
   it("checks a freshly missing launch before explicit restart and accepts the real Done acknowledgement", async () => {
     const original = run();
@@ -295,52 +345,18 @@ describe("Supervisor direct actions and scoped drafts", () => {
     expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!.value).toBe("");
     expect(host.textContent).toContain("Answer sent. Waiting for the agent.");
   });
-  it("assigns the exact single-field body and waits for TaskAssigned, retaining one UUID after an unknown response", async () => {
-    const fixture = await mount(snapshot());
-    const unknown = Promise.reject(new Error("transport interrupted")); unknown.catch(() => undefined);
-    fixture.mutation.mockReturnValueOnce(unknown);
-    const text = "  Improve search\n\nKeep  all instruction spacing.\n";
-    enter(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!, text);
-    act(() => button("Give task").click()); await settle();
-    const submitted = fixture.mutation.mock.calls[0][0].action;
-    expect(submitted.action).toBe("task_assign");
-    if (submitted.action !== "task_assign") throw new Error("Wrong operation");
-    expect(submitted.body).toBe(text);
-    expect(submitted.title).toBe("Improve search");
-    expect(submitted.task_id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!.value).toBe(text);
-    expect(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!.readOnly).toBe(true);
-    await rerender(false); await rerender(true);
-    expect(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!.value).toBe(text);
-    act(() => button("Retry same task").click()); await settle();
-    expect(fixture.mutation.mock.calls[1][0].action).toEqual(submitted);
-    expect(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!.value).toBe("");
-    expect(host.textContent).toContain("Assigned to Project supervisor");
-  });
-  it("never treats authoring-only Task as assignment delivery success", async () => {
-    const fixture = await mount(snapshot());
-    fixture.mutation.mockResolvedValueOnce({ revision: 2, result: { result: "task", task: task().task } });
-    enter(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!, "Give real work");
-    act(() => button("Give task").click()); await settle();
-    expect(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!.value).toBe("Give real work");
-    expect(host.textContent).toContain("Could not confirm assignment");
-    expect(host.textContent).not.toContain("Assigned to Project supervisor");
-  });
-  it("preserves root-specific task and answer drafts across root changes, hide, refresh and offline state", async () => {
+  it("preserves root-specific answer drafts across root changes, hide, refresh and offline state", async () => {
     const first = run({ last_report: { message_id: "ask", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
     const second = run({ run_id: "second", root_id: "second", label: "Other supervisor" });
     const fixture = await mount(snapshot([first, second]), new Map([["root", board()], ["second", board("second")]]));
-    enter(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!, "First root draft");
-    const answer = [...host.querySelectorAll<HTMLTextAreaElement>("textarea")].find(field => field.id !== host.querySelector("[data-task-composer]")!.id)!;
+    const answer = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
     enter(answer, "Use the existing checkout");
     enter(host.querySelector<HTMLSelectElement>('select[aria-label="Agent"]')!, "second"); await settle();
-    expect(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!.value).toBe("");
-    enter(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!, "Second root draft");
+    expect(host.querySelector('[aria-label="Needs you"] textarea')).toBeNull();
     enter(host.querySelector<HTMLSelectElement>('select[aria-label="Agent"]')!, "root"); await settle();
     await rerender(false); await rerender(true, false);
-    expect(host.querySelector<HTMLTextAreaElement>("[data-task-composer]")!.value).toBe("First root draft");
     expect([...host.querySelectorAll<HTMLTextAreaElement>("textarea")].some(field => field.value === "Use the existing checkout")).toBe(true);
-    expect(button("Give task").disabled).toBe(true);
+    expect(button("Send answer").disabled).toBe(true);
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
   it("resolves an assignment conflict with the current canonical CAS and never deletes Markdown", async () => {

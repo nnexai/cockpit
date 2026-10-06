@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { RowSplitter } from "./RowSplitter";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { ActorRef, OrchestrationSnapshot, Run, SessionSnapshotResponse, Subagent, TaskView } from "../../protocol/generated/v1";
@@ -7,7 +7,7 @@ import { StateGlyph } from "../sidebar/StateGlyph";
 import { UiIcon } from "../UiIcon";
 import { SupervisorGraph } from "./SupervisorGraph";
 import { taskLanes, taskNeighbor } from "./boardNavigation";
-import { AgentRecovery, agentState, ObservedEvidence, ReportedEvidence, RunDiagnostics, SupervisorActions, taskStatus, TextAction, type Mutation } from "./SupervisorActions";
+import { AgentRecovery, agentState, ObservedEvidence, ReportedEvidence, RunDiagnostics, SupervisorActions, taskStatus, TextAction } from "./SupervisorActions";
 import { SupervisorDialogs, type StartDraft, type SupervisorDialogState } from "./SupervisorDialogs";
 import { messageDraft, useSupervisorDrafts, type ScopeDrafts } from "./useSupervisorDrafts";
 import { useSupervisor } from "./useSupervisor";
@@ -37,49 +37,10 @@ export function supervisorForest(snapshot: OrchestrationSnapshot, includeSubagen
   snapshot.runs.forEach(run => appendRun(run, 0));
   return rows;
 }
-/** A bounded metadata title; instruction body is always sent unchanged. */
-export function taskTitle(text: string): string {
-  const first = text.split(/\r?\n/).find(line => line.trim())?.trim() ?? "";
-  const encoder = new TextEncoder();
-  if (encoder.encode(first).length <= 256) return first;
-  let title = "";
-  let bytes = 0;
-  for (const character of first) { const count = encoder.encode(character).length; if (bytes + count > 253) break; title += character; bytes += count; }
-  return `${title}…`;
-}
 function actorName(actor: ActorRef, snapshot: OrchestrationSnapshot): string {
   if (actor.type === "operator") return "You";
   if (actor.type === "dispatcher") return "Dispatcher";
   return snapshot.runs.find(run => run.run_id === actor.run_id)?.label ?? "Agent";
-}
-function TaskComposer({ root, scope, snapshot, canAssign, busy, changed, mutateResult, refresh }: {
-  root: Run; scope: ScopeDrafts; snapshot: OrchestrationSnapshot; canAssign: boolean; busy: boolean; changed(): void; mutateResult: Mutation; refresh(): void;
-}) {
-  const id = useId();
-  const errorId = useId();
-  const inFlight = useRef(false);
-  const [pending, setPending] = useState(false);
-  const draft = scope.task;
-  const submit = async () => {
-    if (busy || inFlight.current || !canAssign || !draft.text.trim()) return;
-    if (!draft.operation && new TextEncoder().encode(draft.text).length > 16 * 1024) {
-      draft.error = "This task exceeds the 16 KiB instruction limit. The complete draft is kept; shorten it before assigning.";
-      changed(); return;
-    }
-    draft.operation ??= { id: crypto.randomUUID(), text: draft.text };
-    const submitted = draft.operation;
-    draft.error = null; draft.notice = null; inFlight.current = true; setPending(true); changed();
-    try {
-      const result = await mutateResult({ action: "task_assign", root_id: root.run_id, task_id: submitted.id, title: taskTitle(submitted.text), body: submitted.text });
-      if (result?.result === "task_assigned" && result.task.task_id === submitted.id && result.to_run_id === root.run_id) {
-        if (draft.text === submitted.text) draft.text = "";
-        draft.operation = null; draft.notice = `Assigned to ${root.label}. Waiting for the agent.`;
-      } else draft.error = "Could not confirm assignment. Your draft and task identity are kept. Check status, then explicitly retry the same task; do not submit a changed duplicate.";
-    } catch { draft.error = "Could not assign task. Your draft is kept."; }
-    finally { inFlight.current = false; setPending(false); changed(); }
-  };
-  const intent = snapshot.assignment_intents.find(item => item.root_id === root.run_id && item.task_id === draft.operation?.id);
-  return <form className="supervisor-task-composer" aria-busy={pending} onSubmit={event => { event.preventDefault(); void submit(); }}><label htmlFor={id}>Task</label><textarea id={id} data-task-composer rows={3} placeholder="What should the agent do?" value={draft.text} readOnly={pending || !!draft.operation} aria-describedby={!canAssign || draft.error ? errorId : undefined} onChange={event => { draft.text = event.target.value; draft.notice = null; changed(); }} /><div className="supervisor-composer-footer"><span>{root.stage === "closed" ? "Tracking is closed. Start an agent to assign new work." : !canAssign ? "Wait for a fresh, connected OMP supervisor before assigning work. Your draft stays here." : "Or give work directly in the supervisor's terminal."}</span><button type="submit" disabled={busy || pending || !canAssign || !draft.text.trim() || intent?.state === "conflict"}>{pending ? "Assigning task…" : draft.operation ? "Retry same task" : "Give task"}</button></div>{!canAssign ? <p id={errorId} className="supervisor-muted">Assignment is unavailable until the agent is connected.</p> : null}{draft.error ? <div className="supervisor-error" id={canAssign ? errorId : undefined} role="alert"><p>{draft.error}</p><button type="button" disabled={busy} onClick={refresh}>Check assignment status</button></div> : null}{draft.operation && !pending ? <p className="supervisor-muted">The submitted draft is kept unchanged until its previous assignment is resolved.</p> : null}{draft.notice ? <p role="status">{draft.notice}</p> : null}</form>;
 }
 export function SupervisorView({ client, sessionId, session, runtimeLive, active, startToken, navigationError, onClose, onTerminal, onUnmanagedTerminal, onModalChange }: {
   client: CockpitClient; sessionId: string; session: SessionSnapshotResponse | null; runtimeLive: boolean; active: boolean; startToken: number;
@@ -103,7 +64,6 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   const [detailSection, setDetailSection] = useState<"overview" | "activity" | "actions">("overview");
   const [narrowView, setNarrowView] = useState<"board" | "agents">("board");
   const [graphHeight, setGraphHeight] = useState<number | null>(null);
-  const [composerHeight, setComposerHeight] = useState<number | null>(null);
   const startDraft = useRef<StartDraft>({ label: "", location: "existing", spaceId: "", directory: "" });
   const lastSession = useRef(sessionId);
   const seenStart = useRef(0);
@@ -113,6 +73,7 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   const startFocus = useRef<{ runId: string | null; invoker: Element | null } | null>(null);
   const lastTaskIds = useRef<string[]>([]);
   const opened = useRef(false);
+  const initialRootSnapshot = useRef<OrchestrationSnapshot | null>(null);
   const [focusNotice, setFocusNotice] = useState<string | null>(null);
   const modalVisible = !!dialog && active && !!snapshot;
   useEffect(() => { onModalChange(modalVisible); return () => onModalChange(false); }, [modalVisible, onModalChange]);
@@ -125,7 +86,12 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   const openRoots = snapshot?.roots.filter(summary => snapshot.runs.some(run => run.run_id === summary.root_id && run.stage !== "closed")) ?? [];
   const closedRoots = snapshot?.roots.filter(summary => snapshot.runs.some(run => run.run_id === summary.root_id && run.stage === "closed")) ?? [];
   const orphanedWorkers = snapshot?.runs.filter(run => run.stage !== "closed" && !!run.parent_run_id && closedRoots.some(summary => summary.root_id === run.root_id)) ?? [];
-  useEffect(() => { if (snapshot && !rootId && openRoots.length) setRootId(openRoots[0].root_id); }, [snapshot, rootId]);
+  useEffect(() => {
+    if (snapshot && !rootId && openRoots.length) {
+      initialRootSnapshot.current = snapshot;
+      setRootId(openRoots[0].root_id);
+    }
+  }, [snapshot, rootId]);
   const live = connected && runtimeLive && snapshot?.runtime.status === "fresh";
   const destination = runtimeLive && session ? session.spaces.find(space => space.id === session.focused_space_id) : undefined;
   const rootState = root && snapshot ? agentState(snapshot, root, connected, runtimeLive) : null;
@@ -139,21 +105,28 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   const openTasks = tasks.filter(task => task.lane !== "accepted");
   const taskIds = taskLanes.flatMap(({ lane }) => lane === "accepted" && !scope.disclosures.completed ? [] : tasks.filter(task => task.lane === lane).map(task => task.task.task_id));
   const { listRef, listProps, tabIndexFor, focusRow } = useRovingList({ rowIds: taskIds, selectedId: scope.selectedTask, onEscape: () => { if (scope.selectedTask) { scope.selectedTask = null; changed(); } else onClose(); return true; } });
+  const focusTaskOrStart = () => {
+    const taskId = scope.selectedTask && taskIds.includes(scope.selectedTask) ? scope.selectedTask : taskIds[0];
+    if (taskId) focusRow(taskId);
+    else rootRef.current?.querySelector<HTMLButtonElement>("[data-start-agent]")?.focus({ preventScroll: true });
+  };
   useEffect(() => {
     if (!active) { opened.current = false; return; }
-    if (!snapshot || opened.current || dialog) return;
+    // Selecting the initial root reloads the board; focus only its scoped snapshot.
+    if (!snapshot || snapshot === initialRootSnapshot.current || opened.current || dialog) return;
+    initialRootSnapshot.current = null;
     opened.current = true;
-    const selected = rootRef.current?.querySelector<HTMLButtonElement>("[data-row-id][aria-expanded=true]");
-    (selected ?? rootRef.current?.querySelector<HTMLElement>(root && root.stage !== "closed" ? "[data-task-composer]" : "[data-start-agent]"))?.focus({ preventScroll: true });
+    focusTaskOrStart();
   }, [active, snapshot, dialog, root]);
   useEffect(() => {
+    if (!snapshot) return;
     const removed = focusedTask.current && !taskIds.includes(focusedTask.current);
     if (removed && active) {
       const index = lastTaskIds.current.indexOf(focusedTask.current!);
       if (scope.selectedTask === focusedTask.current) { scope.selectedTask = null; changed(); }
       const next = taskIds[Math.min(Math.max(index, 0), taskIds.length - 1)];
-      if (next) focusRow(next); else rootRef.current?.querySelector<HTMLTextAreaElement>("[data-task-composer]")?.focus();
-      focusedTask.current = next ?? null; setFocusNotice("The focused task changed elsewhere. Focus moved to the next available task.");
+      if (next) focusRow(next); else rootRef.current?.querySelector<HTMLButtonElement>("[data-start-agent]")?.focus({ preventScroll: true });
+      focusedTask.current = next ?? null; setFocusNotice(next ? "The focused task changed elsewhere. Focus moved to the next available task." : "The focused task changed elsewhere. Focus moved to Start agent.");
     }
     lastTaskIds.current = taskIds;
   }, [tasks, scope.disclosures.completed, active]);
@@ -178,7 +151,7 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   }, [startToken, active, snapshot, connected]);
   useEffect(() => {
     if (!active || !rootState?.verified || !root || startFocus.current?.runId !== root.run_id) return;
-    if (document.activeElement === startFocus.current.invoker) rootRef.current?.querySelector<HTMLTextAreaElement>("[data-task-composer]")?.focus({ preventScroll: true });
+    if (document.activeElement === startFocus.current.invoker) focusTaskOrStart();
     startFocus.current = null;
   }, [active, root, rootState?.verified]);
   const navigate = async (run: Run) => {
@@ -223,7 +196,7 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   useEffect(() => {
     if (active && questionHadFocus.current && (!question || answered)) {
       questionHadFocus.current = false;
-      rootRef.current?.querySelector<HTMLTextAreaElement>("[data-task-composer]")?.focus({ preventScroll: true });
+      focusTaskOrStart();
     }
   }, [active, question?.message_id, answered]);
   const assignmentIntents = snapshot?.assignment_intents.filter(intent => intent.root_id === root?.run_id) ?? [];
@@ -317,14 +290,10 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
         {question && answer && !answered ? <section className="supervisor-needs-you" aria-label="Needs you" role="status"><div className="supervisor-question"><h2><UiIcon name="comment" />Needs you · {root.label}</h2><p id={`supervisor-question-${question.message_id}`} className="supervisor-exact-text">{question.summary}</p><p className="supervisor-muted">Reported by {root.label} · <time dateTime={question.at}>{new Date(question.at).toLocaleString()}</time></p></div><TextAction label="Answer" submitLabel="Send answer" describedBy={`supervisor-question-${question.message_id}`} draft={answer} changed={changed} busy={busy || !live || !rootState?.verified} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: root.run_id, kind: "answer", text })} success="Answer sent. Waiting for the agent." /></section> : question && answered ? <p role="status">Answer sent. Waiting for the agent.</p> : null}
         {assignmentIntents.map(intent => {
           const canonical = tasks.find(task => task.task.task_id === intent.task_id);
-          const submitted = scope.task.operation?.id === intent.task_id ? scope.task.operation : null;
           const resolve = async (assign: boolean) => {
-            const result = await mutateResult({ action: "task_assignment_resolve", root_id: root.run_id, task_id: intent.task_id, expected_task_revision: assign ? canonical?.task.task_revision ?? null : null, assign });
-            if (assign ? result?.result === "task_assigned" : result?.result === "done") {
-              if (submitted) { if (assign && scope.task.text === submitted.text) scope.task.text = ""; scope.task.operation = null; scope.task.error = null; scope.task.notice = assign ? `Assigned current task to ${root.label}.` : "Task kept unassigned. The original draft is kept."; changed(); }
-            }
+            await mutateResult({ action: "task_assignment_resolve", root_id: root.run_id, task_id: intent.task_id, expected_task_revision: assign ? canonical?.task.task_revision ?? null : null, assign });
           };
-          return <section key={intent.task_id} className="supervisor-needs-you"><h2>{intent.state === "conflict" ? "Task changed elsewhere · Not assigned" : "Task assignment pending"}</h2><p>{canonical?.task.title ?? "The canonical task is not available yet."}</p>{canonical ? <details><summary>Current task</summary><p className="supervisor-exact-text">{canonical.task.body}</p></details> : null}{submitted ? <details><summary>Original submitted draft</summary><p className="supervisor-exact-text">{submitted.text}</p></details> : null}{intent.state === "conflict" ? <div className="supervisor-action-row"><button type="button" disabled={busy || !live || !canonical || !!canonical.task.diagnostic || root.stage === "closed"} onClick={() => void resolve(true)}>Assign current task</button><button type="button" disabled={busy || !connected} onClick={() => void resolve(false)}>Keep unassigned</button></div> : <button type="button" disabled={busy} onClick={refresh}>Check assignment status</button>}</section>;
+          return <section key={intent.task_id} className="supervisor-needs-you"><h2>{intent.state === "conflict" ? "Task changed elsewhere · Not assigned" : "Task assignment pending"}</h2><p>{canonical?.task.title ?? "The canonical task is not available yet."}</p>{canonical ? <details><summary>Current task</summary><p className="supervisor-exact-text">{canonical.task.body}</p></details> : null}{intent.state === "conflict" ? <div className="supervisor-action-row"><button type="button" disabled={busy || !live || !canonical || !!canonical.task.diagnostic || root.stage === "closed"} onClick={() => void resolve(true)}>Assign current task</button><button type="button" disabled={busy || !connected} onClick={() => void resolve(false)}>Keep unassigned</button></div> : <button type="button" disabled={busy} onClick={refresh}>Check assignment status</button>}</section>;
         })}
         {acceptanceConflicts.map(intent => <section key={intent.intent_id} className="supervisor-needs-you"><h2>Task changed during acceptance</h2><p>{tasks.find(task => task.task.task_id === intent.task_id)?.task.title ?? "Task"} · Review the current task before applying acceptance. Keeping it leaves Markdown unchanged.</p><button type="button" disabled={busy || !live} onClick={() => void mutateResult({ action: "intent_resolve", intent_id: intent.intent_id, apply: true })}>Apply acceptance to current task</button><button type="button" disabled={busy || !connected} onClick={() => void mutateResult({ action: "intent_resolve", intent_id: intent.intent_id, apply: false })}>Keep current task unchanged</button></section>)}
         {snapshot.board?.unidentified_items ? <section className="supervisor-warning"><p>{snapshot.board.unidentified_items} task-file items need identity markers before they can be managed.</p><button type="button" disabled={busy || !connected} onClick={() => void mutateResult({ action: "tasks_assign_ids", root_id: root.run_id, expected_doc_revision: snapshot.board!.doc_revision })}>Identify task-file items</button></section> : null}
@@ -366,10 +335,6 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
       </div>}
     </aside> : null}
     </div>
-    {snapshot && root ? <div className={`supervisor-composer-wrap${composerHeight === null ? "" : " is-sized"}`} style={composerHeight === null ? undefined : { "--composer-height": `${composerHeight}px` } as CSSProperties}>
-      <RowSplitter label="Resize task input" target={splitter => splitter.parentElement?.querySelector("textarea") ?? null} grow={-1} min={44} max={Math.round(window.innerHeight * 0.6)} onChange={setComposerHeight} onReset={() => setComposerHeight(null)} />
-      <TaskComposer root={root} scope={scope} snapshot={snapshot} canAssign={!!rootState?.verified && root.stage === "active" && !!live} busy={busy || startPending} changed={changed} mutateResult={mutateResult} refresh={refresh} />
-    </div> : null}
     <div className="supervisor-focus-notice" role="status">{focusNotice}</div>
     {dialog && snapshot && active ? <SupervisorDialogs dialog={dialog} snapshot={snapshot} spaces={runtimeLive ? session?.spaces ?? [] : []} startDraft={startDraft.current} changed={changed} busy={busy} available={connected && (dialog.mode === "edit" || dialog.mode === "close" || runtimeLive && snapshot.runtime.status === "fresh")} mutateResult={mutateResult} onStarted={started} onEdited={taskId => { scope.edits.delete(taskId); changed(); }} onStartUnconfirmed={() => setStartUnknown(true)} onClose={() => setDialog(null)} /> : null}
   </section>;

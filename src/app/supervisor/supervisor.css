@@ -133,21 +133,11 @@
 .supervisor-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; min-height: 150px; gap: 6px; padding: 24px; text-align: center; color: var(--text-secondary); }
 .supervisor-empty > .ui-icon { width: 28px; height: 28px; flex: 0 0 28px; color: var(--text-muted); }
 .supervisor-empty p { max-width: 370px; color: var(--text-muted); }
-.supervisor-task-composer { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 4px; padding: 10px 12px 6px; margin: 0; border-top: 1px solid var(--border); background: var(--chrome-bg); flex: 0 0 auto; }
-.supervisor-task-composer > label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.supervisor-task-composer > textarea { min-height: 44px; height: auto; max-height: 128px; padding-right: 120px; field-sizing: content; resize: none; }
-.supervisor-composer-wrap { position: relative; flex: 0 0 auto; }
-.supervisor-composer-wrap.is-sized .supervisor-task-composer > textarea { height: var(--composer-height); max-height: none; field-sizing: fixed; }
 .supervisor-row-splitter { position: absolute; z-index: var(--z-raised); left: 0; right: 0; height: 6px; cursor: row-resize; touch-action: none; }
-.supervisor-composer-wrap > .supervisor-row-splitter { top: -3px; }
 .supervisor-graph-splitter { bottom: -3px; }
 .supervisor-row-splitter::after { content: ""; position: absolute; left: 0; right: 0; top: 2px; height: 2px; background: transparent; transition: background 80ms; }
 .supervisor-row-splitter:hover::after, .supervisor-row-splitter:focus-visible::after, .supervisor-row-splitter:active::after { background: var(--accent); }
 .supervisor-row-splitter:focus { outline: none; }
-.supervisor-composer-footer { display: contents; }
-.supervisor-composer-footer > button { position: absolute; top: 17px; right: 20px; }
-.supervisor-composer-footer > span { color: var(--text-muted); font-size: var(--font-size-2xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.supervisor-task-composer > p, .supervisor-task-composer > .supervisor-error { grid-column: 1; margin: 0; font-size: var(--font-size-control); }
 .supervisor-focus-notice { min-height: 3px; font-size: var(--font-size-control); color: var(--text-muted); }
 .supervisor-archive { position: absolute; right: 90px; top: 48px; z-index: var(--z-floating); width: min(330px, calc(100% - 24px)); padding: 12px; box-sizing: border-box; background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-panel); box-shadow: 0 8px 24px var(--scrim); }
 .supervisor-archive button { margin-top: 6px; }
@@ -180,8 +170,6 @@
   .supervisor-task-list-heading { padding: 7px 8px; }
   .supervisor-task-filters { gap: 5px; }
   .supervisor-task-filters label:first-child { max-width: 235px; }
-  .supervisor-task-composer { padding: 8px 8px 5px; }
-  .supervisor-composer-footer > button { top: 15px; right: 16px; }
 }
 .supervisor-graph-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 10px; height: 30px; box-sizing: border-box; position: sticky; top: 0; z-index: 1; background: var(--chrome-bg); border-bottom: 1px solid var(--border); }
 .supervisor-graph-heading h2 { margin: 0; font-size: var(--font-size-control); }
