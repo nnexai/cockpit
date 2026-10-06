@@ -150,6 +150,13 @@ impl Drop for Stage {
 pub(crate) struct Lease {
     _file: File,
 }
+impl Drop for Lease {
+    fn drop(&mut self) {
+        // A concurrent fork can retain the open file description until exec.
+        // Release ownership now rather than waiting for every descriptor to close.
+        let _ = FileExt::unlock(&self._file);
+    }
+}
 
 pub(crate) fn error(code: &str, message: impl Into<String>) -> InspectionError {
     InspectionError::new(code, message)
@@ -2881,6 +2888,60 @@ mod tests {
         let _lock = store.exclusive().unwrap();
         assert_eq!(store.upgrade_v3().unwrap_err().code, "library_corrupt");
         assert_eq!(read_json_bounded::<serde_json::Value>(&store.meta, "index.json", MAX_INDEX).unwrap(), raw);
+    }
+
+    #[test]
+    fn dropped_item_lease_releases_lock_with_duplicated_descriptor_alive() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let id = "reserved-item";
+        let held = store.lease(id).unwrap();
+        // Model the descriptor inherited between a concurrent fork and exec.
+        let inherited = held._file.try_clone().unwrap();
+        assert_eq!(store.lease(id).err().unwrap().code, "library_item_busy");
+        drop(held);
+        let replacement = store.lease(id).unwrap();
+        drop(inherited);
+        assert_eq!(store.lease(id).err().unwrap().code, "library_item_busy");
+        drop(replacement);
+        assert!(store.lease(id).is_ok());
+    }
+
+    #[test]
+    fn dropped_library_leases_release_lock_with_duplicated_descriptor_alive() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        for shared in [true, false] {
+            let held = if shared {
+                store.shared().unwrap()
+            } else {
+                store.exclusive().unwrap()
+            };
+            let inherited = held._file.try_clone().unwrap();
+            assert!(store.try_exclusive().unwrap().is_none());
+            drop(held);
+            let replacement = store.try_exclusive().unwrap().unwrap();
+            drop(inherited);
+            assert!(store.try_exclusive().unwrap().is_none());
+            drop(replacement);
+        }
+    }
+
+    #[test]
+    fn independent_shared_lease_survives_another_lease_drop() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let first = store.shared().unwrap();
+        let second = store.shared().unwrap();
+        let inherited = first._file.try_clone().unwrap();
+        drop(first);
+        assert!(store.try_exclusive().unwrap().is_none());
+        drop(second);
+        let exclusive = store.try_exclusive().unwrap().unwrap();
+        drop(inherited);
+        assert!(store.try_exclusive().unwrap().is_none());
+        drop(exclusive);
+        assert!(store.try_exclusive().unwrap().is_some());
     }
 
     #[test]
