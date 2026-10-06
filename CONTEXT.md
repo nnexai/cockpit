@@ -149,7 +149,22 @@ Configured repository actions run without a per-operation consent checkbox. Cock
 
 The durable global Context Library, not a cache, survives workspace destruction. Destruction removes only proven owned resources; Library items and unrelated resources are never removed with a workspace. Library operations do not inspect, import, or modify the legacy `<state_root>/sources` cache.
 
-Spaces do not copy context files or create companion directories. Agents read the live Library and existing checkout paths. Task notes belong in the working checkout; the Library is Cockpit-managed and read-only by convention, not a sandbox.
+Spaces do not copy context files or create companion directories. Agents read the live Library and existing checkout paths. The Library is Cockpit-managed and read-only by convention, not a sandbox; writable Space Notes have their own durable Markdown store.
+
+### 4.4 Durable Space Notes
+
+Notes is a Cockpit-local workarea, opened from the header or Commands without creating a Herdr pane or changing Herdr focus/layout. Scratchpad, Todos, Kanban and Decisions share the same core operations through the browser, native client and `cockpit-cli`; board-item comments are durable Markdown records, separate from ephemeral Files/Review comment batches.
+
+The default Linux root is `$XDG_DATA_HOME/cockpit/notes` (`$HOME/.local/share/cockpit/notes` when unset), configurable with `notes_root` or `COCKPIT_NOTES_ROOT`. Keep it outside disposable checkouts, the Library and Cockpit's ephemeral pane-state roots. Each Notes UUID owns `scratchpad.md`, `todos.md`, `decisions/<decisionId>.md` and `comments/<todoId>/<commentId>.md`; registry and lock metadata live under `.cockpit/`. Opening an unbound Space never creates files. Creation and attaching an existing UUID are explicit.
+
+Space bindings use the live endpoint boot identity, session and Space ID, never labels or checkout paths. A Herdr restart leaves old content intact but requires explicit attachment; transferring a binding is confirmed. Pinned `--notes UUID` content operations need neither Herdr nor a running Cockpit owner, so agents resolve once and retain that identity throughout a task. The UI's command examples also pin the configured Notes root.
+
+Todos are source Markdown, not a second database. Stable hidden IDs and optional open-lane metadata connect the board to the same tasks. Done derives from the checkbox; reopening restores the remembered open lane. Moves preserve file order rather than inventing ranks, and unboarding keeps the todo and its comments. Decision replacement creates a new record without rewriting its predecessor. Decision recorded timestamps and comment creation/author metadata are preserved during edits.
+
+Writes use bounded no-follow reads, stable advisory lock inodes, revision checks and atomic publication. Stable task IDs use item revisions; unadopted/ambiguous tasks use line references tied to the full document revision. Surgical Markdown edits preserve unrelated bytes and refuse unsafe boundaries. External editors that ignore advisory locks can still race after the final revision check; this is not a filesystem-wide compare-and-swap guarantee.
+
+Editors keep drafts separately by Notes UUID and record, with bounded best-effort browser storage and visible storage failures. Tab/Space changes and closing Notes do not silently discard those drafts. Conflicts require explicit resolution. An unknown write outcome requires reading saved state and acknowledging the possible duplicate before another write; it is never automatically replayed. Pointer and keyboard board gestures capture their source revision and cancel on source changes, focus loss, Notes closure or Space changes.
+
 
 ## 5. Herdr client UI
 

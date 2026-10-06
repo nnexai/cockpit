@@ -21,6 +21,7 @@ impl Fixture {
             "state_root": root.join("state"),
             "cache_root": root.join("cache"),
             "library_root": root.join("library"),
+            "notes_root": root.join("notes"),
             "branch_template": "test/{task}",
             "checkout_template": "{task}",
             "providers": [],

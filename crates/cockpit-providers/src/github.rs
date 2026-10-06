@@ -772,6 +772,7 @@ mod tests {
         state_root: "state".into(),
         cache_root: "cache".into(),
         library_root: "library".into(),
+        notes_root: "notes".into(),
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {

@@ -12,6 +12,8 @@ import type { ContextViewerProps } from "./context/ContextViewer";
 import type {
   BrowserAssociation,
   CommentBatch,
+  OrchestrationSnapshot,
+  OrchestrationWaitResponse,
   ResourceMutationRequest,
   ResourceMutationResponse,
   ViewerContext,
@@ -254,6 +256,7 @@ class AppFixture {
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
     contextMedia: vi.fn(),
+    notes: vi.fn(async () => { throw new Error("Unexpected Notes operation in terminal fixture"); }),
     librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, space_label: "Fixture Space", library_root: "/data/cockpit/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] })),
     librarySpaceAdd: vi.fn(), librarySpaceRemove: vi.fn(), librarySpaceRepositories: vi.fn(),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
@@ -421,11 +424,15 @@ function leafButton(id: string, label: string): HTMLButtonElement {
 }
 
 async function openCommand(label: string): Promise<void> {
+  act(() => button("Commands").focus());
   click(button("Commands"));
   await settle();
   click(button("All commands"));
-  click(button(label));
+  const row = [...container.querySelectorAll<HTMLButtonElement>(".command-overlay .command-row")].find(candidate => candidate.querySelector(".command-row-label > span")?.textContent === label);
+  if (!row) throw new Error(`Missing command ${label}`);
+  click(row);
   await settle();
+  expect(container.querySelector(".command-overlay")).toBeNull();
 }
 function readyTerminal(paneId: string): void {
   const ready = terminalReadyCallbacks.get(paneId);
@@ -632,7 +639,7 @@ describe("mounted App mutation and session ordering", () => {
     emptyLibrary(fixture);
     vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
       version: 1, repository_roots: [], worktree_root: "", companion_root: "", state_root: "", cache_root: "",
-      library_root: "/data/cockpit/library", branch_template: "", checkout_template: "", providers: [], origins: {},
+      library_root: "/data/cockpit/library", notes_root: "/data/cockpit/notes", branch_template: "", checkout_template: "", providers: [], origins: {},
       orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
         context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
@@ -1217,6 +1224,87 @@ describe("Library view presentation lifecycle", () => {
     await settle();
     expect(document.activeElement).toBe(button("Open Library"));
     expect(fixture.snapshotCalls).not.toHaveBeenCalled();
+  });
+});
+
+describe("merged local workarea lifecycle", () => {
+  it("switches Notes, Supervisor and Library without changing Herdr focus or pane selection", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    vi.mocked(fixture.client.notes).mockRejectedValue(new CockpitClientError("http_error", "No notes are bound", { operationCode: "notes_unbound" }));
+    vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
+      session_id: "session-1", revision: 1, tasks_token: "tasks-1",
+      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], attention: [], unmanaged_agents: [],
+      runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "No runtime observation" } },
+    });
+    vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
+    await mount(fixture);
+    fixture.focusCalls.mockClear();
+
+    act(() => button("Open Notes").focus());
+    click(button("Open Notes"));
+    await settle();
+    expect(container.querySelector('section[aria-label="Notes"]')).not.toBeNull();
+    expect(terminal("pane-1")).toBeNull();
+    click(button("Close Notes"));
+    await settle();
+    expect(document.activeElement).toBe(button("Open Notes"));
+    click(button("Open Notes"));
+    await settle();
+
+    click(button("Supervisor"));
+    await settle();
+    const supervisor = container.querySelector<HTMLElement>('section[aria-label="Supervisor"]')!;
+    expect(supervisor.hidden).toBe(false);
+    expect(container.querySelector('section[aria-label="Notes"]')).toBeNull();
+
+    click(button("Library"));
+    await settle();
+    expect(supervisor.hidden).toBe(true);
+    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
+
+    await openCommand("Open Notes");
+    expect(container.querySelector('section[aria-label="Library"]')).toBeNull();
+    expect(container.querySelector('section[aria-label="Notes"]')).not.toBeNull();
+    click(button("Close Notes"));
+    await settle();
+    expect(document.activeElement).toBe(button("Commands"));
+    expect(selectedLeaf()).toBe("pane-1");
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+
+    click(button("Supervisor"));
+    await settle();
+    click(button("Close Supervisor"));
+    await settle();
+    expect(document.activeElement).toBe(terminal("pane-1"));
+    expect(selectedLeaf()).toBe("pane-1");
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late Supervisor observation after switching to Notes", async () => {
+    const fixture = new AppFixture();
+    vi.mocked(fixture.client.notes).mockRejectedValue(new CockpitClientError("http_error", "No notes are bound", { operationCode: "notes_unbound" }));
+    const observation = deferred<OrchestrationSnapshot>();
+    vi.mocked(fixture.client.orchestrationSnapshot).mockReturnValue(observation.promise);
+    await mount(fixture);
+    fixture.focusCalls.mockClear();
+    click(button("Supervisor"));
+    await settle();
+    click(button("Open Notes"));
+    await settle();
+
+    observation.resolve({
+      session_id: "session-1", revision: 1, tasks_token: "tasks-1",
+      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], attention: [], unmanaged_agents: [],
+      runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "Late observation" } },
+    });
+    await settle();
+    expect(container.querySelector('section[aria-label="Notes"]')).not.toBeNull();
+    expect(container.querySelector<HTMLElement>('section[aria-label="Supervisor"]')?.hidden).toBe(true);
+    expect(fixture.client.orchestrationWait).not.toHaveBeenCalled();
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
   });
 });
 

@@ -71,6 +71,7 @@ pub struct ProjectConfiguration {
     pub state_root: String,
     pub cache_root: String,
     pub library_root: String,
+    pub notes_root: String,
     pub branch_template: String,
     pub checkout_template: String,
     pub providers: Vec<ProjectProvider>,

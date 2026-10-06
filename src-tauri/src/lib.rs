@@ -8,6 +8,7 @@ mod orchestration;
 mod requests;
 mod review;
 mod library;
+mod notes;
 mod viewer;
 
 use std::{
@@ -1886,6 +1887,9 @@ pub fn run() {
     let contexts = contexts.with_viewers(viewers.clone());
     let service = service.with_contexts(contexts).with_viewers(viewers);
     let service = service.with_library((*library).clone());
+    let service = service.with_notes(cockpit_core::notes::NotesService::new(
+        std::path::PathBuf::from(&project_config.notes_root),
+    ).with_herdr(inspector.clone()));
     let reviews = cockpit_core::review::ReviewService::new(
         project_config.clone(),
         service
@@ -1956,6 +1960,7 @@ pub fn run() {
             cockpit_widget_content,
             cockpit_widget_remove,
             cockpit_widget_select,
+            notes::cockpit_notes_execute,
             projects::cockpit_resolve_workspace_defaults,
             projects::cockpit_project_configuration,
             projects::cockpit_repositories,

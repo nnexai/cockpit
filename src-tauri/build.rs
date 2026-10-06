@@ -6,6 +6,7 @@ fn main() {
             "orchestration_snapshot",
             "orchestration_mutate",
             "orchestration_wait",
+            "cockpit_notes_execute",
             "cockpit_widget_subscribe",
             "cockpit_widget_report",
             "cockpit_widget_content",

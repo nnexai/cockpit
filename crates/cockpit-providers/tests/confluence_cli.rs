@@ -59,6 +59,7 @@ fn configuration(server: &FakeConfluence, login: &str) -> ProjectConfiguration {
     state_root: "/s".into(),
     cache_root: "/cache".into(),
     library_root: "/l".into(),
+    notes_root: "/notes".into(),
     branch_template: "{repo}/{task_id}".into(),
     checkout_template: "{repo}-{task_id}".into(),
     providers: vec![ProjectProvider {

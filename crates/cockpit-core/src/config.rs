@@ -60,6 +60,7 @@ struct TomlConfiguration {
     branch_template: Option<String>,
     checkout_template: Option<String>,
     library_root: Option<String>,
+    notes_root: Option<String>,
     providers: Option<Vec<ProjectProvider>>,
     limits: Option<TomlLimits>,
     window: Option<TomlWindow>,
@@ -243,6 +244,32 @@ pub fn load_project_configuration(
         }
     }
     origins.insert("library_root".into(), library_origin.into());
+    let default_notes = xdg_directory("XDG_DATA_HOME", ".local/share")?.join("cockpit/notes");
+    let (notes_root, notes_origin) = choose_path(
+        "COCKPIT_NOTES_ROOT",
+        file.notes_root.clone(),
+        &path_text(&default_notes, "notes_root")?,
+    )
+    .map_err(|error| InspectionError::new("invalid_notes_root", error.message))?;
+    validate_paths(&[notes_root.clone()], "notes_root")?;
+    for (field, root) in [
+        ("library_root", library_root.as_str()),
+        ("state_root", state_root.as_str()),
+        ("companion_root", companion_root.as_str()),
+        ("worktree_root", worktree_root.as_str()),
+        ("cache_root", cache_root.as_str()),
+    ]
+    .into_iter()
+    .chain(roots.iter().map(|root| ("repository_roots", root.as_str())))
+    {
+        if paths_overlap_lexically(&notes_root, root) {
+            return Err(InspectionError::new(
+                "invalid_notes_root",
+                format!("notes_root must not overlap {field}"),
+            ));
+        }
+    }
+    origins.insert("notes_root".into(), notes_origin.into());
 
     let branch_template = file
         .branch_template
@@ -436,6 +463,7 @@ pub fn load_project_configuration(
         companion_root,
         state_root,
         library_root,
+        notes_root,
         branch_template,
         checkout_template,
         providers,
@@ -1118,6 +1146,128 @@ mod tests {
         let mut unsafe_route = configuration;
         unsafe_route.routes[0].instance = "https://user:secret@issues.example/path".into();
         assert_eq!(validate_orchestration(&unsafe_route).unwrap_err().code, "invalid_route_instance");
+    }
+
+    #[test]
+    fn notes_root_loading_precedence_validation_and_no_directory_creation() {
+        // Environment-dependent cases run in separate processes, so no test
+        // mutates the shared process environment.
+        if let Some(path) = std::env::var_os("COCKPIT_TEST_NOTES_CONFIG") {
+            let expected = std::env::var("COCKPIT_TEST_NOTES_EXPECTED").expect("expected root");
+            let result = load_project_configuration(Some(std::path::Path::new(&path)), None);
+            if expected == "invalid_notes_root" {
+                assert_eq!(result.expect_err("invalid Notes root").code, expected);
+            } else {
+                let configuration = result.expect("Notes configuration");
+                assert_eq!(configuration.notes_root, expected);
+                let expected_origin = std::env::var("COCKPIT_TEST_NOTES_ORIGIN").expect("origin");
+                assert_eq!(
+                    configuration.origins.get("notes_root").map(String::as_str),
+                    Some(expected_origin.as_str()),
+                );
+                for root in configuration.repository_roots.iter().chain([
+                    &configuration.notes_root,
+                    &configuration.library_root,
+                    &configuration.state_root,
+                    &configuration.companion_root,
+                    &configuration.worktree_root,
+                    &configuration.cache_root,
+                ]) {
+                    assert!(!std::path::Path::new(root).exists(), "loader created {root}");
+                }
+            }
+            return;
+        }
+
+        let id = uuid::Uuid::new_v4();
+        let base = std::env::temp_dir().join(format!("cockpit-notes-config-{id}"));
+        let path = std::env::temp_dir().join(format!("cockpit-notes-config-{id}.toml"));
+        let toml_root = base.join("toml-notes").to_string_lossy().into_owned();
+        let environment_root = base.join("environment-notes").to_string_lossy().into_owned();
+        let default_root = base.join("data/cockpit/notes").to_string_lossy().into_owned();
+        let home_root = base.join("home/.local/share/cockpit/notes").to_string_lossy().into_owned();
+        let mut cases = vec![
+            (None, None, default_root, "default", true),
+            (None, None, home_root, "default", false),
+            (Some(toml_root.clone()), None, toml_root.clone(), "toml", true),
+            (Some(toml_root), Some(environment_root.clone()), environment_root.clone(), "environment", true),
+            (Some("relative".into()), Some(environment_root.clone()), environment_root, "environment", true),
+            (Some(base.join("library-notes").to_string_lossy().into_owned()), None,
+                base.join("library-notes").to_string_lossy().into_owned(), "toml", true),
+        ];
+        for invalid in [
+            "relative".to_owned(),
+            base.join("notes/../escape").to_string_lossy().into_owned(),
+            String::new(),
+            format!("/{}", "n".repeat(super::MAX_TEXT_BYTES)),
+        ] {
+            cases.push((Some(invalid), None, "invalid_notes_root".into(), "", true));
+        }
+        for field in ["library", "state", "companions", "worktrees", "cache", "repositories"] {
+            for notes in [base.join(field), base.join(field).join("child"), base.clone()] {
+                cases.push((Some(notes.to_string_lossy().into_owned()), None,
+                    "invalid_notes_root".into(), "", true));
+            }
+        }
+        // An environment override still must be validated against every root.
+        cases.push((None, Some(base.join("repositories").to_string_lossy().into_owned()),
+            "invalid_notes_root".into(), "", true));
+        for (toml_notes, environment_notes, expected, expected_origin, use_xdg) in cases {
+            let mut content = format!(
+                "version = 1\nrepository_roots = [{:?}]\nworktree_root = {:?}\ncompanion_root = {:?}\nstate_root = {:?}\ncache_root = {:?}\nlibrary_root = {:?}\n",
+                base.join("repositories").to_string_lossy(),
+                base.join("worktrees").to_string_lossy(),
+                base.join("companions").to_string_lossy(),
+                base.join("state").to_string_lossy(),
+                base.join("cache").to_string_lossy(),
+                base.join("library").to_string_lossy(),
+            );
+            if let Some(value) = &toml_notes {
+                content.push_str(&format!("notes_root = {value:?}\n"));
+            }
+            fs::write(&path, content).expect("write Notes configuration");
+            let mut child = std::process::Command::new(
+                std::env::current_exe().expect("test executable"),
+            );
+            child.args([
+                "--exact",
+                "config::tests::notes_root_loading_precedence_validation_and_no_directory_creation",
+                "--nocapture",
+            ]);
+            for name in [
+                "COCKPIT_REPOSITORY_ROOTS",
+                "COCKPIT_WORKTREE_ROOT",
+                "COCKPIT_COMPANION_ROOT",
+                "COCKPIT_STATE_ROOT",
+                "COCKPIT_CACHE_ROOT",
+                "COCKPIT_LIBRARY_ROOT",
+                "COCKPIT_NOTES_ROOT",
+                "XDG_DATA_HOME",
+            ] {
+                child.env_remove(name);
+            }
+            child.env("HOME", base.join("home"));
+            child.env("XDG_STATE_HOME", base.join("xdg-state"));
+            child.env("XDG_CACHE_HOME", base.join("xdg-cache"));
+            if use_xdg {
+                child.env("XDG_DATA_HOME", base.join("data"));
+            }
+            if let Some(value) = &environment_notes {
+                child.env("COCKPIT_NOTES_ROOT", value);
+            }
+            child.env("COCKPIT_TEST_NOTES_CONFIG", &path);
+            child.env("COCKPIT_TEST_NOTES_EXPECTED", expected);
+            child.env("COCKPIT_TEST_NOTES_ORIGIN", expected_origin);
+            let output = child.output().expect("run isolated Notes configuration case");
+            assert!(
+                output.status.success(),
+                "Notes configuration TOML={toml_notes:?}, environment={environment_notes:?}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        fs::remove_file(path).expect("remove Notes test configuration");
+        assert!(!base.exists(), "configuration loading must not create roots");
     }
 }
 

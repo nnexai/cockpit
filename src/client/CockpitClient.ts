@@ -16,6 +16,14 @@ export type {
   WidgetKey, WidgetSummary, WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent,
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
 } from "../protocol/generated/v1";
+import type { NotesRequest, NotesResponse } from "../protocol/generated/v1";
+export type {
+  NotesRequest, NotesResponse, NotesTarget, NotesOperation, NotesTodoSelector,
+  NotesResult, NotesCatalogEntry, NotesTargetInfo, NotesSpaceInfo, NotesChangeTokens,
+  NotesDocument, NotesTodo, NotesTodoProblem, NotesBoard, NotesLane, NotesColumn,
+  NotesTodoFilter, NotesDecisionFilter, NotesDecisionStatus, NotesDecisionSummary,
+  NotesDecision, NotesComment,
+} from "../protocol/generated/v1";
 import type { ContextMedia, ContextMediaRequest } from "../protocol/generated/v1";
 import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceRepositoriesRequest, SpaceRemoveRequest } from "../protocol/generated/v1";
 import type { ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
@@ -359,6 +367,8 @@ export interface CockpitClient {
   contextSearch(sessionId: string, viewerId: string, request: ContextSearchRequest, signal?: AbortSignal): Promise<ContextSearchResponse>;
   contextInvalidate(sessionId: string, viewerId: string, request: ContextInvalidationRequest, signal?: AbortSignal): Promise<ContextInvalidationResponse>;
   contextMedia(sessionId: string, viewerId: string, request: ContextMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;
+  /** Pinned durable Notes operations; aborting does not roll back a dispatched write. */
+  notes(request: NotesRequest, signal?: AbortSignal): Promise<NotesResponse>;
   librarySpaceList(request: SpaceContextRequest, signal?: AbortSignal): Promise<SpaceContextListing>;
   librarySpaceAdd(request: SpaceAddRequest): Promise<LibraryOperation>;
   /** Replaces this Space's additional existing repository selections. */

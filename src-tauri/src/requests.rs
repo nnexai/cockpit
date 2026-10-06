@@ -38,6 +38,15 @@ pub(super) fn decode_library_request<T: DeserializeOwned>(
     decode_request_with_limit(value, domain, MAX_LIBRARY_REQUEST_BYTES)
 }
 
+pub(super) fn decode_notes_request<T: DeserializeOwned>(
+    value: Value,
+) -> Result<T, ErrorResponse> {
+    serde_json::to_writer(RequestBudget(4 * 1024 * 1024), &value)
+        .map_err(|_| stream_error("notes_too_large", "Notes request exceeds the 4 MiB limit"))?;
+    serde_json::from_value(value)
+        .map_err(|_| stream_error("notes_usage", "Expected a bounded JSON Notes request with valid fields"))
+}
+
 fn decode_request_with_limit<T: DeserializeOwned>(
     value: Value,
     domain: &str,

@@ -52,6 +52,7 @@ import type { LibraryCommand } from "./context/ContextViewer";
 import { AddContextDialog } from "./library/AddContextDialog";
 import { LibraryView } from "./library/LibraryView";
 import { SupervisorView } from "./supervisor/SupervisorView";
+import { NotesView } from "./notes/NotesView";
 import { LibraryProblems } from "./library/LibraryProblems";
 import type { LibrarySpace } from "./library/libraryState";
 import { InlineRename } from "./InlineRename";
@@ -176,7 +177,7 @@ function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; ch
   }}>{children}</div>;
 }
 
-function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorOpen, onSupervisor, onStartSupervisor, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorOpen, onSupervisor, onStartSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
@@ -187,6 +188,8 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDi
   supervisorOpen: boolean;
   onSupervisor(): void;
   onStartSupervisor(): void;
+  notesOpen: boolean;
+  onNotesToggle(): void;
   widgetDots: ReadonlySet<string>;
   widgetsPending: boolean;
   onWidgets(): void;
@@ -234,7 +237,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDi
         : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={displayedNumber <= 9 ? withShortcut(redundantLabel ? `Tab ${displayedNumber}` : tab.label, `select-tab-${displayedNumber as 1}`) : redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="n">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}{widgetDots.has(tab.id) ? <span className="widget-dot"><span className="sr-only">widget</span></span> : null}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" />{widgetsPending ? <button type="button" className="tab-strip-action" aria-label="Show widgets" disabled={busy} onClick={onWidgets}>Widgets <span className="widget-dot" aria-hidden="true" /></button> : null}<button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" />{widgetsPending ? <button type="button" className="tab-strip-action" aria-label="Show widgets" disabled={busy} onClick={onWidgets}>Widgets <span className="widget-dot" aria-hidden="true" /></button> : null}<button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-strip-action" aria-label={notesOpen ? "Notes (open)" : "Open Notes"} aria-controls="cockpit-notes" aria-pressed={notesOpen} title={notesOpen ? "Close Notes" : "Open Notes"} onClick={onNotesToggle}>Notes</button><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
     <div className="tab-strip-actions supervisor-topbar-actions"><button type="button" className="tab-strip-action" aria-pressed={supervisorOpen} onClick={onSupervisor}>Supervisor</button><button type="button" className="tab-icon-button" aria-label="Start supervisor" title="Start an interactive supervisor…" onClick={onStartSupervisor}><UiIcon name="plus" /></button></div>
   </nav>;
 }
@@ -295,7 +298,7 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const [active, setActive] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const normalized = query.trim().toLocaleLowerCase();
-  const primaryIds = ["prefix:zoom-pane", "prefix:toggle-library", "show-supervisor", "start-supervisor", "browser:open", "prefix:new-tab", "prefix:switch-session", "renderer:review", "prefix:setup-space", "pull-space", "push-space"];
+  const primaryIds = ["prefix:zoom-pane", "prefix:toggle-library", "notes:toggle", "show-supervisor", "start-supervisor", "browser:open", "prefix:new-tab", "prefix:switch-session", "renderer:review", "prefix:setup-space", "pull-space", "push-space"];
   const ranked = normalized
     ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group} ${action.reasonDetail ?? ""}`)
     : actions.map((action, index) => ({ ...action, score: index, matchedIndices: [] as number[] }));
@@ -485,8 +488,10 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const setupParent = setupParentFor(selectedSpace, snapshot?.panes ?? [], snapshot?.focused_pane_id ?? null);
   const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
   const spaceGit = gitPoll.spaces;
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [supervisorOpen, setSupervisorOpen] = useState(false);
+  const [localWorkarea, setLocalWorkarea] = useState<"library" | "notes" | "supervisor" | null>(null);
+  const libraryOpen = localWorkarea === "library";
+  const notesOpen = localWorkarea === "notes";
+  const supervisorOpen = localWorkarea === "supervisor";
   const [supervisorMounted, setSupervisorMounted] = useState(false);
   const [supervisorStartToken, setSupervisorStartToken] = useState(0);
   const [supervisorModal, setSupervisorModal] = useState(false);
@@ -513,7 +518,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       const tab = selectedTab ? ctx.getState().tabs[selectedTab.id] : null;
       const besideId = paneId && tab?.terminals[paneId] ? paneId : tab?.lastRealLeafId;
       const besideWidth = tab?.root && besideId ? solveLayout(tab.root, area).leaves.get(besideId)?.width ?? area.width : area.width;
-      return libraryOpen || supervisorOpen ? "library" as const : document.body.classList.contains("is-pane-dragging") ? "drag" as const : tab?.zoomLeafId && tab.zoomLeafId !== `${tab.tabId}:widget` ? "zoom" as const : !tab?.viewers.widget && besideWidth * (tab?.widgetShare ?? 0.4) < 320 ? "too_narrow" as const : null;
+      return localWorkarea !== null ? "library" as const : document.body.classList.contains("is-pane-dragging") ? "drag" as const : tab?.zoomLeafId && tab.zoomLeafId !== `${tab.tabId}:widget` ? "zoom" as const : !tab?.viewers.widget && besideWidth * (tab?.widgetShare ?? 0.4) < 320 ? "too_narrow" as const : null;
     };
     widgets.bind(ctx, (widget, docked) => {
       const space = spaces.find(candidate => candidate.id === widget.space_id)?.label ?? "Space";
@@ -524,19 +529,18 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     }, widget => blockerFor(widget.source?.pane_id));
     const pending = selectedTab ? widgets.widgets(ctx.sessionId, selectedTab.id).reverse().find(widget => widget.arrival === "own_tab" && !widgets.everDisplayed.has(widgetKey(widget.key))) : undefined;
     widgets.updateWindow({ session_id: state.sessionId, displayed_tab_id: widgetWindow.visible ? selectedTab?.id ?? null : null, blocker: blockerFor(pending?.source?.pane_id ?? sourcePaneId ?? undefined) });
-  }, [widgets, widgetRevision, ctx, selectedTab, libraryOpen, supervisorOpen, tabLayout, area, widgetWindow, state.sessionId, sourcePaneId, spaces, allTabs, onWidgetAnnouncement]);
+  }, [widgets, widgetRevision, ctx, selectedTab, localWorkarea, tabLayout, area, widgetWindow, state.sessionId, sourcePaneId, spaces, allTabs, onWidgetAnnouncement]);
   const widgetDots = new Set(tabs.filter(tab => widgets.tabHasDot(ctx.sessionId, tab.id)).map(tab => tab.id));
   const widgetsPending = Boolean(selectedTab && widgets.needsClick(ctx.sessionId, selectedTab.id));
   const showWidgets = () => {
     if (!selectedTab) return;
-    setLibraryOpen(false);
-    setSupervisorOpen(false);
+    setLocalWorkarea(null);
     if (tabLayout?.zoomLeafId) ctx.dispatch({ type: "zoom-toggle", tabId: selectedTab.id, leafId: tabLayout.zoomLeafId });
     widgets.show(selectedTab.id);
   };
   useLayoutEffect(() => {
     const element = Array.from(canvasRef.current?.querySelectorAll<HTMLElement>(".tab-canvas") ?? []).find(node => node.closest<HTMLElement>("[data-tab-id]")?.dataset.tabId === selection.tabId);
-    if (!element || libraryOpen || supervisorOpen) return;
+    if (!element || localWorkarea !== null) return;
     const measure = () => {
       const rect = element.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) setArea(current => current.width === rect.width && current.height === rect.height ? current : { x: 0, y: 0, width: rect.width, height: rect.height });
@@ -546,7 +550,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     observer?.observe(element);
     window.addEventListener("resize", measure);
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
-  }, [libraryOpen, supervisorOpen, selection.tabId, tabLayout?.zoomLeafId]);
+  }, [localWorkarea, selection.tabId, tabLayout?.zoomLeafId]);
   const streamRegistry = useRef(new Set<TerminalStream>());
   const attachedPaneIds = useRef(new Set<string>());
   const registerStream = useCallback((stream: TerminalStream, active: boolean) => { if (active) streamRegistry.current.add(stream); else streamRegistry.current.delete(stream); }, []);
@@ -555,11 +559,11 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const [, setBrowserLifecycleRevision] = useState(0);
   useEffect(() => subscribeBrowserLifecycle(() => setBrowserLifecycleRevision(value => value + 1)), []);
   const browserOpen = Boolean(tabLayout?.viewers.browser);
-  const browserInputActive = selectedLeaf?.kind === "browser" && !libraryOpen && !supervisorOpen;
+  const browserInputActive = selectedLeaf?.kind === "browser" && localWorkarea === null;
   const browserReason = !selectedTab ? "Select a tab first" : state.sync !== "live" ? "Herdr is not live" : browserOpenDisabledReason(ctx, selectedTab.id);
   const perform = (operation: Promise<void>) => { setLifecycleError(null); void operation.catch(error => setLifecycleError(describeError(error, "Could not change this pane").message)); };
-  const openBrowser = () => { if (selectedTab && !browserReason) { setSupervisorOpen(false); setLibraryOpen(false); setAttachFocusSuppressed(false); perform(openBrowserLeaf(ctx, selectedTab.id, "row")); } };
-  const toggleBrowser = () => { if (!selectedTab) return; setSupervisorOpen(false); setLibraryOpen(false); setAttachFocusSuppressed(false); if (browserOpen) perform(closeBrowserLeaf(ctx, selectedTab.id)); else openBrowser(); };
+  const openBrowser = () => { if (selectedTab && !browserReason) { setLocalWorkarea(null); setAttachFocusSuppressed(false); perform(openBrowserLeaf(ctx, selectedTab.id, "row")); } };
+  const toggleBrowser = () => { if (!selectedTab) return; setLocalWorkarea(null); setAttachFocusSuppressed(false); if (browserOpen) perform(closeBrowserLeaf(ctx, selectedTab.id)); else openBrowser(); };
   const [viewerSources, setViewerSources] = useState<ViewerSourceOptions | null>(null);
   const [viewerSourcesError, setViewerSourcesError] = useState<string | null>(null);
   const [paintedTab, setPaintedTab] = useState<TabLayoutState | null>(tabLayout);
@@ -603,8 +607,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     libraryOrigin.current = active instanceof HTMLElement && active.closest(".pane-view") && selectedPaneIdRef.current
       ? { paneId: selectedPaneIdRef.current, graphical: active.closest<HTMLElement>("[data-kind]")?.dataset.kind !== "terminal" }
       : null;
-    setSupervisorOpen(false);
-    setLibraryOpen(true);
+    setLocalWorkarea("library");
     // A command belongs to this opening only; reopening must not replay it.
     setLibraryCommand(command ? { ...command, token: ++libraryCommandToken.current } : null);
   }, []);
@@ -615,7 +618,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     librarySidebarInvoker.current = null;
     const returnToSidebar = Boolean(sidebarInvoker?.isConnected && !sidebarInvoker.closest("[inert]"));
     const returnToPane = origin !== null && origin.paneId === selectedPaneIdRef.current;
-    setLibraryOpen(false);
+    setLocalWorkarea(null);
     setAttachFocusSuppressed(returnToSidebar);
     if (returnToPane && origin.graphical) {
       const focusDocument = (attempts: number) => {
@@ -627,13 +630,12 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     }
   }, []);
   const openSupervisor = useCallback((start = false) => {
-    setLibraryOpen(false);
     setAttachFocusSuppressed(true);
     setSupervisorMounted(true);
-    setSupervisorOpen(true);
+    setLocalWorkarea("supervisor");
     if (start) setSupervisorStartToken(value => value + 1);
   }, []);
-  const closeSupervisor = useCallback(() => { setSupervisorOpen(false); setAttachFocusSuppressed(false); }, []);
+  const closeSupervisor = useCallback(() => { setLocalWorkarea(null); setAttachFocusSuppressed(false); }, []);
   const supervisorTerminal = async (paneId: string, run?: Run, orchestration?: OrchestrationSnapshot) => {
     const pane = snapshot?.panes.find(candidate => candidate.id === paneId);
     if (state.sync !== "live" || !pane || !snapshot?.tabs.some(tab => tab.id === pane.tab_id && tab.space_id === pane.space_id)) throw new Error("Terminal membership is no longer current. Refresh observation.");
@@ -646,12 +648,15 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   };
   useEffect(() => {
     if (!supervisorNavigation) return;
+    if (!supervisorOpen) { setSupervisorNavigation(null); return; }
     if (state.focusError) { setSupervisorNavigationError(state.focusError.message); setSupervisorNavigation(null); return; }
     if (!state.focusPending && state.snapshot?.focused_pane_id === supervisorNavigation) {
       setSupervisorNavigation(null);
       closeSupervisor();
     }
-  }, [supervisorNavigation, state.focusPending, state.focusError, state.snapshot, closeSupervisor]);
+  }, [supervisorNavigation, supervisorOpen, state.focusPending, state.focusError, state.snapshot, closeSupervisor]);
+  const closeNotes = useCallback(() => { setLocalWorkarea(null); setAttachFocusSuppressed(true); }, []);
+  const openNotes = useCallback(() => { setAttachFocusSuppressed(true); setLocalWorkarea("notes"); }, []);
   const [prefixActive, setPrefixActive] = useState(false);
   const [armedPrefix, setArmedPrefix] = useState<{ origin: "cockpit" | "herdr"; label: string }>({ origin: "cockpit", label: "Ctrl+B" });
   const [prefixHint, setPrefixHint] = useState<string | null>(null);
@@ -790,7 +795,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   };
   const focusTab = (tab: Tab) => {
     if (modalOpen) return;
-    setSupervisorOpen(false); setLibraryOpen(false); setAttachFocusSuppressed(false);
+    setLocalWorkarea(null); setAttachFocusSuppressed(false);
     const remembered = ctx.getState().tabs[tab.id];
     const paneId = remembered?.selectedLeafId ?? tab.focused_pane_id ?? null;
     const focusedTerminal = tab.focused_pane_id;
@@ -800,12 +805,12 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   };
   const selectLeaf = (leafId: string) => {
     if (modalOpen || !tabLayout) return;
-    setSupervisorOpen(false); setLibraryOpen(false); setAttachFocusSuppressed(false);
+    setLocalWorkarea(null); setAttachFocusSuppressed(false);
     onSelectLeaf(tabLayout.tabId, leafId);
   };
   const focusAgent = (agent: Agent) => {
     if (modalOpen) return;
-    setSupervisorOpen(false); setLibraryOpen(false); setAttachFocusSuppressed(false);
+    setLocalWorkarea(null); setAttachFocusSuppressed(false);
     if (narrowViewport) drawerFocusTarget.current = { spaceId: agent.space_id, paneId: agent.pane_id };
     onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id });
   };
@@ -863,7 +868,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const openViewer = (kind: RendererActionDefinition["kind"]) => {
     if (!tabLayout || !sourcePaneId || !viewerCapability(kind) || mutationBusy || state.sync !== "live") return;
     const selector = kind === "review" ? { kind: "review" as const, repositoryId: viewerSources!.review_repository_ids[0] } : { kind: kind === "files" ? "files_folder" as const : "files_context" as const };
-    setSupervisorOpen(false); setLibraryOpen(false); setAttachFocusSuppressed(false);
+    setLocalWorkarea(null); setAttachFocusSuppressed(false);
     perform(openViewerLeaf(ctx, tabLayout.tabId, kind === "review" ? "review" : "files", selector, "row", sourcePaneId));
   };
   const runCommand = useCallback((command: PrefixCommand) => {
@@ -932,16 +937,16 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     };
     if (command === "help") { setCommandsOpen(true); return; }
     if (mutationBusy && !COMMANDS_ALLOWED_WHILE_BUSY.includes(command)) return;
-    if (shortcutEntry(command).paneScoped && (libraryOpen || supervisorOpen)) {
-      // Show the pane before a scoped command so confirmations name a visible target.
+    if (shortcutEntry(command).paneScoped && localWorkarea !== null) {
+      // A pane command deliberately exits the local workarea before acting on that pane.
       libraryOrigin.current = null;
       setAttachFocusSuppressed(false);
-      flushSync(() => { setSupervisorOpen(false); setLibraryOpen(false); });
+      flushSync(() => setLocalWorkarea(null));
       requestAnimationFrame(() => window.setTimeout(execute, 0));
       return;
     }
     execute();
-  }, [spaces, tabs, panes, tabLayout, area, localLeaves, selectedLeaf, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, supervisorOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, state.focusPending, browserOpen, browserReason, closeLibrary, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed, runGitAction]);
+  }, [spaces, tabs, panes, tabLayout, area, localLeaves, selectedLeaf, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, localWorkarea, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, state.focusPending, browserOpen, browserReason, closeLibrary, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed, runGitAction]);
   const customCommandReason = state.sync !== "live" || shell?.status !== "live" ? shell?.error ?? "Herdr commands are not live"
     : state.focusPending || state.focusError || !snapshot?.focused_space_id || !snapshot.focused_tab_id ? "Waiting for Herdr focus"
     : mutationBusy ? "Another Herdr action is pending" : undefined;
@@ -1072,6 +1077,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       return { id: entry.id, label: entry.label, group: entry.group, icon: action === "pull" ? "down" : "up", shortcut: formatShortcut(id), disabled: Boolean(reason), reason: reason ?? detail, reasonDetail: detail ? `${detail}${reason ? ` · ${reason}` : ""}` : reason, run: () => { if (target) runGitAction(target.id, action); } };
     }),
     { id: "recovery:cleanup", label: "Recover task cleanup…", group: "Navigate", run: () => setRecoveryOpen(true) },
+    { id: "notes:toggle", label: notesOpen ? "Close Notes" : "Open Notes", icon: "file", group: "Navigate", disabled: !selectedSpace, reason: !selectedSpace ? "Select a Space first" : undefined, run: notesOpen ? closeNotes : openNotes },
     { id: "browser:open", label: "Open Browser", group: "Browser", disabled: Boolean(browserReason), reason: browserReason ?? undefined, run: openBrowser },
     { id: "browser:close", label: "Close browser", group: "Browser", disabled: !browserOpen, reason: !browserOpen ? "No browser in this tab" : undefined, run: () => { if (selectedTab) perform(closeBrowserLeaf(ctx, selectedTab.id)); } },
     { id: "browser:cleanup", label: "Retry browser cleanup", group: "Browser", run: () => perform(retryBrowserCleanup(ctx)) },
@@ -1084,7 +1090,7 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     ...widgets.widgets(ctx.sessionId).map(widget => ({
       id: `widget:${widgetKey(widget.key)}`, label: `Go to widget: ${widget.title} — ${spaces.find(space => space.id === widget.space_id)?.label ?? "Space"} · ${allTabs.find(tab => tab.id === widget.key.tab_id)?.label ?? "tab"}`, group: "Navigate" as const,
       // A widget explicitly requested from Commands returns to the terminal workarea.
-      run: () => { const tab = allTabs.find(candidate => candidate.id === widget.key.tab_id); if (!tab) return; setSupervisorOpen(false); setLibraryOpen(false); const local = ctx.getState().tabs[tab.id]; if (local?.zoomLeafId) ctx.dispatch({ type: "zoom-toggle", tabId: tab.id, leafId: local.zoomLeafId }); widgets.show(tab.id, widget.key.id); onFocus({ kind: "tab", target_id: tab.id }, { spaceId: tab.space_id, tabId: tab.id, paneId: local?.selectedLeafId ?? tab.focused_pane_id }); },
+      run: () => { const tab = allTabs.find(candidate => candidate.id === widget.key.tab_id); if (!tab) return; setLocalWorkarea(null); const local = ctx.getState().tabs[tab.id]; if (local?.zoomLeafId) ctx.dispatch({ type: "zoom-toggle", tabId: tab.id, leafId: local.zoomLeafId }); widgets.show(tab.id, widget.key.id); onFocus({ kind: "tab", target_id: tab.id }, { spaceId: tab.space_id, tabId: tab.id, paneId: local?.selectedLeafId ?? tab.focused_pane_id }); },
     })),
     { id: "library:add", label: "Add to Library…", group: "Library", run: () => setLibraryAddOpen(true) },
     { id: "library:refresh", label: "Refresh Library", group: "Library", run: () => openLibrary({ kind: "refresh" }) },
@@ -1160,10 +1166,10 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
-      {selection.spaceId ? <TabStrip supervisorOpen={supervisorOpen} onSupervisor={() => { if (supervisorOpen) closeSupervisor(); else openSupervisor(); }} onStartSupervisor={() => openSupervisor(true)} widgetDots={widgetDots} widgetsPending={widgetsPending} onWidgets={showWidgets} sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : <div className="tab-toolbar"><button type="button" className="tab-strip-action" onClick={() => openSupervisor()}>Supervisor</button><button type="button" className="tab-strip-action" onClick={() => openSupervisor(true)}>Start supervisor…</button><button type="button" className="tab-strip-action" onClick={() => setCommandsOpen(true)}>Commands</button></div>}
+      {selection.spaceId ? <TabStrip supervisorOpen={supervisorOpen} onSupervisor={() => { if (supervisorOpen) closeSupervisor(); else openSupervisor(); }} onStartSupervisor={() => openSupervisor(true)} widgetDots={widgetDots} widgetsPending={widgetsPending} onWidgets={showWidgets} sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} notesOpen={notesOpen} onNotesToggle={notesOpen ? closeNotes : openNotes} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : <div className="tab-toolbar"><button type="button" className="tab-strip-action" onClick={() => openSupervisor()}>Supervisor</button><button type="button" className="tab-strip-action" onClick={() => openSupervisor(true)}>Start supervisor…</button><button type="button" className="tab-strip-action" onClick={() => setCommandsOpen(true)}>Commands</button></div>}
       <div className="workarea-content">
         {supervisorMounted && state.sessionId ? <SupervisorView client={client} sessionId={state.sessionId} session={snapshot} runtimeLive={state.sync === "live"} active={supervisorOpen} startToken={supervisorStartToken} onClose={closeSupervisor} onModalChange={setSupervisorModal} onTerminal={(run, orchestration) => supervisorTerminal(orchestration.runtime.status === "fresh" ? orchestration.runtime.runs.find(observation => observation.run_id === run.run_id)?.pane_id ?? "" : "", run, orchestration)} onUnmanagedTerminal={paneId => supervisorTerminal(paneId)} navigationError={supervisorNavigationError} /> : null}
-        {supervisorOpen ? null : libraryOpen ? <LibraryView client={client} onClose={closeLibrary} onCaptureInvoker={invoker => { librarySidebarInvoker.current = invoker?.closest(".sidebar") ? invoker : null; }} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
+        {supervisorOpen ? null : notesOpen ? <NotesView key={`${state.sessionId}:${selection.spaceId}`} client={client} space={librarySpace} onClose={closeNotes} /> : libraryOpen ? <LibraryView client={client} onClose={closeLibrary} onCaptureInvoker={invoker => { librarySidebarInvoker.current = invoker?.closest(".sidebar") ? invoker : null; }} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
           onContextMenu={event => { const pane = (event.target as HTMLElement).closest<HTMLElement>("[data-leaf-id]"); if (pane?.dataset.leafId) { selectLeaf(pane.dataset.leafId); openContext(event, { kind: "pane", id: pane.dataset.leafId }); } }}>
           {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
         </div>}

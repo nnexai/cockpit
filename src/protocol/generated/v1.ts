@@ -311,7 +311,7 @@ export type ProjectLimits = { catalog_depth: number, catalog_entries: number, gi
 
 export type ProjectProvider = { id: string, base_url: string, executable: string, login?: string, };
 
-export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, cache_root: string, library_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, orchestration: OrchestrationConfiguration, origins: { [key in string]: string }, };
+export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, cache_root: string, library_root: string, notes_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, orchestration: OrchestrationConfiguration, origins: { [key in string]: string }, };
 
 export type OrchestrationConfiguration = { omp_extension: string | null, model: string | null, extra_args: Array<string>, routes: Array<OrchestrationRoute>, };
 
@@ -420,6 +420,54 @@ export type SpaceAddRequest = { target: SpaceTarget, item_ids: Array<string>, };
 export type SpaceRepositoriesRequest = { target: SpaceTarget, repository_paths: Array<string>, };
 
 export type SpaceRemoveRequest = { target: SpaceTarget, item_ids: Array<string>, };
+
+export type NotesTarget = { "kind": "root" } | { "kind": "notes", notes_id: string, } | { "kind": "space", session_id: string, space_id: string, };
+
+export type NotesLane = "backlog" | "doing";
+
+export type NotesColumn = "backlog" | "doing" | "done";
+
+export type NotesTodoFilter = "all" | "open" | "done";
+
+export type NotesDecisionFilter = "current" | "history" | "all";
+
+export type NotesTodoSelector = { "by": "id", id: string, expected_revision: string, } | { "by": "ref", ref: string, };
+
+export type NotesOperation = { "op": "catalog_list" } | { "op": "target_resolve" } | { "op": "target_create" } | { "op": "target_attach", notes_id: string, } | { "op": "scratchpad_read" } | { "op": "scratchpad_append", text: string, expected_revision: string | null, } | { "op": "scratchpad_replace", content: string, expected_revision: string, } | { "op": "todo_list", filter: NotesTodoFilter, } | { "op": "todo_add", text: string, lane: NotesLane | null, } | { "op": "todo_update", todo: NotesTodoSelector, text: string | null, } | { "op": "todo_set_done", todo: NotesTodoSelector, done: boolean, } | { "op": "todo_remove", todo: NotesTodoSelector, } | { "op": "kanban_list" } | { "op": "kanban_promote", todo: NotesTodoSelector, } | { "op": "kanban_move", todo: NotesTodoSelector, to: NotesColumn, } | { "op": "kanban_unboard", todo: NotesTodoSelector, } | { "op": "decision_list", status: NotesDecisionFilter, query: string | null, } | { "op": "decision_get", decision_id: string, } | { "op": "decision_create", title: string, body: string, decided: string | null, } | { "op": "decision_update", decision_id: string, expected_revision: string, title: string | null, body: string | null, } | { "op": "decision_replace", decision_id: string, expected_revision: string, title: string, body: string, decided: string | null, } | { "op": "comment_list", todo_id: string, } | { "op": "comment_get", todo_id: string, comment_id: string, } | { "op": "comment_add", todo_id: string, body: string, author: string | null, } | { "op": "comment_update", todo_id: string, comment_id: string, expected_revision: string, body: string, } | { "op": "comment_remove", todo_id: string, comment_id: string, expected_revision: string, };
+
+export type NotesRequest = { target: NotesTarget, operation: NotesOperation, };
+
+export type NotesCatalogEntry = { notes_id: string, label: string | null, created: string | null, bound: boolean, };
+
+export type NotesSpaceInfo = { session_id: string, space_id: string, label: string, };
+
+export type NotesChangeTokens = { scratchpad: string, todos: string, decisions: string, comments: string, };
+
+export type NotesTargetInfo = { notes_id: string,
+/**
+ * Absolute path to the durable notes folder.
+ */
+folder: string, space: NotesSpaceInfo | null, change_tokens: NotesChangeTokens, };
+
+export type NotesDocument = { content: string, revision: string, };
+
+export type NotesTodoProblem = "duplicate_id" | "unknown_lane" | "metadata_malformed" | "lazy_continuation";
+
+export type NotesTodo = { id: string | null, ref: string, text: string, done: boolean, lane: NotesLane | null, revision: string, line: number, depth: number, problems: Array<NotesTodoProblem>, };
+
+export type NotesBoard = { backlog: Array<NotesTodo>, doing: Array<NotesTodo>, done: Array<NotesTodo>, };
+
+export type NotesDecisionStatus = "current" | "replaced";
+
+export type NotesDecisionSummary = { decision_id: string, title: string, recorded: string | null, decided: string | null, replaces: string | null, replaced_by: Array<string>, status: NotesDecisionStatus, revision: string, problems: Array<string>, };
+
+export type NotesDecision = { summary: NotesDecisionSummary, body: string, relative_path: string, path: string, };
+
+export type NotesComment = { todo_id: string, comment_id: string, created: string | null, author: string | null, body: string, revision: string, };
+
+export type NotesResult = { "kind": "catalog", entries: Array<NotesCatalogEntry>, } | { "kind": "target", info: NotesTargetInfo, } | { "kind": "scratchpad", document: NotesDocument, } | { "kind": "todos", revision: string, todos: Array<NotesTodo>, } | { "kind": "todo", revision: string, todo: NotesTodo, } | { "kind": "todo_removed", revision: string, } | { "kind": "board", revision: string, columns: NotesBoard, } | { "kind": "decisions", decisions: Array<NotesDecisionSummary>, } | { "kind": "decision", decision: NotesDecision, } | { "kind": "comments", todo_id: string, comments: Array<NotesComment>, } | { "kind": "comment", comment: NotesComment, } | { "kind": "comment_removed", todo_id: string, comment_id: string, };
+
+export type NotesResponse = { notes_id: string | null, changed: boolean, result: NotesResult, };
 
 export type RepositoryCandidate = { repository_id: string, name: string, root: string, checkout_path: string, common_dir: string, branch: string | null, is_linked_worktree: boolean, is_detached: boolean, provenance: string, };
 

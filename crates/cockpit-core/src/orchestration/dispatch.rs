@@ -1004,6 +1004,7 @@ mod tests {
             let config = serde_json::from_value(serde_json::json!({
                 "version":1,"repository_roots":[],"worktree_root":root.join("worktrees"),"companion_root":root.join("companions"),
                 "state_root":root.join("state"),"cache_root":root.join("cache"),"library_root":root.join("library"),
+                "notes_root":root.join("notes"),
                 "branch_template":"test/{task}","checkout_template":"{task}","providers":[],"origins":{},
                 "limits":{"catalog_depth":1,"catalog_entries":1,"git_timeout_ms":1000,"git_output_bytes":1024,
                 "operation_timeout_ms":1000,"context_preview_bytes":1024,"context_preview_lines":10,

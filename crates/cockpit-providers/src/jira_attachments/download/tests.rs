@@ -196,6 +196,7 @@ fn configuration(base_url: &str) -> ProjectConfiguration {
     state_root: "/tmp/s".into(),
     cache_root: "/tmp/k".into(),
     library_root: "/tmp/l".into(),
+    notes_root: "/tmp/notes".into(),
     branch_template: "{repo}/{task_id}".into(),
     checkout_template: "{repo}-{task_id}".into(),
     providers: vec![ProjectProvider {
