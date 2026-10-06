@@ -284,7 +284,11 @@
  .notes-agent-overlay { max-height:65cqh; }
 }
 @media (pointer:coarse) { .notes-todo-secondary,.notes-todo-comments,.kanban-card-comments,.kanban-card-handle,.notes-comment-actions button { opacity:1 !important; } .kanban-card-handle { min-width:32px; } }
-@media (prefers-reduced-motion:reduce) { .kanban-board { scroll-behavior:auto; scroll-snap-type:none; } }
+@media (prefers-reduced-motion:reduce) {
+ .kanban-board { scroll-behavior:auto; scroll-snap-type:none; }
+ /* CodeMirror sets the caret blink animation inline after selection changes. */
+ .notes-editor .cm-cursorLayer { animation:none !important; }
+}
 @media (max-height:650px) {
  .notes-task-detail { overflow:auto; display:block; }
  .notes-task-detail>header { position:sticky; top:0; z-index:var(--z-floating); }
