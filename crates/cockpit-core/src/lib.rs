@@ -14,6 +14,7 @@ pub mod library;
 pub mod jira_query;
 pub mod paste_adapter;
 pub mod process;
+pub mod notes;
 pub mod project_adapter;
 mod project_store;
 pub mod project_teardown;
@@ -142,6 +143,7 @@ pub struct CockpitService {
     comments: Option<Arc<comments::CommentsService>>,
     reviews: Option<Arc<review::ReviewService>>,
     library: Option<Arc<library::LibraryService>>,
+    notes: Option<Arc<notes::NotesService>>,
     credentials: Option<Arc<credentials::ProviderCredentials>>,
     quota: Option<Arc<quota::QuotaService>>,
     git_actions: Arc<space_git_action::SpaceGitActions>,
@@ -209,6 +211,7 @@ impl CockpitService {
             comments: None,
             reviews: None,
             library: None,
+            notes: None,
             credentials: None,
             quota: None,
             git_actions: Arc::new(space_git_action::SpaceGitActions::default()),
@@ -266,6 +269,17 @@ impl CockpitService {
                 "Library is not configured in this host",
             )
         })
+    }
+
+    pub fn with_notes(mut self, notes: notes::NotesService) -> Self {
+        self.notes = Some(Arc::new(notes));
+        self
+    }
+
+    pub fn notes(&self) -> Result<&Arc<notes::NotesService>, InspectionError> {
+        self.notes.as_ref().ok_or_else(|| InspectionError::new(
+            "notes_unavailable", "Notes operations are not configured in this host",
+        ))
     }
 
     pub fn with_credentials(mut self, credentials: Arc<credentials::ProviderCredentials>) -> Self {

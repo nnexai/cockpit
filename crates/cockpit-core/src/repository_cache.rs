@@ -134,6 +134,7 @@ mod tests {
             state_root: "state".into(),
             cache_root: "cache".into(),
             library_root: "library".into(),
+            notes_root: root.with_extension("notes").display().to_string(),
             branch_template: "{repo}/{task_id}".into(),
             checkout_template: "{repo}-{task_id}".into(),
             providers: Vec::new(),

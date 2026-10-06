@@ -54,6 +54,7 @@
     "allow-cockpit-terminal-command",
     "allow-cockpit-stream-cancel",
     "allow-cockpit-library-space-list",
+    "allow-cockpit-notes-execute",
     "allow-cockpit-library-space-add",
     "allow-cockpit-library-space-repositories",
     "allow-cockpit-library-space-remove",

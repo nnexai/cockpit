@@ -53,6 +53,7 @@ mod comments;
 mod context;
 mod context_media;
 mod credentials;
+mod notes;
 mod projects;
 mod review;
 mod library;
@@ -234,6 +235,7 @@ fn build_router_with_validated_root(
         .merge(context::routes())
         .merge(viewer::routes())
         .merge(library::routes())
+        .merge(notes::routes())
         .merge(credentials::routes())
         .merge(browser_view::routes())
         .merge(widgets::routes())

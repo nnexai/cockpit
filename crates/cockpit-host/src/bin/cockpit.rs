@@ -1,3 +1,6 @@
+#[path = "cockpit/notes.rs"]
+mod notes_cli;
+
 use std::{fs::OpenOptions, io::{IsTerminal, Read}, net::SocketAddr, os::unix::fs::OpenOptionsExt, path::{Path, PathBuf}, process::ExitCode, sync::Arc, time::Duration};
 
 use clap::{Args, Parser, Subcommand};
@@ -65,17 +68,19 @@ pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     Widget(WidgetArgs),
     /// Print the live Library context selected by a Herdr Space.
     Context(ContextArgs),
+    /// Read and edit durable Space Notes outside repositories and the Library.
+    Notes(notes_cli::NotesArgs),
 }
 #[derive(Debug, Clone, Args)]
 struct HerdrArgs {
     /// Herdr executable to invoke.
-    #[arg(long, env = "COCKPIT_HERDR_EXECUTABLE")]
+    #[arg(long, env = "COCKPIT_HERDR_EXECUTABLE", global = true)]
     herdr: Option<PathBuf>,
     /// Named Herdr session to inspect. Required with --herdr-socket.
-    #[arg(long, env = "COCKPIT_HERDR_SESSION")]
+    #[arg(long, env = "COCKPIT_HERDR_SESSION", global = true)]
     herdr_session: Option<String>,
     /// Herdr socket path override. Requires an explicit logical session identity.
-    #[arg(long, env = "COCKPIT_HERDR_SOCKET")]
+    #[arg(long, env = "COCKPIT_HERDR_SOCKET", global = true)]
     herdr_socket: Option<PathBuf>,
 }
 
@@ -274,6 +279,9 @@ fn make_service(
     let service = CockpitService::new(mode, adapter.clone());
     match projects {
         Some(config) => {
+            let notes = cockpit_core::notes::NotesService::new(PathBuf::from(&config.notes_root))
+                .with_herdr(adapter.clone());
+            let service = service.with_notes(notes);
             let credentials = Arc::new(cockpit_core::credentials::ProviderCredentials::new(
                 &config,
                 cockpit_secrets::os_vault(),
@@ -432,6 +440,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         }
         Command::Browser(args) => run_browser(args).await,
         Command::Widget(_) => unreachable!("widget commands use their own exit-status contract"),
+        Command::Notes(_) => unreachable!("Notes commands use their own exit-status contract"),
         Command::Context(args) => run_context(args).await,
     }
 }
@@ -951,9 +960,13 @@ async fn run_widget(args: WidgetArgs) -> Result<u8, CliError> {
 #[tokio::main]
 async fn main() -> ExitCode {
     let widget = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("widget"));
+    let notes = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("notes"));
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
+            if notes && !matches!(error.kind(), clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion) {
+                return ExitCode::from(notes_cli::print_error(cockpit_core::InspectionError::new("notes_usage", error.to_string())));
+            }
             if widget && !matches!(error.kind(), clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion) {
                 eprintln!("{}", CliError::widget("widget_usage", error).text);
                 return ExitCode::from(2);
@@ -965,6 +978,7 @@ async fn main() -> ExitCode {
     };
     let result = match cli.command {
         Command::Widget(args) => run_widget(args).await,
+        Command::Notes(args) => return ExitCode::from(notes_cli::run(args).await),
         command => run_legacy(Cli { command }).await.map(|()| 0).map_err(CliError::from),
     };
     match result {

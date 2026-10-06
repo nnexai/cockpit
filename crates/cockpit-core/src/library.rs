@@ -1541,6 +1541,7 @@ mod tests {
             state_root: root.join("state").to_string_lossy().into_owned(),
             cache_root: root.join("cache").to_string_lossy().into_owned(),
             library_root: root.join("library").to_string_lossy().into_owned(),
+            notes_root: root.join("notes").to_string_lossy().into_owned(),
             branch_template: "{repo}/{task_id}".into(),
             checkout_template: "{repo}-{task_id}".into(),
             providers: vec![ProjectProvider {

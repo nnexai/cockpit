@@ -3,7 +3,7 @@ import { matchingHerdrCommand, herdrBindingMatches, type HerdrBindingEvent, type
 import type { HerdrCommand } from "../../protocol/generated/v1";
 
 function editableTarget(target: EventTarget | null): boolean {
-  return target !== null && target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+  return target !== null && target instanceof HTMLElement && (target.isContentEditable || Boolean(target.closest(".notes-editor")) || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 }
 
 export type WorkbenchKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey" | "target" | "isComposing" | "preventDefault" | "stopPropagation"> & Partial<Pick<KeyboardEvent, "code" | "repeat">>;

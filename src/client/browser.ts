@@ -1,3 +1,4 @@
+import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest,
   parseWidgetRemoveResponse, parseWidgetSelectRequest, parseWidgetSelectResponse,
@@ -952,6 +953,15 @@ export function createBrowserClient(
       const response = await getJson(request, "/api/v1/library/media", "Library media", parseLibraryMedia, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       signal?.throwIfAborted();
       return matchLibraryMedia(response, body);
+    },
+    async notes(value, signal) {
+      signal?.throwIfAborted();
+      const body = parseNotesRequest(value);
+      const response = await getJson(request, "/api/v1/notes", "Notes", parseNotesResponse, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+      });
+      signal?.throwIfAborted();
+      return matchNotesResponse(response, body);
     },
     async librarySpaceList(value, signal) {
       signal?.throwIfAborted();

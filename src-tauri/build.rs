@@ -3,6 +3,7 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "cockpit_status",
             "cockpit_quota_status",
+            "cockpit_notes_execute",
             "cockpit_widget_subscribe",
             "cockpit_widget_report",
             "cockpit_widget_content",

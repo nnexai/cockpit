@@ -38,7 +38,8 @@ fn open_source(configuration: &ProjectConfiguration, input: &str) -> Result<(Pat
     let path = std::fs::canonicalize(path).map_err(unavailable)?;
     source_root_revalidate(&root, &path)?;
     for managed in [&configuration.library_root, &configuration.companion_root,
-        &configuration.state_root, &configuration.worktree_root, &configuration.cache_root] {
+        &configuration.state_root, &configuration.worktree_root, &configuration.cache_root,
+        &configuration.notes_root] {
         let managed = canonical_managed(Path::new(managed))?;
         if path.starts_with(&managed) || managed.starts_with(&path) {
             return Err(error("library_folder_refused", "Folder overlaps a Cockpit-owned root"));
@@ -285,3 +286,26 @@ impl LibraryService {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod notes_root_tests {
+    use super::*;
+
+    #[test]
+    fn imports_refuse_notes_root_ancestors_and_descendants() {
+        let fixture = crate::library::tests::fixture();
+        let source = fixture.root.join("source");
+        let notes = source.join("notes");
+        std::fs::create_dir_all(notes.join("child")).expect("Notes test directories");
+        let mut configuration = fixture.service.configuration.clone();
+        configuration.notes_root = notes.to_string_lossy().into_owned();
+        for path in [&source, &notes, &notes.join("child")] {
+            let error = open_source(&configuration, &path.to_string_lossy())
+                .expect_err("Notes overlap must be refused");
+            assert_eq!(error.code, "library_folder_refused");
+        }
+        let sibling = source.join("notes-sibling");
+        std::fs::create_dir(&sibling).expect("independent source");
+        assert!(open_source(&configuration, &sibling.to_string_lossy()).is_ok());
+    }
+}

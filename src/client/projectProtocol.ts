@@ -34,6 +34,7 @@ function isArtifact(value: unknown): value is ProjectArtifact {
 export function parseProjectConfiguration(value: unknown): ProjectConfiguration {
   if (!record(value) || !u32(value.version) || !texts(value.repository_roots)
     || !text(value.worktree_root) || !text(value.companion_root) || !text(value.state_root) || !text(value.library_root)
+    || !text(value.notes_root)
     || !text(value.branch_template) || !text(value.checkout_template)
     || !record(value.limits) || !u32(value.limits.catalog_depth) || !u32(value.limits.catalog_entries)
     || !u32(value.limits.git_timeout_ms) || !u32(value.limits.git_output_bytes) || !u32(value.limits.operation_timeout_ms)

@@ -1,6 +1,6 @@
 # Code guide
 
-Herdr owns live sessions, Spaces, tabs, real terminal existence/membership, focus identity and PTYs. Cockpit owns in-memory tab placement and local Files/Review/Browser leaves and widget docks, task setup, Context assets, local Review snapshots and comment batches. An HTTP response arriving later does not make it newer than an ordered stream event.
+Herdr owns live sessions, Spaces, tabs, real terminal existence/membership, focus identity and PTYs. Cockpit owns in-memory tab placement and local Files/Review/Browser leaves and widget docks, task setup, Context assets, durable Space Notes, local Review snapshots and ephemeral viewer comment batches. An HTTP response arriving later does not make it newer than an ordered stream event.
 
 ## Where to change behavior
 
@@ -17,6 +17,8 @@ Herdr owns live sessions, Spaces, tabs, real terminal existence/membership, focu
 | Herdr methods, server identity and creation receipts | `crates/cockpit-herdr/src/cli/`, `crates/cockpit-protocol/src/v1.rs` | Adapter fixtures against the supported schema and real split/move receipts |
 | Generic Herdr commands and singleton popup | `crates/cockpit-protocol/src/herdr_shell.rs`, `crates/cockpit-herdr/src/{shell_wire.rs,cli/shell.rs,cli/operations.rs}`, `src/app/{App,ServerPopup}.tsx` | Live advertised invocation, popup program input/closure, unchanged split geometry, disconnected recovery and DOM focus return |
 | Task setup and recovery | `crates/cockpit-core/src/projects.rs`, `project_store.rs`, `project_teardown.rs` | Ownership, idempotency and uncertain-outcome fixtures |
+| Durable Space Notes, task board and comments | `crates/cockpit-core/src/{notes.rs,notes/}`, `crates/cockpit-protocol/src/notes.rs`, `src/app/notes/` | Real Markdown/CAS fixtures, sibling-byte preservation, concurrent/external edits, orphan retention, boot-scoped attach and disposable browser/native drag/comment/draft recovery |
+| Notes CLI and browser/native transport | `crates/cockpit-host/src/{bin/cockpit/notes.rs,server/notes.rs}`, `src-tauri/src/notes.rs`, `src/client/notesProtocol.ts` | Real standalone CLI without Herdr, origin rejection, equivalent producer DTOs, custom-root copied recipes and real native IPC |
 | Virtual viewer source binding and path authorization | `crates/cockpit-core/src/{viewer,context}.rs`, `crates/cockpit-protocol/src/viewer.rs`, `src/app/layout/{FilesLeaf,ReviewLeaf}.tsx`, `viewerLifecycle.ts` | Same-tab source checks, stale bindings/root replacement, pluginless Files/Review and source-state retention |
 | Repository discovery cache and setup freshness | `crates/cockpit-core/src/repository_cache.rs`, `projects.rs`, `context.rs` | Mutation-generation invalidation, stale-while-refill, and disposable gateway request counts |
 | Context/Library file index and picker ranking | `crates/cockpit-core/src/context.rs`, `file_index_cache.rs`, `config.rs`, `library/reader.rs`, `src/app/input/fileIndexCache.ts`, `fileNavigation.ts` | Git ignore/symlink/cap fixture, persisted restart smoke, mixed Unicode ranking parity |
@@ -63,6 +65,31 @@ The owner emits ordered widget summaries; `server/widgets.rs` and native command
 For example, `<button onclick="cockpit.select({plan: 'small'})">Choose small plan</button>` sends page JSON through the incarnation-bound bridge, `widgetStore.selectPage`, the shared transport and owner validation. Raw and canonical selection JSON must each fit 16 KiB UTF-8; UI submission is capped at four per second. HTML caps are 1 MiB per widget/64 MiB aggregate owner, live count is eight per tab, and owner/transport snapshot metadata is bounded to 8 MiB. Keep these protocol bounds aligned across preflight, owner, adapters and frontend.
 
 `cockpit widget selection --id plan-picker --wait` pulls retained JSON immediately or waits for selection; default wait is 300 s (`--timeout` 1–3600 s). CLI emits `status` and decoded `value`, not a command. Handle none/timeout/dismissed/retired, validate application-specific shape/allowed values and never execute or interpolate the value into shell commands or instructions. Replacement retains selection unless `--clear-selection`; reopen clears it. `cockpit.selection`/`cockpit.hasSelection` are mount/replacement state, not live subscriptions. The dedicated bounded shortcut bridge feeds Cockpit/configured Herdr prefixes and custom bindings through `App.tsx`'s existing workbench router, never synthetic keydown, paste, chat or terminal bytes.
+
+## Durable Notes call flow
+
+`NotesRequest { target, operation }` in `cockpit-protocol/src/notes.rs` is the shared contract. `NotesService` in `cockpit-core/src/notes.rs` owns target authorization and durable content; `notes/{registry,fs,todos,decisions,comments}.rs` own bindings, bounded filesystem publication and Markdown records. `cockpit notes` delegates directly to that service. HTTP `POST /api/v1/notes` checks Origin before dispatch; native `cockpit_notes_execute` uses the same request/response and is registered in the build manifest and capabilities. `notesProtocol.ts` checks shapes and response identities; opaque change tokens are not CAS revisions. Regenerate `src/protocol/generated/v1.ts` after Rust contract changes.
+
+`App.tsx` opens the local Notes workarea; `NotesView.tsx` owns the four views, explicit create/attach, catalog recovery and read-before-retry acknowledgement. `useNotes.ts` owns pinned operations, source refresh, mutation outcomes and UUID-scoped drafts. `MarkdownEditor.tsx` preserves source editor state and renders a safe GFM preview. `TaskDetail.tsx` owns durable thread edits, conflicts, confirmed deletion and external-append scroll behavior. `TodoTitle.tsx` sizes editable titles on value and width changes without stealing selection.
+
+`Kanban.tsx` uses the pinned dnd-kit sensors through `notesSensors.ts`; do not remove real listener cancellation or replace it with a boolean guard. Capture keyboard lane intent before the deferred document listener and collision render, then let `boardState.ts` reject stale identity/revision, absent membership, outside targets and same-column no-ops. Pointer drops remain collision-owned. Neither path writes ranks or reorders `todos.md`. Only the Notes live status announces the intended/confirmed result.
+
+Configure `notes_root` in Cockpit TOML or `COCKPIT_NOTES_ROOT` in the environment, using a persistent location outside worktrees, the Library and ephemeral pane-state roots. The default Linux location is `$XDG_DATA_HOME/cockpit/notes`, with `$HOME/.local/share` as the unset-XDG fallback. The UI's POSIX command examples pin both this root and the UUID, escaping shell-sensitive paths. In an uninstalled checkout, use `target/debug/cockpit` instead of the installed `cockpit-cli` name:
+
+```sh
+cockpit-cli notes --current target
+cockpit-cli notes --current target --create
+cockpit-cli notes --current target --attach UUID
+
+# Resolve once; use the returned UUID and the same configured root thereafter.
+COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID scratchpad read
+COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID todo list
+COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID kanban list
+COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID decision list
+COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID comment list --todo TODO_ID
+```
+
+Use `--id ID --expected-revision REVISION` for adopted task mutations, or `--ref 'L<n>@sha256:…'` for an unadopted/ambiguous source task. Whole Scratchpad, decision and comment edits use their read revision. Root/Space operations do not authorize arbitrary content paths. Pinned content operations work without Herdr; `--current` still needs a real current pane. Unknown outcomes must be re-read, never blindly replayed. Filesystem CAS protects participating Cockpit writers, not external editors that ignore advisory locks.
 
 ## Development loop
 

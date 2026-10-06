@@ -278,6 +278,7 @@ fn project_configuration(root: &std::path::Path) -> ProjectConfiguration {
         state_root: root.join("state").display().to_string(),
         cache_root: root.join("cache").display().to_string(),
         library_root: root.join("library").display().to_string(),
+        notes_root: root.join("notes").display().to_string(),
         branch_template: "{name}".to_owned(),
         checkout_template: "{name}".to_owned(),
         providers: vec![],

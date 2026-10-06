@@ -108,6 +108,19 @@ Local chords act when focus is inside the viewer and not in a text field or dial
 
 <!-- shortcuts:end -->
 
+### Notes
+
+Open **Notes** from the work-area header or **Open Notes** in Commands. This is a local whole-work-area surface for the selected Space, not a Herdr pane. Closing Notes restores its entry focus without changing Herdr focus; drafts remain associated with their durable Notes UUID.
+
+- The four peer tabs are Scratchpad, Todos, Kanban and Decisions. Left/Right, Home and End navigate the focused tab strip.
+- Markdown source uses CodeMirror. Ctrl/Cmd+S saves the focused Scratchpad, decision or comment editor; Ctrl/Cmd+Enter posts/saves a focused comment. Enter in a composer remains a newline. Text fields and Markdown editors own their ordinary typing keys.
+- Enter adds a todo/card without moving focus away from its add field. Enter in a task title saves it; Shift+Enter keeps a newline in the draft (the storage operation normalizes task text).
+- A card's dedicated grip supports Space/Enter to pick up, Left/Right to choose Backlog/Doing/Done, Space/Enter to drop, and Escape/Tab to cancel. Moving never creates manual ranking: order follows todos.md. The visible Move select provides a non-drag alternative.
+- Escape parks an active comment edit, cancels a delete or association-transfer confirmation, closes task detail, closes the attach picker, then closes Notes. Closing/switching views keeps unsaved drafts. Cancelling an attach picker restores its entry focus. Explicit Discard/Reload controls are the only draft-discard actions.
+- Save conflicts retain local text and show the observed saved version. **Keep mine and save** explicitly uses that version's revision; a second concurrent change can conflict again. An unconfirmed write is never automatically retried.
+- After an unconfirmed write, **Check saved state** performs reads but does not enable another write. Review the result and explicitly choose **I checked saved state; allow next write**; the next write may duplicate the unconfirmed change. A failed check or reopening Notes requires a successful check before that acknowledgment is available.
+
+
 ### Runtime Herdr custom bindings
 
 The generated tables describe Cockpit's static shortcuts. Herdr can also advertise configured shell, pane, popup and plugin-action commands with direct keys and `prefix+` aliases. **Commands** includes those runtime actions with their server descriptions and binding aliases; Cockpit does not need a plugin-specific integration. Config reload replaces the advertised bindings, so retired aliases stop invoking their old commands.
@@ -130,7 +143,7 @@ These Herdr built-in prefix keys have no Cockpit action, so Ctrl+B followed by o
 
 ### Where things happen
 
-- Pane commands (split, close, zoom, rename, swap, resize divider) close the Library first when it is open, then act on the selected layout leaf. Split always creates a real terminal, even beside a viewer; only real terminals can be renamed.
+- Pane commands (split, close, zoom, rename, swap, resize divider) close the Library or Notes first when open, then act on the selected layout leaf. Split always creates a real terminal, even beside a viewer; only real terminals can be renamed.
 - Closing the Library with Ctrl+B i, Esc, its toolbar toggle or Close button returns keyboard focus to the selected terminal once it reattaches. An explicit connected sidebar invoker keeps focus instead; an originating graphical pane regains focus if still selected. Closing never changes Herdr focus.
 - Outside a Herdr popup, Esc closes the innermost layer first: an armed prefix, then a menu, then a dialog or picker, then the narrow drawer or file overlay, then the Library. In terminal, browser and viewer content Esc belongs to that surface. With focus on layout chrome, Esc restores zoom; during a pane-header drag it cancels the drag first. On a focused divider it returns focus to the selected leaf.
 - Ctrl+B works from the inline browser surface, not from its address field or note editor. Press Ctrl+B twice to send a literal Ctrl+B to the page.

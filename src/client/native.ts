@@ -1,3 +1,4 @@
+import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest,
   parseWidgetRemoveResponse, parseWidgetSelectRequest, parseWidgetSelectResponse,
@@ -893,6 +894,13 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const response = await invokeAndParse(invoke, "cockpit_library_media", { request }, "Library media", parseLibraryMedia);
       signal?.throwIfAborted();
       return matchLibraryMedia(response, request);
+    },
+    async notes(value, signal) {
+      signal?.throwIfAborted();
+      const request = parseNotesRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_notes_execute", { request }, "Notes", parseNotesResponse);
+      signal?.throwIfAborted();
+      return matchNotesResponse(response, request);
     },
     async librarySpaceList(value, signal) {
       signal?.throwIfAborted();

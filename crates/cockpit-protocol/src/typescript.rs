@@ -81,6 +81,12 @@ use crate::library::{
     SpaceAddRequest, SpaceContextListing, SpaceContextRequest, SpacePhaseResult,
     SpaceRemoveRequest, SpaceRepositoriesRequest, SpaceTarget,
 };
+use crate::notes::{
+    NotesBoard, NotesCatalogEntry, NotesChangeTokens, NotesColumn, NotesComment, NotesDecision,
+    NotesDecisionFilter, NotesDecisionStatus, NotesDecisionSummary, NotesDocument, NotesLane,
+    NotesOperation, NotesRequest, NotesResponse, NotesResult, NotesSpaceInfo, NotesTarget,
+    NotesTargetInfo, NotesTodo, NotesTodoFilter, NotesTodoProblem, NotesTodoSelector,
+};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -339,6 +345,28 @@ pub fn render_v1() -> String {
         SpaceAddRequest::decl(&config),
         SpaceRepositoriesRequest::decl(&config),
         SpaceRemoveRequest::decl(&config),
+        NotesTarget::decl(&config),
+        NotesLane::decl(&config),
+        NotesColumn::decl(&config),
+        NotesTodoFilter::decl(&config),
+        NotesDecisionFilter::decl(&config),
+        NotesTodoSelector::decl(&config),
+        NotesOperation::decl(&config),
+        NotesRequest::decl(&config),
+        NotesCatalogEntry::decl(&config),
+        NotesSpaceInfo::decl(&config),
+        NotesChangeTokens::decl(&config),
+        NotesTargetInfo::decl(&config),
+        NotesDocument::decl(&config),
+        NotesTodoProblem::decl(&config),
+        NotesTodo::decl(&config),
+        NotesBoard::decl(&config),
+        NotesDecisionStatus::decl(&config),
+        NotesDecisionSummary::decl(&config),
+        NotesDecision::decl(&config),
+        NotesComment::decl(&config),
+        NotesResult::decl(&config),
+        NotesResponse::decl(&config),
         RepositoryCandidate::decl(&config),
         ProjectDiagnostic::decl(&config),
         RepositoryListResponse::decl(&config),

@@ -27,6 +27,8 @@ import {
   type StreamOrderCursor,
 } from "./streamOrder";
 import { parseViewerContext, parseViewerSourceOptions, parseViewerOpenRequest, matchViewerContext } from "./contextProtocol";
+import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
+import type { NotesRequest, NotesResponse, NotesOperation, NotesTodo, NotesDecision, NotesComment, NotesTargetInfo, ProjectConfiguration } from "../protocol/generated/v1";
 
 const snapshot: CockpitSessionSnapshot = {
   session_id: "session-1",
@@ -122,6 +124,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
     contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceRepositories: vi.fn(), librarySpaceRemove: vi.fn(),
+    notes: vi.fn(async () => { throw new Error("Unexpected Notes operation in terminal fixture"); }),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -1035,5 +1038,353 @@ describe("owned-tab client identity boundaries", () => {
       ...send,
       recipient: { endpoint_identity: "endpoint", session_id: "session-1", workspace_id: "space-1", tab_id: "tab-1", pane_id: "agent", terminal_id: "terminal", agent_fingerprint: "fingerprint", agent_label: "Agent" },
     })).toThrow(CockpitClientError);
+  });
+});
+
+describe("Notes decoder and transport security boundaries", () => {
+  const notesId = "12345678-1234-1234-1234-123456789abc";
+  const otherNotesId = "87654321-4321-4321-4321-cba987654321";
+  const commentId = "11111111-1111-1111-1111-111111111111";
+  const rev = `sha256:${"a".repeat(64)}`;
+  const itemRev = `sha256:${"b".repeat(64)}`;
+  const notesTarget = { kind: "notes" as const, notes_id: notesId };
+  const spaceTarget = { kind: "space" as const, session_id: "session-1", space_id: "space-1" };
+  const item: NotesTodo = { id: "todo-1", ref: `L1@${rev}`, text: "Review API", done: false, lane: "doing", revision: itemRev, line: 1, depth: 0, problems: [] };
+  const byId = { by: "id" as const, id: "todo-1", expected_revision: itemRev };
+  const decision: NotesDecision = {
+    summary: { decision_id: "record-1", title: "Use a typed boundary", recorded: null, decided: "2026-10-05", replaces: null, replaced_by: [], status: "current", revision: rev, problems: [] },
+    body: "Preserve editor-authored Markdown.", relative_path: "decisions/record-1.md", path: `/data/notes/${notesId}/decisions/record-1.md`,
+  };
+  const comment: NotesComment = { todo_id: "todo-1", comment_id: commentId, created: "2026-10-05T12:03:12Z", author: null, body: "Blocked on API", revision: rev };
+  const targetInfo: NotesTargetInfo = { notes_id: notesId, folder: `/data/notes/${notesId}`, space: { session_id: "session-1", space_id: "space-1", label: "API review" }, change_tokens: { scratchpad: rev, todos: rev, decisions: rev, comments: rev } };
+  const scratchpad: NotesResponse = { notes_id: notesId, changed: false, result: { kind: "scratchpad", document: { content: "Draft\n", revision: rev } } };
+  const todoResponse: NotesResponse = { notes_id: notesId, changed: true, result: { kind: "todo", revision: rev, todo: item } };
+  const commentResponse: NotesResponse = { notes_id: notesId, changed: false, result: { kind: "comment", comment } };
+  const decisionResponse: NotesResponse = { notes_id: notesId, changed: false, result: { kind: "decision", decision } };
+  const replacement: NotesDecision = { ...decision, summary: { ...decision.summary, decision_id: otherNotesId, replaces: "record-1" }, relative_path: `decisions/${otherNotesId}.md`, path: `/data/notes/${notesId}/decisions/${otherNotesId}.md` };
+  const readRequest: NotesRequest = { target: notesTarget, operation: { op: "scratchpad_read" } };
+  const cases: [NotesRequest, NotesResponse][] = [
+    [{ target: { kind: "root" }, operation: { op: "catalog_list" } }, { notes_id: null, changed: false, result: { kind: "catalog", entries: [{ notes_id: notesId, label: null, created: null, bound: true }] } }],
+    [{ target: spaceTarget, operation: { op: "target_resolve" } }, { notes_id: notesId, changed: false, result: { kind: "target", info: targetInfo } }],
+    [{ target: notesTarget, operation: { op: "target_resolve" } }, { notes_id: notesId, changed: false, result: { kind: "target", info: { ...targetInfo, space: null } } }],
+    [{ target: spaceTarget, operation: { op: "target_create" } }, { notes_id: notesId, changed: true, result: { kind: "target", info: targetInfo } }],
+    [{ target: spaceTarget, operation: { op: "target_attach", notes_id: notesId } }, { notes_id: notesId, changed: true, result: { kind: "target", info: targetInfo } }],
+    [readRequest, scratchpad],
+    [{ target: notesTarget, operation: { op: "scratchpad_append", text: "Next", expected_revision: null } }, { ...scratchpad, changed: true }],
+    [{ target: notesTarget, operation: { op: "scratchpad_replace", content: "Draft\n", expected_revision: "absent" } }, { ...scratchpad, changed: true }],
+    [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, { notes_id: notesId, changed: false, result: { kind: "todos", revision: rev, todos: [item] } }],
+    [{ target: notesTarget, operation: { op: "todo_add", text: "Review API", lane: "doing" } }, todoResponse],
+    [{ target: notesTarget, operation: { op: "todo_add", text: " \n", lane: null } }, { notes_id: notesId, changed: false, result: { kind: "todos", revision: "absent", todos: [] } }],
+    [{ target: notesTarget, operation: { op: "todo_update", todo: { by: "ref", ref: `L1@${rev}` }, text: null } }, todoResponse],
+    [{ target: notesTarget, operation: { op: "todo_set_done", todo: byId, done: true } }, { ...todoResponse, result: { kind: "todo", revision: rev, todo: { ...item, done: true } } }],
+    [{ target: notesTarget, operation: { op: "todo_remove", todo: byId } }, { notes_id: notesId, changed: true, result: { kind: "todo_removed", revision: rev } }],
+    [{ target: notesTarget, operation: { op: "kanban_list" } }, { notes_id: notesId, changed: false, result: { kind: "board", revision: rev, columns: { backlog: [], doing: [item], done: [] } } }],
+    [{ target: notesTarget, operation: { op: "kanban_promote", todo: byId } }, todoResponse],
+    [{ target: notesTarget, operation: { op: "kanban_move", todo: byId, to: "doing" } }, { ...todoResponse, changed: false }],
+    [{ target: notesTarget, operation: { op: "kanban_unboard", todo: byId } }, { ...todoResponse, result: { kind: "todo", revision: rev, todo: { ...item, lane: null } } }],
+    [{ target: notesTarget, operation: { op: "decision_list", status: "all", query: null } }, { notes_id: notesId, changed: false, result: { kind: "decisions", decisions: [decision.summary] } }],
+    [{ target: notesTarget, operation: { op: "decision_get", decision_id: "record-1" } }, decisionResponse],
+    [{ target: notesTarget, operation: { op: "decision_create", title: "Use a typed boundary", body: decision.body, decided: "2026-10-05" } }, { ...decisionResponse, changed: true }],
+    [{ target: notesTarget, operation: { op: "decision_update", decision_id: "record-1", expected_revision: rev, title: null, body: decision.body } }, { ...decisionResponse, changed: true }],
+    [{ target: notesTarget, operation: { op: "decision_replace", decision_id: "record-1", expected_revision: rev, title: "Use a typed boundary", body: decision.body, decided: null } }, { notes_id: notesId, changed: true, result: { kind: "decision", decision: replacement } }],
+    [{ target: notesTarget, operation: { op: "comment_list", todo_id: "todo-1" } }, { notes_id: notesId, changed: false, result: { kind: "comments", todo_id: "todo-1", comments: [comment] } }],
+    [{ target: notesTarget, operation: { op: "comment_get", todo_id: "todo-1", comment_id: commentId } }, commentResponse],
+    [{ target: notesTarget, operation: { op: "comment_add", todo_id: "todo-1", body: comment.body, author: null } }, { ...commentResponse, changed: true }],
+    [{ target: notesTarget, operation: { op: "comment_update", todo_id: "todo-1", comment_id: commentId, expected_revision: rev, body: comment.body } }, { ...commentResponse, changed: true }],
+    [{ target: notesTarget, operation: { op: "comment_remove", todo_id: "todo-1", comment_id: commentId, expected_revision: rev } }, { notes_id: notesId, changed: true, result: { kind: "comment_removed", todo_id: "todo-1", comment_id: commentId } }],
+  ];
+
+  it("decodes every frozen operation and refuses missing or surplus schema fields", async () => {
+    for (const [request, response] of cases) {
+      expect(parseNotesRequest(request)).toEqual(request);
+      expect(matchNotesResponse(parseNotesResponse(response), request)).toEqual(response);
+      for (const key of Object.keys(request.operation)) {
+        const missing = { ...request.operation } as Record<string, unknown>;
+        delete missing[key];
+        expect(() => parseNotesRequest({ ...request, operation: missing })).toThrow(CockpitClientError);
+      }
+      expect(() => parseNotesRequest({ ...request, operation: { ...request.operation, unexpected: null } })).toThrow(CockpitClientError);
+      for (const key of Object.keys(response.result)) {
+        const missing = { ...response.result } as Record<string, unknown>;
+        delete missing[key];
+        expect(() => parseNotesResponse({ ...response, result: missing })).toThrow(CockpitClientError);
+      }
+      expect(() => parseNotesResponse({ ...response, result: { ...response.result, unexpected: null } })).toThrow(CockpitClientError);
+      const fetch = vi.fn(async (_path: string, _init?: RequestInit) => jsonResponse(response));
+      const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>) => response);
+      await expect(createBrowserClient(fetch).notes(request)).resolves.toEqual(response);
+      await expect(createNativeClient(invoke).notes(request)).resolves.toEqual(response);
+      expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/v1/notes", expect.objectContaining({ method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(request) }));
+      expect(invoke).toHaveBeenCalledExactlyOnceWith("cockpit_notes_execute", { request });
+      const wrongResult: NotesResponse = response.result.kind === "scratchpad"
+        ? { notes_id: notesId, changed: false, result: { kind: "comments", todo_id: "todo-1", comments: [] } }
+        : scratchpad;
+      await expect(createBrowserClient(vi.fn(async () => jsonResponse(wrongResult))).notes(request)).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(createNativeClient(vi.fn(async () => wrongResult)).notes(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
+
+  it("accepts captured target creation with absent collection change tokens without widening CAS revisions", () => {
+    const request: NotesRequest = {
+      target: { kind: "space", session_id: "polish-0_vuw1xb", space_id: "w1" },
+      operation: { op: "target_create" },
+    };
+    // HTTP 200 captured from the real Notes producer before any decisions/comments exist.
+    const created: NotesResponse = {
+      notes_id: "5d8c2ef2-2604-45ec-94d1-2c0cb4816dce",
+      changed: true,
+      result: {
+        kind: "target",
+        info: {
+          notes_id: "5d8c2ef2-2604-45ec-94d1-2c0cb4816dce",
+          folder: "/tmp/cpol-0_vuw1xb/data/cockpit/notes/5d8c2ef2-2604-45ec-94d1-2c0cb4816dce",
+          space: { session_id: "polish-0_vuw1xb", space_id: "w1", label: "Polish sample" },
+          change_tokens: {
+            scratchpad: "sha256:5ad38304b535c2987dbd24657c1a11b884984ff600d9f389deb0d4e634fee792",
+            todos: "sha256:5ad38304b535c2987dbd24657c1a11b884984ff600d9f389deb0d4e634fee792",
+            decisions: "absent",
+            comments: "absent",
+          },
+        },
+      },
+    };
+    const parsed = matchNotesResponse(parseNotesResponse(created), request);
+    expect(parsed.notes_id).toBe(created.notes_id);
+    expect(parsed.result).toEqual(created.result);
+    if (created.result.kind !== "target") throw new Error("Expected captured target response");
+    const info = created.result.info;
+    for (const key of ["scratchpad", "todos", "decisions", "comments"] as const) {
+      const opaque = { ...created, result: { kind: "target", info: { ...info, change_tokens: { ...info.change_tokens, [key]: "opaque-metadata-token" } } } };
+      expect(() => parseNotesResponse(opaque)).not.toThrow();
+      for (const invalid of ["", "x".repeat(257), undefined, 42, "\ud800"]) {
+        expect(() => parseNotesResponse({
+          ...created,
+          result: { kind: "target", info: { ...info, change_tokens: { ...info.change_tokens, [key]: invalid } } },
+        })).toThrow(CockpitClientError);
+      }
+    }
+    expect(() => parseNotesResponse({
+      ...scratchpad,
+      result: { kind: "scratchpad", document: { content: "Draft", revision: "opaque-metadata-token" } },
+    })).toThrow(CockpitClientError);
+  });
+
+  it("retains valid enum variants, malformed-record diagnostics and absent documents", async () => {
+    const unannotated: NotesTodo = { ...item, id: null, lane: null, problems: ["duplicate_id", "unknown_lane", "metadata_malformed", "lazy_continuation"] };
+    const history = { ...decision.summary, status: "replaced" as const, replaced_by: [otherNotesId], problems: ["frontmatter_malformed"] };
+    const variants: [NotesRequest, NotesResponse][] = [
+      [readRequest, { notes_id: notesId, changed: false, result: { kind: "scratchpad", document: { content: "", revision: "absent" } } }],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "open" } }, { notes_id: notesId, changed: false, result: { kind: "todos", revision: rev, todos: [unannotated] } }],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "done" } }, { notes_id: notesId, changed: false, result: { kind: "todos", revision: rev, todos: [{ ...item, done: true }] } }],
+      [{ target: notesTarget, operation: { op: "todo_add", text: "Review API", lane: "backlog" } }, { ...todoResponse, result: { kind: "todo", revision: rev, todo: { ...item, lane: "backlog" } } }],
+      [{ target: notesTarget, operation: { op: "kanban_move", todo: byId, to: "backlog" } }, { ...todoResponse, result: { kind: "todo", revision: rev, todo: { ...item, lane: "backlog" } } }],
+      [{ target: notesTarget, operation: { op: "kanban_move", todo: byId, to: "done" } }, { ...todoResponse, result: { kind: "todo", revision: rev, todo: { ...item, done: true } } }],
+      [{ target: notesTarget, operation: { op: "decision_list", status: "current", query: "typed" } }, { notes_id: notesId, changed: false, result: { kind: "decisions", decisions: [decision.summary] } }],
+      [{ target: notesTarget, operation: { op: "decision_list", status: "history", query: null } }, { notes_id: notesId, changed: false, result: { kind: "decisions", decisions: [history] } }],
+    ];
+    for (const [request, response] of variants) {
+      await expect(createBrowserClient(vi.fn(async () => jsonResponse(response))).notes(request)).resolves.toEqual(response);
+      await expect(createNativeClient(vi.fn(async () => response)).notes(request)).resolves.toEqual(response);
+    }
+  });
+
+  it("rejects invalid targets, IDs, selectors, enums and revisions before either transport sends", async () => {
+    const invalidOperations: unknown[] = [
+      { op: "scratchpad_append", text: "", expected_revision: "sha256:stale" },
+      { op: "scratchpad_replace", content: "", expected_revision: null },
+      { op: "todo_list", filter: "active" },
+      { op: "todo_add", text: "Task", lane: "done" },
+      { op: "todo_add", text: "Task <!-- injected -->", lane: null },
+      { op: "todo_update", todo: { ...byId, id: "../todo" }, text: null },
+      { op: "todo_update", todo: { ...byId, expected_revision: "absent" }, text: null },
+      { op: "todo_update", todo: { by: "ref", ref: `L0@${rev}` }, text: null },
+      { op: "todo_update", todo: { by: "ref", ref: `L4294967296@${rev}` }, text: null },
+      { op: "todo_update", todo: { by: "ref", ref: "L1@absent" }, text: null },
+      { op: "todo_update", todo: { by: "ref", ref: `L01@${rev}` }, text: null },
+      { op: "todo_update", todo: { by: "unknown", id: "todo-1" }, text: null },
+      { op: "todo_set_done", todo: byId, done: 1 },
+      { op: "kanban_move", todo: byId, to: "archive" },
+      { op: "decision_list", status: "old", query: null },
+      { op: "decision_get", decision_id: "../decision" },
+      { op: "decision_create", title: "Bad\nheading", body: "", decided: null },
+      { op: "decision_create", title: " ", body: "", decided: null },
+      { op: "decision_create", title: "Good", body: "", decided: "2026-02-30" },
+      { op: "decision_create", title: "Good", body: "", decided: "2026-10-05T24:00:00Z" },
+      { op: "comment_list", todo_id: "." },
+      { op: "comment_get", todo_id: "todo-1", comment_id: "../comment" },
+      { op: "comment_add", todo_id: "todo-1", body: "", author: "Name\ninjection" },
+      { op: "comment_update", todo_id: "todo-1", comment_id: commentId, expected_revision: rev.toUpperCase(), body: "" },
+      { op: "comment_remove", todo_id: "todo-1", comment_id: commentId.toUpperCase() + "a", expected_revision: rev },
+      { op: "unknown" },
+    ];
+    const invalidRequests: unknown[] = [
+      ...invalidOperations.map(operation => ({ target: notesTarget, operation })),
+      { operation: { op: "scratchpad_read" } },
+      { ...readRequest, target: { kind: "root" } },
+      { ...readRequest, target: spaceTarget },
+      { ...readRequest, target: { ...notesTarget, notes_id: notesId.toUpperCase() } },
+      { ...readRequest, target: { ...notesTarget, notes_id: "../notes" } },
+      { ...readRequest, target: { ...notesTarget, extra: true } },
+      { ...readRequest, extra: true },
+      { target: notesTarget, operation: { op: "target_create" } },
+      { target: notesTarget, operation: { op: "target_attach", notes_id: notesId } },
+      { target: notesTarget, operation: { op: "catalog_list" } },
+      { target: { ...spaceTarget, session_id: "../session" }, operation: { op: "target_resolve" } },
+      { target: { ...spaceTarget, space_id: "space/child" }, operation: { op: "target_resolve" } },
+    ];
+    const fetch = vi.fn(async () => jsonResponse(scratchpad));
+    const invoke = vi.fn(async () => scratchpad);
+    for (const client of [createBrowserClient(fetch), createNativeClient(invoke)]) {
+      for (const request of invalidRequests) await expect(client.notes(request as NotesRequest)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("enforces UTF-8 payload limits rather than JavaScript character counts", async () => {
+    const oversized: NotesOperation[] = [
+      { op: "scratchpad_append", text: "x".repeat(1024 * 1024 + 1), expected_revision: null },
+      { op: "scratchpad_replace", content: "😀".repeat(262145), expected_revision: rev },
+      { op: "todo_add", text: "😀".repeat(513), lane: null },
+      { op: "decision_create", title: "😀".repeat(129), body: "", decided: null },
+      { op: "decision_update", decision_id: "record-1", expected_revision: rev, title: null, body: "x".repeat(256 * 1024 + 1) },
+      { op: "comment_add", todo_id: "todo-1", body: "😀".repeat(16385), author: null },
+      { op: "comment_add", todo_id: "todo-1", body: "", author: "😀".repeat(33) },
+      { op: "scratchpad_append", text: "\u0001".repeat(1024 * 1024), expected_revision: null },
+      { op: "comment_add", todo_id: "todo-1", body: "\ud800", author: null },
+    ];
+    const fetch = vi.fn(async () => jsonResponse(scratchpad));
+    const invoke = vi.fn(async () => scratchpad);
+    for (const client of [createBrowserClient(fetch), createNativeClient(invoke)]) {
+      for (const operation of oversized) await expect(client.notes({ target: notesTarget, operation })).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(parseNotesRequest({ target: notesTarget, operation: { op: "todo_add", text: "😀".repeat(512), lane: null } }).operation).toMatchObject({ text: "😀".repeat(512) });
+    expect(parseNotesRequest({ target: notesTarget, operation: { op: "comment_add", todo_id: "todo-1", body: "😀".repeat(16384), author: "😀".repeat(32) } }).operation).toMatchObject({ author: "😀".repeat(32) });
+    expect(parseNotesRequest({ target: notesTarget, operation: { op: "decision_create", title: "Decision", body: "", decided: "2024-02-29T12:30:00+02:00" } }).operation).toMatchObject({ decided: "2024-02-29T12:30:00+02:00" });
+  });
+
+  it("rejects malformed nested responses and bounded collections at the consumer boundary", async () => {
+    const response = (result: unknown): unknown => ({ notes_id: notesId, changed: false, result });
+    const todoResults = (todo: unknown): unknown => ({ kind: "todos", revision: rev, todos: [todo] });
+    const malformed: [NotesRequest, unknown][] = [
+      [readRequest, { ...scratchpad, notes_id: null }],
+      [readRequest, { ...scratchpad, notes_id: notesId.toUpperCase() }],
+      [readRequest, response({ kind: "scratchpad", document: { content: "", revision: "sha256:stale" } })],
+      [readRequest, response({ kind: "unknown" })],
+      [readRequest, { ...scratchpad, changed: "false" }],
+      [readRequest, { ...scratchpad, extra: true }],
+      [readRequest, response({ kind: "scratchpad", document: { content: "not missing", revision: "absent" } })],
+      [readRequest, response({ kind: "scratchpad", document: { content: "x".repeat(1024 * 1024 + 1), revision: rev } })],
+      [readRequest, response({ kind: "scratchpad", document: { content: "\udfff", revision: rev } })],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response(todoResults({ ...item, line: 0 }))],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response(todoResults({ ...item, depth: 4294967296 }))],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response(todoResults({ ...item, ref: `L2@${rev}` }))],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response(todoResults({ ...item, ref: `L1@${itemRev}` }))],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response(todoResults({ ...item, revision: "absent" }))],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response(todoResults({ ...item, problems: ["invented"] }))],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response(todoResults({ ...item, lane: "done" }))],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response(todoResults({ ...item, id: "../todo" }))],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response({ kind: "todos", revision: rev, todos: Array.from({ length: 513 }, (_, index) => ({ ...item, line: index + 1, ref: `L${index + 1}@${rev}`, text: "x".repeat(2048) })) })],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "all" } }, response({ kind: "todos", revision: rev, todos: Array(5001).fill(item) })],
+      [{ target: notesTarget, operation: { op: "kanban_list" } }, response({ kind: "board", revision: rev, columns: { backlog: [item], doing: [], done: [] } })],
+      [{ target: notesTarget, operation: { op: "decision_get", decision_id: "record-1" } }, response({ kind: "decision", decision: { ...decision, relative_path: "../record-1.md" } })],
+      [{ target: notesTarget, operation: { op: "decision_get", decision_id: "record-1" } }, response({ kind: "decision", decision: { ...decision, path: "/data/../record-1.md" } })],
+      [{ target: notesTarget, operation: { op: "decision_list", status: "all", query: null } }, response({ kind: "decisions", decisions: [{ ...decision.summary, status: "unknown" }] })],
+      [{ target: notesTarget, operation: { op: "decision_list", status: "all", query: null } }, response({ kind: "decisions", decisions: Array(4097).fill(decision.summary) })],
+      [{ target: notesTarget, operation: { op: "comment_get", todo_id: "todo-1", comment_id: commentId } }, response({ kind: "comment", comment: { ...comment, body: "x".repeat(64 * 1024 + 1) } })],
+      [{ target: notesTarget, operation: { op: "comment_get", todo_id: "todo-1", comment_id: commentId } }, response({ kind: "comment", comment: { ...comment, comment_id: "not-a-uuid" } })],
+      [{ target: notesTarget, operation: { op: "comment_get", todo_id: "todo-1", comment_id: commentId } }, response({ kind: "comment", comment: { ...comment, revision: "absent" } })],
+      [{ target: notesTarget, operation: { op: "comment_get", todo_id: "todo-1", comment_id: commentId } }, response({ kind: "comment", comment: { ...comment, author: undefined } })],
+      [{ target: notesTarget, operation: { op: "comment_list", todo_id: "todo-1" } }, response({ kind: "comments", todo_id: "todo-1", comments: Array(1001).fill(comment) })],
+      [{ target: notesTarget, operation: { op: "comment_list", todo_id: "todo-1" } }, response({ kind: "comments", todo_id: "todo-1", comments: Array.from({ length: 257 }, (_, index) => ({ ...comment, comment_id: `11111111-1111-1111-1111-${String(index).padStart(12, "0")}`, body: "x".repeat(64 * 1024) })) })],
+      [{ target: spaceTarget, operation: { op: "target_resolve" } }, response({ kind: "target", info: { ...targetInfo, change_tokens: { ...targetInfo.change_tokens, comments: undefined } } })],
+      [{ target: spaceTarget, operation: { op: "target_resolve" } }, response({ kind: "target", info: { ...targetInfo, notes_id: otherNotesId } })],
+      [{ target: { kind: "root" }, operation: { op: "catalog_list" } }, { notes_id: null, changed: false, result: { kind: "catalog", entries: Array(4097).fill({ notes_id: notesId, label: null, created: null, bound: false }) } }],
+    ];
+    for (const [request, payload] of malformed) {
+      await expect(createBrowserClient(vi.fn(async () => jsonResponse(payload))).notes(request)).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(createNativeClient(vi.fn(async () => payload)).notes(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
+
+  it("refuses cross-target and cross-record responses despite individually valid DTOs", async () => {
+    const mismatches: [NotesRequest, NotesResponse][] = [
+      [readRequest, { ...scratchpad, notes_id: otherNotesId }],
+      [readRequest, { ...scratchpad, changed: true }],
+      [{ target: spaceTarget, operation: { op: "target_resolve" } }, { notes_id: notesId, changed: false, result: { kind: "target", info: { ...targetInfo, space: { ...targetInfo.space!, space_id: "different-space" } } } }],
+      [{ target: spaceTarget, operation: { op: "target_attach", notes_id: otherNotesId } }, { notes_id: notesId, changed: true, result: { kind: "target", info: targetInfo } }],
+      [{ target: notesTarget, operation: { op: "todo_update", todo: byId, text: null } }, { ...todoResponse, result: { kind: "todo", revision: rev, todo: { ...item, id: "other-todo" } } }],
+      [{ target: notesTarget, operation: { op: "todo_set_done", todo: byId, done: true } }, todoResponse],
+      [{ target: notesTarget, operation: { op: "todo_list", filter: "done" } }, { notes_id: notesId, changed: false, result: { kind: "todos", revision: rev, todos: [item] } }],
+      [{ target: notesTarget, operation: { op: "decision_get", decision_id: "other-decision" } }, decisionResponse],
+      [{ target: notesTarget, operation: { op: "decision_list", status: "history", query: null } }, { notes_id: notesId, changed: false, result: { kind: "decisions", decisions: [decision.summary] } }],
+      [{ target: notesTarget, operation: { op: "decision_replace", decision_id: "record-1", expected_revision: rev, title: "Replacement", body: "", decided: null } }, { ...decisionResponse, changed: true }],
+      [{ target: notesTarget, operation: { op: "comment_list", todo_id: "other-todo" } }, { notes_id: notesId, changed: false, result: { kind: "comments", todo_id: "todo-1", comments: [comment] } }],
+      [{ target: notesTarget, operation: { op: "comment_get", todo_id: "other-todo", comment_id: commentId } }, commentResponse],
+      [{ target: notesTarget, operation: { op: "comment_get", todo_id: "todo-1", comment_id: otherNotesId } }, commentResponse],
+      [{ target: notesTarget, operation: { op: "comment_remove", todo_id: "todo-1", comment_id: otherNotesId, expected_revision: rev } }, { notes_id: notesId, changed: true, result: { kind: "comment_removed", todo_id: "todo-1", comment_id: commentId } }],
+    ];
+    for (const [request, response] of mismatches) {
+      expect(parseNotesResponse(response)).toEqual(response);
+      await expect(createBrowserClient(vi.fn(async () => jsonResponse(response))).notes(request)).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(createNativeClient(vi.fn(async () => response)).notes(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
+
+  it("preserves pre-dispatch and late cancellation parity without claiming writes roll back", async () => {
+    const aborted = new AbortController();
+    aborted.abort();
+    const fetch = vi.fn(async () => jsonResponse(scratchpad));
+    const invoke = vi.fn(async () => scratchpad);
+    for (const client of [createBrowserClient(fetch), createNativeClient(invoke)]) {
+      await expect(client.notes(readRequest, aborted.signal)).rejects.toMatchObject({ name: "AbortError" });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    const browserAbort = new AbortController();
+    const lateFetch = vi.fn(async (_path: string, init?: RequestInit) => {
+      expect(init?.signal).toBe(browserAbort.signal);
+      browserAbort.abort();
+      return jsonResponse(scratchpad);
+    });
+    await expect(createBrowserClient(lateFetch).notes(readRequest, browserAbort.signal)).rejects.toMatchObject({ name: "AbortError" });
+    const nativeAbort = new AbortController();
+    const lateInvoke = vi.fn(async () => { nativeAbort.abort(); return scratchpad; });
+    await expect(createNativeClient(lateInvoke).notes(readRequest, nativeAbort.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(lateFetch).toHaveBeenCalledOnce();
+    expect(lateInvoke).toHaveBeenCalledOnce();
+  });
+
+  it.each(["notes_conflict", "notes_outcome_unknown"])("preserves %s errors and never retries a write", async operationCode => {
+    const request: NotesRequest = { target: notesTarget, operation: { op: "scratchpad_replace", content: "Draft", expected_revision: rev } };
+    const envelope = { code: operationCode, message: "Re-read before writing again" };
+    const fetch = vi.fn(async () => jsonResponse(envelope, 409));
+    const invoke = vi.fn(async () => { throw envelope; });
+    await expect(createBrowserClient(fetch).notes(request)).rejects.toMatchObject({ code: "http_error", operationCode });
+    await expect(createNativeClient(invoke).notes(request)).rejects.toMatchObject({ code: "native_error", operationCode });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
+  it("requires notes_root in configuration responses in both transports", async () => {
+    const config: ProjectConfiguration = {
+      version: 1, repository_roots: [], worktree_root: "/worktrees", companion_root: "/companions", state_root: "/state", cache_root: "/cache",
+      library_root: "/library", notes_root: "/notes", branch_template: "", checkout_template: "", providers: [], origins: {},
+      limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
+        context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
+        library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,
+        library_attachment_bytes: 1, library_item_attachment_bytes: 1, library_max_items: 1 },
+    };
+    let payload: unknown = config;
+    for (const client of [createBrowserClient(vi.fn(async () => jsonResponse(payload))), createNativeClient(vi.fn(async () => payload))]) {
+      payload = config;
+      await expect(client.projectConfiguration()).resolves.toEqual(config);
+      for (const notes_root of [undefined, null, 42]) {
+        payload = { ...config, notes_root };
+        await expect(client.projectConfiguration()).rejects.toMatchObject({ code: "malformed_response" });
+      }
+    }
   });
 });

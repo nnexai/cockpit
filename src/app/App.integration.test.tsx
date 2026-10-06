@@ -251,6 +251,7 @@ class AppFixture {
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
     contextMedia: vi.fn(),
+    notes: vi.fn(async () => { throw new Error("Unexpected Notes operation in terminal fixture"); }),
     librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, space_label: "Fixture Space", library_root: "/data/cockpit/library", checkout_path: null, items: [], repository_paths: [], diagnostics: [] })),
     librarySpaceAdd: vi.fn(), librarySpaceRemove: vi.fn(), librarySpaceRepositories: vi.fn(),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
@@ -629,7 +630,7 @@ describe("mounted App mutation and session ordering", () => {
     emptyLibrary(fixture);
     vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
       version: 1, repository_roots: [], worktree_root: "", companion_root: "", state_root: "", cache_root: "",
-      library_root: "/data/cockpit/library", branch_template: "", checkout_template: "", providers: [], origins: {},
+      library_root: "/data/cockpit/library", notes_root: "/data/cockpit/notes", branch_template: "", checkout_template: "", providers: [], origins: {},
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
         context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
         library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,
