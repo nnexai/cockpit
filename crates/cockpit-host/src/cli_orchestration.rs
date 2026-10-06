@@ -8,7 +8,8 @@ use cockpit_core::{
     orchestration::{Actor, AgentCaller, OrchestrationService, herdr::OrchestrationHerdr},
     projects::ProjectService,
 };
-use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
+use cockpit_herdr::HerdrCliAdapter;
+use super::endpoint::{AmbientEndpoint, Endpoint, resolve_endpoint};
 use cockpit_protocol::{
     orchestration::*,
     projects::{ProjectConfiguration, WorkspaceSetupRequest},
@@ -118,20 +119,16 @@ impl OrchestrationArgs {
         )?)
     }
 
-    fn endpoint(&self, required: bool) -> Result<Endpoint, CliError> {
-        let session = self
-            .herdr_session
-            .clone()
-            .or_else(|| std::env::var("COCKPIT_SESSION_ID").ok());
+    fn endpoint(&self) -> Result<Endpoint, CliError> {
         resolve_endpoint(
             self.herdr.clone(),
-            session,
+            self.herdr_session.clone(),
             self.herdr_socket.clone(),
-            std::env::var("HERDR_SESSION_NAME").ok(),
-            std::env::var("HERDR_SESSION").ok(),
-            std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from),
-            required,
-        )
+            &AmbientEndpoint::from_process(),
+        ).map_err(|error| match error.code.as_str() {
+            "missing_socket_session" | "session_required" => CliError::usage(error.message),
+            _ => CliError::new(&error.code, error.message),
+        })
     }
 
     fn env_run(&self) -> Result<Option<(String, u32)>, CliError> {
@@ -160,52 +157,6 @@ impl OrchestrationArgs {
             _ => Ok(()),
         }
     }
-}
-
-struct Endpoint {
-    executable: PathBuf,
-    session: Option<String>,
-    socket: Option<PathBuf>,
-}
-
-fn resolve_endpoint(
-    executable: Option<PathBuf>,
-    explicit_session: Option<String>,
-    explicit_socket: Option<PathBuf>,
-    inherited_name: Option<String>,
-    inherited_session: Option<String>,
-    inherited_socket: Option<PathBuf>,
-    required: bool,
-) -> Result<Endpoint, CliError> {
-    // An explicit logical session must not accidentally inherit another session's socket.
-    let socket = explicit_socket.clone().or_else(|| {
-        if explicit_session.is_none() {
-            inherited_socket.clone()
-        } else {
-            None
-        }
-    });
-    let session = if let Some(session) = explicit_session {
-        Some(session)
-    } else if explicit_socket.is_some() {
-        return Err(CliError::usage("--herdr-socket requires --herdr-session"));
-    } else {
-        inherited_name.or(inherited_session).or_else(|| {
-            inherited_socket
-                .as_deref()
-                .and_then(super::inherited_session_from_socket)
-        })
-    };
-    if session.as_deref() == Some("") || (required && session.is_none()) {
-        return Err(CliError::usage(
-            "a resolvable Herdr session is required; pass --herdr-session outside Herdr",
-        ));
-    }
-    Ok(Endpoint {
-        executable: executable.unwrap_or_else(|| PathBuf::from("herdr")),
-        session,
-        socket,
-    })
 }
 
 fn parse_env_run(
@@ -245,15 +196,14 @@ struct Context {
 impl Context {
     async fn open(args: &OrchestrationArgs, caller_required: bool) -> Result<Self, CliError> {
         args.validate_identity()?;
-        let endpoint = args.endpoint(true)?;
-        let session = endpoint.session.expect("required endpoint has session");
+        let endpoint = args.endpoint()?;
         let caller = caller_required || std::env::var("HERDR_ENV").ok().as_deref() == Some("1");
         let pane = if caller {
             Some(
                 super::current_pane_id(
-                    &endpoint.executable,
-                    endpoint.socket.as_deref(),
-                    Some(&session),
+                    endpoint.executable(),
+                    endpoint.socket(),
+                    Some(&endpoint.session),
                     "orchestration",
                 )
                 .await
@@ -262,11 +212,8 @@ impl Context {
         } else {
             None
         };
-        let adapter = Arc::new(HerdrCliAdapter::new(HerdrCliConfig::from_options(
-            Some(endpoint.executable),
-            Some(session.clone()),
-            endpoint.socket,
-        )?));
+        let session = endpoint.session;
+        let adapter = Arc::new(HerdrCliAdapter::new(endpoint.config));
         let evidence = match pane {
             Some(pane) => Some(
                 adapter
@@ -1835,45 +1782,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_session_does_not_inherit_foreign_socket() {
-        let endpoint = resolve_endpoint(
-            None,
-            Some("chosen".into()),
-            None,
-            Some("inherited".into()),
-            None,
-            Some(PathBuf::from("/tmp/inherited.sock")),
-            true,
-        )
-        .unwrap();
-        assert_eq!(endpoint.session.as_deref(), Some("chosen"));
-        assert!(endpoint.socket.is_none());
-        assert!(
-            resolve_endpoint(
-                None,
-                None,
-                Some(PathBuf::from("/tmp/explicit.sock")),
-                Some("inherited".into()),
-                None,
-                None,
-                true
-            )
-            .is_err()
-        );
-        let endpoint = resolve_endpoint(
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(PathBuf::from("/tmp/herdr-fixture.sock")),
-            true,
-        )
-        .unwrap();
-        assert_eq!(endpoint.session.as_deref(), Some("fixture"));
-    }
-
-    #[test]
     fn inherited_attempt_requires_complete_positive_identity() {
         assert!(parse_env_run(None, None).unwrap().is_none());
         assert!(parse_env_run(Some("run".into()), None).is_err());
@@ -1884,22 +1792,6 @@ mod tests {
             parse_env_run(Some("run".into()), Some("2".into())).unwrap(),
             Some(("run".into(), 2))
         );
-    }
-
-    #[test]
-    fn launcher_logical_session_accepts_its_explicit_socket_without_focus_guessing() {
-        let endpoint = resolve_endpoint(
-            None,
-            Some("launcher-session".into()),
-            Some(PathBuf::from("/tmp/launcher.sock")),
-            Some("foreign-session".into()),
-            None,
-            Some(PathBuf::from("/tmp/foreign.sock")),
-            true,
-        )
-        .unwrap();
-        assert_eq!(endpoint.session.as_deref(), Some("launcher-session"));
-        assert_eq!(endpoint.socket, Some(PathBuf::from("/tmp/launcher.sock")));
     }
 
     fn message(

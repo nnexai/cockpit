@@ -6,16 +6,19 @@ use std::{
 
 use clap::{Args, Subcommand, ValueEnum};
 use cockpit_core::{InspectionError, notes::NotesService};
-use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
+use cockpit_herdr::HerdrCliAdapter;
 use cockpit_protocol::{notes::*, v1::ErrorResponse};
 
-use super::{HerdrArgs, current_pane_id, inherited_session_from_socket};
+use super::{
+    HerdrArgs, current_pane_id,
+    endpoint::{AmbientEndpoint, resolve_endpoint},
+};
 
 #[derive(Debug, Args)]
 pub(super) struct NotesArgs {
     #[command(flatten)]
     herdr: HerdrArgs,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "COCKPIT_CONFIG_PATH")]
     config: Option<PathBuf>,
     #[arg(long, global = true, conflicts_with_all = ["space", "notes"])]
     current: bool,
@@ -608,21 +611,13 @@ async fn execute(args: NotesArgs) -> Result<NotesResponse, InspectionError> {
                 "Provide --notes UUID, --current, or an explicit --space target",
             ));
         }
-        let executable = args
-            .herdr
-            .herdr
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("herdr"));
-        let inherited_socket = std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from);
-        let socket = args.herdr.herdr_socket.clone().or(inherited_socket);
-        let session = args
-            .herdr
-            .herdr_session
-            .clone()
-            .or_else(|| std::env::var("HERDR_SESSION_NAME").ok())
-            .or_else(|| std::env::var("HERDR_SESSION").ok())
-            .or_else(|| socket.as_deref().and_then(inherited_session_from_socket))
-            .ok_or_else(|| usage("The Herdr session identity is required"))?;
+        let endpoint = resolve_endpoint(
+            args.herdr.herdr.clone(),
+            args.herdr.herdr_session.clone(),
+            args.herdr.herdr_socket.clone(),
+            &AmbientEndpoint::from_process(),
+        )
+        .map_err(|error| usage(error.message))?;
         if !args.current
             && (args.herdr.herdr_session.is_none() || args.herdr.herdr_socket.is_none())
         {
@@ -630,20 +625,23 @@ async fn execute(args: NotesArgs) -> Result<NotesResponse, InspectionError> {
         }
         let pane = if args.current {
             Some(
-                current_pane_id(&executable, socket.as_deref(), Some(&session), "notes")
-                    .await
-                    .map_err(|error| InspectionError::new("notes_space_unavailable", error))?,
+                current_pane_id(
+                    endpoint.executable(),
+                    endpoint.socket(),
+                    Some(&endpoint.session),
+                    "notes",
+                )
+                .await
+                .map_err(|error| InspectionError::new("notes_space_unavailable", error))?,
             )
         } else {
             None
         };
-        let config = HerdrCliConfig::from_options(Some(executable), Some(session.clone()), socket)
-            .map_err(|error| InspectionError::new("notes_space_unavailable", error.to_string()))?;
-        let adapter = Arc::new(HerdrCliAdapter::new(config));
+        let adapter = Arc::new(HerdrCliAdapter::new(endpoint.config));
         let space_id = if let Some(pane) = pane {
             let source = adapter.source_adapter();
-            let before = source.source_pane_evidence(&session, &pane).await?;
-            let after = source.source_pane_evidence(&session, &pane).await?;
+            let before = source.source_pane_evidence(&endpoint.session, &pane).await?;
+            let after = source.source_pane_evidence(&endpoint.session, &pane).await?;
             if before.pane_id != pane
                 || after.pane_id != pane
                 || before.workspace_id != after.workspace_id
@@ -662,7 +660,7 @@ async fn execute(args: NotesArgs) -> Result<NotesResponse, InspectionError> {
         };
         service = service.with_herdr(adapter);
         NotesTarget::Space {
-            session_id: session,
+            session_id: endpoint.session,
             space_id,
         }
     };

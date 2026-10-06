@@ -1,3 +1,5 @@
+#[path = "cockpit/endpoint.rs"]
+mod endpoint;
 #[path = "cockpit/notes.rs"]
 mod notes_cli;
 
@@ -120,7 +122,7 @@ struct BrowserArgs {
     tab: Option<String>,
     #[arg(long)]
     url: Option<String>,
-    #[arg(long)]
+    #[arg(long, env = "COCKPIT_CONFIG_PATH")]
     config: Option<PathBuf>,
     #[arg(long = "id")]
     ids: Vec<String>,
@@ -161,7 +163,7 @@ struct WidgetArgs {
     herdr_session: Option<String>,
     #[arg(long, env = "COCKPIT_HERDR_SOCKET", global = true)]
     herdr_socket: Option<PathBuf>,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "COCKPIT_CONFIG_PATH")]
     config: Option<PathBuf>,
     #[arg(long, global = true, conflicts_with_all = ["pane", "tab"])]
     current: bool,
@@ -482,13 +484,6 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
             unreachable!("orchestration commands preserve their structured error contract"),
     }
 }
-fn inherited_session_from_socket(path: &std::path::Path) -> Option<String> {
-    let stem = path.file_stem()?.to_str()?;
-    if stem != "herdr" {
-        return Some(stem.trim_start_matches("herdr-").to_owned());
-    }
-    path.parent()?.file_name()?.to_str().map(str::to_owned)
-}
 
 async fn current_pane_id(
     executable: &std::path::Path,
@@ -521,25 +516,24 @@ async fn current_pane_id(
 }
 
 async fn run_context(args: ContextArgs) -> Result<(), String> {
-    let executable = args.herdr.herdr.clone().unwrap_or_else(|| PathBuf::from("herdr"));
-    let inherited_socket = std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from);
-    let inherited_session = std::env::var("HERDR_SESSION_NAME").ok()
-        .or_else(|| std::env::var("HERDR_SESSION").ok())
-        .or_else(|| inherited_socket.as_deref().and_then(inherited_session_from_socket));
-    let socket = args.herdr.herdr_socket.clone().or(inherited_socket);
-    let session = args.herdr.herdr_session.clone().or(inherited_session)
-        .ok_or_else(|| "context requires a resolvable Herdr session identity".to_owned())?;
+    let endpoint = endpoint::resolve_endpoint(
+        args.herdr.herdr.clone(), args.herdr.herdr_session.clone(),
+        args.herdr.herdr_socket.clone(), &endpoint::AmbientEndpoint::from_process(),
+    ).map_err(|error| match error.code.as_str() {
+        "session_required" => "context requires a resolvable Herdr session identity".to_owned(),
+        "missing_socket_session" => error.message,
+        _ => error.to_string(),
+    })?;
     if !args.current && (args.herdr.herdr_session.is_none() || args.herdr.herdr_socket.is_none()) {
         return Err("explicit context targets require --herdr-session, --herdr-socket, and --space".to_owned());
     }
     let pane_id = if args.current {
-        Some(current_pane_id(&executable, socket.as_deref(), Some(&session), "context").await?)
+        Some(current_pane_id(endpoint.executable(), endpoint.socket(), Some(&endpoint.session), "context").await?)
     } else {
         None
     };
-    let config = HerdrCliConfig::from_options(Some(executable), Some(session.clone()), socket)
-        .map_err(|error| error.to_string())?;
-    let adapter = Arc::new(HerdrCliAdapter::new(config));
+    let session = endpoint.session;
+    let adapter = Arc::new(HerdrCliAdapter::new(endpoint.config));
     let source_adapter = adapter.source_adapter();
     let evidence = match pane_id.as_deref() {
         Some(pane_id) => Some(source_adapter.source_pane_evidence(&session, pane_id).await
@@ -548,7 +542,10 @@ async fn run_context(args: ContextArgs) -> Result<(), String> {
     };
     let space_id = evidence.as_ref().map(|source| source.workspace_id.clone())
         .or(args.space).ok_or_else(|| "context has no current Space evidence".to_owned())?;
-    let project_config = project_configuration(&args.project)?;
+    let mut project = args.project;
+    project.config = project.config.or_else(|| std::env::var_os("COCKPIT_CONFIG_PATH")
+        .filter(|value| !value.is_empty()).map(PathBuf::from));
+    let project_config = project_configuration(&project)?;
     let credentials = Arc::new(cockpit_core::credentials::ProviderCredentials::new(
         &project_config, cockpit_secrets::os_vault(), cockpit_providers::credential_kinds,
     ));
@@ -587,47 +584,35 @@ async fn run_context(args: ContextArgs) -> Result<(), String> {
 }
 
 async fn run_browser(args: BrowserArgs) -> Result<(), String> {
-    let herdr_executable = args
-        .herdr
-        .herdr
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("herdr"));
-    let inherited_socket = std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from);
-    let inherited_session = std::env::var("HERDR_SESSION_NAME")
-        .ok()
-        .or_else(|| std::env::var("HERDR_SESSION").ok())
-        .or_else(|| {
-            inherited_socket
-                .as_ref()
-                .and_then(|path| inherited_session_from_socket(path))
-        });
-    let effective_socket = args.herdr.herdr_socket.clone().or(inherited_socket);
-    let effective_session = args.herdr.herdr_session.clone().or(inherited_session);
+    if args.current && std::env::var("HERDR_ENV").ok().as_deref() != Some("1") {
+        return Err(
+            "browser --current requires HERDR_ENV=1 in the inherited Herdr caller environment"
+                .to_owned(),
+        );
+    }
+    if !args.current && args.herdr.herdr_session.is_none() {
+        return Err("explicit browser targets require --herdr-session, --herdr-socket, and --tab".to_owned());
+    }
+    let endpoint = endpoint::resolve_endpoint(
+        args.herdr.herdr.clone(), args.herdr.herdr_session.clone(),
+        args.herdr.herdr_socket.clone(), &endpoint::AmbientEndpoint::from_process(),
+    ).map_err(|error| match error.code.as_str() {
+        "session_required" => "current Herdr pane has no resolvable session identity; use explicit --herdr-session --herdr-socket --tab".to_owned(),
+        "missing_socket_session" => error.message,
+        _ => error.to_string(),
+    })?;
     let target = if args.current {
-        if std::env::var("HERDR_ENV").ok().as_deref() != Some("1") {
-            return Err(
-                "browser --current requires HERDR_ENV=1 in the inherited Herdr caller environment"
-                    .to_owned(),
-            );
-        }
         let (session_id, pane_id) = resolve_current_pane(
-            &herdr_executable, effective_session.as_deref(), effective_socket.as_deref(),
+            endpoint.executable(), Some(&endpoint.session), endpoint.socket(),
         ).await?;
         BrowserTarget {
             session_id,
             tab_id: None,
             pane_id: Some(pane_id),
-            endpoint_path: effective_socket
-                .as_ref()
-                .and_then(|path| path.to_str())
-                .map(str::to_owned),
+            endpoint_path: endpoint.socket().and_then(|path| path.to_str()).map(str::to_owned),
         }
     } else {
-        let session_id = args.herdr.herdr_session.clone().ok_or_else(|| {
-            "explicit browser targets require --herdr-session, --herdr-socket, and --tab"
-                .to_owned()
-        })?;
-        let _socket = effective_socket.clone().ok_or_else(|| {
+        let _socket = endpoint.socket().ok_or_else(|| {
             "explicit browser targets require --herdr-session, --herdr-socket, and --tab"
                 .to_owned()
         })?;
@@ -636,16 +621,13 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
                 .to_owned()
         })?;
         BrowserTarget {
-            session_id,
+            session_id: endpoint.session.clone(),
             tab_id: Some(tab_id),
             pane_id: None,
             endpoint_path: None,
         }
     };
-    let herdr_config =
-        HerdrCliConfig::from_options(Some(herdr_executable), effective_session, effective_socket)
-            .map_err(|error| error.to_string())?;
-    let adapter = Arc::new(HerdrCliAdapter::new(herdr_config));
+    let adapter = Arc::new(HerdrCliAdapter::new(endpoint.config));
     let paste_adapter = adapter.paste_adapter();
     let browser_config =
         load_browser_configuration(args.config.as_deref()).map_err(|error| error.to_string())?;
@@ -916,17 +898,23 @@ async fn run_widget(args: WidgetArgs) -> Result<u8, CliError> {
     if !explicit && !in_herdr {
         return Err(CliError::widget("widget_target_required", "no target. Run inside a Herdr pane, or pass --pane, --tab or --space with --herdr-session and --herdr-socket"));
     }
-    let executable = args.herdr.unwrap_or_else(|| PathBuf::from("herdr"));
-    let socket = args.herdr_socket.or_else(|| std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from));
-    let inherited_session = || std::env::var("HERDR_SESSION_NAME").ok()
-        .or_else(|| std::env::var("HERDR_SESSION").ok())
-        .or_else(|| socket.as_deref().and_then(inherited_session_from_socket));
-    let session = args.herdr_session.or_else(|| if !explicit || in_herdr { inherited_session() } else { None })
-        .ok_or_else(|| CliError::widget("widget_target_required", "widget targets require a Herdr session identity; pass --herdr-session"))?;
-    if explicit && socket.is_none() {
+    if explicit && !in_herdr && args.herdr_session.is_none() {
+        return Err(CliError::widget("widget_target_required", "widget targets require a Herdr session identity; pass --herdr-session"));
+    }
+    if explicit && !in_herdr && args.herdr_socket.is_none() {
         return Err(CliError::widget("widget_target_required", "explicit widget targets require --herdr-session and --herdr-socket"));
     }
-    let source_pane_id = widget_source_pane(in_herdr, &executable, &session, socket.as_deref()).await?;
+    let endpoint = endpoint::resolve_endpoint(
+        args.herdr, args.herdr_session, args.herdr_socket, &endpoint::AmbientEndpoint::from_process(),
+    ).map_err(|error| match error.code.as_str() {
+        "session_required" => CliError::widget("widget_target_required", "widget targets require a Herdr session identity; pass --herdr-session"),
+        "missing_socket_session" => CliError::widget("widget_target_required", error.message),
+        _ => CliError::widget("widget_target_required", error),
+    })?;
+    if explicit && endpoint.socket().is_none() {
+        return Err(CliError::widget("widget_target_required", "explicit widget targets require --herdr-session and --herdr-socket"));
+    }
+    let source_pane_id = widget_source_pane(in_herdr, endpoint.executable(), &endpoint.session, endpoint.socket()).await?;
     let (locator, space_check) = if let Some(pane_id) = args.pane {
         (WidgetLocator::Pane { pane_id }, args.space)
     } else if let Some(tab_id) = args.tab {
@@ -938,12 +926,10 @@ async fn run_widget(args: WidgetArgs) -> Result<u8, CliError> {
     } else {
         (WidgetLocator::CurrentPane, None)
     };
-    let endpoint_path = socket.as_ref().map(|path| path.to_str()
+    let endpoint_path = endpoint.socket().map(|path| path.to_str()
         .map(str::to_owned).ok_or_else(|| CliError::widget("widget_usage", "Herdr socket path must be valid UTF-8"))).transpose()?;
-    let address = WidgetAddress { session_id: session.clone(), endpoint_path, source_pane_id, locator, space_check };
-    let herdr_config = HerdrCliConfig::from_options(Some(executable), Some(session), socket)
-        .map_err(|error| CliError::widget("widget_target_required", error))?;
-    let adapter = Arc::new(HerdrCliAdapter::new(herdr_config));
+    let address = WidgetAddress { session_id: endpoint.session, endpoint_path, source_pane_id, locator, space_check };
+    let adapter = Arc::new(HerdrCliAdapter::new(endpoint.config));
     let browser_config = load_browser_configuration(args.config.as_deref())
         .map_err(|error| CliError::widget("widget_no_owner", error))?;
     let project_config = load_project_configuration(args.config.as_deref(), None)
