@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,11 @@ const MAX_TEXT_BYTES: usize = 4096;
 const CONFIG_VERSION: u32 = 1;
 const DEFAULT_WINDOW_SCALE_FACTOR: f64 = 1.0;
 const DEFAULT_WINDOW_DECORATIONS: bool = true;
+const OMP_SYSTEM_DIRS: [&str; 3] = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/home/linuxbrew/.linuxbrew/bin",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WindowConfiguration {
@@ -536,10 +542,65 @@ pub fn load_quota_configuration(
 ) -> Result<QuotaConfiguration, InspectionError> {
     let (file, _) = load_file_configuration(config_path)?;
     let quota = file.quota.unwrap_or_default();
-    let (omp, _) = choose_path("COCKPIT_OMP_EXECUTABLE", quota.omp_executable, "omp")?;
+    let (omp, source) = choose_path("COCKPIT_OMP_EXECUTABLE", quota.omp_executable, "omp")?;
+    let omp_executable = if source == "default" {
+        let path = env::var_os("PATH");
+        let home = env::var_os("HOME").map(PathBuf::from);
+        default_omp_executable(
+            path.as_deref(),
+            home.as_deref(),
+            &OMP_SYSTEM_DIRS.map(Path::new),
+        )
+    } else {
+        PathBuf::from(omp)
+    };
     Ok(QuotaConfiguration {
-        omp_executable: PathBuf::from(omp),
+        omp_executable,
     })
+}
+
+fn default_omp_executable(
+    path: Option<&OsStr>,
+    home: Option<&Path>,
+    system_dirs: &[&Path],
+) -> PathBuf {
+    let executable_name = if cfg!(windows) { "omp.exe" } else { "omp" };
+    if let Some(path) = path {
+        for directory in env::split_paths(path).filter(|directory| !directory.as_os_str().is_empty()) {
+            let candidate = directory.join(executable_name);
+            if is_omp_executable_file(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    if let Some(home) = home.filter(|home| !home.as_os_str().is_empty()) {
+        for relative in [".local/bin", ".bun/bin"] {
+            let candidate = home.join(relative).join(executable_name);
+            if is_omp_executable_file(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    for directory in system_dirs {
+        let candidate = directory.join(executable_name);
+        if is_omp_executable_file(&candidate) {
+            return candidate;
+        }
+    }
+    PathBuf::from("omp")
+}
+
+#[cfg(unix)]
+fn is_omp_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_omp_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// Load the native window presentation settings from the shared Cockpit TOML.
@@ -856,13 +917,229 @@ fn origin(from_file: bool, file_origin: &str, _secret: bool) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     use cockpit_protocol::projects::OrchestrationConfiguration;
 
     use super::{
-        load_browser_configuration, load_project_configuration, load_window_configuration,
-        validate_orchestration, validate_orchestration_args, validate_template,
+        default_omp_executable, load_browser_configuration, load_project_configuration,
+        load_quota_configuration, load_window_configuration, validate_orchestration,
+        validate_orchestration_args, validate_template,
     };
+
+    fn omp_fixture_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("cockpit-omp-config-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create OMP fixture");
+        root
+    }
+
+    fn write_omp_executable(directory: &Path) -> PathBuf {
+        fs::create_dir_all(directory).expect("create OMP install directory");
+        let executable = directory.join(format!("omp{}", std::env::consts::EXE_SUFFIX));
+        fs::write(&executable, "").expect("write OMP executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+                .expect("make OMP executable");
+        }
+        executable
+    }
+
+    #[test]
+    fn omp_default_discovery_preserves_path_precedence() {
+        let root = omp_fixture_root();
+        let first = root.join("first");
+        let second = root.join("second");
+        let home = root.join("home");
+        let system = root.join("system");
+        let expected = write_omp_executable(&first);
+        write_omp_executable(&second);
+        write_omp_executable(&home.join(".local/bin"));
+        write_omp_executable(&system);
+        let path = std::env::join_paths([&first, &second]).expect("fixture PATH");
+        assert_eq!(
+            default_omp_executable(Some(&path), Some(&home), &[&system]),
+            expected,
+        );
+        let path = std::env::join_paths([&second, &first]).expect("reversed fixture PATH");
+        assert_eq!(
+            default_omp_executable(Some(&path), Some(&home), &[&system]),
+            second.join(format!("omp{}", std::env::consts::EXE_SUFFIX)),
+        );
+        fs::remove_dir_all(root).expect("remove OMP fixture");
+    }
+
+    #[test]
+    fn omp_default_discovery_skips_missing_and_invalid_candidates() {
+        let root = omp_fixture_root();
+        let missing = root.join("missing");
+        let directory = root.join("directory");
+        fs::create_dir_all(directory.join(format!("omp{}", std::env::consts::EXE_SUFFIX)))
+            .expect("create directory named OMP");
+        let valid = root.join("valid");
+        let expected = write_omp_executable(&valid);
+        let mut directories = vec![missing, directory];
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = root.join("non-executable");
+            let executable = write_omp_executable(&directory);
+            fs::set_permissions(executable, fs::Permissions::from_mode(0o644))
+                .expect("remove execute permission");
+            directories.push(directory);
+        }
+        directories.push(valid);
+        let path = std::env::join_paths(&directories).expect("fixture PATH");
+        assert_eq!(default_omp_executable(Some(&path), None, &[]), expected);
+        fs::remove_dir_all(root).expect("remove OMP fixture");
+    }
+
+    #[test]
+    fn omp_default_discovery_uses_local_then_bun_before_system() {
+        let root = omp_fixture_root();
+        let home = root.join("home");
+        let system = root.join("system");
+        let local = write_omp_executable(&home.join(".local/bin"));
+        let bun = write_omp_executable(&home.join(".bun/bin"));
+        let system_executable = write_omp_executable(&system);
+        assert_eq!(
+            default_omp_executable(None, Some(&home), &[&system]),
+            local,
+        );
+        fs::remove_file(local).expect("remove local OMP executable");
+        assert_eq!(
+            default_omp_executable(Some(std::ffi::OsStr::new("")), Some(&home), &[&system]),
+            bun,
+        );
+        fs::remove_file(bun).expect("remove bun OMP executable");
+        assert_eq!(
+            default_omp_executable(None, Some(&home), &[&system]),
+            system_executable,
+        );
+        fs::remove_dir_all(root).expect("remove OMP fixture");
+    }
+
+    #[test]
+    fn omp_default_discovery_uses_homebrew_prefixes_in_order() {
+        let root = omp_fixture_root();
+        let apple_silicon = root.join("opt/homebrew/bin");
+        let intel = root.join("usr/local/bin");
+        let linuxbrew = root.join("home/linuxbrew/.linuxbrew/bin");
+        let directories = [apple_silicon.as_path(), intel.as_path(), linuxbrew.as_path()];
+        let apple_executable = write_omp_executable(&apple_silicon);
+        let intel_executable = write_omp_executable(&intel);
+        let linux_executable = write_omp_executable(&linuxbrew);
+        for expected in [apple_executable, intel_executable, linux_executable] {
+            assert_eq!(default_omp_executable(None, None, &directories), expected);
+            fs::remove_file(expected).expect("remove Homebrew OMP executable");
+        }
+        assert_eq!(
+            default_omp_executable(None, None, &directories),
+            PathBuf::from("omp"),
+        );
+        fs::remove_dir_all(root).expect("remove OMP fixture");
+    }
+
+    #[test]
+    fn omp_default_discovery_without_candidates_keeps_bare_name() {
+        assert_eq!(default_omp_executable(None, None, &[]), PathBuf::from("omp"));
+        assert_eq!(
+            default_omp_executable(
+                Some(std::ffi::OsStr::new("")),
+                Some(Path::new("")),
+                &[],
+            ),
+            PathBuf::from("omp"),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn omp_default_discovery_accepts_symlink_installs() {
+        let root = omp_fixture_root();
+        let target = write_omp_executable(&root.join("target"));
+        let directory = root.join("bin");
+        fs::create_dir_all(&directory).expect("create symlink install directory");
+        let executable = directory.join(format!("omp{}", std::env::consts::EXE_SUFFIX));
+        std::os::unix::fs::symlink(target, &executable).expect("link OMP executable");
+        let path = std::env::join_paths([&directory]).expect("fixture PATH");
+        assert_eq!(default_omp_executable(Some(&path), None, &[]), executable);
+        fs::remove_dir_all(root).expect("remove OMP fixture");
+    }
+
+    #[test]
+    fn omp_configuration_discovers_only_default_and_preserves_explicit_overrides() {
+        // Exercise the actual loader with isolated child environments, following
+        // the browser/Notes configuration tests without global env mutations.
+        if let Some(path) = std::env::var_os("COCKPIT_TEST_OMP_CONFIG") {
+            let expected = std::env::var_os("COCKPIT_TEST_OMP_EXPECTED").expect("expected OMP path");
+            assert_eq!(
+                load_quota_configuration(Some(Path::new(&path)))
+                    .expect("quota configuration")
+                    .omp_executable,
+                PathBuf::from(expected),
+            );
+            return;
+        }
+
+        let root = omp_fixture_root();
+        let directory = root.join("bin");
+        let discovered = write_omp_executable(&directory);
+        let home = root.join("home");
+        write_omp_executable(&home.join(".local/bin"));
+        let path = root.join("config.toml");
+        let toml_explicit = root.join("custom-toml-omp").to_string_lossy().into_owned();
+        let environment_explicit = root.join("custom-env-omp").to_string_lossy().into_owned();
+        let cases = [
+            (None, None, discovered.to_string_lossy().into_owned()),
+            (Some("omp"), None, "omp".to_owned()),
+            (Some(toml_explicit.as_str()), None, toml_explicit.clone()),
+            (None, Some("omp"), "omp".to_owned()),
+            (None, Some(environment_explicit.as_str()), environment_explicit.clone()),
+            (
+                Some(toml_explicit.as_str()),
+                Some("omp"),
+                "omp".to_owned(),
+            ),
+            (
+                Some("omp"),
+                Some(environment_explicit.as_str()),
+                environment_explicit.clone(),
+            ),
+        ];
+        for (toml_executable, environment_executable, expected) in cases {
+            let content = match toml_executable {
+                Some(executable) => format!("version = 1\n[quota]\nomp_executable = {executable:?}\n"),
+                None => "version = 1\n".into(),
+            };
+            fs::write(&path, content).expect("write quota configuration");
+            let mut child = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            );
+            child.args([
+                "--exact",
+                "config::tests::omp_configuration_discovers_only_default_and_preserves_explicit_overrides",
+                "--nocapture",
+            ]);
+            child.env_remove("COCKPIT_OMP_EXECUTABLE");
+            child.env("PATH", std::env::join_paths([&directory]).expect("fixture PATH"));
+            child.env("HOME", &home);
+            child.env("COCKPIT_TEST_OMP_CONFIG", &path);
+            child.env("COCKPIT_TEST_OMP_EXPECTED", expected);
+            if let Some(value) = environment_executable {
+                child.env("COCKPIT_OMP_EXECUTABLE", value);
+            }
+            let output = child.output().expect("run isolated quota configuration case");
+            assert!(
+                output.status.success(),
+                "quota case TOML={toml_executable:?}, environment={environment_executable:?}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        fs::remove_dir_all(root).expect("remove OMP fixture");
+    }
 
     #[test]
     fn template_accepts_only_documented_variables() {

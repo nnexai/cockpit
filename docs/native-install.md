@@ -26,6 +26,8 @@ operations to that owner.
 
 Linux desktop entries and icons are installed under the selected data directory at `applications/dev.cockpit.app.desktop` and `icons/hicolor/256x256/apps/dev.cockpit.app.png`. On macOS, launch the installed app bundle or use the `cockpit` shell launcher. Add the selected `bin` directory to `PATH` if needed.
 
+Subscription limits discover OMP even when a macOS app launch omits its install directory from `PATH`. With no quota override, Cockpit checks `PATH`, then `~/.local/bin`, `~/.bun/bin`, and the Homebrew prefixes `/opt/homebrew/bin`, `/usr/local/bin`, and `/home/linuxbrew/.linuxbrew/bin`. Candidates must be executable files. This does not modify `PATH` or execute shell startup files. For a custom installation, set `[quota] omp_executable = "/absolute/path/to/omp"` in the shared Cockpit TOML; `COCKPIT_OMP_EXECUTABLE` takes precedence. Explicit settings are never replaced by discovery. “OMP usage source not found” means the CLI could not be launched, not that its Copilot usage JSON failed to parse. Restart Cockpit after changing configuration.
+
 ## Native window settings
 
 The native Tauri window reads optional presentation settings from the same
