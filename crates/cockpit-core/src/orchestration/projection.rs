@@ -206,6 +206,7 @@ pub(crate) fn snapshot(
             .cloned()
             .collect(),
         intents: intents.into_iter().cloned().collect(),
+        assignment_intents: super::assignments::snapshot_intents(state, &request.session_id),
         runtime: runtime.0,
         unmanaged_agents: runtime.1,
         attention,
@@ -273,6 +274,7 @@ fn observe(
             run_id: run.run_id.clone(), presence: Presence::Unobserved,
             workspace_id: None, workspace_label: None, tab_id: None, tab_label: None,
             pane_id: None, agent_status: None, state_changed_at: None,
+            actual_omp: false,
         };
         let Some(location) = run.location.as_ref() else { return observation };
         if location.endpoint_identity != view.endpoint_identity {
@@ -312,6 +314,11 @@ fn observe(
         };
         matched.insert(pane.pane_id.as_str());
         observation.presence = Presence::Present;
+        observation.actual_omp = run.stage != RunStage::Closed
+            && run.bound_omp_session.as_deref().is_some_and(|s| !s.is_empty())
+            && pane.agent_kind.as_deref() == Some("omp") && !pane.launch_pending
+            && (run.kind == RunKind::Adopted
+                || (super::launch_receipt_coherent(run) && pane.agent_name.as_deref() == Some(location.launch_tag.as_str())));
         observation.workspace_id = Some(pane.workspace_id.clone());
         observation.workspace_label = Some(pane.workspace_label.clone());
         observation.tab_id = Some(pane.tab_id.clone());
@@ -326,13 +333,18 @@ fn observe(
         .iter()
         .filter(|pane| !matched.contains(pane.pane_id.as_str()))
         .filter_map(|pane| {
-            pane.agent_name.as_ref().map(|name| UnmanagedAgent {
+            if pane.launch_pending {
+                return None;
+            }
+            let kind = pane.agent_kind.as_deref().filter(|kind| !kind.is_empty())?;
+            let name = pane.agent_name.as_deref().unwrap_or(kind);
+            Some(UnmanagedAgent {
                 workspace_id: pane.workspace_id.clone(),
                 workspace_label: pane.workspace_label.clone(),
                 tab_id: pane.tab_id.clone(),
                 tab_label: pane.tab_label.clone(),
                 pane_id: pane.pane_id.clone(),
-                agent_name: name.clone(),
+                agent_name: name.to_owned(),
                 agent_status: pane.agent_status.clone(),
                 state_changed_at: pane.state_changed_at.clone(),
             })
@@ -633,6 +645,9 @@ mod tests {
                 native_session_id: None,
                 agent_name: Some("worker".into()),
                 agent_status: Some(status.into()),
+                agent_kind: Some("omp".into()),
+                launch_pending: false,
+                interactive_ready: false,
                 state_changed_at: Some(START.into()),
             }],
         }
@@ -733,7 +748,9 @@ mod tests {
             grant_id: "execute".into(),
             scope: GrantScope::Execute,
             plan_revision: "work-plan".into(),
-            origin: OperatorOrigin::Browser,
+            origin: GrantOrigin::Browser,
+            supervisor_run_id: None,
+            omp_session_id: None,
             granted_at: START.into(),
         });
         let working = project(&state(run), Ok(runtime("working")));
@@ -858,6 +875,10 @@ mod tests {
             run_id: WORKER.into(),
             expected_task_revision: "item-revision".into(),
             state: IntentState::Conflict,
+            origin: None,
+            supervisor_run_id: None,
+            omp_session_id: None,
+            result_message_id: None,
         });
         let conflicted = project(&durable, Ok(runtime("idle")));
         assert!(has(&conflicted, AttentionKind::IntentConflict));
@@ -1019,5 +1040,59 @@ mod tests {
         assert_eq!(runs[1].presence, Presence::Present);
         assert_eq!(runs[1].pane_id.as_deref(), Some("moved-pane"));
         assert!(observed.unmanaged_agents.is_empty());
+    }
+
+    #[test]
+    fn actual_omp_requires_process_and_binding_not_idle_or_launch_ack() {
+        let mut run = worker(RunStage::Working);
+        run.bound_omp_session = Some("native-main".into());
+        for (kind, pending, native, expected) in [
+            (Some("omp"), false, None, true),
+            (Some("omp"), false, Some("native-main"), true),
+            (Some("omp"), true, Some("native-main"), false),
+            (None, false, Some("native-main"), false),
+            (Some("claude"), false, Some("native-main"), false),
+            (Some("omp"), false, Some("other-main"), false),
+        ] {
+            let mut live = runtime("working");
+            live.panes[0].agent_name = Some("launch".into());
+            live.panes[0].agent_kind = kind.map(str::to_owned);
+            live.panes[0].launch_pending = pending;
+            live.panes[0].interactive_ready = false;
+            live.panes[0].native_session_id = native.map(str::to_owned);
+            let observed = project(&state(run.clone()), Ok(live));
+            let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
+                panic!("fresh observation")
+            };
+            assert_eq!(runs[1].actual_omp, expected);
+        }
+        run.bound_omp_session = None;
+        let mut live = runtime("working");
+        live.panes[0].agent_name = Some("launch".into());
+        let observed = project(&state(run), Ok(live));
+        let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
+            panic!("fresh observation")
+        };
+        assert!(!runs[1].actual_omp);
+    }
+
+    #[test]
+    fn unmanaged_agents_exclude_pending_registrations_and_include_detected_unnamed_omp() {
+        for (kind, pending, name, count) in [
+            (None, false, Some("registered-name"), 0),
+            (Some("omp"), true, Some("pending-name"), 0),
+            (Some("omp"), false, None, 1),
+        ] {
+            let mut live = runtime("working");
+            live.panes[0].pane_id = "unmanaged-pane".into();
+            live.panes[0].agent_kind = kind.map(str::to_owned);
+            live.panes[0].launch_pending = pending;
+            live.panes[0].agent_name = name.map(str::to_owned);
+            let observed = project(&state(worker(RunStage::Working)), Ok(live));
+            assert_eq!(observed.unmanaged_agents.len(), count);
+            if count != 0 {
+                assert_eq!(observed.unmanaged_agents[0].agent_name, "omp");
+            }
+        }
     }
 }

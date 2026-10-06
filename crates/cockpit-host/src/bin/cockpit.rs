@@ -446,6 +446,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
                     service.projects().map_err(|error| error.to_string())?.clone(),
                     service.library().map_err(|error| error.to_string())?.clone(),
                     args.project.config.clone(),
+                    cockpit_host::orchestration_runtime::CliProcessRole::Host,
                 ).map_err(|error| error.to_string())?))
             } else { None };
             let service = match &orchestration_runtime {

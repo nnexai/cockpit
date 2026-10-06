@@ -21,6 +21,8 @@ const path = boundedText(4096);
 const id: Validator = value => typeof value === "string" && value.length > 0
   && value.length <= 512 && encoder.encode(value).byteLength <= 512 && !/[\x00-\x1f\x7f]/.test(value);
 const hash: Validator = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+const uuid: Validator = value => typeof value === "string"
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const bool: Validator = value => typeof value === "boolean";
 const u64: Validator = value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const u32: Validator = value => u64(value) && (value as number) <= 0xffffffff;
@@ -89,21 +91,33 @@ const location = shape({
   endpoint_identity: id, session_id: session, workspace_id: id, tab_id: id, pane_id: id, launch_tag: id,
   boot_id: nullable(id), terminal_id: nullable(id), native_session_id: nullable(id),
 });
-const run = shape({
+const grantOrigin = oneOf("browser", "native", "supervisor");
+// Persisted legacy grants/intents acquire explicit nulls when serialized by Rust.
+// A supervisor decision always identifies its verified root and actual SDK session;
+// operator and legacy decisions must not claim either identity.
+const provenance: Validator = value => record(value) && (value.origin === "supervisor"
+  ? id(value.supervisor_run_id) && id(value.omp_session_id)
+  : value.supervisor_run_id === null && value.omp_session_id === null);
+const grant: Validator = value => shape({
+  grant_id: id, scope: oneOf("prepare", "execute"), plan_revision: hash, origin: grantOrigin,
+  supervisor_run_id: nullable(id), omp_session_id: nullable(id), granted_at: timestamp,
+})(value) && provenance(value);
+const run: Validator = value => shape({
   session_id: session, prepare_brief: text, run_id: id, kind: runKind, label, root_id: id,
   parent_run_id: nullable(id), task_id: nullable(id), attempt: u32, task_revision_at_propose: nullable(hash),
   stage: oneOf("proposed", "awaiting_prepare", "preparing", "initializing", "ready", "working", "reported", "active", "closed"),
   close_reason: nullable(oneOf("accepted", "cancelled", "superseded", "failed")),
   dispatch: nullable(shape({
-    step: oneOf("planning", "plan_failed", "setup_pending", "setup_running", "setup_unknown", "launch_intent", "launch_unknown", "launched", "needs_review"),
+    step: oneOf("planning", "plan_failed", "setup_pending", "setup_running", "setup_unknown", "launch_intent", "launch_pending", "launch_unknown", "launched", "needs_review"),
     launch_attempt: u32, error: nullable(error), updated_at: timestamp, launch_tag: nullable(id),
     endpoint_identity: nullable(id), recovery: nullable(recovery), agent_started: bool,
   })),
   target: nullable(target), setup: nullable(setup), prepare_plan: nullable(plan), init_receipt: nullable(report), work_plan: nullable(plan),
-  grants: list(shape({ grant_id: id, scope: oneOf("prepare", "execute"), plan_revision: hash, origin: oneOf("browser", "native"), granted_at: timestamp })),
+  grants: list(grant),
   last_report: nullable(report), result: nullable(report), annotations: list(shape({ by: actor, text, at: timestamp })),
   location: nullable(location), bound_omp_session: nullable(id), supersedes_run_id: nullable(id), created_at: timestamp, updated_at: timestamp,
-});
+})(value) && record(value) && Array.isArray(value.grants)
+  && value.grants.every(grant => record(grant) && (grant.origin !== "supervisor" || grant.supervisor_run_id === value.root_id));
 const message = shape({
   message_id: id, to_run_id: id, seq: u64, from: actor, kind: messageKind, text, report: nullable(report), stale: bool,
   escalated_from: nullable(id), from_subagent_id: nullable(id), stage: oneOf("stored", "woken", "read", "acked"),
@@ -114,12 +128,17 @@ const subagent = shape({
   status: subagentStatus, summary: nullable(text), updated_at: timestamp,
   last_control: nullable(shape({ seq: u64, op: subagentOp, stage: oneOf("stored", "applied", "failed"), error: nullable(text), at: timestamp })),
 });
-const intent = shape({ intent_id: id, root_id: id, task_id: id, run_id: id, expected_task_revision: hash, state: oneOf("pending", "conflict") });
-const observation = shape({
+const intent: Validator = value => shape({
+  intent_id: id, root_id: id, task_id: id, run_id: id, expected_task_revision: hash, state: oneOf("pending", "conflict"),
+  origin: nullable(grantOrigin), supervisor_run_id: nullable(id), omp_session_id: nullable(id), result_message_id: nullable(id),
+})(value) && provenance(value) && record(value)
+  && (value.origin !== "supervisor" || value.supervisor_run_id === value.root_id);
+const assignmentIntent = shape({ root_id: id, task_id: uuid, state: oneOf("pending", "conflict") }, true);
+const observation: Validator = value => shape({
   run_id: id, presence: oneOf("present", "missing", "endpoint_changed", "unobserved"), workspace_id: nullable(id),
-  pane_id: nullable(id),
+  pane_id: nullable(id), actual_omp: bool,
   workspace_label: nullable(externalText), tab_id: nullable(id), tab_label: nullable(externalText), agent_status: nullable(externalText), state_changed_at: nullable(timestamp),
-});
+})(value) && record(value) && (!value.actual_omp || value.presence === "present");
 const runtime: Validator = value => record(value) && (
   (value.status === "fresh" && shape({ status: oneOf("fresh"), endpoint_identity: id, observed_at: timestamp, runs: list(observation) })(value))
   || (value.status === "unavailable" && shape({ status: oneOf("unavailable"), error })(value))
@@ -133,6 +152,8 @@ const attention = shape({
 // actor/origin can never be supplied by a caller through this transport boundary.
 const actions: Readonly<Record<OrchestrationAction["action"], Fields>> = {
   task_create: { root_id: id, title: label, body: text },
+  task_assign: { root_id: id, task_id: uuid, title: label, body: text },
+  task_assignment_resolve: { root_id: id, task_id: uuid, expected_task_revision: nullable(hash), assign: bool },
   task_update: { root_id: id, task_id: id, expected_task_revision: hash, title: nullable(label), body: nullable(text) },
   tasks_assign_ids: { root_id: id, expected_doc_revision: hash },
   supervisor_start: { target: nullable(target), label: nullable(label) },
@@ -161,6 +182,7 @@ export function parseOrchestrationAction(value: unknown): OrchestrationAction {
   if (!record(value) || typeof value.action !== "string" || !Object.hasOwn(actions, value.action)) malformed("action");
   const fields = actions[value.action as OrchestrationAction["action"]];
   if (!shape({ action: oneOf(value.action), ...fields }, true)(value)) malformed("action");
+  if (value.action === "task_assignment_resolve" && value.assign && value.expected_task_revision === null) malformed("assignment revision");
   return value as unknown as OrchestrationAction;
 }
 export function parseOrchestrationSnapshotRequest(value: unknown): OrchestrationSnapshotRequest {
@@ -180,6 +202,7 @@ export function parseOrchestrationSnapshot(value: unknown): OrchestrationSnapsho
     session_id: session, revision: u64, tasks_token: hash,
     roots: list(shape({ root_id: id, label, kind: runKind, open_runs: u32, needs_you: u32 })),
     board: nullable(board), runs: list(run), messages: list(message), subagents: list(subagent), intents: list(intent), runtime, attention: list(attention),
+    assignment_intents: list(assignmentIntent),
     unmanaged_agents: list(shape({
       workspace_id: id, workspace_label: externalText, tab_id: id, tab_label: externalText, pane_id: id,
       agent_name: externalText, agent_status: nullable(externalText), state_changed_at: nullable(timestamp),
@@ -197,6 +220,7 @@ export function matchOrchestrationSnapshot(value: unknown, request: Orchestratio
 }
 const results: Readonly<Record<OrchestrationMutationResponse["result"]["result"], Fields>> = {
   task: { task }, task_ids: { assigned: u32, doc_revision: hash }, run: { run_id: id, attempt: u32 },
+  task_assigned: { task, to_run_id: id, seq: u64, duplicate: bool },
   message: { to_run_id: id, seq: u64, duplicate: bool, stale: bool }, inbox: { messages: list(message), read_through_seq: u64 }, done: {},
 };
 export function parseOrchestrationMutationResponse(value: unknown): OrchestrationMutationResponse {

@@ -6,7 +6,9 @@ use std::{
 
 use cap_fs_ext::DirExt;
 use cap_std::fs::Dir;
-use cockpit_protocol::orchestration::{Message, Run, Subagent, TaskIntent};
+use cockpit_protocol::orchestration::{
+    IntentState, Message, OperatorOrigin, Run, Subagent, TaskIntent,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -21,8 +23,9 @@ use crate::{
 pub(crate) const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
 const SCHEMA: u32 = 1;
 
-/// Canonical machine records only. Task titles, bodies, and checked state live
-/// exclusively in tasks/*.md; runtime observations are never persisted here.
+/// Canonical machine records and temporary transaction journals. Task content
+/// lives in tasks/*.md; assignment payloads exist only until durable delivery.
+/// Runtime observations are never persisted here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OrchestrationState {
@@ -32,6 +35,20 @@ pub(crate) struct OrchestrationState {
     pub messages: Vec<Message>,
     pub subagents: Vec<Subagent>,
     pub task_intents: Vec<TaskIntent>,
+    #[serde(default)]
+    pub assignment_intents: Vec<AssignmentIntent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AssignmentIntent {
+    pub root_id: String,
+    pub task_id: String,
+    pub request_hash: String,
+    pub title: String,
+    pub body: String,
+    pub origin: OperatorOrigin,
+    pub state: IntentState,
 }
 
 impl Default for OrchestrationState {
@@ -43,6 +60,7 @@ impl Default for OrchestrationState {
             messages: Vec::new(),
             subagents: Vec::new(),
             task_intents: Vec::new(),
+            assignment_intents: Vec::new(),
         }
     }
 }
@@ -347,6 +365,10 @@ mod tests {
             run_id: Uuid::new_v4().to_string(),
             expected_task_revision: "expected".into(),
             state: IntentState::Pending,
+            origin: None,
+            supervisor_run_id: None,
+            omp_session_id: None,
+            result_message_id: None,
         });
         assert_eq!(lock.save(&mut state).unwrap(), 1);
         drop(lock);
@@ -358,6 +380,45 @@ mod tests {
         assert_eq!(state.messages.len(), 1);
         assert_eq!(state.task_intents.len(), 1);
         assert_eq!(state.messages[0].text, "never prune this receipt");
+    }
+
+    #[test]
+    fn schema_one_without_assignment_journal_keeps_legacy_acceptance() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let root_id = Uuid::new_v4().to_string();
+        let task_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let legacy = serde_json::json!({
+            "schema": 1, "revision": 3, "runs": [], "messages": [], "subagents": [],
+            "task_intents": [{
+                "intent_id": "legacy-intent", "root_id": root_id, "task_id": task_id,
+                "run_id": run_id, "expected_task_revision": "legacy-revision", "state": "pending"
+            }]
+        });
+        store
+            .store
+            .state_dir()
+            .write("state.json", serde_json::to_vec(&legacy).unwrap())
+            .unwrap();
+        let locked = store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        assert!(state.assignment_intents.is_empty());
+        assert!(state.task_intents[0].origin.is_none());
+        assert!(state.task_intents[0].supervisor_run_id.is_none());
+        assert!(state.task_intents[0].omp_session_id.is_none());
+        assert!(state.task_intents[0].result_message_id.is_none());
+        locked.save(&mut state).unwrap();
+        let saved = locked.read().unwrap();
+        assert_eq!(saved.schema, 1);
+        assert_eq!(saved.task_intents[0].intent_id, "legacy-intent");
+        assert_eq!(saved.task_intents[0].root_id, root_id);
+        assert_eq!(saved.task_intents[0].task_id, task_id);
+        assert_eq!(saved.task_intents[0].run_id, run_id);
+        assert_eq!(
+            saved.task_intents[0].expected_task_revision,
+            "legacy-revision"
+        );
     }
 
     #[test]

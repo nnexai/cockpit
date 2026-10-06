@@ -1,185 +1,104 @@
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import type { CockpitClient } from "../../client/CockpitClient";
-import type { DispatchTarget, OrchestrationAction, OrchestrationSnapshot, RepositoryListResponse, SpaceSummary, TaskView } from "../../protocol/generated/v1";
+import type { DispatchTarget, OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, Run, SpaceSummary, Subagent, TaskView } from "../../protocol/generated/v1";
 import { useRestoreFocus } from "../library/LibraryConfirmDialog";
-import { UiIcon } from "../UiIcon";
+import type { EditDraft } from "./useSupervisorDrafts";
 import "../projects/setup.css";
-import "../projects/taskSetup.css";
 
-export type SupervisorDialogsProps = {
-  mode: "start" | "create" | "edit" | "propose";
-  snapshot: OrchestrationSnapshot;
-  task: TaskView | null;
-  client: Pick<CockpitClient, "repositories">;
-  spaces: SpaceSummary[];
-  busy: boolean;
-  error: string | null;
-  mutate: (action: OrchestrationAction) => Promise<boolean>;
-  onClose: () => void;
-};
-
-type TargetChoice = "isolated" | "worktree" | "directory" | "existingSpace";
-
-function SupervisorDialogForm({ mode, snapshot, task, client, spaces, busy, error, mutate, onClose }: SupervisorDialogsProps) {
+export type StartDraft = { label: string; location: "existing" | "directory" | "dedicated"; spaceId: string; directory: string };
+export type SupervisorDialogState = { mode: "start" } | { mode: "edit"; task: TaskView; draft: EditDraft } | { mode: "retry" | "close" | "setup_recovery"; run: Run } | { mode: "subagent_cancel"; run: Run; subagent: Subagent };
+export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, changed, busy, available, mutateResult, onStarted, onEdited, onStartUnconfirmed, onClose }: {
+  dialog: SupervisorDialogState; snapshot: OrchestrationSnapshot; spaces: SpaceSummary[]; startDraft: StartDraft;
+  changed(): void; busy: boolean; available: boolean; mutateResult(action: OrchestrationAction): Promise<OrchestrationActionResult | null>;
+  onStarted(runId: string): void; onEdited(taskId: string): void; onStartUnconfirmed(): void; onClose(): void;
+}) {
   const titleId = useId();
   const formId = useId();
-  const dialogRef = useRef<HTMLElement>(null);
-  const firstRef = useRef<HTMLInputElement>(null);
+  const ref = useRef<HTMLElement>(null);
   const inFlight = useRef(false);
-  const [opened] = useState(() => ({
-    task: task?.task ?? null,
-    rootId: snapshot.board?.root_id ?? snapshot.roots[0]?.root_id ?? "",
-    currentRunId: task?.current_run_id ?? null,
-  }));
-  const [rootId, setRootId] = useState(opened.rootId);
-  const [title, setTitle] = useState(mode === "edit" ? opened.task?.title ?? "" : "");
-  const [body, setBody] = useState(mode === "edit" ? opened.task?.body ?? "" : "");
-  const [label, setLabel] = useState("");
-  const [targetChoice, setTargetChoice] = useState<TargetChoice>(mode === "start" ? "isolated" : "worktree");
-  const [repositoryId, setRepositoryId] = useState("");
-  const [branch, setBranch] = useState("");
-  const [base, setBase] = useState("");
-  const [checkout, setCheckout] = useState("");
-  const [directory, setDirectory] = useState("");
-  const [spaceId, setSpaceId] = useState("");
-  const [parentRunId, setParentRunId] = useState(opened.rootId);
-  const [brief, setBrief] = useState("");
-  const [supersede, setSupersede] = useState(false);
-  const [catalog, setCatalog] = useState<RepositoryListResponse | null>(null);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [catalogPending, setCatalogPending] = useState(false);
-  const [catalogRefresh, setCatalogRefresh] = useState(0);
-  const [localError, setLocalError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [unconfirmed, setUnconfirmed] = useState(false);
   const locked = busy || pending;
+  const mode = dialog.mode;
+  const title = mode === "start" ? "Start agent" : mode === "edit" ? "Edit task" : mode === "retry" ? "Restart agent" : mode === "close" ? "Close tracking" : mode === "setup_recovery" ? "Recover setup" : "Cancel subagent";
   useRestoreFocus();
-  useEffect(() => { firstRef.current?.focus({ preventScroll: true }); }, []);
   useEffect(() => {
-    if (mode !== "propose") return;
-    let active = true;
-    setCatalogPending(true);
-    setCatalogError(null);
-    void client.repositories().then((result) => {
-      if (active) setCatalog(result);
-    }).catch((cause: unknown) => {
-      if (active) setCatalogError(cause instanceof Error ? cause.message : "Could not load configured repositories.");
-    }).finally(() => { if (active) setCatalogPending(false); });
-    return () => { active = false; };
-  }, [client, mode, catalogRefresh]);
-  const liveTask = opened.task ? snapshot.board?.tasks.find((item) => item.task.task_id === opened.task?.task_id) : null;
-  const taskChanged = !!liveTask && liveTask.task.task_revision !== opened.task?.task_revision;
-  const runChanged = mode === "propose" && !!liveTask && liveTask.current_run_id !== opened.currentRunId;
-  const currentRun = snapshot.runs.find((run) => run.run_id === opened.currentRunId && run.stage !== "closed");
-  const parentChoices = snapshot.runs.filter((run) => run.root_id === opened.rootId && run.stage !== "closed");
-  const chosenParent = parentChoices.find((run) => run.run_id === parentRunId);
-  const selectedRepository = catalog?.repositories.find((repository) => repository.repository_id === repositoryId);
-  const close = useCallback(() => { if (!busy && !inFlight.current) onClose(); }, [busy, onClose]);
-  const trapKeys = (event: KeyboardEvent<HTMLElement>) => {
+    ref.current?.querySelector<HTMLElement>(mode === "start" && startDraft.location === "existing" && spaces.some(space => space.id === startDraft.spaceId) ? "[data-primary]" : "[data-initial]")?.focus({ preventScroll: true });
+  }, []); // Opening owns focus once; polling must not move it.
+  const close = () => { if (!inFlight.current && !busy) onClose(); };
+  const keys = (event: KeyboardEvent<HTMLElement>) => {
     if (event.nativeEvent.isComposing) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      close();
-      return;
-    }
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
     if (event.key !== "Tab") return;
     event.stopPropagation();
-    const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>("button, input, textarea, select, a[href], summary, [tabindex]:not([tabindex='-1'])")]
-      .filter((element) => !element.matches(":disabled, [hidden], [aria-hidden='true']") && !element.closest("[hidden], [inert]") && element.getClientRects().length > 0);
-    if (!focusable.length) { event.preventDefault(); dialogRef.current?.focus(); return; }
-    const index = focusable.indexOf(document.activeElement as HTMLElement);
-    if (event.shiftKey && index <= 0) { event.preventDefault(); focusable.at(-1)?.focus(); }
-    else if (!event.shiftKey && (index < 0 || index === focusable.length - 1)) { event.preventDefault(); focusable[0]?.focus(); }
+    const elements = [...event.currentTarget.querySelectorAll<HTMLElement>("button,input,textarea,select,[tabindex]:not([tabindex='-1'])")].filter(element => !element.matches(":disabled,[hidden]") && !element.closest("[hidden],[inert]"));
+    const index = elements.indexOf(document.activeElement as HTMLElement);
+    if (event.shiftKey && index <= 0) { event.preventDefault(); elements.at(-1)?.focus(); }
+    else if (!event.shiftKey && (index < 0 || index === elements.length - 1)) { event.preventDefault(); elements[0]?.focus(); }
   };
   const submit = async () => {
-    if (locked || inFlight.current) return;
-    setLocalError(null);
+    if (locked || inFlight.current || unconfirmed && dialog.mode !== "edit") return;
+    if (!available) { setError("The required connection is unavailable. Your draft and resources are kept."); return; }
     let action: OrchestrationAction;
-    if (mode === "create" || mode === "edit") {
-      if (!rootId || !snapshot.roots.some((root) => root.root_id === rootId)) { setLocalError("Choose an available supervisor root for this task."); return; }
-      if (!title.trim()) { setLocalError("A task title is required."); return; }
-      if (mode === "edit") {
-        if (!opened.task) { setLocalError("No task was selected for editing."); return; }
-        action = { action: "task_update", root_id: opened.rootId, task_id: opened.task.task_id, expected_task_revision: opened.task.task_revision, title: title.trim(), body };
-      } else action = { action: "task_create", root_id: rootId, title: title.trim(), body };
-    } else {
+    if (dialog.mode === "start") {
       let target: DispatchTarget | null = null;
-      if (targetChoice === "existingSpace") {
-        if (!spaces.some((space) => space.id === spaceId)) { setLocalError("Choose an available existing Space."); return; }
-        target = { target: "existing_space", workspace_id: spaceId };
-      } else if (targetChoice === "directory") {
-        if (!directory.trim().startsWith("/")) { setLocalError("Enter an explicit absolute directory path."); return; }
-        target = { target: "setup", request: { operation: "open", path: directory.trim(), label: label.trim() || null, task_name: opened.task?.title ?? null, focus: false } };
-      } else if (targetChoice === "worktree") {
-        if (!selectedRepository) { setLocalError("Choose a configured repository for the new worktree."); return; }
-        target = { target: "setup", request: { operation: "create", repository_id: selectedRepository.repository_id, branch: branch.trim() || null, base_ref: base.trim() || null, checkout_path: checkout.trim() || null, label: label.trim() || null, task_name: opened.task?.title ?? null, artifact_url: null, linked_artifact_urls: [], focus: false } };
+      if (startDraft.location === "existing") {
+        if (!spaces.some(space => space.id === startDraft.spaceId)) { setError("Choose a currently available Space. No different destination will be selected automatically."); return; }
+        target = { target: "existing_space", workspace_id: startDraft.spaceId };
+      } else if (startDraft.location === "directory") {
+        if (!startDraft.directory.trim().startsWith("/")) { setError("Enter an absolute directory path."); return; }
+        target = { target: "setup", request: { operation: "open", path: startDraft.directory.trim(), label: startDraft.label.trim() || null, task_name: null, focus: false } };
       }
-      if (mode === "start") action = { action: "supervisor_start", target, label: label.trim() || null };
-      else {
-        if (!opened.task || !target) { setLocalError("A selected task and a worker target are required."); return; }
-        if (runChanged) { setLocalError("The task's current run changed after this dialog opened. Close and reopen the proposal to review the new run before superseding it."); return; }
-        if (!chosenParent) { setLocalError("Choose an active parent run under this task's supervisor root."); return; }
-        if (!brief.trim()) { setLocalError("Provide the bounded preparation and read-only initialization brief."); return; }
-        if (currentRun && !supersede) { setLocalError("This task has an open run. Explicitly authorize superseding that run, or cancel this proposal."); return; }
-        action = { action: "run_propose", task_id: opened.task.task_id, parent_run_id: chosenParent.run_id, label: label.trim() || null, target, prepare_brief: brief, supersedes_run_id: supersede && currentRun ? currentRun.run_id : null };
+      action = { action: "supervisor_start", target, label: startDraft.label.trim() || null };
+    } else if (dialog.mode === "edit") {
+      if (!dialog.draft.title.trim()) { setError("Enter a task title."); return; }
+      if (!snapshot.board) { setError("The task document is unavailable. Your edit draft is kept."); return; }
+      action = { action: "task_update", root_id: snapshot.board.root_id, task_id: dialog.task.task.task_id, expected_task_revision: dialog.draft.revision, title: dialog.draft.title, body: dialog.draft.body };
+    } else if (dialog.mode === "subagent_cancel") action = { action: "subagent_control", run_id: dialog.run.run_id, subagent_id: dialog.subagent.subagent_id, op: { op: "cancel" } };
+    else if (dialog.mode === "setup_recovery") action = { action: "reconcile_run", run_id: dialog.run.run_id, recovery: dialog.run.dispatch?.recovery ?? null };
+    else action = { action: dialog.mode === "retry" ? "retry_launch" : "cancel_run", run_id: dialog.run.run_id };
+    inFlight.current = true; setPending(true); setError(null);
+    try {
+      const result = await mutateResult(action);
+      const confirmed = result && (dialog.mode === "start" ? result.result === "run" : dialog.mode === "edit" ? result.result === "task" : result.result === "done" || result.result === "message");
+      if (!result || !confirmed) {
+        if (dialog.mode !== "edit") setUnconfirmed(true);
+        if (dialog.mode === "start") onStartUnconfirmed();
+        setError(dialog.mode === "start" ? "The start was not confirmed. Close these options and check status before another start; the previous request may have opened a terminal." : "The change was not confirmed. Your draft and tracking are kept. Check current status before requesting another action.");
+        return;
       }
-    }
-    inFlight.current = true;
-    setPending(true);
-    try { if (await mutate(action)) onClose(); }
-    catch (cause) { setLocalError(cause instanceof Error ? cause.message : "Could not save the requested change. Your draft is preserved."); }
+      if (dialog.mode === "start" && result.result === "run") onStarted(result.run_id);
+      if (dialog.mode === "edit" && result.result === "task") onEdited(dialog.task.task.task_id);
+      onClose();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "The change was not confirmed. Your draft is kept."); }
     finally { inFlight.current = false; setPending(false); }
   };
-  const dialogTitle = mode === "start" ? "Start supervisor" : mode === "create" ? "Create Markdown task" : mode === "edit" ? "Edit Markdown task" : "Propose worker run";
-  const submitTitle = mode === "start" ? "Start supervisor" : mode === "create" ? "Create task" : mode === "edit" ? "Save task" : "Propose run";
-  return createPortal(<div className="setup-overlay" role="presentation">
-    <section ref={dialogRef} tabIndex={-1} className="setup-dialog task-setup supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={locked} onKeyDown={trapKeys}>
-      <header className="task-setup-header"><h2 id={titleId}>{dialogTitle}</h2><button type="button" className="task-setup-close" aria-label={`Close ${dialogTitle}`} disabled={locked} onClick={close}><UiIcon name="close" /></button></header>
-      <form id={formId} className="task-setup-body" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <fieldset disabled={locked}>
-          {mode === "create" || mode === "edit" ? <>
-            {mode === "create" ? <label>Supervisor root<select value={rootId} onChange={(event) => setRootId(event.target.value)}><option value="">Choose a supervisor</option>{snapshot.roots.map((root) => <option key={root.root_id} value={root.root_id}>{root.label}</option>)}</select></label> : <p>Revision at open: <code>{opened.task?.task_revision ?? "No selected task"}</code></p>}
-            <label>Task title<input ref={firstRef} value={title} onChange={(event) => setTitle(event.target.value)} autoComplete="off" /></label>
-            <label>Markdown body<textarea rows={10} value={body} onChange={(event) => setBody(event.target.value)} /></label>
-            <p>The canonical task is Markdown. Body formatting is saved as entered; no Space-local copy is created.</p>
-            {mode === "edit" && taskChanged ? <p className="supervisor-error" role="alert">The canonical task changed after this dialog opened. Saving uses the original revision and will reject a conflicting edit; your draft will remain intact.</p> : null}
-          </> : <>
-            {mode === "propose" ? <p>Task: {opened.task?.title ?? "No selected task"}</p> : null}
-            <label>{mode === "start" ? "Supervisor name (optional)" : "Worker name (optional)"}<input ref={firstRef} value={label} onChange={(event) => setLabel(event.target.value)} autoComplete="off" /></label>
-            {mode === "propose" ? <label>Parent run<select value={parentRunId} onChange={(event) => setParentRunId(event.target.value)}><option value="">Choose an active parent</option>{parentChoices.map((run) => <option key={run.run_id} value={run.run_id}>{run.label} · {run.kind} · {run.stage}</option>)}</select></label> : null}
-            <label>Target<select value={targetChoice} onChange={(event) => setTargetChoice(event.target.value as TargetChoice)}>
-              {mode === "start" ? <option value="isolated">None · default isolated supervisor directory</option> : <option value="worktree">New repository worktree</option>}
-              <option value="directory">Open an explicit directory</option><option value="existingSpace">Existing Space</option>
-            </select></label>
-            {targetChoice === "isolated" ? <p>Cockpit opens an isolated directory under its orchestration state root. It does not infer a target from the current Space or working directory.</p> : null}
-            {targetChoice === "worktree" ? <>
-              <label>Repository<select value={repositoryId} disabled={catalogPending || locked} onChange={(event) => setRepositoryId(event.target.value)}><option value="">{catalogPending ? "Loading configured repositories…" : "Choose a repository"}</option>{catalog?.repositories.map((repository) => <option key={repository.repository_id} value={repository.repository_id}>{repository.name} · {repository.checkout_path}</option>)}</select></label>
-              {catalogError ? <p className="supervisor-error" role="alert">{catalogError} <button type="button" onClick={() => setCatalogRefresh((value) => value + 1)}>Reload repositories</button></p> : null}
-              {catalog && !catalog.repositories.length ? <p>No configured repositories are available. Choose an explicit directory or existing Space instead.</p> : null}
-              {catalog?.diagnostics.map((diagnostic, index) => <p key={index}>{diagnostic.message}{diagnostic.path ? ` · ${diagnostic.path}` : ""}</p>)}
-              <label>Branch (optional)<input value={branch} onChange={(event) => setBranch(event.target.value)} autoComplete="off" spellCheck={false} /></label>
-              <label>Base reference (optional)<input value={base} onChange={(event) => setBase(event.target.value)} autoComplete="off" spellCheck={false} /></label>
-              <label>Checkout destination (optional)<input value={checkout} onChange={(event) => setCheckout(event.target.value)} autoComplete="off" spellCheck={false} /></label>
-              <p>Blank fields use repository setup defaults. The exact setup plan must be reviewed and granted separately; proposing does not create the worktree or launch the worker.</p>
-            </> : null}
-            {targetChoice === "directory" ? <label>Absolute directory<input value={directory} onChange={(event) => setDirectory(event.target.value)} autoComplete="off" spellCheck={false} /></label> : null}
-            {targetChoice === "existingSpace" ? <label>Space<select value={spaceId} onChange={(event) => setSpaceId(event.target.value)}><option value="">Choose an existing Space</option>{spaces.map((space) => <option key={space.id} value={space.id}>{space.label}</option>)}</select></label> : null}
-            {mode === "propose" ? <>
-              <label>Preparation and read-only initialization brief<textarea rows={8} value={brief} onChange={(event) => setBrief(event.target.value)} /></label>
-              <p>The brief is delivered through the worker inbox. Prepare and Execute need separate operator grants bound to exact plans. Read-only is policy, not an OS sandbox.</p>
-              {currentRun ? <label><input type="checkbox" checked={supersede} onChange={(event) => setSupersede(event.target.checked)} /> Explicitly supersede {currentRun.label} (attempt {currentRun.attempt}, {currentRun.stage}) when the new run receives Prepare authorization. Its Space and checkout are not torn down.</label> : <p>No open current run will be superseded.</p>}
-              {runChanged ? <p className="supervisor-error" role="alert">The task's current run changed. Close and reopen this proposal to review the new run; no stale supersede action will be sent.</p> : null}
-            </> : <p>The supervisor opens without switching your current terminal focus.</p>}
-          </>}
-        </fieldset>
-        {localError || error ? <p className="supervisor-error" role="alert">{localError ?? error}</p> : null}
-      </form>
-      <footer className="task-setup-footer"><button type="button" disabled={locked} onClick={close}>Cancel</button><button type="submit" className="setup-primary" form={formId} disabled={locked || runChanged}>{pending ? "Saving…" : submitTitle}</button></footer>
-    </section>
-  </div>, document.body);
-}
-
-export function SupervisorDialogs(props: SupervisorDialogsProps) {
-  return <SupervisorDialogForm key={`${props.mode}:${props.task?.task.task_id ?? "none"}`} {...props} />;
+  const dialogRun = "run" in dialog ? dialog.run : null;
+  const editedTaskId = dialog.mode === "edit" ? dialog.task.task.task_id : null;
+  const descendants = dialogRun ? snapshot.runs.filter(run => run.root_id === dialogRun.root_id && run.run_id !== dialogRun.run_id && run.stage !== "closed") : [];
+  const currentTask = editedTaskId ? snapshot.board?.tasks.find(task => task.task.task_id === editedTaskId) : null;
+  return createPortal(<div className="setup-overlay" role="presentation"><section ref={ref} className="supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={locked} tabIndex={-1} onKeyDown={keys}>
+    <h2 id={titleId}>{title}</h2><form id={formId} onSubmit={event => { event.preventDefault(); void submit(); }}>
+      {dialog.mode === "start" ? <>
+        <p>An OMP supervisor manages tasks and delegates work for you.</p>
+        <label>Name (optional)<input value={startDraft.label} disabled={locked} onChange={event => { startDraft.label = event.target.value; changed(); }} /></label>
+        <label>Location<select data-initial value={startDraft.location} disabled={locked} onChange={event => { startDraft.location = event.target.value as StartDraft["location"]; changed(); }}><option value="existing">Existing Space</option><option value="directory">Directory</option><option value="dedicated">Dedicated agent folder</option></select></label>
+        {startDraft.location === "existing" ? <label>Space<select value={startDraft.spaceId} disabled={locked} onChange={event => { startDraft.spaceId = event.target.value; changed(); }}><option value="">Choose a Space</option>{spaces.map(space => <option key={space.id} value={space.id}>{space.label}</option>)}</select></label> : startDraft.location === "directory" ? <label>Absolute directory<input value={startDraft.directory} disabled={locked} onChange={event => { startDraft.directory = event.target.value; changed(); }} /></label> : <p>Creates a dedicated agent folder and Space. Existing project context is not copied.</p>}
+        <p>Starts OMP without switching your terminal focus.</p>
+      </> : dialog.mode === "edit" ? <>
+        <label>Task title<input data-initial value={dialog.draft.title} disabled={locked} onChange={event => { dialog.draft.title = event.target.value; changed(); }} /></label>
+        <label>Task description<textarea rows={8} value={dialog.draft.body} disabled={locked} onChange={event => { dialog.draft.body = event.target.value; changed(); }} /></label>
+        {currentTask?.task.task_revision !== dialog.draft.revision ? <><p className="supervisor-warning">Task changed elsewhere. Saving will not overwrite those changes without your review. Your draft is kept.</p>{currentTask ? <details><summary>Review current task</summary><h3>{currentTask.task.title}</h3><p className="supervisor-exact-text">{currentTask.task.body}</p><p>Keeping your draft for the next save replaces the current task text only if this reviewed version is still current.</p><button type="button" disabled={locked || !!currentTask.task.diagnostic} onClick={() => { dialog.draft.revision = currentTask.task.task_revision; changed(); }}>I reviewed the current task; keep my draft for saving</button></details> : null}</> : null}
+      </> : dialog.mode === "retry" ? <>
+        <p>Restart {dialog.run.label}?</p><p>We cannot confirm whether the previous agent is still running. Restarting creates a new terminal and could leave another agent running. The previous launch is checked again before a new launch.</p>{descendants.length ? <p>Worker agents may still be running. Restart only this agent; keep their tasks and history.</p> : null}
+      </> : dialog.mode === "close" ? <>
+        <p>Close tracking for {dialog.run.label}?</p><p>Tasks, history, Spaces and worktrees are kept. This does not guarantee the agent or its workers stop.</p>{descendants.length ? <p>{descendants.length} other tracked agents stay open. Live descendants will still need supervision.</p> : null}
+      </> : dialog.mode === "subagent_cancel" ? <p>Request cancellation of {dialog.subagent.label}. Its OMP control receipt, not this request, confirms whether it stopped.</p> : <>
+        <p>Setup for {dialog.run.label} needs review before launch. Existing resources are kept.</p><p>{dialog.run.dispatch?.recovery === "accept_existing_worktree" ? "Confirm using the existing worktree receipt rather than creating another worktree." : dialog.run.dispatch?.recovery === "retry_environment" ? "Explicitly retry the uncertain setup operation after reviewing its recorded effects." : "Check and reconcile the existing setup only. No new launch is requested by this confirmation."}</p>
+        {dialog.run.prepare_plan ? <details><summary>Exact setup plan</summary><p className="supervisor-exact-text">{dialog.run.prepare_plan.text}</p></details> : null}{dialog.run.setup ? <><p>{dialog.run.setup.checkout_path}</p><ul>{dialog.run.setup.effects.map((effect, index) => <li key={index}>{effect}</li>)}</ul>{dialog.run.setup.warnings.map((warning, index) => <p className="supervisor-warning" key={index}>{warning}</p>)}</> : null}
+      </>}
+      {error ? <p className="supervisor-error" role="alert">{error}</p> : null}
+    </form>{!available ? <p className="supervisor-warning">Reconnect before applying this change. You can keep editing or close this dialog without losing your draft.</p> : null}<footer><button type="button" data-initial={mode !== "start" && mode !== "edit" || undefined} disabled={locked} onClick={close}>{mode === "close" ? "Keep tracking" : mode === "retry" ? "Back" : "Cancel"}</button><button type="submit" form={formId} data-primary disabled={locked || !available || unconfirmed && mode !== "edit"}>{pending ? "Working…" : mode === "retry" ? "Restart anyway" : mode === "edit" ? "Save task" : title}</button></footer>
+  </section></div>, document.body);
 }

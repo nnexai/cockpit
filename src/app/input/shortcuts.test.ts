@@ -45,6 +45,16 @@ describe("shortcut registry", () => {
     expect(formatShortcut("terminal-copy", "other")).toBe("Ctrl+Shift+C");
   });
 
+  it("keeps Supervisor entry points keyless and routes Start agent to the same current-Space flow", () => {
+    const show = SHORTCUTS.find(entry => entry.id === "show-supervisor")!;
+    const start = SHORTCUTS.find(entry => entry.id === "start-supervisor")!;
+    expect(show.prefix).toBeUndefined();
+    expect(start.prefix).toBeUndefined();
+    expect(formatShortcut(show.id, "other")).toBe("");
+    expect(formatShortcut(start.id, "other")).toBe("");
+    expect(start.label).toBe("Start agent");
+    expect(start.note).toContain("fresh current Space");
+  });
 });
 
 describe("viewer shortcuts", () => {

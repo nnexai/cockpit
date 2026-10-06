@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeControl, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseWakeSummary, prepareToolAllowed, recoverWake, reportIdentity } from "./cockpit-orchestration";
+import { decodeControl, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseWakeSummary, prepareToolAllowed, recoverWake, reportIdentity, requireSupervisorManagement } from "./cockpit-orchestration";
 
 describe("durable inbox wake bookkeeping", () => {
   it("coalesces arrivals without implying a read or acknowledgement", () => {
@@ -56,15 +56,44 @@ describe("native identity and bounded preparation", () => {
   });
 
   it("fails closed for mutation, shell execution, nested dispatch and unknown tools", () => {
-    for (const name of ["write", "edit", "bash", "eval", "task", "cockpit_delegate", "cockpit_task", "mcp__provider__write", "toString"]) expect(prepareToolAllowed(name)).toBe(false);
+    for (const name of ["write", "edit", "bash", "eval", "task", "cockpit_delegate", "cockpit_task", "cockpit_manage", "mcp__provider__write", "toString"]) expect(prepareToolAllowed(name)).toBe(false);
     for (const name of ["read", "find", "grep", "glob", "cockpit_report"]) expect(prepareToolAllowed(name)).toBe(true);
     expect(prepareToolAllowed("cockpit_inbox", "list")).toBe(true);
     expect(prepareToolAllowed("cockpit_inbox", "ack")).toBe(true);
     expect(prepareToolAllowed("cockpit_inbox", "send")).toBe(false);
     expect(prepareToolAllowed("cockpit_message", "show")).toBe(true);
     expect(prepareToolAllowed("cockpit_task", "list")).toBe(true);
+    expect(prepareToolAllowed("cockpit_task", "show")).toBe(true);
+    for (const operation of ["prepare", "execute", "accept", "send_back", "cancel"]) expect(prepareToolAllowed("cockpit_manage", operation)).toBe(false);
     for (const operation of ["message", "annotate", "list", undefined]) expect(prepareToolAllowed("cockpit_message", operation)).toBe(false);
-    for (const operation of ["create", "update", "show", undefined]) expect(prepareToolAllowed("cockpit_task", operation)).toBe(false);
+    for (const operation of ["create", "update", undefined]) expect(prepareToolAllowed("cockpit_task", operation)).toBe(false);
+  });
+});
+
+describe("supervisor native management identity", () => {
+  const root = { run_id: "root", root_id: "root", parent_run_id: null, kind: "supervisor", stage: "active", bound_omp_session: "native-main" };
+
+  it("allows only the currently bound active native main root", () => {
+    expect(() => requireSupervisorManagement(root, { kind: "main" }, "native-main")).not.toThrow();
+    expect(() => requireSupervisorManagement({ ...root, kind: "adopted" }, { kind: "main" }, "native-main")).not.toThrow();
+    for (const nativeSession of ["", "old-native-main", "clone-native"]) {
+      expect(() => requireSupervisorManagement(root, { kind: "main" }, nativeSession)).toThrow("bound native main");
+    }
+    expect(() => requireSupervisorManagement({ ...root, bound_omp_session: null }, { kind: "main" }, "native-main")).toThrow();
+    for (const stage of ["preparing", "initializing", "ready", "reported", "closed"]) {
+      expect(() => requireSupervisorManagement({ ...root, stage }, { kind: "main" }, "native-main")).toThrow();
+    }
+  });
+
+  it("rejects workers and native clones even with inherited matching root/session fields", () => {
+    for (const kind of ["sub", "subagent", "unknown"]) {
+      expect(() => requireSupervisorManagement(root, { kind }, "native-main")).toThrow("internal subagent");
+    }
+    for (const stage of ["active", "working"]) {
+      expect(() => requireSupervisorManagement({ ...root, kind: "worker", stage }, { kind: "main" }, "native-main")).toThrow();
+    }
+    expect(() => requireSupervisorManagement({ ...root, parent_run_id: "parent" }, { kind: "main" }, "native-main")).toThrow();
+    expect(() => requireSupervisorManagement({ ...root, run_id: "child" }, { kind: "main" }, "native-main")).toThrow();
   });
 });
 

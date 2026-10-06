@@ -469,6 +469,39 @@ pub(crate) fn apply(
                     }
                     run.updated_at = now();
                 }
+                if from_subagent_id.is_none()
+                    && matches!(
+                        kind,
+                        ReportKind::Ready | ReportKind::Result | ReportKind::NeedsInput
+                    )
+                    && recipient != state.runs[index].root_id
+                    && state.runs[index].parent_run_id.is_some()
+                {
+                    let root_id = state.runs[index].root_id.clone();
+                    let run_id = state.runs[index].run_id.clone();
+                    let event = match kind {
+                        ReportKind::Ready => "ready",
+                        ReportKind::Result => "result",
+                        _ => "needs_input",
+                    };
+                    let plan_revision = state.runs[index]
+                        .work_plan
+                        .as_ref()
+                        .map(|p| p.plan_revision.as_str());
+                    let text = serde_json::json!({"event":event,"run_id":run_id,"receipt_message_id":message_id,"plan_revision":plan_revision}).to_string();
+                    append(
+                        state,
+                        ActorRef::Dispatcher,
+                        &root_id,
+                        &format!("manage-{run_id}-{message_id}"),
+                        MessageKind::Observation,
+                        &text,
+                        None,
+                        false,
+                        None,
+                        None,
+                    )?;
+                }
             }
             result
         }
@@ -496,6 +529,16 @@ pub(crate) fn apply(
                     let (_, index) = agent(actor, caller)?;
                     let own = &state.runs[index].run_id;
                     match kind {
+                        MessageKind::Answer => {
+                            super::management_target(
+                                state,
+                                actor,
+                                caller,
+                                &state.runs[index].session_id,
+                                to_run_id,
+                            )?;
+                            (to_run_id.clone(), None)
+                        }
                         MessageKind::Instruction | MessageKind::CancelRequest => {
                             if !is_ancestor(state, own, to_run_id) {
                                 return Err(error(
@@ -546,9 +589,25 @@ pub(crate) fn apply(
                 }
                 return Ok(Some(message_result(existing, true)));
             }
-            append(
+            let result = append(
                 state, from, &recipient, message_id, *kind, text, None, false, None, escalated,
-            )?
+            )?;
+            if *kind == MessageKind::Answer {
+                let (_, provenance) = super::management_target(
+                    state,
+                    actor,
+                    caller,
+                    &state.runs[target].session_id,
+                    to_run_id,
+                )?;
+                let annotation = super::decision_annotation(
+                    actor_ref(actor, caller, state),
+                    &provenance,
+                    &format!("Answer delivered as message {message_id}"),
+                );
+                state.runs[target].annotations.push(annotation);
+            }
+            result
         }
         OrchestrationAction::Annotate { run_id, text } => {
             text_bound(text)?;
@@ -962,6 +1021,7 @@ mod tests {
             messages: Vec::new(),
             subagents: Vec::new(),
             task_intents: Vec::new(),
+            assignment_intents: Vec::new(),
         }
     }
 
@@ -979,6 +1039,7 @@ mod tests {
             omp_session_id: Some(format!("omp-{run_id}")),
             main_omp_session_id: Some(format!("omp-{run_id}")),
             agent_kind: Some(AgentKind::Main),
+            actual_agent_kind: Some("omp".into()),
             subagent_id: None,
         })
     }

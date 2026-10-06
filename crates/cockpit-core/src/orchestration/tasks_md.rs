@@ -77,6 +77,16 @@ fn read_bytes(dir: &Dir, name: &str) -> Result<Vec<u8>, InspectionError> {
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+fn digest_matches_revision(digest: &[u8], revision: &str) -> bool {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    revision.len() == digest.len() * 2
+        && digest
+            .iter()
+            .zip(revision.as_bytes().chunks_exact(2))
+            .all(|(byte, pair)| {
+                pair[0] == HEX[(byte >> 4) as usize] && pair[1] == HEX[(byte & 15) as usize]
+            })
+}
 fn conflict() -> InspectionError {
     InspectionError::new(
         "task_revision_conflict",
@@ -121,9 +131,23 @@ impl<'a> TaskDocument<'a> {
     }
 
     pub(crate) fn create(&self, title: &str, body: &str) -> Result<Task, InspectionError> {
-        validate_title(title)?;
-        validate_body(body)?;
-        let task_id = self.new_id();
+        self.create_with_id(&self.new_id(), title, body)
+    }
+
+    pub(crate) fn create_with_id(
+        &self,
+        task_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<Task, InspectionError> {
+        validate_creation(title, body)?;
+        let task_id = validate_uuid(task_id)?.to_string();
+        if self.tasks.iter().any(|task| task.task_id == task_id) {
+            return Err(InspectionError::new(
+                "task_id_conflict",
+                "task identity already exists in the canonical Markdown",
+            ));
+        }
         let eol = self.eol();
         let mut bytes = self.bytes.clone();
         if bytes.is_empty() {
@@ -138,6 +162,28 @@ impl<'a> TaskDocument<'a> {
         bytes.extend_from_slice(encode_body(body, eol).as_bytes());
         let updated = self.commit(bytes)?;
         Ok(updated.task(&task_id)?.clone())
+    }
+
+    /// Compare the exact intended canonical item, not normalized title/body.
+    /// Checkbox, body bytes and marker edits all stop automatic assignment.
+    pub(crate) fn matches_creation(&self, task: &Task, title: &str, body: &str) -> bool {
+        // Creation uses the document's newline convention. Unrelated prose can
+        // subsequently change that convention without changing this task.
+        ["\n", "\r\n"].into_iter().any(|eol| {
+            let mut digest = Sha256::new();
+            digest.update(b"- [ ] ");
+            digest.update(title.as_bytes());
+            digest.update(b" <!-- cockpit-task: ");
+            digest.update(task.task_id.as_bytes());
+            digest.update(b" -->");
+            digest.update(eol.as_bytes());
+            for line in body.lines() {
+                digest.update(b"  ");
+                digest.update(line.as_bytes());
+                digest.update(eol.as_bytes());
+            }
+            digest_matches_revision(&digest.finalize(), &task.task_revision)
+        })
     }
 
     pub(crate) fn update(
@@ -184,6 +230,35 @@ impl<'a> TaskDocument<'a> {
         bytes[item.range.start + 3] = if checked { b'x' } else { b' ' };
         let updated = self.commit(bytes)?;
         Ok(updated.task(task_id)?.clone())
+    }
+
+    /// Recover acceptance only when checking was the entire canonical edit.
+    pub(crate) fn checked_matches_revision(
+        &self,
+        task_id: &str,
+        expected_unchecked_revision: &str,
+    ) -> Result<bool, InspectionError> {
+        let task = self.task(task_id)?;
+        if !task.checked {
+            return Ok(false);
+        }
+        let item = self
+            .items
+            .iter()
+            .find(|item| {
+                item.task_index
+                    .is_some_and(|index| self.tasks[index].task_id == task.task_id)
+            })
+            .ok_or_else(|| InspectionError::new("task_not_found", "task item is missing"))?;
+        let checkbox = item.range.start + 3;
+        let mut digest = Sha256::new();
+        digest.update(&self.bytes[item.range.start..checkbox]);
+        digest.update(b" ");
+        digest.update(&self.bytes[checkbox + 1..item.range.end]);
+        Ok(digest_matches_revision(
+            &digest.finalize(),
+            expected_unchecked_revision,
+        ))
     }
 
     pub(crate) fn assign_ids(
@@ -266,6 +341,11 @@ impl<'a> TaskDocument<'a> {
         })?;
         Ok(updated)
     }
+}
+
+pub(crate) fn validate_creation(title: &str, body: &str) -> Result<(), InspectionError> {
+    validate_title(title)?;
+    validate_body(body)
 }
 
 fn validate_title(title: &str) -> Result<(), InspectionError> {
@@ -708,6 +788,135 @@ mod tests {
                 .to_string_lossy()
                 .ends_with(".tmp")
         }));
+    }
+
+    #[test]
+    fn checked_recovery_requires_exact_item_bytes_except_checkbox() {
+        let fixture = Fixture::new();
+        let task_id = Uuid::new_v4().to_string();
+        fixture.write(format!(
+            "# User notes\r\n* [ ] Custom title  <!-- cockpit-task: {task_id} -->\r\n  body\ttext\r\n"
+        ).as_bytes());
+        let locked = fixture.store.lock().unwrap();
+        let original = locked
+            .tasks(&fixture.root_id)
+            .unwrap()
+            .task(&task_id)
+            .unwrap()
+            .clone();
+        assert!(
+            !locked
+                .tasks(&fixture.root_id)
+                .unwrap()
+                .checked_matches_revision(&task_id, &original.task_revision)
+                .unwrap()
+        );
+        locked
+            .tasks(&fixture.root_id)
+            .unwrap()
+            .check(&task_id, &original.task_revision, true)
+            .unwrap();
+        assert!(
+            locked
+                .tasks(&fixture.root_id)
+                .unwrap()
+                .checked_matches_revision(&task_id, &original.task_revision)
+                .unwrap()
+        );
+        let checked = locked
+            .tasks(&fixture.root_id)
+            .unwrap()
+            .task(&task_id)
+            .unwrap()
+            .clone();
+        locked
+            .tasks(&fixture.root_id)
+            .unwrap()
+            .update(
+                &task_id,
+                &checked.task_revision,
+                None,
+                Some("externally changed body"),
+            )
+            .unwrap();
+        assert!(
+            !locked
+                .tasks(&fixture.root_id)
+                .unwrap()
+                .checked_matches_revision(&task_id, &original.task_revision)
+                .unwrap()
+        );
+        let changed = locked
+            .tasks(&fixture.root_id)
+            .unwrap()
+            .task(&task_id)
+            .unwrap()
+            .clone();
+        locked
+            .tasks(&fixture.root_id)
+            .unwrap()
+            .update(
+                &task_id,
+                &changed.task_revision,
+                Some("Changed title"),
+                None,
+            )
+            .unwrap();
+        assert!(
+            !locked
+                .tasks(&fixture.root_id)
+                .unwrap()
+                .checked_matches_revision(&task_id, &original.task_revision)
+                .unwrap()
+        );
+        let mut bytes = fixture.bytes();
+        bytes.extend_from_slice(
+            format!("* [x] Duplicate <!-- cockpit-task: {task_id} -->\r\n").as_bytes(),
+        );
+        fixture.write(&bytes);
+        assert_eq!(
+            locked
+                .tasks(&fixture.root_id)
+                .unwrap()
+                .checked_matches_revision(&task_id, &original.task_revision)
+                .unwrap_err()
+                .code,
+            "task_id_duplicate"
+        );
+    }
+
+    #[test]
+    fn stable_creation_uses_supplied_uuid_and_rejects_duplicate_without_editing() {
+        let fixture = Fixture::new();
+        fixture.write(b"# User tasks\r\n\r\nUnrelated prose\r\n");
+        let lock = fixture.store.lock().unwrap();
+        let task_id = Uuid::new_v4().to_string();
+        let task = lock
+            .tasks(&fixture.root_id)
+            .unwrap()
+            .create_with_id(&task_id.to_uppercase(), "Stable title", "First\r\nSecond\n")
+            .unwrap();
+        assert_eq!(task.task_id, task_id);
+        let document = lock.tasks(&fixture.root_id).unwrap();
+        assert!(document.matches_creation(&task, "Stable title", "First\r\nSecond\n"));
+        let before = fixture.bytes();
+        assert!(before.starts_with(b"# User tasks\r\n\r\nUnrelated prose\r\n"));
+        assert_eq!(
+            document
+                .create_with_id(&task_id, "Other", "")
+                .unwrap_err()
+                .code,
+            "task_id_conflict"
+        );
+        assert_eq!(fixture.bytes(), before);
+        assert_eq!(
+            document
+                .create_with_id("not-a-uuid", "Other", "")
+                .unwrap_err()
+                .code,
+            "invalid_identity"
+        );
+        assert_eq!(fixture.bytes(), before);
     }
 
     #[test]

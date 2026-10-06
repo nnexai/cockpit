@@ -152,7 +152,7 @@ impl Fixture {
     fn launch_and_bind(&self, run_id: &str) -> Actor {
         let actor = self.launch_tab(run_id);
         self.service
-            .record_dispatch(run_id, DispatchUpdate::AgentStarted)
+            .record_launch_pending(&self.run(run_id))
             .unwrap();
         let Actor::Agent(caller) = &actor else {
             unreachable!();
@@ -164,6 +164,9 @@ impl Fixture {
             },
         )
         .unwrap();
+        self.service
+            .record_launch_verified(&self.run(run_id))
+            .unwrap();
         actor
     }
 
@@ -215,6 +218,7 @@ impl Fixture {
             omp_session_id: Some(native.clone()),
             main_omp_session_id: Some(native.clone()),
             agent_kind: Some(AgentKind::Main),
+            actual_agent_kind: Some("omp".into()),
             subagent_id: None,
         })
     }
@@ -231,9 +235,10 @@ impl Fixture {
         .unwrap()
     }
 
-    fn working(&self, root_id: &str) -> (Task, String, Actor) {
-        let task = self.create_task(root_id, "Worker task");
-        let run_id = self.propose(root_id, &task, None);
+    fn working(&self, parent_run_id: &str) -> (Task, String, Actor) {
+        let root_id = self.run(parent_run_id).root_id;
+        let task = self.create_task(&root_id, "Worker task");
+        let run_id = self.propose(parent_run_id, &task, None);
         self.prepare(&run_id);
         let actor = self.launch_and_bind(&run_id);
         self.ready(&actor);
@@ -258,6 +263,10 @@ impl Fixture {
             run_id: run_id.into(),
             expected_task_revision: task.task_revision.clone(),
             state: IntentState::Pending,
+            origin: None,
+            supervisor_run_id: None,
+            omp_session_id: None,
+            result_message_id: None,
         });
         locked.save(&mut state).unwrap();
         intent_id
@@ -619,9 +628,12 @@ fn prepare_and_execute_require_separate_exact_grants_and_keep_initialization_rec
     let run_id = fixture.propose(&root, &task, None);
     let prepare = fixture.plan(&run_id);
     let root_actor = fixture.launch_and_bind(&root);
+    let mut denied_actor = root_actor.clone();
+    caller_mut(&mut denied_actor).actual_agent_kind = Some("shell".into());
+    let bytes = fixture.state_bytes();
     assert_code(
         fixture.apply(
-            &root_actor,
+            &denied_actor,
             OrchestrationAction::GrantPrepare {
                 run_id: run_id.clone(),
                 plan_revision: prepare.plan_revision.clone(),
@@ -629,6 +641,7 @@ fn prepare_and_execute_require_separate_exact_grants_and_keep_initialization_rec
         ),
         "actor_forbidden",
     );
+    assert_eq!(fixture.state_bytes(), bytes);
     assert_code(
         fixture.apply(
             &Actor::Operator(OperatorOrigin::Browser),
@@ -825,7 +838,7 @@ fn failed_result_is_not_accepted_or_checked() {
 }
 
 #[test]
-fn recovery_conflicts_on_changed_unchecked_task_and_finishes_already_checked_task() {
+fn recovery_conflicts_on_changed_task_even_when_externally_checked() {
     for already_checked in [false, true] {
         let fixture = Fixture::new();
         let root = fixture.root();
@@ -857,22 +870,16 @@ fn recovery_conflicts_on_changed_unchecked_task_and_finishes_already_checked_tas
         reopened.recover_intents().unwrap();
         let state = reopened.store.lock().unwrap().read().unwrap();
         let run = &state.runs[run_index(&state, &run_id).unwrap()];
-        if already_checked {
-            assert_eq!(run.stage, RunStage::Closed);
-            assert_eq!(run.close_reason, Some(CloseReason::Accepted));
-            assert!(state.task_intents.is_empty());
-        } else {
-            assert_eq!(run.stage, RunStage::Reported);
-            assert!(run.close_reason.is_none());
-            assert_eq!(state.task_intents.len(), 1);
-            assert_eq!(state.task_intents[0].intent_id, intent_id);
-            assert_eq!(state.task_intents[0].state, IntentState::Conflict);
-            assert_eq!(
-                state.task_intents[0].expected_task_revision,
-                task.task_revision
-            );
-            assert!(!fixture.task(&root, &task.task_id).checked);
-        }
+        assert_eq!(run.stage, RunStage::Reported);
+        assert!(run.close_reason.is_none());
+        assert_eq!(state.task_intents.len(), 1);
+        assert_eq!(state.task_intents[0].intent_id, intent_id);
+        assert_eq!(state.task_intents[0].state, IntentState::Conflict);
+        assert_eq!(
+            state.task_intents[0].expected_task_revision,
+            task.task_revision
+        );
+        assert_eq!(fixture.task(&root, &task.task_id).checked, already_checked);
         let recovered_revision = state.revision;
         reopened.recover_intents().unwrap();
         assert_eq!(
@@ -884,27 +891,55 @@ fn recovery_conflicts_on_changed_unchecked_task_and_finishes_already_checked_tas
 
 #[test]
 fn recovery_applies_unchanged_pending_acceptance_once() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let (task, run_id, actor) = fixture.working(&root);
-    fixture
-        .apply(
-            &actor,
-            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-        )
-        .unwrap();
-    fixture.pending_intent(&root, &task, &run_id);
-    let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
-    reopened.recover_intents().unwrap();
-    assert!(fixture.task(&root, &task.task_id).checked);
-    assert_eq!(
-        fixture.run(&run_id).close_reason,
-        Some(CloseReason::Accepted)
-    );
-    assert!(fixture.state().task_intents.is_empty());
-    let revision = fixture.state().revision;
-    reopened.recover_intents().unwrap();
-    assert_eq!(fixture.state().revision, revision);
+    for check_phase in 0..3 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let (task, run_id, actor) = fixture.working(&root);
+        fixture
+            .apply(
+                &actor,
+                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+            )
+            .unwrap();
+        // Pending from unchecked Markdown, crash after writing the exact check,
+        // or acceptance explicitly requested on the already checked item.
+        if check_phase == 2 {
+            fixture
+                .service
+                .store
+                .lock()
+                .unwrap()
+                .tasks(&root)
+                .unwrap()
+                .check(&task.task_id, &task.task_revision, true)
+                .unwrap();
+            fixture.pending_intent(&root, &fixture.task(&root, &task.task_id), &run_id);
+        } else {
+            fixture.pending_intent(&root, &task, &run_id);
+            if check_phase == 1 {
+                fixture
+                    .service
+                    .store
+                    .lock()
+                    .unwrap()
+                    .tasks(&root)
+                    .unwrap()
+                    .check(&task.task_id, &task.task_revision, true)
+                    .unwrap();
+            }
+        }
+        let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+        reopened.recover_intents().unwrap();
+        assert!(fixture.task(&root, &task.task_id).checked);
+        assert_eq!(
+            fixture.run(&run_id).close_reason,
+            Some(CloseReason::Accepted)
+        );
+        assert!(fixture.state().task_intents.is_empty());
+        let revision = fixture.state().revision;
+        reopened.recover_intents().unwrap();
+        assert_eq!(fixture.state().revision, revision);
+    }
 }
 
 #[test]
@@ -1611,7 +1646,6 @@ fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_an
             kind: MessageKind::Instruction,
             text: "Replay this original unread instruction after explicit retry".into(),
         });
-        let original = fixture.run(&run_id);
         for queued in [false, true] {
             if queued {
                 fixture.queue_review(&run_id);
@@ -1630,6 +1664,26 @@ fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_an
         }
         let reviewed = fixture.run(&run_id);
         commit_review(&fixture, &reviewed, outcome, Some(review_error()));
+        let bytes = fixture.state_bytes();
+        assert_code(
+            fixture.apply(
+                &Actor::Operator(OperatorOrigin::Browser),
+                OrchestrationAction::RetryLaunch {
+                    run_id: run_id.clone(),
+                },
+            ),
+            "invalid_stage",
+        );
+        assert_eq!(
+            fixture.state_bytes(),
+            bytes,
+            "Unreviewed Result must survive uncertain startup"
+        );
+        fixture.operator(OrchestrationAction::SendBack {
+            run_id: run_id.clone(),
+            text: "Reviewed Result; explicitly initialize a new launch before further work".into(),
+        });
+        let original = fixture.run(&run_id);
         let messages = serde_json::to_value(fixture.state().messages).unwrap();
         fixture.operator(OrchestrationAction::RetryLaunch {
             run_id: run_id.clone(),
@@ -1659,13 +1713,43 @@ fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_an
             expected[field] = actual[field].clone();
         }
         assert_eq!(actual, expected);
+        let mut expected_messages: Vec<Message> = serde_json::from_value(messages.clone()).unwrap();
+        for message in expected_messages.iter_mut().filter(|message| {
+            message.to_run_id == run_id
+                && matches!(
+                    message.kind,
+                    MessageKind::WorkBrief
+                        | MessageKind::PrepareBrief
+                        | MessageKind::SupervisorBrief
+                )
+        }) {
+            message.stale = true;
+        }
         assert_eq!(
             serde_json::to_value(fixture.state().messages).unwrap(),
-            messages
+            serde_json::to_value(&expected_messages).unwrap()
         );
         fixture.assert_stale_review(&reviewed);
         let new_actor = fixture.launch_and_bind(&run_id);
         let settled = fixture.run(&run_id);
+        assert_eq!(settled.stage, RunStage::Initializing);
+        let bytes = fixture.state_bytes();
+        assert_code(
+            fixture.apply(
+                &Actor::Operator(OperatorOrigin::Browser),
+                OrchestrationAction::GrantExecute {
+                    run_id: run_id.clone(),
+                    plan_revision: original.work_plan.as_ref().unwrap().plan_revision.clone(),
+                    note: None,
+                },
+            ),
+            "invalid_stage",
+        );
+        assert_eq!(
+            fixture.state_bytes(),
+            bytes,
+            "Historical execute grants must not resume work"
+        );
         assert_ne!(settled.bound_omp_session, original.bound_omp_session);
         assert_eq!(settled.attempt, original.attempt);
         assert_eq!(settled.root_id, original.root_id);
@@ -1743,6 +1827,17 @@ fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_an
                 .unwrap();
             assert_eq!(current.seq, old.seq);
             assert_eq!(current.text, old.text);
+            if matches!(
+                old.kind,
+                MessageKind::WorkBrief | MessageKind::PrepareBrief | MessageKind::SupervisorBrief
+            ) {
+                assert!(
+                    current.stale,
+                    "Old launch briefs are history, not executable mail"
+                );
+            } else {
+                assert_eq!(current.stale, old.stale);
+            }
             assert_eq!(current.stage, DeliveryStage::Read);
             assert!(current.acked_at.is_none());
         }
@@ -1755,7 +1850,7 @@ fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_an
 }
 
 #[test]
-fn first_agent_started_preserves_fast_same_launch_progress_and_repeated_receipt_is_no_write() {
+fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_no_write() {
     for stage in [
         RunStage::Initializing,
         RunStage::Ready,
@@ -1775,6 +1870,10 @@ fn first_agent_started_preserves_fast_same_launch_progress_and_repeated_receipt_
             run_id
         };
         let actor = fixture.launch_tab(&run_id);
+        fixture
+            .service
+            .record_launch_pending(&fixture.run(&run_id))
+            .unwrap();
         let Actor::Agent(caller) = &actor else {
             unreachable!();
         };
@@ -1786,8 +1885,10 @@ fn first_agent_started_preserves_fast_same_launch_progress_and_repeated_receipt_
                 },
             )
             .unwrap();
-        // Seed only the lifecycle transition that can precede the adapter reply;
-        // Ready/Execute/Result and all receipts are real service mutations.
+        let reviewed = fixture.run(&run_id);
+        // Model lifecycle advancement during the runtime proof read. Keep the
+        // captured Preparing incarnation, and exercise Ready/Execute/Result
+        // through actual service mutations rather than forging their receipts.
         fixture.seed_run(&run_id, |run| {
             run.stage = if stage == RunStage::Active {
                 RunStage::Active
@@ -1810,10 +1911,7 @@ fn first_agent_started_preserves_fast_same_launch_progress_and_repeated_receipt_
         let original_messages = serde_json::to_value(fixture.state().messages).unwrap();
         let revision = fixture.state().revision;
         assert_eq!(
-            fixture
-                .service
-                .record_dispatch(&run_id, DispatchUpdate::AgentStarted)
-                .unwrap(),
+            fixture.service.record_launch_verified(&reviewed).unwrap(),
             revision + 1
         );
         let after = fixture.run(&run_id);
@@ -1854,14 +1952,1586 @@ fn first_agent_started_preserves_fast_same_launch_progress_and_repeated_receipt_
             let bytes = fixture.state_bytes();
             let receiver = fixture.service.revision.subscribe();
             assert_eq!(
-                fixture
-                    .service
-                    .record_dispatch(&run_id, DispatchUpdate::AgentStarted)
-                    .unwrap(),
+                fixture.service.record_launch_verified(&reviewed).unwrap(),
                 revision
             );
             assert_eq!(fixture.state_bytes(), bytes);
             assert!(!receiver.has_changed().unwrap());
         }
+    }
+}
+
+fn assert_agent_decision(message: &Message, run_id: &str) {
+    assert!(matches!(&message.from, ActorRef::Run { run_id: from } if from == run_id));
+    assert!(!message.stale);
+}
+
+fn assert_proof_discarded(fixture: &Fixture, reviewed: &Run) {
+    let revision = fixture.state().revision;
+    let bytes = fixture.state_bytes();
+    let receiver = fixture.service.revision.subscribe();
+    assert_eq!(
+        fixture.service.record_launch_verified(reviewed).unwrap(),
+        revision
+    );
+    assert_eq!(
+        fixture.state_bytes(),
+        bytes,
+        "Obsolete proof must not write"
+    );
+    assert!(
+        !receiver.has_changed().unwrap(),
+        "Obsolete proof must not notify"
+    );
+}
+
+#[test]
+fn pending_launch_ack_and_independent_bind_do_not_promote_root_or_worker() {
+    for worker in [false, true] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let run_id = if worker {
+            let task = fixture.create_task(&root, "Pending initialization");
+            let run_id = fixture.propose(&root, &task, None);
+            fixture.prepare(&run_id);
+            run_id
+        } else {
+            root
+        };
+        let actor = fixture.launch_tab(&run_id);
+        let unbound = fixture.run(&run_id);
+        assert_eq!(unbound.stage, RunStage::Preparing);
+        assert!(unbound.bound_omp_session.is_none());
+        assert_proof_discarded(&fixture, &unbound);
+        let Actor::Agent(caller) = &actor else {
+            unreachable!()
+        };
+        fixture
+            .apply(
+                &actor,
+                OrchestrationAction::RunBindSession {
+                    omp_session_id: caller.omp_session_id.clone().unwrap(),
+                },
+            )
+            .unwrap();
+        assert_eq!(fixture.run(&run_id).stage, RunStage::Preparing);
+        let revision = fixture.state().revision;
+        // SDK binding can win the race with accepted agent.start ACK. The old
+        // unbound request may record Pending, but is never sufficient proof.
+        assert_eq!(
+            fixture.service.record_launch_pending(&unbound).unwrap(),
+            revision + 1
+        );
+        let pending = fixture.run(&run_id);
+        assert_eq!(
+            pending.dispatch.as_ref().unwrap().step,
+            DispatchStep::LaunchPending
+        );
+        assert!(!pending.dispatch.as_ref().unwrap().agent_started);
+        assert_eq!(pending.stage, RunStage::Preparing);
+        assert_eq!(pending.bound_omp_session, caller.omp_session_id);
+        assert!(fixture.state().messages.iter().all(|message| {
+            message.to_run_id != run_id
+                || !matches!(
+                    message.kind,
+                    MessageKind::SupervisorBrief | MessageKind::PrepareBrief
+                )
+        }));
+        assert_proof_discarded(&fixture, &unbound);
+        let revision = fixture.state().revision;
+        fixture.service.record_launch_verified(&pending).unwrap();
+        let proven = fixture.run(&run_id);
+        assert_eq!(fixture.state().revision, revision + 1);
+        assert_eq!(
+            proven.stage,
+            if worker {
+                RunStage::Initializing
+            } else {
+                RunStage::Active
+            }
+        );
+        assert!(proven.dispatch.as_ref().unwrap().agent_started);
+        assert_eq!(
+            proven.dispatch.as_ref().unwrap().step,
+            DispatchStep::Launched
+        );
+        let kind = if worker {
+            MessageKind::PrepareBrief
+        } else {
+            MessageKind::SupervisorBrief
+        };
+        let messages = fixture.state().messages;
+        let briefs: Vec<_> = messages
+            .iter()
+            .filter(|message| message.to_run_id == run_id && message.kind == kind)
+            .collect();
+        assert_eq!(briefs.len(), 1);
+        assert_eq!(
+            briefs[0].message_id,
+            format!(
+                "brief:{run_id}:launch-{}-{}:launch",
+                proven.attempt,
+                proven.dispatch.as_ref().unwrap().launch_attempt,
+            )
+        );
+        assert_eq!(briefs[0].text, proven.prepare_brief);
+        assert_proof_discarded(&fixture, &proven);
+    }
+}
+
+#[test]
+fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Exact launch proof");
+    let run_id = fixture.propose(&root, &task, None);
+    fixture.prepare(&run_id);
+    let actor = fixture.launch_tab(&run_id);
+    fixture
+        .service
+        .record_launch_pending(&fixture.run(&run_id))
+        .unwrap();
+    let Actor::Agent(caller) = &actor else {
+        unreachable!()
+    };
+    fixture
+        .apply(
+            &actor,
+            OrchestrationAction::RunBindSession {
+                omp_session_id: caller.omp_session_id.clone().unwrap(),
+            },
+        )
+        .unwrap();
+    let reviewed = fixture.run(&run_id);
+    for fence in 0..20 {
+        let mut stale = reviewed.clone();
+        match fence {
+            0 => stale.root_id = id(),
+            1 => stale.task_id = Some(id()),
+            2 => stale.session_id = "different-session".into(),
+            3 => stale.attempt += 1,
+            4 => stale.dispatch.as_mut().unwrap().launch_attempt += 1,
+            5 => stale.dispatch.as_mut().unwrap().launch_tag = Some("different-tag".into()),
+            6 => {
+                stale.dispatch.as_mut().unwrap().endpoint_identity =
+                    Some("different-endpoint".into())
+            }
+            7 => stale.bound_omp_session = None,
+            8 => stale.bound_omp_session = Some(String::new()),
+            9 => stale.bound_omp_session = Some("other-native-main".into()),
+            10 => stale.location = None,
+            11 => stale.location.as_mut().unwrap().boot_id = Some("different-boot".into()),
+            12 => stale.location.as_mut().unwrap().terminal_id = Some("different-terminal".into()),
+            13 => {
+                stale.location.as_mut().unwrap().native_session_id = Some("different-native".into())
+            }
+            14 => stale.location.as_mut().unwrap().endpoint_identity = "different-endpoint".into(),
+            15 => stale.location.as_mut().unwrap().session_id = "different-session".into(),
+            16 => stale.location.as_mut().unwrap().workspace_id = "different-space".into(),
+            17 => stale.location.as_mut().unwrap().tab_id = "different-tab".into(),
+            18 => stale.location.as_mut().unwrap().pane_id = "different-pane".into(),
+            19 => stale.location.as_mut().unwrap().launch_tag = "different-tag".into(),
+            _ => unreachable!(),
+        }
+        assert_proof_discarded(&fixture, &stale);
+    }
+    // Even matching captured/current corrupt receipts are not valid proof.
+    for fence in 0..5 {
+        fixture.seed_run(&run_id, |run| {
+            *run = reviewed.clone();
+            match fence {
+                0 => run.bound_omp_session = Some(String::new()),
+                1 => {
+                    run.location.as_mut().unwrap().native_session_id =
+                        Some("conflicting-native".into())
+                }
+                2 => run.location.as_mut().unwrap().launch_tag.clear(),
+                3 => {
+                    run.dispatch.as_mut().unwrap().endpoint_identity = Some("wrong-endpoint".into())
+                }
+                4 => run.location.as_mut().unwrap().session_id = "wrong-session".into(),
+                _ => unreachable!(),
+            }
+        });
+        assert_proof_discarded(&fixture, &fixture.run(&run_id));
+    }
+    fixture.seed_run(&run_id, |run| {
+        *run = reviewed;
+        // Herdr's optional native ID is not a required launch gate.
+        run.location.as_mut().unwrap().native_session_id = None;
+    });
+    fixture
+        .service
+        .record_launch_verified(&fixture.run(&run_id))
+        .unwrap();
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Initializing);
+}
+
+#[test]
+fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
+    for race in 0..4 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let actor = fixture.launch_tab(&root);
+        fixture
+            .service
+            .record_launch_pending(&fixture.run(&root))
+            .unwrap();
+        let Actor::Agent(caller) = &actor else {
+            unreachable!()
+        };
+        if race != 2 {
+            fixture
+                .apply(
+                    &actor,
+                    OrchestrationAction::RunBindSession {
+                        omp_session_id: caller.omp_session_id.clone().unwrap(),
+                    },
+                )
+                .unwrap();
+        }
+        let reviewed = fixture.run(&root);
+        match race {
+            0 => {
+                fixture.operator(OrchestrationAction::CancelRun {
+                    run_id: root.clone(),
+                });
+            }
+            1 => {
+                fixture
+                    .service
+                    .record_dispatch(
+                        &root,
+                        DispatchUpdate::Step {
+                            step: DispatchStep::LaunchUnknown,
+                            error: Some(review_error()),
+                        },
+                    )
+                    .unwrap();
+                fixture.operator(OrchestrationAction::RetryLaunch {
+                    run_id: root.clone(),
+                });
+                assert_eq!(
+                    fixture.run(&root).dispatch.unwrap().launch_attempt,
+                    reviewed.dispatch.as_ref().unwrap().launch_attempt + 1
+                );
+            }
+            2 => {
+                fixture
+                    .apply(
+                        &actor,
+                        OrchestrationAction::RunBindSession {
+                            omp_session_id: caller.omp_session_id.clone().unwrap(),
+                        },
+                    )
+                    .unwrap();
+            }
+            3 => {
+                let mut moved = actor.clone();
+                let moved_caller = caller_mut(&mut moved);
+                moved_caller.workspace_id = "moved-space".into();
+                moved_caller.tab_id = "moved-tab".into();
+                moved_caller.pane_id = "moved-pane".into();
+                fixture
+                    .apply(
+                        &moved,
+                        OrchestrationAction::Annotate {
+                            run_id: root.clone(),
+                            text: "Same terminal moved while proof waits".into(),
+                        },
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert_proof_discarded(&fixture, &reviewed);
+        assert!(
+            fixture
+                .state()
+                .messages
+                .iter()
+                .all(|message| message.kind != MessageKind::SupervisorBrief)
+        );
+    }
+}
+
+#[test]
+fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cancel() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let task = fixture.create_task(&root, "User chat task requires no new operator grant");
+    let run_id = fixture.propose(&root, &task, None);
+    let prepare = fixture.plan(&run_id);
+    let bytes = fixture.state_bytes();
+    assert_code(
+        fixture.apply(
+            &supervisor,
+            OrchestrationAction::GrantPrepare {
+                run_id: run_id.clone(),
+                plan_revision: plan_revision(&"Unreviewed setup").unwrap(),
+            },
+        ),
+        "plan_changed",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::GrantPrepare {
+                run_id: run_id.clone(),
+                plan_revision: prepare.plan_revision.clone(),
+            },
+        )
+        .unwrap();
+    let worker = fixture.launch_and_bind(&run_id);
+    fixture.ready(&worker);
+    let ready = fixture.run(&run_id);
+    let work_plan = ready.work_plan.as_ref().unwrap();
+    let bytes = fixture.state_bytes();
+    assert_code(
+        fixture.apply(
+            &supervisor,
+            OrchestrationAction::GrantExecute {
+                run_id: run_id.clone(),
+                plan_revision: prepare.plan_revision.clone(),
+                note: None,
+            },
+        ),
+        "plan_changed",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::GrantExecute {
+                run_id: run_id.clone(),
+                plan_revision: work_plan.plan_revision.clone(),
+                note: Some("Exact Ready receipt reviewed by the root".into()),
+            },
+        )
+        .unwrap();
+    let working = fixture.run(&run_id);
+    assert_eq!(
+        serde_json::to_value(&working.init_receipt).unwrap(),
+        serde_json::to_value(&ready.init_receipt).unwrap()
+    );
+    let native = fixture.run(&root).bound_omp_session.unwrap();
+    assert_eq!(working.grants.len(), 2);
+    for grant in &working.grants {
+        assert_eq!(grant.origin, GrantOrigin::Supervisor);
+        assert_eq!(grant.supervisor_run_id.as_deref(), Some(root.as_str()));
+        assert_eq!(grant.omp_session_id.as_deref(), Some(native.as_str()));
+    }
+    assert_eq!(working.grants[0].scope, GrantScope::Prepare);
+    assert_eq!(working.grants[0].plan_revision, prepare.plan_revision);
+    assert_eq!(working.grants[1].scope, GrantScope::Execute);
+    assert_eq!(working.grants[1].plan_revision, work_plan.plan_revision);
+    fixture
+        .apply(&worker, report(ReportKind::NeedsInput, None, None))
+        .unwrap();
+    let answer_id = id();
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::MessageSend {
+                message_id: answer_id.clone(),
+                to_run_id: run_id.clone(),
+                kind: MessageKind::Answer,
+                text: "Use the established task scope; no additional decision is missing".into(),
+            },
+        )
+        .unwrap();
+    let answer = fixture
+        .state()
+        .messages
+        .into_iter()
+        .find(|message| message.message_id == answer_id)
+        .unwrap();
+    assert_agent_decision(&answer, &root);
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
+    fixture
+        .apply(
+            &worker,
+            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+        )
+        .unwrap();
+    assert!(!fixture.task(&root, &task.task_id).checked);
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::SendBack {
+                run_id: run_id.clone(),
+                text: "Add explicit evidence for the second acceptance criterion".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
+    assert!(fixture.run(&run_id).result.is_none());
+    let sendback = fixture
+        .state()
+        .messages
+        .into_iter()
+        .find(|message| {
+            message.to_run_id == run_id
+                && message.kind == MessageKind::Answer
+                && message.text == "Add explicit evidence for the second acceptance criterion"
+        })
+        .unwrap();
+    assert_agent_decision(&sendback, &root);
+    fixture
+        .apply(
+            &worker,
+            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+        )
+        .unwrap();
+    let result_id = fixture.run(&run_id).result.unwrap().message_id;
+    let edited = task_result(
+        fixture
+            .apply(
+                &supervisor,
+                OrchestrationAction::TaskUpdate {
+                    root_id: root.clone(),
+                    task_id: task.task_id.clone(),
+                    expected_task_revision: task.task_revision.clone(),
+                    title: None,
+                    body: Some("Canonical task body with reviewed evidence requirements".into()),
+                },
+            )
+            .unwrap(),
+    );
+    let bytes = fixture.state_bytes();
+    assert_code(
+        fixture.apply(
+            &supervisor,
+            OrchestrationAction::Accept {
+                run_id: run_id.clone(),
+                expected_task_revision: task.task_revision,
+            },
+        ),
+        "task_revision_conflict",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::Accept {
+                run_id: run_id.clone(),
+                expected_task_revision: edited.task_revision.clone(),
+            },
+        )
+        .unwrap();
+    assert!(fixture.task(&root, &task.task_id).checked);
+    let accepted = fixture.run(&run_id);
+    assert_eq!(accepted.close_reason, Some(CloseReason::Accepted));
+    assert_eq!(accepted.stage, RunStage::Closed);
+    assert!(fixture.state().task_intents.is_empty());
+    let requested = accepted
+        .annotations
+        .iter()
+        .find(|annotation| annotation.text.starts_with("Acceptance requested"))
+        .unwrap();
+    assert!(matches!(&requested.by, ActorRef::Run { run_id } if run_id == &root));
+    assert!(requested.text.contains(&result_id));
+    assert!(requested.text.contains(&edited.task_revision));
+    assert!(requested.text.contains(&native));
+    assert!(accepted.annotations.iter().any(|annotation| {
+        annotation.text.starts_with("Accepted Result")
+            && matches!(&annotation.by, ActorRef::Run { run_id } if run_id == &root)
+    }));
+    let (cancel_task, cancelled, _) = fixture.working(&root);
+    let (_, survivor, _) = fixture.working(&cancelled);
+    let survivor_before = serde_json::to_value(fixture.run(&survivor)).unwrap();
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::CancelRun {
+                run_id: cancelled.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.run(&cancelled).close_reason,
+        Some(CloseReason::Cancelled)
+    );
+    assert!(!fixture.task(&root, &cancel_task.task_id).checked);
+    assert_eq!(
+        serde_json::to_value(fixture.run(&survivor)).unwrap(),
+        survivor_before
+    );
+    let cancel = fixture
+        .state()
+        .messages
+        .into_iter()
+        .find(|message| {
+            message.to_run_id == cancelled && message.kind == MessageKind::CancelRequest
+        })
+        .unwrap();
+    assert_agent_decision(&cancel, &root);
+    assert!(cancel.text.contains("Tracking is closed"));
+    assert!(
+        cancel
+            .text
+            .contains("does not guarantee process termination")
+    );
+}
+
+#[test]
+fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_root() {
+    for operation in 0..6 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let supervisor = fixture.launch_and_bind(&root);
+        let task = fixture.create_task(&root, "Authority boundary");
+        let run_id = fixture.propose(&root, &task, None);
+        let prepare = fixture.plan(&run_id);
+        let worker = if operation == 0 {
+            None
+        } else {
+            fixture.operator(OrchestrationAction::GrantPrepare {
+                run_id: run_id.clone(),
+                plan_revision: prepare.plan_revision.clone(),
+            });
+            let actor = fixture.launch_and_bind(&run_id);
+            fixture.ready(&actor);
+            if operation != 1 {
+                fixture.operator(OrchestrationAction::GrantExecute {
+                    run_id: run_id.clone(),
+                    plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision,
+                    note: None,
+                });
+            }
+            if matches!(operation, 2 | 3) {
+                fixture
+                    .apply(
+                        &actor,
+                        report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+                    )
+                    .unwrap();
+            }
+            Some(actor)
+        };
+        let action = match operation {
+            0 => OrchestrationAction::GrantPrepare {
+                run_id: run_id.clone(),
+                plan_revision: prepare.plan_revision,
+            },
+            1 => OrchestrationAction::GrantExecute {
+                run_id: run_id.clone(),
+                plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision,
+                note: None,
+            },
+            2 => OrchestrationAction::Accept {
+                run_id: run_id.clone(),
+                expected_task_revision: task.task_revision,
+            },
+            3 => OrchestrationAction::SendBack {
+                run_id: run_id.clone(),
+                text: "Review correction".into(),
+            },
+            4 => OrchestrationAction::CancelRun {
+                run_id: run_id.clone(),
+            },
+            5 => OrchestrationAction::MessageSend {
+                message_id: id(),
+                to_run_id: run_id.clone(),
+                kind: MessageKind::Answer,
+                text: "Answer".into(),
+            },
+            _ => unreachable!(),
+        };
+        let other_root = fixture.root();
+        let outsider = fixture.launch_and_bind(&other_root);
+        let (_, branch_id, branch_actor) = fixture.working(&root);
+        let mut inherited_env = branch_actor.clone();
+        caller_mut(&mut inherited_env).env_run = Some((root.clone(), 1));
+        let mut denied = vec![outsider, branch_actor.clone(), inherited_env];
+        if let Some(worker) = worker {
+            denied.push(worker);
+        }
+        for fence in 0..10 {
+            let mut actor = supervisor.clone();
+            let caller = caller_mut(&mut actor);
+            match fence {
+                0 => caller.actual_agent_kind = None,
+                1 => caller.actual_agent_kind = Some("shell".into()),
+                2 => caller.actual_agent_kind = Some("OMP".into()),
+                3 => caller.agent_kind = None,
+                4 => {
+                    caller.agent_kind = Some(AgentKind::Subagent);
+                    caller.subagent_id = Some("internal-child".into());
+                    caller.omp_session_id = Some("internal-child-native".into());
+                }
+                5 => caller.omp_session_id = Some("obsolete-main".into()),
+                6 => caller.native_session_id = Some("other-occupant".into()),
+                7 => caller.endpoint_identity = "other-endpoint".into(),
+                8 => caller.terminal_id = Some("new-terminal".into()),
+                9 => caller.env_run.as_mut().unwrap().1 += 1,
+                _ => unreachable!(),
+            }
+            denied.push(actor);
+        }
+        let mut branch_subagent = branch_actor;
+        let caller = caller_mut(&mut branch_subagent);
+        caller.agent_kind = Some(AgentKind::Subagent);
+        caller.subagent_id = Some("worker-child".into());
+        caller.omp_session_id = Some("worker-child-native".into());
+        denied.push(branch_subagent);
+        for actor in denied {
+            let bytes = fixture.state_bytes();
+            let failure = fixture.apply(&actor, action.clone()).unwrap_err();
+            assert!(
+                matches!(
+                    failure.code.as_str(),
+                    "actor_forbidden" | "caller_mismatch" | "session_mismatch" | "attempt_stale"
+                ),
+                "Operation {operation} unexpectedly failed outside authority fences: {failure:?}"
+            );
+            assert_eq!(
+                fixture.state_bytes(),
+                bytes,
+                "Denied operation {operation} must not write"
+            );
+        }
+        let valid_root = fixture.run(&root);
+        for fence in 0..7 {
+            fixture.seed_run(&root, |run| {
+                *run = valid_root.clone();
+                match fence {
+                    0 => run.kind = RunKind::Worker,
+                    1 => run.stage = RunStage::Preparing,
+                    2 => run.stage = RunStage::Closed,
+                    3 => run.parent_run_id = Some(branch_id.clone()),
+                    4 => run.root_id = other_root.clone(),
+                    5 => run.bound_omp_session = None,
+                    6 => run.bound_omp_session = Some(String::new()),
+                    _ => unreachable!(),
+                }
+            });
+            let bytes = fixture.state_bytes();
+            assert!(fixture.apply(&supervisor, action.clone()).is_err());
+            assert_eq!(
+                fixture.state_bytes(),
+                bytes,
+                "Malformed root must not gain management authority"
+            );
+        }
+    }
+}
+
+#[test]
+fn management_targets_are_strict_open_worker_descendants_and_recovery_stays_operator_only() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let (_, branch, branch_actor) = fixture.working(&root);
+    let (_, nested, _) = fixture.working(&branch);
+    let other_root = fixture.root();
+    let (_, outsider, _) = fixture.working(&other_root);
+    for target in [&root, &other_root, &outsider] {
+        let bytes = fixture.state_bytes();
+        assert_code(
+            fixture.apply(
+                &supervisor,
+                OrchestrationAction::CancelRun {
+                    run_id: target.clone(),
+                },
+            ),
+            "actor_forbidden",
+        );
+        assert_eq!(fixture.state_bytes(), bytes);
+    }
+    for action in [
+        OrchestrationAction::ReconcileRun {
+            run_id: nested.clone(),
+            recovery: None,
+        },
+        OrchestrationAction::RetryLaunch {
+            run_id: nested.clone(),
+        },
+        OrchestrationAction::CancelRun {
+            run_id: branch.clone(),
+        },
+    ] {
+        let bytes = fixture.state_bytes();
+        let actor = if matches!(&action, OrchestrationAction::CancelRun { .. }) {
+            &branch_actor
+        } else {
+            &supervisor
+        };
+        assert_code(fixture.apply(actor, action), "actor_forbidden");
+        assert_eq!(fixture.state_bytes(), bytes);
+    }
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::CancelRun {
+                run_id: nested.clone(),
+            },
+        )
+        .unwrap();
+    let bytes = fixture.state_bytes();
+    assert_code(
+        fixture.apply(
+            &supervisor,
+            OrchestrationAction::MessageSend {
+                message_id: id(),
+                to_run_id: nested,
+                kind: MessageKind::Answer,
+                text: "Too late".into(),
+            },
+        ),
+        "actor_forbidden",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
+fn explicitly_adopted_actual_main_root_has_management_authority() {
+    let fixture = Fixture::new();
+    let seed = fixture.root();
+    let mut actor = fixture.launch_tab(&seed);
+    let caller = caller_mut(&mut actor);
+    caller.env_run = None;
+    caller.pane_id = "unclaimed-pane".into();
+    caller.tab_id = "unclaimed-tab".into();
+    caller.terminal_id = Some("unclaimed-terminal".into());
+    caller.native_session_id = Some("adopted-native".into());
+    caller.omp_session_id = Some("adopted-native".into());
+    caller.main_omp_session_id = Some("adopted-native".into());
+    let mut shell = actor.clone();
+    caller_mut(&mut shell).actual_agent_kind = Some("shell".into());
+    let bytes = fixture.state_bytes();
+    assert_code(
+        fixture.apply(
+            &shell,
+            OrchestrationAction::RunAdopt {
+                label: "Not OMP".into(),
+            },
+        ),
+        "report_requires_main",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+    let root = run_result(
+        fixture
+            .apply(
+                &actor,
+                OrchestrationAction::RunAdopt {
+                    label: "Actual main explicitly adopted".into(),
+                },
+            )
+            .unwrap(),
+    )
+    .0;
+    caller_mut(&mut actor).env_run = Some((root.clone(), 1));
+    assert_eq!(fixture.run(&root).kind, RunKind::Adopted);
+    let task = fixture.create_task(&root, "Adopted root task");
+    let run_id = fixture.propose(&root, &task, None);
+    let plan = fixture.plan(&run_id);
+    fixture
+        .apply(
+            &actor,
+            OrchestrationAction::GrantPrepare {
+                run_id: run_id.clone(),
+                plan_revision: plan.plan_revision,
+            },
+        )
+        .unwrap();
+    let grant = fixture.run(&run_id).grants.remove(0);
+    assert_eq!(grant.origin, GrantOrigin::Supervisor);
+    assert_eq!(grant.supervisor_run_id.as_deref(), Some(root.as_str()));
+    assert_eq!(grant.omp_session_id.as_deref(), Some("adopted-native"));
+}
+
+#[test]
+fn legacy_schema_one_grants_and_acceptance_intents_keep_truthful_default_provenance() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (task, run_id, actor) = fixture.working(&root);
+    fixture
+        .apply(
+            &actor,
+            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+        )
+        .unwrap();
+    fixture.pending_intent(&root, &task, &run_id);
+    let mut legacy = serde_json::to_value(fixture.state()).unwrap();
+    legacy.as_object_mut().unwrap().remove("assignment_intents");
+    let run = legacy["runs"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|run| run["run_id"] == run_id)
+        .unwrap();
+    for (index, origin) in ["browser", "native"].into_iter().enumerate() {
+        let grant = run["grants"][index].as_object_mut().unwrap();
+        grant.insert("origin".into(), serde_json::json!(origin));
+        grant.remove("supervisor_run_id");
+        grant.remove("omp_session_id");
+    }
+    for intent in legacy["task_intents"].as_array_mut().unwrap() {
+        let intent = intent.as_object_mut().unwrap();
+        for key in [
+            "origin",
+            "supervisor_run_id",
+            "omp_session_id",
+            "result_message_id",
+        ] {
+            intent.remove(key);
+        }
+    }
+    std::fs::write(
+        fixture.service.base().join("state.json"),
+        serde_json::to_vec(&legacy).unwrap(),
+    )
+    .unwrap();
+    let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+    let locked = reopened.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    assert_eq!(state.schema, 1);
+    assert!(state.assignment_intents.is_empty());
+    let current = &state.runs[run_index(&state, &run_id).unwrap()];
+    assert_eq!(current.grants[0].origin, GrantOrigin::Browser);
+    assert_eq!(current.grants[1].origin, GrantOrigin::Native);
+    for grant in &current.grants {
+        assert!(grant.supervisor_run_id.is_none());
+        assert!(grant.omp_session_id.is_none());
+    }
+    let intent = &state.task_intents[0];
+    assert!(intent.origin.is_none());
+    assert!(intent.supervisor_run_id.is_none());
+    assert!(intent.omp_session_id.is_none());
+    assert!(intent.result_message_id.is_none());
+    locked.save(&mut state).unwrap();
+    let mut saved = serde_json::to_value(locked.read().unwrap()).unwrap();
+    assert_eq!(saved["schema"], legacy["schema"]);
+    saved["revision"] = legacy["revision"].clone();
+    saved.as_object_mut().unwrap().remove("assignment_intents");
+    let run = saved["runs"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|run| run["run_id"] == run_id)
+        .unwrap();
+    for grant in run["grants"].as_array_mut().unwrap() {
+        let grant = grant.as_object_mut().unwrap();
+        assert_eq!(
+            grant.remove("supervisor_run_id"),
+            Some(serde_json::Value::Null)
+        );
+        assert_eq!(
+            grant.remove("omp_session_id"),
+            Some(serde_json::Value::Null)
+        );
+    }
+    for intent in saved["task_intents"].as_array_mut().unwrap() {
+        for key in [
+            "origin",
+            "supervisor_run_id",
+            "omp_session_id",
+            "result_message_id",
+        ] {
+            assert_eq!(
+                intent.as_object_mut().unwrap().remove(key),
+                Some(serde_json::Value::Null)
+            );
+        }
+    }
+    assert_eq!(
+        saved, legacy,
+        "Resaving schema 1 must not rewrite history or invent provenance"
+    );
+    drop(locked);
+    assert!(!fixture.task(&root, &task.task_id).checked);
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Reported);
+}
+
+#[test]
+fn acceptance_recovery_cannot_substitute_a_new_result_for_the_reviewed_receipt() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let (task, run_id, worker) = fixture.working(&root);
+    fixture
+        .apply(
+            &worker,
+            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+        )
+        .unwrap();
+    let reviewed_result = fixture.run(&run_id).result.unwrap().message_id;
+    let supervisor_native = fixture.run(&root).bound_omp_session;
+    let intent_id = fixture.pending_intent(&root, &task, &run_id);
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let intent = state
+            .task_intents
+            .iter_mut()
+            .find(|intent| intent.intent_id == intent_id)
+            .unwrap();
+        intent.origin = Some(GrantOrigin::Supervisor);
+        intent.supervisor_run_id = Some(root.clone());
+        intent.omp_session_id = supervisor_native;
+        intent.result_message_id = Some(reviewed_result);
+        locked.save(&mut state).unwrap();
+    }
+    for action in [
+        OrchestrationAction::SendBack {
+            run_id: run_id.clone(),
+            text: "Must resolve pending exact acceptance first".into(),
+        },
+        OrchestrationAction::CancelRun {
+            run_id: run_id.clone(),
+        },
+    ] {
+        let bytes = fixture.state_bytes();
+        assert_code(fixture.apply(&supervisor, action), "intent_conflict");
+        assert_eq!(fixture.state_bytes(), bytes);
+    }
+    // Model concurrent replacement from a previously interrupted recovery.
+    fixture.seed_run(&run_id, |run| {
+        run.result.as_mut().unwrap().message_id = id()
+    });
+    let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+    reopened.recover_intents().unwrap();
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Reported);
+    assert!(!fixture.task(&root, &task.task_id).checked);
+    assert_eq!(fixture.state().task_intents[0].state, IntentState::Conflict);
+    assert_eq!(fixture.state().task_intents[0].intent_id, intent_id);
+}
+
+#[test]
+fn nested_setup_ready_result_and_question_pointers_wake_root_once_without_forwarding_subagent_evidence()
+ {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let (_, branch, _) = fixture.working(&root);
+    let task = fixture.create_task(&root, "Nested managed worker");
+    let run_id = fixture.propose(&branch, &task, None);
+    let prepare = fixture.plan(&run_id);
+    let setup = fixture.run(&run_id).setup.unwrap();
+    fixture
+        .service
+        .record_dispatch(
+            &run_id,
+            DispatchUpdate::SetupPlanned {
+                setup,
+                prepare_plan: prepare.clone(),
+            },
+        )
+        .unwrap();
+    let notice_id = format!("setup-ready-{run_id}-{}", prepare.plan_revision);
+    let messages = fixture.state().messages;
+    let notices: Vec<_> = messages
+        .iter()
+        .filter(|message| message.message_id == notice_id)
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].to_run_id, root);
+    let pointer: serde_json::Value = serde_json::from_str(&notices[0].text).unwrap();
+    assert_eq!(
+        pointer,
+        serde_json::json!({
+            "event": "setup_ready", "run_id": run_id, "plan_revision": prepare.plan_revision,
+        })
+    );
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::GrantPrepare {
+                run_id: run_id.clone(),
+                plan_revision: prepare.plan_revision,
+            },
+        )
+        .unwrap();
+    let worker = fixture.launch_and_bind(&run_id);
+    let ready = report(ReportKind::Ready, None, Some("Nested exact work plan"));
+    let needs_input = report(ReportKind::NeedsInput, None, None);
+    let result = report(ReportKind::Result, Some(ReportOutcome::Succeeded), None);
+    for (event, action) in [
+        ("ready", ready),
+        ("needs_input", needs_input),
+        ("result", result),
+    ] {
+        if event == "needs_input" {
+            fixture
+                .apply(
+                    &supervisor,
+                    OrchestrationAction::GrantExecute {
+                        run_id: run_id.clone(),
+                        plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision,
+                        note: None,
+                    },
+                )
+                .unwrap();
+        }
+        let OrchestrationAction::Report { message_id, .. } = &action else {
+            unreachable!()
+        };
+        fixture.apply(&worker, action.clone()).unwrap();
+        fixture.apply(&worker, action.clone()).unwrap();
+        let messages = fixture.state().messages;
+        let receipt = messages
+            .iter()
+            .find(|message| message.message_id == *message_id)
+            .unwrap();
+        assert_eq!(receipt.to_run_id, branch);
+        assert_eq!(receipt.kind, MessageKind::Report);
+        let pointer_id = format!("manage-{run_id}-{message_id}");
+        let pointers: Vec<_> = messages
+            .iter()
+            .filter(|message| message.message_id == pointer_id)
+            .collect();
+        assert_eq!(pointers.len(), 1);
+        assert_eq!(pointers[0].to_run_id, root);
+        assert_eq!(pointers[0].kind, MessageKind::Observation);
+        assert!(!pointers[0].stale);
+        let pointer: serde_json::Value = serde_json::from_str(&pointers[0].text).unwrap();
+        assert_eq!(
+            pointer,
+            serde_json::json!({
+                "event": event, "run_id": run_id, "receipt_message_id": message_id,
+                "plan_revision": fixture.run(&run_id).work_plan.unwrap().plan_revision,
+            })
+        );
+        assert!(!pointers[0].text.contains("Evidence from isolated worker"));
+    }
+    let original = serde_json::to_value(fixture.run(&run_id)).unwrap();
+    let mut subagent = worker.clone();
+    let caller = caller_mut(&mut subagent);
+    caller.agent_kind = Some(AgentKind::Subagent);
+    caller.subagent_id = Some("internal-evidence".into());
+    caller.omp_session_id = Some("internal-evidence-native".into());
+    let mut stale = worker;
+    caller_mut(&mut stale).omp_session_id = Some("obsolete-native-main".into());
+    for actor in [&subagent, &stale] {
+        let action = report(ReportKind::NeedsInput, None, None);
+        let OrchestrationAction::Report { message_id, .. } = &action else {
+            unreachable!()
+        };
+        let pointer_id = format!("manage-{run_id}-{message_id}");
+        fixture.apply(actor, action).unwrap();
+        assert!(
+            fixture
+                .state()
+                .messages
+                .iter()
+                .all(|message| message.message_id != pointer_id)
+        );
+        assert_eq!(
+            serde_json::to_value(fixture.run(&run_id)).unwrap(),
+            original
+        );
+    }
+    // Direct-root reports already wake the root; no duplicate Observation.
+    let (_, direct, direct_worker) = fixture.working(&root);
+    let action = report(ReportKind::NeedsInput, None, None);
+    let OrchestrationAction::Report { message_id, .. } = &action else {
+        unreachable!()
+    };
+    let pointer_id = format!("manage-{direct}-{message_id}");
+    fixture.apply(&direct_worker, action).unwrap();
+    assert!(
+        fixture
+            .state()
+            .messages
+            .iter()
+            .all(|message| message.message_id != pointer_id)
+    );
+}
+
+#[test]
+fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.launch_and_bind(&root);
+    let (task, child, worker) = fixture.working(&root);
+    let (_, nested, _) = fixture.working(&child);
+    let child_before = serde_json::to_value(fixture.run(&child)).unwrap();
+    let nested_before = serde_json::to_value(fixture.run(&nested)).unwrap();
+    fixture.operator(OrchestrationAction::CancelRun {
+        run_id: root.clone(),
+    });
+    assert_eq!(fixture.run(&root).stage, RunStage::Closed);
+    assert_eq!(
+        serde_json::to_value(fixture.run(&child)).unwrap(),
+        child_before
+    );
+    assert_eq!(
+        serde_json::to_value(fixture.run(&nested)).unwrap(),
+        nested_before
+    );
+    assert!(!fixture.task(&root, &task.task_id).checked);
+    let child_run = fixture.run(&child);
+    let location = child_run.location.as_ref().unwrap();
+    let board = {
+        let locked = fixture.service.store.lock().unwrap();
+        let document = locked.tasks(&root).unwrap();
+        TaskBoard {
+            root_id: root.clone(),
+            path: fixture
+                .service
+                .base()
+                .join("tasks")
+                .join(format!("{root}.md"))
+                .to_string_lossy()
+                .into_owned(),
+            doc_revision: document.doc_revision.clone(),
+            unidentified_items: document.unidentified_items,
+            diagnostics: Vec::new(),
+            tasks: document
+                .tasks
+                .iter()
+                .cloned()
+                .map(|task| TaskView {
+                    task,
+                    lane: TaskLane::Queued,
+                    current_run_id: None,
+                })
+                .collect(),
+        }
+    };
+    let snapshot = projection::snapshot(
+        &OrchestrationSnapshotRequest {
+            session_id: SESSION.into(),
+            root_id: Some(root.clone()),
+        },
+        &fixture.state(),
+        "fixture-token".into(),
+        vec![board],
+        Ok(herdr::RuntimeView {
+            endpoint_identity: location.endpoint_identity.clone(),
+            boot_id: location.boot_id.clone(),
+            workspaces: Vec::new(),
+            panes: vec![herdr::RuntimePane {
+                workspace_id: location.workspace_id.clone(),
+                workspace_label: "Retained Space".into(),
+                tab_id: location.tab_id.clone(),
+                tab_label: "Still working".into(),
+                pane_id: location.pane_id.clone(),
+                terminal_id: location.terminal_id.clone(),
+                native_session_id: location.native_session_id.clone(),
+                agent_name: Some(location.launch_tag.clone()),
+                agent_kind: Some("omp".into()),
+                launch_pending: false,
+                interactive_ready: false,
+                agent_status: Some("working".into()),
+                state_changed_at: None,
+            }],
+        }),
+        &now(),
+    )
+    .unwrap();
+    let current_task = snapshot
+        .board
+        .as_ref()
+        .unwrap()
+        .tasks
+        .iter()
+        .find(|view| view.task.task_id == task.task_id)
+        .unwrap();
+    assert_eq!(current_task.lane, TaskLane::Working);
+    assert_eq!(current_task.current_run_id.as_deref(), Some(child.as_str()));
+    assert_eq!(snapshot.roots[0].open_runs, 2);
+    assert_eq!(
+        snapshot
+            .runs
+            .iter()
+            .find(|run| run.run_id == child)
+            .unwrap()
+            .stage,
+        RunStage::Working
+    );
+    let RuntimeObservation::Fresh { runs, .. } = snapshot.runtime else {
+        panic!("Expected fresh observation")
+    };
+    let observed = runs.iter().find(|run| run.run_id == child).unwrap();
+    assert_eq!(observed.presence, Presence::Present);
+    assert_eq!(observed.agent_status.as_deref(), Some("working"));
+    assert!(
+        observed.actual_omp,
+        "Closing tracking is not process termination"
+    );
+    fixture
+        .apply(
+            &worker,
+            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+        )
+        .unwrap();
+    assert_eq!(fixture.run(&child).stage, RunStage::Reported);
+    let receipt = fixture.run(&child).result.unwrap().message_id;
+    assert!(fixture.state().messages.iter().any(|message| {
+        message.message_id == receipt && message.to_run_id == root && !message.stale
+    }));
+    assert!(!fixture.task(&root, &task.task_id).checked);
+}
+
+#[test]
+fn public_task_assignment_is_idempotent_operator_only_and_resolves_current_task_by_exact_revision()
+{
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let task_id = id();
+    let action = OrchestrationAction::TaskAssign {
+        root_id: root.clone(),
+        task_id: task_id.clone(),
+        title: "Assigned canonical task".into(),
+        body: "Canonical body is never copied to inbox".into(),
+    };
+    let bytes = fixture.state_bytes();
+    assert_code(
+        fixture.apply(&supervisor, action.clone()),
+        "actor_forbidden",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+    let first = fixture.operator(action.clone());
+    let OrchestrationActionResult::TaskAssigned {
+        task,
+        to_run_id,
+        seq,
+        duplicate,
+    } = first.result
+    else {
+        panic!("Expected durable assignment");
+    };
+    assert_eq!(task.task_id, task_id);
+    assert_eq!(to_run_id, root);
+    assert!(!duplicate);
+    let repeated = fixture.operator(action);
+    let OrchestrationActionResult::TaskAssigned {
+        seq: repeated_seq,
+        duplicate,
+        ..
+    } = repeated.result
+    else {
+        panic!("Expected same durable assignment");
+    };
+    assert!(duplicate);
+    assert_eq!(repeated_seq, seq);
+    let messages = fixture.state().messages;
+    let assigned: Vec<_> = messages
+        .iter()
+        .filter(|message| message.message_id == format!("assign-{task_id}"))
+        .collect();
+    assert_eq!(assigned.len(), 1);
+    assert_eq!(assigned[0].kind, MessageKind::Instruction);
+    assert!(matches!(assigned[0].from, ActorRef::Operator));
+    let pointer: serde_json::Value = serde_json::from_str(&assigned[0].text).unwrap();
+    assert_eq!(pointer["event"], "task_assigned");
+    assert_eq!(pointer["task_id"], task_id);
+    assert_eq!(pointer["task_revision"], task.task_revision);
+    assert_eq!(pointer["origin"], "browser");
+    assert!(pointer.get("title").is_none());
+    assert!(pointer.get("body").is_none());
+    assert!(fixture.state().assignment_intents.is_empty());
+    let conflict_id = id();
+    let existing = {
+        let locked = fixture.service.store.lock().unwrap();
+        locked
+            .tasks(&root)
+            .unwrap()
+            .create_with_id(
+                &conflict_id,
+                "Authoritative external title",
+                "Authoritative external body",
+            )
+            .unwrap()
+    };
+    assert_code(
+        fixture.apply(
+            &Actor::Operator(OperatorOrigin::Native),
+            OrchestrationAction::TaskAssign {
+                root_id: root.clone(),
+                task_id: conflict_id.clone(),
+                title: "Submitted title".into(),
+                body: "Submitted body".into(),
+            },
+        ),
+        "task_assignment_conflict",
+    );
+    assert_eq!(fixture.state().assignment_intents.len(), 1);
+    assert_eq!(
+        fixture.state().assignment_intents[0].state,
+        IntentState::Conflict
+    );
+    assert!(
+        fixture
+            .state()
+            .messages
+            .iter()
+            .all(|message| message.message_id != format!("assign-{conflict_id}"))
+    );
+    let bytes = fixture.state_bytes();
+    assert_code(
+        fixture.apply(
+            &Actor::Operator(OperatorOrigin::Browser),
+            OrchestrationAction::TaskAssignmentResolve {
+                root_id: root.clone(),
+                task_id: conflict_id.clone(),
+                expected_task_revision: Some("unreviewed-revision".into()),
+                assign: true,
+            },
+        ),
+        "task_revision_conflict",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+    assert_code(
+        fixture.apply(
+            &supervisor,
+            OrchestrationAction::TaskAssignmentResolve {
+                root_id: root.clone(),
+                task_id: conflict_id.clone(),
+                expected_task_revision: Some(existing.task_revision.clone()),
+                assign: true,
+            },
+        ),
+        "actor_forbidden",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+    let resolved = fixture.operator(OrchestrationAction::TaskAssignmentResolve {
+        root_id: root.clone(),
+        task_id: conflict_id.clone(),
+        expected_task_revision: Some(existing.task_revision.clone()),
+        assign: true,
+    });
+    let OrchestrationActionResult::TaskAssigned { task: current, .. } = resolved.result else {
+        panic!("Expected current task assigned")
+    };
+    assert_eq!(current.title, existing.title);
+    assert_eq!(current.body, existing.body);
+    assert_eq!(current.task_revision, existing.task_revision);
+    assert!(fixture.state().assignment_intents.is_empty());
+    let messages = fixture.state().messages;
+    let assignment = messages
+        .iter()
+        .find(|message| message.message_id == format!("assign-{conflict_id}"))
+        .unwrap();
+    let pointer: serde_json::Value = serde_json::from_str(&assignment.text).unwrap();
+    assert_eq!(
+        pointer["origin"], "native",
+        "Resolution retains actual assignment provenance"
+    );
+}
+
+#[test]
+fn supervisor_management_honors_explicit_machine_cas_without_requiring_new_consent() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let task = fixture.create_task(&root, "CAS reviewed setup");
+    let run_id = fixture.propose(&root, &task, None);
+    let plan = fixture.plan(&run_id);
+    let reviewed_revision = fixture.state().revision;
+    fixture.operator(OrchestrationAction::Annotate {
+        run_id: root.clone(),
+        text: "Concurrent unrelated machine history".into(),
+    });
+    assert_ne!(
+        fixture.state().revision,
+        reviewed_revision,
+        "Concurrent machine history must invalidate an explicit machine CAS"
+    );
+    let bytes = fixture.state_bytes();
+    assert_code(
+        fixture.service.mutate(
+            &supervisor,
+            OrchestrationMutationRequest {
+                session_id: SESSION.into(),
+                expected_revision: Some(reviewed_revision),
+                action: OrchestrationAction::GrantPrepare {
+                    run_id: run_id.clone(),
+                    plan_revision: plan.plan_revision.clone(),
+                },
+            },
+        ),
+        "orchestration_revision_conflict",
+    );
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture
+        .apply(
+            &supervisor,
+            OrchestrationAction::GrantPrepare {
+                run_id: run_id.clone(),
+                plan_revision: plan.plan_revision,
+            },
+        )
+        .unwrap();
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Preparing);
+    assert_eq!(
+        fixture.run(&run_id).grants[0].origin,
+        GrantOrigin::Supervisor
+    );
+}
+
+#[test]
+fn reviewed_retry_fences_post_read_cancel_move_binding_stage_and_incarnation() {
+    for race in 0..6 {
+        let fixture = Fixture::new();
+        let (run_id, actor) = launched_case(&fixture, RunStage::Working);
+        let queued = fixture.queue_review(&run_id);
+        commit_review(
+            &fixture,
+            &queued,
+            DispatchStep::NeedsReview,
+            Some(review_error()),
+        );
+        let reviewed = fixture.service.run_for_review(SESSION, &run_id).unwrap();
+        match race {
+            0 => {
+                fixture.operator(OrchestrationAction::CancelRun {
+                    run_id: run_id.clone(),
+                });
+            }
+            1 => {
+                let mut moved = actor.clone();
+                let caller = caller_mut(&mut moved);
+                caller.workspace_id = "post-read-space".into();
+                caller.tab_id = "post-read-tab".into();
+                caller.pane_id = "post-read-pane".into();
+                fixture
+                    .apply(
+                        &moved,
+                        OrchestrationAction::Annotate {
+                            run_id: run_id.clone(),
+                            text: "Post-read terminal move".into(),
+                        },
+                    )
+                    .unwrap();
+            }
+            2 => fixture.seed_run(&run_id, |run| {
+                run.bound_omp_session = Some("post-read-main".into())
+            }),
+            3 => {
+                fixture
+                    .apply(
+                        &actor,
+                        report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+                    )
+                    .unwrap();
+            }
+            4 => fixture.seed_run(&run_id, |run| {
+                run.dispatch.as_mut().unwrap().launch_attempt += 1
+            }),
+            5 => fixture.seed_run(&run_id, |run| run.task_id = Some(id())),
+            _ => unreachable!(),
+        }
+        let bytes = fixture.state_bytes();
+        assert_code(
+            fixture.service.mutate_operator_reviewed(
+                OperatorOrigin::Browser,
+                OrchestrationMutationRequest {
+                    session_id: SESSION.into(),
+                    expected_revision: Some(fixture.state().revision),
+                    action: OrchestrationAction::RetryLaunch { run_id },
+                },
+                &reviewed,
+            ),
+            "attempt_stale",
+        );
+        assert_eq!(fixture.state_bytes(), bytes);
+    }
+}
+
+#[test]
+fn abandoning_conflicted_assignment_preserves_authoritative_markdown_even_after_root_closure() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task_id = id();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        locked
+            .tasks(&root)
+            .unwrap()
+            .create_with_id(
+                &task_id,
+                "Keep this existing task",
+                "External content survives abandonment",
+            )
+            .unwrap();
+    }
+    assert_code(
+        fixture.apply(
+            &Actor::Operator(OperatorOrigin::Browser),
+            OrchestrationAction::TaskAssign {
+                root_id: root.clone(),
+                task_id: task_id.clone(),
+                title: "Different submitted draft".into(),
+                body: "Do not overwrite authoritative task".into(),
+            },
+        ),
+        "task_assignment_conflict",
+    );
+    fixture.operator(OrchestrationAction::CancelRun {
+        run_id: root.clone(),
+    });
+    let markdown_path = fixture
+        .service
+        .base()
+        .join("tasks")
+        .join(format!("{root}.md"));
+    let before = std::fs::read(&markdown_path).unwrap();
+    let result = fixture.operator(OrchestrationAction::TaskAssignmentResolve {
+        root_id: root.clone(),
+        task_id: task_id.clone(),
+        expected_task_revision: None,
+        assign: false,
+    });
+    assert!(matches!(result.result, OrchestrationActionResult::Done));
+    assert!(fixture.state().assignment_intents.is_empty());
+    assert_eq!(std::fs::read(markdown_path).unwrap(), before);
+    assert!(
+        fixture
+            .state()
+            .messages
+            .iter()
+            .all(|message| message.message_id != format!("assign-{task_id}"))
+    );
+    assert_eq!(
+        fixture.task(&root, &task_id).title,
+        "Keep this existing task"
+    );
+}
+
+#[test]
+fn acceptance_intent_recovery_cannot_accept_cancelled_restarted_failed_or_other_task_runs() {
+    for race in 0..7 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let (task, run_id, actor) = fixture.working(&root);
+        fixture
+            .apply(
+                &actor,
+                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+            )
+            .unwrap();
+        let intent_id = fixture.pending_intent(&root, &task, &run_id);
+        fixture.seed_run(&run_id, |run| match race {
+            0 => {
+                run.stage = RunStage::Closed;
+                run.close_reason = Some(CloseReason::Cancelled);
+            }
+            1 => {
+                run.stage = RunStage::Preparing;
+                run.bound_omp_session = None;
+                run.dispatch.as_mut().unwrap().launch_attempt += 1;
+            }
+            2 => run.result.as_mut().unwrap().outcome = Some(ReportOutcome::Failed),
+            3 => run.result = None,
+            4 => run.task_id = Some(id()),
+            5 => run.root_id = id(),
+            6 => run.stage = RunStage::Working,
+            _ => unreachable!(),
+        });
+        let before = serde_json::to_value(fixture.run(&run_id)).unwrap();
+        let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+        reopened.recover_intents().unwrap();
+        assert_eq!(serde_json::to_value(fixture.run(&run_id)).unwrap(), before);
+        assert!(!fixture.task(&root, &task.task_id).checked);
+        let state = fixture.state();
+        assert_eq!(state.task_intents.len(), 1);
+        assert_eq!(state.task_intents[0].intent_id, intent_id);
+        assert_eq!(state.task_intents[0].state, IntentState::Conflict);
     }
 }

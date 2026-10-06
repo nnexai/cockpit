@@ -311,6 +311,11 @@ impl Context {
                     boot_id: runtime.boot_id,
                     terminal_id: Some(source.terminal_id.clone()),
                     native_session_id: pane.native_session_id.clone(),
+                    actual_agent_kind: pane
+                        .agent_kind
+                        .as_ref()
+                        .filter(|kind| kind.as_str() == "omp" && !pane.launch_pending)
+                        .cloned(),
                     env_run: args.env_run()?,
                     omp_session_id: args.omp_session.clone(),
                     main_omp_session_id: args.omp_main_session.clone(),
@@ -364,6 +369,9 @@ impl Context {
                 if runtime.endpoint_identity != caller.endpoint_identity
                     || runtime.boot_id != caller.boot_id
                     || pane.native_session_id != caller.native_session_id
+                    || caller.actual_agent_kind.as_ref().is_some_and(|kind| {
+                        pane.agent_kind.as_ref() != Some(kind) || pane.launch_pending
+                    })
                     || pane
                         .terminal_id
                         .as_ref()
@@ -801,6 +809,7 @@ impl From<OutcomeArg> for ReportOutcome {
 pub(crate) enum MessageKindArg {
     Instruction,
     CancelRequest,
+    Answer,
 }
 
 #[derive(Debug, Args)]
@@ -830,7 +839,7 @@ pub(crate) struct ProposeArgs {
     linked_artifact: Vec<String>,
     #[arg(long, conflicts_with = "space")]
     task_name: Option<String>,
-    /// Preparation instructions only; work waits for a separate GUI execute grant.
+    /// Preparation instructions only; work waits for exact-plan execute authority.
     #[arg(long, required_unless_present = "brief", conflicts_with = "brief")]
     brief_file: Option<PathBuf>,
     /// Literal preparation instructions (at most 16 KiB).
@@ -907,6 +916,34 @@ pub(crate) enum RunCommand {
     },
     /// Propose preparation; never grants prepare or execute authority.
     Propose(ProposeArgs),
+    /// Prepare a descendant worker after inspecting its exact current setup plan.
+    Prepare {
+        run: String,
+        #[arg(long)]
+        plan_revision: String,
+    },
+    /// Execute a Ready descendant worker after inspecting its exact work plan.
+    Execute {
+        run: String,
+        #[arg(long)]
+        plan_revision: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Accept an explicit successful result against the canonical task revision.
+    Accept {
+        run: String,
+        #[arg(long)]
+        task_revision: String,
+    },
+    /// Send a descendant worker's result back with actionable review feedback.
+    SendBack {
+        run: String,
+        #[arg(long)]
+        text: String,
+    },
+    /// Close descendant tracking and request cancellation; does not guarantee a stop.
+    Cancel { run: String },
     /// Report upward with a required sender-chosen deduplication ID.
     Report {
         #[arg(long, value_enum)]
@@ -929,7 +966,7 @@ pub(crate) enum RunCommand {
     },
     /// Bind the caller run to the native main OMP session.
     BindSession,
-    /// Send a durable instruction or cancel request to a descendant run.
+    /// Send a durable instruction, answer or cancel request to a descendant run.
     Message {
         run: String,
         #[arg(long, value_enum)]
@@ -1012,6 +1049,28 @@ impl RunArgs {
                 return emit(run, self.common.json);
             }
             RunCommand::Propose(args) => args.action()?,
+            RunCommand::Prepare { run, plan_revision } => OrchestrationAction::GrantPrepare {
+                run_id: run,
+                plan_revision,
+            },
+            RunCommand::Execute {
+                run,
+                plan_revision,
+                note,
+            } => OrchestrationAction::GrantExecute {
+                run_id: run,
+                plan_revision,
+                note: note.map(bounded).transpose()?,
+            },
+            RunCommand::Accept { run, task_revision } => OrchestrationAction::Accept {
+                run_id: run,
+                expected_task_revision: task_revision,
+            },
+            RunCommand::SendBack { run, text } => OrchestrationAction::SendBack {
+                run_id: run,
+                text: bounded(text)?,
+            },
+            RunCommand::Cancel { run } => OrchestrationAction::CancelRun { run_id: run },
             RunCommand::Report {
                 kind,
                 message_id,
@@ -1062,6 +1121,7 @@ impl RunArgs {
                 kind: match kind {
                     MessageKindArg::Instruction => MessageKind::Instruction,
                     MessageKindArg::CancelRequest => MessageKind::CancelRequest,
+                    MessageKindArg::Answer => MessageKind::Answer,
                 },
                 text: bounded(text)?,
             },
@@ -1517,15 +1577,8 @@ mod tests {
     }
 
     #[test]
-    fn operator_commands_and_missing_dedupe_are_rejected() {
-        for command in [
-            "accept",
-            "grant-prepare",
-            "grant-execute",
-            "cancel",
-            "retry-launch",
-            "start",
-        ] {
+    fn operator_only_commands_and_missing_dedupe_are_rejected() {
+        for command in ["grant-prepare", "grant-execute", "retry-launch", "start"] {
             assert!(TestCli::try_parse_from(["test", "run", command]).is_err());
         }
         assert!(
@@ -1552,6 +1605,76 @@ mod tests {
                 "x"
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn management_requires_explicit_targets_and_exact_revision_arguments() {
+        for command in ["prepare", "execute", "accept", "send-back", "cancel"] {
+            assert!(TestCli::try_parse_from(["test", "run", command]).is_err());
+        }
+        for command in ["prepare", "execute", "accept", "send-back"] {
+            assert!(TestCli::try_parse_from(["test", "run", command, "worker"]).is_err());
+        }
+        for (command, flag) in [
+            ("prepare", "--plan-revision"),
+            ("execute", "--plan-revision"),
+            ("accept", "--task-revision"),
+            ("send-back", "--text"),
+        ] {
+            assert!(
+                TestCli::try_parse_from(["test", "run", command, "worker", flag, "exact"]).is_ok()
+            );
+            assert!(
+                TestCli::try_parse_from([
+                    "test",
+                    "run",
+                    command,
+                    "worker",
+                    flag,
+                    "exact",
+                    "--operator"
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "run",
+                "prepare",
+                "worker",
+                "--task-revision",
+                "exact"
+            ])
+            .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "run",
+                "accept",
+                "worker",
+                "--plan-revision",
+                "exact"
+            ])
+            .is_err()
+        );
+        assert!(TestCli::try_parse_from(["test", "run", "cancel", "worker"]).is_ok());
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "run",
+                "message",
+                "worker",
+                "--kind",
+                "answer",
+                "--text",
+                "Use the documented checkout.",
+                "--message-id",
+                "answer-1"
+            ])
+            .is_ok()
         );
     }
 
@@ -1979,6 +2102,7 @@ mod tests {
             boot_id: Some("boot".into()),
             terminal_id: Some("terminal".into()),
             native_session_id: Some("main".into()),
+            actual_agent_kind: Some("omp".into()),
             env_run: Some(("run".into(), 1)),
             omp_session_id: Some("child-native".into()),
             main_omp_session_id: Some("main".into()),

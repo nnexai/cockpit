@@ -1228,13 +1228,42 @@ describe("Library view presentation lifecycle", () => {
 });
 
 describe("merged local workarea lifecycle", () => {
+  it("starts from Commands in the current Space through the same single-entry workarea without changing Herdr focus", async () => {
+    const fixture = new AppFixture();
+    vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
+      session_id: "session-1", revision: 1, tasks_token: "tasks-1",
+      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      runtime: { status: "fresh", endpoint_identity: "fixture-endpoint", observed_at: "2026-10-06T12:00:00Z", runs: [] },
+    });
+    vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
+    vi.mocked(fixture.client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "run", run_id: "new-root", attempt: 1 } });
+    await mount(fixture);
+    const selectedBefore = selectedLeaf();
+    fixture.focusCalls.mockClear();
+    expect(container.querySelector('button[aria-label="Start supervisor"]')).toBeNull();
+    await openCommand("Start agent");
+    await settle();
+    expect(fixture.client.orchestrationMutate).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toEqual({
+      action: "supervisor_start", target: { target: "existing_space", workspace_id: snapshot("session-1").focused_space_id }, label: null,
+    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(fixture.client.planWorkspace).not.toHaveBeenCalled();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    click(button("Close Supervisor"));
+    await settle();
+    expect(selectedLeaf()).toBe(selectedBefore);
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+  });
   it("switches Notes, Supervisor and Library without changing Herdr focus or pane selection", async () => {
     const fixture = new AppFixture();
     emptyLibrary(fixture);
     vi.mocked(fixture.client.notes).mockRejectedValue(new CockpitClientError("http_error", "No notes are bound", { operationCode: "notes_unbound" }));
     vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], attention: [], unmanaged_agents: [],
+      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "No runtime observation" } },
     });
     vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
@@ -1296,7 +1325,7 @@ describe("merged local workarea lifecycle", () => {
 
     observation.resolve({
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], attention: [], unmanaged_agents: [],
+      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "Late observation" } },
     });
     await settle();

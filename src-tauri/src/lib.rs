@@ -1873,6 +1873,7 @@ pub fn run() {
         .with_herdr(inspector.clone()));
     let orchestration_runtime = Arc::new(cockpit_host::OrchestrationRuntime::new(
         &project_config, inspector.clone(), shutdown_projects.clone(), library.clone(), None,
+        cockpit_host::orchestration_runtime::CliProcessRole::Native,
     ).expect("failed to initialize orchestration"));
     tauri::async_runtime::block_on(async {
         orchestration_runtime.start_owner(browser_runtime.is_owner().await).await;

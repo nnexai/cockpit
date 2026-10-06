@@ -1,11 +1,10 @@
-use crate::orchestration::*;
 use crate::browser::{
-    BrowserAction, BrowserAssociation, BrowserConnectionState, BrowserFeedbackAckRequest,
-    BrowserFeedbackDeliveryStatus, BrowserFeedbackImage, BrowserFeedbackImageRequest,
-    BrowserFeedbackLookup, BrowserFeedbackRequest, BrowserFeedbackSendRequest,
-    BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse, BrowserTarget,
-    BrowserCleanupFailure, BrowserCleanupRetryRequest, BrowserCleanupScope, BrowserCleanupState,
-    BrowserCleanupStatus, BrowserWorkScope,
+    BrowserAction, BrowserAssociation, BrowserCleanupFailure, BrowserCleanupRetryRequest,
+    BrowserCleanupScope, BrowserCleanupState, BrowserCleanupStatus, BrowserConnectionState,
+    BrowserFeedbackAckRequest, BrowserFeedbackDeliveryStatus, BrowserFeedbackImage,
+    BrowserFeedbackImageRequest, BrowserFeedbackLookup, BrowserFeedbackRequest,
+    BrowserFeedbackSendRequest, BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse,
+    BrowserTarget, BrowserWorkScope,
 };
 use crate::browser_view::{
     BrowserDraftRecoveryAction, BrowserDraftRecoveryRequest, BrowserViewBlocker,
@@ -24,10 +23,11 @@ use crate::browser_view::{
     BrowserViewLocation, BrowserViewNavigationCommand, BrowserViewNavigationState,
     BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPermissionCommand,
     BrowserViewPermissionDecision, BrowserViewPointerButton, BrowserViewPointerInput,
-    BrowserViewPointerKind, BrowserViewSnapshot, BrowserViewTabCommand,
-    BrowserViewTargetKind, BrowserViewTargetSummary, BrowserViewTextInput,
-    BrowserViewViewportRequest, BrowserViewViewportState, BrowserViewWheelInput,
+    BrowserViewPointerKind, BrowserViewSnapshot, BrowserViewTabCommand, BrowserViewTargetKind,
+    BrowserViewTargetSummary, BrowserViewTextInput, BrowserViewViewportRequest,
+    BrowserViewViewportState, BrowserViewWheelInput,
 };
+use crate::orchestration::*;
 
 use crate::browser_feedback::{
     BrowserAnnotation, BrowserAnnotationKind, BrowserCaptureContext, BrowserCaptureSaved,
@@ -47,38 +47,21 @@ use crate::context_search::{
     ContextInvalidationState, ContextKnownRevision, ContextSearchRequest, ContextSearchResponse,
     ContextSearchResult,
 };
-use crate::project_teardown::{
-    WorkspaceTeardownAction, WorkspaceTeardownDirtyState,
-    WorkspaceTeardownExecuteRequest, WorkspaceTeardownOutcome, WorkspaceTeardownOwnership,
-    WorkspaceTeardownPreview, WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecovery,
-    WorkspaceTeardownRecoveryList, WorkspaceTeardownRecoveryState, WorkspaceTeardownResult,
-    WorkspaceTeardownWorkspaceState,
-};
-use crate::review::{
-    ReviewChangedFile, ReviewComparison, ReviewDiffLine, ReviewDiffLineKind, ReviewFileDiff,
-    ReviewFileRequest, ReviewFileStatus, ReviewHunk, ReviewSide, ReviewSnapshot,
-    ReviewSnapshotRequest,
-};
 use crate::credentials::{
     ProviderAuthKind, ProviderCredentialClearRequest, ProviderCredentialSetRequest,
     ProviderCredentialState, ProviderCredentialStatus, ProviderCredentialStatusList,
 };
-use crate::quota::{
-    QuotaProvider, QuotaProviderState, QuotaErrorCode, QuotaUnit, QuotaLevel,
-    QuotaLimit, QuotaAccount, QuotaProviderStatus, QuotaStatusRequest, QuotaStatusResponse,
-};
-use crate::sources::SourceCapability;
 use crate::library::{
     LibraryAddRequest, LibraryAncestor, LibraryAttachment, LibraryAttachmentAction,
-    LibraryAttachmentRequest, LibraryAttachmentState, LibraryConflictFile, LibraryContainer,
-    LibraryDirectoryRequest, LibraryDocumentRequest, LibraryFileIndexMode, LibraryFileIndexRequest,
-    LibraryFollowMode, LibraryFollowSource, LibraryFollowSummary, LibraryFolderInfo,
-    LibraryInclusion, LibraryInclusionHolder, LibraryInputKind, LibraryIssueMeta, LibraryItemKind,
-    LibraryItemRef, LibraryItemState,
-    LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryOperationKind,
-    LibraryPartial, LibraryPhase, LibraryPhaseName, LibraryPhaseState, LibraryRefreshReport,
-    LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest, LibraryReportOutcome,
-    LibraryReportRow, LibraryConfluenceSpacesRequest, LibraryResolution, LibraryResolveRequest,
+    LibraryAttachmentRequest, LibraryAttachmentState, LibraryConflictFile,
+    LibraryConfluenceSpacesRequest, LibraryContainer, LibraryDirectoryRequest,
+    LibraryDocumentRequest, LibraryFileIndexMode, LibraryFileIndexRequest, LibraryFolderInfo,
+    LibraryFollowMode, LibraryFollowSource, LibraryFollowSummary, LibraryInclusion,
+    LibraryInclusionHolder, LibraryInputKind, LibraryIssueMeta, LibraryItemKind, LibraryItemRef,
+    LibraryItemState, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation,
+    LibraryOperationKind, LibraryPartial, LibraryPhase, LibraryPhaseName, LibraryPhaseState,
+    LibraryRefreshReport, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
+    LibraryReportOutcome, LibraryReportRow, LibraryResolution, LibraryResolveRequest,
     SpaceAddRequest, SpaceContextListing, SpaceContextRequest, SpacePhaseResult,
     SpaceRemoveRequest, SpaceRepositoriesRequest, SpaceTarget,
 };
@@ -88,6 +71,22 @@ use crate::notes::{
     NotesOperation, NotesRequest, NotesResponse, NotesResult, NotesSpaceInfo, NotesTarget,
     NotesTargetInfo, NotesTodo, NotesTodoFilter, NotesTodoProblem, NotesTodoSelector,
 };
+use crate::project_teardown::{
+    WorkspaceTeardownAction, WorkspaceTeardownDirtyState, WorkspaceTeardownExecuteRequest,
+    WorkspaceTeardownOutcome, WorkspaceTeardownOwnership, WorkspaceTeardownPreview,
+    WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecovery, WorkspaceTeardownRecoveryList,
+    WorkspaceTeardownRecoveryState, WorkspaceTeardownResult, WorkspaceTeardownWorkspaceState,
+};
+use crate::quota::{
+    QuotaAccount, QuotaErrorCode, QuotaLevel, QuotaLimit, QuotaProvider, QuotaProviderState,
+    QuotaProviderStatus, QuotaStatusRequest, QuotaStatusResponse, QuotaUnit,
+};
+use crate::review::{
+    ReviewChangedFile, ReviewComparison, ReviewDiffLine, ReviewDiffLineKind, ReviewFileDiff,
+    ReviewFileRequest, ReviewFileStatus, ReviewHunk, ReviewSide, ReviewSnapshot,
+    ReviewSnapshotRequest,
+};
+use crate::sources::SourceCapability;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -101,49 +100,50 @@ use crate::comments::{
 };
 use crate::context::{
     ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
-    ContextEntry, ContextEntryKind, ContextFileIndex, ContextFileIndexMode, ContextFileIndexRequest,
-    ContextFileIndexSource, ContextFileIndexState, ContextIndexedFile,
+    ContextEntry, ContextEntryKind, ContextFileIndex, ContextFileIndexMode,
+    ContextFileIndexRequest, ContextFileIndexSource, ContextFileIndexState, ContextIndexedFile,
     ContextRoot, ContextRootKind, ViewerSourceKind,
 };
-use crate::viewer::{ViewerContext, ViewerKind, ViewerOpenRequest, ViewerSourceOptions, ViewerSourceSelector};
-use crate::project_defaults::{LinkedArtifact, WorkspaceDefaults, WorkspaceDefaultsRequest};
-use crate::projects::{
-    OrchestrationConfiguration, OrchestrationRoute,
-    ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectLimits, ProjectProvider,
-    RepositoryCandidate, RepositoryListResponse, WorkspaceCheckoutOwnership, WorkspaceOperation,
-    WorkspaceOperationRequest, WorkspaceOperationState, WorkspaceOperationStep,
-    WorkspaceOwnedResource, WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode,
-    WorkspaceSetupPlan, WorkspaceSetupRequest,
-};
-use ts_rs::{Config, TS};
 use crate::herdr_shell::{
     HerdrCommand, HerdrCommandAction, HerdrPopup, HerdrPopupSize, HerdrShellState, HerdrShellStatus,
 };
-
-use crate::v1::{
-    AgentSummary, CockpitCapabilities, CockpitMode, CreatedPane, ErrorResponse, FocusKind, FocusRequest,
-    FocusResponse, HerdrCompatibility, HerdrIdentity, PaneMoveDestination,
-    PaneOutputResponse, PaneSplitDirection, PaneSummary,
-    ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
-    SessionSnapshotResponse, SessionStreamMessage, SessionSummary, SpaceGitStatus,
-    SpaceGitStatusResponse, SpaceGitSummary, SpaceSummary, StatusResponse, TabSummary,
-    SpaceGitSource, SpaceGitCheckout, SpaceGitUpstream, SpaceGitAction, SpaceGitActionRequest,
-    SpaceGitActionResponse, SpaceGitActionOutcome, SpaceGitRefusal,
-    TerminalCommand, TerminalMode, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest,
-    TerminalOwnershipState, TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
+use crate::project_defaults::{LinkedArtifact, WorkspaceDefaults, WorkspaceDefaultsRequest};
+use crate::projects::{
+    OrchestrationConfiguration, OrchestrationRoute, ProjectArtifact, ProjectConfiguration,
+    ProjectDiagnostic, ProjectLimits, ProjectProvider, RepositoryCandidate, RepositoryListResponse,
+    WorkspaceCheckoutOwnership, WorkspaceOperation, WorkspaceOperationRequest,
+    WorkspaceOperationState, WorkspaceOperationStep, WorkspaceOwnedResource,
+    WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode, WorkspaceSetupPlan,
+    WorkspaceSetupRequest,
 };
+use crate::viewer::{
+    ViewerContext, ViewerKind, ViewerOpenRequest, ViewerSourceOptions, ViewerSourceSelector,
+};
+use ts_rs::{Config, TS};
+
 use crate::v1::TerminalTargetKind;
+use crate::v1::{
+    AgentSummary, CockpitCapabilities, CockpitMode, CreatedPane, ErrorResponse, FocusKind,
+    FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity, PaneMoveDestination,
+    PaneOutputResponse, PaneSplitDirection, PaneSummary, ResourceMutationRequest,
+    ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse, SessionStreamMessage,
+    SessionSummary, SpaceGitAction, SpaceGitActionOutcome, SpaceGitActionRequest,
+    SpaceGitActionResponse, SpaceGitCheckout, SpaceGitRefusal, SpaceGitSource, SpaceGitStatus,
+    SpaceGitStatusResponse, SpaceGitSummary, SpaceGitUpstream, SpaceSummary, StatusResponse,
+    TabSummary, TerminalCommand, TerminalMode, TerminalMouseButton, TerminalMouseKind,
+    TerminalOpenRequest, TerminalOwnershipState, TerminalScrollDirection, TerminalScrollSource,
+    TerminalStreamMessage,
+};
 use crate::widget::{
     WidgetAddress, WidgetArrival, WidgetBlocker, WidgetBody, WidgetChange, WidgetChoice,
-    WidgetChoicesSpec, WidgetCloseRequest, WidgetCloseResponse, WidgetCloseResult,
-    WidgetContent, WidgetContentFacts, WidgetContentInput, WidgetContentRequest,
-    WidgetDisplayed, WidgetEvent, WidgetInputKind, WidgetKey, WidgetKind, WidgetListEntry,
-    WidgetListRequest, WidgetListResponse, WidgetListState, WidgetLocator,
-    WidgetPresentation, WidgetRemovalReason, WidgetRemoveRequest, WidgetRemoveResponse,
-    WidgetRemoveResult, WidgetResolvedFrom, WidgetSelectRequest, WidgetSelectResponse,
-    WidgetSelectValue, WidgetSelectionFacts, WidgetSelectionRequest, WidgetSelectionResponse,
-    WidgetSelectionStatus, WidgetShowRequest, WidgetShowResponse, WidgetShowResult,
-    WidgetSourceFacts, WidgetSourceStatus, WidgetSourceSummary, WidgetSummary,
+    WidgetChoicesSpec, WidgetCloseRequest, WidgetCloseResponse, WidgetCloseResult, WidgetContent,
+    WidgetContentFacts, WidgetContentInput, WidgetContentRequest, WidgetDisplayed, WidgetEvent,
+    WidgetInputKind, WidgetKey, WidgetKind, WidgetListEntry, WidgetListRequest, WidgetListResponse,
+    WidgetListState, WidgetLocator, WidgetPresentation, WidgetRemovalReason, WidgetRemoveRequest,
+    WidgetRemoveResponse, WidgetRemoveResult, WidgetResolvedFrom, WidgetSelectRequest,
+    WidgetSelectResponse, WidgetSelectValue, WidgetSelectionFacts, WidgetSelectionRequest,
+    WidgetSelectionResponse, WidgetSelectionStatus, WidgetShowRequest, WidgetShowResponse,
+    WidgetShowResult, WidgetSourceFacts, WidgetSourceStatus, WidgetSourceSummary, WidgetSummary,
     WidgetTargetFacts, WidgetWindowReport,
 };
 
@@ -461,7 +461,6 @@ pub fn render_v1() -> String {
         ReviewDiffLine::decl(&config),
         ReviewHunk::decl(&config),
         ReviewFileDiff::decl(&config),
-
         ContextSearchRequest::decl(&config),
         ContextSearchResult::decl(&config),
         ContextSearchResponse::decl(&config),
@@ -553,6 +552,7 @@ pub fn render_v1() -> String {
         PlanRecord::decl(&config),
         Grant::decl(&config),
         GrantScope::decl(&config),
+        GrantOrigin::decl(&config),
         OperatorOrigin::decl(&config),
         RunLocation::decl(&config),
         Run::decl(&config),
@@ -572,6 +572,7 @@ pub fn render_v1() -> String {
         AgentKind::decl(&config),
         IntentState::decl(&config),
         TaskIntent::decl(&config),
+        TaskAssignmentIntent::decl(&config),
         Presence::decl(&config),
         RunObservation::decl(&config),
         RuntimeObservation::decl(&config),

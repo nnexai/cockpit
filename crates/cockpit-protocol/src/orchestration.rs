@@ -53,6 +53,8 @@ pub struct OrchestrationSnapshot {
     pub messages: Vec<Message>, // for those runs; bodies included (≤16 KiB each)
     pub subagents: Vec<Subagent>,
     pub intents: Vec<TaskIntent>,
+    #[serde(default)]
+    pub assignment_intents: Vec<TaskAssignmentIntent>,
     pub runtime: RuntimeObservation,
     pub unmanaged_agents: Vec<UnmanagedAgent>,
     pub attention: Vec<Attention>, // Activity "Needs you", derived
@@ -149,6 +151,7 @@ pub enum DispatchStep {
     SetupRunning,
     SetupUnknown,
     LaunchIntent,
+    LaunchPending,
     LaunchUnknown,
     Launched,
     NeedsReview,
@@ -187,7 +190,11 @@ pub struct Grant {
     pub grant_id: String,
     pub scope: GrantScope,
     pub plan_revision: String,
-    pub origin: OperatorOrigin,
+    pub origin: GrantOrigin,
+    #[serde(default)]
+    pub supervisor_run_id: Option<String>,
+    #[serde(default)]
+    pub omp_session_id: Option<String>,
     pub granted_at: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -195,6 +202,13 @@ pub struct Grant {
 pub enum GrantScope {
     Prepare,
     Execute,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantOrigin {
+    Browser,
+    Native,
+    Supervisor,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -390,6 +404,20 @@ pub struct TaskIntent {
     pub run_id: String,
     pub expected_task_revision: String,
     pub state: IntentState,
+    #[serde(default)]
+    pub origin: Option<GrantOrigin>,
+    #[serde(default)]
+    pub supervisor_run_id: Option<String>,
+    #[serde(default)]
+    pub omp_session_id: Option<String>,
+    #[serde(default)]
+    pub result_message_id: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskAssignmentIntent {
+    pub root_id: String,
+    pub task_id: String,
+    pub state: IntentState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -404,6 +432,7 @@ pub enum Presence {
 pub struct RunObservation {
     pub run_id: String,
     pub presence: Presence,
+    pub actual_omp: bool,
     pub workspace_id: Option<String>,
     pub workspace_label: Option<String>,
     pub tab_id: Option<String>,
@@ -464,6 +493,18 @@ pub enum OrchestrationAction {
         title: String,
         body: String,
     }, // operator: any root; agent: only its bound run's root_id
+    TaskAssign {
+        root_id: String,
+        task_id: String,
+        title: String,
+        body: String,
+    }, // operator; creates the canonical task and assigns it to the selected root atomically
+    TaskAssignmentResolve {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: Option<String>,
+        assign: bool,
+    }, // operator; resolves only an existing conflicted assignment intent
     TaskUpdate {
         root_id: String,
         task_id: String,
@@ -498,23 +539,24 @@ pub enum OrchestrationAction {
     GrantPrepare {
         run_id: String,
         plan_revision: String,
-    }, // operator
+    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker
     GrantExecute {
         run_id: String,
         plan_revision: String,
         note: Option<String>,
-    }, // operator
+    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker
     Accept {
         run_id: String,
         expected_task_revision: String,
-    }, // operator
+    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker
     SendBack {
         run_id: String,
         text: String,
-    }, // operator
+    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker
     CancelRun {
         run_id: String,
-    }, // operator
+    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker;
+    // closes tracking and requests stop, not process termination
     RetryLaunch {
         run_id: String,
     }, // operator; new tab, launch_attempt + 1
@@ -595,6 +637,13 @@ pub enum OrchestrationActionResult {
     Task {
         task: Task,
     },
+    TaskAssigned {
+        task: Task,
+        to_run_id: String,
+        #[ts(type = "number")]
+        seq: u64,
+        duplicate: bool,
+    },
     TaskIds {
         assigned: u32,
         doc_revision: String,
@@ -616,4 +665,92 @@ pub enum OrchestrationActionResult {
         read_through_seq: u64,
     },
     Done,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn legacy_grants_preserve_operator_origin_and_identity() {
+        for (name, origin) in [
+            ("browser", GrantOrigin::Browser),
+            ("native", GrantOrigin::Native),
+        ] {
+            let legacy = json!({
+                "grant_id": "legacy-grant",
+                "scope": "execute",
+                "plan_revision": "a".repeat(64),
+                "origin": name,
+                "granted_at": "2026-10-05T12:00:00Z",
+            });
+            let grant: Grant = serde_json::from_value(legacy.clone()).unwrap();
+            assert_eq!(grant.origin, origin);
+            assert_eq!(grant.supervisor_run_id, None);
+            assert_eq!(grant.omp_session_id, None);
+            let mut expected = legacy;
+            expected["supervisor_run_id"] = Value::Null;
+            expected["omp_session_id"] = Value::Null;
+            assert_eq!(serde_json::to_value(grant).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn legacy_acceptance_intent_does_not_invent_provenance() {
+        let legacy = json!({
+            "intent_id": "legacy-intent",
+            "root_id": "root",
+            "task_id": "task",
+            "run_id": "worker",
+            "expected_task_revision": "b".repeat(64),
+            "state": "pending",
+        });
+        let intent: TaskIntent = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(intent.origin, None);
+        assert_eq!(intent.supervisor_run_id, None);
+        assert_eq!(intent.omp_session_id, None);
+        assert_eq!(intent.result_message_id, None);
+        let mut expected = legacy;
+        for key in [
+            "origin",
+            "supervisor_run_id",
+            "omp_session_id",
+            "result_message_id",
+        ] {
+            expected[key] = Value::Null;
+        }
+        assert_eq!(serde_json::to_value(intent).unwrap(), expected);
+    }
+
+    #[test]
+    fn legacy_snapshot_defaults_assignment_intents_to_empty() {
+        let legacy = json!({
+            "session_id": "session", "revision": 1, "tasks_token": "c".repeat(64),
+            "roots": [], "board": null, "runs": [], "messages": [], "subagents": [],
+            "intents": [], "runtime": {
+                "status": "unavailable", "error": { "code": "offline", "message": "Offline" },
+            },
+            "unmanaged_agents": [], "attention": [],
+        });
+        let snapshot: OrchestrationSnapshot = serde_json::from_value(legacy).unwrap();
+        assert!(snapshot.assignment_intents.is_empty());
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap()["assignment_intents"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn supervisor_grant_provenance_round_trips_without_operator_promotion() {
+        let value = json!({
+            "grant_id": "supervisor-grant", "scope": "prepare", "plan_revision": "d".repeat(64),
+            "origin": "supervisor", "supervisor_run_id": "root", "omp_session_id": "actual-omp",
+            "granted_at": "2026-10-05T12:00:00Z",
+        });
+        let grant: Grant = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(grant.origin, GrantOrigin::Supervisor);
+        assert_eq!(serde_json::to_value(grant).unwrap(), value);
+        assert!(serde_json::from_value::<OperatorOrigin>(json!("supervisor")).is_err());
+    }
 }

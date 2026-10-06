@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use cockpit_core::{
@@ -37,7 +41,7 @@ fn validate_start_receipt(
     {
         return Err(InspectionError::new(
             "herdr_outcome_unknown",
-            "agent.start returned no proven start receipt",
+            "agent.start returned no accepted command receipt",
         ));
     }
     let agent = response
@@ -201,6 +205,18 @@ impl OrchestrationHerdr for HerdrCliAdapter {
                         })
                         .or_else(|| pane.agent.clone()),
                     agent_status: Some(pane.agent_status.clone()),
+                    agent_kind: agent
+                        .and_then(|item| item.get("agent"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    launch_pending: agent
+                        .and_then(|item| item.get("launch_pending"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    interactive_ready: agent
+                        .and_then(|item| item.get("interactive_ready"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                     state_changed_at: agent
                         .and_then(|item| item.get("state_changed_at"))
                         .and_then(Value::as_str)
@@ -280,9 +296,132 @@ impl OrchestrationHerdr for HerdrCliAdapter {
                 "Only OMP with a bounded start timeout is supported",
             ));
         }
-        let (result, _) = self.socket_request_with_identity(session_id, "agent.start", json!({"pane_id":request.pane_id,"name":request.name,"kind":request.kind,"args":request.args,"timeout_ms":request.timeout_ms}), Some(&request.endpoint_identity)).await.map_err(unknown)?;
-        validate_start_receipt(&result, request)
+        // v0.9.3 rejects a typed start before submission while a fresh shell
+        // initializes. Mirror only its pinned-terminal, process-info branch;
+        // never repeat an accepted or ambiguous command.
+        let pinned = self.launch_terminal(session_id, request).await?;
+        let mut deadline = None;
+        loop {
+            match self.socket_request_with_identity(session_id, "agent.start", json!({"pane_id":request.pane_id,"name":request.name,"kind":request.kind,"args":request.args,"timeout_ms":request.timeout_ms}), Some(&request.endpoint_identity)).await {
+                Ok((result, _)) => {
+                    validate_start_receipt(&result, request)?;
+                    if pinned.as_deref().zip(result["agent"]["terminal_id"].as_str())
+                        .is_some_and(|(expected, actual)| expected != actual)
+                    {
+                        return Err(InspectionError::new("herdr_outcome_unknown", "Accepted start receipt belongs to a different terminal; no additional start was sent"));
+                    }
+                    return Ok(());
+                }
+                Err(error) if error.code == "agent_pane_busy" && pinned.is_some() => {
+                    let until = *deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
+                    if Instant::now() >= until
+                        || self.launch_terminal(session_id, request).await? != pinned
+                        || !self.launch_shell_initializing(session_id, request).await?
+                    {
+                        return Err(error);
+                    }
+                    tokio::time::sleep(Duration::from_millis(100).min(until.saturating_duration_since(Instant::now()))).await;
+                    if Instant::now() >= until
+                        || self.launch_terminal(session_id, request).await? != pinned
+                        || !self.launch_shell_initializing(session_id, request).await?
+                    {
+                        return Err(error);
+                    }
+                }
+                Err(error) => return Err(unknown(error)),
+            }
+        }
     }
+}
+
+impl HerdrCliAdapter {
+    async fn launch_terminal(
+        &self,
+        session_id: &str,
+        request: &AgentStartRequest,
+    ) -> Result<Option<String>, InspectionError> {
+        let (result, _) = self
+            .socket_request_with_identity(
+                session_id,
+                "pane.get",
+                json!({"pane_id":request.pane_id}),
+                Some(&request.endpoint_identity),
+            )
+            .await?;
+        Ok(result
+            .get("pane")
+            .and_then(|pane| pane.get("terminal_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned))
+    }
+
+    async fn launch_shell_initializing(
+        &self,
+        session_id: &str,
+        request: &AgentStartRequest,
+    ) -> Result<bool, InspectionError> {
+        let (result, _) = self
+            .socket_request_with_identity(
+                session_id,
+                "pane.process_info",
+                json!({"pane_id":request.pane_id}),
+                Some(&request.endpoint_identity),
+            )
+            .await?;
+        Ok(process_info_shows_shell_initialization(
+            &result["process_info"],
+        ))
+    }
+}
+
+// Source: Herdr v0.9.3 cli/agent.rs and platform/mod.rs. A busy
+// foreground child is not evidence of shell initialization.
+fn process_info_shows_shell_initialization(info: &Value) -> bool {
+    let Some(shell_pid) = info["shell_pid"].as_u64() else {
+        return false;
+    };
+    info["foreground_process_group_id"].as_u64() == Some(shell_pid)
+        && info["foreground_processes"]
+            .as_array()
+            .is_some_and(|processes| {
+                processes.iter().any(|process| {
+                    process["pid"].as_u64() == Some(shell_pid)
+                        && (process["name"].as_str().is_some_and(is_shell_name)
+                            || process["argv"]
+                                .as_array()
+                                .and_then(|argv| argv.first())
+                                .and_then(Value::as_str)
+                                .is_some_and(is_shell_name))
+                })
+            })
+}
+
+fn is_shell_name(name: &str) -> bool {
+    let basename = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .trim_start_matches('-');
+    let basename = basename.trim_end_matches(".exe");
+    [
+        "sh",
+        "bash",
+        "dash",
+        "zsh",
+        "fish",
+        "ksh",
+        "mksh",
+        "csh",
+        "tcsh",
+        "elvish",
+        "xonsh",
+        "nu",
+        "pwsh",
+        "powershell",
+        "cmd",
+    ]
+    .iter()
+    .any(|shell| basename.eq_ignore_ascii_case(shell))
 }
 
 #[cfg(test)]
@@ -325,5 +464,15 @@ mod tests {
             validate_start_receipt(&wrong, &request).unwrap_err().code,
             "herdr_outcome_unknown"
         );
+    }
+    #[test]
+    fn busy_retry_requires_the_shell_as_foreground_group_owner() {
+        let initializing = json!({"shell_pid":12,"foreground_process_group_id":12,"foreground_processes":[{"pid":12,"name":"-zsh","argv":["/bin/zsh"]}]});
+        assert!(process_info_shows_shell_initialization(&initializing));
+        let child = json!({"shell_pid":12,"foreground_process_group_id":20,"foreground_processes":[{"pid":20,"name":"omp","argv":["omp"]}]});
+        assert!(!process_info_shows_shell_initialization(&child));
+        let same_group_child = json!({"shell_pid":12,"foreground_process_group_id":12,"foreground_processes":[{"pid":13,"name":"bash","argv":["bash"]}]});
+        assert!(!process_info_shows_shell_initialization(&same_group_child));
+        assert!(!process_info_shows_shell_initialization(&json!({})));
     }
 }

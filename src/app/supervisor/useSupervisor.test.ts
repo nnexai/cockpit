@@ -5,7 +5,7 @@ import { acceptsSupervisorSnapshot } from "./useSupervisor";
 const snapshot: OrchestrationSnapshot = {
   session_id: "session-a", revision: 12, tasks_token: "external-edit-a",
   roots: [], board: { root_id: "root-a", path: "/state/tasks/root-a.md", doc_revision: "doc-a", unidentified_items: 0, diagnostics: [], tasks: [] },
-  runs: [], messages: [], subagents: [], intents: [], attention: [], unmanaged_agents: [],
+  runs: [], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
   runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "offline" } },
 };
 

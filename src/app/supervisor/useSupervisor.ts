@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { OrchestrationAction, OrchestrationSnapshot } from "../../protocol/generated/v1";
+import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot } from "../../protocol/generated/v1";
 
-// These operations carry an exact task/plan hash, an idempotent message ID, or append-only intent.
-// Unrelated worker telemetry must not invalidate a human's already reviewed plan.
+// Exact hashes and stable operation IDs fence these mutations independently of telemetry.
 const LOCAL_FENCES: Partial<Record<OrchestrationAction["action"], true>> = {
-  task_update: true, tasks_assign_ids: true, grant_prepare: true, grant_execute: true,
+  task_update: true, task_assign: true, task_assignment_resolve: true,
+  tasks_assign_ids: true, grant_prepare: true, grant_execute: true,
   accept: true, message_send: true, annotate: true,
 };
 
@@ -71,9 +71,9 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
     void observe();
     return () => { cancelled = true; generation.current++; window.clearTimeout(timer); };
   }, [client, sessionId, rootId, active, refreshToken]);
-  const mutate = useCallback(async (action: OrchestrationAction): Promise<boolean> => {
+  const mutateResult = useCallback(async (action: OrchestrationAction): Promise<OrchestrationActionResult | null> => {
     const observed = current.current;
-    if (!active || !observed || pending.current) return false;
+    if (!active || !observed || pending.current) return null;
     const scope = identity.current;
     const sameScope = () => scope.client === identity.current.client && scope.sessionId === identity.current.sessionId && scope.rootId === identity.current.rootId;
     pending.current = true;
@@ -81,18 +81,18 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
     setError(null);
     try {
       const response = await client.orchestrationMutate({ session_id: sessionId, expected_revision: LOCAL_FENCES[action.action] ? null : observed.revision, action });
-      if (!sameScope()) return false;
+      if (!sameScope()) return null;
       floor.current = Math.max(floor.current, response.revision);
       refresh();
-      return true;
+      return response.result;
     } catch (failure) {
-      if (!sameScope()) return false;
+      if (!sameScope()) return null;
       setError(failure instanceof Error ? failure.message : "The action was not confirmed. Review current state before retrying.");
       refresh();
-      return false;
+      return null;
     } finally {
       if (sameScope()) { pending.current = false; setBusy(false); }
     }
   }, [client, sessionId, active, refresh]);
-  return { snapshot, error: error ?? observationError, connected, busy, mutate, refresh };
+  return { snapshot, error: error ?? observationError, connected, busy, mutateResult, refresh };
 }

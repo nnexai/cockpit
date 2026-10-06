@@ -11,6 +11,8 @@ pub trait OrchestrationHerdr: Send + Sync {
         session_id: &str,
         request: &AgentTabRequest,
     ) -> Result<RunLocation, InspectionError>;
+    /// A successful response means the shell command was accepted, not that
+    /// OMP started or bound its Cockpit integration.
     async fn start_agent(
         &self,
         session_id: &str,
@@ -58,6 +60,9 @@ pub struct RuntimePane {
     pub terminal_id: Option<String>,
     pub native_session_id: Option<String>,
     pub agent_name: Option<String>,
+    pub agent_kind: Option<String>,
+    pub launch_pending: bool,
+    pub interactive_ready: bool,
     pub agent_status: Option<String>,
     pub state_changed_at: Option<String>,
 }

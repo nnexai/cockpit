@@ -928,7 +928,7 @@ export type OrchestrationMutationRequest = { session_id: string, expected_revisi
 
 export type OrchestrationMutationResponse = { revision: number, result: OrchestrationActionResult, };
 
-export type OrchestrationSnapshot = { session_id: string, revision: number, tasks_token: string, roots: Array<RootSummary>, board: TaskBoard | null, runs: Array<Run>, messages: Array<Message>, subagents: Array<Subagent>, intents: Array<TaskIntent>, runtime: RuntimeObservation, unmanaged_agents: Array<UnmanagedAgent>, attention: Array<Attention>, };
+export type OrchestrationSnapshot = { session_id: string, revision: number, tasks_token: string, roots: Array<RootSummary>, board: TaskBoard | null, runs: Array<Run>, messages: Array<Message>, subagents: Array<Subagent>, intents: Array<TaskIntent>, assignment_intents: Array<TaskAssignmentIntent>, runtime: RuntimeObservation, unmanaged_agents: Array<UnmanagedAgent>, attention: Array<Attention>, };
 
 export type UnmanagedAgent = { workspace_id: string, workspace_label: string, tab_id: string, tab_label: string, pane_id: string, agent_name: string, agent_status: string | null, state_changed_at: string | null, };
 
@@ -948,7 +948,7 @@ export type RunStage = "proposed" | "awaiting_prepare" | "preparing" | "initiali
 
 export type CloseReason = "accepted" | "cancelled" | "superseded" | "failed";
 
-export type DispatchStep = "planning" | "plan_failed" | "setup_pending" | "setup_running" | "setup_unknown" | "launch_intent" | "launch_unknown" | "launched" | "needs_review";
+export type DispatchStep = "planning" | "plan_failed" | "setup_pending" | "setup_running" | "setup_unknown" | "launch_intent" | "launch_pending" | "launch_unknown" | "launched" | "needs_review";
 
 export type DispatchTarget = { "target": "setup", request: WorkspaceSetupRequest, } | { "target": "existing_space", workspace_id: string, };
 
@@ -956,9 +956,11 @@ export type SetupSummary = { operation_id: string | null, generation: number | n
 
 export type PlanRecord = { plan_revision: string, text: string, created_at: string, };
 
-export type Grant = { grant_id: string, scope: GrantScope, plan_revision: string, origin: OperatorOrigin, granted_at: string, };
+export type Grant = { grant_id: string, scope: GrantScope, plan_revision: string, origin: GrantOrigin, supervisor_run_id: string | null, omp_session_id: string | null, granted_at: string, };
 
 export type GrantScope = "prepare" | "execute";
+
+export type GrantOrigin = "browser" | "native" | "supervisor";
 
 export type OperatorOrigin = "browser" | "native";
 
@@ -996,11 +998,13 @@ export type AgentKind = "main" | "subagent";
 
 export type IntentState = "pending" | "conflict";
 
-export type TaskIntent = { intent_id: string, root_id: string, task_id: string, run_id: string, expected_task_revision: string, state: IntentState, };
+export type TaskIntent = { intent_id: string, root_id: string, task_id: string, run_id: string, expected_task_revision: string, state: IntentState, origin: GrantOrigin | null, supervisor_run_id: string | null, omp_session_id: string | null, result_message_id: string | null, };
+
+export type TaskAssignmentIntent = { root_id: string, task_id: string, state: IntentState, };
 
 export type Presence = "present" | "missing" | "endpoint_changed" | "unobserved";
 
-export type RunObservation = { run_id: string, presence: Presence, workspace_id: string | null, workspace_label: string | null, tab_id: string | null, tab_label: string | null, pane_id: string | null, agent_status: string | null, state_changed_at: string | null, };
+export type RunObservation = { run_id: string, presence: Presence, actual_omp: boolean, workspace_id: string | null, workspace_label: string | null, tab_id: string | null, tab_label: string | null, pane_id: string | null, agent_status: string | null, state_changed_at: string | null, };
 
 export type RuntimeObservation = { "status": "fresh", endpoint_identity: string, observed_at: string, runs: Array<RunObservation>, } | { "status": "unavailable", error: ErrorResponse, };
 
@@ -1008,8 +1012,8 @@ export type AttentionKind = "awaits_prepare" | "awaits_execute" | "plan_changed"
 
 export type Attention = { kind: AttentionKind, run_id: string | null, task_id: string | null, message_seq: number | null, since: string, };
 
-export type OrchestrationAction = { "action": "task_create", root_id: string, title: string, body: string, } | { "action": "task_update", root_id: string, task_id: string, expected_task_revision: string, title: string | null, body: string | null, } | { "action": "tasks_assign_ids", root_id: string, expected_doc_revision: string, } | { "action": "supervisor_start", target: DispatchTarget | null, label: string | null, } | { "action": "run_bind_session", omp_session_id: string, } | { "action": "run_adopt", label: string, } | { "action": "run_propose", task_id: string, parent_run_id: string | null, label: string | null, target: DispatchTarget, prepare_brief: string, supersedes_run_id: string | null, } | { "action": "grant_prepare", run_id: string, plan_revision: string, } | { "action": "grant_execute", run_id: string, plan_revision: string, note: string | null, } | { "action": "accept", run_id: string, expected_task_revision: string, } | { "action": "send_back", run_id: string, text: string, } | { "action": "cancel_run", run_id: string, } | { "action": "retry_launch", run_id: string, } | { "action": "reconcile_run", run_id: string, recovery: WorkspaceRecoveryAction | null, } | { "action": "intent_resolve", intent_id: string, apply: boolean, } | { "action": "report", message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, to_run_id: string | null, } | { "action": "message_send", message_id: string, to_run_id: string, kind: MessageKind, text: string, } | { "action": "annotate", run_id: string, text: string, } | { "action": "inbox_pull", after_seq: number, limit: number, } | { "action": "inbox_woken", through_seq: number, omp_session_id: string, } | { "action": "inbox_ack", through_seq: number, } | { "action": "subagent_update", subagent_id: string, parent_subagent_id: string | null, role: string | null, label: string, status: SubagentStatus, summary: string | null, } | { "action": "subagent_control", run_id: string, subagent_id: string, op: SubagentOp, } | { "action": "subagent_control_done", seq: number, applied: boolean, error: string | null, };
+export type OrchestrationAction = { "action": "task_create", root_id: string, title: string, body: string, } | { "action": "task_assign", root_id: string, task_id: string, title: string, body: string, } | { "action": "task_assignment_resolve", root_id: string, task_id: string, expected_task_revision: string | null, assign: boolean, } | { "action": "task_update", root_id: string, task_id: string, expected_task_revision: string, title: string | null, body: string | null, } | { "action": "tasks_assign_ids", root_id: string, expected_doc_revision: string, } | { "action": "supervisor_start", target: DispatchTarget | null, label: string | null, } | { "action": "run_bind_session", omp_session_id: string, } | { "action": "run_adopt", label: string, } | { "action": "run_propose", task_id: string, parent_run_id: string | null, label: string | null, target: DispatchTarget, prepare_brief: string, supersedes_run_id: string | null, } | { "action": "grant_prepare", run_id: string, plan_revision: string, } | { "action": "grant_execute", run_id: string, plan_revision: string, note: string | null, } | { "action": "accept", run_id: string, expected_task_revision: string, } | { "action": "send_back", run_id: string, text: string, } | { "action": "cancel_run", run_id: string, } | { "action": "retry_launch", run_id: string, } | { "action": "reconcile_run", run_id: string, recovery: WorkspaceRecoveryAction | null, } | { "action": "intent_resolve", intent_id: string, apply: boolean, } | { "action": "report", message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, to_run_id: string | null, } | { "action": "message_send", message_id: string, to_run_id: string, kind: MessageKind, text: string, } | { "action": "annotate", run_id: string, text: string, } | { "action": "inbox_pull", after_seq: number, limit: number, } | { "action": "inbox_woken", through_seq: number, omp_session_id: string, } | { "action": "inbox_ack", through_seq: number, } | { "action": "subagent_update", subagent_id: string, parent_subagent_id: string | null, role: string | null, label: string, status: SubagentStatus, summary: string | null, } | { "action": "subagent_control", run_id: string, subagent_id: string, op: SubagentOp, } | { "action": "subagent_control_done", seq: number, applied: boolean, error: string | null, };
 
 export type SubagentOp = { "op": "cancel" } | { "op": "send", text: string, };
 
-export type OrchestrationActionResult = { "result": "task", task: Task, } | { "result": "task_ids", assigned: number, doc_revision: string, } | { "result": "run", run_id: string, attempt: number, } | { "result": "message", to_run_id: string, seq: number, duplicate: boolean, stale: boolean, } | { "result": "inbox", messages: Array<Message>, read_through_seq: number, } | { "result": "done" };
+export type OrchestrationActionResult = { "result": "task", task: Task, } | { "result": "task_assigned", task: Task, to_run_id: string, seq: number, duplicate: boolean, } | { "result": "task_ids", assigned: number, doc_revision: string, } | { "result": "run", run_id: string, attempt: number, } | { "result": "message", to_run_id: string, seq: number, duplicate: boolean, stale: boolean, } | { "result": "inbox", messages: Array<Message>, read_through_seq: number, } | { "result": "done" };

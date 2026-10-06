@@ -177,7 +177,7 @@ function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; ch
   }}>{children}</div>;
 }
 
-function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorOpen, onSupervisor, onStartSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorOpen, onSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
@@ -187,7 +187,6 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDi
   libraryOpen: boolean;
   supervisorOpen: boolean;
   onSupervisor(): void;
-  onStartSupervisor(): void;
   notesOpen: boolean;
   onNotesToggle(): void;
   widgetDots: ReadonlySet<string>;
@@ -238,7 +237,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDi
     </div>;
   })}
     <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" />{widgetsPending ? <button type="button" className="tab-strip-action" aria-label="Show widgets" disabled={busy} onClick={onWidgets}>Widgets <span className="widget-dot" aria-hidden="true" /></button> : null}<button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-strip-action" aria-label={notesOpen ? "Notes (open)" : "Open Notes"} aria-controls="cockpit-notes" aria-pressed={notesOpen} title={notesOpen ? "Close Notes" : "Open Notes"} onClick={onNotesToggle}>Notes</button><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
-    <div className="tab-strip-actions supervisor-topbar-actions"><button type="button" className="tab-strip-action" aria-pressed={supervisorOpen} onClick={onSupervisor}>Supervisor</button><button type="button" className="tab-icon-button" aria-label="Start supervisor" title="Start an interactive supervisor…" onClick={onStartSupervisor}><UiIcon name="plus" /></button></div>
+    <div className="tab-strip-actions supervisor-topbar-actions"><button type="button" className="tab-strip-action" aria-pressed={supervisorOpen} onClick={onSupervisor}>Supervisor</button></div>
   </nav>;
 }
 
@@ -494,9 +493,12 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
   const supervisorOpen = localWorkarea === "supervisor";
   const [supervisorMounted, setSupervisorMounted] = useState(false);
   const [supervisorStartToken, setSupervisorStartToken] = useState(0);
+  const [supervisorStartSession, setSupervisorStartSession] = useState<string | null>(null);
+  useEffect(() => { setSupervisorStartSession(null); setSupervisorStartToken(0); }, [state.sessionId]);
   const [supervisorModal, setSupervisorModal] = useState(false);
   const [supervisorNavigation, setSupervisorNavigation] = useState<string | null>(null);
   const [supervisorNavigationError, setSupervisorNavigationError] = useState<string | null>(null);
+  const supervisorNavigationAck = useRef<{ sessionId: string | null; resolve(): void; reject(error: Error): void } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [area, setArea] = useState<Rect>({ x: 0, y: 0, width: 800, height: 600 });
   const widgets = useWidgets(client);
@@ -633,8 +635,8 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     setAttachFocusSuppressed(true);
     setSupervisorMounted(true);
     setLocalWorkarea("supervisor");
-    if (start) setSupervisorStartToken(value => value + 1);
-  }, []);
+    if (start) { setSupervisorStartSession(state.sessionId); setSupervisorStartToken(value => value + 1); }
+  }, [state.sessionId]);
   const closeSupervisor = useCallback(() => { setLocalWorkarea(null); setAttachFocusSuppressed(false); }, []);
   const supervisorTerminal = async (paneId: string, run?: Run, orchestration?: OrchestrationSnapshot) => {
     const pane = snapshot?.panes.find(candidate => candidate.id === paneId);
@@ -642,19 +644,36 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
     // Session server_instance is a SHA-256 prefix, not the raw endpoint identity.
     // Endpoint fencing comes from the fresh run observation and its launch receipt.
     if (run && (orchestration?.runtime.status !== "fresh" || !run.location || run.location.session_id !== state.sessionId || run.location.endpoint_identity !== orchestration.runtime.endpoint_identity || !orchestration.runtime.runs.some(observation => observation.run_id === run.run_id && observation.presence === "present" && observation.pane_id === pane.id && observation.workspace_id === pane.space_id && observation.tab_id === pane.tab_id))) throw new Error("The run's current Herdr location is not confirmed. Reconcile before navigating.");
+    if (supervisorNavigationAck.current) throw new Error("Another terminal navigation is awaiting acknowledgement.");
+    const promise = new Promise<void>((resolve, reject) => {
+      supervisorNavigationAck.current = { sessionId: state.sessionId, resolve, reject };
+    });
     setSupervisorNavigationError(null);
     setSupervisorNavigation(pane.id);
     onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id });
+    return promise;
   };
   useEffect(() => {
     if (!supervisorNavigation) return;
-    if (!supervisorOpen) { setSupervisorNavigation(null); return; }
-    if (state.focusError) { setSupervisorNavigationError(state.focusError.message); setSupervisorNavigation(null); return; }
+    if (!supervisorOpen || state.focusError || state.sync !== "live" || supervisorNavigationAck.current?.sessionId !== state.sessionId) {
+      const message = state.focusError?.message ?? (!supervisorOpen ? "Terminal navigation was cancelled when the view was hidden." : supervisorNavigationAck.current?.sessionId !== state.sessionId ? "The session changed before terminal focus was confirmed." : "Connection lost before terminal focus was confirmed.");
+      setSupervisorNavigationError(message);
+      supervisorNavigationAck.current?.reject(new Error(message));
+      supervisorNavigationAck.current = null;
+      setSupervisorNavigation(null);
+      return;
+    }
     if (!state.focusPending && state.snapshot?.focused_pane_id === supervisorNavigation) {
+      supervisorNavigationAck.current?.resolve();
+      supervisorNavigationAck.current = null;
       setSupervisorNavigation(null);
       closeSupervisor();
     }
-  }, [supervisorNavigation, supervisorOpen, state.focusPending, state.focusError, state.snapshot, closeSupervisor]);
+  }, [supervisorNavigation, supervisorOpen, state.sessionId, state.sync, state.focusPending, state.focusError, state.snapshot, closeSupervisor]);
+  useEffect(() => () => {
+    supervisorNavigationAck.current?.reject(new Error("Workbench closed before terminal focus was confirmed."));
+    supervisorNavigationAck.current = null;
+  }, []);
   const closeNotes = useCallback(() => { setLocalWorkarea(null); setAttachFocusSuppressed(true); }, []);
   const openNotes = useCallback(() => { setAttachFocusSuppressed(true); setLocalWorkarea("notes"); }, []);
   const [prefixActive, setPrefixActive] = useState(false);
@@ -1166,9 +1185,9 @@ function Workbench({ client, state, sessions, selection, terminalMouseInput, mut
       onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
-      {selection.spaceId ? <TabStrip supervisorOpen={supervisorOpen} onSupervisor={() => { if (supervisorOpen) closeSupervisor(); else openSupervisor(); }} onStartSupervisor={() => openSupervisor(true)} widgetDots={widgetDots} widgetsPending={widgetsPending} onWidgets={showWidgets} sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} notesOpen={notesOpen} onNotesToggle={notesOpen ? closeNotes : openNotes} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : <div className="tab-toolbar"><button type="button" className="tab-strip-action" onClick={() => openSupervisor()}>Supervisor</button><button type="button" className="tab-strip-action" onClick={() => openSupervisor(true)}>Start supervisor…</button><button type="button" className="tab-strip-action" onClick={() => setCommandsOpen(true)}>Commands</button></div>}
+      {selection.spaceId ? <TabStrip supervisorOpen={supervisorOpen} onSupervisor={() => { if (supervisorOpen) closeSupervisor(); else openSupervisor(); }} widgetDots={widgetDots} widgetsPending={widgetsPending} onWidgets={showWidgets} sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} notesOpen={notesOpen} onNotesToggle={notesOpen ? closeNotes : openNotes} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : <div className="tab-toolbar"><button type="button" className="tab-strip-action" onClick={() => openSupervisor()}>Supervisor</button><button type="button" className="tab-strip-action" onClick={() => setCommandsOpen(true)}>Commands</button></div>}
       <div className="workarea-content">
-        {supervisorMounted && state.sessionId ? <SupervisorView client={client} sessionId={state.sessionId} session={snapshot} runtimeLive={state.sync === "live"} active={supervisorOpen} startToken={supervisorStartToken} onClose={closeSupervisor} onModalChange={setSupervisorModal} onTerminal={(run, orchestration) => supervisorTerminal(orchestration.runtime.status === "fresh" ? orchestration.runtime.runs.find(observation => observation.run_id === run.run_id)?.pane_id ?? "" : "", run, orchestration)} onUnmanagedTerminal={paneId => supervisorTerminal(paneId)} navigationError={supervisorNavigationError} /> : null}
+        {supervisorMounted && state.sessionId ? <SupervisorView key={state.sessionId} client={client} sessionId={state.sessionId} session={snapshot} runtimeLive={state.sync === "live"} active={supervisorOpen} startToken={supervisorStartSession === state.sessionId ? supervisorStartToken : 0} onClose={closeSupervisor} onModalChange={setSupervisorModal} onTerminal={(run, orchestration) => supervisorTerminal(orchestration.runtime.status === "fresh" ? orchestration.runtime.runs.find(observation => observation.run_id === run.run_id)?.pane_id ?? "" : "", run, orchestration)} onUnmanagedTerminal={paneId => supervisorTerminal(paneId)} navigationError={supervisorNavigationError} /> : null}
         {supervisorOpen ? null : notesOpen ? <NotesView key={`${state.sessionId}:${selection.spaceId}`} client={client} space={librarySpace} onClose={closeNotes} /> : libraryOpen ? <LibraryView client={client} onClose={closeLibrary} onCaptureInvoker={invoker => { librarySidebarInvoker.current = invoker?.closest(".sidebar") ? invoker : null; }} command={libraryCommand} space={librarySpace} /> : <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
           onContextMenu={event => { const pane = (event.target as HTMLElement).closest<HTMLElement>("[data-leaf-id]"); if (pane?.dataset.leafId) { selectLeaf(pane.dataset.leafId); openContext(event, { kind: "pane", id: pane.dataset.leafId }); } }}>
           {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}

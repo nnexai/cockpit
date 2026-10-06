@@ -1,72 +1,85 @@
-.supervisor-view { container-type: inline-size; display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); font-size: var(--font-size-sm); }
+.supervisor-view { container-type: inline-size; display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); color: var(--text-primary); font: 14px/var(--line-height-normal) var(--font-sans); }
 .supervisor-view[hidden] { display: none; }
-.supervisor-header, .supervisor-tabs, .supervisor-filters { display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex-wrap: wrap; }
-.supervisor-header, .supervisor-tabs { border-bottom: 1px solid var(--border); background: var(--chrome-bg); }
-.supervisor-header > strong { margin-right: auto; }
-.supervisor-root-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.supervisor-root-label select { max-width: 220px; min-width: 80px; }
-.supervisor-view button, .supervisor-view select, .supervisor-dialog button, .supervisor-dialog select, .supervisor-dialog input { min-height: 32px; }
-:where(.supervisor-view, .supervisor-dialog) :where(button) { padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); font-family: var(--font-sans); font-size: var(--font-size-control); line-height: var(--line-height-normal); cursor: pointer; }
+.supervisor-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--chrome-bg); }
+.supervisor-header > strong { margin-right: auto; font-weight: 500; }
+.supervisor-agent-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.supervisor-agent-label select { max-width: 260px; min-width: 100px; }
+.supervisor-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
+.supervisor-content { width: 100%; max-width: 1008px; margin-inline: auto; padding: 20px 24px 28px; box-sizing: border-box; overflow-wrap: anywhere; }
+.supervisor-view h2, .supervisor-view h3, .supervisor-view h4 { font-size: 14px; font-weight: 500; margin: 12px 0 8px; }
+.supervisor-view p { margin-block: 8px; }
+.supervisor-view button, .supervisor-view select, .supervisor-view summary, .supervisor-dialog button, .supervisor-dialog select, .supervisor-dialog input { min-height: 32px; box-sizing: border-box; }
+:where(.supervisor-view, .supervisor-dialog) :where(button) { padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); font: var(--font-size-control)/var(--line-height-normal) var(--font-sans); cursor: pointer; max-width: 100%; white-space: normal; }
 :where(.supervisor-view, .supervisor-dialog) :where(button):hover:not(:disabled) { background: var(--surface-hover); border-color: var(--border-strong); }
-:where(.supervisor-view, .supervisor-dialog) :where(button, select, input, textarea):disabled { color: var(--text-muted); cursor: default; opacity: .6; }
-:where(.supervisor-view, .supervisor-dialog) :where(select, input:not([type=checkbox]), textarea) { padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--terminal-bg); color: var(--text-primary); font-family: var(--font-sans); font-size: var(--font-size-control); line-height: var(--line-height-normal); }
+:where(.supervisor-view, .supervisor-dialog) :where(button, select, input):disabled { color: var(--text-muted); cursor: default; }
+:where(.supervisor-view, .supervisor-dialog) :where(select, input:not([type=checkbox]), textarea) { padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--terminal-bg); color: var(--text-primary); font: inherit; min-width: 0; max-width: 100%; box-sizing: border-box; }
+:where(.supervisor-view, .supervisor-dialog) :where(textarea) { display: block; width: 100%; min-height: 80px; resize: vertical; }
 :where(.supervisor-view, .supervisor-dialog) :where(input[type=checkbox]) { accent-color: var(--accent); }
 .supervisor-topbar-actions .tab-strip-action[aria-pressed=true] { background: var(--select-fill); color: var(--accent); border-color: var(--border-strong); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); }
 .supervisor-topbar-actions { padding-left: 0; }
-.supervisor-view button:focus-visible, .supervisor-view select:focus-visible, .supervisor-view textarea:focus-visible, .supervisor-dialog :focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
-.supervisor-tabs [role=tab] { border: 0; border-radius: 0; background: transparent; padding: 6px 10px; box-shadow: inset 0 2px transparent; }
-.supervisor-tabs [aria-selected=true] { background: var(--select-fill); box-shadow: inset 0 2px var(--select-edge); }
-.supervisor-tabs span { color: var(--text-muted); font-size: var(--font-size-control); }
-.supervisor-provenance { margin-left: auto; max-width: 100%; overflow-wrap: anywhere; }
-.supervisor-error { height: 36px; flex-shrink: 0; overflow: auto; padding: 6px 12px; color: var(--warning); display: flex; align-items: start; gap: 8px; overflow-wrap: anywhere; }
-.supervisor-error button { flex-shrink: 0; margin-left: auto; }
-.supervisor-body { display: grid; grid-template-columns: minmax(0, 1fr) 288px; min-height: 0; flex: 1 1 0; }
-.supervisor-list-area { overflow: auto; min-width: 0; padding: 0 12px 12px; }
-.supervisor-list-area h2 { font-size: var(--font-size-sm); margin: 14px 0 8px; font-weight: 500; }
-.supervisor-filters { padding-inline: 0; }
-.supervisor-filters label { display: flex; align-items: center; gap: 6px; }
-.supervisor-path, .supervisor-location { font-family: var(--font-mono); font-size: var(--font-size-control); overflow-wrap: anywhere; }
-.supervisor-path { color: var(--text-muted); }
-.supervisor-lane-jumps { position: sticky; top: 0; display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; background: var(--surface); z-index: 1; }
-.supervisor-lane-jumps button { font-size: var(--font-size-control); }
-.supervisor-lanes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
-.supervisor-lane { min-width: 0; scroll-margin-top: 90px; }
-.supervisor-lane h2 { display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-.supervisor-row { display: flex; flex-direction: column; align-items: start; text-align: left; width: 100%; min-width: 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 12px; gap: 4px; background: transparent; box-shadow: inset 2px 0 transparent; }
-.supervisor-row:hover { background: var(--surface-hover); }
-.supervisor-row.is-selected { background: var(--select-fill); box-shadow: inset 2px 0 var(--select-edge); }
-.supervisor-row.is-dimmed { opacity: .55; }
-.supervisor-row > span, .supervisor-row > strong, .supervisor-row > time { max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; }
-.supervisor-row > span, .supervisor-row > time, .supervisor-row small { color: var(--text-muted); font-size: var(--font-size-control); }
-.supervisor-row strong { font-weight: 500; }
-.supervisor-row-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-.supervisor-row-tags > span { border: 1px solid var(--border-strong); padding: 1px 4px; border-radius: var(--radius-small); color: var(--warning); }
-.supervisor-location.is-shared { background: var(--select-fill); outline: 1px solid var(--accent); }
-.supervisor-agent.is-subagent { border-inline-start: 1px dashed var(--border-strong); }
-.supervisor-accepted { padding: 12px 0; color: var(--text-muted); }
-.supervisor-detail-rail { min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--border); background: var(--sidebar-bg); }
-.supervisor-detail-heading { display: block; position: sticky; top: 0; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 12px; background: var(--chrome-bg); font-weight: 500; overflow-wrap: anywhere; z-index: 1; }
-.supervisor-detail { padding: 12px; overflow-wrap: anywhere; }
-.supervisor-detail h2, .supervisor-detail h3 { margin: 8px 0; font-size: var(--font-size-sm); }
+.supervisor-view :focus-visible, .supervisor-dialog :focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.supervisor-view summary { padding: 6px 0; cursor: pointer; color: var(--text-secondary); }
+.supervisor-view details { min-width: 0; }
+.supervisor-destination, .supervisor-muted { color: var(--text-muted); font-size: var(--font-size-control); }
+.supervisor-error { padding: 10px 12px; color: var(--blocked); overflow-wrap: anywhere; border-inline-start: 2px solid var(--blocked); background: var(--surface-raised); margin-block: 8px; }
+.supervisor-error p { margin-top: 0; }
+.supervisor-warning { color: var(--warning); overflow-wrap: anywhere; }
+.supervisor-action-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.supervisor-agent-status { padding-block: 10px 14px; border-bottom: 1px solid var(--border); }
+.supervisor-status-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.supervisor-state { display: inline-flex; gap: 6px; align-items: center; color: var(--text-secondary); }
+.supervisor-state .sb-glyph, .supervisor-observed .sb-glyph { width: 18px; height: 18px; flex: 0 0 18px; }
+.supervisor-agent-status.is-failure .supervisor-state, .supervisor-agent-status.is-missing .supervisor-state, .supervisor-agent-status.is-unknown .supervisor-state { color: var(--warning); }
+.supervisor-agent-status.is-offline .supervisor-state, .supervisor-agent-status.is-closed .supervisor-state { color: var(--text-muted); }
+.supervisor-needs-you { padding: 12px; border-inline-start: 2px solid var(--warning); background: var(--surface-raised); margin-block: 14px; }
+.supervisor-needs-you h2 { margin-top: 0; }
+.supervisor-task-composer { display: flex; flex-direction: column; gap: 8px; margin-block: 20px; }
+.supervisor-task-composer > label { font-weight: 500; }
+.supervisor-composer-footer { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.supervisor-composer-footer > span { color: var(--text-muted); font-size: var(--font-size-control); flex: 1 1 220px; }
+.supervisor-composer-footer > button { margin-left: auto; }
+.supervisor-task-list-heading { display: flex; justify-content: space-between; align-items: start; gap: 8px; flex-wrap: wrap; }
+.supervisor-task-filters label { display: flex; align-items: center; gap: 6px; margin-block: 8px; flex-wrap: wrap; }
+.supervisor-task-list, .supervisor-agent-list, .supervisor-history { list-style: none; margin: 0; padding: 0; }
+.supervisor-task { padding: 8px 12px; border-bottom: 1px solid var(--border); box-shadow: inset 2px 0 transparent; }
+.supervisor-task.is-selected { background: var(--select-fill); box-shadow: inset 2px 0 var(--select-edge); }
+.supervisor-task.is-dimmed { opacity: .58; }
+.supervisor-view .supervisor-task-toggle { display: flex; align-items: start; justify-content: space-between; gap: 12px; width: 100%; text-align: left; padding: 6px 0; border: 0; border-radius: 0; background: transparent; font: inherit; }
+.supervisor-task-title { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.supervisor-task-stage { color: var(--text-secondary); flex-shrink: 0; max-width: 48%; text-align: right; font-size: var(--font-size-control); }
+.supervisor-task-evidence { font-size: var(--font-size-control); }
+.supervisor-evidence { display: flex; align-items: start; gap: 6px 10px; flex-wrap: wrap; color: var(--text-muted); font-size: var(--font-size-control); }
+.supervisor-evidence > time { white-space: nowrap; margin-left: auto; }
+.supervisor-report-summary { color: var(--text-secondary); white-space: pre-wrap; min-width: 0; flex: 1 1 240px; }
+.supervisor-observed { align-items: center; }
+.supervisor-location { display: inline-block; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-small); color: var(--text-secondary); font-size: var(--font-size-control); max-width: 100%; overflow-wrap: anywhere; }
+.supervisor-location.is-shared { background: var(--select-fill); border-color: var(--accent); }
+.supervisor-task-detail { padding: 8px 0 12px; min-width: 0; overflow-wrap: anywhere; }
+.supervisor-exact-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.supervisor-task-detail > button, .supervisor-more-actions button, .supervisor-needs-you > button { margin: 4px 8px 4px 0; }
 .supervisor-section { padding-block: 8px; border-bottom: 1px solid var(--border); }
-.supervisor-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; margin-block: 8px; font-size: var(--font-size-control); }
-.supervisor-facts > div { display: contents; }
-.supervisor-facts dt { color: var(--text-muted); }
-.supervisor-facts dd { margin: 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.supervisor-plan { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--font-size-control); max-width: 100%; margin: 8px 0; padding: 8px; border: 1px solid var(--border); background: var(--terminal-bg); }
-.supervisor-action-form { display: flex; flex-direction: column; gap: 8px; margin-block: 8px; }
-.supervisor-detail textarea, .supervisor-dialog textarea { display: block; width: 100%; min-height: 80px; resize: vertical; padding: 8px; background: var(--terminal-bg); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: var(--radius-control); font: inherit; }
-.supervisor-detail button { margin: 4px 4px 4px 0; max-width: 100%; white-space: normal; }
-.supervisor-confirmation { padding: 8px; border: 1px solid var(--accent); margin: 8px 0; }
-.supervisor-confirmation p { font-size: var(--font-size-control); }
-.supervisor-empty { color: var(--text-muted); padding: 16px; overflow-wrap: anywhere; }
-.supervisor-dialog { width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 20px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-panel); box-shadow: 0 12px 40px var(--scrim); }
-.supervisor-dialog header, .supervisor-dialog footer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.supervisor-plan { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--font-size-control)/var(--line-height-normal) var(--font-mono); max-width: 100%; margin: 8px 0; padding: 8px; border: 1px solid var(--border); background: var(--terminal-bg); }
+.supervisor-action-form { display: flex; flex-direction: column; gap: 8px; margin-block: 12px; }
+.supervisor-action-form > label { font-weight: 500; }
+.supervisor-secondary { margin-top: 24px; border-top: 1px solid var(--border); }
+.supervisor-secondary > details { border-bottom: 1px solid var(--border); padding-block: 4px 8px; }
+.supervisor-secondary > details > summary { font-weight: 500; }
+.supervisor-agent-list > li { border-bottom: 1px solid var(--border); padding-block: 8px; }
+.supervisor-view .supervisor-agent-row { display: flex; flex-direction: column; align-items: start; gap: 4px; width: 100%; text-align: left; padding: 8px; background: transparent; border: 0; box-shadow: inset 2px 0 transparent; }
+.supervisor-view .supervisor-agent-row.is-selected { background: var(--select-fill); box-shadow: inset 2px 0 var(--select-edge); }
+.supervisor-agent-row > span { max-width: 100%; overflow-wrap: anywhere; }
+.supervisor-agent-row strong { font-weight: 500; }
+.supervisor-other-agent { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-block: 8px; }
+.supervisor-other-agent > span { color: var(--text-muted); font-size: var(--font-size-control); }
+.supervisor-history > li { padding-block: 6px; border-bottom: 1px solid var(--border); }
+.supervisor-history summary > strong { font-weight: 500; }
+.supervisor-history-summary { display: block; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.supervisor-history time { display: block; color: var(--text-muted); font-size: var(--font-size-control); }
+.supervisor-empty { color: var(--text-secondary); padding-block: 20px; }
+.supervisor-dialog { width: min(440px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 20px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-panel); box-shadow: 0 12px 40px var(--scrim); box-sizing: border-box; color: var(--text-primary); }
 .supervisor-dialog h2 { margin: 0 0 14px; font-size: var(--font-size-lg); }
 .supervisor-dialog label { display: flex; flex-direction: column; gap: 6px; margin-block: 10px; }
-.supervisor-dialog label:has(input[type=checkbox]) { flex-direction: row; align-items: center; }
-.supervisor-dialog input:not([type=checkbox]), .supervisor-dialog select { width: 100%; min-width: 0; }
-.supervisor-dialog footer { justify-content: flex-end; padding-top: 12px; }
-.supervisor-dialog .supervisor-error { padding-inline: 0; }
-@container (min-width: 1490px) { .supervisor-lanes { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; } .supervisor-lane-jumps { display: none; } }
-@container (max-width: 699px) { .supervisor-body { display: flex; flex-direction: column; } .supervisor-list-area { flex: 1 1 0; min-height: 0; } .supervisor-detail-rail { flex: 0 0 auto; max-height: 46%; border-left: 0; border-top: 1px solid var(--border); } .supervisor-detail-rail:not(.is-open) { max-height: 44px; } .supervisor-header { gap: 6px; } .supervisor-header > strong { flex: 0 0 100%; } .supervisor-provenance { flex: 1 1 100%; margin-left: 0; } .supervisor-root-label { flex: 1 1 0; } .supervisor-root-label select { width: 100%; max-width: none; } .supervisor-tabs { gap: 4px; } }
+.supervisor-dialog input, .supervisor-dialog select { width: 100%; }
+.supervisor-dialog footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; padding-top: 12px; }
+@container (max-width: 899px) { .supervisor-content { padding: 16px; } }
+@container (max-width: 479px) { .supervisor-content { padding: 12px; } .supervisor-header { gap: 6px; } .supervisor-header > strong { flex: 1 1 100%; } .supervisor-agent-label { flex: 1 1 100%; } .supervisor-agent-label select { flex: 1 1 0; max-width: none; } .supervisor-task-toggle { flex-wrap: wrap; gap: 4px; } .supervisor-task-stage { flex: 1 1 100%; max-width: 100%; text-align: left; } .supervisor-status-heading { align-items: start; } .supervisor-state { flex: 1 1 100%; } .supervisor-task { padding-inline: 8px; } .supervisor-evidence > time { margin-left: 0; } }

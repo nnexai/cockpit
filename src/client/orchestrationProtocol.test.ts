@@ -11,6 +11,7 @@ import {
 
 const hash = "a".repeat(64);
 const at = "2026-10-05T12:00:00Z";
+const assignmentTaskId = "7b613f19-4a52-41fa-8864-a880cd69ef50";
 const target = { target: "setup" as const, request: { operation: "open" as const, path: "/repo", label: null, task_name: null, focus: false } };
 const task = { task_id: "task", title: "Title", body: "Body", checked: false, line: 3, task_revision: hash, diagnostic: null };
 const report = { message_id: "report", kind: "ready" as const, outcome: "succeeded" as const, summary: "Ready", plan: "Work plan", at };
@@ -33,7 +34,8 @@ const snapshot: OrchestrationSnapshot = {
       branch: "task", base: "main", ownership: "owned_worktree", effects: ["Create"], warnings: ["Warning"] },
     prepare_plan: { plan_revision: hash, text: "Prepare", created_at: at }, init_receipt: report,
     work_plan: { plan_revision: hash, text: "Work", created_at: at },
-    grants: [{ grant_id: "grant", scope: "prepare", plan_revision: hash, origin: "browser", granted_at: at }],
+    grants: [{ grant_id: "grant", scope: "prepare", plan_revision: hash, origin: "browser",
+      supervisor_run_id: null, omp_session_id: null, granted_at: at }],
     last_report: report, result: report, annotations: [{ by: { type: "operator" }, text: "Note", at }],
     location: { endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane",
       launch_tag: "launch", boot_id: "boot", terminal_id: "terminal", native_session_id: null },
@@ -42,15 +44,19 @@ const snapshot: OrchestrationSnapshot = {
   messages: [message],
   subagents: [{ run_id: "run", subagent_id: "child", parent_subagent_id: null, role: "coder", label: "Child", status: "running", summary: "Working",
     last_control: { seq: 1, op: { op: "send", text: "Report" }, stage: "applied", error: null, at }, updated_at: at }],
-  intents: [{ intent_id: "intent", root_id: "root", task_id: "task", run_id: "run", expected_task_revision: hash, state: "pending" }],
+  intents: [{ intent_id: "intent", root_id: "root", task_id: "task", run_id: "run", expected_task_revision: hash, state: "pending",
+    origin: null, supervisor_run_id: null, omp_session_id: null, result_message_id: null }],
+  assignment_intents: [{ root_id: "root", task_id: assignmentTaskId, state: "conflict" }],
   runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at,
-    runs: [{ run_id: "run", presence: "present", workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Worker", pane_id: "moved-pane", agent_status: "idle", state_changed_at: at }] },
+    runs: [{ run_id: "run", presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Worker", pane_id: "moved-pane", agent_status: "idle", state_changed_at: at }] },
   unmanaged_agents: [{ workspace_id: "space", workspace_label: "Space", tab_id: "other-tab", tab_label: "Unmanaged", pane_id: "other-pane",
     agent_name: "omp", agent_status: "idle", state_changed_at: at }],
   attention: [{ kind: "awaits_execute", run_id: "run", task_id: "task", message_seq: 1, since: at }],
 };
 const actions: OrchestrationAction[] = [
   { action: "task_create", root_id: "root", title: "Title", body: "Body" },
+  { action: "task_assign", root_id: "root", task_id: assignmentTaskId, title: "Title", body: "Body" },
+  { action: "task_assignment_resolve", root_id: "root", task_id: assignmentTaskId, expected_task_revision: hash, assign: true },
   { action: "task_update", root_id: "root", task_id: "task", expected_task_revision: hash, title: null, body: "Body" },
   { action: "tasks_assign_ids", root_id: "root", expected_doc_revision: hash },
   { action: "supervisor_start", target: null, label: null },
@@ -113,8 +119,76 @@ describe("orchestration protocol boundary", () => {
     ["messages", 0, "report", "kind"], ["messages", 0, "report", "outcome"],
     ["subagents", 0, "status"], ["subagents", 0, "last_control", "op", "op"], ["subagents", 0, "last_control", "stage"],
     ["intents", 0, "state"], ["runtime", "status"], ["runtime", "runs", 0, "presence"], ["attention", 0, "kind"],
+    ["intents", 0, "origin"], ["assignment_intents", 0, "state"],
   ])("rejects unknown nested enum at %s", (...path) => {
     expect(() => parseOrchestrationSnapshot(replaceField(snapshot, path, "unknown"))).toThrow(CockpitClientError);
+  });
+
+  it("decodes truthful operator, supervisor and legacy decision provenance", () => {
+    for (const origin of ["browser", "native", "supervisor"] as const) {
+      const provenance = {
+        origin, supervisor_run_id: origin === "supervisor" ? "root" : null,
+        omp_session_id: origin === "supervisor" ? "actual-omp" : null,
+      };
+      const grant = { ...snapshot.runs[0]!.grants[0]!, ...provenance };
+      const intent = { ...snapshot.intents[0]!, ...provenance, result_message_id: "exact-result" };
+      const dto = { ...snapshot, runs: [{ ...snapshot.runs[0]!, grants: [grant] }], intents: [intent] };
+      expect(parseOrchestrationSnapshot(dto)).toEqual(dto);
+    }
+    expect(parseOrchestrationSnapshot(snapshot).intents[0]!.origin).toBeNull();
+  });
+
+  it("rejects incomplete, foreign-root or fabricated supervisor provenance", () => {
+    const badProvenances = [
+      { origin: "supervisor", supervisor_run_id: null, omp_session_id: null },
+      { origin: "supervisor", supervisor_run_id: "root", omp_session_id: null },
+      { origin: "supervisor", supervisor_run_id: null, omp_session_id: "actual-omp" },
+      { origin: "supervisor", supervisor_run_id: "other-root", omp_session_id: "actual-omp" },
+      { origin: "supervisor", supervisor_run_id: "root", omp_session_id: "" },
+      { origin: "browser", supervisor_run_id: "root", omp_session_id: "actual-omp" },
+      { origin: "native", supervisor_run_id: null, omp_session_id: "actual-omp" },
+      { origin: "native", supervisor_run_id: "root", omp_session_id: null },
+      { origin: "unknown", supervisor_run_id: null, omp_session_id: null },
+    ];
+    for (const provenance of badProvenances) {
+      const grant = { ...snapshot.runs[0]!.grants[0]!, ...provenance };
+      expect(() => parseOrchestrationSnapshot({ ...snapshot, runs: [{ ...snapshot.runs[0]!, grants: [grant] }] })).toThrow(CockpitClientError);
+      const intent = { ...snapshot.intents[0]!, ...provenance };
+      expect(() => parseOrchestrationSnapshot({ ...snapshot, intents: [intent] })).toThrow(CockpitClientError);
+    }
+    for (const provenance of [
+      { origin: null, supervisor_run_id: "root", omp_session_id: null },
+      { origin: null, supervisor_run_id: null, omp_session_id: "actual-omp" },
+    ]) expect(() => parseOrchestrationSnapshot({ ...snapshot, intents: [{ ...snapshot.intents[0]!, ...provenance }] })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["intents", 0, "result_message_id"], ""))).toThrow(CockpitClientError);
+  });
+
+  it("decodes pending launches and refuses live OMP proof on absent panes", () => {
+    expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "dispatch", "step"], "launch_pending"))).toBeDefined();
+    for (const presence of ["missing", "endpoint_changed", "unobserved"]) {
+      const dto = replaceField(snapshot, ["runtime", "runs", 0, "presence"], presence);
+      expect(() => parseOrchestrationSnapshot(dto)).toThrow(CockpitClientError);
+      expect(parseOrchestrationSnapshot(replaceField(dto, ["runtime", "runs", 0, "actual_omp"], false))).toBeDefined();
+    }
+  });
+
+  it("requires stable assignment UUIDs, exact resolve revisions and pointer-only intents", () => {
+    const assign = { action: "task_assign", root_id: "root", task_id: assignmentTaskId, title: "Title", body: "Body" };
+    const resolve = { action: "task_assignment_resolve", root_id: "root", task_id: assignmentTaskId, expected_task_revision: null, assign: false };
+    expect(parseOrchestrationAction(resolve)).toEqual(resolve);
+    expect(() => parseOrchestrationAction({ ...resolve, assign: true })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ ...resolve, assign: true, expected_task_revision: "bad" })).toThrow(CockpitClientError);
+    for (const task_id of ["task", "", "7b613f19-4a52-41fa-8864-a880cd69ef5z"]) {
+      expect(() => parseOrchestrationAction({ ...assign, task_id })).toThrow(CockpitClientError);
+      expect(() => parseOrchestrationAction({ ...resolve, task_id })).toThrow(CockpitClientError);
+      expect(() => parseOrchestrationSnapshot({ ...snapshot, assignment_intents: [{ ...snapshot.assignment_intents[0]!, task_id }] })).toThrow(CockpitClientError);
+    }
+    for (const extra of [{ body: "Not canonical" }, { title: "Not canonical" }]) {
+      expect(() => parseOrchestrationSnapshot({ ...snapshot, assignment_intents: [{ ...snapshot.assignment_intents[0]!, ...extra }] })).toThrow(CockpitClientError);
+    }
+    expect(() => parseOrchestrationAction({ ...assign, origin: "supervisor" })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ ...assign, title: "é".repeat(129) })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ ...assign, body: "é".repeat(8193) })).toThrow(CockpitClientError);
   });
 
   it("rejects unsafe counters, malformed digests, timestamps, booleans and foreign sessions", () => {
@@ -164,6 +238,7 @@ describe("orchestration protocol boundary", () => {
 
   it("validates all mutation result variants deeply", () => {
     const results = [{ result: "task", task }, { result: "task_ids", assigned: 1, doc_revision: hash },
+      { result: "task_assigned", task, to_run_id: "root", seq: 1, duplicate: false },
       { result: "run", run_id: "run", attempt: 1 }, { result: "message", to_run_id: "run", seq: 1, duplicate: false, stale: true },
       { result: "inbox", messages: [message], read_through_seq: 1 }, { result: "done" }];
     for (const result of results) {
@@ -173,6 +248,12 @@ describe("orchestration protocol boundary", () => {
     }
     expect(() => parseOrchestrationMutationResponse({ revision: 2, result: { result: "unknown" } })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationMutationResponse({ revision: 2, result: { result: "inbox", messages: [{ ...message, seq: -1 }], read_through_seq: 1 } })).toThrow(CockpitClientError);
+    for (const bad of [
+      { result: "task_assigned", task: { ...task, task_revision: "bad" }, to_run_id: "root", seq: 1, duplicate: false },
+      { result: "task_assigned", task, to_run_id: "", seq: 1, duplicate: false },
+      { result: "task_assigned", task, to_run_id: "root", seq: Number.MAX_SAFE_INTEGER + 1, duplicate: false },
+      { result: "task_assigned", task, to_run_id: "root", seq: 1, duplicate: "false" },
+    ]) expect(() => parseOrchestrationMutationResponse({ revision: 2, result: bad })).toThrow(CockpitClientError);
   });
 
   it("validates long-poll timeouts and invalidation tokens", () => {
