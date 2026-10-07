@@ -164,6 +164,12 @@ pub enum DispatchTarget {
     // tag = "target"
     Setup { request: WorkspaceSetupRequest }, // existing Create/Open; `focus` forced false
     ExistingSpace { workspace_id: String },   // launch in an existing Space; no setup
+    /// Owned linked worktree from an explicit project Space's configured repository.
+    SpaceWorktree {
+        workspace_id: String,
+        branch: Option<String>,
+        base_ref: Option<String>,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SetupSummary {
@@ -178,6 +184,9 @@ pub struct SetupSummary {
     pub ownership: Option<WorkspaceCheckoutOwnership>,
     pub effects: Vec<String>,
     pub warnings: Vec<String>,
+    /// Source project Space for SpaceWorktree; absent for other targets.
+    #[serde(default)]
+    pub project_workspace_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct PlanRecord {
@@ -730,11 +739,13 @@ pub enum OrchestrationAction {
     // closes tracking and requests stop, not process termination
     RetryLaunch {
         run_id: String,
-    }, // operator; new tab, launch_attempt + 1
+    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker;
+    // requires fresh absence review for supervisors; new tab, launch_attempt + 1
     ReconcileRun {
         run_id: String,
         recovery: Option<WorkspaceRecoveryAction>,
-    }, // operator; explicit
+    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker;
+    // supervisors may accept a proven existing worktree, never retry an uncertain environment
     IntentResolve {
         intent_id: String,
         apply: bool,
@@ -842,6 +853,33 @@ pub enum OrchestrationActionResult {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn legacy_setup_summary_has_no_inferred_project_space() {
+        let legacy = json!({
+            "operation_id": null, "generation": null, "workspace_id": "space",
+            "checkout_path": "/repo", "repository_id": null, "branch": null, "base": null,
+            "ownership": null, "effects": [], "warnings": [],
+        });
+        let summary: SetupSummary = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(summary.project_workspace_id, None);
+        let mut expected = legacy;
+        expected["project_workspace_id"] = Value::Null;
+        assert_eq!(serde_json::to_value(summary).unwrap(), expected);
+    }
+
+    #[test]
+    fn project_space_worktree_target_preserves_explicit_source_and_branch() {
+        let value = json!({
+            "target": "space_worktree", "workspace_id": "project",
+            "branch": "feature", "base_ref": "main",
+        });
+        let target: DispatchTarget = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(&target, DispatchTarget::SpaceWorktree {
+            workspace_id, branch: Some(branch), base_ref: Some(base),
+        } if workspace_id == "project" && branch == "feature" && base == "main"));
+        assert_eq!(serde_json::to_value(target).unwrap(), value);
+    }
 
     #[test]
     fn legacy_run_does_not_backfill_native_identity_or_retirement() {

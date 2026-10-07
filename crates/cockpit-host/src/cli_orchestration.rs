@@ -11,9 +11,10 @@ use cockpit_core::{
 };
 use cockpit_herdr::HerdrCliAdapter;
 use super::endpoint::{AmbientEndpoint, Endpoint, resolve_endpoint};
+use cockpit_host::orchestration_runtime::{RetryAuthority, retry_launch_preflight};
 use cockpit_protocol::{
     orchestration::*,
-    projects::{ProjectConfiguration, WorkspaceSetupRequest},
+    projects::{ProjectConfiguration, WorkspaceRecoveryAction, WorkspaceSetupRequest},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -575,6 +576,31 @@ impl Context {
         })?;
         Ok(result)
     }
+
+    async fn retry_launch(&self, run_id: String) -> Result<OrchestrationMutationResponse, CliError> {
+        self.check_caller().await?;
+        let actor = self.actor.as_ref().ok_or_else(|| {
+            CliError::new("caller_unbound", "agent mutations require HERDR_ENV=1")
+        })?;
+        let reviewed = self.service.run_for_review(&self.session, &run_id)?;
+        retry_launch_preflight(self.adapter.as_ref(), &reviewed, RetryAuthority::Supervisor).await?;
+        let result = self.service.mutate_reviewed(
+            actor,
+            OrchestrationMutationRequest {
+                session_id: self.session.clone(),
+                expected_revision: None,
+                action: OrchestrationAction::RetryLaunch { run_id },
+            },
+            &reviewed,
+        )?;
+        self.check_caller().await.map_err(|error| {
+            CliError::new(
+                &error.code,
+                format!("{}; durable mutation may already be committed", error.message),
+            )
+        })?;
+        Ok(result)
+    }
 }
 
 fn native_process_evidence(pid: u32) -> Result<NativeProcessIdentity, CliError> {
@@ -1008,7 +1034,7 @@ pub(crate) enum MessageKindArg {
 
 #[derive(Debug, Args)]
 #[group(skip)]
-#[command(group(clap::ArgGroup::new("target").required(true).multiple(false).args(["repository", "path", "space"])))]
+#[command(group(clap::ArgGroup::new("target").required(true).multiple(false).args(["repository", "path", "space", "space_worktree"])))]
 pub(crate) struct ProposeArgs {
     #[arg(long)]
     task: String,
@@ -1021,17 +1047,20 @@ pub(crate) struct ProposeArgs {
     /// Launch in an existing Herdr workspace without workspace setup.
     #[arg(long)]
     space: Option<String>,
-    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space"])]
+    /// Create an owned linked worktree from this explicit project Space's repository.
+    #[arg(long)]
+    space_worktree: Option<String>,
+    #[arg(long, conflicts_with_all = ["path", "space"])]
     branch: Option<String>,
-    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space"])]
+    #[arg(long, conflicts_with_all = ["path", "space"])]
     base: Option<String>,
-    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space"])]
+    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space", "space_worktree"])]
     checkout_path: Option<String>,
-    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space"])]
+    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space", "space_worktree"])]
     artifact: Option<String>,
-    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space"])]
+    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space", "space_worktree"])]
     linked_artifact: Vec<String>,
-    #[arg(long, conflicts_with = "space")]
+    #[arg(long, conflicts_with_all = ["space", "space_worktree"])]
     task_name: Option<String>,
     /// Preparation instructions only; work waits for exact-plan execute authority.
     #[arg(long, required_unless_present = "brief", conflicts_with = "brief")]
@@ -1053,8 +1082,8 @@ impl ProposeArgs {
             None => read_input(self.brief_file, false)?
                 .ok_or_else(|| CliError::usage("--brief or --brief-file is required"))?,
         };
-        let target = match (self.repository, self.path, self.space) {
-            (Some(repository_id), None, None) => DispatchTarget::Setup {
+        let target = match (self.repository, self.path, self.space, self.space_worktree) {
+            (Some(repository_id), None, None, None) => DispatchTarget::Setup {
                 request: WorkspaceSetupRequest::Create {
                     repository_id,
                     branch: self.branch,
@@ -1067,7 +1096,7 @@ impl ProposeArgs {
                     focus: false,
                 },
             },
-            (None, Some(path), None) => DispatchTarget::Setup {
+            (None, Some(path), None, None) => DispatchTarget::Setup {
                 request: WorkspaceSetupRequest::Open {
                     path,
                     label: self.label.clone(),
@@ -1075,10 +1104,15 @@ impl ProposeArgs {
                     focus: false,
                 },
             },
-            (None, None, Some(workspace_id)) => DispatchTarget::ExistingSpace { workspace_id },
+            (None, None, Some(workspace_id), None) => DispatchTarget::ExistingSpace { workspace_id },
+            (None, None, None, Some(workspace_id)) => DispatchTarget::SpaceWorktree {
+                workspace_id,
+                branch: self.branch,
+                base_ref: self.base,
+            },
             _ => {
                 return Err(CliError::usage(
-                    "propose requires exactly one of --repository, --path, --space",
+                    "propose requires exactly one of --repository, --path, --space, --space-worktree",
                 ));
             }
         };
@@ -1232,6 +1266,11 @@ fn require_retirement_caller(args: &OrchestrationArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum RecoveryArg {
+    AcceptExistingWorktree,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum RunCommand {
     /// List durable runs joined to fresh Herdr observations.
@@ -1277,6 +1316,14 @@ pub(crate) enum RunCommand {
     },
     /// Close descendant tracking and request cancellation; does not guarantee a stop.
     Cancel { run: String },
+    /// Read-only review or re-plan of a descendant worker; accept only an inventory-proven worktree.
+    Reconcile {
+        run: String,
+        #[arg(long, value_enum)]
+        recovery: Option<RecoveryArg>,
+    },
+    /// Restart a descendant worker after fresh absence proof; never duplicates a live original.
+    RetryLaunch { run: String },
     /// Report upward with a required sender-chosen deduplication ID.
     Report {
         #[arg(long, value_enum)]
@@ -1416,6 +1463,13 @@ impl RunArgs {
                 text: bounded(text)?,
             },
             RunCommand::Cancel { run } => OrchestrationAction::CancelRun { run_id: run },
+            RunCommand::Reconcile { run, recovery } => OrchestrationAction::ReconcileRun {
+                run_id: run,
+                recovery: recovery.map(|RecoveryArg::AcceptExistingWorktree| WorkspaceRecoveryAction::AcceptExistingWorktree),
+            },
+            RunCommand::RetryLaunch { run } => {
+                return emit(&context.retry_launch(run).await?, self.common.json);
+            }
             RunCommand::Report {
                 kind,
                 message_id,
@@ -2093,7 +2147,7 @@ mod tests {
 
     #[test]
     fn operator_only_commands_and_missing_dedupe_are_rejected() {
-        for command in ["grant-prepare", "grant-execute", "retry-launch", "start"] {
+        for command in ["grant-prepare", "grant-execute", "start"] {
             assert!(TestCli::try_parse_from(["test", "run", command]).is_err());
         }
         assert!(
@@ -2125,7 +2179,7 @@ mod tests {
 
     #[test]
     fn management_requires_explicit_targets_and_exact_revision_arguments() {
-        for command in ["prepare", "execute", "accept", "send-back", "cancel"] {
+        for command in ["prepare", "execute", "accept", "send-back", "cancel", "reconcile", "retry-launch"] {
             assert!(TestCli::try_parse_from(["test", "run", command]).is_err());
         }
         for command in ["prepare", "execute", "accept", "send-back"] {
@@ -2191,6 +2245,27 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[test]
+    fn recovery_commands_allow_only_scoped_explicit_worker_actions() {
+        for command in ["reconcile", "retry-launch"] {
+            assert!(TestCli::try_parse_from(["test", "run", command, "worker"]).is_ok());
+            assert!(TestCli::try_parse_from(["test", "run", command, "worker", "--operator"]).is_err());
+        }
+        let parsed = TestCli::try_parse_from([
+            "test", "run", "reconcile", "worker", "--recovery", "accept-existing-worktree",
+        ]).unwrap();
+        let TestCommand::Run(args) = parsed.command else { panic!("expected run") };
+        assert!(matches!(args.command, RunCommand::Reconcile {
+            run, recovery: Some(RecoveryArg::AcceptExistingWorktree),
+        } if run == "worker"));
+        assert!(TestCli::try_parse_from([
+            "test", "run", "reconcile", "worker", "--recovery", "retry-environment",
+        ]).is_err());
+        assert!(TestCli::try_parse_from([
+            "test", "run", "retry-launch", "worker", "--recovery", "accept-existing-worktree",
+        ]).is_err());
     }
 
     #[test]
@@ -2278,6 +2353,9 @@ mod tests {
             ["--repository", "repository", "--path", "/tmp/checkout"],
             ["--repository", "repository", "--space", "workspace"],
             ["--path", "/tmp/checkout", "--space", "workspace"],
+            ["--space-worktree", "workspace", "--repository", "repository"],
+            ["--space-worktree", "workspace", "--path", "/tmp/checkout"],
+            ["--space-worktree", "workspace", "--space", "workspace"],
         ] {
             let mut command = vec![
                 "test",
@@ -2303,6 +2381,32 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn project_space_worktree_preserves_branch_base_and_restricts_modifiers() {
+        let prefix = ["test", "run", "propose", "--task", "task", "--brief", "Read-only preparation"];
+        let mut command = prefix.to_vec();
+        command.extend(["--space-worktree", "project", "--branch", "feature", "--base", "main"]);
+        let parsed = TestCli::try_parse_from(command).unwrap();
+        let TestCommand::Run(args) = parsed.command else { panic!("expected run") };
+        let RunCommand::Propose(proposal) = args.command else { panic!("expected proposal") };
+        let OrchestrationAction::RunPropose { target, .. } = proposal.action().unwrap() else { panic!("expected proposal action") };
+        assert!(matches!(target, DispatchTarget::SpaceWorktree {
+            workspace_id, branch: Some(branch), base_ref: Some(base),
+        } if workspace_id == "project" && branch == "feature" && base == "main"));
+        for target in ["--space", "--path"] {
+            for modifier in ["--branch", "--base"] {
+                let mut command = prefix.to_vec();
+                command.extend([target, "project", modifier, "feature"]);
+                assert!(TestCli::try_parse_from(command).is_err());
+            }
+        }
+        for modifier in ["--checkout-path", "--artifact", "--linked-artifact", "--task-name"] {
+            let mut command = prefix.to_vec();
+            command.extend(["--space-worktree", "project", modifier, "value"]);
+            assert!(TestCli::try_parse_from(command).is_err(), "{modifier} must reject --space-worktree");
+        }
     }
 
     #[test]

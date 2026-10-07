@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { NativeStopReceipt, RunRetirement } from "../../src/protocol/generated/v1";
-import cockpitOrchestration, { createRetirementHandler, decodeControl, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseMainWaitRead, parseWakeSummary, prepareToolAllowed, readRetirementReadiness, recoverWake, reportIdentity, requireSupervisorManagement, retirementReadiness, type RetirementReadinessInput, type MainWaitRead } from "./cockpit-orchestration";
+import cockpitOrchestration, { contextPage, contextSource, createRetirementHandler, decodeControl, delegateArgs, managementArgs, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseMainWaitRead, parseWakeSummary, prepareToolAllowed, readRetirementReadiness, recoverWake, reportIdentity, requireSupervisorManagement, retirementReadiness, type RetirementReadinessInput, type MainWaitRead } from "./cockpit-orchestration";
 
 describe("durable inbox wake bookkeeping", () => {
   it("coalesces arrivals without implying a read or acknowledgement", () => {
@@ -59,21 +59,21 @@ describe("native identity and bounded preparation", () => {
 
   it("fails closed for mutation, shell execution, nested dispatch and unknown tools", () => {
     for (const name of ["write", "edit", "bash", "eval", "task", "cockpit_delegate", "cockpit_task", "cockpit_manage", "mcp__provider__write", "toString"]) expect(prepareToolAllowed(name)).toBe(false);
-    for (const name of ["read", "find", "grep", "glob", "cockpit_report"]) expect(prepareToolAllowed(name)).toBe(true);
+    for (const name of ["read", "find", "grep", "glob", "cockpit_context", "cockpit_report"]) expect(prepareToolAllowed(name)).toBe(true);
     expect(prepareToolAllowed("cockpit_inbox", "list")).toBe(true);
     expect(prepareToolAllowed("cockpit_inbox", "ack")).toBe(true);
     expect(prepareToolAllowed("cockpit_inbox", "send")).toBe(false);
     expect(prepareToolAllowed("cockpit_message", "show")).toBe(true);
     expect(prepareToolAllowed("cockpit_task", "list")).toBe(true);
     expect(prepareToolAllowed("cockpit_task", "show")).toBe(true);
-    for (const operation of ["prepare", "execute", "accept", "send_back", "cancel"]) expect(prepareToolAllowed("cockpit_manage", operation)).toBe(false);
+    for (const operation of ["prepare", "execute", "accept", "send_back", "cancel", "reconcile", "retry_launch"]) expect(prepareToolAllowed("cockpit_manage", operation)).toBe(false);
     for (const operation of ["message", "annotate", "list", undefined]) expect(prepareToolAllowed("cockpit_message", operation)).toBe(false);
     for (const operation of ["create", "update", undefined]) expect(prepareToolAllowed("cockpit_task", operation)).toBe(false);
   });
 });
 
 describe("supervisor native management identity", () => {
-  const root = { run_id: "root", root_id: "root", parent_run_id: null, kind: "supervisor", stage: "active", bound_omp_session: "native-main" };
+  const root = { run_id: "root", root_id: "root", parent_run_id: null, kind: "supervisor", stage: "active", bound_omp_session: "native-main", location: { workspace_id: "supervisor-space" } };
 
   it("allows only the currently bound active native main root", () => {
     expect(() => requireSupervisorManagement(root, { kind: "main" }, "native-main")).not.toThrow();
@@ -96,6 +96,73 @@ describe("supervisor native management identity", () => {
     }
     expect(() => requireSupervisorManagement({ ...root, parent_run_id: "parent" }, { kind: "main" }, "native-main")).toThrow();
     expect(() => requireSupervisorManagement({ ...root, run_id: "child" }, { kind: "main" }, "native-main")).toThrow();
+  });
+});
+
+describe("project placement and scoped recovery arguments", () => {
+  const proposal = { task_id: "task", target_id: "project-space", prepare_brief: "Read project evidence" };
+
+  it("rejects missing explicit targets and branch/base on non-worktree placements", () => {
+    expect(() => delegateArgs({ ...proposal, target_id: " " })).toThrow("explicit real project Space");
+    for (const target of ["space", "path"] as const) {
+      expect(() => delegateArgs({ ...proposal, target, branch: "feature" })).toThrow("Branch and base");
+      expect(() => delegateArgs({ ...proposal, target, base: "main" })).toThrow("Branch and base");
+    }
+  });
+
+  it("rejects recovery outside reconcile and missing management targets", () => {
+    for (const operation of ["prepare", "execute", "accept", "send_back", "cancel", "retry_launch"] as const) {
+      expect(() => managementArgs({ operation, run_id: "worker", recovery: "accept_existing_worktree" })).toThrow("only for reconcile");
+    }
+    expect(() => managementArgs({ operation: "retry_launch", run_id: "" })).toThrow("target run_id");
+  });
+});
+
+describe("read-only project context boundaries", () => {
+  const source = { session_id: "herdr", space_id: "project" };
+  const listing = {
+    target: source, space_label: "Project", pane_id: null, library_root: "/library",
+    items: Array.from({ length: 5_000 }, (_, index) => ({ item_id: `item-${index}`, title: `Item ${index}`, kind: "folder_copy", path: `/library/${index}.md` })),
+    checkout_path: "/repo", repository_paths: ["/repo/CODE_GUIDE.md"], diagnostics: [],
+  };
+
+  it("keeps linked workers on their source project selection and refuses unverified source identity", () => {
+    const run = { session_id: "herdr", setup: { project_workspace_id: "project" },
+      location: { session_id: "herdr", workspace_id: "linked" } };
+    expect(contextSource(run).space_id).toBe("project");
+    expect(contextSource({ ...run, setup: null }).space_id).toBe("linked");
+    for (const invalid of [
+      { ...run, session_id: "" }, { ...run, location: null },
+      { ...run, location: { session_id: "other-session", workspace_id: "linked" } },
+      { ...run, setup: { project_workspace_id: "" } },
+    ]) expect(() => contextSource(invalid)).toThrow();
+  });
+
+  it("makes all 5000 existing paths reachable in bounded pages without losing source or totals", () => {
+    const paths: string[] = [];
+    let offset = 0;
+    do {
+      const page = contextPage(listing, source, offset);
+      expect(page.total_items).toBe(5_000);
+      expect(page.target).toEqual(source);
+      expect(page.repository_paths).toEqual(listing.repository_paths);
+      const items = page.items as typeof listing.items;
+      expect(items.length).toBeLessThanOrEqual(100);
+      paths.push(...items.map(item => item.path));
+      if (page.next_offset === null) break;
+      expect(page.next_offset).toBeGreaterThan(offset);
+      offset = page.next_offset as number;
+    } while (true);
+    expect(paths).toEqual(listing.items.map(item => item.path));
+    expect(contextPage(listing, source, 5_000).items).toEqual([]);
+    for (const [offset, limit] of [[-1, 100], [0.5, 100], [Number.MAX_SAFE_INTEGER + 1, 100], [0, 0], [0, 101], [0, 1.5]]) {
+      expect(() => contextPage(listing, source, offset, limit)).toThrow();
+    }
+    for (const invalid of [
+      { ...listing, target: { ...source, space_id: "other" } },
+      { ...listing, target: { ...source, session_id: "other" } },
+      { ...listing, items: [{}] }, { ...listing, repository_paths: [false] },
+    ]) expect(() => contextPage(invalid, source)).toThrow();
   });
 });
 
@@ -409,6 +476,70 @@ describe("native main-only lifecycle hooks", () => {
     return { hooks, exec, observations, holdObservation, ctx, pi, shutdown, sessionManager };
   }
 
+  it("permits read-only context during initialization but fails closed after a context binding change", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "context-worker");
+    vi.stubEnv("COCKPIT_HERDR_SOCKET", "/tmp/context-fixture.sock");
+    try {
+      const h = extensionHost();
+      const run = { run_id: "context-worker", session_id: "herdr", kind: "worker", stage: "initializing",
+        bound_omp_session: "native-main", setup: { project_workspace_id: "project" },
+        location: { session_id: "herdr", workspace_id: "linked" } };
+      const response = (value: unknown) => ({ code: 0, killed: false, stdout: JSON.stringify(value), stderr: "" });
+      h.exec.mockResolvedValueOnce(response(run));
+      expect(await h.hooks.get("tool_call")!({ toolName: "cockpit_context", input: {} }, h.ctx)).toBeUndefined();
+      type ContextTool = { name: string; execute: (id: string, params: { offset?: number; limit?: number },
+        signal: undefined, update: undefined, ctx: ExtensionContext) => Promise<unknown> };
+      const tool = vi.mocked(h.pi.registerTool).mock.calls.map(([tool]) => tool as unknown as ContextTool)
+        .find(tool => tool.name === "cockpit_context")!;
+      h.exec.mockResolvedValueOnce(response(run));
+      h.exec.mockResolvedValueOnce(response({
+        target: { session_id: "herdr", space_id: "project" }, space_label: "Project", pane_id: null,
+        library_root: "/library", items: [], checkout_path: "/repo", repository_paths: [], diagnostics: [],
+      }));
+      h.exec.mockResolvedValueOnce(response({ ...run, setup: { project_workspace_id: "different-project" } }));
+      await expect(tool.execute("context", {}, undefined, undefined, h.ctx)).rejects.toThrow("binding changed");
+      h.exec.mockResolvedValueOnce(response({ ...run, stage: "closed" }));
+      await expect(tool.execute("context", {}, undefined, undefined, h.ctx)).rejects.toThrow("closed");
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+
+  it.each(["attempt_stale", "original_agent_present", "original_identity_unverifiable"])("does not repeat a refused scoped recovery after %s", async code => {
+    vi.stubEnv("COCKPIT_RUN_ID", "recovery-root");
+    try {
+      const h = extensionHost();
+      const root = { run_id: "recovery-root", root_id: "recovery-root", parent_run_id: null,
+        kind: "supervisor", stage: "active", bound_omp_session: "native-main", location: { workspace_id: "supervisor-space" } };
+      h.exec.mockResolvedValueOnce({ code: 0, killed: false, stdout: JSON.stringify(root), stderr: "" });
+      h.exec.mockResolvedValueOnce({ code: 1, killed: false, stdout: "", stderr: JSON.stringify({ code, message: "Fresh original evidence refuses restart" }) });
+      type ManageTool = { name: string; execute: (id: string, params: Parameters<typeof managementArgs>[0],
+        signal: undefined, update: undefined, ctx: ExtensionContext) => Promise<unknown> };
+      const tools = vi.mocked(h.pi.registerTool).mock.calls.map(([tool]) => tool as unknown as ManageTool);
+      const manage = tools.find(tool => tool.name === "cockpit_manage")!;
+      await expect(manage.execute("call", { operation: "retry_launch", run_id: "worker" }, undefined, undefined, h.ctx))
+        .rejects.toThrow("Fresh original evidence refuses restart");
+      expect(h.exec).toHaveBeenCalledTimes(2);
+      expect(h.exec.mock.calls[1][1]).not.toContain("--operator");
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("rejects stale supervisor binding before issuing a recovery command", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "recovery-root");
+    try {
+      const h = extensionHost();
+      const root = { run_id: "recovery-root", root_id: "recovery-root", parent_run_id: null,
+        kind: "supervisor", stage: "active", bound_omp_session: "old-native-main", location: { workspace_id: "supervisor-space" } };
+      h.exec.mockResolvedValueOnce({ code: 0, killed: false, stdout: JSON.stringify(root), stderr: "" });
+      type ManageTool = { name: string; execute: (id: string, params: Parameters<typeof managementArgs>[0],
+        signal: undefined, update: undefined, ctx: ExtensionContext) => Promise<unknown> };
+      const tools = vi.mocked(h.pi.registerTool).mock.calls.map(([tool]) => tool as unknown as ManageTool);
+      await expect(tools.find(tool => tool.name === "cockpit_manage")!.execute(
+        "call", { operation: "reconcile", run_id: "worker" }, undefined, undefined, h.ctx,
+      )).rejects.toThrow("bound native main");
+      expect(h.exec).toHaveBeenCalledTimes(1);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("does not bind, observe, or retire an internal clone with inherited run environment", async () => {
     vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
     try {
@@ -608,6 +739,145 @@ describe("native main-only lifecycle hooks", () => {
       expect(h.exec.mock.calls.filter(([, args]) => args[1] === "bind-session")).toHaveLength(3);
       expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
       expect(h.shutdown).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["new", "resume", "fork"])("rebinds a completed %s switch and observes only the current native inbox", async reason => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    vi.useFakeTimers();
+    const h = extensionHost();
+    try {
+      const oldMail = Promise.withResolvers<MainWaitRead>();
+      const currentWait = Promise.withResolvers<void>();
+      h.observations.mockReset()
+        .mockReturnValueOnce(oldMail.promise)
+        .mockResolvedValueOnce({
+          mode: "open", inbox: { run_id: "retirement-test-run", pending: true, through_seq: 8, counts: [{ kind: "instruction", count: 1 }] },
+          retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN,
+        })
+        .mockImplementation(signal => { currentWait.resolve(); return h.holdObservation(signal); });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      const oldWait = h.exec.mock.results[1].value;
+      const oldSignal = h.exec.mock.calls[1][2].signal!;
+      h.sessionManager.getSessionId = () => "switched-main";
+      await h.hooks.get("session_switch")!({ reason, previousSessionFile: "/tmp/previous.jsonl" }, h.ctx);
+      await currentWait.promise;
+      expect(oldSignal.aborted).toBe(true);
+      const binds = h.exec.mock.calls.filter(([, args]) => args[1] === "bind-session");
+      expect(binds).toHaveLength(2);
+      expect(binds[1][1]).toEqual(expect.arrayContaining([
+        "--omp-session", "switched-main", "--omp-main-session", "switched-main", "--agent-kind", "main",
+        "--omp-pid", String(process.pid),
+      ]));
+      const currentSignal = binds[1][2].signal!;
+      expect(currentSignal).not.toBe(oldSignal);
+      expect(currentSignal.aborted).toBe(false);
+      const currentCalls = h.exec.mock.calls.slice(2);
+      expect(currentCalls.every(([, args]) => args[args.indexOf("--omp-session") + 1] === "switched-main")).toBe(true);
+      expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "woken")).toHaveLength(1);
+      oldMail.resolve({
+        mode: "open", inbox: { run_id: "retirement-test-run", pending: true, through_seq: 99, counts: [{ kind: "instruction", count: 1 }] },
+        retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN,
+      });
+      await oldWait;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.observations).toHaveBeenCalledTimes(3);
+      expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(h.pi.appendEntry).toHaveBeenLastCalledWith("cockpit-orchestration-wake-v1", expect.objectContaining({ seen: 8 }));
+      expect(h.exec.mock.calls.some(([, args]) => args[0] === "inbox" && ["list", "ack"].includes(args[1]))).toBe(false);
+      expect(h.shutdown).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
+  it("supersedes an unresolved startup bind on switch without restarting its stale observer", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const binding = Promise.withResolvers<CliResponse>();
+      h.exec.mockReturnValueOnce(binding.promise);
+      h.observations.mockReset().mockImplementation(h.holdObservation);
+      const startup = h.hooks.get("session_start")!({}, h.ctx);
+      const startupSignal = h.exec.mock.calls[0][2].signal!;
+      h.sessionManager.getSessionId = () => "switched-main";
+      await h.hooks.get("session_switch")!({ reason: "new" }, h.ctx);
+      expect(startupSignal.aborted).toBe(true);
+      binding.resolve({ code: 0, killed: false, stdout: "{}", stderr: "" });
+      await startup;
+      expect(h.observations).toHaveBeenCalledTimes(1);
+      const waits = h.exec.mock.calls.filter(([, args]) => args[0] === "inbox" && args[1] === "wait");
+      expect(waits).toHaveLength(1);
+      expect(waits[0][1]).toEqual(expect.arrayContaining(["--omp-session", "switched-main", "--omp-main-session", "switched-main"]));
+      expect(waits[0][2].signal!.aborted).toBe(false);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps the original observer functional when a before-switch transition is cancelled", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const mail = Promise.withResolvers<MainWaitRead>();
+      const continued = Promise.withResolvers<void>();
+      h.observations.mockReset().mockReturnValueOnce(mail.promise)
+        .mockImplementation(signal => { continued.resolve(); return h.holdObservation(signal); });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      const signal = h.exec.mock.calls[1][2].signal!;
+      await h.hooks.get("session_before_switch")?.({ reason: "new" }, h.ctx);
+      // A cancelled native transition emits no session_switch and keeps its ID.
+      mail.resolve({
+        mode: "open", inbox: { run_id: "retirement-test-run", pending: true, through_seq: 7, counts: [{ kind: "instruction", count: 1 }] },
+        retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN,
+      });
+      await continued.promise;
+      expect(signal.aborted).toBe(false);
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "bind-session")).toHaveLength(1);
+      expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "woken")).toHaveLength(1);
+      expect(h.observations).toHaveBeenCalledTimes(2);
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not promote a switched native child or replace the process main-session identity", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "switch-child-run");
+    const h = extensionHost();
+    try {
+      h.sessionManager.getSessionId = () => "actual-main";
+      h.observations.mockReset().mockImplementation(h.holdObservation);
+      await h.hooks.get("session_start")!({}, h.ctx);
+      const mainSignal = h.exec.mock.calls[1][2].signal!;
+      const childHost = extensionHost();
+      childHost.sessionManager.getSessionId = () => "switched-child";
+      const child = { ...childHost.ctx, agent: { kind: "sub" as const, id: "native-child", parentId: "Main" } };
+      await childHost.hooks.get("session_start")!({}, child);
+      await childHost.hooks.get("session_switch")!({ reason: "fork" }, child);
+      expect(childHost.exec).not.toHaveBeenCalled();
+      expect(childHost.observations).not.toHaveBeenCalled();
+      expect(childHost.shutdown).not.toHaveBeenCalled();
+      expect(mainSignal.aborted).toBe(false);
+      childHost.exec.mockResolvedValueOnce({
+        code: 0, killed: false, stderr: "",
+        stdout: JSON.stringify({ run_id: "switch-child-run", kind: "supervisor", stage: "active" }),
+      });
+      expect(await childHost.hooks.get("tool_call")!({ toolName: "read", input: {} }, child)).toBeUndefined();
+      expect(childHost.exec.mock.calls[0][1]).toEqual(expect.arrayContaining([
+        "--omp-session", "switched-child", "--omp-main-session", "actual-main", "--agent-kind", "subagent", "--subagent-id", "native-child",
+      ]));
+      expect(h.observations).toHaveBeenCalledTimes(1);
     } finally {
       await h.hooks.get("session_shutdown")!({}, h.ctx);
       vi.unstubAllEnvs();

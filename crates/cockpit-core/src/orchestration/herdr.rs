@@ -24,6 +24,23 @@ pub trait OrchestrationHerdr: Send + Sync {
         endpoint_identity: &str,
         pane_id: &str,
     ) -> Result<PaneProcessInfo, InspectionError>;
+    /// Reconcile Herdr's expired Pending metadata on an exact recorded pane.
+    /// Success is not evidence that its queued command or native process stopped.
+    async fn expire_pending_agent(
+        &self,
+        session_id: &str,
+        endpoint_identity: &str,
+        pane_id: &str,
+    ) -> Result<(), InspectionError>;
+    /// Reclaim an exclusive recorded launch tab by closing its exact owned pane
+    /// after fresh identity validation, preserving any racing foreign split.
+    /// Requires a committed Core close intent; SDK-binding revocation is Core's
+    /// responsibility. The acknowledgement is not an absence/cancellation proof.
+    async fn close_owned_launch_tab(
+        &self,
+        session_id: &str,
+        location: &RunLocation,
+    ) -> Result<(), InspectionError>;
     /// A close acknowledgement is not proof of absence; callers must obtain a
     /// fresh observation and must never repeat an uncertain close.
     async fn close_pane(

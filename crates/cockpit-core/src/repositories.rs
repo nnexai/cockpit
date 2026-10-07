@@ -239,6 +239,30 @@ impl RepositoryCatalog {
         base: &str,
     ) -> Result<String, InspectionError> {
         let fresh = self.fresh_candidate(candidate).await?;
+        self.resolve_commit(Path::new(&fresh.checkout_path), base).await
+    }
+
+    /// Read HEAD from a freshly proved runtime checkout, which may be a linked
+    /// checkout outside catalog roots. This does not admit it to the catalog.
+    pub(crate) async fn resolve_checkout_head(
+        &self,
+        candidate: &RepositoryCandidate,
+    ) -> Result<String, InspectionError> {
+        let fresh = self.discover_checkout(Path::new(&candidate.checkout_path)).await?;
+        if fresh.repository_id != candidate.repository_id
+            || fresh.root != candidate.root
+            || fresh.common_dir != candidate.common_dir
+            || fresh.checkout_path != candidate.checkout_path
+        {
+            return Err(InspectionError::new(
+                "repository_identity_stale",
+                "Source checkout changed during HEAD inspection",
+            ));
+        }
+        self.resolve_commit(Path::new(&fresh.checkout_path), "HEAD").await
+    }
+
+    async fn resolve_commit(&self, checkout: &Path, base: &str) -> Result<String, InspectionError> {
         validate_input(base, "base")?;
         if base.starts_with('-') || base.chars().any(char::is_whitespace) {
             return Err(InspectionError::new(
@@ -249,7 +273,7 @@ impl RepositoryCatalog {
         let revision = format!("{base}^{{commit}}");
         let output = self
             .git_output(
-                Path::new(&fresh.checkout_path),
+                checkout,
                 &["rev-parse", "--verify", "--end-of-options", &revision],
             )
             .await?;

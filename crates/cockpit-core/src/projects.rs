@@ -53,6 +53,34 @@ pub struct ProjectService {
     last_plan_prune: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
+/// Configured repository identity and the immutable HEAD of the actual source Space.
+#[derive(Debug)]
+pub struct SpaceRepository {
+    pub repository: RepositoryCandidate,
+    pub source_head: String,
+}
+
+impl SpaceRepository {
+    pub(crate) fn worktree_request(
+        &self,
+        branch: Option<String>,
+        base_ref: Option<String>,
+        task_name: String,
+    ) -> WorkspaceSetupRequest {
+        WorkspaceSetupRequest::Create {
+            repository_id: self.repository.repository_id.clone(),
+            branch,
+            base_ref: Some(base_ref.unwrap_or_else(|| self.source_head.clone())),
+            checkout_path: None,
+            label: None,
+            task_name: Some(task_name),
+            artifact_url: None,
+            linked_artifact_urls: vec![],
+            focus: false,
+        }
+    }
+}
+
 /// A plan the user did not start within this time is stale: starting it
 /// asks for a fresh plan, and the unstarted record is deleted.
 const PLAN_TTL_MS: u128 = 60 * 60 * 1000;
@@ -184,6 +212,75 @@ impl ProjectService {
     pub fn prewarm_repositories(self: &Arc<Self>) {
         let service = Arc::clone(self);
         tokio::spawn(async move { let _ = service.cached_repositories().await; });
+    }
+
+    /// Prove an open Space belongs to one configured primary repository, using
+    /// fresh Git provenance and Herdr's authoritative open-worktree inventory.
+    pub async fn space_repository(
+        &self,
+        session: &str,
+        workspace_id: &str,
+        space_cwd: &str,
+    ) -> Result<SpaceRepository, InspectionError> {
+        validate_session(session)?;
+        let catalog = RepositoryCatalog::new(self.configuration.clone());
+        let checkout = catalog.discover_checkout(Path::new(space_cwd)).await?;
+        let mut candidates = catalog.list().await?.repositories.into_iter().filter(|candidate| {
+            !candidate.is_linked_worktree
+                && candidate.checkout_path == checkout.root
+                && candidate.common_dir == checkout.common_dir
+        });
+        let repository = candidates.next().ok_or_else(|| {
+            InspectionError::new(
+                "project_repository_not_configured",
+                format!("Space {workspace_id} checkout {space_cwd} has no configured primary repository"),
+            )
+        })?;
+        if candidates.next().is_some() {
+            return Err(InspectionError::new(
+                "repository_identity_conflict",
+                "Project Space matched multiple configured primary repositories",
+            ));
+        }
+        let inventory = self.adapter.project_inventory(session, &repository.checkout_path).await?;
+        verify_inventory(&inventory, &repository)?;
+        let mut matching = inventory.worktrees.iter()
+            .filter(|entry| entry.open_workspace_id.as_deref() == Some(workspace_id));
+        let entry = matching.next().ok_or_else(|| {
+            InspectionError::new(
+                "space_repository_mismatch",
+                format!("Herdr does not identify Space {workspace_id} as an open checkout of {}", repository.repository_id),
+            )
+        })?;
+        if matching.next().is_some()
+            || std::fs::canonicalize(&entry.checkout_path).ok().as_deref()
+                != Some(Path::new(&checkout.checkout_path))
+            || entry.is_linked_worktree != checkout.is_linked_worktree
+        {
+            return Err(InspectionError::new(
+                "space_repository_mismatch",
+                format!("Space {workspace_id} inventory does not uniquely prove its actual checkout {space_cwd}"),
+            ));
+        }
+        let source_head = catalog.resolve_checkout_head(&checkout).await?;
+        Ok(SpaceRepository { repository, source_head })
+    }
+
+    /// Return real open Space IDs after freshly verifying repository provenance.
+    pub async fn repository_open_spaces(
+        &self,
+        session: &str,
+        repository_id: &str,
+    ) -> Result<Vec<String>, InspectionError> {
+        validate_session(session)?;
+        let repository = RepositoryCatalog::new(self.configuration.clone()).resolve(repository_id).await?;
+        let inventory = self.adapter.project_inventory(session, &repository.checkout_path).await?;
+        verify_inventory(&inventory, &repository)?;
+        let mut spaces: Vec<_> = inventory.worktrees.into_iter()
+            .filter_map(|entry| entry.open_workspace_id).collect();
+        spaces.sort();
+        spaces.dedup();
+        Ok(spaces)
     }
 
     pub async fn plan(
@@ -2446,6 +2543,7 @@ mod tests {
         terminal_requests: StdMutex<Vec<ProjectTerminalRequest>>,
         closed_workspaces: StdMutex<Vec<String>>,
         repository: std::sync::OnceLock<RepositoryCandidate>,
+        inventory: parking_lot::Mutex<Option<ProjectInventory>>,
         selection_available: AtomicBool,
     }
 
@@ -2530,6 +2628,9 @@ mod tests {
             _: &str,
         ) -> Result<ProjectInventory, InspectionError> {
             self.inventory_calls.fetch_add(1, Ordering::Relaxed);
+            if let Some(inventory) = self.inventory.lock().clone() {
+                return Ok(inventory);
+            }
             let repository = self.repository.get().cloned();
             let Some(repository) = repository else { return unused(); };
             Ok(ProjectInventory {
@@ -2697,6 +2798,99 @@ mod tests {
             "git {args:?}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[tokio::test]
+    async fn project_space_repository_requires_fresh_git_and_unique_inventory_proof() {
+        use crate::project_adapter::ProjectWorktreeEntry;
+        let root = std::env::temp_dir().join(format!("cockpit-project-space-{}", Uuid::new_v4()));
+        let configured = root.join("configured");
+        let primary = configured.join("repository");
+        std::fs::create_dir_all(&primary).unwrap();
+        git(&primary, &["init"]);
+        git(&primary, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+            "commit", "--allow-empty", "-m", "fixture"]);
+        let linked = root.join("linked");
+        git(&primary, &["worktree", "add", "-b", "linked-fixture", linked.to_str().unwrap()]);
+        git(&linked, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+            "commit", "--allow-empty", "-m", "linked source HEAD differs from primary"]);
+        let mut config = configuration(&root);
+        config.repository_roots = vec![configured.to_string_lossy().into_owned()];
+        let adapter = Arc::new(NestedDirectoryAdapter::default());
+        let service = ProjectService::new(config, adapter.clone()).unwrap();
+        let repository = service.repositories().await.unwrap().repositories.into_iter().next().unwrap();
+        let inventory = ProjectInventory {
+            endpoint_identity: "endpoint".into(),
+            repository_key: repository.common_dir.clone(),
+            repository_root: repository.root.clone(),
+            supported_methods: vec![],
+            worktrees: vec![
+                ProjectWorktreeEntry {
+                    checkout_path: primary.to_string_lossy().into_owned(),
+                    branch: repository.branch.clone(),
+                    open_workspace_id: Some("primary-space".into()),
+                    is_primary: true, is_linked_worktree: false, dirty: Some(false),
+                },
+                ProjectWorktreeEntry {
+                    checkout_path: linked.to_string_lossy().into_owned(),
+                    branch: Some("linked-fixture".into()),
+                    open_workspace_id: Some("linked-space".into()),
+                    is_primary: false, is_linked_worktree: true, dirty: Some(false),
+                },
+            ],
+        };
+        *adapter.inventory.lock() = Some(inventory.clone());
+        let primary_head = RepositoryCatalog::new(service.configuration()).resolve_base(&repository, "HEAD").await.unwrap();
+        for (space, cwd) in [("primary-space", &primary), ("linked-space", &linked)] {
+            let source = service.space_repository("session", space, cwd.to_str().unwrap()).await.unwrap();
+            assert_eq!(source.repository.repository_id, repository.repository_id);
+            let checkout = RepositoryCatalog::new(service.configuration()).discover_checkout(cwd).await.unwrap();
+            let expected_head = RepositoryCatalog::new(service.configuration()).resolve_checkout_head(&checkout).await.unwrap();
+            assert_eq!(source.source_head, expected_head);
+            if space == "linked-space" {
+                assert_ne!(source.source_head, primary_head, "source linked checkout has its own HEAD");
+            }
+            for (suffix, explicit, expected) in [
+                ("default", None, source.source_head.as_str()),
+                ("explicit", Some(primary_head.clone()), primary_head.as_str()),
+            ] {
+                let request = source.worktree_request(
+                    Some(format!("{space}-{suffix}")), explicit, "source-base-test".into(),
+                );
+                let plan = service.plan("session", &request).await.unwrap();
+                assert_eq!(plan.base.as_deref(), Some(expected),
+                    "explicit base wins; otherwise use actual source HEAD");
+            }
+        }
+        assert_eq!(service.repository_open_spaces("session", &repository.repository_id).await.unwrap(),
+            vec!["linked-space", "primary-space"]);
+        assert_eq!(service.space_repository("session", "missing", primary.to_str().unwrap()).await
+            .unwrap_err().code, "space_repository_mismatch");
+        // A valid repository key alone does not prove this Space's checkout.
+        assert_eq!(service.space_repository("session", "primary-space", linked.to_str().unwrap()).await
+            .unwrap_err().code, "space_repository_mismatch");
+        let mut duplicate = inventory.clone();
+        duplicate.worktrees.push(duplicate.worktrees[0].clone());
+        *adapter.inventory.lock() = Some(duplicate);
+        assert_eq!(service.space_repository("session", "primary-space", primary.to_str().unwrap()).await
+            .unwrap_err().code, "space_repository_mismatch");
+        let mut contradictory = inventory.clone();
+        contradictory.repository_key = "unrelated-common-directory".into();
+        *adapter.inventory.lock() = Some(contradictory);
+        assert_eq!(service.space_repository("session", "primary-space", primary.to_str().unwrap()).await
+            .unwrap_err().code, "repository_conflict");
+        assert_eq!(service.repository_open_spaces("session", &repository.repository_id).await
+            .unwrap_err().code, "repository_conflict");
+        *adapter.inventory.lock() = Some(inventory);
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        git(&outside, &["init"]);
+        assert_eq!(service.space_repository("session", "outside-space", outside.to_str().unwrap()).await
+            .unwrap_err().code, "project_repository_not_configured");
+        assert!(adapter.worktree_requests.lock().unwrap().is_empty(), "proof must not create a checkout");
+        assert!(adapter.terminal_requests.lock().unwrap().is_empty(), "proof must not create a terminal");
+        assert_eq!(adapter.inventory_calls.load(Ordering::SeqCst), 16, "each proof and each Create plan uses fresh inventory");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     struct SetupProvider {

@@ -72,7 +72,7 @@ const snapshot: OrchestrationSnapshot = {
     dispatch: { step: "launched", launch_attempt: 1, error: { code: "launch_unknown", message: "Review" }, updated_at: at,
       launch_tag: "launch", endpoint_identity: "endpoint", recovery: "retry_environment", agent_started: true },
     target, setup: { operation_id: "operation", generation: 1, workspace_id: "space", checkout_path: "/repo", repository_id: "repo",
-      branch: "task", base: "main", ownership: "owned_worktree", effects: ["Create"], warnings: ["Warning"] },
+      branch: "task", base: "main", ownership: "owned_worktree", effects: ["Create"], warnings: ["Warning"], project_workspace_id: null },
     prepare_plan: { plan_revision: hash, text: "Prepare", created_at: at }, init_receipt: report,
     work_plan: { plan_revision: hash, text: "Work", created_at: at },
     grants: [{ grant_id: "grant", scope: "prepare", plan_revision: hash, origin: "browser",
@@ -155,6 +155,23 @@ describe("orchestration protocol boundary", () => {
     expect(parseOrchestrationSnapshot({ ...snapshot, runtime: { status: "unavailable", error: { code: "offline", message: "Offline" } } }).runtime.status).toBe("unavailable");
     expect(() => parseOrchestrationSnapshot({ ...snapshot, runtime: { status: "unavailable", error: { code: "offline", message: 4 } } })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationSnapshot({ ...snapshot, messages: Array(1) })).toThrow(CockpitClientError);
+  });
+
+  it("decodes explicit project-bound worktree targets and rejects malformed or unknown targets", () => {
+    const worktree = { target: "space_worktree", workspace_id: "project-space", branch: "feature", base_ref: "main" };
+    const dto = replaceField(snapshot, ["runs", 0, "target"], worktree);
+    const bound = replaceField(dto, ["runs", 0, "setup", "project_workspace_id"], "project-space");
+    expect(parseOrchestrationSnapshot(bound).runs[0]!.target).toEqual(worktree);
+    expect(parseOrchestrationSnapshot(bound).runs[0]!.setup!.project_workspace_id).toBe("project-space");
+    expect(parseOrchestrationAction({
+      action: "run_propose", task_id: "task", parent_run_id: null, label: null,
+      target: { ...worktree, branch: null, base_ref: null }, prepare_brief: "Prepare", supersedes_run_id: null,
+    })).toMatchObject({ target: { target: "space_worktree", workspace_id: "project-space" } });
+    for (const invalid of [
+      { ...worktree, target: "unknown" }, { ...worktree, workspace_id: "" },
+      { ...worktree, branch: 1 }, { ...worktree, base_ref: {} }, { ...worktree, extra: true },
+      { target: "space_worktree", workspace_id: "project-space", branch: null },
+    ]) expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "target"], invalid))).toThrow(CockpitClientError);
   });
 
   it.each(retirementStates)("decodes strict retirement state $state", state => {

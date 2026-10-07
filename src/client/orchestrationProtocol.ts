@@ -75,6 +75,7 @@ const setupRequest: Validator = value => {
 const target: Validator = value => record(value) && (
   (value.target === "setup" && shape({ target: oneOf("setup"), request: setupRequest }, true)(value))
   || (value.target === "existing_space" && shape({ target: oneOf("existing_space"), workspace_id: id }, true)(value))
+  || (value.target === "space_worktree" && shape({ target: oneOf("space_worktree"), workspace_id: id, branch: nullable(path), base_ref: nullable(path) }, true)(value))
 );
 const task = shape({ task_id: id, title: externalText, body: externalText, checked: bool, line: u32, task_revision: hash, diagnostic: nullable(id) });
 const board = shape({
@@ -86,6 +87,7 @@ const setup = shape({
   operation_id: nullable(id), generation: nullable(u32), workspace_id: nullable(id), checkout_path: path,
   repository_id: nullable(id), branch: nullable(path), base: nullable(path),
   ownership: nullable(oneOf("owned_worktree", "borrowed_directory")), effects: list(text), warnings: list(text),
+  project_workspace_id: nullable(id),
 });
 const location = shape({
   endpoint_identity: id, session_id: session, workspace_id: id, tab_id: id, pane_id: id, launch_tag: id,

@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, time::{Duration, Instant}};
 use parking_lot::Mutex;
 
 use cockpit_protocol::orchestration::{
-    NativeStopEvidence, RetainReason, RetirementIdentity, RetirementPhase,
+    NativeProcessIdentity, NativeStopEvidence, RetainReason, RetirementIdentity, RetirementPhase,
     RetirementState, Run, RunRetirement,
 };
 
@@ -90,7 +90,7 @@ pub(super) async fn retire_run(
                 (Some(expected), Some(actual)) if expected != actual) {
                 return effect.retain(RetainReason::IdentityChanged, false);
             }
-            let running = match exact_running(identity, boot_id.as_deref()) {
+            let running = match exact_running(&identity.process, boot_id.as_deref()) {
                 Ok(running) => running,
                 Err(_) => return effect.retain(RetainReason::NativeProcessUnverifiable, false),
             };
@@ -108,7 +108,7 @@ pub(super) async fn retire_run(
             } else { None };
             // The pane RPC may have taken time; refresh local incarnation
             // proof before publishing an offer from that observation.
-            let running = match exact_running(identity, boot_id.as_deref()) {
+            let running = match exact_running(&identity.process, boot_id.as_deref()) {
                 Ok(running) => running,
                 Err(_) => return effect.retain(RetainReason::NativeProcessUnverifiable, false),
             };
@@ -135,7 +135,7 @@ pub(super) async fn retire_run(
         }
         RetirementState::NativeStopRequested { at } => {
             let boot_id = process_identity::kernel_boot_id();
-            match exact_running(identity, boot_id.as_deref()) {
+            match exact_running(&identity.process, boot_id.as_deref()) {
                 Ok(false) => {
                     // Helpful evidence only. No Herdr result substitutes for
                     // process-incarnation absence, and unavailability must not
@@ -246,15 +246,15 @@ impl Effect<'_> {
 fn retained(reason: RetainReason, native_stopped: bool) -> RetirementState {
     RetirementState::Retained { at: now(), reason, native_stopped }
 }
-fn exact_running(identity: &RetirementIdentity, boot_id: Option<&str>) -> std::io::Result<bool> {
-    if identity.process.kernel_boot_id.as_ref().is_some_and(|expected| {
+pub(super) fn exact_running(process: &NativeProcessIdentity, boot_id: Option<&str>) -> std::io::Result<bool> {
+    if process.kernel_boot_id.as_ref().is_some_and(|expected| {
         boot_id != Some(expected.as_str())
     }) {
         return Err(std::io::Error::other("Kernel boot identity unavailable or changed"));
     }
-    let pid = i32::try_from(identity.process.pid)
+    let pid = i32::try_from(process.pid)
         .map_err(|_| std::io::Error::other("Native PID is outside the supported range"))?;
-    process_identity::incarnation_running(pid, identity.process.start_ticks)
+    process_identity::incarnation_running(pid, process.start_ticks)
 }
 fn expired(since: &str, seconds: i64) -> bool {
     // Invalid durable time is not an unlimited permission to keep waiting.

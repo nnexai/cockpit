@@ -278,6 +278,7 @@ fn observe(
         .map(|pane| (pane.pane_id.as_str(), pane))
         .collect();
     let mut matched = HashSet::new();
+    let mut kernel_boot_id = None;
     let observations = runs.iter().map(|run| {
         let mut observation = RunObservation {
             run_id: run.run_id.clone(), presence: Presence::Unobserved,
@@ -323,11 +324,7 @@ fn observe(
         };
         matched.insert(pane.pane_id.as_str());
         observation.presence = Presence::Present;
-        observation.actual_omp = run.stage != RunStage::Closed
-            && run.bound_omp_session.as_deref().is_some_and(|s| !s.is_empty())
-            && pane.agent_kind.as_deref() == Some("omp") && !pane.launch_pending
-            && (run.kind == RunKind::Adopted
-                || (super::launch_receipt_coherent(run) && pane.agent_name.as_deref() == Some(location.launch_tag.as_str())));
+        observation.actual_omp = actual_omp(run, pane, &mut kernel_boot_id);
         observation.workspace_id = Some(pane.workspace_id.clone());
         observation.workspace_label = Some(pane.workspace_label.clone());
         observation.tab_id = Some(pane.tab_id.clone());
@@ -367,6 +364,35 @@ fn observe(
         },
         unmanaged,
     )
+}
+
+/// Shared fresh occupant proof for projection and unresolved-launch escalation.
+/// Endpoint and available boot/native receipt fences are checked by the caller.
+pub(super) fn actual_omp(
+    run: &Run,
+    pane: &super::herdr::RuntimePane,
+    kernel_boot_id: &mut Option<Option<String>>,
+) -> bool {
+    let Some(location) = run.location.as_ref() else { return false };
+    run.stage != RunStage::Closed
+        && run.bound_omp_session.as_deref().is_some_and(|s| !s.is_empty())
+        && pane.agent_kind.as_deref() == Some("omp") && !pane.launch_pending
+        && (run.kind == RunKind::Adopted || super::launch_receipt_coherent(run))
+        && pane.pane_id == location.pane_id
+        && pane.workspace_id == location.workspace_id && pane.tab_id == location.tab_id
+        && location.terminal_id.is_some() && pane.terminal_id == location.terminal_id
+        && (pane.native_session_id.as_deref() == run.bound_omp_session.as_deref()
+            || (pane.native_session_id.is_none()
+                && run.bound_omp_process.as_ref().is_some_and(|process| {
+                    process.kernel_boot_id.is_some()
+                        && super::retire::exact_running(process, kernel_boot_id
+                            .get_or_insert_with(crate::process_identity::kernel_boot_id)
+                            .as_deref()).unwrap_or(false)
+                        && i32::try_from(process.pid).ok().is_some_and(|pid| {
+                            crate::process_identity::incarnation_foreground(pid,
+                                process.start_ticks).unwrap_or(false)
+                        })
+                })))
 }
 
 fn identity_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
@@ -1055,37 +1081,89 @@ mod tests {
     }
 
     #[test]
-    fn actual_omp_requires_process_and_binding_not_idle_or_launch_ack() {
+    fn actual_omp_requires_current_native_identity_not_a_display_name() {
         let mut run = worker(RunStage::Working);
         run.bound_omp_session = Some("native-main".into());
-        for (kind, pending, native, expected) in [
-            (Some("omp"), false, None, true),
-            (Some("omp"), false, Some("native-main"), true),
-            (Some("omp"), true, Some("native-main"), false),
-            (None, false, Some("native-main"), false),
-            (Some("claude"), false, Some("native-main"), false),
-            (Some("omp"), false, Some("other-main"), false),
-        ] {
+        let location = run.location.as_mut().unwrap();
+        location.workspace_id = "live-space".into();
+        location.tab_id = "live-tab".into();
+        location.terminal_id = Some("terminal".into());
+        for name in [None, Some("renamed"), Some("launch")] {
+            for (kind, pending, native, expected) in [
+                (Some("omp"), false, None, false),
+                (Some("omp"), false, Some("native-main"), true),
+                (Some("omp"), true, Some("native-main"), false),
+                (None, false, Some("native-main"), false),
+                (Some("claude"), false, Some("native-main"), false),
+                (Some("omp"), false, Some("other-main"), false),
+            ] {
+                let mut live = runtime("working");
+                live.panes[0].agent_name = name.map(str::to_owned);
+                live.panes[0].agent_kind = kind.map(str::to_owned);
+                live.panes[0].launch_pending = pending;
+                live.panes[0].terminal_id = Some("terminal".into());
+                live.panes[0].native_session_id = native.map(str::to_owned);
+                let observed = project(&state(run.clone()), Ok(live));
+                let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
+                    panic!("fresh observation")
+                };
+                assert_eq!(runs[1].actual_omp, expected);
+            }
+        }
+        for mismatch in 0..6 {
+            let mut run = run.clone();
             let mut live = runtime("working");
-            live.panes[0].agent_name = Some("launch".into());
-            live.panes[0].agent_kind = kind.map(str::to_owned);
-            live.panes[0].launch_pending = pending;
-            live.panes[0].interactive_ready = false;
-            live.panes[0].native_session_id = native.map(str::to_owned);
+            live.panes[0].terminal_id = Some("terminal".into());
+            live.panes[0].native_session_id = Some("native-main".into());
+            match mismatch {
+                0 => run.bound_omp_session = None,
+                1 => live.panes[0].terminal_id = Some("replacement-terminal".into()),
+                2 => live.panes[0].pane_id = "replacement-pane".into(),
+                3 => live.panes[0].workspace_id = "replacement-space".into(),
+                4 => live.panes[0].tab_id = "replacement-tab".into(),
+                _ => run.stage = RunStage::Closed,
+            }
+            let observed = project(&state(run), Ok(live));
+            let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
+                panic!("fresh observation")
+            };
+            assert!(!runs[1].actual_omp, "mismatch {mismatch}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn actual_omp_without_native_session_rejects_stale_bound_process_identity() {
+        use cockpit_protocol::orchestration::NativeProcessIdentity;
+        let mut run = worker(RunStage::Active);
+        run.bound_omp_session = Some("native-main".into());
+        let location = run.location.as_mut().unwrap();
+        location.workspace_id = "live-space".into();
+        location.tab_id = "live-tab".into();
+        location.terminal_id = Some("terminal".into());
+        let pid = std::process::id();
+        let current = NativeProcessIdentity {
+            pid, start_ticks: crate::process_identity::start_identity(pid as i32).unwrap(),
+            kernel_boot_id: crate::process_identity::kernel_boot_id(),
+        };
+        for mismatch in 0..4 {
+            let mut identity = current.clone();
+            match mismatch {
+                0 => identity.start_ticks += 1,
+                1 => identity.kernel_boot_id = Some("replacement-boot".into()),
+                2 => identity.kernel_boot_id = None,
+                _ => identity.pid = u32::MAX,
+            }
+            run.bound_omp_process = Some(identity);
+            let mut live = runtime("working");
+            live.panes[0].agent_name = None;
+            live.panes[0].terminal_id = Some("terminal".into());
             let observed = project(&state(run.clone()), Ok(live));
             let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
                 panic!("fresh observation")
             };
-            assert_eq!(runs[1].actual_omp, expected);
+            assert!(!runs[1].actual_omp, "mismatch {mismatch}");
         }
-        run.bound_omp_session = None;
-        let mut live = runtime("working");
-        live.panes[0].agent_name = Some("launch".into());
-        let observed = project(&state(run), Ok(live));
-        let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
-            panic!("fresh observation")
-        };
-        assert!(!runs[1].actual_omp);
     }
 
     #[test]

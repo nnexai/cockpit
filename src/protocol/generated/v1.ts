@@ -958,9 +958,13 @@ export type CloseReason = "accepted" | "cancelled" | "superseded" | "failed";
 
 export type DispatchStep = "planning" | "plan_failed" | "setup_pending" | "setup_running" | "setup_unknown" | "launch_intent" | "launch_pending" | "launch_unknown" | "launched" | "needs_review";
 
-export type DispatchTarget = { "target": "setup", request: WorkspaceSetupRequest, } | { "target": "existing_space", workspace_id: string, };
+export type DispatchTarget = { "target": "setup", request: WorkspaceSetupRequest, } | { "target": "existing_space", workspace_id: string, } | { "target": "space_worktree", workspace_id: string, branch: string | null, base_ref: string | null, };
 
-export type SetupSummary = { operation_id: string | null, generation: number | null, workspace_id: string | null, checkout_path: string, repository_id: string | null, branch: string | null, base: string | null, ownership: WorkspaceCheckoutOwnership | null, effects: Array<string>, warnings: Array<string>, };
+export type SetupSummary = { operation_id: string | null, generation: number | null, workspace_id: string | null, checkout_path: string, repository_id: string | null, branch: string | null, base: string | null, ownership: WorkspaceCheckoutOwnership | null, effects: Array<string>, warnings: Array<string>,
+/**
+ * Source project Space for SpaceWorktree; absent for other targets.
+ */
+project_workspace_id: string | null, };
 
 export type PlanRecord = { plan_revision: string, text: string, created_at: string, };
 

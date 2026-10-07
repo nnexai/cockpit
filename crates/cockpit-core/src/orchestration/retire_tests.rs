@@ -140,6 +140,12 @@ impl OrchestrationHerdr for FakeHerdr {
         if s.info_error { Err(InspectionError::new("offline", "No process observation")) }
         else { Ok(s.infos.pop_front().unwrap_or_else(|| s.info.clone())) }
     }
+    async fn expire_pending_agent(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> {
+        panic!("retirement cannot reconcile pending launch metadata")
+    }
+    async fn close_owned_launch_tab(&self, _: &str, _: &RunLocation) -> Result<(), InspectionError> {
+        panic!("retirement cannot close an entire launch tab")
+    }
     async fn close_pane(&self, session: &str, endpoint: &str, pane: &str) -> Result<(), InspectionError> {
         assert_eq!((session, endpoint, pane), ("fixture", "endpoint", "pane"));
         let stored = self.service.store.lock().unwrap().read().unwrap();

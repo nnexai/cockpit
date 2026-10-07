@@ -132,6 +132,7 @@ impl Fixture {
                         ownership: None,
                         effects: vec!["Open isolated existing Space".into()],
                         warnings: Vec::new(),
+                        project_workspace_id: None,
                     },
                     prepare_plan: plan.clone(),
                 },
@@ -1543,9 +1544,19 @@ fn commit_review(
     let actual = serde_json::to_value(after).unwrap();
     expected["revision"] = actual["revision"].clone();
     expected["runs"][index] = actual["runs"][index].clone();
+    let before_messages = expected["messages"].as_array().unwrap();
+    let after_messages = actual["messages"].as_array().unwrap();
+    assert_eq!(&after_messages[..before_messages.len()], before_messages);
+    for message in after_messages.iter().skip(before_messages.len()) {
+        let body: serde_json::Value = serde_json::from_str(message["text"].as_str().unwrap()).unwrap();
+        assert!(matches!(body["event"].as_str(), Some("dispatch_failure" | "dispatch_recovered")));
+        assert_eq!(body["run_id"], reviewed.run_id);
+        assert_eq!(message["to_run_id"], reviewed.root_id);
+    }
+    expected["messages"] = actual["messages"].clone();
     assert_eq!(
         actual, expected,
-        "Review must not change other runs or inboxes"
+        "Review must preserve other runs and existing inbox records"
     );
 }
 
@@ -1638,10 +1649,11 @@ fn launched_reconcile_preserves_lifecycle_receipts_grants_setup_identity_and_inb
             let error = (outcome != DispatchStep::Launched).then(review_error);
             commit_review(&fixture, &reviewed, outcome, error);
             assert_review_fields_only(&before, &fixture.run(&run_id));
-            assert_eq!(
-                serde_json::to_value(fixture.state().messages).unwrap(),
-                messages
-            );
+            let retained = fixture.state().messages.into_iter().filter(|message| {
+                !message.message_id.starts_with("dispatch-failure:")
+                    && !message.message_id.starts_with("dispatch-recovered:")
+            }).collect::<Vec<_>>();
+            assert_eq!(serde_json::to_value(retained).unwrap(), messages);
             fixture.assert_stale_review(&reviewed);
             if outcome != DispatchStep::Launched {
                 let uncertain = fixture.run(&run_id);
@@ -2859,7 +2871,7 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
 
 #[test]
 fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_root() {
-    for operation in 0..6 {
+    for operation in 0..8 {
         let fixture = Fixture::new();
         let root = fixture.root();
         let supervisor = fixture.launch_and_bind(&root);
@@ -2919,6 +2931,13 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
                 kind: MessageKind::Answer,
                 text: "Answer".into(),
             },
+            6 => OrchestrationAction::ReconcileRun {
+                run_id: run_id.clone(),
+                recovery: None,
+            },
+            7 => OrchestrationAction::RetryLaunch {
+                run_id: run_id.clone(),
+            },
             _ => unreachable!(),
         };
         let other_root = fixture.root();
@@ -2960,7 +2979,13 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
         denied.push(branch_subagent);
         for actor in denied {
             let bytes = fixture.state_bytes();
-            let failure = fixture.apply(&actor, action.clone()).unwrap_err();
+            let failure = if operation == 7 {
+                fixture.service.mutate_reviewed(&actor, OrchestrationMutationRequest {
+                    session_id: SESSION.into(), expected_revision: None, action: action.clone(),
+                }, &fixture.run(&run_id))
+            } else {
+                fixture.apply(&actor, action.clone())
+            }.unwrap_err();
             assert!(
                 matches!(
                     failure.code.as_str(),
@@ -2990,7 +3015,14 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
                 }
             });
             let bytes = fixture.state_bytes();
-            assert!(fixture.apply(&supervisor, action.clone()).is_err());
+            let denied = if operation == 7 {
+                fixture.service.mutate_reviewed(&supervisor, OrchestrationMutationRequest {
+                    session_id: SESSION.into(), expected_revision: None, action: action.clone(),
+                }, &fixture.run(&run_id))
+            } else {
+                fixture.apply(&supervisor, action.clone())
+            };
+            assert!(denied.is_err());
             assert_eq!(
                 fixture.state_bytes(),
                 bytes,
@@ -3001,7 +3033,7 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
 }
 
 #[test]
-fn management_targets_are_strict_open_worker_descendants_and_recovery_stays_operator_only() {
+fn supervisor_recovers_only_strict_descendants_with_review() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let supervisor = fixture.launch_and_bind(&root);
@@ -3022,27 +3054,70 @@ fn management_targets_are_strict_open_worker_descendants_and_recovery_stays_oper
         );
         assert_eq!(fixture.state_bytes(), bytes);
     }
-    for action in [
-        OrchestrationAction::ReconcileRun {
-            run_id: nested.clone(),
-            recovery: None,
-        },
-        OrchestrationAction::RetryLaunch {
-            run_id: nested.clone(),
-        },
-        OrchestrationAction::CancelRun {
-            run_id: branch.clone(),
-        },
-    ] {
-        let bytes = fixture.state_bytes();
-        let actor = if matches!(&action, OrchestrationAction::CancelRun { .. }) {
-            &branch_actor
-        } else {
-            &supervisor
-        };
-        assert_code(fixture.apply(actor, action), "actor_forbidden");
-        assert_eq!(fixture.state_bytes(), bytes);
+    fixture.apply(&supervisor, OrchestrationAction::ReconcileRun {
+        run_id: nested.clone(), recovery: None,
+    }).unwrap();
+    let reconciled = fixture.run(&nested);
+    let annotation = reconciled.annotations.last().unwrap();
+    assert!(matches!(&annotation.by, ActorRef::Run { run_id } if run_id == &root));
+    assert!(annotation.text.contains("Supervisor"));
+    assert!(annotation.text.contains(&reconciled.root_id));
+    fixture.service.record_launch_review(&reconciled, DispatchStep::NeedsReview, Some(review_error())).unwrap();
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&supervisor, OrchestrationAction::RetryLaunch {
+        run_id: nested.clone(),
+    }), "retry_preflight_required");
+    assert_eq!(fixture.state_bytes(), bytes);
+    let reviewed = fixture.run(&nested);
+    fixture.seed_run(&nested, |run| run.bound_omp_process.as_mut().unwrap().start_ticks += 1);
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.service.mutate_reviewed(&supervisor, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None,
+        action: OrchestrationAction::RetryLaunch { run_id: nested.clone() },
+    }, &reviewed), "attempt_stale");
+    assert_eq!(fixture.state_bytes(), bytes);
+    let reviewed = fixture.run(&nested);
+    let preserved = serde_json::to_value(&reviewed).unwrap();
+    for target in [&root, &other_root, &outsider, &branch] {
+        let actor = if target == &branch { &branch_actor } else { &supervisor };
+        for operation in 0..2 {
+            let bytes = fixture.state_bytes();
+            let result = if operation == 0 {
+                fixture.apply(actor, OrchestrationAction::ReconcileRun { run_id: target.clone(), recovery: None })
+            } else {
+                fixture.service.mutate_reviewed(actor, OrchestrationMutationRequest {
+                    session_id: SESSION.into(), expected_revision: None,
+                    action: OrchestrationAction::RetryLaunch { run_id: target.clone() },
+                }, &fixture.run(target))
+            };
+            assert_code(result, "actor_forbidden");
+            assert_eq!(fixture.state_bytes(), bytes);
+        }
     }
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&supervisor, OrchestrationAction::ReconcileRun {
+        run_id: nested.clone(), recovery: Some(cockpit_protocol::projects::WorkspaceRecoveryAction::RetryEnvironment),
+    }), "actor_forbidden");
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture.service.mutate_reviewed(&supervisor, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: Some(fixture.state().revision),
+        action: OrchestrationAction::RetryLaunch { run_id: nested.clone() },
+    }, &reviewed).unwrap();
+    let retried = fixture.run(&nested);
+    assert_eq!(retried.dispatch.as_ref().unwrap().launch_attempt, reviewed.dispatch.as_ref().unwrap().launch_attempt + 1);
+    assert_eq!(retried.stage, RunStage::Preparing);
+    assert!(retried.location.is_none());
+    let current = serde_json::to_value(&retried).unwrap();
+    for field in ["task_id", "root_id", "setup", "grants", "work_plan", "last_report", "result"] {
+        assert_eq!(current[field], preserved[field]);
+    }
+    assert!(retried.annotations.last().unwrap().text.contains("Supervisor"));
+    fixture.seed_run(&nested, |run| run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending);
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&supervisor, OrchestrationAction::ReconcileRun {
+        run_id: nested.clone(), recovery: None,
+    }), "invalid_stage");
+    assert_eq!(fixture.state_bytes(), bytes);
     fixture
         .apply(
             &supervisor,
@@ -3932,8 +4007,8 @@ fn reviewed_retry_fences_post_read_cancel_move_binding_stage_and_incarnation() {
         }
         let bytes = fixture.state_bytes();
         assert_code(
-            fixture.service.mutate_operator_reviewed(
-                OperatorOrigin::Browser,
+            fixture.service.mutate_reviewed(
+                &Actor::Operator(OperatorOrigin::Browser),
                 OrchestrationMutationRequest {
                     session_id: SESSION.into(),
                     expected_revision: Some(fixture.state().revision),
@@ -4046,5 +4121,288 @@ fn acceptance_intent_recovery_cannot_accept_cancelled_restarted_failed_or_other_
         assert_eq!(state.task_intents.len(), 1);
         assert_eq!(state.task_intents[0].intent_id, intent_id);
         assert_eq!(state.task_intents[0].state, IntentState::Conflict);
+    }
+}
+
+fn dispatch_events(fixture: &Fixture, root: &str, event: &str) -> Vec<Message> {
+    fixture.state().messages.into_iter().filter(|message| {
+        message.to_run_id == root && matches!(message.from, ActorRef::Dispatcher)
+            && serde_json::from_str::<serde_json::Value>(&message.text)
+                .is_ok_and(|body| body["event"] == event)
+    }).collect()
+}
+
+#[test]
+fn dispatch_failure_wakes_root_once_with_typed_next_steps() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let task = fixture.create_task(&root, "Recover planning");
+    let worker = fixture.propose(&root, &task, None);
+    let failure = || DispatchUpdate::PlanFailed { error: ErrorResponse {
+        code: "endpoint_unavailable".into(), message: "Herdr endpoint is unavailable".into(),
+    }};
+    fixture.service.record_dispatch(&worker, failure()).unwrap();
+    fixture.service.record_dispatch(&worker, failure()).unwrap();
+    let events = dispatch_events(&fixture, &root, "dispatch_failure");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, MessageKind::Observation);
+    assert_eq!(events[0].stage, DeliveryStage::Stored);
+    let run = fixture.run(&worker);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&events[0].text).unwrap(), serde_json::json!({
+        "event": "dispatch_failure", "run_id": worker, "task_id": task.task_id,
+        "run_attempt": run.attempt, "launch_attempt": run.dispatch.as_ref().unwrap().launch_attempt,
+        "stage": run.stage, "step": "plan_failed", "agent_started": false,
+        "error": {"code": "endpoint_unavailable", "message": "Herdr endpoint is unavailable"},
+        "automatic": "none", "effect": "none", "next": ["show", "reconcile"], "operator_reason": null,
+    }));
+    fixture.apply(&supervisor, OrchestrationAction::InboxWoken {
+        omp_session_id: caller_mut(&mut supervisor.clone()).omp_session_id.clone().unwrap(),
+        through_seq: events[0].seq,
+    }).unwrap();
+    fixture.service.record_dispatch(&worker, failure()).unwrap();
+    assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 1);
+    fixture.apply(&supervisor, OrchestrationAction::InboxPull { after_seq: 0, limit: 100 }).unwrap();
+    fixture.service.record_dispatch(&worker, failure()).unwrap();
+    assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 2);
+    fixture.service.record_dispatch(&root, failure()).unwrap();
+    assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 2);
+    let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+    let reopened_state = {
+        let locked = reopened.store.lock().unwrap();
+        locked.read().unwrap()
+    };
+    assert_eq!(serde_json::to_value(reopened_state).unwrap(), serde_json::to_value(fixture.state()).unwrap());
+}
+
+#[test]
+fn launch_review_failure_classifies_effect_and_operator_cases() {
+    for case in 0..7 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let task = fixture.create_task(&root, "Classified recovery");
+        let worker = fixture.propose(&root, &task, None);
+        fixture.prepare(&worker);
+        if matches!(case, 0 | 1 | 5 | 6) {
+            fixture.launch_and_bind(&worker);
+        }
+        fixture.seed_run(&worker, |run| {
+            let dispatch = run.dispatch.as_mut().unwrap();
+            dispatch.step = DispatchStep::LaunchIntent;
+            if matches!(case, 2 | 3) {
+                let setup = run.setup.as_mut().unwrap();
+                setup.operation_id = Some("uncertain-operation".into());
+                setup.workspace_id = None;
+            }
+            if case == 1 { run.bound_omp_process = None; }
+            if case == 5 { run.stage = RunStage::Reported; }
+            if case == 6 { run.stage = RunStage::Closed; }
+        });
+        if case == 6 {
+            let bytes = fixture.state_bytes();
+            fixture.service.record_launch_review(&fixture.run(&worker), DispatchStep::NeedsReview, Some(review_error())).unwrap();
+            assert_eq!(fixture.state_bytes(), bytes);
+        } else if matches!(case, 2 | 3) {
+            fixture.service.record_dispatch(&worker, DispatchUpdate::Step {
+                step: DispatchStep::SetupUnknown,
+                error: Some(ErrorResponse { code: if case == 2 { "workspace_conflict" } else { "outcome_unknown" }.into(),
+                    message: "Checkout effect is uncertain".into() }),
+            }).unwrap();
+        } else {
+            fixture.service.record_launch_review(&fixture.run(&worker), DispatchStep::NeedsReview,
+                Some(ErrorResponse { code: "launch_identity_conflict".into(), message: "é".repeat(1000) })).unwrap();
+        }
+        let events = dispatch_events(&fixture, &root, "dispatch_failure");
+        if case >= 5 {
+            assert!(events.is_empty());
+            continue;
+        }
+        assert_eq!(events.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(&events[0].text).unwrap();
+        let (effect, next) = match case {
+            0 => ("unknown", serde_json::json!(["show", "reconcile", "retry_launch"])),
+            1 => ("unknown", serde_json::json!(["show", "reconcile", "operator"])),
+            2 => ("unknown", serde_json::json!(["show", "operator"])),
+            3 => ("unknown", serde_json::json!(["show", "reconcile_accept_existing_worktree", "operator"])),
+            4 => ("none", serde_json::json!(["show", "retry_launch"])),
+            _ => unreachable!(),
+        };
+        assert_eq!(body["effect"], effect);
+        assert_eq!(body["next"], next);
+        assert_eq!(body["operator_reason"].is_string(), matches!(case, 1..=3));
+        assert!(body["error"]["message"].as_str().unwrap().len() <= 1024);
+    }
+}
+
+#[test]
+fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
+    for exhausted in [false, true] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let task = fixture.create_task(&root, "Automatic proof before escalation");
+        let worker = fixture.propose(&root, &task, None);
+        fixture.prepare(&worker);
+        fixture.service.record_dispatch(&worker, DispatchUpdate::LaunchIntent {
+            launch_tag: format!("launch-{worker}-1"), launch_attempt: 1, endpoint_identity: "endpoint-one".into(),
+        }).unwrap();
+        fixture.service.record_launch_review(&fixture.run(&worker), DispatchStep::LaunchUnknown, Some(ErrorResponse {
+            code: "omp_start_unobserved".into(), message: "OMP start was not observed before its deadline".into(),
+        })).unwrap();
+        assert!(dispatch_events(&fixture, &root, "dispatch_failure").is_empty());
+        let runtime = herdr::RuntimeView {
+            endpoint_identity: "endpoint-one".into(), boot_id: Some("boot-one".into()),
+            workspaces: Vec::new(), panes: Vec::new(),
+        };
+        let bytes = fixture.state_bytes();
+        let receiver = fixture.service.subscribe();
+        fixture.service.record_observation(&runtime, SESSION).unwrap();
+        assert_eq!(fixture.state_bytes(), bytes);
+        assert!(!receiver.has_changed().unwrap());
+        if exhausted {
+            fixture.seed_run(&worker, |run| {
+                run.dispatch.as_mut().unwrap().updated_at =
+                    (time::OffsetDateTime::now_utc() - time::Duration::milliseconds(DEFAULT_START_TIMEOUT_MS as i64 + 1000))
+                        .format(&time::format_description::well_known::Rfc3339).unwrap();
+            });
+            fixture.service.record_observation(&runtime, SESSION).unwrap();
+            let events = dispatch_events(&fixture, &root, "dispatch_failure");
+            assert_eq!(events.len(), 1);
+            assert!(events[0].message_id.ends_with(":launch_unresolved"));
+            let body: serde_json::Value = serde_json::from_str(&events[0].text).unwrap();
+            assert_eq!(body["automatic"], "exhausted");
+            assert_eq!(body["effect"], "unknown");
+            assert_eq!(body["next"], serde_json::json!(["show", "retry_launch"]));
+            let bytes = fixture.state_bytes();
+            fixture.service.record_observation(&runtime, SESSION).unwrap();
+            assert_eq!(fixture.state_bytes(), bytes);
+            fixture.seed_run(&worker, |run| {
+                run.dispatch.as_mut().unwrap().error = Some(ErrorResponse { code: "launch_outcome_unknown".into(), message: "Different evidence, same launch".into() });
+            });
+            let bytes = fixture.state_bytes();
+            fixture.service.record_observation(&runtime, SESSION).unwrap();
+            assert_eq!(fixture.state_bytes(), bytes);
+            assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 1);
+        }
+        // A late actual-main bind and proof resolves this same launch incarnation.
+        let actor = fixture.launch_tab(&worker);
+        let Actor::Agent(caller) = &actor else { unreachable!() };
+        fixture.apply(&actor, OrchestrationAction::RunBindSession {
+            omp_session_id: caller.omp_session_id.clone().unwrap(),
+        }).unwrap();
+        let reviewed = fixture.run(&worker);
+        fixture.service.record_launch_verified(&reviewed).unwrap();
+        let notices = dispatch_events(&fixture, &root, "dispatch_recovered");
+        assert_eq!(notices.len(), usize::from(exhausted));
+        let bytes = fixture.state_bytes();
+        fixture.service.record_launch_verified(&fixture.run(&worker)).unwrap();
+        assert_eq!(fixture.state_bytes(), bytes);
+        assert_eq!(dispatch_events(&fixture, &root, "dispatch_recovered").len(), usize::from(exhausted));
+        if exhausted {
+            let queued = fixture.queue_review(&worker);
+            fixture.service.record_launch_review(&queued, DispatchStep::Launched, None).unwrap();
+            assert_eq!(dispatch_events(&fixture, &root, "dispatch_recovered").len(), 1);
+        }
+    }
+}
+
+#[test]
+fn supervisor_recovery_preserves_machine_cas_and_automatic_launch_ownership() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let (_, worker, _) = fixture.working(&root);
+    let queued = fixture.queue_review(&worker);
+    fixture.service.record_launch_review(&queued, DispatchStep::NeedsReview, Some(review_error())).unwrap();
+    let reviewed = fixture.run(&worker);
+    let revision = fixture.state().revision;
+    fixture.operator(OrchestrationAction::Annotate { run_id: root.clone(), text: "Unrelated newer history".into() });
+    for action in [
+        OrchestrationAction::ReconcileRun { run_id: worker.clone(), recovery: None },
+        OrchestrationAction::RetryLaunch { run_id: worker.clone() },
+    ] {
+        let request = OrchestrationMutationRequest { session_id: SESSION.into(), expected_revision: Some(revision), action };
+        let bytes = fixture.state_bytes();
+        let result = if matches!(&request.action, OrchestrationAction::RetryLaunch { .. }) {
+            fixture.service.mutate_reviewed(&supervisor, request, &reviewed)
+        } else {
+            fixture.service.mutate(&supervisor, request)
+        };
+        assert_code(result, "orchestration_revision_conflict");
+        assert_eq!(fixture.state_bytes(), bytes);
+    }
+    fixture.seed_run(&worker, |run| run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending);
+    let reviewed = fixture.run(&worker);
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.service.mutate_reviewed(&supervisor, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None,
+        action: OrchestrationAction::RetryLaunch { run_id: worker.clone() },
+    }, &reviewed), "invalid_stage");
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture.seed_run(&worker, |run| {
+        run.dispatch.as_mut().unwrap().step = DispatchStep::SetupUnknown;
+        run.dispatch.as_mut().unwrap().launch_tag = None;
+        run.setup.as_mut().unwrap().operation_id = Some("checkout-recovery-operation".into());
+        run.setup.as_mut().unwrap().workspace_id = None;
+    });
+    fixture.apply(&supervisor, OrchestrationAction::ReconcileRun {
+        run_id: worker.clone(),
+        recovery: Some(cockpit_protocol::projects::WorkspaceRecoveryAction::AcceptExistingWorktree),
+    }).unwrap();
+    let recovery = fixture.run(&worker);
+    assert_eq!(recovery.dispatch.as_ref().unwrap().step, DispatchStep::SetupUnknown);
+    assert_eq!(recovery.dispatch.as_ref().unwrap().recovery,
+        Some(cockpit_protocol::projects::WorkspaceRecoveryAction::AcceptExistingWorktree));
+    assert!(recovery.annotations.last().unwrap().text.contains("Supervisor"));
+}
+
+#[test]
+fn old_unknown_launch_with_fresh_bound_omp_proof_stays_quiet_before_reconcile() {
+    for evidence in 0..5 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let task = fixture.create_task(&root, "Recover an old launch outcome");
+        let worker = fixture.propose(&root, &task, None);
+        fixture.prepare(&worker);
+        fixture.launch_and_bind(&worker);
+        fixture.seed_run(&worker, |run| {
+            let dispatch = run.dispatch.as_mut().unwrap();
+            dispatch.step = DispatchStep::LaunchUnknown;
+            dispatch.agent_started = false;
+            dispatch.error = Some(ErrorResponse {
+                code: "omp_start_unobserved".into(), message: "Prior installation did not recognize this bound launch".into(),
+            });
+            dispatch.updated_at = (time::OffsetDateTime::now_utc() - time::Duration::hours(2))
+                .format(&time::format_description::well_known::Rfc3339).unwrap();
+        });
+        let location = fixture.run(&worker).location.unwrap();
+        let runtime = herdr::RuntimeView {
+            endpoint_identity: location.endpoint_identity.clone(), boot_id: location.boot_id.clone(),
+            workspaces: Vec::new(),
+            panes: vec![herdr::RuntimePane {
+                workspace_id: location.workspace_id.clone(), workspace_label: "Project".into(),
+                tab_id: location.tab_id.clone(), tab_label: "Worker".into(), pane_id: location.pane_id.clone(),
+                terminal_id: location.terminal_id.clone(),
+                native_session_id: if evidence == 4 { Some("replacement-native-session".into()) } else { location.native_session_id.clone() },
+                agent_name: if evidence == 1 { Some("changed-display-name".into()) } else { None },
+                agent_kind: if evidence == 3 { None } else { Some("omp".into()) },
+                launch_pending: evidence == 2, interactive_ready: false,
+                agent_status: Some("working".into()), state_changed_at: None,
+            }],
+        };
+        let bytes = fixture.state_bytes();
+        fixture.service.record_observation(&runtime, SESSION).unwrap();
+        let failures = dispatch_events(&fixture, &root, "dispatch_failure");
+        if evidence <= 1 {
+            assert!(failures.is_empty());
+            assert_eq!(fixture.state_bytes(), bytes);
+            fixture.service.record_launch_verified(&fixture.run(&worker)).unwrap();
+            assert_eq!(fixture.run(&worker).dispatch.as_ref().unwrap().step, DispatchStep::Launched);
+            assert!(dispatch_events(&fixture, &root, "dispatch_recovered").is_empty());
+        } else {
+            assert_eq!(failures.len(), 1);
+            let bytes = fixture.state_bytes();
+            fixture.service.record_observation(&runtime, SESSION).unwrap();
+            assert_eq!(fixture.state_bytes(), bytes);
+        }
     }
 }

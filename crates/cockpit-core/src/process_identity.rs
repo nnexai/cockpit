@@ -27,6 +27,25 @@ pub fn incarnation_running(pid: i32, start: u64) -> io::Result<bool> {
     }
 }
 
+/// Prove the exact incarnation still occupies its controlling terminal's
+/// foreground group. Background/stopped survivors cannot identify a new OMP.
+#[cfg(target_os = "linux")]
+pub(crate) fn incarnation_foreground(pid: i32, start: u64) -> io::Result<bool> {
+    let process = read_process(pid)?;
+    if !process.foreground(start) {
+        return Ok(false);
+    }
+    let fresh = read_process(pid)?;
+    Ok(fresh.foreground(start) && process.tty == fresh.tty
+        && process.process_group == fresh.process_group)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn incarnation_foreground(pid: i32, _start: u64) -> io::Result<bool> {
+    valid_pid(pid)?;
+    Err(io::Error::new(io::ErrorKind::Unsupported, "foreground process evidence unavailable on this OS"))
+}
+
 /// Capture executable and argument evidence for the exact live shell incarnation.
 /// PID/start alone survives exec; this fingerprint deliberately does not.
 #[cfg(target_os = "linux")]
@@ -151,6 +170,23 @@ struct ProcessStatus {
     parent: i32,
     start: u64,
     exited: bool,
+    #[cfg(target_os = "linux")]
+    process_group: i32,
+    #[cfg(target_os = "linux")]
+    tty: i64,
+    #[cfg(target_os = "linux")]
+    foreground_group: i32,
+    #[cfg(target_os = "linux")]
+    stopped: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl ProcessStatus {
+    fn foreground(&self, start: u64) -> bool {
+        self.start == start && !self.exited && !self.stopped
+            && self.tty != 0 && self.process_group > 0
+            && self.process_group == self.foreground_group
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -191,10 +227,18 @@ fn parse_linux_stat(stat: &str, pid: i32) -> io::Result<ProcessStatus> {
     }
     let parent = fields.next().and_then(|field| field.parse::<i32>().ok())
         .filter(|parent| *parent >= 0).ok_or_else(invalid)?;
-    // /proc stat field 22: starttime (state is field 3, ppid is field 4).
-    let start = fields.nth(17).and_then(|field| field.parse::<u64>().ok())
+    let process_group = fields.next().and_then(|field| field.parse::<i32>().ok())
+        .filter(|group| *group >= 0).ok_or_else(invalid)?;
+    fields.next().and_then(|field| field.parse::<i32>().ok())
+        .filter(|session| *session >= 0).ok_or_else(invalid)?;
+    let tty = fields.next().and_then(|field| field.parse::<i64>().ok()).ok_or_else(invalid)?;
+    let foreground_group = fields.next().and_then(|field| field.parse::<i32>().ok())
+        .filter(|group| *group >= -1).ok_or_else(invalid)?;
+    // /proc stat field 22: starttime (tpgid above is field 8).
+    let start = fields.nth(13).and_then(|field| field.parse::<u64>().ok())
         .ok_or_else(invalid)?;
-    Ok(ProcessStatus { parent, start, exited: matches!(state, "Z" | "X" | "x") })
+    Ok(ProcessStatus { parent, start, exited: matches!(state, "Z" | "X" | "x"),
+        process_group, tty, foreground_group, stopped: matches!(state, "T" | "t") })
 }
 
 #[cfg(target_os = "macos")]
@@ -282,6 +326,26 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn stat(state: &str, start: &str) -> String {
         format!("42 (name with ) parentheses) {state} 12 {} {start} 0", ["0"; 17].join(" "))
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn foreground_proof_rejects_background_stopped_and_reused_processes() {
+        for (state, group, tty, foreground, expected) in [
+            ("S", "42", "1234", "42", true),
+            ("S", "42", "1234", "99", false),
+            ("T", "42", "1234", "42", false),
+            ("t", "42", "1234", "42", false),
+            ("Z", "42", "1234", "42", false),
+            ("S", "42", "0", "42", false),
+            ("S", "42", "1234", "-1", false),
+        ] {
+            let stat = format!("42 (omp) {state} 12 {group} 42 {tty} {foreground} {} 123 0",
+                ["0"; 13].join(" "));
+            let process = parse_linux_stat(&stat, 42).unwrap();
+            assert_eq!(process.foreground(123), expected);
+            assert!(!process.foreground(124));
+        }
     }
 
     #[cfg(target_os = "linux")]
