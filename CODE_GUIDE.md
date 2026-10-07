@@ -153,6 +153,8 @@ bun run build
 
 Use the repository's Rust toolchain and pinned Bun dependencies. Run `cargo fmt --check` on the final Rust scope. Regenerate TypeScript from Rust DTOs; never maintain a second handwritten wire schema. Runtime failures need a reproduction through the user action and its authoritative result, not only a mocked success response.
 
+Pacing boundary tests use explicit `BackgroundPolicy` values rather than inheriting scheduler defaults. Learned server spacing constrains both lanes and must never relax a stricter configured background interval. Cancellation tests fill only the configured in-flight capacity and bound permit-acquisition waits so a regression fails instead of hanging the suite. Run `cargo test -p cockpit-providers site_http::pacing::tests:: -- --test-threads=1` for the focused scenarios.
+
 ## Disposable runtime acceptance
 
 Create a uniquely named Herdr session with isolated XDG config/state, a fixture repository and a resource ledger. `scripts/verify/resource_guard.py` checks executable, session, socket and ownership before fixture Herdr commands run. Never automate the default session or use the user's manual gateway. Browser and Tauri must point to the same owned session and configuration. Preserve evidence before stopping only recorded processes.

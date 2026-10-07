@@ -15,8 +15,9 @@ fn same_origin_registry_ignores_context_and_default_port_but_not_scheme() {
 fn background_spacing_inflight_priority_and_rolling_budget_are_independent() {
     let now = Instant::now();
     let policy = BackgroundPolicy {
+        min_interval_seconds: 1,
+        in_flight: 2,
         hourly_request_cap: 3,
-        ..Default::default()
     };
     let mut state = State::default();
     assert_eq!(
@@ -172,21 +173,80 @@ fn retry_after_dates_seconds_and_invalid_values_are_safe() {
 }
 
 #[test]
-fn advertised_dc_fill_rate_reduces_background_but_not_interactive_rate() {
+fn advertised_dc_fill_rate_constrains_both_lanes_without_relaxing_configured_spacing() {
     let pacer = Pacer::default();
     let mut headers = HeaderMap::new();
     headers.insert("x-ratelimit-fillrate", "30".parse().unwrap());
     headers.insert("x-ratelimit-interval-seconds", "60".parse().unwrap());
     pacer.observe(&headers);
+    let policy = BackgroundPolicy {
+        min_interval_seconds: 6,
+        in_flight: 1,
+        hourly_request_cap: 300,
+    };
     let now = Instant::now();
     let mut state = pacer.state.lock();
     assert_eq!(
-        state.decide(RequestLane::Background, BackgroundPolicy::default(), now),
+        state.decide(RequestLane::Background, policy, now),
         Decision::Grant
     );
-    assert_eq!(state.next_background, Some(now + Duration::from_secs(4)));
     assert_eq!(
-        state.decide(RequestLane::Interactive, BackgroundPolicy::default(), now),
+        state.decide(RequestLane::Interactive, policy, now),
+        Decision::Grant
+    );
+    assert_eq!(
+        state.decide(
+            RequestLane::Interactive,
+            policy,
+            now + Duration::from_secs(3)
+        ),
+        Decision::Wait(Some(now + Duration::from_secs(4)))
+    );
+    assert_eq!(
+        state.decide(
+            RequestLane::Interactive,
+            policy,
+            now + Duration::from_secs(4)
+        ),
+        Decision::Grant
+    );
+    state.interactive = 0;
+    state.background = 0;
+    assert_eq!(
+        state.decide(
+            RequestLane::Background,
+            policy,
+            now + Duration::from_secs(4)
+        ),
+        Decision::Wait(Some(now + Duration::from_secs(6)))
+    );
+    let faster_policy = BackgroundPolicy {
+        min_interval_seconds: 2,
+        ..policy
+    };
+    assert_eq!(
+        state.decide(
+            RequestLane::Background,
+            faster_policy,
+            now + Duration::from_secs(6)
+        ),
+        Decision::Grant
+    );
+    state.background = 0;
+    assert_eq!(
+        state.decide(
+            RequestLane::Background,
+            faster_policy,
+            now + Duration::from_secs(9)
+        ),
+        Decision::Wait(Some(now + Duration::from_secs(10)))
+    );
+    assert_eq!(
+        state.decide(
+            RequestLane::Background,
+            faster_policy,
+            now + Duration::from_secs(10)
+        ),
         Decision::Grant
     );
 }
