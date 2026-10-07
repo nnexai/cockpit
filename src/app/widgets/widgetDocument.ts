@@ -67,6 +67,19 @@ export function widgetDocument(html: string, bridge: {
       value: freeze({select, selection: state.selection, hasSelection: state.hasSelection}),
       writable: false, configurable: false, enumerable: true
     });
+    // srcdoc inherits Cockpit's base URL, so bare fragments otherwise navigate
+    // to the host page. Keep native fragment scrolling, focus and history.
+    window.addEventListener('click', event => {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey
+        || event.altKey || event.shiftKey || event.metaKey) return;
+      const element = event.target instanceof Element ? event.target : event.target?.parentElement;
+      const anchor = element?.closest('a[href], area[href]');
+      if (!anchor || anchor.hasAttribute('download')) return;
+      const target = (anchor.getAttribute('target') || '').toLowerCase();
+      if (target && target !== '_self') return;
+      const href = anchor.getAttribute('href').trim();
+      if (href.startsWith('#')) anchor.setAttribute('href', 'about:srcdoc' + href);
+    }, true);
     let prefixUntil = 0;
     window.addEventListener('message', event => {
       if (event.source !== parent) return;
