@@ -748,6 +748,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "nix",
+ "parking_lot",
  "percent-encoding",
  "serde",
  "serde_json",

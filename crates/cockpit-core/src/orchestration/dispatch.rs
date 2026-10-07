@@ -33,11 +33,12 @@ pub struct DispatcherSettings {
 }
 
 pub struct Dispatcher {
-    service: Arc<OrchestrationService>,
+    pub(super) service: Arc<OrchestrationService>,
     projects: Arc<ProjectService>,
     library: Arc<LibraryService>,
-    herdr: Arc<dyn OrchestrationHerdr>,
+    pub(super) herdr: Arc<dyn OrchestrationHerdr>,
     settings: DispatcherSettings,
+    pub(super) retirement_observations: super::retire::ObservationBackoff,
 }
 
 impl Dispatcher {
@@ -54,6 +55,7 @@ impl Dispatcher {
             library,
             herdr,
             settings,
+            retirement_observations: Default::default(),
         }
     }
 
@@ -140,6 +142,22 @@ impl Dispatcher {
                                 let _ = dispatcher.service.record_dispatch(&run_id, update);
                             }
                             Some(run_id)
+                        });
+                    }
+                }
+                if let Ok(queue) = dispatcher.service.retirement_queue() {
+                    dispatcher.retain_retirement_observations(&queue);
+                    for run in queue {
+                        let key = format!("retire:{}", run.run_id);
+                        if !active.insert(key.clone()) {
+                            continue;
+                        }
+                        let dispatcher = Arc::clone(&dispatcher);
+                        workers.spawn(async move {
+                            // Retirement outcomes use only retirement CAS;
+                            // never rewrite launch state on retirement errors.
+                            let _ = dispatcher.retire(&run).await;
+                            Some(key)
                         });
                     }
                 }
@@ -620,10 +638,25 @@ impl Dispatcher {
                 return Ok(());
             }
         };
+        // Capture the newly created shell before submitting OMP. Failure does
+        // not retry launch: incomplete evidence only disables later retirement.
+        let launch_shell_identity = self.herdr.pane_process_info(
+            &location.session_id,
+            &location.endpoint_identity,
+            &location.pane_id,
+        ).await.ok().filter(|info| {
+            info.pane_id == location.pane_id
+                && info.shell_pid.is_some()
+                && info.shell_pid == info.shell_identity.as_ref().map(|shell| shell.process.pid)
+                && info.foreground_pgid == info.shell_pid
+                && !info.processes.is_empty()
+                && info.processes.iter().all(|(pid, _)| Some(*pid) == info.shell_pid)
+        }).and_then(|info| info.shell_identity);
         self.service.record_dispatch(
             &run.run_id,
             DispatchUpdate::TabReceipt {
                 location: location.clone(),
+                launch_shell_identity,
             },
         )?;
         let mut args = self.settings.extra_args.clone();
@@ -1121,6 +1154,12 @@ mod tests {
             run.stage = stage;
             run.location = Some(receipt());
             run.bound_omp_session = Some("native".into());
+            run.launch_shell_identity = Some(cockpit_protocol::orchestration::NativeShellIdentity {
+                process: cockpit_protocol::orchestration::NativeProcessIdentity {
+                    pid: 123, start_ticks: 1, kernel_boot_id: Some("00000000-0000-0000-0000-000000000001".into()),
+                },
+                executable_device: "1".into(), executable_inode: "2".into(), argv_digest: "a".repeat(64),
+            });
             let mut dispatch = crate::orchestration::dispatch(DispatchStep::LaunchIntent);
             dispatch.agent_started = true;
             dispatch.launch_tag = Some("tag".into());
@@ -1222,6 +1261,17 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             panic!("launch review must not start an agent")
         }
+        async fn pane_process_info(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<super::super::herdr::PaneProcessInfo, InspectionError> {
+            panic!("launch review must not inspect retirement processes")
+        }
+        async fn close_pane(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> {
+            panic!("launch review must not close a pane")
+        }
     }
 
     #[tokio::test]
@@ -1312,6 +1362,7 @@ mod tests {
                     dispatch.step = DispatchStep::SetupPending;
                     run.location = None;
                     run.bound_omp_session = None;
+                    run.launch_shell_identity = None;
                     run.stage = RunStage::Preparing;
                 } else {
                     run.result = Some(cockpit_protocol::orchestration::Report {

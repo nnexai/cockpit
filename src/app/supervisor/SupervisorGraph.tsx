@@ -1,125 +1,117 @@
-import { useId, useMemo } from "react";
-import type { OrchestrationSnapshot, Run, Subagent } from "../../protocol/generated/v1";
-import { StateGlyph, type GlyphShape } from "../sidebar/StateGlyph";
+import { useId, useMemo, type KeyboardEvent, type RefObject } from "react";
+import type { OrchestrationSnapshot } from "../../protocol/generated/v1";
+import { StateGlyph } from "../sidebar/StateGlyph";
 import { useRovingList } from "../sidebar/useRovingList";
 import { UiIcon } from "../UiIcon";
 import { agentState } from "./SupervisorActions";
-import { graphLayout } from "./graphLayout";
-import type { ScopeDrafts } from "./useSupervisorDrafts";
+import { TIER_LABEL, type AttentionTier } from "./attention";
+import { edgePath, GRAPH_GEOMETRY } from "./graphLayout";
+import { revealNearest } from "./reveal";
+import { chainIds, firstChild, nodeFacts, nodeId, type SupervisorGraphModel, type TopologyNode } from "./topology";
 
-export type SupervisorGraphRow = { key: string; depth: number; run: Run; subagent: Subagent | null };
 export type SupervisorGraphProps = {
-  rows: SupervisorGraphRow[];
+  model: SupervisorGraphModel;
   snapshot: OrchestrationSnapshot;
-  live: boolean;
-  connected: boolean;
-  runtimeLive: boolean;
-  scope: ScopeDrafts;
+  live: boolean; connected: boolean; runtimeLive: boolean;
+  selectedNodeId: string | null; highlightedRunId: string | null;
+  tierFor(node: TopologyNode): AttentionTier | null;
+  dimFor(node: TopologyNode): string | null;
+  showSubagents: boolean; onShowSubagents(next: boolean): void;
   sharedSpace: string | null | undefined;
-  highlightedRun: string | null;
-  onHover(run: Run | null): void;
-  onSelect(run: Run, subagent: Subagent | null): void;
-  onSelectTask?(taskId: string): void;
-  changed(): void;
+  bottomInset: number; scrollRef: RefObject<HTMLDivElement | null>;
+  onSelect(node: TopologyNode): void;
+  onHover(runId: string | null): void;
+  onEscape(): boolean;
 };
 
-export function SupervisorGraph({ rows, snapshot, live, connected, runtimeLive, scope, sharedSpace, highlightedRun, onHover, onSelect, onSelectTask, changed }: SupervisorGraphProps) {
+/** Observation and selection only. No terminal or orchestration control callback is accepted. */
+export function SupervisorGraph({ model, snapshot, live, connected, runtimeLive, selectedNodeId, highlightedRunId, tierFor, dimFor,
+  showSubagents, onShowSubagents, sharedSpace, bottomInset, scrollRef, onSelect, onHover, onEscape }: SupervisorGraphProps) {
   const headingId = useId();
   const fresh = live && connected && runtimeLive && snapshot.runtime.status === "fresh";
-  const observations = fresh && snapshot.runtime.status === "fresh" ? snapshot.runtime.runs : [];
-  const visibleRows = useMemo(() => scope.showSubagents ? rows : rows.filter(row => !row.subagent), [rows, scope.showSubagents]);
-  const graph = useMemo(() => {
-    const nodes = visibleRows.map(row => ({
-      id: row.key,
-      parentId: row.subagent
-        ? row.subagent.parent_subagent_id ? `${row.run.run_id}:${row.subagent.parent_subagent_id}` : row.run.run_id
-        : row.run.parent_run_id,
-    }));
-    const taskRefs = visibleRows.flatMap(row => {
-      if (row.subagent || row.run.kind !== "worker" || snapshot.board?.root_id !== row.run.root_id) return [];
-      const task = snapshot.board.tasks.find(task => task.task.task_id === row.run.task_id);
-      return task ? [{ id: `task:${row.run.run_id}:${task.task.task_id}`, run: row.run, task: task.task }] : [];
-    });
-    const layout = graphLayout(nodes);
-    const positionsById = new Map(layout.positions.map(position => [position.id, position]));
-    return { ...layout, taskRefs, positionsById };
-  }, [visibleRows, snapshot.board]);
-  const selectedId = scope.selectedRun ? scope.selectedSubagent ? `${scope.selectedRun}:${scope.selectedSubagent}` : scope.selectedRun : null;
-  const highlightedIds = new Set<string>();
-  if (selectedId) highlightedIds.add(selectedId);
-  if (highlightedRun) highlightedIds.add(highlightedRun);
-  for (const reference of graph.taskRefs) if (reference.task.task_id === scope.selectedTask) {
-    highlightedIds.add(reference.id);
-    highlightedIds.add(reference.run.run_id);
-  }
-  const highlightedEdges = new Set<string>();
-  for (const id of highlightedIds) {
-    let current = id;
-    const visited = new Set<string>();
-    while (!visited.has(current)) {
-      visited.add(current);
-      const edge = graph.edges.find(edge => edge.to === current);
-      if (!edge) break;
-      highlightedEdges.add(`${edge.from}:${edge.to}`);
-      current = edge.from;
+  const observations = useMemo(() => new Map(fresh && snapshot.runtime.status === "fresh" ? snapshot.runtime.runs.map(run => [run.run_id, run]) : []), [fresh, snapshot.runtime]);
+  const positions = useMemo(() => new Map(model.layout.positions.map(position => [position.id, position])), [model.layout]);
+  const highlighted = useMemo(() => {
+    const ids = new Set(selectedNodeId ? chainIds(model, selectedNodeId) : []);
+    if (highlightedRunId) for (const id of chainIds(model, nodeId.run(highlightedRunId))) ids.add(id);
+    return ids;
+  }, [model, selectedNodeId, highlightedRunId]);
+  const roving = useRovingList({ rowIds: model.layout.order, selectedId: selectedNodeId });
+  const connectedCount = model.nodes.filter(node => node.kind !== "subagent" && node.run && observations.get(node.run.run_id)?.presence === "present" && observations.get(node.run.run_id)?.actual_omp).length;
+  const onGraphKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const id = (event.target as HTMLElement).dataset.rowId;
+    if (id === undefined || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent.isComposing) return;
+    if (event.key === "Escape") {
+      if (onEscape()) { event.preventDefault(); event.stopPropagation(); }
+      return;
     }
-  }
-  const roving = useRovingList({
-    rowIds: [...visibleRows.map(row => row.key), ...(onSelectTask ? graph.taskRefs.map(reference => reference.id) : [])],
-    selectedId,
-    onEscape: () => {
-      scope.selectedRun = null;
-      scope.selectedSubagent = null;
-      scope.selectedTask = null;
-      changed();
-      return true;
-    },
-  });
-  const connectedCount = visibleRows.filter(row => !row.subagent && observations.some(observed => observed.run_id === row.run.run_id && observed.actual_omp && observed.presence === "present")).length;
-
+    const order = model.layout.order, index = order.indexOf(id);
+    let target: string | null | undefined;
+    switch (event.key) {
+      case "ArrowLeft": target = model.layout.parentOf.get(id); break;
+      case "ArrowRight": target = firstChild(model, id); break;
+      case "ArrowUp": target = order[Math.max(0, index - 1)]; break;
+      case "ArrowDown": target = order[Math.min(order.length - 1, index + 1)]; break;
+      case "Home": target = order[0]; break;
+      case "End": target = order[order.length - 1]; break;
+      default: return;
+    }
+    event.preventDefault(); event.stopPropagation();
+    if (!target || !scrollRef.current) return;
+    const element = [...scrollRef.current.querySelectorAll<HTMLElement>("[data-row-id]")].find(row => row.dataset.rowId === target);
+    if (element) {
+      revealNearest(scrollRef.current, element, { top: GRAPH_GEOMETRY.headerHeight, bottom: bottomInset });
+      element.focus({ preventScroll: true });
+    }
+  };
+  const columnLabels = ["Supervisor", "Tasks", "Workers", "Subagents"];
   return <section className="supervisor-graph-band" aria-labelledby={headingId}>
     <div className="supervisor-graph-heading">
-      <h2 id={headingId}>Agents · {fresh ? `${connectedCount} connected` : "unobserved"}</h2>
-      <label className="supervisor-graph-subagents"><input type="checkbox" checked={scope.showSubagents} disabled={!rows.some(row => !row.subagent)} onChange={event => {
-        scope.showSubagents = event.target.checked;
-        if (!scope.showSubagents && scope.selectedSubagent) {
-          scope.selectedSubagent = null;
-          const parent = scope.selectedRun;
-          requestAnimationFrame(() => roving.focusRow(parent ?? undefined));
-        }
-        changed();
-      }} />Subagents</label>
+      <h2 id={headingId} title="Up/Down moves through nodes, Left/Right along the chain">
+        Agents · {fresh ? `${connectedCount} connected` : "unobserved"} · {model.counts.subagents} subagents · {model.counts.tasks} tasks
+      </h2>
+      {model.hiddenCompletedTasks > 0 ? <span className="supervisor-graph-hidden-completed">{model.hiddenCompletedTasks} completed tasks hidden</span> : null}
+      <label className="supervisor-graph-subagents"><input type="checkbox" checked={showSubagents} onChange={event => onShowSubagents(event.target.checked)} />Subagents</label>
     </div>
-    <div className="supervisor-graph-scroll" ref={roving.listRef} {...roving.listProps}>
-      {visibleRows.length ? <div className="supervisor-graph-canvas" role="group" aria-label="Agent relationships" style={{ width: graph.width, height: graph.height }}>
-        <svg className="supervisor-graph-edges" width={graph.width} height={graph.height} viewBox={`0 0 ${graph.width} ${graph.height}`} aria-hidden="true" focusable="false">
-          {graph.edges.map(edge => <path key={`${edge.from}:${edge.to}`} className={`supervisor-graph-edge${highlightedEdges.has(`${edge.from}:${edge.to}`) ? " is-highlighted" : ""}`} d={edge.path} fill="none" stroke="var(--border-strong)" />)}
-        </svg>
-        {visibleRows.map(row => {
-          const position = graph.positionsById.get(row.key)!;
-          const observed = observations.find(observation => observation.run_id === row.run.run_id);
-          const state = agentState(snapshot, row.run, connected, runtimeLive);
-          const rawStatus = row.subagent ? row.subagent.status : fresh && state.verified ? observed?.agent_status ?? "unknown" : "unobserved";
-          const shape: GlyphShape = row.subagent
-            ? rawStatus === "running" ? "working" : rawStatus === "done" ? "done" : rawStatus === "failed" ? "blocked" : "unknown"
-            : rawStatus === "working" || rawStatus === "idle" || rawStatus === "blocked" || rawStatus === "done" ? rawStatus : "unknown";
-          const selected = selectedId === row.key;
-          const label = row.subagent?.label ?? row.run.label;
-          const role = row.subagent?.role ?? (row.subagent ? "OMP subagent" : row.run.kind === "worker" ? "Task agent" : "Supervisor");
-          const space = observed?.presence === "present" ? observed.workspace_label : null;
-          const evidence = `${row.subagent ? "OMP events" : "Herdr"} · ${rawStatus.replaceAll("_", " ")}`;
-          return <button key={row.key} type="button" data-row-id={row.key} tabIndex={roving.tabIndexFor(row.key)} aria-expanded={selected} aria-label={`${label}, ${role}, ${evidence}${space ? `, Space ${space}` : ""}`} title={row.subagent ? `${evidence} · ${row.subagent.updated_at}${row.subagent.summary ? `\n${row.subagent.summary}` : ""}` : `${state.label}\n${state.detail}`} className={`supervisor-graph-node${selected ? " is-selected" : ""}${highlightedIds.has(row.key) ? " is-highlighted" : ""}${row.subagent ? " is-subagent" : ""}`} style={{ left: position.x, top: position.y, width: position.width, height: position.height }} onMouseEnter={() => onHover(row.run)} onMouseLeave={() => onHover(null)} onClick={() => onSelect(row.run, row.subagent)}>
-            <span className="supervisor-graph-node-heading"><StateGlyph shape={shape} /><strong>{label}</strong></span>
-            <span className={`supervisor-graph-node-metadata${space && observed?.workspace_id === sharedSpace ? " is-shared" : ""}`} title={`${role} · ${evidence} · ${space ? `Space ${space}${observed?.tab_label ? ` · ${observed.tab_label}` : ""}` : row.subagent ? `In ${row.run.label} · no terminal` : "Space unobserved"}`}>{row.subagent ? role : row.run.kind === "worker" ? "Worker" : "Supervisor"} · {row.subagent ? "OMP " : ""}{rawStatus.replaceAll("_", " ")} · {space ?? (row.subagent ? "no terminal" : "unobserved")}</span>
-          </button>;
-        })}
-      </div> : <p className="supervisor-graph-empty">No agents in this task scope.</p>}
-      {graph.taskRefs.length ? <div className="supervisor-graph-task-links" role="group" aria-label="Worker task references">{graph.taskRefs.map(reference => {
-        const className = `supervisor-graph-task${highlightedIds.has(reference.id) || highlightedIds.has(reference.run.run_id) ? " is-highlighted" : ""}${scope.selectedTask === reference.task.task_id ? " is-selected" : ""}`;
-        const title = `${reference.run.label} → Task · ${reference.task.title}`;
-        const content = <><UiIcon name="file" /><span>{title}</span></>;
-        return onSelectTask ? <button key={reference.id} type="button" className={className} data-row-id={reference.id} tabIndex={roving.tabIndexFor(reference.id)} title={title} aria-label={`View task ${reference.task.title} assigned to ${reference.run.label}`} onMouseEnter={() => onHover(reference.run)} onMouseLeave={() => onHover(null)} onClick={() => onSelectTask(reference.task.task_id)}>{content}</button> : <span key={reference.id} className={className} title={title}>{content}</span>;
-      })}</div> : null}
+    {model.counts.workers === 0 && model.counts.supervisors > 0 ? <p className="supervisor-graph-empty">No worker agents yet</p> : null}
+    <div className="supervisor-graph-scroll" role="region" aria-label="Agent graph, scrollable" ref={element => { roving.listRef.current = element; scrollRef.current = element; }}
+      onFocus={roving.listProps.onFocus} onBlur={roving.listProps.onBlur} onKeyDown={onGraphKey}>
+      {model.nodes.length ? <>
+        <div className="supervisor-graph-columns" style={{ width: model.layout.width, height: GRAPH_GEOMETRY.headerHeight }} aria-hidden="true">
+          {Array.from({ length: model.layout.columns }, (_, column) => <span key={column} className="supervisor-graph-column" style={{
+            left: GRAPH_GEOMETRY.padding + column * (GRAPH_GEOMETRY.nodeWidth + GRAPH_GEOMETRY.columnGap) + 2, width: GRAPH_GEOMETRY.nodeWidth,
+          }}>{columnLabels[column] ?? "Nested"}</span>)}
+        </div>
+        <div className="supervisor-graph-canvas" role="group" aria-label="Agent relationships" style={{ width: model.layout.width, height: model.layout.height }}>
+          <svg className="supervisor-graph-edges" width={model.layout.width} height={model.layout.height} viewBox={`0 0 ${model.layout.width} ${model.layout.height}`} aria-hidden="true" focusable="false">
+            {model.layout.edges.map(edge => <path key={edge.to} className={`supervisor-graph-edge is-${model.byId.get(edge.to)!.edge ?? "delegated"}${highlighted.has(edge.from) && highlighted.has(edge.to) ? " is-highlighted" : ""}`} d={edge.path} />)}
+            {model.links.map(link => <path key={`${link.from}|${link.to}`} className={`supervisor-graph-edge is-assigned is-link${highlighted.has(link.from) && highlighted.has(link.to) ? " is-highlighted" : ""}`}
+              d={edgePath(positions.get(link.from)!, positions.get(link.to)!)} />)}
+          </svg>
+          {model.nodes.map(node => {
+            const position = positions.get(node.id)!;
+            const facts = nodeFacts(node, { model, snapshot, live, connected, runtimeLive });
+            const tier = tierFor(node), dim = dimFor(node), selected = selectedNodeId === node.id;
+            const observed = observations.get(node.run?.run_id ?? node.assignedRunId ?? "");
+            const shared = observed?.presence === "present" && !!sharedSpace && observed.workspace_id === sharedSpace;
+            const name = [facts.title, facts.role, facts.status, facts.provenance, facts.relation, tier ? TIER_LABEL[tier] : null, dim ? `dimmed by ${dim}` : null].filter(Boolean).join(", ");
+            const detail = node.subagent ? node.subagent.summary : node.run ? agentState(snapshot, node.run, connected, runtimeLive).detail : null;
+            return <button key={node.id} type="button" data-row-id={node.id} data-node-kind={node.kind} tabIndex={roving.tabIndexFor(node.id)}
+              aria-expanded={selected} aria-label={name} title={`${name}${detail ? `\n${detail}` : ""}`} className={`supervisor-graph-node is-${node.kind}${selected ? " is-selected" : ""}${highlighted.has(node.id) ? " is-highlighted" : ""}${node.unassigned ? " is-unassigned" : ""}${dim ? " is-dimmed" : ""}`}
+              style={{ left: position.x, top: position.y, width: position.width, height: position.height }}
+              onMouseEnter={() => onHover(node.run?.run_id ?? node.assignedRunId)} onMouseLeave={() => onHover(null)} onClick={() => onSelect(node)}>
+              <span className="supervisor-graph-node-icon" aria-hidden="true">{facts.glyph === "document" ? <UiIcon name="file" /> : <StateGlyph shape={facts.glyph} />}</span>
+              <strong className="supervisor-graph-node-title">{facts.title}</strong>
+              {tier ? <span className={`supervisor-tier is-${tier}`}><span className="supervisor-tier-glyph" aria-hidden="true">{tier === "decide" ? "?" : tier === "recover" ? "!" : "i"}</span><span className="supervisor-tier-label">{TIER_LABEL[tier]}</span></span> : null}
+              <span className={`supervisor-graph-node-metadata${shared ? " is-shared" : ""}`}>
+                <span className="supervisor-graph-node-status">{facts.status}</span>
+                <span className="supervisor-graph-node-provenance">{facts.provenance}</span>
+              </span>
+            </button>;
+          })}
+        </div>
+        {bottomInset > 0 ? <div className="supervisor-graph-bottom-inset" style={{ height: bottomInset }} aria-hidden="true" /> : null}
+      </> : <p className="supervisor-graph-empty">No agents in this task scope.</p>}
     </div>
   </section>;
 }

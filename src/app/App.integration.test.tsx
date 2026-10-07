@@ -1251,8 +1251,12 @@ describe("merged local workarea lifecycle", () => {
     expect(fixture.client.planWorkspace).not.toHaveBeenCalled();
     expect(fixture.mutateCalls).not.toHaveBeenCalled();
     expect(fixture.focusCalls).not.toHaveBeenCalled();
-    click(button("Close Supervisor"));
+    const supervisor = container.querySelector<HTMLElement>('section[aria-label="Supervisor"]')!;
+    expect(supervisor.hidden).toBe(false);
+    click(button("Supervisor"));
     await settle();
+    expect(supervisor.hidden).toBe(true);
+    expect(terminal("pane-1")).not.toBeNull();
     expect(selectedLeaf()).toBe(selectedBefore);
     expect(fixture.focusCalls).not.toHaveBeenCalled();
     expect(fixture.mutateCalls).not.toHaveBeenCalled();
@@ -1304,8 +1308,10 @@ describe("merged local workarea lifecycle", () => {
 
     click(button("Supervisor"));
     await settle();
-    click(button("Close Supervisor"));
+    expect(supervisor.hidden).toBe(false);
+    click(button("Supervisor"));
     await settle();
+    expect(supervisor.hidden).toBe(true);
     expect(document.activeElement).toBe(terminal("pane-1"));
     expect(selectedLeaf()).toBe("pane-1");
     expect(fixture.focusCalls).not.toHaveBeenCalled();

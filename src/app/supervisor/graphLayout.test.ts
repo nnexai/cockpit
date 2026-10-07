@@ -18,7 +18,7 @@ describe("graphLayout", () => {
       const from = layout.positions.find(node => node.id === edge.from)!;
       const to = layout.positions.find(node => node.id === edge.to)!;
       expect(to.x).toBeGreaterThan(from.x + from.width);
-      expect(edge.path).toMatch(/^M .* C /);
+      expect(edge.path).toMatch(/^M .* (C|L) /);
     }
     for (let index = 0; index < layout.positions.length; index++) {
       const node = layout.positions[index];
@@ -61,29 +61,28 @@ describe("graphLayout", () => {
     expect(graphLayout([...nodes].reverse())).toEqual(layout);
   });
 
-  it("produces stable exact coordinates without mutating its input", () => {
+  it("orders the task column, leaves an unassigned gap and centers each parent on its first and last child", () => {
     const nodes = Object.freeze([
       Object.freeze({ id: "root", parentId: null }),
-      Object.freeze({ id: "worker-b", parentId: "root" }),
-      Object.freeze({ id: "worker-a", parentId: "root" }),
+      Object.freeze({ id: "task-b", parentId: "root", minColumn: 1, order: [0, 2] }),
+      Object.freeze({ id: "task-a", parentId: "root", minColumn: 1, order: [0, 1] }),
+      Object.freeze({ id: "worker", parentId: "task-a", minColumn: 2 }),
+      Object.freeze({ id: "sub-a", parentId: "worker", minColumn: 3 }),
+      Object.freeze({ id: "sub-b", parentId: "worker", minColumn: 3 }),
+      Object.freeze({ id: "unassigned", parentId: "root", minColumn: 1, order: [3, 0], gapBefore: 0.4 }),
     ]);
     const layout = graphLayout(nodes);
-    expect(layout).toEqual({
-      positions: [
-        { id: "root", x: 8, y: 30, width: 180, height: 36 },
-        { id: "worker-a", x: 224, y: 8, width: 180, height: 36 },
-        { id: "worker-b", x: 224, y: 52, width: 180, height: 36 },
-      ],
-      edges: [
-        { from: "root", to: "worker-a", path: "M 188 48 C 206 48, 206 26, 224 26" },
-        { from: "root", to: "worker-b", path: "M 188 48 C 206 48, 206 70, 224 70" },
-      ],
-      width: 412,
-      height: 96,
-    });
-    expect(graphLayout(nodes)).toEqual(layout);
+    const positions = new Map(layout.positions.map(position => [position.id, position]));
+    expect(layout.order).toEqual(["root", "task-a", "worker", "sub-a", "sub-b", "task-b", "unassigned"]);
+    expect(positions.get("sub-a")).toMatchObject({ column: 3, row: 0, x: 824, y: 8, width: 240, height: 48 });
+    expect(positions.get("sub-b")).toMatchObject({ column: 3, row: 1, y: 64 });
+    expect(positions.get("task-a")!.row).toBe(0.5);
+    expect(positions.get("task-b")!.row).toBe(2);
+    expect(positions.get("unassigned")!.row).toBe(3.4);
+    expect(positions.get("root")!.row).toBe(1.95);
+    expect(layout.columns).toBe(4);
     expect(graphLayout([...nodes].reverse())).toEqual(layout);
-    expect(graphLayout([])).toEqual({ positions: [], edges: [], width: 0, height: 0 });
+    expect(layout.parentOf.get("worker")).toBe("task-a");
   });
 
   it("handles deep parent chains without recursive traversal", () => {

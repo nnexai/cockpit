@@ -91,6 +91,52 @@ const location = shape({
   endpoint_identity: id, session_id: session, workspace_id: id, tab_id: id, pane_id: id, launch_tag: id,
   boot_id: nullable(id), terminal_id: nullable(id), native_session_id: nullable(id),
 });
+const nativeProcessIdentity = shape({
+  pid: u32, start_ticks: u64, kernel_boot_id: nullable(id),
+}, true);
+const numericIdentity: Validator = value => typeof value === "string" && /^(?:0|[1-9]\d*)$/.test(value)
+  && (value.length < 20 || (value.length === 20 && value <= "18446744073709551615"));
+const nativeShellIdentity = shape({
+  process: nativeProcessIdentity, executable_device: numericIdentity, executable_inode: numericIdentity, argv_digest: hash,
+}, true);
+const retirementIdentity = shape({
+  run_attempt: u32, launch_attempt: u32, launch_tag: id, endpoint_identity: id,
+  session_id: session, workspace_id: id, tab_id: id, pane_id: id, terminal_id: id,
+  herdr_boot_id: nullable(id), omp_session_id: id, process: nativeProcessIdentity, shell: nativeShellIdentity,
+}, true);
+const nativeDeferReason = oneOf("busy", "pending_messages", "async_jobs", "live_subagents", "editor_draft");
+const retainReason = oneOf(
+  "identity_incomplete", "identity_changed", "endpoint_changed", "native_process_unverifiable",
+  "process_pane_mismatch", "worker_unresponsive", "worker_busy_timeout", "user_activity", "native_refused",
+  "shared_tab", "tab_renamed", "pane_moved", "foreground_process", "observation_unavailable", "herdr_refused",
+);
+const retirementStates: Readonly<Record<string, Fields>> = {
+  waiting: { blockers: list(oneOf("open_descendant_runs", "running_subagents")) },
+  native_stop_offered: { offered_at: timestamp },
+  native_stop_deferred: { offered_at: timestamp, reason: nativeDeferReason, at: timestamp },
+  native_stop_requested: { at: timestamp },
+  native_stopped: { at: timestamp, evidence: oneOf("exited_after_shutdown_request", "already_exited") },
+  close_intent: { at: timestamp },
+  retired: { at: timestamp, terminal: oneOf("closed_by_cockpit", "already_absent", "absent_after_uncertain_close") },
+  retained: { at: timestamp, reason: retainReason, native_stopped: bool },
+  unknown: { at: timestamp, phase: oneOf("native_stop", "terminal_close"), detail: text },
+};
+const retirementState: Validator = value => record(value) && typeof value.state === "string"
+  && Object.hasOwn(retirementStates, value.state)
+  && shape({ state: oneOf(value.state), ...retirementStates[value.state]! }, true)(value);
+const retirement: Validator = value => shape({
+  retirement_id: uuid, trigger: oneOf("accept", "accept_recovery", "operator_conflict_resolution"),
+  result_message_id: id, task_revision: hash, identity: nullable(retirementIdentity), state: retirementState,
+  created_at: timestamp, updated_at: timestamp,
+}, true)(value) && record(value) && (value.identity !== null
+  || (record(value.state) && value.state.state === "retained" && value.state.reason === "identity_incomplete"));
+const nativeStopReceipt: Validator = value => record(value) && (
+  (value.outcome === "shutdown_requested" && shape({ outcome: oneOf("shutdown_requested") }, true)(value))
+  || (value.outcome === "deferred" && shape({ outcome: oneOf("deferred"), reason: nativeDeferReason }, true)(value))
+  || (value.outcome === "refused" && shape({
+    outcome: oneOf("refused"), reason: oneOf("user_activity", "native_refused"), text: boundedText(1024),
+  }, true)(value))
+);
 const grantOrigin = oneOf("browser", "native", "supervisor");
 // Persisted legacy grants/intents acquire explicit nulls when serialized by Rust.
 // A supervisor decision always identifies its verified root and actual SDK session;
@@ -115,7 +161,9 @@ const run: Validator = value => shape({
   target: nullable(target), setup: nullable(setup), prepare_plan: nullable(plan), init_receipt: nullable(report), work_plan: nullable(plan),
   grants: list(grant),
   last_report: nullable(report), result: nullable(report), annotations: list(shape({ by: actor, text, at: timestamp })),
-  location: nullable(location), bound_omp_session: nullable(id), supersedes_run_id: nullable(id), created_at: timestamp, updated_at: timestamp,
+  location: nullable(location), bound_omp_session: nullable(id), bound_omp_process: nullable(nativeProcessIdentity),
+  launch_shell_identity: nullable(nativeShellIdentity),
+  retirement: nullable(retirement), supersedes_run_id: nullable(id), created_at: timestamp, updated_at: timestamp,
 })(value) && record(value) && Array.isArray(value.grants)
   && value.grants.every(grant => record(grant) && (grant.origin !== "supervisor" || grant.supervisor_run_id === value.root_id));
 const message = shape({
@@ -144,7 +192,7 @@ const runtime: Validator = value => record(value) && (
   || (value.status === "unavailable" && shape({ status: oneOf("unavailable"), error })(value))
 );
 const attention = shape({
-  kind: oneOf("awaits_prepare", "awaits_execute", "plan_changed", "to_accept", "needs_input", "runtime_blocked", "brief_unread", "idle_without_report", "exited_without_report", "dispatch_unknown", "intent_conflict"),
+  kind: oneOf("awaits_prepare", "awaits_execute", "plan_changed", "to_accept", "needs_input", "runtime_blocked", "brief_unread", "idle_without_report", "exited_without_report", "dispatch_unknown", "intent_conflict", "retirement_unconfirmed"),
   run_id: nullable(id), task_id: nullable(id), message_seq: nullable(u64), since: timestamp,
 });
 
@@ -158,6 +206,7 @@ const actions: Readonly<Record<OrchestrationAction["action"], Fields>> = {
   tasks_assign_ids: { root_id: id, expected_doc_revision: hash },
   supervisor_start: { target: nullable(target), label: nullable(label) },
   run_bind_session: { omp_session_id: id },
+  retirement_native_receipt: { retirement_id: uuid, outcome: nativeStopReceipt },
   run_adopt: { label },
   run_propose: { task_id: id, parent_run_id: nullable(id), label: nullable(label), target, prepare_brief: text, supersedes_run_id: nullable(id) },
   grant_prepare: { run_id: id, plan_revision: hash },

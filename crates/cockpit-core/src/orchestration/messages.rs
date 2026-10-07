@@ -1002,6 +1002,9 @@ mod tests {
             annotations: Vec::new(),
             location: None,
             bound_omp_session: Some(format!("omp-{id}")),
+            bound_omp_process: None,
+            launch_shell_identity: None,
+            retirement: None,
             supersedes_run_id: None,
             created_at: now(),
             updated_at: now(),
@@ -1041,6 +1044,7 @@ mod tests {
             agent_kind: Some(AgentKind::Main),
             actual_agent_kind: Some("omp".into()),
             subagent_id: None,
+            process: None,
         })
     }
 

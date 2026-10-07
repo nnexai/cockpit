@@ -202,6 +202,10 @@ impl Fixture {
                 run_id,
                 DispatchUpdate::TabReceipt {
                     location: location.clone(),
+                    launch_shell_identity: Some(NativeShellIdentity {
+                        process: NativeProcessIdentity { pid: 11, start_ticks: 12, kernel_boot_id: Some("kernel-one".into()) },
+                        executable_device: "1".into(), executable_inode: "2".into(), argv_digest: "a".repeat(64),
+                    }),
                 },
             )
             .unwrap();
@@ -220,6 +224,11 @@ impl Fixture {
             agent_kind: Some(AgentKind::Main),
             actual_agent_kind: Some("omp".into()),
             subagent_id: None,
+            process: Some(NativeProcessIdentity {
+                pid: 42,
+                start_ticks: 123,
+                kernel_boot_id: Some("kernel-one".into()),
+            }),
         })
     }
 
@@ -835,6 +844,266 @@ fn failed_result_is_not_accepted_or_checked() {
     assert!(fixture.run(&run_id).close_reason.is_none());
     assert!(!fixture.task(&root, &task.task_id).checked);
     assert!(fixture.state().task_intents.is_empty());
+}
+
+fn wait_request(fixture: &Fixture, timeout_ms: u32) -> OrchestrationWaitRequest {
+    OrchestrationWaitRequest {
+        after_revision: fixture.state().revision,
+        after_tasks_token: fixture.service.store.tasks_token().unwrap(),
+        timeout_ms,
+    }
+}
+
+// Polling once establishes a deterministic pending-read barrier without letting
+// Tokio auto-advance the paused clock. The real wait registers its own wakers.
+async fn poll_wait_once<F: Future>(
+    mut future: std::pin::Pin<&mut F>,
+) -> std::task::Poll<F::Output> {
+    std::future::poll_fn(|cx| std::task::Poll::Ready(future.as_mut().poll(cx))).await
+}
+
+fn completed_wait(
+    result: std::task::Poll<Result<OrchestrationWaitResponse, InspectionError>>,
+) -> OrchestrationWaitResponse {
+    match result {
+        std::task::Poll::Ready(response) => response.unwrap(),
+        std::task::Poll::Pending => panic!("Expected the consumer wait to complete"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_already_changed_revision_or_tasks_token_returns_at_zero_timeout() {
+    let fixture = Fixture::new();
+    let before = wait_request(&fixture, 0);
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Already available");
+    let current = wait_request(&fixture, 0);
+    let requests = [
+        OrchestrationWaitRequest {
+            after_tasks_token: current.after_tasks_token.clone(),
+            ..before
+        },
+        OrchestrationWaitRequest {
+            after_revision: current.after_revision,
+            after_tasks_token: "older-task-token".into(),
+            timeout_ms: 0,
+        },
+    ];
+    let started = tokio::time::Instant::now();
+    for request in requests {
+        let mut waiting = Box::pin(fixture.service.wait(&request));
+        let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+        assert!(response.changed);
+        assert_eq!(response.revision, current.after_revision);
+        assert_eq!(response.tasks_token, current.after_tasks_token);
+    }
+    assert_eq!(tokio::time::Instant::now(), started);
+    assert_eq!(fixture.task(&root, &task.task_id).title, "Already available");
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_zero_timeout_without_change_returns_current_cursor() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let request = wait_request(&fixture, 0);
+    let started = tokio::time::Instant::now();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(!response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_eq!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(tokio::time::Instant::now(), started);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_watched_task_change_wakes_without_advancing_time() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let request = wait_request(&fixture, 3_000);
+    let started = tokio::time::Instant::now();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+
+    let task = fixture.create_task(&root, "Delivered by the watched service");
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(response.changed);
+    assert_eq!(response.revision, fixture.state().revision);
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    assert_eq!(tokio::time::Instant::now(), started);
+    assert_eq!(
+        fixture.task(&root, &task.task_id).title,
+        "Delivered by the watched service"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_external_service_revision_is_visible_within_wait_budget() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let external = OrchestrationService::open(&fixture.configuration).unwrap();
+    let request = wait_request(&fixture, 3_000);
+    let before = fixture.state_bytes();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+
+    let (new_root, attempt) = run_result(
+        external
+            .mutate(
+                &Actor::Operator(OperatorOrigin::Browser),
+                OrchestrationMutationRequest {
+                    session_id: SESSION.into(),
+                    expected_revision: Some(request.after_revision),
+                    action: OrchestrationAction::SupervisorStart {
+                        target: Some(target()),
+                        label: Some("External service supervisor".into()),
+                    },
+                },
+            )
+            .unwrap(),
+    );
+    let committed = fixture.state_bytes();
+    assert_ne!(committed, before, "external machine mutation must persist a revision");
+    // This service has no notification from the external writer.
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(1_000)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(response.changed);
+    assert_eq!(response.revision, fixture.state().revision);
+    assert!(response.revision > request.after_revision);
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    let delivered = fixture.run(&new_root);
+    assert_eq!(delivered.run_id, new_root);
+    assert_eq!(delivered.attempt, attempt);
+    assert_eq!(delivered.kind, RunKind::Supervisor);
+    assert_eq!(delivered.root_id, new_root);
+    assert!(delivered.parent_run_id.is_none());
+    assert_eq!(delivered.label, "External service supervisor");
+    assert_eq!(fixture.state_bytes(), committed, "wait must not write machine state");
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_external_markdown_replacement_delivers_task_without_revision_change() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Original task title");
+    let request = wait_request(&fixture, 3_000);
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+
+    let path = fixture.service.base().join("tasks").join(format!("{root}.md"));
+    let replacement = path.with_extension("replacement");
+    let document = std::fs::read_to_string(&path).unwrap();
+    let updated = document.replace("Original task title", "Externally revised task title");
+    assert_ne!(updated, document);
+    std::fs::write(&replacement, updated).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    assert_eq!(fixture.state().revision, request.after_revision);
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+
+    tokio::time::advance(Duration::from_millis(1_500)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_ne!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    assert_eq!(
+        fixture.task(&root, &task.task_id).title,
+        "Externally revised task title"
+    );
+    assert_eq!(fixture.task(&root, &task.task_id).body, task.body);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_short_timeout_returns_unchanged_at_the_requested_deadline() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let request = wait_request(&fixture, 20);
+    let started = tokio::time::Instant::now();
+    let before = fixture.state_bytes();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(19)).await;
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(!response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_eq!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(tokio::time::Instant::now() - started, Duration::from_millis(20));
+    assert_eq!(fixture.state_bytes(), before);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_oversized_timeout_is_clipped_to_the_protocol_maximum() {
+    let fixture = Fixture::new();
+    let request = wait_request(&fixture, u32::MAX);
+    let started = tokio::time::Instant::now();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(29_999)).await;
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(!response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_eq!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(tokio::time::Instant::now() - started, Duration::from_secs(30));
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_cancellation_preserves_state_and_next_wait_rediscovers_change() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let original = fixture.create_task(&root, "Existing task");
+    let request = wait_request(&fixture, 3_000);
+    let started = tokio::time::Instant::now();
+    let before = fixture.state_bytes();
+    let before_task = fixture.task(&root, &original.task_id);
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    drop(waiting);
+    assert_eq!(fixture.state_bytes(), before);
+    assert_eq!(
+        fixture.task(&root, &original.task_id).task_revision,
+        before_task.task_revision
+    );
+
+    let arrived = fixture.create_task(&root, "Arrived after cancellation");
+    let mut next_wait = Box::pin(fixture.service.wait(&request));
+    let response = completed_wait(poll_wait_once(next_wait.as_mut()).await);
+    assert!(response.changed);
+    assert_eq!(response.revision, fixture.state().revision);
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    assert_eq!(tokio::time::Instant::now(), started);
+    assert_eq!(
+        fixture.task(&root, &arrived.task_id).title,
+        "Arrived after cancellation"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_subscription_edges_do_not_lose_back_to_back_changes() {
+    for mutate_before_first_poll in [true, false] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let request = wait_request(&fixture, 3_000);
+        let started = tokio::time::Instant::now();
+        let mut waiting = Box::pin(fixture.service.wait(&request));
+        if !mutate_before_first_poll {
+            assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+        }
+        // Cover both a commit before subscription and retained notifications
+        // after the first unchanged read, before the consumer is polled again.
+        let first = fixture.create_task(&root, "First edge arrival");
+        let second = fixture.create_task(&root, "Second edge arrival");
+        let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+        assert!(response.changed);
+        assert_eq!(response.revision, fixture.state().revision);
+        assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+        assert_eq!(tokio::time::Instant::now(), started);
+        assert_eq!(fixture.task(&root, &first.task_id).title, "First edge arrival");
+        assert_eq!(fixture.task(&root, &second.task_id).title, "Second edge arrival");
+    }
 }
 
 #[test]
@@ -1795,6 +2064,13 @@ fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_an
         assert_eq!(retried.stage, RunStage::Preparing);
         assert!(retried.location.is_none());
         assert!(retried.bound_omp_session.is_none());
+        assert!(original.bound_omp_process.is_some());
+        assert!(original.launch_shell_identity.is_some());
+        assert!(retried.bound_omp_process.is_none());
+        assert!(retried.launch_shell_identity.is_none());
+        // Only accepted Closed runs obtain retirement authority; Closed runs
+        // cannot retry. A permitted uncertain-launch retry has none.
+        assert!(retried.retirement.is_none());
         let dispatch = retried.dispatch.as_ref().unwrap();
         assert_eq!(dispatch.step, DispatchStep::SetupPending);
         assert_eq!(
@@ -1804,18 +2080,20 @@ fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_an
         assert!(!dispatch.agent_started);
         assert!(dispatch.launch_tag.is_none());
         assert!(dispatch.endpoint_identity.is_none());
-        let mut expected = serde_json::to_value(&original).unwrap();
-        let actual = serde_json::to_value(&retried).unwrap();
-        for field in [
-            "stage",
-            "location",
-            "bound_omp_session",
-            "dispatch",
-            "updated_at",
-        ] {
-            expected[field] = actual[field].clone();
-        }
-        assert_eq!(actual, expected);
+        assert_eq!(retried.task_id, original.task_id);
+        assert_eq!(retried.prepare_brief, original.prepare_brief);
+        assert_eq!(
+            serde_json::to_value(&retried.setup).unwrap(),
+            serde_json::to_value(&original.setup).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&retried.grants).unwrap(),
+            serde_json::to_value(&original.grants).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&retried.work_plan).unwrap(),
+            serde_json::to_value(&original.work_plan).unwrap()
+        );
         let mut expected_messages: Vec<Message> = serde_json::from_value(messages.clone()).unwrap();
         for message in expected_messages.iter_mut().filter(|message| {
             message.to_run_id == run_id
@@ -3001,6 +3279,138 @@ fn acceptance_recovery_cannot_substitute_a_new_result_for_the_reviewed_receipt()
     assert!(!fixture.task(&root, &task.task_id).checked);
     assert_eq!(fixture.state().task_intents[0].state, IntentState::Conflict);
     assert_eq!(fixture.state().task_intents[0].intent_id, intent_id);
+}
+
+#[test]
+fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, parent, parent_actor) = fixture.working(&root);
+    let (_, child, child_actor) = fixture.working(&parent);
+    fixture
+        .apply(
+            &parent_actor,
+            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
+        )
+        .unwrap();
+    let parent_before = fixture.run(&parent);
+    let parent_init = serde_json::to_value(parent_before.init_receipt.as_ref().unwrap()).unwrap();
+    let parent_plan = serde_json::to_value(parent_before.work_plan.as_ref().unwrap()).unwrap();
+    let parent_result = serde_json::to_value(parent_before.result.as_ref().unwrap()).unwrap();
+    let assert_parent_receipts = || {
+        let after = fixture.run(&parent);
+        assert_eq!(after.stage, RunStage::Reported);
+        assert_eq!(
+            serde_json::to_value(after.init_receipt.as_ref().unwrap()).unwrap(),
+            parent_init
+        );
+        assert_eq!(
+            serde_json::to_value(after.work_plan.as_ref().unwrap()).unwrap(),
+            parent_plan
+        );
+        assert_eq!(
+            serde_json::to_value(after.result.as_ref().unwrap()).unwrap(),
+            parent_result
+        );
+        assert_eq!(
+            serde_json::to_value(after.last_report.as_ref().unwrap()).unwrap(),
+            parent_result
+        );
+    };
+    let child_before = fixture.run(&child);
+    let child_init = serde_json::to_value(child_before.init_receipt.as_ref().unwrap()).unwrap();
+    let child_plan = serde_json::to_value(child_before.work_plan.as_ref().unwrap()).unwrap();
+    let mut report_ids = Vec::new();
+    for (kind, summary, outcome) in [
+        (ReportKind::Progress, "Child completed its first step", None),
+        (ReportKind::NeedsInput, "Which deployment target should the child use?", None),
+        (ReportKind::Result, "Child completed the selected deployment", Some(ReportOutcome::Succeeded)),
+    ] {
+        let message_id = id();
+        fixture
+            .apply(
+                &child_actor,
+                OrchestrationAction::Report {
+                    message_id: message_id.clone(),
+                    kind,
+                    outcome,
+                    summary: summary.into(),
+                    plan: None,
+                    to_run_id: None,
+                },
+            )
+            .unwrap();
+        assert_parent_receipts();
+        let state = fixture.state();
+        let delivered = state
+            .messages
+            .iter()
+            .find(|message| message.message_id == message_id)
+            .unwrap();
+        assert_agent_decision(delivered, &child);
+        assert_eq!(delivered.to_run_id, parent);
+        assert_eq!(delivered.kind, MessageKind::Report);
+        assert_eq!(delivered.from_subagent_id, None);
+        assert_eq!(delivered.stage, DeliveryStage::Stored);
+        let receipt = delivered.report.as_ref().unwrap();
+        assert_eq!(receipt.kind, kind);
+        assert_eq!(receipt.summary, summary);
+        assert_eq!(receipt.outcome, outcome);
+        let child_after = fixture.run(&child);
+        assert_eq!(
+            serde_json::to_value(child_after.init_receipt.as_ref().unwrap()).unwrap(),
+            child_init
+        );
+        assert_eq!(
+            serde_json::to_value(child_after.work_plan.as_ref().unwrap()).unwrap(),
+            child_plan
+        );
+        assert_eq!(child_after.last_report.as_ref().unwrap().message_id, message_id);
+        if kind == ReportKind::Result {
+            assert_eq!(child_after.stage, RunStage::Reported);
+            assert_eq!(child_after.result.as_ref().unwrap().message_id, message_id);
+            assert_eq!(child_after.result.as_ref().unwrap().outcome, Some(ReportOutcome::Succeeded));
+        } else {
+            assert_eq!(child_after.stage, RunStage::Working);
+            assert!(child_after.result.is_none());
+        }
+        report_ids.push(message_id);
+    }
+    let response = fixture
+        .apply(
+            &parent_actor,
+            OrchestrationAction::InboxPull { after_seq: 0, limit: 100 },
+        )
+        .unwrap();
+    let OrchestrationActionResult::Inbox { messages, read_through_seq } = response.result else {
+        panic!("Expected the parent's actual inbox read");
+    };
+    assert_parent_receipts();
+    for message_id in &report_ids {
+        let read = messages.iter().find(|message| &message.message_id == message_id).unwrap();
+        assert_agent_decision(read, &child);
+        assert_eq!(read.to_run_id, parent);
+        assert_eq!(read.stage, DeliveryStage::Read);
+        assert!(read.seq <= read_through_seq);
+        let state = fixture.state();
+        let durable = state.messages.iter().find(|message| &message.message_id == message_id).unwrap();
+        assert_eq!(durable.stage, DeliveryStage::Read);
+    }
+    fixture
+        .apply(
+            &parent_actor,
+            OrchestrationAction::InboxAck { through_seq: read_through_seq },
+        )
+        .unwrap();
+    assert_parent_receipts();
+    let state = fixture.state();
+    for message_id in report_ids {
+        let acked = state.messages.iter().find(|message| message.message_id == message_id).unwrap();
+        assert_agent_decision(acked, &child);
+        assert_eq!(acked.to_run_id, parent);
+        assert_eq!(acked.stage, DeliveryStage::Acked);
+        assert!(acked.acked_at.is_some());
+    }
 }
 
 #[test]

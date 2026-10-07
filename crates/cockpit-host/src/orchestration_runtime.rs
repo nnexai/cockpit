@@ -328,6 +328,17 @@ mod tests {
         async fn start_agent(&self, _: &str, _: &AgentStartRequest) -> Result<(), InspectionError> {
             panic!("a retry preflight must not start a process")
         }
+        async fn pane_process_info(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<cockpit_core::orchestration::herdr::PaneProcessInfo, InspectionError> {
+            panic!("a retry preflight must not inspect retirement processes")
+        }
+        async fn close_pane(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> {
+            panic!("a retry preflight must not close a terminal")
+        }
     }
 
     fn reviewed() -> Run {
@@ -339,7 +350,9 @@ mod tests {
             "grants":[],"annotations":[],
             "location":{"endpoint_identity":"endpoint","session_id":"fixture","workspace_id":"space",
                 "tab_id":"tab","pane_id":"pane","launch_tag":"tag","terminal_id":"terminal"},
-            "bound_omp_session":"native","created_at":"2026-10-06T00:00:00Z","updated_at":"2026-10-06T00:00:00Z"
+            "bound_omp_session":"native","created_at":"2026-10-06T00:00:00Z","updated_at":"2026-10-06T00:00:00Z",
+            "launch_shell_identity":{"process":{"pid":123,"start_ticks":1,"kernel_boot_id":"00000000-0000-0000-0000-000000000001"},
+                "executable_device":"1","executable_inode":"2","argv_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
         })).unwrap()
     }
 

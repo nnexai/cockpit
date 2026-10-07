@@ -1649,3 +1649,4 @@ kbd {
 .tab-strip-action:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
 .tab-strip-actions .tab-strip-action { height: 28px; margin-left: 6px; padding: 0 10px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); font-size: var(--font-size-control); font-weight: 500; }
 .tab-strip-actions .tab-strip-action:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text-primary); }
+.tab-strip-actions .tab-strip-action[aria-pressed="true"]:not(:disabled) { background: var(--select-fill); color: var(--accent); border-color: var(--border-strong); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); }

@@ -228,6 +228,166 @@ pub struct RunLocation {
     pub pane_id: String,
     pub launch_tag: String,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct NativeProcessIdentity {
+    pub pid: u32,
+    #[ts(type = "number")]
+    pub start_ticks: u64,
+    pub kernel_boot_id: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct NativeShellIdentity {
+    pub process: NativeProcessIdentity,
+    pub executable_device: String,
+    pub executable_inode: String,
+    pub argv_digest: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RetirementTrigger {
+    Accept,
+    AcceptRecovery,
+    OperatorConflictResolution,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct RetirementIdentity {
+    pub run_attempt: u32,
+    pub launch_attempt: u32,
+    pub launch_tag: String,
+    pub endpoint_identity: String,
+    pub session_id: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub herdr_boot_id: Option<String>,
+    pub omp_session_id: String,
+    pub process: NativeProcessIdentity,
+    pub shell: NativeShellIdentity,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct RunRetirement {
+    pub retirement_id: String,
+    pub trigger: RetirementTrigger,
+    pub result_message_id: String,
+    pub task_revision: String,
+    pub identity: Option<RetirementIdentity>,
+    pub state: RetirementState,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+#[ts(tag = "state", rename_all = "snake_case")]
+pub enum RetirementState {
+    Waiting {
+        blockers: Vec<RetirementBlocker>,
+    },
+    NativeStopOffered {
+        offered_at: String,
+    },
+    NativeStopDeferred {
+        offered_at: String,
+        reason: NativeDeferReason,
+        at: String,
+    },
+    NativeStopRequested {
+        at: String,
+    },
+    NativeStopped {
+        at: String,
+        evidence: NativeStopEvidence,
+    },
+    CloseIntent {
+        at: String,
+    },
+    Retired {
+        at: String,
+        terminal: TerminalOutcome,
+    },
+    Retained {
+        at: String,
+        reason: RetainReason,
+        native_stopped: bool,
+    },
+    Unknown {
+        at: String,
+        phase: RetirementPhase,
+        detail: String,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RetirementBlocker {
+    OpenDescendantRuns,
+    RunningSubagents,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeDeferReason {
+    Busy,
+    PendingMessages,
+    AsyncJobs,
+    LiveSubagents,
+    EditorDraft,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeStopEvidence {
+    ExitedAfterShutdownRequest,
+    AlreadyExited,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalOutcome {
+    ClosedByCockpit,
+    AlreadyAbsent,
+    AbsentAfterUncertainClose,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RetainReason {
+    IdentityIncomplete,
+    IdentityChanged,
+    EndpointChanged,
+    NativeProcessUnverifiable,
+    ProcessPaneMismatch,
+    WorkerUnresponsive,
+    WorkerBusyTimeout,
+    UserActivity,
+    NativeRefused,
+    SharedTab,
+    TabRenamed,
+    PaneMoved,
+    ForegroundProcess,
+    ObservationUnavailable,
+    HerdrRefused,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RetirementPhase {
+    NativeStop,
+    TerminalClose,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeRefuseReason {
+    UserActivity,
+    NativeRefused,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+#[ts(tag = "outcome", rename_all = "snake_case")]
+pub enum NativeStopReceipt {
+    ShutdownRequested,
+    Deferred {
+        reason: NativeDeferReason,
+    },
+    Refused {
+        reason: NativeRefuseReason,
+        text: String,
+    },
+}
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Run {
     pub session_id: String,
@@ -254,6 +414,12 @@ pub struct Run {
     pub annotations: Vec<Annotation>,
     pub location: Option<RunLocation>,
     pub bound_omp_session: Option<String>, // set by RunBindSession; cleared by RetryLaunch
+    #[serde(default)]
+    pub bound_omp_process: Option<NativeProcessIdentity>, // trusted bind evidence; cleared by RetryLaunch
+    #[serde(default)]
+    pub launch_shell_identity: Option<NativeShellIdentity>, // captured before launch; cleared by RetryLaunch
+    #[serde(default)]
+    pub retirement: Option<RunRetirement>, // created with accepted closure; never backfilled
     pub supersedes_run_id: Option<String>, // from RunPropose; applied on GrantPrepare
     pub created_at: String,
     pub updated_at: String,
@@ -469,6 +635,7 @@ pub enum AttentionKind {
     ExitedWithoutReport,
     DispatchUnknown,
     IntentConflict,
+    RetirementUnconfirmed,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Attention {
@@ -524,6 +691,10 @@ pub enum OrchestrationAction {
     RunBindSession {
         omp_session_id: String,
     }, // main-session extension at session_start
+    RetirementNativeReceipt {
+        retirement_id: String,
+        outcome: NativeStopReceipt,
+    }, // bound main session of the accepted retiring worker only
     RunAdopt {
         label: String,
     }, // unbound agent: binds caller pane as Adopted root
@@ -671,6 +842,78 @@ pub enum OrchestrationActionResult {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn legacy_run_does_not_backfill_native_identity_or_retirement() {
+        let legacy = json!({
+            "session_id": "session", "prepare_brief": "Prepare", "run_id": "worker",
+            "kind": "worker", "label": "Worker", "root_id": "root",
+            "parent_run_id": "root", "task_id": "task", "attempt": 1,
+            "task_revision_at_propose": null, "stage": "closed", "close_reason": "accepted",
+            "dispatch": null, "target": null, "setup": null, "prepare_plan": null,
+            "init_receipt": null, "work_plan": null, "grants": [], "last_report": null,
+            "result": null, "annotations": [], "location": null, "bound_omp_session": "omp",
+            "supersedes_run_id": null, "created_at": "2026-10-05T12:00:00Z",
+            "updated_at": "2026-10-05T12:00:00Z",
+        });
+        let run: Run = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(run.bound_omp_process, None);
+        assert_eq!(run.launch_shell_identity, None);
+        assert!(run.retirement.is_none());
+        let mut expected = legacy;
+        expected["bound_omp_process"] = Value::Null;
+        expected["launch_shell_identity"] = Value::Null;
+        expected["retirement"] = Value::Null;
+        assert_eq!(serde_json::to_value(run).unwrap(), expected);
+    }
+
+    #[test]
+    fn native_stop_evidence_round_trips_without_receipt_inference() {
+        for evidence in ["exited_after_shutdown_request", "already_exited"] {
+            let value = json!({
+                "state": "native_stopped", "at": "2026-10-05T12:00:00Z", "evidence": evidence,
+            });
+            let state: RetirementState = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(state).unwrap(), value);
+        }
+        assert!(
+            serde_json::from_value::<RetirementState>(json!({
+                "state": "native_stopped", "at": "2026-10-05T12:00:00Z",
+                "evidence": "shutdown_requested",
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn native_refusal_requires_a_typed_reason_separate_from_text() {
+        let value = json!({
+            "action": "retirement_native_receipt",
+            "retirement_id": "7b613f19-4a52-41fa-8864-a880cd69ef50",
+            "outcome": {
+                "outcome": "refused", "reason": "native_refused",
+                "text": "user_activity is diagnostic text only",
+            },
+        });
+        let action: OrchestrationAction = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(
+            &action,
+            OrchestrationAction::RetirementNativeReceipt {
+                outcome: NativeStopReceipt::Refused {
+                    reason: NativeRefuseReason::NativeRefused,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(action).unwrap(), value);
+        let mut missing = value.clone();
+        missing["outcome"].as_object_mut().unwrap().remove("reason");
+        assert!(serde_json::from_value::<OrchestrationAction>(missing).is_err());
+        let mut unknown = value;
+        unknown["outcome"]["reason"] = json!("unknown");
+        assert!(serde_json::from_value::<OrchestrationAction>(unknown).is_err());
+    }
 
     #[test]
     fn legacy_grants_preserve_operator_origin_and_identity() {

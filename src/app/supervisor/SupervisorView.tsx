@@ -1,47 +1,41 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { RowSplitter } from "./RowSplitter";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ActorRef, OrchestrationSnapshot, Run, SessionSnapshotResponse, Subagent, TaskView } from "../../protocol/generated/v1";
+import type { AttentionKind, OrchestrationSnapshot, Run, SessionSnapshotResponse, TaskLane, TaskView } from "../../protocol/generated/v1";
 import { useRovingList } from "../sidebar/useRovingList";
-import { StateGlyph } from "../sidebar/StateGlyph";
 import { UiIcon } from "../UiIcon";
 import { SupervisorGraph } from "./SupervisorGraph";
-import { taskLanes, taskNeighbor } from "./boardNavigation";
-import { AgentRecovery, agentState, ObservedEvidence, ReportedEvidence, RunDiagnostics, SupervisorActions, taskStatus, TextAction } from "./SupervisorActions";
+import { taskLanes, taskNeighbor, visibleTaskIds } from "./boardNavigation";
+import { agentState, recoveryActions, SupervisorActions, taskStatus, TextAction, type PathRowView } from "./SupervisorActions";
 import { SupervisorDialogs, type StartDraft, type SupervisorDialogState } from "./SupervisorDialogs";
-import { messageDraft, useSupervisorDrafts, type ScopeDrafts } from "./useSupervisorDrafts";
+import { messageDraft, useSupervisorDrafts } from "./useSupervisorDrafts";
 import { useSupervisor } from "./useSupervisor";
+import { deriveAttention, rootAttentionSummary, TIER_LABEL, TIER_ORDER, type AttentionTier, type LocalCondition } from "./attention";
+import { AttentionQueue, SupervisorSummary, type QueueAction, type QueueRowView } from "./SupervisorAttention";
+import { activityRows, ClosedTracking, SupervisorActivity, SupervisorDiagnostics, type ClosedTaskCount } from "./SupervisorActivity";
+import { AgentsStrip, TaskCard, type StripChip } from "./SupervisorTasks";
+import { buildSupervisorGraph, nodeFacts, nodeSelection, pathNodes, selectionNodeId, type TopologyNode } from "./topology";
+import { PanelSplitter } from "./PanelSplitter";
+import { GRAPH_GEOMETRY } from "./graphLayout";
+import { panelBounds, panelPlacement, queueCap, useSupervisorLayout, type PanelKind } from "./useSupervisorLayout";
+import { isCovered, readOffset, revealNearest, writeOffset } from "./reveal";
+import { retirementView } from "./retirementView";
 import "./supervisor.css";
 
-type ForestRow = { key: string; depth: number; run: Run; subagent: Subagent | null };
-export function supervisorForest(snapshot: OrchestrationSnapshot, includeSubagents: boolean): ForestRow[] {
-  const rows: ForestRow[] = [];
-  const visited = new Set<string>();
-  const appendRun = (run: Run, depth: number) => {
-    if (visited.has(run.run_id)) return;
-    visited.add(run.run_id); rows.push({ key: run.run_id, depth, run, subagent: null });
-    if (includeSubagents) {
-      const seen = new Set<string>();
-      const children = snapshot.subagents.filter(agent => agent.run_id === run.run_id);
-      const appendSubagent = (agent: Subagent, level: number) => {
-        if (seen.has(agent.subagent_id)) return;
-        seen.add(agent.subagent_id); rows.push({ key: `${run.run_id}:${agent.subagent_id}`, depth: level, run, subagent: agent });
-        children.filter(child => child.parent_subagent_id === agent.subagent_id).forEach(child => appendSubagent(child, level + 1));
-      };
-      children.filter(agent => !agent.parent_subagent_id || !children.some(parent => parent.subagent_id === agent.parent_subagent_id)).forEach(agent => appendSubagent(agent, depth + 1));
-      children.forEach(agent => appendSubagent(agent, depth + 1));
-    }
-    snapshot.runs.filter(child => child.parent_run_id === run.run_id).forEach(child => appendRun(child, depth + 1));
-  };
-  snapshot.runs.filter(run => !run.parent_run_id || !snapshot.runs.some(parent => parent.run_id === run.parent_run_id)).forEach(run => appendRun(run, 0));
-  snapshot.runs.forEach(run => appendRun(run, 0));
-  return rows;
-}
-function actorName(actor: ActorRef, snapshot: OrchestrationSnapshot): string {
-  if (actor.type === "operator") return "You";
-  if (actor.type === "dispatcher") return "Dispatcher";
-  return snapshot.runs.find(run => run.run_id === actor.run_id)?.label ?? "Agent";
-}
+const ATTENTION_PROBLEM: Record<AttentionKind, string> = {
+  needs_input: "Needs your answer",
+  runtime_blocked: "Blocked without a question",
+  dispatch_unknown: "Dispatch unconfirmed",
+  exited_without_report: "Exited without a Result",
+  idle_without_report: "Idle without a Result",
+  brief_unread: "Brief not read yet",
+  plan_changed: "Plan changed",
+  intent_conflict: "Task changed during acceptance",
+  awaits_prepare: "Waiting for supervisor",
+  awaits_execute: "Waiting for supervisor",
+  to_accept: "Supervisor is reviewing",
+  retirement_unconfirmed: "Worker retirement unconfirmed",
+};
+
 export function SupervisorView({ client, sessionId, session, runtimeLive, active, startToken, navigationError, onClose, onTerminal, onModalChange }: {
   client: CockpitClient; sessionId: string; session: SessionSnapshotResponse | null; runtimeLive: boolean; active: boolean; startToken: number;
   navigationError: string | null; onClose(): void; onTerminal(run: Run, snapshot: OrchestrationSnapshot): Promise<void>; onModalChange(open: boolean): void;
@@ -59,81 +53,169 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   const startLock = useRef(false);
   const [pendingRestart, setPendingRestart] = useState<string | null>(null);
   const [hoverSpace, setHoverSpace] = useState<string | null>(null);
-  const detailInvoker = useRef<HTMLElement | null>(null);
   const [hoverRun, setHoverRun] = useState<string | null>(null);
   const [detailSection, setDetailSection] = useState<"overview" | "activity" | "actions">("overview");
-  const [narrowView, setNarrowView] = useState<"board" | "agents">("board");
-  const [graphHeight, setGraphHeight] = useState<number | null>(null);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [focusTier, setFocusTier] = useState<AttentionTier | null>(null);
+  const [focusNotice, setFocusNotice] = useState<string | null>(null);
+  const [inlineQueueCap, setInlineQueueCap] = useState<number | null>(null);
+  const [graphViewportHeight, setGraphViewportHeight] = useState<number | null>(null);
+  const [archiveCounts, setArchiveCounts] = useState<ReadonlyMap<string, ClosedTaskCount>>(new Map());
+  const archiveGeneration = useRef(0);
+  const detailInvoker = useRef<HTMLElement | null>(null);
+  const panelInvoker = useRef<HTMLElement | null>(null);
+  const counterInvoker = useRef<HTMLElement | null>(null);
+  const returnFocusIntent = useRef<{ invoker: Element | null } | null>(null);
   const startDraft = useRef<StartDraft>({ label: "", location: "existing", spaceId: "", directory: "" });
   const lastSession = useRef(sessionId);
   const seenStart = useRef(0);
   const rootRef = useRef<HTMLElement>(null);
+  const workareaRef = useRef<HTMLDivElement>(null);
+  const graphRef = useRef<HTMLDivElement>(null);
+  const laneRefs = useRef<Partial<Record<TaskLane, HTMLUListElement | null>>>({});
   const focusedTask = useRef<string | null>(null);
+  const focusedGraph = useRef<string | null>(null);
+  const focusWithinDetail = useRef(false);
   const questionHadFocus = useRef(false);
   const startFocus = useRef<{ runId: string | null; invoker: Element | null } | null>(null);
   const lastTaskIds = useRef<string[]>([]);
   const opened = useRef(false);
   const initialRootSnapshot = useRef<OrchestrationSnapshot | null>(null);
-  const [focusNotice, setFocusNotice] = useState<string | null>(null);
+  const revealIntent = useRef<{ focus: boolean } | null>(null);
+  const explicitFocus = useRef(false);
+  const previousGraph = useRef<{ scope: typeof scope; ids: readonly string[] } | null>(null);
+  const layout = useSupervisorLayout(workareaRef);
+  const mode = scope.view.mode;
   const modalVisible = !!dialog && active && !!snapshot;
   useEffect(() => { onModalChange(modalVisible); return () => onModalChange(false); }, [modalVisible, onModalChange]);
   useEffect(() => {
     if (lastSession.current === sessionId) return;
-    lastSession.current = sessionId; setRootId(null); setDialog(null); setTerminalError(null); setNotice(null); setStartUnknown(false); setPendingRestart(null);
+    lastSession.current = sessionId; setRootId(null); setDialog(null); setTerminalError(null); setNotice(null); setStartUnknown(false); setPendingRestart(null); setAttentionOpen(false);
     startDraft.current = { label: "", location: "existing", spaceId: "", directory: "" };
   }, [sessionId]);
   const root = snapshot?.runs.find(run => run.run_id === (rootId ?? snapshot.board?.root_id) && run.run_id === run.root_id && (run.stage !== "closed" || rootId === run.run_id)) ?? null;
   const openRoots = snapshot?.roots.filter(summary => snapshot.runs.some(run => run.run_id === summary.root_id && run.stage !== "closed")) ?? [];
   const closedRoots = snapshot?.roots.filter(summary => snapshot.runs.some(run => run.run_id === summary.root_id && run.stage === "closed")) ?? [];
-  const orphanedWorkers = snapshot?.runs.filter(run => run.stage !== "closed" && !!run.parent_run_id && closedRoots.some(summary => summary.root_id === run.root_id)) ?? [];
+  const orphanedWorkers = snapshot?.runs.filter(run => run.stage !== "closed" && !!run.parent_run_id && closedRoots.some(summary => summary.root_id === run.root_id) && (!root || run.root_id === root.run_id)) ?? [];
   useEffect(() => {
-    if (snapshot && !rootId && openRoots.length) {
-      initialRootSnapshot.current = snapshot;
-      setRootId(openRoots[0].root_id);
-    }
+    if (snapshot && !rootId && openRoots.length) { initialRootSnapshot.current = snapshot; setRootId(openRoots[0].root_id); }
   }, [snapshot, rootId]);
   const live = connected && runtimeLive && snapshot?.runtime.status === "fresh";
   const destination = runtimeLive && session ? session.spaces.find(space => space.id === session.focused_space_id) : undefined;
   const rootState = root && snapshot ? agentState(snapshot, root, connected, runtimeLive) : null;
   const tasks = root && snapshot?.board?.root_id === root.run_id ? snapshot.board.tasks : [];
   const rootRuns = root ? snapshot?.runs.filter(run => run.root_id === root.run_id) ?? [] : [];
-  const descendants = rootRuns.filter(run => run.run_id !== root?.run_id && run.stage !== "closed");
   const selectedAgent = rootRuns.find(run => run.run_id === scope.selectedRun) ?? null;
-  const observations = live && snapshot?.runtime.status === "fresh" ? snapshot.runtime.runs : [];
+  // Saved location remains useful, but observed status helpers independently enforce freshness.
+  const observations = snapshot?.runtime.status === "fresh" ? snapshot.runtime.runs : [];
   const observe = (runId: string | null | undefined) => observations.find(item => item.run_id === runId);
-  const forest = snapshot ? supervisorForest(snapshot, scope.showSubagents).filter(row => row.run.root_id === root?.run_id && row.run.stage !== "closed") : [];
-  const openTasks = tasks.filter(task => task.lane !== "accepted");
-  const taskIds = taskLanes.flatMap(({ lane }) => lane === "accepted" && !scope.disclosures.completed ? [] : tasks.filter(task => task.lane === lane).map(task => task.task.task_id));
-  const { listRef, listProps, tabIndexFor, focusRow } = useRovingList({ rowIds: taskIds, selectedId: scope.selectedTask, onEscape: () => { if (scope.selectedTask) { scope.selectedTask = null; changed(); } else onClose(); return true; } });
-  const focusTaskOrStart = () => {
-    const taskId = scope.selectedTask && taskIds.includes(scope.selectedTask) ? scope.selectedTask : taskIds[0];
-    if (taskId) focusRow(taskId);
-    else rootRef.current?.querySelector<HTMLButtonElement>("[data-start-agent]")?.focus({ preventScroll: true });
+  const selectedTask = tasks.find(task => task.task.task_id === scope.selectedTask) ?? null;
+  const detailRun = selectedTask ? snapshot?.runs.find(run => run.run_id === selectedTask.current_run_id) ?? null : selectedAgent;
+  const detailTask = selectedTask ?? tasks.find(task => task.task.task_id === detailRun?.task_id) ?? null;
+  const detailSubagent = !selectedTask ? snapshot?.subagents.find(agent => agent.run_id === selectedAgent?.run_id && agent.subagent_id === scope.selectedSubagent) ?? null : null;
+  const detailOpen = !!selectedTask || !!selectedAgent;
+  const sharedSpace = hoverSpace ?? observe(selectedAgent?.run_id)?.workspace_id ?? observe(selectedTask?.current_run_id)?.workspace_id;
+  const navOptions = { arrangement: layout.narrow ? "stacked" as const : "lanes" as const, completedOpen: scope.disclosures.completed, collapsedLanes: scope.view.collapsedLanes };
+  const taskIds = visibleTaskIds(tasks, navOptions);
+  const { listRef, listProps, tabIndexFor, focusRow } = useRovingList({ rowIds: taskIds, selectedId: scope.selectedTask, onEscape: () => { escapeLayer(); return true; } });
+  const model = useMemo(() => snapshot && root ? buildSupervisorGraph({ snapshot, root, rootId: root.run_id, tasks, includeSubagents: scope.showSubagents }) : null, [snapshot, root, scope.showSubagents]);
+  const selectedNode = selectionNodeId(scope);
+  const panelKind: PanelKind | null = attentionOpen && layout.queueMode === "overlay" ? "attention" : detailOpen ? "details" : scope.disclosures.diagnostics ? "diagnostics" : scope.disclosures.history ? "activity" : null;
+  const sheetMax = graphViewportHeight === null ? null : Math.floor(graphViewportHeight - GRAPH_GEOMETRY.headerHeight - GRAPH_GEOMETRY.nodeHeight - GRAPH_GEOMETRY.padding);
+  const requestedPlacement = panelKind ? panelPlacement(layout, mode, panelKind) : null;
+  const placement = requestedPlacement === "sheet" && sheetMax !== null && sheetMax < 160 ? "overlay" : requestedPlacement;
+  const bounds = placement ? panelBounds(layout, placement, scope.view, mode === "graph" ? sheetMax : null) : null;
+  const bottomInset = placement === "sheet" ? bounds?.value ?? 0 : 0;
+  const rowElement = (id: string | null) => [...rootRef.current?.querySelectorAll<HTMLElement>("[data-row-id]") ?? []].find(element => element.dataset.rowId === id);
+  const selectedVisibleId = () => mode === "graph" ? selectedNode : scope.selectedTask ?? (scope.selectedRun ? tasks.find(task => task.current_run_id === scope.selectedRun)?.task.task_id ?? null : null);
+  const revealSelection = (focus: boolean, coveredOnly = false) => {
+    const element = rowElement(selectedVisibleId());
+    const scroller = mode === "graph" ? graphRef.current : layout.narrow ? listRef.current : element?.closest<HTMLUListElement>(".supervisor-task-list");
+    if (!element || !scroller) {
+      if (focus) rootRef.current?.querySelector<HTMLButtonElement>(`[data-view-segment="${mode}"]`)?.focus({ preventScroll: true });
+      return;
+    }
+    const insets = mode === "graph" ? { top: 28, bottom: bottomInset } : {};
+    if (!coveredOnly || isCovered(scroller, element, insets)) revealNearest(scroller, element, insets);
+    if (focus) element.focus({ preventScroll: true });
   };
+  const focusTaskOrStart = () => {
+    if (mode === "graph" && model?.nodes.length) {
+      const id = selectedNode && model.byId.has(selectedNode) ? selectedNode : model.nodes[0].id;
+      rowElement(id)?.focus({ preventScroll: true }); return;
+    }
+    const id = scope.selectedTask && taskIds.includes(scope.selectedTask) ? scope.selectedTask : taskIds[0];
+    if (id) focusRow(id); else rootRef.current?.querySelector<HTMLButtonElement>("[data-start-agent]")?.focus({ preventScroll: true });
+  };
+  const saveOffsets = () => {
+    const scroller = mode === "graph" ? graphRef.current : listRef.current;
+    if (scroller) scope.view.offsets[mode] = readOffset(scroller);
+    for (const { lane } of taskLanes) { const list = laneRefs.current[lane]; if (list && !layout.narrow) scope.view.laneScroll[lane] = list.scrollTop; }
+  };
+  useLayoutEffect(() => {
+    if (!root || !active) return;
+    const scroller = mode === "graph" ? graphRef.current : listRef.current;
+    if (scroller && scope.view.offsets[mode]) writeOffset(scroller, scope.view.offsets[mode]!);
+    if (mode === "tasks" && !layout.narrow) for (const { lane } of taskLanes) { const list = laneRefs.current[lane]; if (list) list.scrollTop = scope.view.laneScroll[lane] ?? 0; }
+    revealSelection(revealIntent.current?.focus ?? false, true);
+    revealIntent.current = null;
+    return saveOffsets;
+  }, [scope, mode, active, !!root]);
+  useLayoutEffect(() => {
+    if (!revealIntent.current || !active) return;
+    revealSelection(revealIntent.current.focus); revealIntent.current = null;
+  });
+  useLayoutEffect(() => {
+    const graph = graphRef.current, workarea = workareaRef.current;
+    if (mode !== "graph" || !active || !graph || !workarea) { setGraphViewportHeight(null); return; }
+    const measure = () => {
+      const available = Math.min(graph.clientHeight, workarea.getBoundingClientRect().bottom - graph.getBoundingClientRect().top);
+      const next = available > 0 ? available : null;
+      setGraphViewportHeight(current => current === next ? current : next);
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(graph); observer?.observe(workarea);
+    return () => observer?.disconnect();
+  }, [mode, active, rootId, !!root, layout.width, layout.height, layout.queueMode]);
+  useLayoutEffect(() => { if (detailOpen && mode === "graph") revealSelection(false, true); }, [layout.width, layout.height, bounds?.value, placement]);
   useEffect(() => {
     if (!active) { opened.current = false; return; }
-    // Selecting the initial root reloads the board; focus only its scoped snapshot.
     if (!snapshot || snapshot === initialRootSnapshot.current || opened.current || dialog) return;
-    initialRootSnapshot.current = null;
-    opened.current = true;
-    focusTaskOrStart();
+    initialRootSnapshot.current = null; opened.current = true;
+    if (placement === "overlay" && panelKind) rootRef.current?.querySelector<HTMLButtonElement>(".supervisor-detail-header button,.supervisor-queue-header button")?.focus({ preventScroll: true });
+    else focusTaskOrStart();
   }, [active, snapshot, dialog, root]);
   useEffect(() => {
-    if (!snapshot) return;
-    const removed = focusedTask.current && !taskIds.includes(focusedTask.current);
-    if (removed && active) {
-      const index = lastTaskIds.current.indexOf(focusedTask.current!);
-      if (scope.selectedTask === focusedTask.current) { scope.selectedTask = null; changed(); }
+    if (!snapshot || snapshot.board?.root_id !== rootId || !active) return;
+    const id = focusedTask.current;
+    if (id && !taskIds.includes(id) && mode === "tasks") {
+      const index = lastTaskIds.current.indexOf(id);
+      if (scope.selectedTask === id) { scope.selectedTask = null; changed(); }
       const next = taskIds[Math.min(Math.max(index, 0), taskIds.length - 1)];
       if (next) focusRow(next); else rootRef.current?.querySelector<HTMLButtonElement>("[data-start-agent]")?.focus({ preventScroll: true });
       focusedTask.current = next ?? null; setFocusNotice(next ? "The focused task changed elsewhere. Focus moved to the next available task." : "The focused task changed elsewhere. Focus moved to Start agent.");
     }
+    // Closed graph rows and removed canonical tasks are no longer selectable; kept Done tasks remain selectable in Tasks.
+    const gone = scope.selectedTask && !tasks.some(task => task.task.task_id === scope.selectedTask) || scope.selectedRun && (!selectedAgent || selectedAgent.stage === "closed") || scope.selectedSubagent && !detailSubagent;
+    const graphItemRemoved = mode === "graph" && selectedNode && previousGraph.current?.scope === scope && previousGraph.current.ids.includes(selectedNode) && !model?.byId.has(selectedNode);
+    if (gone || graphItemRemoved) {
+      const hadFocus = focusWithinDetail.current || focusedGraph.current === selectedNode || !!rowElement(selectedNode)?.contains(document.activeElement);
+      scope.selectedTask = null; scope.selectedRun = null; scope.selectedSubagent = null; changed();
+      if (hadFocus) {
+        const oldIndex = selectedNode ? previousGraph.current?.ids.indexOf(selectedNode) ?? 0 : 0;
+        const next = model?.layout.order[Math.min(Math.max(oldIndex, 0), model.layout.order.length - 1)];
+        requestAnimationFrame(() => {
+          if (mode === "graph" && next) rowElement(next)?.focus({ preventScroll: true });
+          else if (mode === "graph") rootRef.current?.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')?.focus({ preventScroll: true });
+          else focusTaskOrStart();
+        });
+      }
+    }
     lastTaskIds.current = taskIds;
-  }, [tasks, scope.disclosures.completed, active]);
-  const started = (runId: string) => {
-    if (startFocus.current) startFocus.current.runId = runId;
-    setRootId(runId); setStartUnknown(false); setNotice(null);
-  };
+    previousGraph.current = { scope, ids: model?.layout.order ?? [] };
+  }, [snapshot, active, mode]);
+  const started = (runId: string) => { if (startFocus.current) startFocus.current.runId = runId; setRootId(runId); setStartUnknown(false); setNotice(null); };
   const start = async () => {
     if (!snapshot || !connected || busy || startLock.current || startUnknown || rootState?.kind === "starting") return;
     if (!destination) { setDialog({ mode: "start" }); return; }
@@ -145,31 +227,22 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
       else { setStartUnknown(true); setNotice("The start was not confirmed. Check status before starting another agent; a terminal may already have opened."); }
     } finally { startLock.current = false; setStartPending(false); }
   };
-  useEffect(() => {
-    if (startToken <= seenStart.current || !active || !snapshot || !connected) return;
-    seenStart.current = startToken; void start();
-  }, [startToken, active, snapshot, connected]);
+  useEffect(() => { if (startToken > seenStart.current && active && snapshot && connected) { seenStart.current = startToken; void start(); } }, [startToken, active, snapshot, connected]);
   useEffect(() => {
     if (!active || !rootState?.verified || !root || startFocus.current?.runId !== root.run_id) return;
-    if (document.activeElement === startFocus.current.invoker) focusTaskOrStart();
-    startFocus.current = null;
+    if (document.activeElement === startFocus.current.invoker) focusTaskOrStart(); startFocus.current = null;
   }, [active, root, rootState?.verified]);
   const navigate = async (run: Run) => {
     if (!snapshot || !live || busy) return;
     try { setTerminalError(null); await onTerminal(run, snapshot); }
     catch (cause) { setTerminalError(`Could not open terminal. ${cause instanceof Error ? cause.message : "Check its current location and try again."}`); }
   };
-  const check = (run: Run) => {
-    if (!connected || !runtimeLive || !run.dispatch) { refresh(); return; }
-    void mutateResult({ action: "reconcile_run", run_id: run.run_id, recovery: null });
-  };
+  const check = (run: Run) => { if (!connected || !runtimeLive || !run.dispatch) { refresh(); return; } void mutateResult({ action: "reconcile_run", run_id: run.run_id, recovery: null }); };
   const restart = async (run: Run) => {
     if (!connected || !runtimeLive || busy || !run.dispatch) return;
     if (run.dispatch.step === "setup_unknown") { setDialog({ mode: "setup_recovery", run }); return; }
-    if (run.dispatch.step === "plan_failed") {
-      await mutateResult({ action: "reconcile_run", run_id: run.run_id, recovery: null }); return;
-    }
-    if (run.dispatch?.step === "launch_unknown" || run.dispatch?.step === "needs_review") { setDialog({ mode: "retry", run }); return; }
+    if (run.dispatch.step === "plan_failed") { await mutateResult({ action: "reconcile_run", run_id: run.run_id, recovery: null }); return; }
+    if (run.dispatch.step === "launch_unknown" || run.dispatch.step === "needs_review") { setDialog({ mode: "retry", run }); return; }
     setNotice("Checking the previous launch before restart…");
     if (await mutateResult({ action: "reconcile_run", run_id: run.run_id, recovery: null })) setPendingRestart(run.run_id);
     else setNotice("The previous launch could not be checked. No new agent was requested; tasks and history are kept.");
@@ -182,160 +255,376 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
     if (run.dispatch?.step === "launch_unknown" || run.dispatch?.step === "needs_review") { setPendingRestart(null); setNotice(null); setDialog({ mode: "retry", run }); }
     else if (agentState(snapshot, run, connected, runtimeLive).verified) { setPendingRestart(null); setNotice("The original OMP agent is still connected. No new launch was started."); }
   }, [pendingRestart, snapshot, active, connected, runtimeLive]);
-  const edit = (task: TaskView) => {
-    let draft = scope.edits.get(task.task.task_id);
-    if (!draft) { draft = { title: task.task.title, body: task.task.body, revision: task.task.task_revision }; scope.edits.set(task.task.task_id, draft); }
-    setDialog({ mode: "edit", task, draft });
-  };
-  const disclosures = (key: keyof ScopeDrafts["disclosures"], open: boolean) => { if (scope.disclosures[key] !== open) { scope.disclosures[key] = open; changed(); } };
-  const recovery = (run: Run) => snapshot ? <AgentRecovery key={run.run_id} run={run} state={agentState(snapshot, run, connected, runtimeLive)} busy={busy || startPending || pendingRestart === run.run_id} connected={connected} runtimeLive={runtimeLive && snapshot.runtime.status === "fresh"} onCheck={() => check(run)} onRestart={() => void restart(run)} onCloseTracking={() => setDialog({ mode: "close", run })} onTerminal={() => void navigate(run)} /> : null;
-  const failures = descendants.filter(run => snapshot && ["failure", "missing", "unknown"].includes(agentState(snapshot, run, connected, runtimeLive).kind) && !["proposed", "awaiting_prepare"].includes(run.stage));
-  const question = root?.stage !== "closed" && root?.last_report?.kind === "needs_input" ? root.last_report : null;
-  const answer = question && root ? messageDraft(scope, `answer:${root.run_id}:${question.message_id}`) : null;
-  const answered = question && root && snapshot?.messages.some(message => message.to_run_id === root.run_id && message.kind === "answer" && !message.stale && message.created_at >= question.at);
-  useEffect(() => {
-    if (active && questionHadFocus.current && (!question || answered)) {
-      questionHadFocus.current = false;
-      focusTaskOrStart();
-    }
-  }, [active, question?.message_id, answered]);
+  const edit = (task: TaskView) => { let draft = scope.edits.get(task.task.task_id); if (!draft) { draft = { title: task.task.title, body: task.task.body, revision: task.task.task_revision }; scope.edits.set(task.task.task_id, draft); } setDialog({ mode: "edit", task, draft }); };
   const assignmentIntents = snapshot?.assignment_intents.filter(intent => intent.root_id === root?.run_id) ?? [];
-  const acceptanceConflicts = snapshot?.intents.filter(intent => intent.root_id === root?.run_id && intent.state === "conflict") ?? [];
-  const history = snapshot ? [
-    ...snapshot.messages.filter(message => rootRuns.some(run => run.run_id === message.to_run_id)).map(message => {
-      const recipient = snapshot.runs.find(run => run.run_id === message.to_run_id)?.label ?? "Agent";
-      const task = message.message_id.startsWith("assign-") ? tasks.find(task => `assign-${task.task.task_id}` === message.message_id) : undefined;
-      const systemBrief = ["supervisor_brief", "prepare_brief", "work_brief"].includes(message.kind);
-      const pointer = message.kind === "observation" || !!task;
-      const summary = message.report?.summary ?? (task ? `Task assigned: ${task.task.title}` : systemBrief ? `Guidance delivered to ${recipient}` : pointer ? `Lifecycle update for ${recipient}` : message.text);
-      return { id: `message:${message.message_id}`, label: `${message.kind.replaceAll("_", " ")} · ${actorName(message.from, snapshot)}`, summary, at: message.created_at, detail: systemBrief || pointer ? `${summary}. Exact delivery records are available in Diagnostics.` : message.report?.summary ?? message.text, stale: message.stale };
-    }),
-    ...rootRuns.flatMap(run => run.grants.map(grant => ({ id: grant.grant_id, label: `${grant.scope === "prepare" ? "Preparation" : "Execution"} authorized · ${grant.origin === "supervisor" ? snapshot.runs.find(root => root.run_id === grant.supervisor_run_id)?.label ?? "Supervisor" : `You (${grant.origin})`}`, summary: run.label, at: grant.granted_at, detail: `An exact ${grant.scope === "prepare" ? "preparation" : "work"} plan was authorized for ${run.label}. Actor, actual OMP session and exact revision are retained in Diagnostics.`, stale: false }))),
-    ...rootRuns.flatMap(run => run.annotations.map((note, index) => {
-      const receiptNote = ["Acceptance requested for Result ", "Accepted Result at exact task revision ", "Recovered acceptance of Result "].some(prefix => note.text.startsWith(prefix));
-      const summary = receiptNote ? `Result review note for ${run.label}` : note.text;
-      return { id: `${run.run_id}:note:${index}`, label: `Note · ${actorName(note.by, snapshot)}`, summary, at: note.at, detail: receiptNote ? `${summary}. Exact result, revision and native session references are retained in Diagnostics.` : note.text, stale: false };
-    })),
-  ].sort((a, b) => b.at.localeCompare(a.at)) : [];
-  const sharedSpace = hoverSpace ?? observe(selectedAgent?.run_id)?.workspace_id ?? observe(tasks.find(task => task.task.task_id === scope.selectedTask)?.current_run_id)?.workspace_id;
-  const selectedTask = tasks.find(task => task.task.task_id === scope.selectedTask) ?? null;
-  const detailRun = selectedTask ? snapshot?.runs.find(run => run.run_id === selectedTask.current_run_id) ?? null : selectedAgent;
-  const detailTask = selectedTask ?? tasks.find(task => task.task.task_id === detailRun?.task_id) ?? null;
-  const detailSubagent = !selectedTask ? snapshot?.subagents.find(agent => agent.run_id === selectedAgent?.run_id && agent.subagent_id === scope.selectedSubagent) ?? null : null;
-  const detailOpen = !!selectedTask || !!selectedAgent;
-  const hasAttention = !!question && !answered || failures.length > 0 || !!root && (rootState?.kind !== "ready" || !!rootState?.blocked || root.last_report?.outcome === "failed") || orphanedWorkers.length > 0 || assignmentIntents.length > 0 || acceptanceConflicts.length > 0 || !!snapshot?.board?.unidentified_items || !!notice || startUnknown || !!terminalError || !!navigationError || !!error;
+  const local: LocalCondition[] = [];
+  if (startUnknown) local.push({ kind: "start_unknown" });
+  if (terminalError) local.push({ kind: "terminal_error", message: terminalError });
+  if (navigationError) local.push({ kind: "navigation_error" });
+  if (error && connected) local.push({ kind: "change_unconfirmed", message: error });
+  if (notice) local.push({ kind: "notice", message: notice });
+  for (const run of orphanedWorkers) local.push({ kind: "orphaned_worker", runId: run.run_id });
+  if (snapshot) for (const run of rootRuns) if (run.stage !== "closed" && !["proposed", "awaiting_prepare"].includes(run.stage) && ["failure", "missing", "unknown"].includes(agentState(snapshot, run, connected, runtimeLive).kind)) local.push({ kind: "agent_status", runId: run.run_id, taskId: run.task_id });
+  if (root?.last_report?.outcome === "failed") local.push({ kind: "root_failed_report", runId: root.run_id });
+  for (const intent of assignmentIntents) local.push({ kind: "assignment", taskId: intent.task_id, state: intent.state });
+  if (root && snapshot?.board?.unidentified_items) local.push({ kind: "unidentified_items", count: snapshot.board.unidentified_items });
+  const attention = snapshot ? deriveAttention({ snapshot, rootId: root?.run_id ?? null, local }) : null;
+  const decide = attention?.items.some(item => item.tier === "decide" && item.runId === root?.run_id) ?? false;
+  const question = decide && root?.last_report?.kind === "needs_input" ? root.last_report : null;
+  const answer = question && root ? messageDraft(scope, `answer:${root.run_id}:${question.message_id}`) : null;
   useEffect(() => {
-    const width = rootRef.current?.getBoundingClientRect().width ?? 0;
-    const invoker = document.activeElement as HTMLElement | null;
-    if (detailOpen && invoker?.dataset.rowId && (invoker.dataset.rowId === scope.selectedTask || !!scope.selectedTask && invoker.dataset.rowId.endsWith(`:${scope.selectedTask}`) || invoker.dataset.rowId === scope.selectedRun || invoker.dataset.rowId === `${scope.selectedRun}:${scope.selectedSubagent}`)) detailInvoker.current = invoker;
-    if (active && width > 0 && width < 720 && (detailOpen || scope.disclosures.history || scope.disclosures.diagnostics)) rootRef.current?.querySelector<HTMLButtonElement>(".supervisor-detail-header button")?.focus({ preventScroll: true });
-  }, [active, scope.selectedTask, scope.selectedRun, scope.selectedSubagent, scope.disclosures.history, scope.disclosures.diagnostics]);
-  const selectTask = (id: string) => { scope.selectedTask = scope.selectedTask === id ? null : id; scope.selectedRun = null; scope.selectedSubagent = null; setDetailSection("overview"); changed(); };
+    if (!active || !questionHadFocus.current || decide) return;
+    questionHadFocus.current = false;
+    if (attentionOpen) { setAttentionOpen(false); requestAnimationFrame(() => focusTaskOrStart()); }
+    else focusTaskOrStart();
+  }, [active, decide]);
+  const closeAttention = () => { setAttentionOpen(false); requestAnimationFrame(() => { if (counterInvoker.current?.isConnected) counterInvoker.current.focus({ preventScroll: true }); }); };
+  const closePanel = () => { scope.disclosures.history = false; scope.disclosures.diagnostics = false; changed(); requestAnimationFrame(() => panelInvoker.current?.isConnected && panelInvoker.current.focus({ preventScroll: true })); };
   const closeDetail = () => {
-    const taskId = scope.selectedTask;
-    const agentId = scope.selectedRun ? scope.selectedSubagent ? `${scope.selectedRun}:${scope.selectedSubagent}` : scope.selectedRun : null;
-    scope.selectedTask = null; scope.selectedRun = null; scope.selectedSubagent = null; changed();
-    requestAnimationFrame(() => {
-      if (detailInvoker.current?.isConnected && rootRef.current?.contains(detailInvoker.current)) { detailInvoker.current.focus(); return; }
-      if (taskId) focusRow(taskId);
-      else if (agentId) [...rootRef.current?.querySelectorAll<HTMLElement>("[data-row-id]") ?? []].find(element => element.dataset.rowId === agentId)?.focus();
+    const fallback = selectedVisibleId(); scope.selectedTask = null; scope.selectedRun = null; scope.selectedSubagent = null; changed();
+    requestAnimationFrame(() => { if (detailInvoker.current?.isConnected && rootRef.current?.contains(detailInvoker.current)) detailInvoker.current.focus({ preventScroll: true }); else { const row = rowElement(fallback); if (row) row.focus({ preventScroll: true }); else rootRef.current?.querySelector<HTMLButtonElement>(`[data-view-segment="${mode}"]`)?.focus({ preventScroll: true }); } });
+  };
+  function escapeLayer(target?: HTMLElement) {
+    if (target?.closest(".supervisor-queue-row.is-expanded")) { scope.view.queueOpenRow = "collapsed"; changed(); }
+    else if (attentionOpen) closeAttention(); else if (detailOpen) closeDetail();
+    else if (scope.disclosures.history || scope.disclosures.diagnostics) closePanel();
+    else if (scope.disclosures.archive) { scope.disclosures.archive = false; changed(); }
+    else onClose();
+  }
+  useLayoutEffect(() => {
+    const intent = returnFocusIntent.current;
+    if (!intent || dialog) return;
+    returnFocusIntent.current = null;
+    const view = rootRef.current;
+    if (!active || !view) return;
+    const candidates = [
+      intent.invoker,
+      ...view.querySelectorAll<HTMLElement>(".supervisor-queue-row.is-decide .supervisor-queue-summary,.supervisor-queue-row.is-recover .supervisor-queue-summary,.supervisor-summary-counter.is-decide,.supervisor-summary-counter.is-recover"),
+      view.querySelector<HTMLElement>(`[data-view-segment="${mode}"]`),
+      view.querySelector<HTMLElement>(".supervisor-start-options"),
+      view.querySelector<HTMLElement>('[data-start-agent]'),
+      view.querySelector<HTMLElement>('[aria-label="Hide Supervisor"]'),
+    ];
+    for (const candidate of candidates) {
+      if (!(candidate instanceof HTMLElement) || !candidate.isConnected || !view.contains(candidate) ||
+        candidate.matches(":disabled,[aria-disabled='true']") || candidate.closest("[hidden],[inert]")) continue;
+      let concealed = false;
+      for (let ancestor: HTMLElement | null = candidate.parentElement; ancestor && ancestor !== view; ancestor = ancestor.parentElement) {
+        if (ancestor instanceof HTMLDetailsElement && !ancestor.open && !ancestor.querySelector(":scope > summary")?.contains(candidate)) { concealed = true; break; }
+      }
+      if (concealed) continue;
+      candidate.focus({ preventScroll: true });
+      if (document.activeElement === candidate) break;
+    }
+  });
+  const clearPanels = () => { scope.disclosures.history = false; scope.disclosures.diagnostics = false; };
+  const select = (selection: { task: string } | { run: string; subagent: string | null }, invoker: HTMLElement | null, toggle: boolean, reveal: boolean, focus = false) => {
+    if (invoker) detailInvoker.current = invoker;
+    const same = "task" in selection ? scope.selectedTask === selection.task : scope.selectedRun === selection.run && scope.selectedSubagent === selection.subagent;
+    scope.selectedTask = "task" in selection && !(toggle && same) ? selection.task : null;
+    scope.selectedRun = "run" in selection && !(toggle && same) ? selection.run : null;
+    scope.selectedSubagent = "run" in selection && !(toggle && same) ? selection.subagent : null;
+    clearPanels(); setDetailSection("overview"); if (reveal) revealIntent.current = { focus }; changed();
+    if (focus) explicitFocus.current = true;
+  };
+  const switchView = (next: "tasks" | "graph", focus = false) => {
+    saveOffsets(); scope.view.mode = next; revealIntent.current = { focus }; changed();
+    if (focus) explicitFocus.current = true;
+    setFocusNotice(`${next === "graph" ? "Graph" : "Tasks"} view · ${model ? model.counts.supervisors + model.counts.workers + model.counts.subagents : 0} agents · ${tasks.filter(task => task.lane !== "accepted").length} tasks`);
+  };
+  useLayoutEffect(() => {
+    if (explicitFocus.current) { explicitFocus.current = false; return; }
+    if (active && placement === "overlay" && panelKind) rootRef.current?.querySelector<HTMLButtonElement>(".supervisor-detail-header button,.supervisor-queue-header button")?.focus({ preventScroll: true });
+  }, [active, panelKind, placement]);
+  // Fetch only on archive-open. Four concurrent requests bound provider load; identity/generation fence every completion.
+  const closedKey = closedRoots.map(root => root.root_id).sort().join("\u0000");
+  useEffect(() => {
+    const generation = ++archiveGeneration.current;
+    if (!scope.disclosures.archive || !active || !snapshot) return;
+    const ids = closedRoots.map(root => root.root_id);
+    setArchiveCounts(new Map(ids.map(id => [id, { status: "loading" } as ClosedTaskCount])));
+    let cursor = 0, cancelled = false;
+    const load = async () => {
+      while (!cancelled && cursor < ids.length) {
+        const id = ids[cursor++]; let count: ClosedTaskCount;
+        try { const result = await client.orchestrationSnapshot({ session_id: sessionId, root_id: id }); count = result.session_id === sessionId && result.board?.root_id === id ? { status: "loaded", count: result.board.tasks.length } : { status: "unavailable" }; }
+        catch { count = { status: "unavailable" }; }
+        if (cancelled || archiveGeneration.current !== generation) return;
+        setArchiveCounts(previous => { const next = new Map(previous); next.set(id, count); return next; });
+      }
+    };
+    for (let index = 0; index < Math.min(4, ids.length); index++) void load();
+    return () => { cancelled = true; archiveGeneration.current++; };
+  }, [client, sessionId, rootId, active, scope.disclosures.archive, closedKey]);
+  const dimFor = (tier: AttentionTier | null, runId: string | null) => scope.attentionOnly && !tier ? "attention filter" : scope.spaceFilter && observe(runId)?.workspace_id !== scope.spaceFilter ? "Space filter" : null;
+  const showItem = (taskId: string | null, runId: string | null, invoker: HTMLElement) => {
+    const task = tasks.find(task => task.task.task_id === taskId || mode === "tasks" && task.current_run_id === runId);
+    const focus = attentionOpen;
+    if (focus) setAttentionOpen(false);
+    if (task) select({ task: task.task.task_id }, invoker, false, true, focus);
+    else if (runId) select({ run: runId, subagent: null }, invoker, false, true, focus);
+  };
+  const rows: QueueRowView[] = attention?.items.map(item => {
+    const run = snapshot!.runs.find(run => run.run_id === item.runId);
+    const retirement = run ? retirementView(run) : null;
+    const retirementUnconfirmed = item.sources.some(source => source.origin === "core" && source.kind === "retirement_unconfirmed");
+    const task = tasks.find(task => task.task.task_id === item.taskId || task.current_run_id === item.runId || retirement && task.task.task_id === run?.task_id);
+    const actions: QueueAction[] = []; const bodies = [];
+    let title = task?.task.title ?? run?.label ?? "Supervisor";
+    for (const source of item.sources) {
+      if (source.origin === "core") {
+        const problem = source.kind === "retirement_unconfirmed" ? retirement?.label ?? ATTENTION_PROBLEM[source.kind] : ATTENTION_PROBLEM[source.kind];
+        if (source === item.sources[0]) title = `${problem} · ${title}`;
+        if (source.kind === "needs_input" && question && answer && root) bodies.push(<section key="question" className="supervisor-needs-you" aria-label="Needs you"><p id={`supervisor-question-${question.message_id}`} className="supervisor-exact-text">{question.summary}</p><TextAction label="Answer" submitLabel="Send answer" describedBy={`supervisor-question-${question.message_id}`} draft={answer} changed={changed} busy={busy || !live || !rootState?.verified} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: root.run_id, kind: "answer", text })} success="Answer sent. Waiting for the agent." /></section>);
+        if (source.kind === "retirement_unconfirmed" && retirement) bodies.push(<p key="retirement" className="supervisor-exact-text">{retirement.detail}</p>);
+        if (source.kind === "intent_conflict") for (const intent of snapshot!.intents.filter(intent => intent.root_id === root?.run_id && intent.state === "conflict" && (intent.run_id === item.runId || intent.task_id === item.taskId))) {
+          actions.push({ key: `apply:${intent.intent_id}`, label: "Apply acceptance to current task", primary: true, disabled: busy || !live, onActivate: () => void mutateResult({ action: "intent_resolve", intent_id: intent.intent_id, apply: true }) }, { key: `keep:${intent.intent_id}`, label: "Keep current task unchanged", disabled: busy || !connected, onActivate: () => void mutateResult({ action: "intent_resolve", intent_id: intent.intent_id, apply: false }) });
+          bodies.push(<p key={intent.intent_id}>Review the current task before applying acceptance. Keeping it leaves Markdown unchanged.</p>);
+        }
+      } else {
+        const condition = source.condition;
+        if (condition.kind === "assignment" && root) {
+          const canonical = tasks.find(task => task.task.task_id === condition.taskId);
+          title = `${condition.state === "conflict" ? "Task changed elsewhere · Not assigned" : "Task assignment pending"} · ${canonical?.task.title ?? "Task"}`;
+          if (canonical) bodies.push(<details key="canonical"><summary>Current task</summary><p className="supervisor-exact-text">{canonical.task.body}</p></details>);
+          if (condition.state === "conflict") actions.push({ key: "assign", label: "Assign current task", primary: true, disabled: busy || !live || !canonical || !!canonical.task.diagnostic || root.stage === "closed", onActivate: () => void mutateResult({ action: "task_assignment_resolve", root_id: root.run_id, task_id: condition.taskId, expected_task_revision: canonical?.task.task_revision ?? null, assign: true }) }, { key: "unassign", label: "Keep unassigned", disabled: busy || !connected, onActivate: () => void mutateResult({ action: "task_assignment_resolve", root_id: root.run_id, task_id: condition.taskId, expected_task_revision: null, assign: false }) });
+          else actions.push({ key: "assignment-check", label: "Check assignment status", primary: true, disabled: busy, onActivate: refresh });
+        } else if (condition.kind === "orphaned_worker" && run) {
+          title = `Worker agent needs control · ${run.label}`; bodies.push(<p key="orphan">Closing this supervisor did not stop its workers. Tasks and history are kept.</p>);
+          actions.push({ key: "saved-context", label: "View saved task context", onActivate: () => setRootId(run.root_id), disabled: busy });
+        } else if (condition.kind === "start_unknown") {
+          title = "Previous start unconfirmed"; bodies.push(<p key="start">Review the tracked agents before another start; a terminal may already have opened.</p>);
+          actions.push({ key: "start-check", label: "Check status", primary: true, onActivate: refresh, disabled: busy }, { key: "start-reviewed", label: "I have reviewed the previous start", disabled: busy, onActivate: () => { setStartUnknown(false); setNotice("Previous start reviewed. Any existing terminal and tracking remain unchanged."); } });
+        } else if (condition.kind === "terminal_error" || condition.kind === "change_unconfirmed" || condition.kind === "navigation_error") {
+          title = condition.kind === "navigation_error" ? "Could not open terminal. Its current focus or location was not confirmed." : condition.message;
+          actions.push({ key: "check", label: "Check status", primary: true, onActivate: refresh, disabled: busy });
+        } else if (condition.kind === "notice") { title = condition.message; actions.push({ key: "dismiss", label: "Dismiss notice", onActivate: () => setNotice(null) }); }
+        else if (condition.kind === "root_failed_report" && run) { title = `Reported failure · ${run.label}`; bodies.push(<p key="failure" className="supervisor-exact-text">{run.last_report?.summary}</p>); }
+        else if (condition.kind === "unidentified_items" && root && snapshot?.board) { title = `${condition.count} task-file items need identity markers`; actions.push({ key: "identify", label: "Identify task-file items", primary: true, disabled: busy || !connected, onActivate: () => void mutateResult({ action: "tasks_assign_ids", root_id: root.run_id, expected_doc_revision: snapshot.board!.doc_revision }) }); }
+        else if (condition.kind === "agent_status" && run && snapshot) title = `${agentState(snapshot, run, connected, runtimeLive).label} · ${run.label}`;
+      }
+    }
+    if (retirementUnconfirmed && retirement && run && task && task.current_run_id !== run.run_id) actions.push({
+      key: "saved-retirement", label: "View saved worker details",
+      onActivate: invoker => { if (attentionOpen) setAttentionOpen(false); select({ run: run.run_id, subagent: null }, invoker, false, false); },
     });
+    if (item.tier === "recover" && run && snapshot && !retirementUnconfirmed) {
+      const state = agentState(snapshot, run, connected, runtimeLive);
+      const recovery = recoveryActions(run, state, { busy: busy || startPending || pendingRestart === run.run_id, connected, runtimeLive: runtimeLive && snapshot.runtime.status === "fresh" });
+      for (const action of recovery) actions.push({
+        key: action.kind, label: action.label, primary: action.primary || action.kind === "terminal" && !recovery.some(item => item.primary), disabled: action.disabled, ariaDisabled: action.ariaDisabled,
+        reason: action.reason, consequence: action.consequence,
+        onActivate: () => {
+          if (action.disabled) return;
+          if (action.kind === "terminal") void navigate(run);
+          else if (action.kind === "check") check(run);
+          else if (action.kind === "close") setDialog({ mode: "close", run });
+          else void restart(run);
+        },
+      });
+      bodies.push(<p key="recovery-detail" className="supervisor-muted">{state.detail}</p>);
+    }
+    return {
+      id: item.id, tier: item.tier, title, since: item.since,
+      body: bodies.length ? <>{bodies}</> : undefined, actions,
+      showIn: retirementUnconfirmed ? task ? {
+        key: "show", label: "Show completed task",
+        onActivate: invoker => { scope.disclosures.completed = true; if (mode !== "tasks") switchView("tasks"); showItem(task.task.task_id, item.runId, invoker); },
+      } : run ? {
+        key: "show", label: "View saved worker details",
+        onActivate: invoker => { if (attentionOpen) setAttentionOpen(false); select({ run: run.run_id, subagent: null }, invoker, false, false); },
+      } : null : task || run && rootRuns.includes(run) || root ? {
+        key: "show", label: mode === "graph" ? "Show in Graph" : "Show in Tasks",
+        onActivate: invoker => showItem(task?.task.task_id ?? item.taskId, item.runId ?? root?.run_id ?? null, invoker),
+      } : null,
+    };
+  }) ?? [];
+  const expandedId = scope.view.queueOpenRow && rows.some(row => row.id === scope.view.queueOpenRow) ? scope.view.queueOpenRow : scope.view.queueOpenRow === null ? rows.find(row => row.tier === "decide")?.id ?? null : null;
+  const path: PathRowView[] = model && selectedNode ? pathNodes(model, selectedNode, true).map((node, depth) => {
+    const facts = nodeFacts(node, { model, snapshot: snapshot!, live: !!live, connected, runtimeLive });
+    return { key: node.id, role: facts.role, label: facts.title, facts: [facts.status, facts.provenance, facts.relation].filter((fact): fact is string => !!fact), current: node.id === selectedNode, depth, subagent: node.kind === "subagent", onActivate: () => select(nodeSelection(node), null, false, true) };
+  }) : [];
+  const tier = selectedTask ? attention?.tierForTask(selectedTask) : detailRun ? attention?.tierForRun(detailRun.run_id) : null;
+  const owned = detailRun ? attention?.ownedForRun(detailRun.run_id) : null;
+  const stateSentence = owned ? owned.kind === "to_accept" ? "Supervisor is reviewing this result" : "Waiting for supervisor" : detailRun && snapshot ? agentState(snapshot, detailRun, connected, runtimeLive).label : detailTask ? taskStatus(detailTask, undefined, snapshot!) : "No current worker";
+  const chips: StripChip[] = model && snapshot ? model.nodes.filter(node => node.run && !node.subagent && node.run.stage !== "closed").map(node => { const facts = nodeFacts(node, { model, snapshot, live: !!live, connected, runtimeLive }); return { runId: node.run!.run_id, label: facts.title, glyph: facts.glyph === "document" ? "unknown" : facts.glyph, status: facts.status, tier: attention?.tierForRun(node.run!.run_id) ?? null, selected: scope.selectedRun === node.run!.run_id }; }).sort((a, b) => (a.tier ? TIER_ORDER[a.tier] : 3) - (b.tier ? TIER_ORDER[b.tier] : 3)) : [];
+  const observedCount = rootRuns.filter(run => run.stage !== "closed" && live && observe(run.run_id)?.presence === "present" && observe(run.run_id)?.actual_omp).length;
+  const rootSpace = observe(root?.run_id)?.workspace_id ?? (root?.target?.target === "existing_space" ? root.target.workspace_id : null);
+  const banner = !connected || !runtimeLive ? "Connection lost · showing saved tasks · agent may still be running" : snapshot?.runtime.status !== "fresh" ? "Cannot check agents right now · showing saved tasks" : null;
+  useLayoutEffect(() => {
+    const workarea = workareaRef.current, view = rootRef.current;
+    if (!workarea || !view || layout.queueMode !== "inline") { setInlineQueueCap(null); return; }
+    const chrome = [view.querySelector<HTMLElement>(".supervisor-summary"), view.querySelector<HTMLElement>(".supervisor-viewbar"), view.querySelector<HTMLElement>(".supervisor-strip")].filter((element): element is HTMLElement => !!element);
+    const measure = () => {
+      const height = workarea.getBoundingClientRect().height;
+      if (!height) { setInlineQueueCap(null); return; }
+      const chromeHeight = chrome.reduce((sum, element) => sum + element.getBoundingClientRect().height, 0);
+      const wholeViewHeight = Math.max(height, view.getBoundingClientRect().height);
+      // capPx bounds the scrollport, not the complete queue. Keep its footer and border inside the budget.
+      const footer = Math.max(24, view.querySelector<HTMLElement>(".supervisor-queue-more")?.getBoundingClientRect().height ?? 0);
+      const ceiling = height * (mode === "graph" ? 0.3 : 0.4);
+      const boardBudget = mode === "tasks" ? height - chromeHeight - wholeViewHeight * 0.5 : ceiling;
+      const next = Math.max(38, Math.floor(Math.min(ceiling, boardBudget) - footer - 1));
+      setInlineQueueCap(current => current === next ? current : next);
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(workarea); observer?.observe(view);
+    for (const element of chrome) observer?.observe(element);
+    return () => observer?.disconnect();
+  }, [layout.queueMode, layout.width, layout.height, mode, rootId, rows.length, banner, active]);
+  const openPanel = (kind: "history" | "diagnostics", invoker: HTMLElement) => {
+    const next = !scope.disclosures[kind]; scope.selectedTask = null; scope.selectedRun = null; scope.selectedSubagent = null; clearPanels(); scope.disclosures[kind] = next; panelInvoker.current = invoker; changed();
+    if (next && !layout.narrow) setFocusNotice(`${kind === "history" ? "Activity" : "Diagnostics"} panel opened`);
   };
   const renderTask = (task: TaskView) => {
-    if (!snapshot) return null;
-    const worker = snapshot.runs.find(run => run.run_id === task.current_run_id);
-    const observed = observe(worker?.run_id);
-    const selected = scope.selectedTask === task.task.task_id;
-    const needsAttention = !!worker && (worker.last_report?.kind === "needs_input" || ["failure", "missing", "unknown"].includes(agentState(snapshot, worker, connected, runtimeLive).kind)) || assignmentIntents.some(intent => intent.task_id === task.task.task_id) || acceptanceConflicts.some(intent => intent.task_id === task.task.task_id);
-    const dimmed = scope.attentionOnly && !needsAttention || !!scope.spaceFilter && observed?.workspace_id !== scope.spaceFilter;
-    const linked = !!worker && (hoverRun === worker.run_id || selectedAgent?.run_id === worker.run_id);
-    return <li key={task.task.task_id} className={`supervisor-task${selected ? " is-selected" : ""}${dimmed ? " is-dimmed" : ""}${linked ? " is-linked" : ""}`} onMouseEnter={() => { setHoverRun(worker?.run_id ?? null); setHoverSpace(observed?.workspace_id ?? null); }} onMouseLeave={() => { setHoverRun(null); setHoverSpace(null); }}>
-      <button type="button" data-row-id={task.task.task_id} tabIndex={tabIndexFor(task.task.task_id)} className="supervisor-task-toggle" aria-expanded={selected} aria-controls="supervisor-detail" onFocus={() => { focusedTask.current = task.task.task_id; }} onClick={() => selectTask(task.task.task_id)}>
-        <span className="supervisor-task-title">{task.task.title}</span><span className="supervisor-task-stage">{taskStatus(task, worker, snapshot)}</span>
-        {needsAttention ? <span className="supervisor-attention-badge"><UiIcon name="info" />Needs attention</span> : null}
-        {worker ? <span className="supervisor-worker-chip"><StateGlyph shape={observed?.actual_omp && observed.presence === "present" && ["working", "idle", "blocked", "done"].includes(observed.agent_status ?? "") ? observed.agent_status as "working" | "idle" | "blocked" | "done" : "unknown"} />{worker.label}</span> : null}
-      </button>
-      {worker ? <div className="supervisor-task-evidence">{observed?.workspace_label ? <span className={`supervisor-location${sharedSpace === observed.workspace_id ? " is-shared" : ""}`} title={observed.tab_label ? `${observed.workspace_label} · ${observed.tab_label}` : observed.workspace_label}><UiIcon name="folder" />{observed.workspace_label}</span> : null}<ReportedEvidence report={worker.last_report} source={worker.label} /><ObservedEvidence run={worker} observed={observed} snapshot={snapshot} live={!!live} />
-        {observed?.agent_status === "blocked" && worker.last_report?.kind !== "needs_input" ? <p className="supervisor-warning">Agent is blocked; no question reported. <button type="button" disabled={busy || !live} onClick={() => void navigate(worker)}>Open terminal</button><button type="button" disabled={busy} onClick={() => check(worker)}>Check status</button></p> : null}
-        {observed?.agent_status === "done" && !worker.result ? <p className="supervisor-muted">Runtime Done · no result reported</p> : null}
-      </div> : <p className="supervisor-evidence">No progress reported yet</p>}
-    </li>;
+    const worker = snapshot!.runs.find(run => run.run_id === task.current_run_id), observed = observe(worker?.run_id);
+    const tier = attention?.tierForTask(task) ?? null;
+    return <TaskCard key={task.task.task_id} rowId={task.task.task_id} tabIndex={tabIndexFor(task.task.task_id)} view={{ task, worker, observed, snapshot: snapshot!, live: !!live, status: taskStatus(task, worker, snapshot!), tier, dimReason: dimFor(tier, worker?.run_id ?? null), selected: scope.selectedTask === task.task.task_id, linked: !!worker && (hoverRun === worker.run_id || selectedAgent?.run_id === worker.run_id), subagentCount: snapshot!.subagents.filter(agent => agent.run_id === worker?.run_id).length, showSpace: !!scope.spaceFilter || observed?.workspace_id !== rootSpace, sharedSpace }} onFocus={() => { focusedTask.current = task.task.task_id; }} onSelect={() => select({ task: task.task.task_id }, rowElement(task.task.task_id) ?? null, true, false)} onHover={entering => { setHoverRun(entering ? worker?.run_id ?? null : null); setHoverSpace(entering ? observed?.workspace_id ?? null : null); }} />;
   };
-  return <section ref={rootRef} className={`supervisor-view${hasAttention ? " has-attention" : ""}`} hidden={!active} aria-label="Supervisor" onFocusCapture={event => {
-    const target = event.target as HTMLElement;
-    focusedTask.current = target.closest(".supervisor-detail-panel") ? scope.selectedTask : target.closest("li.supervisor-task")?.querySelector<HTMLElement>("[data-row-id]")?.dataset.rowId ?? null;
-    questionHadFocus.current = !!target.closest('[aria-label="Needs you"]');
-  }} onKeyDown={event => {
-    if (event.key !== "Escape" || event.nativeEvent.isComposing || event.defaultPrevented || dialog || (event.target as HTMLElement).closest("input,textarea,select,[contenteditable=true]")) return;
-    event.preventDefault(); event.stopPropagation();
-    if (detailOpen) closeDetail();
-    else if (scope.disclosures.history || scope.disclosures.diagnostics || scope.disclosures.archive) { disclosures("history", false); disclosures("diagnostics", false); disclosures("archive", false); }
-    else onClose();
-  }}><header className="supervisor-header"><span className="supervisor-brand"><UiIcon name="branch" /><strong>Supervisor</strong></span>
-    {rootState ? <span className="supervisor-header-state"><StateGlyph shape={rootState.blocked ? "blocked" : rootState.verified ? "live" : "unknown"} /><span>{rootState.label}</span></span> : null}
-    {openRoots.length > 1 ? <label className="supervisor-agent-label"><select aria-label="Agent" value={root?.stage !== "closed" ? root?.run_id ?? "" : ""} disabled={busy || startPending || !!dialog} onChange={event => { setRootId(event.target.value); setTerminalError(null); }}><option value="" disabled>Choose an agent</option>{openRoots.map(root => <option key={root.root_id} value={root.root_id}>{root.label}</option>)}</select></label> : null}
-    <nav className="supervisor-header-panels" aria-label="Supervisor panels"><button type="button" aria-label="Activity" title="Activity" aria-pressed={scope.disclosures.history} onClick={() => { scope.selectedTask = null; scope.selectedRun = null; scope.selectedSubagent = null; disclosures("history", !scope.disclosures.history); disclosures("diagnostics", false); changed(); }}><UiIcon name="comment" /></button><button type="button" aria-label="Diagnostics" title="Diagnostics" aria-pressed={scope.disclosures.diagnostics} onClick={() => { scope.selectedTask = null; scope.selectedRun = null; scope.selectedSubagent = null; disclosures("diagnostics", !scope.disclosures.diagnostics); disclosures("history", false); changed(); }}><UiIcon name="info" /></button>{closedRoots.length ? <button type="button" aria-label={`Closed tracking · ${closedRoots.length}`} title={`Closed tracking · ${closedRoots.length}`} aria-expanded={scope.disclosures.archive} onClick={() => disclosures("archive", !scope.disclosures.archive)}><UiIcon name="folder" /></button> : null}</nav>
-    <button type="button" className="supervisor-primary" title={destination ? `New tab in ${destination.label}` : "Choose an available location when starting."} data-start-agent disabled={busy || startPending || !snapshot || !connected || startUnknown || rootState?.kind === "starting"} onClick={() => void start()}><UiIcon name="plus" />{startPending ? "Starting…" : "Start agent"}</button><button type="button" className="supervisor-secondary-button" aria-label="Start options…" title="Start options…" disabled={busy || startPending || !snapshot || !connected || startUnknown || rootState?.kind === "starting"} onClick={() => { if (!startDraft.current.spaceId && destination) startDraft.current.spaceId = destination.id; setDialog({ mode: "start" }); }}><UiIcon name="more" /></button><button type="button" aria-label="Close Supervisor" title="Close Supervisor" onClick={onClose}><UiIcon name="close" /></button></header>
-    {scope.disclosures.archive && snapshot ? <section className="supervisor-archive" aria-label="Closed tracking"><p>Tasks and history remain available. Closing tracking did not kill agents or remove resources.</p>{closedRoots.map(summary => <button type="button" disabled={busy || !!dialog} key={summary.root_id} onClick={() => { setRootId(summary.root_id); disclosures("archive", false); }}>View {summary.label} tasks and history</button>)}{root?.stage === "closed" && openRoots.length ? <button type="button" disabled={busy} onClick={() => setRootId(openRoots[0].root_id)}>Return to {openRoots[0].label}</button> : null}</section> : null}
-    <div className={`supervisor-workarea${detailOpen ? " has-detail" : ""}${detailOpen || scope.disclosures.history || scope.disclosures.diagnostics ? " has-panel" : ""}`}><div className="supervisor-content">
+  const renderLane = (lane: TaskLane, label: string) => {
+    const laneTasks = tasks.filter(task => task.lane === lane);
+    const open = lane === "accepted" ? scope.disclosures.completed : laneTasks.length > 0 && !scope.view.collapsedLanes.includes(lane);
+    const list = <ul ref={element => { laneRefs.current[lane] = element; }} className="supervisor-task-list" hidden={layout.narrow ? !open : lane === "accepted" && !open} onScroll={event => { if (!layout.narrow) scope.view.laneScroll[lane] = event.currentTarget.scrollTop; }}>{laneTasks.map(renderTask)}</ul>;
+    if (layout.narrow) return <details key={lane} className={`supervisor-lane-group is-${lane}`} open={open} onToggle={event => { const next = event.currentTarget.open; if (next === open) return; if (lane === "accepted") scope.disclosures.completed = next; else scope.view.collapsedLanes = next ? scope.view.collapsedLanes.filter(item => item !== lane) : [...scope.view.collapsedLanes.filter(item => item !== lane), lane]; changed(); }}><summary className="supervisor-lane-header"><span className="supervisor-lane-dot" /><strong>{label}</strong><span className="supervisor-lane-count">{laneTasks.length}</span><UiIcon name={open ? "down" : "right"} /></summary>{list}</details>;
+    return <section key={lane} className={`supervisor-lane is-${lane}${lane === "accepted" && !open ? " is-collapsed" : ""}`} aria-label={`${label} tasks`}><header className="supervisor-lane-header"><span className="supervisor-lane-dot" /><strong>{label}</strong><span className="supervisor-lane-count">{laneTasks.length}</span>{lane === "accepted" ? <button type="button" aria-label={open ? "Hide completed tasks" : "Show completed tasks"} aria-expanded={open} onClick={() => { scope.disclosures.completed = !open; changed(); }}><UiIcon name={open ? "down" : "right"} /></button> : null}</header>{list}{!laneTasks.length ? <p className="supervisor-lane-empty">No tasks</p> : null}</section>;
+  };
+  const startDisabled = busy || startPending || !snapshot || !connected || startUnknown || rootState?.kind === "starting";
+  return <section ref={rootRef} className="supervisor-view" hidden={!active} aria-label="Supervisor"
+    data-view={mode} data-narrow={layout.narrow} data-short={layout.short} data-compact={layout.compact}
+    data-panel={placement ?? "none"} data-queue={layout.queueMode}
+    onFocusCapture={event => {
+      const target = event.target as HTMLElement;
+      if (target.closest("li.supervisor-task")) focusedTask.current = target.closest("li.supervisor-task")?.querySelector<HTMLElement>("[data-row-id]")?.dataset.rowId ?? null;
+      focusedGraph.current = target.closest<HTMLElement>(".supervisor-graph-node")?.dataset.rowId ?? null;
+      focusWithinDetail.current = !!target.closest(".supervisor-detail-panel");
+      questionHadFocus.current = !!target.closest('[aria-label="Needs you"]');
+    }}
+    onKeyDown={event => {
+      if (event.key !== "Escape" || event.nativeEvent.isComposing || event.defaultPrevented || dialog ||
+        (event.target as HTMLElement).closest("input,textarea,select,[contenteditable=true]")) return;
+      event.preventDefault(); event.stopPropagation(); escapeLayer(event.target as HTMLElement);
+    }}>
+    <header className="supervisor-header"><span className="supervisor-brand"><UiIcon name="branch" /><strong>Supervisor</strong></span>{openRoots.length > 1 ? <label className="supervisor-agent-label"><select aria-label="Agent" value={root?.stage !== "closed" ? root?.run_id ?? "" : ""} disabled={busy || startPending || !!dialog} onChange={event => { saveOffsets(); setRootId(event.target.value); setTerminalError(null); setAttentionOpen(false); }}><option value="" disabled>Choose an agent</option>{openRoots.map(summary => { const counts = rootAttentionSummary(snapshot!, summary.root_id); return <option key={summary.root_id} value={summary.root_id}>{summary.label} · {counts.decide} need you{counts.recover ? " · ⚠ recover" : ""}</option>; })}</select></label> : null}<nav className="supervisor-header-panels" aria-label="Supervisor panels"><button type="button" aria-label="Activity" title="Activity" aria-pressed={scope.disclosures.history} onClick={event => openPanel("history", event.currentTarget)}><UiIcon name="comment" /></button><button type="button" aria-label="Diagnostics" title="Diagnostics" aria-pressed={scope.disclosures.diagnostics} onClick={event => openPanel("diagnostics", event.currentTarget)}><UiIcon name="info" /></button>{closedRoots.length ? <button type="button" aria-label={`Closed tracking · ${closedRoots.length}`} title={`Closed tracking · ${closedRoots.length}`} aria-expanded={scope.disclosures.archive} onClick={() => { scope.disclosures.archive = !scope.disclosures.archive; changed(); }}><UiIcon name="folder" /></button> : null}</nav><button type="button" className={root?.stage !== "closed" && rootState?.verified ? "supervisor-start-secondary" : "supervisor-primary"} title={destination ? `New tab in ${destination.label}` : "Choose an available location when starting."} data-start-agent disabled={startDisabled} onClick={() => void start()}><UiIcon name="plus" />{startPending ? "Starting…" : "Start agent"}</button><button type="button" className="supervisor-start-options" aria-label="Start options…" title="Start options…" disabled={startDisabled} onClick={() => { if (!startDraft.current.spaceId && destination) startDraft.current.spaceId = destination.id; setDialog({ mode: "start" }); }}><UiIcon name="more" /><span>Start options…</span></button><button type="button" aria-label="Hide Supervisor" title="Hide Supervisor" onClick={onClose}><UiIcon name="close" /></button></header>
+    {scope.disclosures.archive && snapshot ? <ClosedTracking closedRoots={closedRoots} runs={snapshot.runs} loadedRootId={snapshot.board?.root_id ?? null} taskCount={snapshot.board?.tasks.length ?? 0} taskCounts={archiveCounts} busy={busy} dialogOpen={!!dialog} onView={id => { saveOffsets(); setRootId(id); scope.disclosures.archive = false; changed(); }} returnTo={root?.stage === "closed" && openRoots.length ? { label: openRoots[0].label, onActivate: () => setRootId(openRoots[0].root_id) } : null} /> : null}
+    <div ref={workareaRef} className="supervisor-workarea" style={{ "--detail-size": `${bounds?.value ?? 340}px`, "--sheet-size": `${bottomInset}px` } as CSSProperties}><div className="supervisor-content">
       {!snapshot ? <div className="supervisor-empty"><UiIcon name="branch" /><h2>{error ? "Could not load Supervisor" : "Loading Supervisor…"}</h2>{error ? <><p>Your terminals are unchanged. The Supervisor connection could not be established.</p><button type="button" onClick={refresh}>Retry load</button></> : <p role="status">Reading saved tasks and fresh agent observations.</p>}</div> : <>
-      <div className={`supervisor-attention-region${!hasAttention && !root && !orphanedWorkers.length ? " is-empty" : ""}`} aria-label="Supervisor status">
-        {notice ? <p role="status"><UiIcon name="info" />{notice}</p> : null}{startUnknown ? <div className="supervisor-warning" role="status"><UiIcon name="info" /><button type="button" disabled={busy} onClick={refresh}>Check status</button><p>Review the tracked agents below before another start.</p><button type="button" disabled={busy} onClick={() => { setStartUnknown(false); setNotice("Previous start reviewed. Any existing terminal and tracking remain unchanged."); }}>I have reviewed the previous start</button></div> : null}
-        {terminalError || navigationError || error ? <div className="supervisor-error" role="alert"><UiIcon name="info" /><p>{terminalError ?? (navigationError ? "Could not open terminal. Its current focus or location was not confirmed." : !connected ? "Could not refresh Supervisor. Saved tasks and drafts are kept; the agent may still be running." : "The requested change was not confirmed. Your drafts and resources are kept. Check current status before trying again.")}</p><button type="button" disabled={busy} onClick={refresh}>Check status</button></div> : null}
-        {!root && orphanedWorkers.length ? <section className="supervisor-warning"><h2>Worker agents need control</h2><p>Closing their supervisor did not stop them. Tasks and history are kept.</p>{orphanedWorkers.map(run => <div key={run.run_id}>{recovery(run)}<button type="button" disabled={busy} onClick={() => setRootId(run.root_id)}>View saved task context</button></div>)}</section> : null}
-        {root ? <>{recovery(root)}{root.stage === "closed" && descendants.length ? <section className="supervisor-warning"><h2>Worker agents need control</h2><p>{descendants.length} tracked descendants remain open. Closing this supervisor did not stop them.</p>{descendants.map(run => recovery(run))}</section> : failures.length ? <section className="supervisor-needs-you"><h2>{failures.length === 1 ? "Task needs recovery" : `${failures.length} tasks need recovery`}</h2>{failures.map(run => recovery(run))}</section> : null}
-        {!question && root.last_report ? <ReportedEvidence report={root.last_report} source={root.label} /> : null}
-        <ObservedEvidence run={root} observed={observe(root.run_id)} snapshot={snapshot} live={!!live} />
-        {observe(root.run_id)?.agent_status === "blocked" && !question ? <section className="supervisor-warning"><p>Agent is blocked; no question reported.</p><div className="supervisor-action-row"><button type="button" disabled={busy || !live || !rootState?.terminal} onClick={() => void navigate(root)}>Open terminal</button><button type="button" disabled={busy} onClick={() => check(root)}>Check status</button></div></section> : null}
-        {question && answer && !answered ? <section className="supervisor-needs-you" aria-label="Needs you" role="status"><div className="supervisor-question"><h2><UiIcon name="comment" />Needs you · {root.label}</h2><p id={`supervisor-question-${question.message_id}`} className="supervisor-exact-text">{question.summary}</p><p className="supervisor-muted">Reported by {root.label} · <time dateTime={question.at}>{new Date(question.at).toLocaleString()}</time></p></div><TextAction label="Answer" submitLabel="Send answer" describedBy={`supervisor-question-${question.message_id}`} draft={answer} changed={changed} busy={busy || !live || !rootState?.verified} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: root.run_id, kind: "answer", text })} success="Answer sent. Waiting for the agent." /></section> : question && answered ? <p role="status">Answer sent. Waiting for the agent.</p> : null}
-        {assignmentIntents.map(intent => {
-          const canonical = tasks.find(task => task.task.task_id === intent.task_id);
-          const resolve = async (assign: boolean) => {
-            await mutateResult({ action: "task_assignment_resolve", root_id: root.run_id, task_id: intent.task_id, expected_task_revision: assign ? canonical?.task.task_revision ?? null : null, assign });
-          };
-          return <section key={intent.task_id} className="supervisor-needs-you"><h2>{intent.state === "conflict" ? "Task changed elsewhere · Not assigned" : "Task assignment pending"}</h2><p>{canonical?.task.title ?? "The canonical task is not available yet."}</p>{canonical ? <details><summary>Current task</summary><p className="supervisor-exact-text">{canonical.task.body}</p></details> : null}{intent.state === "conflict" ? <div className="supervisor-action-row"><button type="button" disabled={busy || !live || !canonical || !!canonical.task.diagnostic || root.stage === "closed"} onClick={() => void resolve(true)}>Assign current task</button><button type="button" disabled={busy || !connected} onClick={() => void resolve(false)}>Keep unassigned</button></div> : <button type="button" disabled={busy} onClick={refresh}>Check assignment status</button>}</section>;
-        })}
-        {acceptanceConflicts.map(intent => <section key={intent.intent_id} className="supervisor-needs-you"><h2>Task changed during acceptance</h2><p>{tasks.find(task => task.task.task_id === intent.task_id)?.task.title ?? "Task"} · Review the current task before applying acceptance. Keeping it leaves Markdown unchanged.</p><button type="button" disabled={busy || !live} onClick={() => void mutateResult({ action: "intent_resolve", intent_id: intent.intent_id, apply: true })}>Apply acceptance to current task</button><button type="button" disabled={busy || !connected} onClick={() => void mutateResult({ action: "intent_resolve", intent_id: intent.intent_id, apply: false })}>Keep current task unchanged</button></section>)}
-        {snapshot.board?.unidentified_items ? <section className="supervisor-warning"><p>{snapshot.board.unidentified_items} task-file items need identity markers before they can be managed.</p><button type="button" disabled={busy || !connected} onClick={() => void mutateResult({ action: "tasks_assign_ids", root_id: root.run_id, expected_doc_revision: snapshot.board!.doc_revision })}>Identify task-file items</button></section> : null}
-        </> : null}
-      </div>
-      {root ? <>
-        <div className="supervisor-narrow-switch" aria-label="Workarea view"><button type="button" aria-pressed={narrowView === "board"} onClick={() => setNarrowView("board")}><UiIcon name="grid" />Board</button><button type="button" aria-pressed={narrowView === "agents"} onClick={() => setNarrowView("agents")}><UiIcon name="branch" />Agents</button></div>
-        <div className={`supervisor-graph-surface${narrowView === "agents" ? " is-narrow-active" : ""}`} style={graphHeight === null ? undefined : { "--graph-height": `${graphHeight}px` } as CSSProperties}>
-          <SupervisorGraph rows={forest} snapshot={snapshot} live={!!live} connected={connected} runtimeLive={runtimeLive} scope={scope} sharedSpace={sharedSpace} highlightedRun={hoverRun ?? detailRun?.run_id ?? null} changed={changed} onHover={run => { setHoverRun(run?.run_id ?? null); setHoverSpace(observe(run?.run_id)?.workspace_id ?? null); }} onSelect={(run, subagent) => { const selected = scope.selectedRun === run.run_id && scope.selectedSubagent === (subagent?.subagent_id ?? null); scope.selectedTask = null; scope.selectedRun = selected ? null : run.run_id; scope.selectedSubagent = selected ? null : subagent?.subagent_id ?? null; setDetailSection("overview"); changed(); }} onSelectTask={selectTask} />
-          <RowSplitter className="supervisor-graph-splitter" label="Resize agents overview" target={splitter => splitter.previousElementSibling as HTMLElement | null} grow={1} min={80} max={Math.round(window.innerHeight * 0.6)} onChange={setGraphHeight} onReset={() => setGraphHeight(null)} />
-        </div>
-        <section className={`supervisor-board-surface${narrowView === "board" ? " is-narrow-active" : ""}`} aria-label="Tasks">
-          <div className="supervisor-task-list-heading"><h2>Tasks <span>{openTasks.length} open</span></h2><div className="supervisor-task-filters" aria-label="Task filters"><label className={scope.attentionOnly ? "is-active" : ""}><input type="checkbox" checked={scope.attentionOnly} onChange={event => { scope.attentionOnly = event.target.checked; changed(); }} />Needs attention (dims other tasks)</label><label>Space<select aria-label="Task Space" value={scope.spaceFilter} onChange={event => { scope.spaceFilter = event.target.value; changed(); }}><option value="">All Spaces</option>{[...new Map(observations.filter(item => item.workspace_id && item.workspace_label && rootRuns.some(run => run.run_id === item.run_id)).map(item => [item.workspace_id!, item.workspace_label!])).entries()].map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label></div></div>
-          <div ref={listRef} {...listProps} className="supervisor-board" onKeyDown={event => {
-            const id = (event.target as HTMLElement).dataset.rowId;
-            if (id && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing) {
-              const next = taskNeighbor(tasks, id, event.key, scope.disclosures.completed);
-              if (next) { event.preventDefault(); focusRow(next); return; }
+        <SupervisorSummary
+          rootLabel={root?.label ?? "No supervisor selected"} stateLabel={rootState?.label ?? "Start an agent"}
+          stateGlyph={rootState?.blocked ? "blocked" : rootState?.verified ? "live" : "unknown"}
+          observedLine={live ? `${observedCount} agents observed · ${snapshot.runtime.status === "fresh" ? new Date(snapshot.runtime.observed_at).toLocaleTimeString() : ""}` : "Agents · unobserved"}
+          banner={banner} counts={attention?.counts ?? { decide: 0, recover: 0, notice: 0 }} queueMode={layout.queueMode}
+          onCounter={(tier, invoker) => {
+            counterInvoker.current = invoker;
+            if (layout.queueMode === "overlay") { setFocusTier(null); setAttentionOpen(true); }
+            else setFocusTier(tier);
+          }}
+          shortcut={root && rootState?.terminal ? { key: "terminal", label: "Open terminal", disabled: busy || !live, onActivate: () => void navigate(root) } : null}
+        />
+        {rows.length > 0 && layout.queueMode === "inline" ? <AttentionQueue rows={rows} expandedId={expandedId} onExpand={id => { scope.view.queueOpenRow = id ?? "collapsed"; changed(); }} capPx={inlineQueueCap ?? (queueCap(layout, mode) || null)} variant="inline" focusTier={focusTier} onFocusedTier={() => setFocusTier(null)} /> : null}
+        {root && model ? <><div className="supervisor-viewbar"><div className="supervisor-viewbar-switch" role="group" aria-label="Workarea view"><button type="button" data-view-segment="tasks" aria-pressed={mode === "tasks"} onClick={() => switchView("tasks")}><UiIcon name="grid" />Tasks {tasks.filter(task => task.lane !== "accepted").length}</button><button type="button" data-view-segment="graph" aria-pressed={mode === "graph"} onClick={() => switchView("graph")}><UiIcon name="branch" />Graph {model.nodes.length}</button></div><div className="supervisor-viewbar-filters" aria-label="Task filters"><button type="button" aria-pressed={scope.attentionOnly} onClick={() => { scope.attentionOnly = !scope.attentionOnly; changed(); }}>Attention · {attention?.total ?? 0}</button><label>Space<select aria-label="Task Space" value={scope.spaceFilter} onChange={event => { scope.spaceFilter = event.target.value; changed(); }}><option value="">All Spaces</option>{[...new Map(observations.filter(item => item.workspace_id && item.workspace_label && rootRuns.some(run => run.run_id === item.run_id)).map(item => [item.workspace_id!, item.workspace_label!])).entries()].map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label></div></div>
+        {mode === "graph" ? <SupervisorGraph
+          model={model} snapshot={snapshot} live={!!live} connected={connected} runtimeLive={runtimeLive}
+          selectedNodeId={selectedNode} highlightedRunId={hoverRun ?? detailRun?.run_id ?? null}
+          tierFor={node => node.task ? attention?.tierForTask(node.task) ?? null : node.run ? attention?.tierForRun(node.run.run_id) ?? null : null}
+          dimFor={node => dimFor(node.task ? attention?.tierForTask(node.task) ?? null : node.run ? attention?.tierForRun(node.run.run_id) ?? null : null, node.run?.run_id ?? node.assignedRunId)}
+          showSubagents={scope.showSubagents}
+          onShowSubagents={next => {
+            scope.showSubagents = next;
+            if (!next && scope.selectedSubagent && scope.selectedRun) {
+              scope.selectedSubagent = null; revealIntent.current = { focus: true }; setDetailSection("overview");
             }
-            listProps.onKeyDown(event);
-          }}>{taskLanes.map(({ lane, label }, index) => <section key={lane} className={`supervisor-lane is-${lane}${lane === "accepted" && !scope.disclosures.completed ? " is-collapsed" : ""}`} aria-label={`${label} tasks`}>
-            <header className="supervisor-lane-header"><span className="supervisor-lane-dot" /><strong>{label}</strong><span className="supervisor-lane-count">{tasks.filter(task => task.lane === lane).length}</span>{lane === "accepted" ? <button type="button" aria-label={scope.disclosures.completed ? "Hide completed tasks" : "Show completed tasks"} aria-expanded={scope.disclosures.completed} onClick={() => disclosures("completed", !scope.disclosures.completed)}><UiIcon name={scope.disclosures.completed ? "down" : "right"} /></button> : index < taskLanes.length - 1 ? <UiIcon name="right" /> : null}</header>
-            <ul className="supervisor-task-list" hidden={lane === "accepted" && !scope.disclosures.completed}>{tasks.filter(task => task.lane === lane).map(renderTask)}</ul>
-            {!tasks.some(task => task.lane === lane) ? <p className="supervisor-lane-empty">No tasks</p> : null}
-          </section>)}</div>
-        </section>
-      </> : <div className="supervisor-empty"><UiIcon name="branch" /><h2>Start an agent to manage your tasks.</h2></div>}
+            changed();
+          }}
+          sharedSpace={sharedSpace} bottomInset={bottomInset} scrollRef={graphRef}
+          onSelect={(node: TopologyNode) => select(nodeSelection(node), rowElement(node.id) ?? null, true, false)}
+          onHover={id => { setHoverRun(id); setHoverSpace(observe(id)?.workspace_id ?? null); }}
+          onEscape={() => { escapeLayer(); return true; }}
+        /> : <section className="supervisor-board-surface" aria-label="Tasks">
+          {!layout.narrow && !layout.short ? <AgentsStrip
+            heading={live ? `Agents · ${observedCount} observed` : "Agents · unobserved"} chips={chips}
+            subagentCount={snapshot.subagents.filter(agent => rootRuns.some(run => run.run_id === agent.run_id && run.stage !== "closed")).length}
+            onSelect={(id, invoker) => select({ run: id, subagent: null }, invoker, true, false)}
+            onGraph={() => {
+              switchView("graph");
+              requestAnimationFrame(() => rootRef.current?.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')?.focus({ preventScroll: true }));
+            }}
+          /> : null}
+          {tasks.length ? <div ref={listRef} {...listProps} className="supervisor-board"
+            onScroll={event => { scope.view.offsets.tasks = readOffset(event.currentTarget); }}
+            onKeyDown={event => {
+              const id = (event.target as HTMLElement).dataset.rowId;
+              if (id && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing) {
+                const next = taskNeighbor(tasks, id, event.key, navOptions);
+                if (next) {
+                  event.preventDefault();
+                  const element = rowElement(next);
+                  const scroller = layout.narrow ? listRef.current : element?.closest<HTMLUListElement>(".supervisor-task-list");
+                  if (element && scroller) { revealNearest(scroller, element); element.focus({ preventScroll: true }); }
+                  return;
+                }
+              }
+              listProps.onKeyDown(event);
+            }}>
+            {taskLanes.map(({ lane, label }) => renderLane(lane, label))}
+          </div> : <div className="supervisor-empty">
+            <h2>No tasks yet</h2>
+            <button type="button" disabled={busy || !live || !rootState?.terminal} onClick={() => void navigate(root)}>Open terminal</button>
+          </div>}
+        </section>}
+        </> : <div className="supervisor-empty"><UiIcon name="branch" /><h2>Start an agent to manage your tasks.</h2></div>}
       </>}
     </div>
-    {snapshot && active && (detailOpen || scope.disclosures.history || scope.disclosures.diagnostics) ? <aside className={`supervisor-detail-panel${detailOpen ? " is-selection" : ""}`} id="supervisor-detail" aria-label={detailOpen ? "Selected details" : scope.disclosures.diagnostics ? "Diagnostics" : "History"} onKeyDown={event => {
-      if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || (event.target as HTMLElement).closest("input,textarea,select,[contenteditable=true]")) return;
-      event.preventDefault(); event.stopPropagation();
-      if (detailOpen) closeDetail(); else { disclosures("history", false); disclosures("diagnostics", false); }
-    }}>
-      <header className="supervisor-detail-header"><button type="button" aria-label={detailOpen ? "Close details" : "Close activity panel"} onClick={() => { if (detailOpen) closeDetail(); else { disclosures("history", false); disclosures("diagnostics", false); } }}><UiIcon name="back" /></button><strong>{detailOpen ? detailTask?.task.title ?? detailSubagent?.label ?? detailRun?.label : scope.disclosures.diagnostics ? "Diagnostics" : "Activity"}</strong></header>
-      {detailOpen ? <><nav className="supervisor-segments" aria-label="Detail sections">{(["overview", "activity", "actions"] as const).map(section => <button type="button" key={section} aria-pressed={detailSection === section} onClick={() => setDetailSection(section)}>{section[0].toUpperCase() + section.slice(1)}</button>)}</nav><div className="supervisor-detail-scroll"><SupervisorActions key={`${scope.selectedTask ?? scope.selectedRun}:${scope.selectedSubagent ?? ""}`} section={detailSection} snapshot={snapshot} run={detailRun} task={detailTask} subagent={detailSubagent} scope={scope} changed={changed} busy={busy} live={!!live} mutateResult={mutateResult} onTerminal={run => void navigate(run)} onEditTask={edit} onCloseTracking={run => setDialog({ mode: "close", run })} onCancelSubagent={(run, subagent) => setDialog({ mode: "subagent_cancel", run, subagent })} /></div></> : <div className="supervisor-detail-scroll">
-        {scope.disclosures.history ? <section aria-label="History"><h3>Earlier</h3>{history.length ? <ul className="supervisor-history">{history.map(event => <li key={event.id}><strong>{event.label}{event.stale ? " · stale evidence" : ""}</strong><time dateTime={event.at}>{new Date(event.at).toLocaleString()}</time><p className="supervisor-exact-text">{event.detail}</p></li>)}</ul> : <p>No recorded history in this scope.</p>}</section> : null}
-        {scope.disclosures.diagnostics ? <section aria-label="Diagnostics"><p>Canonical task source · {snapshot.board?.path ?? "No selected task document"}</p>{snapshot.board?.unidentified_items ? <p>{snapshot.board.unidentified_items} task-file checklist items need identity markers. <button type="button" disabled={busy || !connected} onClick={() => void mutateResult({ action: "tasks_assign_ids", root_id: snapshot.board!.root_id, expected_doc_revision: snapshot.board!.doc_revision })}>Identify task-file items</button></p> : null}{snapshot.board?.diagnostics.map((diagnostic, index) => <p className="supervisor-error" key={index}>{diagnostic.message}</p>)}{rootRuns.map(run => <RunDiagnostics key={run.run_id} run={run} snapshot={snapshot} />)}<h3>Fresh runtime and transaction records</h3><pre className="supervisor-plan">{JSON.stringify({ runtime: snapshot.runtime, intents: snapshot.intents, assignment_intents: snapshot.assignment_intents }, null, 2)}</pre></section> : null}
-      </div>}
-    </aside> : null}
-    </div>
+    {snapshot && active && panelKind ? <>{bounds ? <PanelSplitter label="Resize details" controls="supervisor-detail" orientation={bounds.orientation} value={bounds.value} min={bounds.min} max={bounds.max} grow={-1} onChange={value => { if (placement === "sheet") scope.view.sheetHeight = value; else scope.view.detailWidth = value; changed(); }} onReset={() => { if (placement === "sheet") scope.view.sheetHeight = null; else scope.view.detailWidth = null; changed(); }} className={placement === "sheet" ? "supervisor-sheet-splitter" : undefined} /> : null}<aside className={`supervisor-detail-panel${placement === "sheet" ? " supervisor-sheet" : ""}`} id="supervisor-detail" aria-label={panelKind === "details" ? "Selected details" : panelKind === "attention" ? "Attention" : panelKind === "diagnostics" ? "Diagnostics" : "Activity"}>
+      {panelKind === "attention" ? <AttentionQueue
+        rows={rows} expandedId={expandedId}
+        onExpand={id => { scope.view.queueOpenRow = id ?? "collapsed"; changed(); }}
+        capPx={null} variant="overlay" focusTier={focusTier}
+        onFocusedTier={() => setFocusTier(null)} onClose={closeAttention}
+      /> : <>
+        <header className="supervisor-detail-header">
+          <button type="button"
+            aria-label={panelKind === "details" ? "Close details" : `Close ${panelKind === "activity" ? "activity" : "diagnostics"} panel`}
+            onClick={panelKind === "details" ? closeDetail : closePanel}><UiIcon name="back" /></button>
+          <strong>{panelKind === "details" ? detailTask?.task.title ?? detailSubagent?.label ?? detailRun?.label : panelKind === "activity" ? "Activity" : "Diagnostics"}</strong>
+        </header>
+        {panelKind === "details" ? <>
+          <nav className="supervisor-segments" aria-label="Detail sections">
+            {(["overview", "activity", "actions"] as const).map(section =>
+              <button type="button" key={section} aria-pressed={detailSection === section}
+                onClick={() => setDetailSection(section)}>{section[0].toUpperCase() + section.slice(1)}</button>)}
+          </nav>
+          <div className="supervisor-detail-scroll">
+            <SupervisorActions
+              section={detailSection} snapshot={snapshot} run={detailRun} task={detailTask}
+              subagent={detailSubagent} scope={scope} changed={changed} busy={busy} live={!!live}
+              mutateResult={mutateResult} onTerminal={run => void navigate(run)} onEditTask={edit}
+              onCloseTracking={run => setDialog({ mode: "close", run })}
+              onCancelSubagent={(run, subagent) => setDialog({ mode: "subagent_cancel", run, subagent })}
+              stateBlock={{ sentence: stateSentence, tierLabel: tier ? TIER_LABEL[tier] : null, waitingSince: owned?.since ?? null }}
+              path={path}
+              crossView={{
+                label: mode === "tasks" ? "Show in Graph" : "Show in Tasks",
+                onActivate: () => switchView(mode === "tasks" ? "graph" : "tasks", true),
+              }}
+              acceptanceConflict={snapshot.intents.some(intent => intent.state === "conflict" &&
+                (intent.task_id === detailTask?.task.task_id || intent.run_id === detailRun?.run_id))}
+            />
+          </div>
+        </> : <div className="supervisor-detail-scroll">
+          {panelKind === "activity" ? <SupervisorActivity rows={activityRows(snapshot, rootRuns, tasks)}
+            onLink={link => {
+              if (link.kind === "task") select({ task: link.taskId }, null, false, true);
+              else select({ run: link.runId, subagent: null }, null, false, true);
+            }} /> : <SupervisorDiagnostics snapshot={snapshot} rootRuns={rootRuns} busy={busy} connected={connected}
+            onIdentify={() => {
+              if (snapshot.board) void mutateResult({ action: "tasks_assign_ids", root_id: snapshot.board.root_id, expected_doc_revision: snapshot.board.doc_revision });
+            }}
+            onCopyPath={() => setFocusNotice("Canonical task path copied")} />}
+        </div>}
+      </>}
+    </aside></> : null}</div>
     <div className="supervisor-focus-notice" role="status">{focusNotice}</div>
-    {dialog && snapshot && active ? <SupervisorDialogs dialog={dialog} snapshot={snapshot} spaces={runtimeLive ? session?.spaces ?? [] : []} startDraft={startDraft.current} changed={changed} busy={busy} available={connected && (dialog.mode === "edit" || dialog.mode === "close" || runtimeLive && snapshot.runtime.status === "fresh")} mutateResult={mutateResult} onStarted={started} onEdited={taskId => { scope.edits.delete(taskId); changed(); }} onStartUnconfirmed={() => setStartUnknown(true)} onClose={() => setDialog(null)} /> : null}
+    {dialog && snapshot && active ? <SupervisorDialogs dialog={dialog} snapshot={snapshot} spaces={runtimeLive ? session?.spaces ?? [] : []} startDraft={startDraft.current} changed={changed} busy={busy} available={connected && (dialog.mode === "edit" || dialog.mode === "close" || runtimeLive && snapshot.runtime.status === "fresh")} mutateResult={mutateResult} onStarted={started} onEdited={taskId => { scope.edits.delete(taskId); changed(); }} onStartUnconfirmed={() => setStartUnknown(true)} onCheck={check} onClose={() => setDialog(null)} onReturnFocus={invoker => { returnFocusIntent.current = { invoker }; }} /> : null}
   </section>;
 }

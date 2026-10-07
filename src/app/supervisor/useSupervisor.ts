@@ -56,7 +56,7 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
           setSnapshot(next);
           setConnected(true);
           setObservationError(null);
-          const wait = await client.orchestrationWait({ after_revision: next.revision, after_tasks_token: next.tasks_token, timeout_ms: 2000 });
+          const wait = await client.orchestrationWait({ after_revision: next.revision, after_tasks_token: next.tasks_token, timeout_ms: 5000 });
           if (!live()) return;
           floor.current = Math.max(floor.current, wait.revision);
           // Even unchanged durable state needs a fresh Herdr observation after the wait.

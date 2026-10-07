@@ -1,4 +1,16 @@
 import { useRef, useState } from "react";
+import type { TaskLane } from "../../protocol/generated/v1";
+import type { ScrollOffset } from "./reveal";
+
+export type SupervisorViewDrafts = {
+  mode: "tasks" | "graph";
+  offsets: { tasks: ScrollOffset | null; graph: ScrollOffset | null };
+  laneScroll: Partial<Record<TaskLane, number>>;
+  collapsedLanes: TaskLane[];
+  detailWidth: number | null;
+  sheetHeight: number | null;
+  queueOpenRow: string | null;
+};
 
 export type TextDraft = { text: string; operation: { id: string; text: string } | null; notice: string | null; error: string | null };
 export type EditDraft = { title: string; body: string; revision: string };
@@ -11,11 +23,12 @@ export type ScopeDrafts = {
   showSubagents: boolean;
   attentionOnly: boolean;
   spaceFilter: string;
-  disclosures: Record<"completed" | "agents" | "history" | "diagnostics" | "archive", boolean>;
+  disclosures: Record<"completed" | "history" | "diagnostics" | "archive", boolean>;
+  view: SupervisorViewDrafts;
 };
 export function newTextDraft(): TextDraft { return { text: "", operation: null, notice: null, error: null }; }
 export function newScopeDrafts(): ScopeDrafts {
-  return { messages: new Map(), edits: new Map(), selectedTask: null, selectedRun: null, selectedSubagent: null, showSubagents: true, attentionOnly: false, spaceFilter: "", disclosures: { completed: false, agents: false, history: false, diagnostics: false, archive: false } };
+  return { messages: new Map(), edits: new Map(), selectedTask: null, selectedRun: null, selectedSubagent: null, showSubagents: true, attentionOnly: false, spaceFilter: "", disclosures: { completed: false, history: false, diagnostics: false, archive: false }, view: { mode: "tasks", offsets: { tasks: null, graph: null }, laneScroll: {}, collapsedLanes: [], detailWidth: null, sheetHeight: null, queueOpenRow: null } };
 }
 export function messageDraft(scope: ScopeDrafts, key: string): TextDraft {
   let draft = scope.messages.get(key);

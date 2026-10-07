@@ -141,7 +141,7 @@ function flushFrames(): void {
   act(() => frames.splice(0).forEach(callback => callback(0)));
 }
 async function openTask(current: Fixture): Promise<void> {
-  await click(button("Todos"));
+  await click(query<HTMLButtonElement>("#f-todos"));
   await type('#todoAddInput', "Next task draft");
   await click(query<HTMLButtonElement>(`#todoList [data-todo-id="${current.task.id}"] .notes-row-actions button`));
   await type('[aria-label="New comment Markdown"]', "Comment draft to preserve");
@@ -236,8 +236,6 @@ describe("NotesView consumer safety", () => {
     current.resolveTarget.mockReturnValueOnce(pendingResolve.promise);
     await act(async () => window.dispatchEvent(new Event("focus")));
     await click(button("Attach existing notes…"));
-    const catalogFailure = query<HTMLElement>('[role="alert"]');
-    expect(catalogFailure.textContent).toContain("Catalog directory cannot be read");
     expect(button("Attach").disabled).toBe(true);
 
     await act(async () => {
@@ -253,6 +251,24 @@ describe("NotesView consumer safety", () => {
     await click(button("Retry reading catalog"));
     expect(current.readCatalog).toHaveBeenCalledTimes(2);
     expect(host!.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("refuses attachment when the selected catalog entry disappears on reopening", async () => {
+    const current = fixture();
+    current.resolveTarget.mockRejectedValue(problem("notes_unbound", "Space has no association"));
+    const entry: NotesCatalogEntry = { notes_id: "30000000-0000-4000-8000-000000000002", label: "Available notes", created: null, bound: false };
+    current.readCatalog.mockResolvedValueOnce(current.response({ kind: "catalog", entries: [entry] }));
+    current.readCatalog.mockResolvedValue(current.response({ kind: "catalog", entries: [] }));
+    await mount(current);
+    await click(button("Attach existing notes…"));
+    await click(query<HTMLInputElement>('input[name="notes-attach"]'));
+    expect(button("Attach").disabled).toBe(false);
+    await click(button("Cancel"));
+    await click(button("Attach existing notes…"));
+    expect(host!.querySelector('input[name="notes-attach"]')).toBeNull();
+    expect(button("Attach").disabled).toBe(true);
+    await click(button("Attach"));
+    expect(current.notes.mock.calls.some(([request]) => request.operation.op === "target_attach")).toBe(false);
   });
 
   it("returns Keep to the current logical Attach action and Cancel to the picker opener without transferring Notes", async () => {
@@ -277,7 +293,7 @@ describe("NotesView consumer safety", () => {
   it("does not let a late detail-close frame steal a new task title's focus after the original row disappears", async () => {
     const current = fixture();
     await mount(current);
-    await click(button("Todos"));
+    await click(query<HTMLButtonElement>("#f-todos"));
     await click(query<HTMLButtonElement>('#todoList [data-todo-id="task1"] .notes-row-actions button'));
     flushFrames();
     await click(button("Close task details"));

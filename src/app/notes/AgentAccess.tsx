@@ -46,6 +46,12 @@ export function AgentAccess({ info, model, todo, decisionId }: { info: NotesTarg
     ["Comments edit", `${base} comment update --todo ${todo?.id ?? "<todo-id>"} --comment <comment-id> --expected-revision '<comment-revision>' --stdin`],
     ["Comments remove", `${base} comment remove --todo ${todo?.id ?? "<todo-id>"} --comment <comment-id> --expected-revision '<comment-revision>'`],
   ];
+  const resolve = commands[0];
+  const groups: [string, string[][]][] = [["Scratchpad", commands.slice(1, 4)], ["Todos", commands.slice(4, 8)], ["Board", commands.slice(8, 13)], ["Decisions", commands.slice(13, 18)], ["Comments", commands.slice(18)]];
+  const renderCommand = ([label, command]: string[]) => <div className="notes-agent-command" key={label}>
+    <label><span>{label}</span><input readOnly value={command} onClick={event => event.currentTarget.select()} /></label>
+    <button type="button" className="notes-agent-copy" aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={() => void copyCommand(label, command)}><UiIcon name="copy" /></button>
+  </div>;
   return <details className="notes-agent-access" id="agentAccessDetails">
     <summary className="notes-agent-summary">
       <UiIcon name="terminal" />
@@ -59,10 +65,11 @@ export function AgentAccess({ info, model, todo, decisionId }: { info: NotesTarg
         <label>Notes UUID<input readOnly value={info.notes_id} onClick={event => event.currentTarget.select()} /></label>
         <label>Folder outside the repository<input readOnly value={info.folder} onClick={event => event.currentTarget.select()} /></label>
         <div className="notes-agent-commands">
-          {commands.map(([label, command]) => <div className="notes-agent-command" key={label}>
-            <label><span>{label}</span><input readOnly value={command} onClick={event => event.currentTarget.select()} /></label>
-            <button type="button" className="notes-agent-copy" aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={() => void copyCommand(label, command)}><UiIcon name="copy" /></button>
-          </div>)}
+          {renderCommand(resolve)}
+          {groups.map(([heading, entries]) => <section className="notes-agent-group" key={heading}>
+            <h4 className="notes-agent-group-heading">{heading}</h4>
+            <div className="notes-agent-group-commands">{entries.map(renderCommand)}</div>
+          </section>)}
         </div>
         <p>All four surfaces plus comments support real read/write. Additional verbs: todo remove, catalog, target --create / --attach. Use cockpit-cli notes --help for flags. Imported todos use --ref until an explicit edit adopts a stable ID.</p>
       </div>

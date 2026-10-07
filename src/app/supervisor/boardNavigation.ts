@@ -6,9 +6,27 @@ export const taskLanes: readonly { lane: TaskLane; label: string }[] = [
   { lane: "review", label: "Review" }, { lane: "accepted", label: "Done" },
 ];
 
+export type BoardArrangement = "lanes" | "stacked";
+export type BoardNavOptions = { arrangement: BoardArrangement; completedOpen: boolean; collapsedLanes: readonly TaskLane[] };
+
+export function visibleTaskIds(tasks: readonly TaskView[], options: BoardNavOptions): string[] {
+  return taskLanes.flatMap(({ lane }) =>
+    lane === "accepted" && !options.completedOpen || options.arrangement === "stacked" && options.collapsedLanes.includes(lane)
+      ? [] : tasks.filter(task => task.lane === lane).map(task => task.task.task_id));
+}
+
 /** Focus navigation only: never changes the backend-derived lane or selection. */
-export function taskNeighbor(tasks: readonly TaskView[], id: string, key: string, completedOpen: boolean): string | undefined {
-  const lanes = taskLanes.filter(item => item.lane !== "accepted" || completedOpen)
+export function taskNeighbor(tasks: readonly TaskView[], id: string, key: string, options: BoardNavOptions): string | undefined {
+  if (options.arrangement === "stacked") {
+    const ids = visibleTaskIds(tasks, options);
+    const index = ids.indexOf(id);
+    if (index < 0) return undefined;
+    if (key === "Home") return ids[0];
+    if (key === "End") return ids[ids.length - 1];
+    if (key === "ArrowUp" || key === "ArrowDown") return ids[Math.max(0, Math.min(ids.length - 1, index + (key === "ArrowDown" ? 1 : -1)))];
+    return undefined;
+  }
+  const lanes = taskLanes.filter(item => item.lane !== "accepted" || options.completedOpen)
     .map(item => tasks.filter(task => task.lane === item.lane));
   const laneIndex = lanes.findIndex(lane => lane.some(task => task.task.task_id === id));
   if (laneIndex < 0) return undefined;

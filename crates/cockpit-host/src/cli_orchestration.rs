@@ -6,6 +6,7 @@ use cockpit_core::{
     config::load_project_configuration,
     extension_adapter::SourcePaneEvidence,
     orchestration::{Actor, AgentCaller, OrchestrationService, herdr::OrchestrationHerdr},
+    process_identity::{is_ancestor_of_self, kernel_boot_id, start_identity},
     projects::ProjectService,
 };
 use cockpit_herdr::HerdrCliAdapter;
@@ -15,6 +16,7 @@ use cockpit_protocol::{
     projects::{ProjectConfiguration, WorkspaceSetupRequest},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 
@@ -96,6 +98,9 @@ struct OrchestrationArgs {
     /// Native OMP session ID supplied by the calling extension.
     #[arg(long, global = true)]
     omp_session: Option<String>,
+    /// Native OMP process; verified as this CLI's ancestor, never trusted from JSON.
+    #[arg(long, global = true)]
+    omp_pid: Option<u32>,
     /// Actual root main OMP session, supplied by the extension for subagent contexts.
     #[arg(long, global = true)]
     omp_main_session: Option<String>,
@@ -196,6 +201,7 @@ struct Context {
 impl Context {
     async fn open(args: &OrchestrationArgs, caller_required: bool) -> Result<Self, CliError> {
         args.validate_identity()?;
+        let process = args.omp_pid.map(native_process_evidence).transpose()?;
         let endpoint = args.endpoint()?;
         let caller = caller_required || std::env::var("HERDR_ENV").ok().as_deref() == Some("1");
         let pane = if caller {
@@ -268,6 +274,7 @@ impl Context {
                     main_omp_session_id: args.omp_main_session.clone(),
                     agent_kind: args.agent_kind.map(Into::into),
                     subagent_id: args.subagent_id.clone(),
+                    process,
                 }))
             }
             None => None,
@@ -285,16 +292,22 @@ impl Context {
 
     async fn check_caller(&self) -> Result<(), CliError> {
         if let Some(before) = &self.evidence {
-            let after = self
-                .adapter
-                .source_adapter()
-                .source_pane_evidence(&self.session, &before.pane_id)
-                .await?;
-            if before.pane_id != after.pane_id
-                || before.terminal_id != after.terminal_id
-                || before.workspace_id != after.workspace_id
-                || before.tab_id != after.tab_id
-                || before.endpoint_identity != after.endpoint_identity
+            // Runtime parsing validates tab/workspace membership before returning this view.
+            let runtime = self.adapter.runtime(&self.session).await?;
+            let pane = runtime
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == before.pane_id)
+                .ok_or_else(|| {
+                    CliError::new(
+                        "caller_mismatch",
+                        "caller pane disappeared during orchestration operation",
+                    )
+                })?;
+            if runtime.endpoint_identity != before.endpoint_identity
+                || pane.workspace_id != before.workspace_id
+                || pane.tab_id != before.tab_id
+                || pane.terminal_id.as_ref() != Some(&before.terminal_id)
             {
                 return Err(CliError::new(
                     "caller_mismatch",
@@ -302,27 +315,13 @@ impl Context {
                 ));
             }
             if let Some(Actor::Agent(caller)) = &self.actor {
-                let runtime = self.adapter.runtime(&self.session).await?;
-                let pane = runtime
-                    .panes
-                    .iter()
-                    .find(|pane| pane.pane_id == caller.pane_id)
-                    .ok_or_else(|| {
-                        CliError::new(
-                            "caller_mismatch",
-                            "caller pane disappeared during orchestration operation",
-                        )
-                    })?;
                 if runtime.endpoint_identity != caller.endpoint_identity
                     || runtime.boot_id != caller.boot_id
                     || pane.native_session_id != caller.native_session_id
                     || caller.actual_agent_kind.as_ref().is_some_and(|kind| {
                         pane.agent_kind.as_ref() != Some(kind) || pane.launch_pending
                     })
-                    || pane
-                        .terminal_id
-                        .as_ref()
-                        .is_some_and(|terminal| Some(terminal) != caller.terminal_id.as_ref())
+                    || pane.terminal_id.as_ref() != caller.terminal_id.as_ref()
                 {
                     return Err(CliError::new(
                         "caller_mismatch",
@@ -423,6 +422,48 @@ impl Context {
         Ok(run)
     }
 
+    fn retiring_run_for_review(&self) -> Result<Run, CliError> {
+        let Some(Actor::Agent(caller)) = &self.actor else {
+            return Err(CliError::new("caller_unbound", "retirement requires a bound caller"));
+        };
+        let (id, _) = caller.env_run.as_ref().ok_or_else(|| {
+            CliError::new("caller_mismatch", "retirement requires the exact inherited run attempt")
+        })?;
+        let run = self.service.run_for_review(&self.session, id)?;
+        retirement_read_scope(&run, caller)?;
+        Ok(run)
+    }
+
+    fn own_retiring_run<'a>(&self, snapshot: &'a OrchestrationSnapshot) -> Result<&'a Run, CliError> {
+        let Some(Actor::Agent(caller)) = &self.actor else {
+            return Err(CliError::new("caller_unbound", "retirement requires a bound caller"));
+        };
+        let (id, _) = caller.env_run.as_ref().ok_or_else(|| {
+            CliError::new("caller_mismatch", "retirement requires the exact inherited run attempt")
+        })?;
+        let run = snapshot.runs.iter().find(|run| run.run_id == *id).ok_or_else(|| {
+            CliError::new("caller_mismatch", "caller run is not in this session")
+        })?;
+        if run.stage != RunStage::Closed {
+            self.own_run(snapshot)?;
+        }
+        retirement_read_scope(run, caller)?;
+        Ok(run)
+    }
+
+    fn check_retirement_process(&self) -> Result<(), CliError> {
+        let Some(Actor::Agent(caller)) = &self.actor else {
+            return Err(CliError::new("caller_unbound", "retirement requires a bound caller"));
+        };
+        let process = caller.process.as_ref().ok_or_else(|| {
+            CliError::new("caller_mismatch", "retirement requires trusted process evidence")
+        })?;
+        if native_process_evidence(process.pid)? != *process {
+            return Err(CliError::new("caller_mismatch", "native process incarnation changed"));
+        }
+        Ok(())
+    }
+
     async fn task_root(&self, args: &OrchestrationArgs, writing: bool) -> Result<String, CliError> {
         let snapshot = self.snapshot(None).await?;
         if writing {
@@ -482,6 +523,86 @@ impl Context {
         })?;
         Ok(result)
     }
+}
+
+fn native_process_evidence(pid: u32) -> Result<NativeProcessIdentity, CliError> {
+    let mismatch = || CliError::new("caller_mismatch", "OMP PID is not a verified live CLI ancestor");
+    let signed_pid = i32::try_from(pid).map_err(|_| mismatch())?;
+    let before = start_identity(signed_pid).ok_or_else(mismatch)?;
+    if !is_ancestor_of_self(signed_pid, 64) {
+        return Err(mismatch());
+    }
+    let boot = kernel_boot_id();
+    if start_identity(signed_pid) != Some(before) {
+        return Err(mismatch());
+    }
+    Ok(NativeProcessIdentity { pid, start_ticks: before, kernel_boot_id: boot })
+}
+
+fn retirement_read_scope(run: &Run, caller: &AgentCaller) -> Result<(), CliError> {
+    let mismatch = || CliError::new("caller_mismatch", "retirement is scoped to the exact worker main incarnation");
+    if caller.agent_kind != Some(AgentKind::Main)
+        || caller.subagent_id.is_some()
+        || caller.actual_agent_kind.as_deref() != Some("omp")
+        || caller.env_run.as_ref().is_none_or(|(id, _)| id != &run.run_id)
+        || run.session_id != caller.session_id
+    {
+        return Err(mismatch());
+    }
+    if caller.env_run.as_ref().is_none_or(|(_, attempt)| *attempt != run.attempt) {
+        return Err(CliError::new("attempt_stale", "caller run attempt is stale"));
+    }
+    let Some(session) = caller.omp_session_id.as_deref().filter(|id| !id.is_empty()) else {
+        return Err(CliError::new("session_mismatch", "retirement requires the actual main session"));
+    };
+    if run.bound_omp_session.as_deref() != Some(session) {
+        return Err(CliError::new("session_mismatch", "retirement main session differs from binding"));
+    }
+    let Some(process) = caller.process.as_ref() else {
+        return Err(mismatch());
+    };
+    if run.bound_omp_process.as_ref() != Some(process) {
+        return Err(mismatch());
+    }
+    let Some(location) = &run.location else {
+        return Err(mismatch());
+    };
+    if !caller_location_matches(location, run.bound_omp_session.as_deref(), caller)
+        || location.pane_id != caller.pane_id
+        || location.workspace_id != caller.workspace_id
+        || location.tab_id != caller.tab_id
+    {
+        return Err(mismatch());
+    }
+    if run.stage == RunStage::Closed {
+        if run.close_reason != Some(CloseReason::Accepted) || run.kind != RunKind::Worker {
+            return Err(mismatch());
+        }
+        let identity = run.retirement.as_ref().and_then(|retirement| retirement.identity.as_ref())
+            .ok_or_else(mismatch)?;
+        if identity.run_attempt != run.attempt
+            || run.dispatch.as_ref().is_none_or(|dispatch| {
+                dispatch.launch_attempt != identity.launch_attempt
+                    || dispatch.launch_tag.as_deref() != Some(identity.launch_tag.as_str())
+                    || dispatch.endpoint_identity.as_deref() != Some(identity.endpoint_identity.as_str())
+            })
+            || location.launch_tag != identity.launch_tag
+            || location.terminal_id.as_deref() != Some(identity.terminal_id.as_str())
+            || identity.omp_session_id != session
+            || &identity.process != process
+            || run.launch_shell_identity.as_ref() != Some(&identity.shell)
+            || identity.endpoint_identity != caller.endpoint_identity
+            || identity.session_id != caller.session_id
+            || identity.workspace_id != caller.workspace_id
+            || identity.tab_id != caller.tab_id
+            || identity.pane_id != caller.pane_id
+            || caller.terminal_id.as_deref() != Some(identity.terminal_id.as_str())
+            || matches!((&identity.herdr_boot_id, &caller.boot_id), (Some(a), Some(b)) if a != b)
+        {
+            return Err(mismatch());
+        }
+    }
+    Ok(())
 }
 fn caller_location_matches(
     location: &RunLocation,
@@ -846,6 +967,145 @@ impl ProposeArgs {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum NativeDeferReasonArg {
+    Busy,
+    PendingMessages,
+    AsyncJobs,
+    LiveSubagents,
+    EditorDraft,
+}
+impl From<NativeDeferReasonArg> for NativeDeferReason {
+    fn from(reason: NativeDeferReasonArg) -> Self {
+        match reason {
+            NativeDeferReasonArg::Busy => Self::Busy,
+            NativeDeferReasonArg::PendingMessages => Self::PendingMessages,
+            NativeDeferReasonArg::AsyncJobs => Self::AsyncJobs,
+            NativeDeferReasonArg::LiveSubagents => Self::LiveSubagents,
+            NativeDeferReasonArg::EditorDraft => Self::EditorDraft,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum NativeRefuseReasonArg {
+    UserActivity,
+    NativeRefused,
+}
+impl From<NativeRefuseReasonArg> for NativeRefuseReason {
+    fn from(reason: NativeRefuseReasonArg) -> Self {
+        match reason {
+            NativeRefuseReasonArg::UserActivity => Self::UserActivity,
+            NativeRefuseReasonArg::NativeRefused => Self::NativeRefused,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+#[group(skip)]
+#[command(group(clap::ArgGroup::new("retirement_outcome").required(true).multiple(false).args(["shutdown_requested", "deferred", "refused"])))]
+pub(crate) struct RetirementReceiptArgs {
+    #[arg(long)]
+    retirement: String,
+    /// Records intent only; does not prove that the native process stopped.
+    #[arg(long)]
+    shutdown_requested: bool,
+    #[arg(long, value_enum)]
+    deferred: Option<NativeDeferReasonArg>,
+    /// Explanation only, at most 1 KiB; typed reason determines the outcome.
+    #[arg(long, requires = "refuse_reason")]
+    refused: Option<String>,
+    #[arg(long, value_enum, requires = "refused")]
+    refuse_reason: Option<NativeRefuseReasonArg>,
+}
+impl RetirementReceiptArgs {
+    fn action(self) -> Result<OrchestrationAction, CliError> {
+        let outcome = match (self.shutdown_requested, self.deferred, self.refused, self.refuse_reason) {
+            (true, None, None, None) => NativeStopReceipt::ShutdownRequested,
+            (false, Some(reason), None, None) => NativeStopReceipt::Deferred { reason: reason.into() },
+            (false, None, Some(text), Some(reason)) if text.len() <= 1024 => {
+                NativeStopReceipt::Refused { reason: reason.into(), text }
+            }
+            (false, None, Some(_), Some(_)) => {
+                return Err(CliError::usage("retirement refusal exceeds 1 KiB"));
+            }
+            _ => return Err(CliError::usage("retirement receipt requires exactly one typed outcome")),
+        };
+        Ok(OrchestrationAction::RetirementNativeReceipt { retirement_id: self.retirement, outcome })
+    }
+}
+
+#[derive(Serialize)]
+struct RetirementRead<'a> {
+    retirement: Option<&'a RunRetirement>,
+}
+
+fn retirement_wait_ready(
+    initial: Option<&RunRetirement>,
+    current: Option<&RunRetirement>,
+) -> bool {
+    initial != current
+        || current.is_some_and(|record| matches!(
+            &record.state,
+            RetirementState::Retired { .. }
+                | RetirementState::Retained { .. }
+                | RetirementState::Unknown { .. }
+        ))
+}
+
+async fn retirement_final_read(context: &Context) -> Result<Run, CliError> {
+    context.check_caller().await?;
+    context.check_retirement_process()?;
+    context.retiring_run_for_review()
+}
+
+async fn retirement_wait(context: &Context, wait: bool, timeout: u64) -> Result<Run, CliError> {
+    if !wait {
+        return retirement_final_read(context).await;
+    }
+    context.check_caller().await?;
+    context.check_retirement_process()?;
+    // Capture the cursor BEFORE the run read, including on every subsequent wait.
+    let mut cursor = context.service.wait(&OrchestrationWaitRequest {
+        after_revision: 0,
+        after_tasks_token: String::new(),
+        timeout_ms: 0,
+    }).await?;
+    let initial = context.retiring_run_for_review()?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
+    let mut latest = None;
+    loop {
+        let own = latest.as_ref().unwrap_or(&initial);
+        if retirement_wait_ready(initial.retirement.as_ref(), own.retirement.as_ref())
+            || tokio::time::Instant::now() >= deadline
+        {
+            // No timeout wrapper may cancel this final authority/output fence.
+            return retirement_final_read(context).await;
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        cursor = context.service.wait(&OrchestrationWaitRequest {
+            after_revision: cursor.revision,
+            after_tasks_token: cursor.tasks_token,
+            timeout_ms: remaining.as_millis().clamp(1, 30_000) as u32,
+        }).await?;
+        latest = Some(context.retiring_run_for_review()?);
+    }
+}
+
+fn require_retirement_caller(args: &OrchestrationArgs) -> Result<(), CliError> {
+    if args.omp_pid.is_none()
+        || !matches!(args.agent_kind, Some(AgentKindArg::Main))
+        || args.subagent_id.is_some()
+        || args.env_run()?.is_none()
+    {
+        return Err(CliError::usage("retirement requires an inherited run attempt, --omp-pid and --agent-kind main"));
+    }
+    required_session(args)?;
+    Ok(())
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum RunCommand {
     /// List durable runs joined to fresh Herdr observations.
@@ -913,6 +1173,15 @@ pub(crate) enum RunCommand {
     },
     /// Bind the caller run to the native main OMP session.
     BindSession,
+    /// Read only this main session's retirement; never stops a process or closes a pane.
+    Retirement {
+        #[arg(long)]
+        wait: bool,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=300))]
+        timeout: u64,
+    },
+    /// Record self-retirement readiness; no native stop success is implied.
+    RetirementReceipt(RetirementReceiptArgs),
     /// Send a durable instruction, answer or cancel request to a descendant run.
     Message {
         run: String,
@@ -937,6 +1206,9 @@ pub(crate) enum RunCommand {
 }
 impl RunArgs {
     pub async fn run(self) -> Result<(), CliError> {
+        if matches!(&self.command, RunCommand::Retirement { .. } | RunCommand::RetirementReceipt(_)) {
+            require_retirement_caller(&self.common)?;
+        }
         let caller_required = !matches!(
             &self.command,
             RunCommand::List { .. }
@@ -1057,6 +1329,22 @@ impl RunArgs {
                     omp_session_id: required_session(&self.common)?,
                 }
             }
+            RunCommand::Retirement { wait, timeout } => {
+                let own = retirement_wait(&context, wait, timeout).await?;
+                return emit(&RetirementRead { retirement: own.retirement.as_ref() }, self.common.json);
+            }
+            RunCommand::RetirementReceipt(args) => {
+                context.retiring_run_for_review()?;
+                let action = args.action()?;
+                context.check_retirement_process()?;
+                let result = context.mutate(action).await?;
+                context.check_retirement_process().map_err(|error| {
+                    CliError::new(&error.code, format!(
+                        "{}; durable mutation may already be committed", error.message,
+                    ))
+                })?;
+                return emit(&result, self.common.json);
+            }
             RunCommand::Message {
                 run,
                 kind,
@@ -1130,6 +1418,12 @@ pub(crate) enum InboxCommand {
         after: u64,
         #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(0..=3600))]
         timeout: u64,
+        /// Join own retirement into this single waiter; closed accepted runs return no mail.
+        #[arg(long)]
+        with_retirement: bool,
+        /// Opaque token returned by the previous narrow wait.
+        #[arg(long, requires = "with_retirement")]
+        after_retirement: Option<String>,
     },
     /// Record that a counts-only wake was delivered to the native OMP session.
     Woken {
@@ -1148,6 +1442,105 @@ struct InboxCounts {
 struct KindCount {
     kind: MessageKind,
     count: u64,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum MainWaitRead<'a> {
+    Open {
+        inbox: InboxCounts,
+        retirement: Option<&'a RunRetirement>,
+        retirement_token: String,
+    },
+    RetirementOnly {
+        retirement: &'a RunRetirement,
+        retirement_token: String,
+    },
+}
+
+impl MainWaitRead<'_> {
+    fn ready(&self, after_retirement: Option<&str>) -> bool {
+        let (token, retirement, pending) = match self {
+            Self::Open { inbox, retirement, retirement_token } => {
+                (retirement_token, *retirement, inbox.pending)
+            }
+            Self::RetirementOnly { retirement, retirement_token } => {
+                (retirement_token, Some(*retirement), false)
+            }
+        };
+        pending
+            || after_retirement.is_none_or(|after| after != token)
+            || retirement_wait_ready(retirement, retirement)
+    }
+}
+
+fn validate_retirement_token(token: &str) -> Result<(), CliError> {
+    if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+        return Err(CliError::usage("--after-retirement must be 64 lowercase hex characters"));
+    }
+    Ok(())
+}
+
+fn retirement_observation_token(record: Option<&RunRetirement>) -> Result<String, CliError> {
+    let bytes = serde_json::to_vec(&record)
+        .map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn main_wait_read(run: &Run, inbox: Option<InboxCounts>) -> Result<MainWaitRead<'_>, CliError> {
+    let retirement_token = retirement_observation_token(run.retirement.as_ref())?;
+    if run.stage == RunStage::Closed {
+        if run.close_reason != Some(CloseReason::Accepted) {
+            return Err(CliError::new("caller_mismatch", "only own accepted retirement may outlive tracking"));
+        }
+        let retirement = run.retirement.as_ref().ok_or_else(|| {
+            CliError::new("caller_mismatch", "closed accepted run has no retirement")
+        })?;
+        return Ok(MainWaitRead::RetirementOnly { retirement, retirement_token });
+    }
+    let inbox = inbox.ok_or_else(|| CliError::new("caller_mismatch", "open wait requires own inbox counts"))?;
+    if inbox.run_id != run.run_id {
+        return Err(CliError::new("caller_mismatch", "inbox belongs to another run"));
+    }
+    Ok(MainWaitRead::Open { inbox, retirement: run.retirement.as_ref(), retirement_token })
+}
+
+fn completed_main_wait<'a>(
+    context: &Context,
+    snapshot: &'a OrchestrationSnapshot,
+    after: u64,
+) -> Result<MainWaitRead<'a>, CliError> {
+    // Context::snapshot already completed its fresh postcheck: no fourth runtime.
+    context.check_retirement_process()?;
+    let run = context.own_retiring_run(snapshot)?;
+    let inbox = if run.stage == RunStage::Closed {
+        None // Never inspect even secret-containing snapshot.messages after acceptance.
+    } else {
+        context.own_run(snapshot)?;
+        Some(inbox_counts(&snapshot.messages, &run.run_id, after))
+    };
+    main_wait_read(run, inbox)
+}
+
+fn main_wait_deadline_run(context: &Context) -> Result<Run, CliError> {
+    // Caller has just completed the CPU-owned fresh runtime timeout fence.
+    context.check_retirement_process()?;
+    context.retiring_run_for_review()
+}
+
+fn empty_main_wait_read(run: &Run, after: u64) -> Result<MainWaitRead<'_>, CliError> {
+    let inbox = if run.stage == RunStage::Closed {
+        None
+    } else {
+        Some(InboxCounts { run_id: run.run_id.clone(), pending: false, through_seq: after, counts: vec![] })
+    };
+    main_wait_read(run, inbox)
+}
+
+fn emit_main_wait_deadline(context: &Context, after: u64, json: bool) -> Result<(), CliError> {
+    let run = main_wait_deadline_run(context)?;
+    // Rebuild mode from CURRENT durable authority. Never emit previous Open mail.
+    emit(&empty_main_wait_read(&run, after)?, json)
 }
 fn inbox_counts(messages: &[Message], run_id: &str, after: u64) -> InboxCounts {
     let mut counts: BTreeMap<&str, KindCount> = BTreeMap::new();
@@ -1187,6 +1580,17 @@ fn inbox_counts(messages: &[Message], run_id: &str, after: u64) -> InboxCounts {
 }
 impl InboxArgs {
     pub async fn run(self) -> Result<(), CliError> {
+        if let InboxCommand::Wait { with_retirement, after_retirement, .. } = &self.command {
+            if let Some(token) = after_retirement {
+                validate_retirement_token(token)?;
+                if !*with_retirement {
+                    return Err(CliError::usage("--after-retirement requires --with-retirement"));
+                }
+            }
+            if *with_retirement {
+                require_retirement_caller(&self.common)?;
+            }
+        }
         let context = Context::open(&self.common, true).await?;
         let action = match self.command {
             InboxCommand::List { after, limit } => OrchestrationAction::InboxPull {
@@ -1200,18 +1604,47 @@ impl InboxArgs {
                 through_seq: through,
                 omp_session_id: required_session(&self.common)?,
             },
-            InboxCommand::Wait { after, timeout } => {
+            InboxCommand::Wait { after, timeout, with_retirement, after_retirement } => {
                 let mut snapshot = context.snapshot(None).await?;
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
                 loop {
-                    let own = context.own_run(&snapshot)?;
-                    let result = inbox_counts(&snapshot.messages, &own.run_id, after);
-                    if result.pending || tokio::time::Instant::now() >= deadline {
-                        return emit(&result, self.common.json);
+                    let narrow = if with_retirement {
+                        Some(completed_main_wait(&context, &snapshot, after)?)
+                    } else {
+                        None
+                    };
+                    let ordinary = if with_retirement {
+                        None
+                    } else {
+                        let own = context.own_run(&snapshot)?;
+                        Some(inbox_counts(&snapshot.messages, &own.run_id, after))
+                    };
+                    if let Some(read) = &narrow {
+                        if read.ready(after_retirement.as_deref()) {
+                            return emit(read, self.common.json);
+                        }
+                    } else if let Some(result) = &ordinary {
+                        if result.pending {
+                            return emit(result, self.common.json);
+                        }
                     }
+                    if tokio::time::Instant::now() >= deadline {
+                        context.check_caller().await?;
+                        if with_retirement {
+                            return emit_main_wait_deadline(&context, after, self.common.json);
+                        }
+                        return emit(ordinary.as_ref().expect("ordinary wait counts"), self.common.json);
+                    }
+                    drop(narrow);
                     match next_snapshot(&context, &snapshot, deadline).await? {
                         Some(next) => snapshot = next,
-                        None => return emit(&result, self.common.json),
+                        None => {
+                            // next_snapshot has completed the fresh CPU timeout fence.
+                            if with_retirement {
+                                return emit_main_wait_deadline(&context, after, self.common.json);
+                            }
+                            return emit(ordinary.as_ref().expect("ordinary wait counts"), self.common.json);
+                        }
                     }
                 }
             }
@@ -1232,7 +1665,12 @@ async fn next_snapshot(
     .await
     {
         Ok(result) => result.map(Some),
-        Err(_) => Ok(None),
+        Err(_) => {
+            // Only the previously empty result may be returned after cancellation.
+            // This authority check is deliberately outside the caller's wait budget.
+            context.check_caller().await?;
+            Ok(None)
+        }
     }
 }
 async fn wait_next(
@@ -1244,8 +1682,8 @@ async fn wait_next(
     if remaining.is_zero() {
         return Ok(());
     }
-    // Poll at most once a second even without an owner, including cross-process writes.
-    let timeout_ms = remaining.min(Duration::from_secs(1)).as_millis().max(1) as u32;
+    // Reobserve idle runtime even without an owner; durable changes wake this wait early.
+    let timeout_ms = remaining.min(Duration::from_secs(3)).as_millis().max(1) as u32;
     context
         .service
         .wait(&OrchestrationWaitRequest {
@@ -1254,7 +1692,7 @@ async fn wait_next(
             timeout_ms,
         })
         .await?;
-    context.check_caller().await
+    Ok(())
 }
 
 #[derive(Debug, Args)]
@@ -1402,7 +1840,11 @@ impl SubagentArgs {
                 loop {
                     let own = context.own_run(&snapshot)?;
                     let result = pending_controls(&snapshot.messages, &own.run_id, &id)?;
-                    if !result.messages.is_empty() || tokio::time::Instant::now() >= deadline {
+                    if !result.messages.is_empty() {
+                        return emit(&result, self.common.json);
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        context.check_caller().await?;
                         return emit(&result, self.common.json);
                     }
                     match next_snapshot(&context, &snapshot, deadline).await? {
@@ -2000,6 +2442,7 @@ mod tests {
             main_omp_session_id: Some("main".into()),
             agent_kind: Some(AgentKind::Subagent),
             subagent_id: Some("child".into()),
+            process: None,
         };
         let mut location = RunLocation {
             endpoint_identity: "endpoint".into(),
@@ -2098,4 +2541,1366 @@ mod tests {
         assert!(help.contains("cancel"));
         assert!(help.contains("send"));
     }
+
+    fn retirement_fixture() -> (Run, AgentCaller) {
+        let process = NativeProcessIdentity {
+            pid: 1234,
+            start_ticks: 5678,
+            kernel_boot_id: Some("kernel".into()),
+        };
+        let caller = AgentCaller {
+            endpoint_identity: "endpoint".into(),
+            session_id: "fixture".into(),
+            workspace_id: "space".into(),
+            tab_id: "tab".into(),
+            pane_id: "pane".into(),
+            boot_id: Some("boot".into()),
+            terminal_id: Some("terminal".into()),
+            native_session_id: Some("main".into()),
+            actual_agent_kind: Some("omp".into()),
+            env_run: Some(("worker".into(), 2)),
+            omp_session_id: Some("main".into()),
+            main_omp_session_id: None,
+            agent_kind: Some(AgentKind::Main),
+            subagent_id: None,
+            process: Some(process.clone()),
+        };
+        let run = Run {
+            session_id: "fixture".into(),
+            prepare_brief: String::new(),
+            run_id: "worker".into(),
+            kind: RunKind::Worker,
+            label: "worker".into(),
+            root_id: "root".into(),
+            parent_run_id: Some("root".into()),
+            task_id: Some("task".into()),
+            attempt: 2,
+            task_revision_at_propose: None,
+            stage: RunStage::Working,
+            close_reason: None,
+            dispatch: Some(DispatchState {
+                launch_tag: Some("launch".into()),
+                endpoint_identity: Some("endpoint".into()),
+                recovery: None,
+                agent_started: true,
+                step: DispatchStep::Launched,
+                launch_attempt: 3,
+                error: None,
+                updated_at: "2026-10-07T00:00:00Z".into(),
+            }),
+            target: None,
+            setup: None,
+            prepare_plan: None,
+            init_receipt: None,
+            work_plan: None,
+            grants: vec![],
+            last_report: None,
+            result: None,
+            annotations: vec![],
+            location: Some(RunLocation {
+                boot_id: caller.boot_id.clone(),
+                terminal_id: caller.terminal_id.clone(),
+                native_session_id: caller.native_session_id.clone(),
+                endpoint_identity: caller.endpoint_identity.clone(),
+                session_id: caller.session_id.clone(),
+                workspace_id: caller.workspace_id.clone(),
+                tab_id: caller.tab_id.clone(),
+                pane_id: caller.pane_id.clone(),
+                launch_tag: "launch".into(),
+            }),
+            bound_omp_session: Some("main".into()),
+            bound_omp_process: Some(process),
+            launch_shell_identity: Some(NativeShellIdentity {
+                process: NativeProcessIdentity {
+                    pid: 4321,
+                    start_ticks: 5000,
+                    kernel_boot_id: Some("kernel".into()),
+                },
+                executable_device: "40".into(),
+                executable_inode: "800".into(),
+                argv_digest: "a".repeat(64),
+            }),
+            retirement: None,
+            supersedes_run_id: None,
+            created_at: "2026-10-07T00:00:00Z".into(),
+            updated_at: "2026-10-07T00:00:00Z".into(),
+        };
+        (run, caller)
+    }
+
+    fn accept_retirement(run: &mut Run, caller: &AgentCaller) {
+        run.stage = RunStage::Closed;
+        run.close_reason = Some(CloseReason::Accepted);
+        run.retirement = Some(RunRetirement {
+            retirement_id: "retirement".into(),
+            trigger: RetirementTrigger::Accept,
+            result_message_id: "result".into(),
+            task_revision: "revision".into(),
+            identity: Some(RetirementIdentity {
+                run_attempt: run.attempt,
+                launch_attempt: 3,
+                launch_tag: "launch".into(),
+                endpoint_identity: caller.endpoint_identity.clone(),
+                session_id: caller.session_id.clone(),
+                workspace_id: caller.workspace_id.clone(),
+                tab_id: caller.tab_id.clone(),
+                pane_id: caller.pane_id.clone(),
+                terminal_id: caller.terminal_id.clone().unwrap(),
+                herdr_boot_id: caller.boot_id.clone(),
+                omp_session_id: "main".into(),
+                process: caller.process.clone().unwrap(),
+                shell: run.launch_shell_identity.clone().unwrap(),
+            }),
+            state: RetirementState::NativeStopOffered {
+                offered_at: "2026-10-07T00:00:01Z".into(),
+            },
+            created_at: "2026-10-07T00:00:01Z".into(),
+            updated_at: "2026-10-07T00:00:01Z".into(),
+        });
+    }
+
+    #[test]
+    fn retirement_scope_survives_only_own_exact_acceptance() {
+        let (mut run, caller) = retirement_fixture();
+        retirement_read_scope(&run, &caller).unwrap();
+        assert!(run.retirement.is_none());
+        run.stage = RunStage::Reported;
+        retirement_read_scope(&run, &caller).unwrap();
+        accept_retirement(&mut run, &caller);
+        retirement_read_scope(&run, &caller).unwrap();
+        for reason in [CloseReason::Cancelled, CloseReason::Superseded, CloseReason::Failed] {
+            run.close_reason = Some(reason);
+            assert!(retirement_read_scope(&run, &caller).is_err());
+        }
+        run.close_reason = Some(CloseReason::Accepted);
+        run.retirement = None;
+        assert!(retirement_read_scope(&run, &caller).is_err());
+    }
+
+    #[test]
+    fn retirement_scope_rejects_foreign_or_replaced_native_authority() {
+        let (mut run, caller) = retirement_fixture();
+        let live = run.clone();
+        accept_retirement(&mut run, &caller);
+        let mutations: &[fn(&mut AgentCaller)] = &[
+            |c| c.env_run = Some(("sibling".into(), 2)),
+            |c| c.env_run = Some(("worker".into(), 1)),
+            |c| c.env_run = None,
+            |c| c.agent_kind = Some(AgentKind::Subagent),
+            |c| c.subagent_id = Some("child".into()),
+            |c| c.omp_session_id = Some("foreign".into()),
+            |c| c.process.as_mut().unwrap().pid += 1,
+            |c| c.process.as_mut().unwrap().start_ticks += 1,
+            |c| c.process.as_mut().unwrap().kernel_boot_id = Some("new-kernel".into()),
+            |c| c.process = None,
+            |c| c.endpoint_identity = "new-endpoint".into(),
+            |c| c.session_id = "other-fixture".into(),
+            |c| c.workspace_id = "other-space".into(),
+            |c| c.tab_id = "other-tab".into(),
+            |c| c.pane_id = "other-pane".into(),
+            |c| c.terminal_id = Some("other-terminal".into()),
+            |c| c.boot_id = Some("new-boot".into()),
+            |c| c.native_session_id = Some("other-native".into()),
+            |c| c.actual_agent_kind = None,
+        ];
+        for mutate in mutations {
+            let mut foreign = caller.clone();
+            mutate(&mut foreign);
+            assert!(retirement_read_scope(&run, &foreign).is_err(), "{foreign:?}");
+            assert!(retirement_read_scope(&live, &foreign).is_err(), "{foreign:?}");
+        }
+        run.dispatch.as_mut().unwrap().launch_attempt += 1;
+        assert!(retirement_read_scope(&run, &caller).is_err());
+        run.dispatch.as_mut().unwrap().launch_attempt -= 1;
+        run.dispatch.as_mut().unwrap().launch_tag = Some("new-launch".into());
+        assert!(retirement_read_scope(&run, &caller).is_err());
+        run.dispatch.as_mut().unwrap().launch_tag = Some("launch".into());
+        run.dispatch.as_mut().unwrap().endpoint_identity = Some("new-endpoint".into());
+        assert!(retirement_read_scope(&run, &caller).is_err());
+        run.dispatch.as_mut().unwrap().endpoint_identity = Some("endpoint".into());
+        run.retirement.as_mut().unwrap().identity.as_mut().unwrap().process.start_ticks += 1;
+        assert!(retirement_read_scope(&run, &caller).is_err());
+    }
+
+    #[test]
+    fn accepted_retirement_read_is_fenced_to_immutable_identity_not_current_binding_alone() {
+        let (mut run, caller) = retirement_fixture();
+        accept_retirement(&mut run, &caller);
+        let mutations: &[fn(&mut RetirementIdentity)] = &[
+            |i| i.run_attempt += 1,
+            |i| i.launch_attempt += 1,
+            |i| i.launch_tag = "other-launch".into(),
+            |i| i.endpoint_identity = "other-endpoint".into(),
+            |i| i.session_id = "other-session".into(),
+            |i| i.workspace_id = "other-space".into(),
+            |i| i.tab_id = "other-tab".into(),
+            |i| i.pane_id = "other-pane".into(),
+            |i| i.terminal_id = "other-terminal".into(),
+            |i| i.herdr_boot_id = Some("other-boot".into()),
+            |i| i.omp_session_id = "other-main".into(),
+            |i| i.process.start_ticks += 1,
+        ];
+        for mutate in mutations {
+            let mut changed = run.clone();
+            mutate(changed.retirement.as_mut().unwrap().identity.as_mut().unwrap());
+            assert!(retirement_read_scope(&changed, &caller).is_err());
+        }
+        run.retirement.as_mut().unwrap().identity = None;
+        assert!(retirement_read_scope(&run, &caller).is_err());
+    }
+
+    #[test]
+    fn native_pid_evidence_rejects_self_and_unrelated_live_child() {
+        assert!(native_process_evidence(std::process::id()).is_err());
+        assert!(native_process_evidence(0).is_err());
+        assert!(native_process_evidence(u32::MAX).is_err());
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let rejected = native_process_evidence(child.id()).is_err();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(rejected);
+    }
+
+    #[test]
+    fn retirement_receipt_requires_one_typed_bounded_outcome() {
+        let parsed = TestCli::try_parse_from([
+            "test", "run", "retirement", "--omp-pid", "1234", "--wait", "--timeout", "30",
+        ]).unwrap();
+        let TestCommand::Run(args) = parsed.command else { panic!("expected run") };
+        assert_eq!(args.common.omp_pid, Some(1234));
+        assert!(matches!(args.command, RunCommand::Retirement { wait: true, timeout: 30 }));
+        for reason in ["busy", "pending_messages", "async_jobs", "live_subagents", "editor_draft"] {
+            assert!(TestCli::try_parse_from([
+                "test", "run", "retirement-receipt", "--retirement", "id", "--deferred", reason,
+            ]).is_ok());
+        }
+        for reason in ["user_activity", "native_refused"] {
+            assert!(TestCli::try_parse_from([
+                "test", "run", "retirement-receipt", "--retirement", "id",
+                "--refused", "Explanation", "--refuse-reason", reason,
+            ]).is_ok());
+        }
+        for flags in [
+            vec![],
+            vec!["--shutdown-requested", "--deferred", "busy"],
+            vec!["--refused", "user_activity"],
+            vec!["--refuse-reason", "native_refused"],
+        ] {
+            let mut argv = vec!["test", "run", "retirement-receipt", "--retirement", "id"];
+            argv.extend(flags);
+            assert!(TestCli::try_parse_from(argv).is_err());
+        }
+        let action = RetirementReceiptArgs {
+            retirement: "id".into(),
+            shutdown_requested: false,
+            deferred: None,
+            refused: Some("user_activity appears here but has no authority".into()),
+            refuse_reason: Some(NativeRefuseReasonArg::NativeRefused),
+        }.action().unwrap();
+        assert!(matches!(action, OrchestrationAction::RetirementNativeReceipt {
+            outcome: NativeStopReceipt::Refused { reason: NativeRefuseReason::NativeRefused, .. }, ..
+        }));
+        assert!(RetirementReceiptArgs {
+            retirement: "id".into(),
+            shutdown_requested: false,
+            deferred: None,
+            refused: Some("é".repeat(513)),
+            refuse_reason: Some(NativeRefuseReasonArg::UserActivity),
+        }.action().is_err());
+    }
+
+    #[test]
+    fn retirement_wait_tracks_acceptance_and_never_spins_on_unchanged_offer() {
+        let (mut run, caller) = retirement_fixture();
+        assert!(!retirement_wait_ready(None, run.retirement.as_ref()));
+        run.stage = RunStage::Reported;
+        assert!(!retirement_wait_ready(None, run.retirement.as_ref()));
+        accept_retirement(&mut run, &caller);
+        assert!(retirement_wait_ready(None, run.retirement.as_ref()));
+        let offered = run.retirement.clone().unwrap();
+        assert!(!retirement_wait_ready(Some(&offered), Some(&offered)));
+        let mut metadata_only = offered.clone();
+        metadata_only.updated_at = "2026-10-07T00:00:02Z".into();
+        assert!(retirement_wait_ready(Some(&offered), Some(&metadata_only)));
+        let mut deferred = offered.clone();
+        deferred.state = RetirementState::NativeStopDeferred {
+            offered_at: "2026-10-07T00:00:01Z".into(),
+            reason: NativeDeferReason::Busy,
+            at: "2026-10-07T00:00:01Z".into(),
+        };
+        // Same timestamp does not hide a real state change.
+        assert!(retirement_wait_ready(Some(&offered), Some(&deferred)));
+        assert!(!retirement_wait_ready(Some(&deferred), Some(&deferred)));
+        deferred.state = RetirementState::Unknown {
+            at: "2026-10-07T00:00:02Z".into(),
+            phase: RetirementPhase::NativeStop,
+            detail: "stop not confirmed".into(),
+        };
+        assert!(retirement_wait_ready(Some(&deferred), Some(&deferred)));
+    }
+
+    #[tokio::test]
+    async fn retirement_commands_reject_missing_native_main_before_endpoint_access() {
+        for mut argv in [
+            vec!["test", "run", "retirement"],
+            vec!["test", "run", "retirement-receipt", "--retirement", "id", "--shutdown-requested"],
+        ] {
+            let TestCommand::Run(args) = TestCli::try_parse_from(&argv).unwrap().command else {
+                panic!("expected run");
+            };
+            assert_eq!(args.run().await.unwrap_err().code, "orchestration_usage");
+            argv.extend(["--omp-pid", "1234", "--agent-kind", "main"]);
+            let TestCommand::Run(args) = TestCli::try_parse_from(argv).unwrap().command else {
+                panic!("expected run");
+            };
+            assert_eq!(args.run().await.unwrap_err().code, "orchestration_usage");
+        }
+    }
+
+    // All authority in these tests comes through the real Unix-socket adapter.
+    // Gates select read phases, not permanent RPC-count or cadence assertions.
+    struct ReadGate {
+        reached: tokio::sync::oneshot::Sender<()>,
+        response: tokio::sync::oneshot::Receiver<Option<serde_json::Value>>,
+    }
+
+    struct SocketFixture {
+        root: PathBuf,
+        configuration: ProjectConfiguration,
+        context: Arc<Context>,
+        payload: Arc<parking_lot::Mutex<serde_json::Value>>,
+        gates: Arc<parking_lot::Mutex<std::collections::VecDeque<Option<ReadGate>>>>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    fn socket_payload() -> serde_json::Value {
+        let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+            "../../cockpit-herdr/tests/fixtures/session-snapshot.json"
+        )).unwrap();
+        let snapshot = &mut payload["result"]["snapshot"];
+        snapshot["boot_id"] = serde_json::json!("boot-one");
+        snapshot["panes"][0]["agent"] = serde_json::json!("omp");
+        snapshot["agents"][0]["agent"] = serde_json::json!("omp");
+        snapshot["agents"][0]["agent_session"] =
+            serde_json::json!({"kind": "id", "value": "main-native"});
+        payload["result"].clone()
+    }
+
+    impl SocketFixture {
+        async fn new() -> Self {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            let root = std::env::temp_dir().join(format!("ck-host-wait-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let socket = root.join("herdr.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let payload = Arc::new(parking_lot::Mutex::new(socket_payload()));
+            let gates = Arc::new(parking_lot::Mutex::new(std::collections::VecDeque::<Option<ReadGate>>::new()));
+            let server_payload = payload.clone();
+            let server_gates = gates.clone();
+            let server = tokio::spawn(async move {
+                let mut handlers = tokio::task::JoinSet::new();
+                loop {
+                    tokio::select! {
+                        connection = listener.accept() => {
+                            let (stream, _) = connection.unwrap();
+                            let payload = server_payload.clone();
+                            let gates = server_gates.clone();
+                            handlers.spawn(async move {
+                                let mut reader = BufReader::new(stream);
+                                let mut line = String::new();
+                                if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                                    return;
+                                }
+                                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                                let result = if request["method"] == "ping" {
+                                    serde_json::json!({"type": "pong", "version": "0.9.0", "protocol": 22})
+                                } else {
+                                    assert_eq!(request["method"], "session.snapshot");
+                                    let gate = gates.lock().pop_front().flatten();
+                                    if let Some(gate) = gate {
+                                        let _ = gate.reached.send(());
+                                        match gate.response.await {
+                                            Ok(Some(result)) => result,
+                                            _ => return,
+                                        }
+                                    } else {
+                                        payload.lock().clone()
+                                    }
+                                };
+                                let response = format!("{}\n", serde_json::json!({
+                                    "id": request["id"], "result": result,
+                                }));
+                                // Cancellation deliberately closes some gated sockets.
+                                let _ = reader.into_inner().write_all(response.as_bytes()).await;
+                            });
+                        }
+                        _ = handlers.join_next(), if !handlers.is_empty() => {}
+                    }
+                }
+            });
+            let configuration: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                "version": 1, "repository_roots": [],
+                "worktree_root": root.join("worktrees"),
+                "companion_root": root.join("unused-companions"),
+                "state_root": root.join("state"), "cache_root": root.join("cache"),
+                "library_root": root.join("library"), "notes_root": root.join("notes"),
+                "branch_template": "test/{task}", "checkout_template": "{task}",
+                "providers": [], "origins": {},
+                "limits": {
+                    "catalog_depth": 1, "catalog_entries": 1,
+                    "git_timeout_ms": 1000, "git_output_bytes": 1024,
+                    "operation_timeout_ms": 1000,
+                    "context_preview_bytes": 1024, "context_preview_lines": 10,
+                    "context_directory_entries": 10, "context_tree_depth": 1,
+                    "library_folder_files": 10, "library_folder_bytes": 1024,
+                    "library_file_bytes": 1024, "library_space_pages": 10,
+                    "library_attachment_bytes": 1024,
+                    "library_item_attachment_bytes": 1024, "library_max_items": 10
+                }
+            })).unwrap();
+            let adapter = Arc::new(HerdrCliAdapter::new(
+                cockpit_herdr::HerdrCliConfig::from_options(
+                    None, Some("fixture".into()), Some(socket),
+                ).unwrap(),
+            ));
+            let evidence = adapter.source_adapter()
+                .source_pane_evidence("fixture", "pane-a").await.unwrap();
+            let runtime = adapter.runtime("fixture").await.unwrap();
+            let pane = &runtime.panes[0];
+            let actor = Actor::Agent(AgentCaller {
+                endpoint_identity: evidence.endpoint_identity.clone(),
+                session_id: "fixture".into(), workspace_id: evidence.workspace_id.clone(),
+                tab_id: evidence.tab_id.clone(), pane_id: evidence.pane_id.clone(),
+                boot_id: runtime.boot_id.clone(), terminal_id: pane.terminal_id.clone(),
+                native_session_id: pane.native_session_id.clone(),
+                actual_agent_kind: pane.agent_kind.clone(), env_run: None,
+                omp_session_id: Some("main-native".into()), main_omp_session_id: None,
+                agent_kind: Some(AgentKind::Main), subagent_id: None, process: None,
+            });
+            let context = Arc::new(Context {
+                service: OrchestrationService::open(&configuration).unwrap(),
+                adapter, session: "fixture".into(), actor: Some(actor), evidence: Some(evidence),
+            });
+            Self { root, configuration, context, payload, gates, server }
+        }
+
+        fn bytes(&self) -> Option<Vec<u8>> {
+            match std::fs::read(self.root.join("state/orchestration/state.json")) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => panic!("{error}"),
+            }
+        }
+
+        fn gate(&self, preceding_reads: usize) -> (
+            tokio::sync::oneshot::Receiver<()>,
+            tokio::sync::oneshot::Sender<Option<serde_json::Value>>,
+        ) {
+            let (reached, ready) = tokio::sync::oneshot::channel();
+            let (response, receive) = tokio::sync::oneshot::channel();
+            let mut gates = self.gates.lock();
+            gates.extend((0..preceding_reads).map(|_| None));
+            gates.push_back(Some(ReadGate { reached, response: receive }));
+            (ready, response)
+        }
+
+        async fn adopt(&self) -> String {
+            let response = self.context.mutate(OrchestrationAction::RunAdopt {
+                label: "Socket-backed host test".into(),
+            }).await.unwrap();
+            let OrchestrationActionResult::Run { run_id, .. } = response.result else {
+                panic!("expected adopted run");
+            };
+            run_id
+        }
+
+        fn operator(&self, action: OrchestrationAction) {
+            let revision = self.bytes().map(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["revision"]
+                    .as_u64().unwrap()
+            }).unwrap_or(0);
+            self.context.service.mutate(
+                &Actor::Operator(OperatorOrigin::Browser),
+                OrchestrationMutationRequest {
+                    session_id: "fixture".into(), expected_revision: Some(revision), action,
+                },
+            ).unwrap();
+        }
+
+        fn send(&self, run_id: &str, id: &str) {
+            self.operator(OrchestrationAction::MessageSend {
+                message_id: id.into(), to_run_id: run_id.into(),
+                kind: MessageKind::Instruction, text: id.into(),
+            });
+        }
+    }
+
+    impl Drop for SocketFixture {
+        fn drop(&mut self) {
+            self.server.abort();
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_identity_and_membership_fail_before_any_durable_mutation() {
+        let fixture = SocketFixture::new().await;
+        let original = fixture.payload.lock().clone();
+        let changes: &[(&str, fn(&mut serde_json::Value))] = &[
+            ("absent pane", |v| v["snapshot"]["panes"] = serde_json::json!([])),
+            ("absent tab", |v| v["snapshot"]["tabs"] = serde_json::json!([])),
+            ("absent workspace", |v| v["snapshot"]["workspaces"] = serde_json::json!([])),
+            ("wrong workspace", |v| v["snapshot"]["panes"][0]["workspace_id"] = serde_json::json!("foreign")),
+            ("duplicate pane", |v| {
+                let item = v["snapshot"]["panes"][0].clone();
+                v["snapshot"]["panes"].as_array_mut().unwrap().push(item);
+            }),
+            ("duplicate tab", |v| {
+                let item = v["snapshot"]["tabs"][0].clone();
+                v["snapshot"]["tabs"].as_array_mut().unwrap().push(item);
+            }),
+            ("duplicate workspace", |v| {
+                let item = v["snapshot"]["workspaces"][0].clone();
+                v["snapshot"]["workspaces"].as_array_mut().unwrap().push(item);
+            }),
+            ("agent membership", |v| v["snapshot"]["agents"][0]["tab_id"] = serde_json::json!("foreign")),
+            ("terminal", |v| v["snapshot"]["panes"][0]["terminal_id"] = serde_json::json!("replacement")),
+            ("missing terminal", |v| { v["snapshot"]["panes"][0].as_object_mut().unwrap().remove("terminal_id"); }),
+            ("boot", |v| v["snapshot"]["boot_id"] = serde_json::json!("replacement")),
+            ("native session", |v| v["snapshot"]["agents"][0]["agent_session"]["value"] = serde_json::json!("replacement")),
+            ("kind", |v| v["snapshot"]["agents"][0]["agent"] = serde_json::json!("other")),
+            ("launch pending", |v| v["snapshot"]["agents"][0]["launch_pending"] = serde_json::json!(true)),
+            ("moved pane", |v| {
+                v["snapshot"]["panes"][0]["pane_id"] = serde_json::json!("pane-b");
+                v["snapshot"]["agents"][0]["pane_id"] = serde_json::json!("pane-b");
+                v["snapshot"]["layouts"][0]["panes"][0]["pane_id"] = serde_json::json!("pane-b");
+                v["snapshot"]["layouts"][0]["focused_pane_id"] = serde_json::json!("pane-b");
+                v["snapshot"]["focused_pane_id"] = serde_json::json!("pane-b");
+            }),
+            ("moved tab", |v| {
+                v["snapshot"]["tabs"][0]["tab_id"] = serde_json::json!("tab-b");
+                v["snapshot"]["panes"][0]["tab_id"] = serde_json::json!("tab-b");
+                v["snapshot"]["agents"][0]["tab_id"] = serde_json::json!("tab-b");
+                v["snapshot"]["layouts"][0]["tab_id"] = serde_json::json!("tab-b");
+                v["snapshot"]["focused_tab_id"] = serde_json::json!("tab-b");
+            }),
+            ("moved workspace", |v| {
+                v["snapshot"]["workspaces"][0]["workspace_id"] = serde_json::json!("space-b");
+                v["snapshot"]["tabs"][0]["workspace_id"] = serde_json::json!("space-b");
+                v["snapshot"]["panes"][0]["workspace_id"] = serde_json::json!("space-b");
+                v["snapshot"]["agents"][0]["workspace_id"] = serde_json::json!("space-b");
+                v["snapshot"]["layouts"][0]["workspace_id"] = serde_json::json!("space-b");
+                v["snapshot"]["focused_workspace_id"] = serde_json::json!("space-b");
+            }),
+        ];
+        let before = fixture.bytes();
+        for (name, change) in changes {
+            let mut replacement = original.clone();
+            change(&mut replacement);
+            *fixture.payload.lock() = replacement;
+            assert!(fixture.context.mutate(OrchestrationAction::RunAdopt {
+                label: "Must not commit".into(),
+            }).await.is_err(), "{name}");
+            assert_eq!(fixture.bytes(), before, "{name}");
+        }
+        *fixture.payload.lock() = original;
+        fixture.adopt().await;
+    }
+
+    #[tokio::test]
+    async fn postcommit_replacement_reports_uncertainty_and_preserves_committed_write() {
+        let fixture = SocketFixture::new().await;
+        let (ready, respond) = fixture.gate(1); // mutation's distinct postcheck
+        let context = fixture.context.clone();
+        let mutation = tokio::spawn(async move {
+            context.mutate(OrchestrationAction::RunAdopt { label: "Committed once".into() }).await
+        });
+        ready.await.unwrap();
+        let committed = fixture.bytes().unwrap();
+        let mut replacement = fixture.payload.lock().clone();
+        replacement["snapshot"]["panes"][0]["terminal_id"] = serde_json::json!("replacement");
+        respond.send(Some(replacement)).unwrap();
+        let error = mutation.await.unwrap().unwrap_err();
+        assert_eq!(error.code, "caller_mismatch");
+        assert!(error.message.contains("durable mutation may already be committed"));
+        assert_eq!(fixture.bytes().unwrap(), committed);
+        let state: serde_json::Value = serde_json::from_slice(&committed).unwrap();
+        assert_eq!(state["runs"][0]["label"], "Committed once");
+    }
+
+    #[tokio::test]
+    async fn postchecked_snapshot_rejects_identity_replaced_during_core_observation() {
+        let fixture = SocketFixture::new().await;
+        fixture.adopt().await;
+        let (ready, respond) = fixture.gate(1); // core runtime, after the precheck
+        let context = fixture.context.clone();
+        let read = tokio::spawn(async move { context.snapshot(None).await });
+        ready.await.unwrap();
+        let original = fixture.payload.lock().clone();
+        fixture.payload.lock()["snapshot"]["agents"][0]["agent_session"]["value"] =
+            serde_json::json!("replacement");
+        respond.send(Some(original)).unwrap();
+        assert_eq!(read.await.unwrap().unwrap_err().code, "caller_mismatch");
+    }
+
+    #[tokio::test]
+    async fn durable_change_before_wait_registration_is_delivered_without_lost_wake() {
+        let fixture = SocketFixture::new().await;
+        let run = fixture.adopt().await;
+        let initial = fixture.context.snapshot(None).await.unwrap();
+        assert!(!inbox_counts(&initial.messages, &run, 0).pending);
+        // Commit between the consumer's empty observation and service subscription.
+        fixture.send(&run, "edge-arrival");
+        let next = next_snapshot(&fixture.context, &initial,
+            tokio::time::Instant::now() + Duration::from_secs(10)).await.unwrap().unwrap();
+        let counts = inbox_counts(&next.messages, &run, 0);
+        assert!(counts.pending);
+        assert_eq!(counts.through_seq, next.messages[0].seq);
+        assert_eq!(next.messages[0].text, "edge-arrival");
+        assert_eq!(next.messages[0].stage, DeliveryStage::Stored);
+        assert_eq!(fixture.context.own_run(&next).unwrap().run_id, run);
+    }
+
+    #[tokio::test]
+    async fn pending_inbox_and_controls_are_visible_in_first_completed_snapshot() {
+        let fixture = SocketFixture::new().await;
+        let run = fixture.adopt().await;
+        for kind in [ReportKind::NeedsInput, ReportKind::Result] {
+            fixture.context.mutate(OrchestrationAction::Report {
+                message_id: format!("pending-{kind:?}"), kind,
+                outcome: (kind == ReportKind::Result).then_some(ReportOutcome::Succeeded),
+                summary: format!("Pending {kind:?}"), plan: None, to_run_id: None,
+            }).await.unwrap();
+        }
+        fixture.context.mutate(OrchestrationAction::SubagentUpdate {
+            subagent_id: "child".into(), parent_subagent_id: None, role: None,
+            label: "Child".into(), status: SubagentStatus::Running, summary: None,
+        }).await.unwrap();
+        fixture.operator(OrchestrationAction::SubagentControl {
+            run_id: run.clone(), subagent_id: "child".into(), op: SubagentOp::Cancel,
+        });
+        let snapshot = fixture.context.snapshot(None).await.unwrap();
+        let before = fixture.bytes();
+        assert!(inbox_counts(&snapshot.messages, &run, 0).pending);
+        assert!(snapshot.messages.iter().any(|message|
+            message.report.as_ref().is_some_and(|report| report.kind == ReportKind::NeedsInput)));
+        assert!(snapshot.messages.iter().any(|message|
+            message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Result)));
+        let controls = pending_controls(&snapshot.messages, &run, "child").unwrap();
+        assert_eq!(controls.messages.len(), 1);
+        let control: ControlPayload = serde_json::from_str(&controls.messages[0].text).unwrap();
+        assert!(matches!(control._op, SubagentOp::Cancel));
+        assert_eq!(fixture.bytes(), before);
+        assert!(snapshot.messages.iter().all(|message| message.stage == DeliveryStage::Stored));
+    }
+
+    #[tokio::test]
+    async fn deadline_cancels_each_read_phase_and_arrivals_remain_durable_for_next_call() {
+        for phase in 0..3 {
+            let fixture = SocketFixture::new().await;
+            let run = fixture.adopt().await;
+            fixture.context.mutate(OrchestrationAction::SubagentUpdate {
+                subagent_id: "child".into(), parent_subagent_id: None, role: None,
+                label: "Child".into(), status: SubagentStatus::Running, summary: None,
+            }).await.unwrap();
+            let initial = fixture.context.snapshot(None).await.unwrap();
+            // A durable change makes service.wait finish immediately; isolate read cancellation.
+            fixture.context.mutate(OrchestrationAction::Annotate {
+                run_id: run.clone(), text: "Wake without inbox payload".into(),
+            }).await.unwrap();
+            let (ready, blocked) = fixture.gate(phase);
+            let context = fixture.context.clone();
+            tokio::time::pause();
+            let read = tokio::spawn(async move {
+                next_snapshot(&context, &initial,
+                    tokio::time::Instant::now() + Duration::from_millis(100)).await
+            });
+            reach_gate_without_advancing_time(ready).await;
+            fixture.send(&run, "deadline-arrival");
+            fixture.operator(OrchestrationAction::SubagentControl {
+                run_id: run.clone(), subagent_id: "child".into(), op: SubagentOp::Cancel,
+            });
+            let committed = fixture.bytes();
+            tokio::time::advance(Duration::from_millis(100)).await;
+            tokio::time::resume();
+            assert!(read.await.unwrap().unwrap().is_none());
+            drop(blocked);
+            assert_eq!(fixture.bytes(), committed);
+            let next = fixture.context.snapshot(None).await.unwrap();
+            assert!(inbox_counts(&next.messages, &run, 0).pending);
+            assert_eq!(next.messages.iter().find(|m| m.text == "deadline-arrival").unwrap().stage,
+                DeliveryStage::Stored);
+            let controls = pending_controls(&next.messages, &run, "child").unwrap();
+            assert_eq!(controls.messages.len(), 1);
+            assert_eq!(controls.messages[0].stage, DeliveryStage::Stored);
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_empty_fence_propagates_replacement_and_unavailable_endpoint() {
+        for unavailable in [false, true] {
+            let fixture = SocketFixture::new().await;
+            let run = fixture.adopt().await;
+            let initial = fixture.context.snapshot(None).await.unwrap();
+            fixture.context.mutate(OrchestrationAction::Annotate {
+                run_id: run, text: "Wake".into(),
+            }).await.unwrap();
+            let committed = fixture.bytes();
+            let (ready, blocked) = fixture.gate(0);
+            let (fence_ready, fence) = fixture.gate(0);
+            let context = fixture.context.clone();
+            tokio::time::pause();
+            let read = tokio::spawn(async move {
+                next_snapshot(&context, &initial,
+                    tokio::time::Instant::now() + Duration::from_millis(100)).await
+            });
+            reach_gate_without_advancing_time(ready).await;
+            tokio::time::advance(Duration::from_millis(100)).await;
+            tokio::time::resume();
+            fence_ready.await.unwrap();
+            assert!(!read.is_finished());
+            let mut replacement = fixture.payload.lock().clone();
+            replacement["snapshot"]["boot_id"] = serde_json::json!("replacement");
+            fence.send(if unavailable { None } else { Some(replacement) }).unwrap();
+            let error = read.await.unwrap().unwrap_err();
+            assert_eq!(error.code, if unavailable { "disconnected" } else { "caller_mismatch" });
+            assert_eq!(fixture.bytes(), committed);
+            drop(blocked);
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_supplied_zero_and_short_wait_budgets_return_only_fenced_empty() {
+        for budget in [Duration::ZERO, Duration::from_millis(20)] {
+            let fixture = SocketFixture::new().await;
+            let run = fixture.adopt().await;
+            let initial = fixture.context.snapshot(None).await.unwrap();
+            let before = fixture.bytes();
+            let deadline = tokio::time::Instant::now() + budget;
+            tokio::time::pause();
+            let context = fixture.context.clone();
+            let read = tokio::spawn(async move { next_snapshot(&context, &initial, deadline).await });
+            tokio::time::advance(budget + Duration::from_millis(1)).await;
+            tokio::time::resume();
+            assert!(read.await.unwrap().unwrap().is_none());
+            let snapshot = fixture.context.snapshot(None).await.unwrap();
+            assert!(!inbox_counts(&snapshot.messages, &run, 0).pending);
+            assert!(pending_controls(&snapshot.messages, &run, "child").unwrap().messages.is_empty());
+            assert_eq!(fixture.bytes(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn aborting_wait_observation_never_mutates_or_acknowledges_durable_state() {
+        let fixture = SocketFixture::new().await;
+        let run = fixture.adopt().await;
+        let initial = fixture.context.snapshot(None).await.unwrap();
+        fixture.send(&run, "unacked");
+        let before = fixture.bytes();
+        let (ready, blocked) = fixture.gate(0);
+        let context = fixture.context.clone();
+        let read = tokio::spawn(async move {
+            next_snapshot(&context, &initial,
+                tokio::time::Instant::now() + Duration::from_secs(10)).await
+        });
+        ready.await.unwrap();
+        read.abort();
+        assert!(read.await.unwrap_err().is_cancelled());
+        drop(blocked);
+        assert_eq!(fixture.bytes(), before);
+        let next = fixture.context.snapshot(None).await.unwrap();
+        assert!(inbox_counts(&next.messages, &run, 0).pending);
+        assert_eq!(next.messages[0].stage, DeliveryStage::Stored);
+    }
+
+    async fn reach_gate_without_advancing_time(mut ready: tokio::sync::oneshot::Receiver<()>) {
+        // Keep a runnable task while paused so socket readiness cannot auto-advance
+        // the clock to an unrelated transport timeout.
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut ready => { result.unwrap(); return; }
+                _ = tokio::task::yield_now() => {}
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn watched_change_interrupts_registered_host_wait_without_timer_advance() {
+        let fixture = SocketFixture::new().await;
+        let run = fixture.adopt().await;
+        let initial = fixture.context.snapshot(None).await.unwrap();
+        let mut waiting = Box::pin(next_snapshot(&fixture.context, &initial,
+            tokio::time::Instant::now() + Duration::from_secs(10)));
+        let pending = std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(waiting.as_mut().poll(cx).is_pending())
+        }).await;
+        assert!(pending);
+        fixture.send(&run, "watched-arrival");
+        let next = waiting.await.unwrap().unwrap();
+        assert!(inbox_counts(&next.messages, &run, 0).pending);
+        assert_eq!(next.messages[0].text, "watched-arrival");
+        assert_eq!(next.messages[0].stage, DeliveryStage::Stored);
+    }
+
+    #[tokio::test]
+    async fn external_durable_change_is_observed_by_host_wait_and_not_acknowledged() {
+        let fixture = SocketFixture::new().await;
+        let run = fixture.adopt().await;
+        let initial = fixture.context.snapshot(None).await.unwrap();
+        let external = OrchestrationService::open(&fixture.configuration).unwrap();
+        let mut waiting = Box::pin(next_snapshot(&fixture.context, &initial,
+            tokio::time::Instant::now() + Duration::from_secs(10)));
+        let pending = std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(waiting.as_mut().poll(cx).is_pending())
+        }).await;
+        assert!(pending);
+        external.mutate(&Actor::Operator(OperatorOrigin::Browser), OrchestrationMutationRequest {
+            session_id: "fixture".into(), expected_revision: Some(initial.revision),
+            action: OrchestrationAction::MessageSend {
+                message_id: "external-arrival".into(), to_run_id: run.clone(),
+                kind: MessageKind::Instruction, text: "External arrival".into(),
+            },
+        }).unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::time::resume();
+        let next = waiting.await.unwrap().unwrap();
+        assert!(inbox_counts(&next.messages, &run, 0).pending);
+        assert_eq!(next.messages[0].text, "External arrival");
+        assert_eq!(next.messages[0].stage, DeliveryStage::Stored);
+    }
+
+    struct EndpointChild {
+        child: std::process::Child,
+        socket: PathBuf,
+    }
+
+    impl EndpointChild {
+        fn start(root: &std::path::Path) -> Self {
+            use std::io::{BufRead, BufReader};
+            let socket = root.join("herdr.sock");
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--ignored", "--exact",
+                    "cli_orchestration::tests::socket_endpoint_responder_process", "--nocapture"])
+                .env("CK_HOST_TEST_SOCKET", &socket)
+                .env("CK_HOST_TEST_PAYLOAD", root.join("payload.json"))
+                .stdout(std::process::Stdio::piped()).spawn().unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let mut owned = Self { child, socket };
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap() == 0 {
+                    panic!("endpoint child exited before readiness: {:?}", owned.child.try_wait());
+                }
+                if line.contains("CK_HOST_ENDPOINT_READY") {
+                    break;
+                }
+            }
+            owned
+        }
+    }
+
+    impl Drop for EndpointChild {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::remove_file(&self.socket);
+        }
+    }
+
+    #[test]
+    #[ignore = "owned endpoint responder, invoked only by the replacement test"]
+    fn socket_endpoint_responder_process() {
+        use std::io::{BufRead, BufReader, Write};
+        let socket = std::env::var_os("CK_HOST_TEST_SOCKET").unwrap();
+        let payload = std::env::var_os("CK_HOST_TEST_PAYLOAD").unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+        println!("CK_HOST_ENDPOINT_READY");
+        std::io::stdout().flush().unwrap();
+        for connection in listener.incoming() {
+            let mut reader = BufReader::new(connection.unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let result: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&payload).unwrap()).unwrap();
+            let response = format!("{}\n", serde_json::json!({
+                "id": request["id"], "result": result,
+            }));
+            let _ = reader.into_inner().write_all(response.as_bytes());
+        }
+    }
+
+    #[tokio::test]
+    async fn same_socket_endpoint_process_replacement_invalidates_before_mutation() {
+        let fixture = SocketFixture::new().await;
+        let run = fixture.adopt().await;
+        fixture.server.abort();
+        // Await listener disposal rather than racing a second bind at the same path.
+        while !fixture.server.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        std::fs::remove_file(fixture.root.join("herdr.sock")).unwrap();
+        std::fs::write(fixture.root.join("payload.json"),
+            serde_json::to_vec(&socket_payload()).unwrap()).unwrap();
+        let child = EndpointChild::start(&fixture.root);
+        let before = fixture.bytes();
+        let error = fixture.context.mutate(OrchestrationAction::Annotate {
+            run_id: run, text: "Must not commit".into(),
+        }).await.unwrap_err();
+        assert_eq!(error.code, "caller_mismatch");
+        assert_eq!(fixture.bytes(), before);
+        drop(child);
+    }
+
+    #[test]
+    fn inbox_retirement_envelope_never_exposes_mail_after_acceptance() {
+        let (mut run, caller) = retirement_fixture();
+        let counts = || InboxCounts {
+            run_id: run.run_id.clone(),
+            pending: true,
+            through_seq: 99,
+            counts: vec![KindCount { kind: MessageKind::Instruction, count: 3 }],
+        };
+        let open = serde_json::to_value(main_wait_read(&run, Some(counts())).unwrap()).unwrap();
+        assert_eq!(open["mode"], "open");
+        validate_retirement_token(open["retirement_token"].as_str().unwrap()).unwrap();
+        assert_eq!(open["inbox"]["through_seq"], 99);
+        assert!(open["retirement"].is_null());
+        let inbox = counts();
+        accept_retirement(&mut run, &caller);
+        let closed = serde_json::to_value(main_wait_read(&run, Some(inbox)).unwrap()).unwrap();
+        assert_eq!(closed["mode"], "retirement_only");
+        assert_eq!(closed.as_object().unwrap().len(), 3);
+        validate_retirement_token(closed["retirement_token"].as_str().unwrap()).unwrap();
+        assert!(closed.get("inbox").is_none());
+        run.close_reason = Some(CloseReason::Cancelled);
+        assert!(main_wait_read(&run, Some(InboxCounts {
+            run_id: run.run_id.clone(), pending: false, through_seq: 0, counts: vec![],
+        })).is_err());
+        let parsed = TestCli::try_parse_from([
+            "test", "inbox", "wait", "--with-retirement", "--omp-pid", "1234",
+        ]).unwrap();
+        let TestCommand::Inbox(args) = parsed.command else { panic!("expected inbox") };
+        assert!(matches!(args.command, InboxCommand::Wait { with_retirement: true, .. }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn retirement_wait_crosses_acceptance_without_quiet_herdr_reads() {
+        let fixture = SocketFixture::new().await;
+        let mut caller = match fixture.context.actor.as_ref().unwrap() {
+            Actor::Agent(caller) => caller.clone(),
+            _ => panic!("expected native caller"),
+        };
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let parent: u32 = stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace().nth(1).unwrap().parse().unwrap();
+        caller.process = Some(native_process_evidence(parent).unwrap());
+        caller.env_run = Some(("worker".into(), 2));
+        let (mut run, _) = retirement_fixture();
+        run.bound_omp_process = caller.process.clone();
+        run.bound_omp_session = caller.omp_session_id.clone();
+        run.location = Some(RunLocation {
+            boot_id: caller.boot_id.clone(),
+            terminal_id: caller.terminal_id.clone(),
+            native_session_id: caller.native_session_id.clone(),
+            endpoint_identity: caller.endpoint_identity.clone(),
+            session_id: caller.session_id.clone(),
+            workspace_id: caller.workspace_id.clone(),
+            tab_id: caller.tab_id.clone(),
+            pane_id: caller.pane_id.clone(),
+            launch_tag: "launch".into(),
+        });
+        run.dispatch.as_mut().unwrap().endpoint_identity = Some(caller.endpoint_identity.clone());
+        let context = Arc::new(Context {
+            service: OrchestrationService::open(&fixture.configuration).unwrap(),
+            adapter: fixture.context.adapter.clone(),
+            session: "fixture".into(),
+            actor: Some(Actor::Agent(caller.clone())),
+            evidence: fixture.context.evidence.clone(),
+        });
+        let publish = |run: &Run, revision| {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "schema": 1, "revision": revision, "runs": [run],
+                "messages": [], "subagents": [], "task_intents": [], "assignment_intents": [],
+            })).unwrap();
+            let temporary = context.service.base().join("retirement-test.next");
+            std::fs::write(&temporary, bytes).unwrap();
+            std::fs::rename(temporary, context.service.base().join("state.json")).unwrap();
+        };
+        publish(&run, 1_u64);
+        let (initial_ready, initial_response) = fixture.gate(0);
+        let (mut final_ready, final_response) = fixture.gate(0);
+        let waiting_context = context.clone();
+        let waiting = tokio::spawn(async move { retirement_wait(&waiting_context, true, 10).await });
+        initial_ready.await.unwrap();
+        initial_response.send(Some(fixture.payload.lock().clone())).unwrap();
+        // A second Herdr read during the quiet wait would hit the final gate.
+        assert!(tokio::time::timeout(Duration::from_millis(1100), &mut final_ready).await.is_err());
+        run.stage = RunStage::Reported;
+        publish(&run, 2);
+        assert!(tokio::time::timeout(Duration::from_millis(1100), &mut final_ready).await.is_err());
+        accept_retirement(&mut run, &caller);
+        run.retirement.as_mut().unwrap().identity.as_mut().unwrap().omp_session_id =
+            caller.omp_session_id.clone().unwrap();
+        publish(&run, 3);
+        tokio::time::timeout(Duration::from_secs(3), final_ready).await.unwrap().unwrap();
+        final_response.send(Some(fixture.payload.lock().clone())).unwrap();
+        let accepted = waiting.await.unwrap().unwrap();
+        assert_eq!(accepted.stage, RunStage::Closed);
+        assert_eq!(accepted.retirement.unwrap().retirement_id, "retirement");
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn main_wait_socket_context(fixture: &SocketFixture) -> (Arc<Context>, Run, AgentCaller) {
+        use std::os::unix::fs::MetadataExt;
+        let root_id = main_wait_test_step("adopting socket-backed root", fixture, fixture.adopt()).await;
+
+        let mut caller = match fixture.context.actor.as_ref().unwrap() {
+            Actor::Agent(caller) => caller.clone(),
+            _ => panic!("expected native caller"),
+        };
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let parent: u32 = stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace().nth(1).unwrap().parse().unwrap();
+        caller.process = Some(native_process_evidence(parent).unwrap());
+        caller.env_run = Some(("worker".into(), 2));
+        let (mut run, _) = retirement_fixture();
+        run.bound_omp_process = caller.process.clone();
+        run.root_id = root_id.clone();
+        run.parent_run_id = Some(root_id);
+        run.bound_omp_session = caller.omp_session_id.clone();
+        run.location = Some(RunLocation {
+            boot_id: caller.boot_id.clone(),
+            terminal_id: caller.terminal_id.clone(),
+            native_session_id: caller.native_session_id.clone(),
+            endpoint_identity: caller.endpoint_identity.clone(),
+            session_id: caller.session_id.clone(),
+            workspace_id: caller.workspace_id.clone(),
+            tab_id: caller.tab_id.clone(),
+            pane_id: caller.pane_id.clone(),
+            launch_tag: "launch".into(),
+        });
+        run.dispatch.as_mut().unwrap().endpoint_identity = Some(caller.endpoint_identity.clone());
+        // Use a live CLI ancestor and its executable/argv evidence, not the parser
+        // fixture's imaginary PID. Acceptance copies this exact launch baseline.
+        let executable = std::fs::metadata(format!("/proc/{parent}/exe")).unwrap();
+        let argv = std::fs::read(format!("/proc/{parent}/cmdline")).unwrap();
+        run.launch_shell_identity = Some(NativeShellIdentity {
+            process: caller.process.clone().unwrap(),
+            executable_device: executable.dev().to_string(),
+            executable_inode: executable.ino().to_string(),
+            argv_digest: format!("{:x}", Sha256::digest(argv)),
+        });
+        let context = Arc::new(Context {
+            service: OrchestrationService::open(&fixture.configuration).unwrap(),
+            adapter: fixture.context.adapter.clone(),
+            session: caller.session_id.clone(),
+            actor: Some(Actor::Agent(caller.clone())),
+            evidence: fixture.context.evidence.clone(),
+        });
+        publish_main_wait_run(fixture, &run);
+        (context, run, caller)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn publish_main_wait_run(fixture: &SocketFixture, run: &Run) {
+        // Model an atomic durable acceptance/rebinding by the owner, retaining
+        // actual service-created mail and delivery/ACK state byte-for-byte.
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fixture.bytes().unwrap()).unwrap();
+        state["revision"] = serde_json::json!(state["revision"].as_u64().unwrap() + 1);
+        let runs = state["runs"].as_array_mut().unwrap();
+        let serialized = serde_json::to_value(run).unwrap();
+        if let Some(existing) = runs.iter_mut().find(|existing| existing["run_id"] == run.run_id) {
+            *existing = serialized;
+        } else {
+            runs.push(serialized);
+        }
+        let temporary = fixture.context.service.base().join("main-wait-test.next");
+        std::fs::write(&temporary, serde_json::to_vec(&state).unwrap()).unwrap();
+        std::fs::rename(temporary, fixture.context.service.base().join("state.json")).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn main_wait_test_step<T>(
+        phase: &str,
+        fixture: &SocketFixture,
+        future: impl Future<Output = T>,
+    ) -> T {
+        tokio::pin!(future);
+        // A Tokio timeout cannot guard a forever-runnable barrier while time is
+        // paused. Bound scheduler turns instead; exhaustion FAILS with the phase
+        // and socket queue, never fabricates a successful consumer result.
+        for _ in 0..16_384 {
+            let result = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(match future.as_mut().poll(cx) {
+                    std::task::Poll::Ready(value) => Some(value),
+                    std::task::Poll::Pending => None,
+                })
+            }).await;
+            if let Some(value) = result {
+                return value;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!(
+            "S7 watchdog exhausted scheduler turns: phase={phase}, queued_reads={}, server_finished={}, clock={:?}",
+            fixture.gates.lock().len(), fixture.server.is_finished(), tokio::time::Instant::now(),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn main_wait_timeout_fence(
+        fixture: &SocketFixture,
+        context: Arc<Context>,
+        initial: OrchestrationSnapshot,
+        run: &Run,
+        case: &str,
+    ) -> (
+        tokio::task::JoinHandle<Result<Option<OrchestrationSnapshot>, CliError>>,
+        tokio::sync::oneshot::Sender<Option<serde_json::Value>>,
+    ) {
+        // A durable revision wakes wait_next immediately. Hold its snapshot
+        // precheck so next_snapshot must take the actual timeout branch.
+        publish_main_wait_run(fixture, run);
+        let (blocked_ready, blocked_response) = fixture.gate(0);
+        let (fence_ready, fence_response) = fixture.gate(0);
+        tokio::time::pause();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+        let waiting = tokio::spawn(async move {
+            next_snapshot(&context, &initial, deadline).await
+        });
+        main_wait_test_step(&format!("{case}: snapshot precheck gate"), fixture, blocked_ready)
+            .await.unwrap();
+        // Advance PAST the deadline, including the timer wheel's next tick.
+        // Advancing to equality and then spinning a runnable barrier prevents
+        // paused-time auto-advance and can strand the timeout at its last tick.
+        tokio::time::advance(Duration::from_millis(101)).await;
+        assert!(tokio::time::Instant::now() > deadline);
+        main_wait_test_step(&format!("{case}: post-timeout authority gate"), fixture, fence_ready)
+            .await.unwrap();
+        tokio::time::resume();
+        assert!(!waiting.is_finished(), "fresh final authority fence must outlive deadline");
+        drop(blocked_response);
+        (waiting, fence_response)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn main_wait_deadline_reconstructs_accepted_metadata_without_mail_or_writes() {
+        let fixture = SocketFixture::new().await;
+        let (context, mut run, caller) = main_wait_test_step(
+            "initializing accepted-mail context", &fixture, main_wait_socket_context(&fixture),
+        ).await;
+        let secret = "SECRET instruction body: must never reach accepted main waiter";
+        fixture.send(&run.run_id, secret);
+        let initial = main_wait_test_step("open snapshot", &fixture, context.snapshot(None)).await.unwrap();
+        assert_eq!(initial.messages.iter().find(|m| m.text == secret).unwrap().stage,
+            DeliveryStage::Stored);
+        let after = initial.messages.iter().map(|m| m.seq).max().unwrap();
+        let open = completed_main_wait(&context, &initial, after).unwrap();
+        let open_json = serde_json::to_value(&open).unwrap();
+        assert_eq!(open_json["mode"], "open");
+        assert!(!open.ready(open_json["retirement_token"].as_str()));
+        drop(open);
+        let (waiting, final_response) =
+            main_wait_timeout_fence(&fixture, context.clone(), initial, &run, "acceptance").await;
+        // The budget is already exhausted while Open; acceptance happens while
+        // its fresh authority fence is blocked, before any final output.
+        let late_secret = "SECRET late durable body: no counts or ACK after acceptance";
+        fixture.send(&run.run_id, late_secret);
+        accept_retirement(&mut run, &caller);
+        run.retirement.as_mut().unwrap().identity.as_mut().unwrap().omp_session_id =
+            caller.omp_session_id.clone().unwrap();
+        publish_main_wait_run(&fixture, &run);
+        let committed = fixture.bytes().unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(&committed).unwrap();
+        assert!(stored["messages"].as_array().unwrap().iter().any(|m| m["text"] == secret));
+        assert!(stored["messages"].as_array().unwrap().iter().any(|m| m["text"] == late_secret));
+        final_response.send(Some(fixture.payload.lock().clone())).unwrap();
+        assert!(main_wait_test_step("accepted deadline completion", &fixture, waiting).await
+            .unwrap().unwrap().is_none(), "must exercise deadline reconstruction");
+        // These are the production deadline-output consumer calls, not a
+        // hand-built envelope or a replay of the previous Open snapshot.
+        let current = main_wait_deadline_run(&context).unwrap();
+        let deadline_output = serde_json::to_value(empty_main_wait_read(&current, after).unwrap()).unwrap();
+        assert_eq!(deadline_output["mode"], "retirement_only");
+        assert_eq!(deadline_output.as_object().unwrap().len(), 3);
+        assert_eq!(deadline_output["retirement"]["retirement_id"], "retirement");
+        validate_retirement_token(deadline_output["retirement_token"].as_str().unwrap()).unwrap();
+        assert!(deadline_output.get("inbox").is_none());
+        assert!(deadline_output.get("counts").is_none());
+        assert!(deadline_output.get("through_seq").is_none());
+        let encoded = serde_json::to_string(&deadline_output).unwrap();
+        assert!(!encoded.contains(secret));
+        assert!(!encoded.contains(late_secret));
+        assert_eq!(fixture.bytes().unwrap(), committed, "deadline read must not ACK or write");
+
+        // Also exercise the completed-snapshot consumer with genuine secret
+        // messages still present, rather than giving it an empty mail vector.
+        let accepted = main_wait_test_step("accepted secret snapshot", &fixture, context.snapshot(None))
+            .await.unwrap();
+        for body in [secret, late_secret] {
+            assert_eq!(accepted.messages.iter().find(|m| m.text == body).unwrap().stage,
+                DeliveryStage::Stored);
+        }
+        let completed = serde_json::to_value(completed_main_wait(&context, &accepted, after).unwrap()).unwrap();
+        assert_eq!(completed, deadline_output);
+        assert_eq!(fixture.bytes().unwrap(), committed, "completed read must not ACK or write");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn main_wait_consumers_reject_durable_incarnation_replacement_at_deadline() {
+        let fixture = SocketFixture::new().await;
+        let (context, mut baseline, caller) = main_wait_test_step(
+            "initializing durable-replacement context", &fixture, main_wait_socket_context(&fixture),
+        ).await;
+        fixture.send(&baseline.run_id, "SECRET mail retained during identity rejection");
+        accept_retirement(&mut baseline, &caller);
+        baseline.retirement.as_mut().unwrap().identity.as_mut().unwrap().omp_session_id =
+            caller.omp_session_id.clone().unwrap();
+        let replacements: &[(&str, &str, fn(&mut Run))] = &[
+            ("run attempt", "attempt_stale", |r| r.attempt += 1),
+            ("bound native session", "session_mismatch", |r| r.bound_omp_session = Some("replacement".into())),
+            ("bound PID", "caller_mismatch", |r| r.bound_omp_process.as_mut().unwrap().pid += 1),
+            ("bound PID incarnation", "caller_mismatch", |r| r.bound_omp_process.as_mut().unwrap().start_ticks += 1),
+            ("bound kernel boot", "caller_mismatch", |r| r.bound_omp_process.as_mut().unwrap().kernel_boot_id = Some("replacement".into())),
+            ("dispatch launch attempt", "caller_mismatch", |r| r.dispatch.as_mut().unwrap().launch_attempt += 1),
+            ("dispatch launch tag", "caller_mismatch", |r| r.dispatch.as_mut().unwrap().launch_tag = Some("replacement".into())),
+            ("dispatch endpoint", "caller_mismatch", |r| r.dispatch.as_mut().unwrap().endpoint_identity = Some("replacement".into())),
+            ("current launch shell", "caller_mismatch", |r| r.launch_shell_identity.as_mut().unwrap().argv_digest = "b".repeat(64)),
+            ("location native session", "caller_mismatch", |r| r.location.as_mut().unwrap().native_session_id = Some("replacement".into())),
+            ("location launch tag", "caller_mismatch", |r| r.location.as_mut().unwrap().launch_tag = "replacement".into()),
+            ("retirement run attempt", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().run_attempt += 1),
+            ("retirement launch attempt", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().launch_attempt += 1),
+            ("retirement launch tag", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().launch_tag = "replacement".into()),
+            ("retirement endpoint", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().endpoint_identity = "replacement".into()),
+            ("retirement session", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().session_id = "replacement".into()),
+            ("retirement workspace", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().workspace_id = "replacement".into()),
+            ("retirement tab", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().tab_id = "replacement".into()),
+            ("retirement pane", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().pane_id = "replacement".into()),
+            ("retirement terminal", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().terminal_id = "replacement".into()),
+            ("retirement Herdr boot", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().herdr_boot_id = Some("replacement".into())),
+            ("retirement native session", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().omp_session_id = "replacement".into()),
+            ("retirement PID", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().process.pid += 1),
+            ("retirement PID incarnation", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().process.start_ticks += 1),
+            ("retirement kernel boot", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().process.kernel_boot_id = Some("replacement".into())),
+            ("retirement shell PID", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell.process.pid += 1),
+            ("retirement shell incarnation", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell.process.start_ticks += 1),
+            ("retirement shell kernel boot", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell.process.kernel_boot_id = Some("replacement".into())),
+            ("retirement shell executable device", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell.executable_device = "replacement".into()),
+            ("retirement shell executable inode", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell.executable_inode = "replacement".into()),
+            ("retirement shell argv", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell.argv_digest = "b".repeat(64)),
+            ("missing immutable identity", "caller_mismatch", |r| r.retirement.as_mut().unwrap().identity = None),
+        ];
+        for (name, code, replace) in replacements {
+            publish_main_wait_run(&fixture, &baseline);
+            let initial = main_wait_test_step(&format!("{name}: baseline snapshot"), &fixture,
+                context.snapshot(None)).await.unwrap();
+            assert!(completed_main_wait(&context, &initial, 0).is_ok(), "{name}: valid baseline");
+            let (waiting, final_response) =
+                main_wait_timeout_fence(&fixture, context.clone(), initial, &baseline, name).await;
+            let mut replaced = baseline.clone();
+            replace(&mut replaced);
+            publish_main_wait_run(&fixture, &replaced);
+            let committed = fixture.bytes().unwrap();
+            final_response.send(Some(fixture.payload.lock().clone())).unwrap();
+            assert!(main_wait_test_step(&format!("{name}: deadline completion"), &fixture, waiting)
+                .await.unwrap().unwrap().is_none(), "{name}: actual deadline");
+            let error = main_wait_deadline_run(&context).unwrap_err();
+            assert_eq!(error.code, *code, "{name}: deadline consumer");
+            // The receipt command performs this same durable scope preflight
+            // before calling mutate; no receipt is submitted on rejection.
+            assert_eq!(context.retiring_run_for_review().unwrap_err().code, *code, "{name}: receipt preflight");
+            let snapshot = main_wait_test_step(&format!("{name}: replaced snapshot"), &fixture,
+                context.snapshot(None)).await.unwrap();
+            let error = completed_main_wait(&context, &snapshot, 0).err().expect("replacement must reject metadata");
+            assert_eq!(error.code, *code, "{name}: completed consumer");
+            assert_eq!(fixture.bytes().unwrap(), committed, "{name}: no read/receipt/ACK write");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn main_wait_deadline_rejects_runtime_and_live_process_replacement_without_writes() {
+        let fixture = SocketFixture::new().await;
+        let (context, mut run, caller) = main_wait_test_step(
+            "initializing runtime-replacement context", &fixture, main_wait_socket_context(&fixture),
+        ).await;
+        fixture.send(&run.run_id, "SECRET mail retained at final runtime fence");
+        accept_retirement(&mut run, &caller);
+        run.retirement.as_mut().unwrap().identity.as_mut().unwrap().omp_session_id =
+            caller.omp_session_id.clone().unwrap();
+        let runtime_replacements: &[(&str, fn(&mut serde_json::Value))] = &[
+            ("native session", |v| v["snapshot"]["agents"][0]["agent_session"]["value"] = serde_json::json!("replacement")),
+            ("terminal", |v| v["snapshot"]["panes"][0]["terminal_id"] = serde_json::json!("replacement")),
+            ("Herdr boot", |v| v["snapshot"]["boot_id"] = serde_json::json!("replacement")),
+            ("native agent kind", |v| v["snapshot"]["agents"][0]["agent"] = serde_json::json!("other")),
+            ("launch pending", |v| v["snapshot"]["agents"][0]["launch_pending"] = serde_json::json!(true)),
+        ];
+        for (name, replace) in runtime_replacements {
+            publish_main_wait_run(&fixture, &run);
+            let initial = main_wait_test_step(&format!("{name}: runtime baseline snapshot"), &fixture,
+                context.snapshot(None)).await.unwrap();
+            assert!(completed_main_wait(&context, &initial, 0).is_ok(), "{name}: valid baseline");
+            let (waiting, final_response) =
+                main_wait_timeout_fence(&fixture, context.clone(), initial, &run, name).await;
+            let committed = fixture.bytes().unwrap();
+            let mut payload = fixture.payload.lock().clone();
+            replace(&mut payload);
+            final_response.send(Some(payload)).unwrap();
+            assert_eq!(main_wait_test_step(&format!("{name}: rejected final runtime fence"), &fixture,
+                waiting).await.unwrap().unwrap_err().code, "caller_mismatch", "{name}");
+            assert_eq!(fixture.bytes().unwrap(), committed, "{name}: timeout fence cannot write");
+        }
+        let process_replacements: &[(&str, fn(&mut NativeProcessIdentity))] = &[
+            ("PID", |p| p.pid = u32::MAX),
+            ("PID incarnation", |p| p.start_ticks += 1),
+            ("kernel boot", |p| p.kernel_boot_id = Some("replacement".into())),
+        ];
+        for (name, replace) in process_replacements {
+            publish_main_wait_run(&fixture, &run);
+            let initial = main_wait_test_step(&format!("{name}: process baseline snapshot"), &fixture,
+                context.snapshot(None)).await.unwrap();
+            let (waiting, final_response) =
+                main_wait_timeout_fence(&fixture, context.clone(), initial, &run, name).await;
+            final_response.send(Some(fixture.payload.lock().clone())).unwrap();
+            assert!(main_wait_test_step(&format!("{name}: process deadline completion"), &fixture,
+                waiting).await.unwrap().unwrap().is_none(), "{name}: actual deadline");
+            let mut replaced_caller = caller.clone();
+            replace(replaced_caller.process.as_mut().unwrap());
+            let mut replaced_run = run.clone();
+            // Keep durable authority internally coherent with the replacement.
+            // Only live ancestor evidence can reject this fabricated incarnation.
+            replaced_run.bound_omp_process = replaced_caller.process.clone();
+            replaced_run.retirement.as_mut().unwrap().identity.as_mut().unwrap().process =
+                replaced_caller.process.clone().unwrap();
+            publish_main_wait_run(&fixture, &replaced_run);
+            let committed = fixture.bytes().unwrap();
+            let replaced_context = Context {
+                service: OrchestrationService::open(&fixture.configuration).unwrap(),
+                adapter: context.adapter.clone(),
+                session: context.session.clone(),
+                actor: Some(Actor::Agent(replaced_caller)),
+                evidence: context.evidence.clone(),
+            };
+            assert!(replaced_context.retiring_run_for_review().is_ok(), "{name}: durable scope alone is insufficient");
+            assert_eq!(main_wait_deadline_run(&replaced_context).unwrap_err().code,
+                "caller_mismatch", "{name}: live process fence");
+            let snapshot = main_wait_test_step(&format!("{name}: replaced process snapshot"), &fixture,
+                replaced_context.snapshot(None)).await.unwrap();
+            assert_eq!(completed_main_wait(&replaced_context, &snapshot, 0).err().unwrap().code,
+                "caller_mismatch", "{name}: completed live process fence");
+            assert_eq!(fixture.bytes().unwrap(), committed, "{name}: rejected incarnation cannot write");
+        }
+    }
+
 }

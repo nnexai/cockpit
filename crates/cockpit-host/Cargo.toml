@@ -39,3 +39,5 @@ time = { version = "=0.3.55", features = ["formatting"] }
 
 [dev-dependencies]
 async-trait.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+parking_lot.workspace = true

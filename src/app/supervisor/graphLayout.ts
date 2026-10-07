@@ -1,26 +1,25 @@
-export type GraphNode = { id: string; parentId: string | null };
-export type GraphPosition = { id: string; x: number; y: number; width: number; height: number };
+export const GRAPH_GEOMETRY = { nodeWidth: 240, nodeHeight: 48, columnGap: 32, rowPitch: 56, padding: 8, headerHeight: 28 } as const;
+export type GraphNode = { id: string; parentId: string | null; minColumn?: number; order?: readonly (string | number)[]; gapBefore?: number };
+export type GraphPosition = { id: string; column: number; row: number; x: number; y: number; width: number; height: number };
 export type GraphEdge = { from: string; to: string; path: string };
-export type GraphLayout = { positions: GraphPosition[]; edges: GraphEdge[]; width: number; height: number };
-
-const CARD_WIDTH = 180;
-const CARD_HEIGHT = 36;
-const COLUMN_GAP = 36;
-const ROW_GAP = 8;
-const PADDING = 8;
+export type GraphLayout = {
+  positions: GraphPosition[]; edges: GraphEdge[]; width: number; height: number; columns: number;
+  order: string[]; parentOf: ReadonlyMap<string, string | null>;
+};
 const compareIds = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 
-/** A deterministic forest layout. Missing parents stay roots; cycles lose one edge, never gain one. */
-export function graphLayout(nodes: readonly GraphNode[]): GraphLayout {
-  if (!nodes.length) return { positions: [], edges: [], width: 0, height: 0 };
-  const ordered = [...nodes].sort((a, b) => compareIds(a.id, b.id));
-  const ids = new Set(ordered.map(node => node.id));
-  const parents = new Map<string, string | null>();
-  for (const node of ordered) {
-    parents.set(node.id, node.parentId !== node.id && node.parentId !== null && ids.has(node.parentId) ? node.parentId : null);
-  }
+export function edgePath(from: GraphPosition, to: GraphPosition): string {
+  const x = from.x + from.width, y = from.y + from.height / 2;
+  const endY = to.y + to.height / 2, bend = (x + to.x) / 2;
+  return y === endY ? `M ${x} ${y} L ${to.x} ${endY}` : `M ${x} ${y} C ${bend} ${y}, ${bend} ${endY}, ${to.x} ${endY}`;
+}
 
-  // Follow parent chains iteratively so even a deep or cyclic snapshot cannot exhaust the stack.
+/** Iterative deterministic forest. Missing parents and the smallest member of each cycle stay roots. */
+export function graphLayout(nodes: readonly GraphNode[]): GraphLayout {
+  const byId = new Map<string, GraphNode>();
+  for (const node of [...nodes].sort((a, b) => compareIds(a.id, b.id))) if (!byId.has(node.id)) byId.set(node.id, node);
+  const parents = new Map<string, string | null>();
+  for (const node of byId.values()) parents.set(node.id, node.parentId !== node.id && node.parentId !== null && byId.has(node.parentId) ? node.parentId : null);
   const settled = new Set<string>();
   for (const id of parents.keys()) {
     const chain: string[] = [];
@@ -30,75 +29,63 @@ export function graphLayout(nodes: readonly GraphNode[]): GraphLayout {
       const cycleStart = indices.get(cursor);
       if (cycleStart !== undefined) {
         let first = chain[cycleStart];
-        for (let index = cycleStart + 1; index < chain.length; index++) {
-          if (compareIds(chain[index], first) < 0) first = chain[index];
-        }
+        for (let index = cycleStart + 1; index < chain.length; index++) if (compareIds(chain[index], first) < 0) first = chain[index];
         parents.set(first, null);
         break;
       }
-      indices.set(cursor, chain.length);
-      chain.push(cursor);
+      indices.set(cursor, chain.length); chain.push(cursor);
       cursor = parents.get(cursor) ?? null;
     }
     for (const member of chain) settled.add(member);
   }
-
+  const compareNodes = (a: string, b: string) => {
+    const left = byId.get(a)!.order ?? [], right = byId.get(b)!.order ?? [];
+    for (let i = 0; i < Math.min(left.length, right.length); i++) {
+      const diff = typeof left[i] === "number" && typeof right[i] === "number"
+        ? (left[i] as number) - (right[i] as number) : compareIds(String(left[i]), String(right[i]));
+      if (diff) return diff;
+    }
+    return left.length - right.length || compareIds(a, b);
+  };
   const children = new Map<string, string[]>();
   const roots: string[] = [];
   for (const [id, parent] of parents) {
     if (parent === null) roots.push(id);
     else {
       const siblings = children.get(parent);
-      if (siblings) siblings.push(id);
-      else children.set(parent, [id]);
+      if (siblings) siblings.push(id); else children.set(parent, [id]);
     }
   }
-  const traversal: { id: string; depth: number }[] = [];
-  const pending = roots.map(id => ({ id, depth: 0 })).reverse();
+  roots.sort(compareNodes);
+  for (const siblings of children.values()) siblings.sort(compareNodes);
+  const order: string[] = [];
+  const positions = new Map<string, GraphPosition>();
+  const pending = roots.map(id => ({ id, parentColumn: -1, exit: false })).reverse();
+  let nextRow = 0, width = 0, height = 0, columns = 0;
   while (pending.length) {
-    const node = pending.pop()!;
-    traversal.push(node);
-    const descendants = children.get(node.id) ?? [];
-    for (let index = descendants.length - 1; index >= 0; index--) pending.push({ id: descendants[index], depth: node.depth + 1 });
-  }
-  const spans = new Map<string, number>();
-  for (let index = traversal.length - 1; index >= 0; index--) {
-    const descendants = children.get(traversal[index].id);
-    const span = descendants ? descendants.reduce((total, id) => total + spans.get(id)!, 0) : CARD_HEIGHT + ROW_GAP;
-    spans.set(traversal[index].id, span);
-  }
-
-  const tops = new Map<string, number>();
-  let rootTop = PADDING;
-  for (const id of roots) {
-    tops.set(id, rootTop);
-    rootTop += spans.get(id)!;
-  }
-  const byId = new Map<string, GraphPosition>();
-  let width = 0;
-  let height = 0;
-  for (const { id, depth } of traversal) {
-    const top = tops.get(id)!;
-    const position = { id, x: PADDING + depth * (CARD_WIDTH + COLUMN_GAP), y: top + (spans.get(id)! - ROW_GAP - CARD_HEIGHT) / 2, width: CARD_WIDTH, height: CARD_HEIGHT };
-    byId.set(id, position);
-    width = Math.max(width, position.x + CARD_WIDTH + PADDING);
-    height = Math.max(height, position.y + CARD_HEIGHT + PADDING);
-    let childTop = top;
-    for (const child of children.get(id) ?? []) {
-      tops.set(child, childTop);
-      childTop += spans.get(child)!;
+    const { id, parentColumn, exit } = pending.pop()!;
+    const descendants = children.get(id) ?? [];
+    if (!exit) {
+      order.push(id);
+      nextRow += Math.max(0, byId.get(id)!.gapBefore ?? 0);
+      const column = Math.max(parentColumn + 1, byId.get(id)!.minColumn ?? 0);
+      positions.set(id, { id, column, row: 0, x: GRAPH_GEOMETRY.padding + column * (GRAPH_GEOMETRY.nodeWidth + GRAPH_GEOMETRY.columnGap),
+        y: 0, width: GRAPH_GEOMETRY.nodeWidth, height: GRAPH_GEOMETRY.nodeHeight });
+      pending.push({ id, parentColumn, exit: true });
+      for (let i = descendants.length - 1; i >= 0; i--) pending.push({ id: descendants[i], parentColumn: column, exit: false });
+    } else {
+      const position = positions.get(id)!;
+      position.row = descendants.length ? (positions.get(descendants[0])!.row + positions.get(descendants[descendants.length - 1])!.row) / 2 : nextRow++;
+      position.y = Math.round(GRAPH_GEOMETRY.padding + GRAPH_GEOMETRY.rowPitch * position.row);
+      width = Math.max(width, position.x + position.width + GRAPH_GEOMETRY.padding);
+      height = Math.max(height, position.y + position.height + GRAPH_GEOMETRY.padding);
+      columns = Math.max(columns, position.column + 1);
     }
   }
   const edges: GraphEdge[] = [];
-  for (const [id, parent] of parents) {
-    if (parent === null) continue;
-    const from = byId.get(parent)!;
-    const to = byId.get(id)!;
-    const startX = from.x + from.width;
-    const startY = from.y + from.height / 2;
-    const endY = to.y + to.height / 2;
-    const bendX = (startX + to.x) / 2;
-    edges.push({ from: parent, to: id, path: `M ${startX} ${startY} C ${bendX} ${startY}, ${bendX} ${endY}, ${to.x} ${endY}` });
+  for (const id of order) {
+    const parent = parents.get(id);
+    if (parent !== null && parent !== undefined) edges.push({ from: parent, to: id, path: edgePath(positions.get(parent)!, positions.get(id)!) });
   }
-  return { positions: [...parents.keys()].map(id => byId.get(id)!), edges, width, height };
+  return { positions: order.map(id => positions.get(id)!), edges, width, height, columns, order, parentOf: parents };
 }

@@ -32,5 +32,8 @@ time = { version = "=0.3.55", features = ["formatting", "parsing"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 libproc = "0.14.11"
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

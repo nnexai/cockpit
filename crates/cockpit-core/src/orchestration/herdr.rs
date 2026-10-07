@@ -1,6 +1,6 @@
 use crate::InspectionError;
 use async_trait::async_trait;
-use cockpit_protocol::orchestration::RunLocation;
+use cockpit_protocol::orchestration::{NativeShellIdentity, RunLocation};
 use std::collections::BTreeMap;
 
 #[async_trait]
@@ -17,6 +17,20 @@ pub trait OrchestrationHerdr: Send + Sync {
         &self,
         session_id: &str,
         request: &AgentStartRequest,
+    ) -> Result<(), InspectionError>;
+    async fn pane_process_info(
+        &self,
+        session_id: &str,
+        endpoint_identity: &str,
+        pane_id: &str,
+    ) -> Result<PaneProcessInfo, InspectionError>;
+    /// A close acknowledgement is not proof of absence; callers must obtain a
+    /// fresh observation and must never repeat an uncertain close.
+    async fn close_pane(
+        &self,
+        session_id: &str,
+        endpoint_identity: &str,
+        pane_id: &str,
     ) -> Result<(), InspectionError>;
 }
 #[derive(Debug, Clone)]
@@ -36,6 +50,15 @@ pub struct AgentStartRequest {
     pub kind: String,
     pub args: Vec<String>,
     pub timeout_ms: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneProcessInfo {
+    pub pane_id: String,
+    pub shell_pid: Option<u32>,
+    pub foreground_pgid: Option<u32>,
+    pub processes: Vec<(u32, String)>,
+    /// Fresh local OS evidence, never inferred from Herdr's shell PID/name.
+    pub shell_identity: Option<NativeShellIdentity>,
 }
 #[derive(Debug, Clone)]
 pub struct RuntimeView {

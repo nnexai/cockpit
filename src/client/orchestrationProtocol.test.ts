@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OrchestrationAction, OrchestrationSnapshot } from "../protocol/generated/v1";
+import type {
+  NativeProcessIdentity, NativeShellIdentity, OrchestrationAction, OrchestrationSnapshot, RetirementIdentity,
+  RetirementState, RunRetirement,
+} from "../protocol/generated/v1";
 import { CockpitClientError } from "./CockpitClient";
 import { createBrowserClient } from "./browser";
 import { createNativeClient } from "./native";
@@ -12,6 +15,44 @@ import {
 const hash = "a".repeat(64);
 const at = "2026-10-05T12:00:00Z";
 const assignmentTaskId = "7b613f19-4a52-41fa-8864-a880cd69ef50";
+const processIdentity: NativeProcessIdentity = { pid: 42, start_ticks: 1234, kernel_boot_id: "kernel-boot" };
+const shellIdentity: NativeShellIdentity = {
+  process: { ...processIdentity, pid: 7, start_ticks: 100 },
+  executable_device: "2049", executable_inode: "18446744073709551615", argv_digest: hash,
+};
+const retirementIdentity: RetirementIdentity = {
+  run_attempt: 1, launch_attempt: 1, launch_tag: "launch", endpoint_identity: "endpoint",
+  session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane",
+  terminal_id: "terminal", herdr_boot_id: "boot", omp_session_id: "omp", process: processIdentity, shell: shellIdentity,
+};
+const retirementStates: RetirementState[] = [
+  { state: "waiting", blockers: [] },
+  { state: "waiting", blockers: ["open_descendant_runs", "running_subagents"] },
+  { state: "native_stop_offered", offered_at: at },
+  ...(["busy", "pending_messages", "async_jobs", "live_subagents", "editor_draft"] as const)
+    .map(reason => ({ state: "native_stop_deferred" as const, offered_at: at, reason, at })),
+  { state: "native_stop_requested", at },
+  ...(["exited_after_shutdown_request", "already_exited"] as const)
+    .map(evidence => ({ state: "native_stopped" as const, at, evidence })),
+  { state: "close_intent", at },
+  ...(["closed_by_cockpit", "already_absent", "absent_after_uncertain_close"] as const)
+    .map(terminal => ({ state: "retired" as const, at, terminal })),
+  ...([
+    "identity_incomplete", "identity_changed", "endpoint_changed", "native_process_unverifiable",
+    "process_pane_mismatch", "worker_unresponsive", "worker_busy_timeout", "user_activity", "native_refused",
+    "shared_tab", "tab_renamed", "pane_moved", "foreground_process", "observation_unavailable", "herdr_refused",
+  ] as const).flatMap(reason => [false, true].map(native_stopped => ({
+    state: "retained" as const, at, reason, native_stopped,
+  }))),
+  ...(["native_stop", "terminal_close"] as const)
+    .map(phase => ({ state: "unknown" as const, at, phase, detail: "Unconfirmed" })),
+];
+function retirementRecord(state: RetirementState, identity: RetirementIdentity | null = retirementIdentity): RunRetirement {
+  return {
+    retirement_id: assignmentTaskId, trigger: "accept", result_message_id: "result",
+    task_revision: hash, identity, state, created_at: at, updated_at: at,
+  };
+}
 const target = { target: "setup" as const, request: { operation: "open" as const, path: "/repo", label: null, task_name: null, focus: false } };
 const task = { task_id: "task", title: "Title", body: "Body", checked: false, line: 3, task_revision: hash, diagnostic: null };
 const report = { message_id: "report", kind: "ready" as const, outcome: "succeeded" as const, summary: "Ready", plan: "Work plan", at };
@@ -39,7 +80,9 @@ const snapshot: OrchestrationSnapshot = {
     last_report: report, result: report, annotations: [{ by: { type: "operator" }, text: "Note", at }],
     location: { endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane",
       launch_tag: "launch", boot_id: "boot", terminal_id: "terminal", native_session_id: null },
-    bound_omp_session: "omp", supersedes_run_id: null, created_at: at, updated_at: at,
+    bound_omp_session: "omp", bound_omp_process: processIdentity, retirement: null,
+    launch_shell_identity: shellIdentity,
+    supersedes_run_id: null, created_at: at, updated_at: at,
   }],
   messages: [message],
   subagents: [{ run_id: "run", subagent_id: "child", parent_subagent_id: null, role: "coder", label: "Child", status: "running", summary: "Working",
@@ -61,6 +104,10 @@ const actions: OrchestrationAction[] = [
   { action: "tasks_assign_ids", root_id: "root", expected_doc_revision: hash },
   { action: "supervisor_start", target: null, label: null },
   { action: "run_bind_session", omp_session_id: "omp" },
+  { action: "retirement_native_receipt", retirement_id: assignmentTaskId, outcome: { outcome: "shutdown_requested" } },
+  { action: "retirement_native_receipt", retirement_id: assignmentTaskId, outcome: { outcome: "deferred", reason: "editor_draft" } },
+  { action: "retirement_native_receipt", retirement_id: assignmentTaskId, outcome: { outcome: "refused", reason: "user_activity", text: "Later input" } },
+  { action: "retirement_native_receipt", retirement_id: assignmentTaskId, outcome: { outcome: "refused", reason: "native_refused", text: "Cannot verify" } },
   { action: "run_adopt", label: "Adopted" },
   { action: "run_propose", task_id: "task", parent_run_id: null, label: null, target, prepare_brief: "Prepare", supersedes_run_id: null },
   { action: "grant_prepare", run_id: "run", plan_revision: hash },
@@ -108,6 +155,118 @@ describe("orchestration protocol boundary", () => {
     expect(parseOrchestrationSnapshot({ ...snapshot, runtime: { status: "unavailable", error: { code: "offline", message: "Offline" } } }).runtime.status).toBe("unavailable");
     expect(() => parseOrchestrationSnapshot({ ...snapshot, runtime: { status: "unavailable", error: { code: "offline", message: 4 } } })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationSnapshot({ ...snapshot, messages: Array(1) })).toThrow(CockpitClientError);
+  });
+
+  it.each(retirementStates)("decodes strict retirement state $state", state => {
+    const retirement = retirementRecord(state);
+    const dto = replaceField(snapshot, ["runs", 0, "retirement"], retirement);
+    expect(parseOrchestrationSnapshot(dto).runs[0]!.retirement).toEqual(retirement);
+    for (const path of fieldPaths(retirement)) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], undefined, true)), path.join("."))
+        .toThrow(CockpitClientError);
+    }
+    for (const path of [[], ["identity"], ["identity", "process"], ["state"]]) {
+      const owner = path.reduce<unknown>((value, key) => (value as Record<string, unknown>)[key], retirement);
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], {
+        ...(owner as Record<string, unknown>), extra: true,
+      }))).toThrow(CockpitClientError);
+    }
+    expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "state", "state"], "unknown_state")))
+      .toThrow(CockpitClientError);
+  });
+
+  it("permits null retirement identity only for identity-incomplete retention", () => {
+    for (const state of retirementStates) {
+      const retirement = retirementRecord(state, null);
+      const dto = replaceField(snapshot, ["runs", 0, "retirement"], retirement);
+      if (state.state === "retained" && state.reason === "identity_incomplete") {
+        expect(parseOrchestrationSnapshot(dto).runs[0]!.retirement).toEqual(retirement);
+      } else {
+        expect(() => parseOrchestrationSnapshot(dto), state.state).toThrow(CockpitClientError);
+      }
+    }
+    expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "bound_omp_process"], null)).runs[0]!.bound_omp_process).toBeNull();
+  });
+
+  it("validates retirement identity counters, timestamps and tagged enum members", () => {
+    const retirement = retirementRecord({ state: "native_stop_deferred", offered_at: at, reason: "busy", at });
+    const dto = replaceField(snapshot, ["runs", 0, "retirement"], retirement);
+    for (const [path, bad] of [
+      [["retirement_id"], "not-a-uuid"], [["trigger"], "unknown"], [["task_revision"], "bad"],
+      [["identity", "run_attempt"], 0x100000000], [["identity", "launch_attempt"], -1],
+      [["identity", "process", "pid"], -1], [["identity", "process", "pid"], 0x100000000],
+      [["identity", "process", "start_ticks"], Number.MAX_SAFE_INTEGER + 1],
+      [["identity", "process", "start_ticks"], -1], [["identity", "process", "start_ticks"], 1.5],
+      [["identity", "process", "start_ticks"], "1234"],
+      [["created_at"], "yesterday"], [["updated_at"], ""],
+      [["state", "offered_at"], "yesterday"], [["state", "at"], null], [["state", "reason"], "unknown"],
+    ] as const) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], bad)), path.join("."))
+        .toThrow(CockpitClientError);
+    }
+    for (const state of [
+      { state: "waiting", blockers: ["unknown"] }, { state: "native_stopped", at, evidence: "acknowledged" },
+      { state: "retired", at, terminal: "unknown" }, { state: "retained", at, reason: "unknown", native_stopped: true },
+      { state: "unknown", at, phase: "unknown", detail: "Unconfirmed" },
+    ]) expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "state"], state))).toThrow(CockpitClientError);
+    const maxProcess = { pid: 0xffffffff, start_ticks: Number.MAX_SAFE_INTEGER, kernel_boot_id: null };
+    expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "identity", "process"], maxProcess))).toBeDefined();
+    for (const trigger of ["accept", "accept_recovery", "operator_conflict_resolution"]) {
+      expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "trigger"], trigger))).toBeDefined();
+    }
+    expect(parseOrchestrationSnapshot(replaceField(dto, ["attention", 0, "kind"], "retirement_unconfirmed")).attention[0]!.kind)
+      .toBe("retirement_unconfirmed");
+  });
+
+  it("requires complete strict shell proof rather than shell PID alone", () => {
+    const dto = replaceField(snapshot, ["runs", 0, "retirement"], retirementRecord({ state: "waiting", blockers: [] }));
+    for (const ownerPath of [
+      ["runs", 0, "launch_shell_identity"],
+      ["runs", 0, "retirement", "identity", "shell"],
+    ] as const) {
+      for (const invalid of [
+        { ...shellIdentity, executable_device: "01" },
+        { ...shellIdentity, executable_inode: "18446744073709551616" },
+        { ...shellIdentity, executable_device: -1 },
+        { ...shellIdentity, executable_inode: " 42" },
+        { ...shellIdentity, executable_device: "+42" },
+        { ...shellIdentity, executable_inode: "" },
+        { ...shellIdentity, argv_digest: "A".repeat(64) },
+        { ...shellIdentity, argv_digest: "not-a-digest" },
+        { ...shellIdentity, process: { ...shellIdentity.process, start_ticks: -1 } },
+        { ...shellIdentity, process: { ...shellIdentity.process, pid: -1 } },
+        { ...shellIdentity, extra: true },
+        { ...shellIdentity, process: { ...shellIdentity.process, extra: true } },
+        { process: shellIdentity.process },
+      ]) expect(() => parseOrchestrationSnapshot(replaceField(dto, [...ownerPath], invalid))).toThrow(CockpitClientError);
+      expect(parseOrchestrationSnapshot(replaceField(dto, [...ownerPath], {
+        ...shellIdentity, executable_device: "0", executable_inode: "9007199254740993",
+      }))).toBeDefined();
+    }
+    expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "identity", "shell"], null)))
+      .toThrow(CockpitClientError);
+    expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "identity", "shell"], undefined, true)))
+      .toThrow(CockpitClientError);
+    expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "launch_shell_identity"], null))
+      .runs[0]!.launch_shell_identity).toBeNull();
+  });
+
+  it("requires typed native refusal and byte-bounded explanation without authority spoofing", () => {
+    const action = {
+      action: "retirement_native_receipt", retirement_id: assignmentTaskId,
+      outcome: { outcome: "refused", reason: "native_refused", text: "user_activity is diagnostic text only" },
+    };
+    expect(parseOrchestrationAction(action)).toEqual(action);
+    for (const outcome of [
+      { outcome: "refused", text: "user_activity" },
+      { outcome: "refused", reason: "unknown", text: "user_activity" },
+      { outcome: "refused", reason: "native_refused", text: "é".repeat(513) },
+      { outcome: "refused", reason: "native_refused", text: "bad\0text" },
+      { outcome: "shutdown_requested", reason: "busy" },
+      { outcome: "deferred", reason: "unknown" }, { outcome: "unknown" },
+    ]) expect(() => parseOrchestrationAction({ ...action, outcome })).toThrow(CockpitClientError);
+    expect(parseOrchestrationAction({ ...action, outcome: { ...action.outcome, text: "é".repeat(512) } })).toBeDefined();
+    expect(() => parseOrchestrationAction({ ...action, retirement_id: "not-a-uuid" })).toThrow(CockpitClientError);
   });
 
   it.each([

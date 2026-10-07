@@ -14,6 +14,7 @@ pub mod library;
 pub mod jira_query;
 pub mod paste_adapter;
 pub mod process;
+pub mod process_identity;
 pub mod notes;
 pub mod project_adapter;
 mod project_store;

@@ -86,6 +86,15 @@ pub(crate) fn snapshot(
             now,
             &mut attention,
         );
+        if let Some(RunRetirement { state: RetirementState::Unknown { at, .. }, .. }) = &run.retirement {
+            attention.push(Attention {
+                kind: AttentionKind::RetirementUnconfirmed,
+                run_id: Some(run.run_id.clone()),
+                task_id: run.task_id.clone(),
+                message_seq: None,
+                since: at.clone(),
+            });
+        }
     }
     for intent in &intents {
         if intent.state == IntentState::Conflict {
@@ -586,6 +595,9 @@ mod tests {
                 launch_tag: "launch".into(),
             }),
             bound_omp_session: None,
+            bound_omp_process: None,
+            launch_shell_identity: None,
+            retirement: None,
             supersedes_run_id: None,
             created_at: START.into(),
             updated_at: START.into(),

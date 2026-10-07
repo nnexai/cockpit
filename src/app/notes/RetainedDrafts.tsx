@@ -9,10 +9,11 @@ export function RetainedDrafts({ model }: { model: NotesModel }) {
   const titles = Object.entries(model.drafts.todos).filter(([key, draft]) => !taskKeys.has(key) && draft.value !== draft.base);
   const decisions = Object.entries(model.drafts.decisionEdits).filter(([key, draft]) => !decisionKeys.has(key) && (draft.title.value !== draft.title.base || draft.body.value !== draft.body.base));
   if (!titles.length && !decisions.length) return null;
+  const count = titles.length + decisions.length;
   return <details className="notes-retained-drafts">
     <summary className="notes-retained-summary">
       <UiIcon name="info" />
-      <span>{titles.length + decisions.length} source draft(s) kept</span>
+      <span>{count} unsaved {count === 1 ? "edit" : "edits"} kept — source no longer exists</span>
       <span className="notes-disclosure-chevron"><UiIcon name="down" /></span>
     </summary>
     <div className="notes-retained-body">

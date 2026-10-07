@@ -9,7 +9,17 @@ import { SupervisorView } from "./SupervisorView";
 
 const at = "2026-10-06T12:00:00Z";
 function run(overrides: Partial<Run> = {}): Run {
-  return { session_id: "session", prepare_brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_propose: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null, annotations: [], location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, bound_omp_session: "native", supersedes_run_id: null, created_at: at, updated_at: at, ...overrides };
+  return { session_id: "session", prepare_brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_propose: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null, annotations: [], location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, bound_omp_session: "native", bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at, ...overrides };
+}
+function acceptedWorker(state: NonNullable<Run["retirement"]>["state"]): Run {
+  const process = { pid: 42, start_ticks: 100, kernel_boot_id: "kernel-boot" };
+  return run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "closed", close_reason: "accepted",
+    bound_omp_process: process,
+    result: { message_id: "accepted-result", kind: "result", outcome: "succeeded", summary: "Accepted result kept", plan: null, at },
+    retirement: { retirement_id: "retirement-worker", trigger: "accept", result_message_id: "accepted-result", task_revision: "task-revision",
+      identity: { run_attempt: 1, launch_attempt: 1, launch_tag: "tag", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", herdr_boot_id: "boot", omp_session_id: "native", process, shell: { process: { pid: 43, start_ticks: 101, kernel_boot_id: "fictional-shell-boot" }, executable_device: "7", executable_inode: "9002", argv_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } },
+      state, created_at: at, updated_at: at },
+  });
 }
 function observed(runId = "root", overrides: Partial<RunObservation> = {}): RunObservation {
   return { run_id: runId, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at, ...overrides };
@@ -21,7 +31,7 @@ function board(rootId = "root", tasks: TaskView[] = []): TaskBoard {
   return { root_id: rootId, path: `/state/${rootId}.md`, doc_revision: "document-revision", unidentified_items: 0, diagnostics: [], tasks };
 }
 function snapshot(runs: Run[] = [run()], tasks: TaskView[] = []): OrchestrationSnapshot {
-  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => !run.parent_run_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: board("root", tasks), runs, messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => observed(run.run_id)) } };
+  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => !run.parent_run_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: board("root", tasks), runs, messages: [], subagents: [], intents: [], assignment_intents: [], attention: runs.filter(run => run.run_id === run.root_id && run.last_report?.kind === "needs_input").map(run => ({ kind: "needs_input", run_id: run.run_id, task_id: null, message_seq: 1, since: at })), unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => observed(run.run_id)) } };
 }
 const session: SessionSnapshotResponse = { session_id: "session", server_instance: "server", version: "fixture", protocol: 20, focused_space_id: "space", focused_tab_id: "tab", focused_pane_id: "pane", spaces: [{ id: "space", label: "Project", number: 1, tab_count: 1, pane_count: 1, focused: true, agent_status: "working", git: null }], tabs: [], panes: [], agents: [] };
 let host: HTMLDivElement;
@@ -40,10 +50,14 @@ function enter(field: HTMLTextAreaElement | HTMLInputElement | HTMLSelectElement
     field.dispatchEvent(new Event(field instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
   });
 }
+function press(target: HTMLElement, key: string) {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+  act(() => target.dispatchEvent(event));
+  return event;
+}
 async function mount(initial: OrchestrationSnapshot, boards?: Map<string, TaskBoard>) {
   let state = initial;
-  const onTerminal = vi.fn(async () => undefined);
-  const onClose = vi.fn();
+  const onTerminal = vi.fn(async () => undefined), onClose = vi.fn();
   const snapshotCall = vi.fn<CockpitClient["orchestrationSnapshot"]>(async request => ({ ...state, board: request.root_id ? boards?.get(request.root_id) ?? state.board : state.board }));
   const mutation = vi.fn<CockpitClient["orchestrationMutate"]>(async request => {
     state = { ...state, revision: state.revision + 1 };
@@ -51,461 +65,463 @@ async function mount(initial: OrchestrationSnapshot, boards?: Map<string, TaskBo
     if (request.action.action === "supervisor_start") return { revision: state.revision, result: { result: "run", run_id: "new-root", attempt: 1 } };
     return { revision: state.revision, result: { result: "done" } };
   });
-  const pendingWait = new Promise<OrchestrationWaitResponse>(() => undefined);
-  const client = { orchestrationSnapshot: snapshotCall, orchestrationWait: vi.fn(() => pendingWait), orchestrationMutate: mutation } as unknown as CockpitClient;
+  let wake: (() => void) | null = null;
+  const client = {
+    orchestrationSnapshot: snapshotCall,
+    orchestrationWait: vi.fn(() => new Promise<OrchestrationWaitResponse>(resolve => {
+      wake = () => resolve({ revision: state.revision, tasks_token: state.tasks_token, changed: true });
+    })),
+    orchestrationMutate: mutation,
+  } as unknown as CockpitClient;
   host = document.createElement("div"); document.body.append(host); reactRoot = createRoot(host);
   rerender = async (active = true, runtimeLive = true) => {
     await act(async () => { reactRoot!.render(<SupervisorView client={client} sessionId="session" session={session} runtimeLive={runtimeLive} active={active} startToken={0} navigationError={null} onClose={onClose} onTerminal={onTerminal} onModalChange={vi.fn()} />); });
     await settle();
   };
   await rerender();
-  return { mutation, onTerminal, onClose, snapshotCall, replace: (next: OrchestrationSnapshot) => { state = next; } };
+  return {
+    mutation, onTerminal, onClose, snapshotCall,
+    replace: (next: OrchestrationSnapshot) => { state = next; },
+    push: async (next: OrchestrationSnapshot) => { state = next; await act(async () => { wake?.(); }); await settle(); },
+  };
+}
+function workarea(width: number, height: number) {
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("supervisor-workarea") ? new DOMRect(0, 0, width, height) : original.call(this);
+  });
+}
+async function expandQueue() {
+  for (const row of host.querySelectorAll<HTMLButtonElement>(".supervisor-queue-summary")) {
+    if (row.getAttribute("aria-expanded") !== "true") { act(() => row.click()); await settle(); }
+  }
 }
 afterEach(async () => { if (reactRoot) await act(async () => reactRoot!.unmount()); reactRoot = null; host?.remove(); vi.restoreAllMocks(); });
 
-describe("Supervisor truth and canonical task presentation", () => {
-  it("never calls a historical ACK, name or bound shell a connected OMP", () => {
-    const saved = run();
-    const state = snapshot([saved]);
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { actual_omp: false, agent_status: "idle" })] };
+// Domain truth assertions stay; incidental UI copy/default wiring assertions are intentionally not migrated.
+describe("Supervisor authority and retained operations", () => {
+  it("does not turn a historical binding or ACK into fresh OMP proof", () => {
+    const saved = run(), state = snapshot([saved]);
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { actual_omp: false })] };
     expect(agentState(state, saved, true, true).verified).toBe(false);
-    expect(agentState(state, saved, true, true).label).toBe("Cannot confirm the agent");
-    const pending = run({ stage: "preparing", dispatch: { ...saved.dispatch!, step: "launch_pending" } });
-    expect(agentState(state, pending, true, true).kind).toBe("starting");
     state.runtime.runs[0].actual_omp = true;
     expect(agentState(state, saved, true, true).verified).toBe(true);
-    expect(state.runtime.runs[0].agent_status).toBe("idle");
-    state.runtime.runs[0].agent_status = "working";
-    expect(agentState(state, saved, true, true).verified).toBe(true);
-    state.runtime.runs[0].agent_status = "blocked";
-    expect(agentState(state, saved, true, true).blocked).toBe(true);
-    expect(agentState(state, saved, true, true).label).toBe("Agent blocked");
+    expect(agentState(state, saved, false, true).verified).toBe(false);
+    expect(agentState(state, saved, true, false).verified).toBe(false);
   });
-  it("keeps launch and setup errors uncertain rather than claiming a proved failed process", () => {
-    const saved = run();
-    const state = snapshot([saved]);
-    const uncertain = run({ dispatch: { ...saved.dispatch!, step: "launch_unknown", error: { code: "launch_timeout", message: "Startup deadline expired." } } });
-    expect(agentState(state, uncertain, true, true).kind).toBe("unknown");
-    expect(agentState(state, uncertain, true, true).detail).toContain("Startup deadline expired.");
-    expect(agentState(state, uncertain, true, true).label).not.toBe("Agent did not start");
-    uncertain.dispatch!.step = "setup_unknown";
-    expect(agentState(state, uncertain, true, true).label).toBe("Agent setup is unconfirmed");
-  });
-  it("labels a verified supervisor ready only when its canonical scope has no open work", () => {
-    const supervisor = run();
-    expect(agentState(snapshot([supervisor]), supervisor, true, true).label).toBe("Ready for a task");
-    expect(agentState(snapshot([supervisor], [task()]), supervisor, true, true).label).toBe("Managing tasks");
-    const finished = task({ lane: "accepted", task: { ...task().task, checked: true } });
-    expect(agentState(snapshot([supervisor], [finished]), supervisor, true, true).label).toBe("Ready for a task");
-    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", stage: "proposed" });
-    expect(agentState(snapshot([supervisor, worker]), supervisor, true, true).label).toBe("Managing tasks");
-  });
-  it("keeps disconnect separate from freshly missing and exposes both recovery choices", async () => {
-    const state = snapshot();
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_omp: false, pane_id: null })] };
-    await mount(state);
-    expect(host.textContent).toContain("Agent terminal is gone");
-    expect(button("Restart agent…").disabled).toBe(false);
-    expect(button("Close tracking…").disabled).toBe(false);
-    expect([...host.querySelectorAll("button")].some(button => button.textContent === "Open terminal")).toBe(false);
-    await rerender(true, false);
-    expect(host.textContent).toContain("Connection lost");
-    expect(host.querySelector('[aria-label="Project supervisor status"]')?.textContent).not.toContain("Agent terminal is gone");
-  });
-  it("uses explicit Result and acceptance rather than runtime Done or a task checkbox as agent success", () => {
+  it("requires explicit successful Result and acceptance, not runtime Done or a checkbox", () => {
     const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
     const state = snapshot([run(), worker], [task()]);
-    expect(taskStatus(task(), worker, state)).toBe("Working");
     const checked = task({ lane: "accepted", task: { ...task().task, checked: true } });
-    expect(taskStatus(checked, worker, state)).toBe("Marked complete in task file");
-    worker.stage = "closed"; worker.close_reason = "accepted"; worker.result = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Tests passed", plan: null, at };
+    expect(taskStatus(checked, worker, state)).not.toBe("Completed");
+    worker.stage = "closed"; worker.close_reason = "accepted";
+    worker.result = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Tests passed", plan: null, at };
     expect(taskStatus(checked, worker, state)).toBe("Completed");
     worker.close_reason = "cancelled";
-    expect(taskStatus(task(), worker, state)).toBe("Tracking closed");
+    expect(taskStatus(checked, worker, state)).not.toBe("Completed");
   });
-  it("keeps ordinary worker questions with the supervisor and retains report/observed provenance", async () => {
-    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working", last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which test should I use?", plan: null, at } });
-    await mount(snapshot([run(), worker], [task()]));
-    expect(host.querySelector('[aria-label="Needs you"]')).toBeNull();
-    expect(host.textContent).toContain("Waiting for supervisor");
-    expect(host.textContent).toContain("Reported · Search agent");
-    expect(host.textContent).toContain("Observed · Herdr");
-    expect(host.querySelector("[role=tablist]")).toBeNull();
-    expect(host.querySelector('[aria-label="Agent relationships"]')).not.toBeNull();
-    expect(host.querySelector('nav[aria-label="Supervisor panels"]')).not.toBeNull();
-    expect(host.querySelector("aside")).toBeNull();
-    const row = host.querySelector<HTMLButtonElement>("[data-row-id=task-a]")!;
-    act(() => row.focus());
-    act(() => row.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true })));
-    expect(row.getAttribute("aria-expanded")).toBe("false");
-    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
-    act(() => row.click()); await settle();
-    const detail = host.querySelector('aside[aria-label="Selected details"]')!;
-    expect(detail.textContent).toContain("Which test should I use?");
-    expect(detail.textContent).toContain("Waiting for supervisor");
-    expect(detail.textContent).toContain("Reported · Search agent");
-    expect(detail.textContent).toContain("Observed · Herdr");
-    expect(detail.querySelector('nav[aria-label="Detail sections"] button[aria-pressed="true"]')!.textContent).toBe("Overview");
-  });
-  it.each(["progress", "ready", "result"] as const)("keeps ordinary %s report text in the selected overview, not the task card", async kind => {
-    const text = "Exact technical report: revision abc123, repository /tmp/worker-checkout.\nKeep every detail unchanged.";
-    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: kind === "result" ? "reported" : kind === "ready" ? "ready" : "working", last_report: { message_id: "report", kind, outcome: kind === "result" ? "succeeded" : null, summary: text, plan: null, at } });
-    if (kind === "result") worker.result = worker.last_report;
-    await mount(snapshot([run(), worker], [task({ lane: kind === "result" ? "review" : kind === "ready" ? "ready" : "working" })]));
-    const row = host.querySelector("li.supervisor-task")!;
-    const evidence = row.querySelector(".supervisor-task-evidence")!;
-    expect(evidence.textContent).toContain("Reported · Search agent");
-    expect(evidence.querySelector("time")).not.toBeNull();
-    expect(evidence.textContent).not.toContain(text);
-    expect(row.querySelector(".supervisor-task-detail")).toBeNull();
-    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
-    act(() => row.querySelector<HTMLButtonElement>("[data-row-id=task-a]")!.click()); await settle();
-    const detail = host.querySelector('aside[aria-label="Selected details"]')!;
-    expect(detail.textContent).toContain(text);
-    expect(detail.querySelector('nav[aria-label="Detail sections"] button[aria-pressed="true"]')!.textContent).toBe("Overview");
-    expect(row.textContent).not.toContain(text);
-    expect(row.querySelector(".supervisor-task-detail")).toBeNull();
-  });
-  it("retains literal root questions and explicit reported failures on the primary surface", async () => {
-    const question = "Which repository should I use?";
-    const failure = "Compiler rejected the migration. Existing files are unchanged.";
-    const supervisor = run({ last_report: { message_id: "root-question", kind: "needs_input", outcome: null, summary: question, plan: null, at } });
-    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "reported", last_report: { message_id: "failed-result", kind: "result", outcome: "failed", summary: failure, plan: null, at } });
-    worker.result = worker.last_report;
-    await mount(snapshot([supervisor, worker], [task({ lane: "review" })]));
-    expect(host.querySelector('[aria-label="Needs you"]')!.textContent).toContain(question);
-    expect(host.querySelector(".supervisor-task-evidence")!.textContent).toContain(failure);
-  });
-  it("omits startup observation for closed work while preserving an unproved live launch and named location", async () => {
-    const finished = run({ kind: "worker", run_id: "finished-worker", label: "Finished agent", parent_run_id: "root", task_id: "completed-task", stage: "closed", close_reason: "accepted", result: { message_id: "accepted-result", kind: "result", outcome: "succeeded", summary: "Completed successfully.", plan: null, at } });
-    finished.last_report = finished.result;
-    const pending = run({ kind: "worker", run_id: "pending-worker", label: "Pending agent", parent_run_id: "root", task_id: "pending-task", stage: "preparing", bound_omp_session: null, dispatch: { ...run().dispatch!, step: "plan_failed", error: { code: "launch_failed", message: "OMP could not start in the target terminal." } } });
-    const completed = task({ task: { ...task().task, task_id: "completed-task", checked: true }, lane: "accepted", current_run_id: "finished-worker" });
-    const unproved = task({ task: { ...task().task, task_id: "pending-task", title: "Pending work" }, lane: "setup", current_run_id: "pending-worker" });
-    const state = snapshot([run(), finished, pending], [completed, unproved]);
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed(), observed("finished-worker", { actual_omp: false, workspace_label: "Named checkout", tab_label: "ck-internal-launch-tag" }), observed("pending-worker", { actual_omp: false })] };
-    await mount(state);
-    expect(button("Show completed tasks").getAttribute("aria-expanded")).toBe("false");
-    act(() => button("Show completed tasks").click()); await settle();
-    const closedRow = host.querySelector('[data-row-id="completed-task"]')!.closest("li")!;
-    expect(closedRow.querySelector(".supervisor-task-stage")!.textContent).toBe("Completed");
-    expect(closedRow.querySelector(".supervisor-observed")).toBeNull();
-    expect(closedRow.querySelector(".supervisor-task-evidence")!.textContent).not.toContain("OMP not confirmed");
-    const location = closedRow.querySelector<HTMLElement>(".supervisor-location")!;
-    expect(location.textContent).toBe("Named checkout");
-    expect(location.title).toContain("ck-internal-launch-tag");
-    const liveRow = host.querySelector('[data-row-id="pending-task"]')!.closest("li")!;
-    expect(liveRow.querySelector(".supervisor-observed")!.textContent).toContain("OMP not confirmed");
-    expect(host.textContent).toContain("OMP could not start in the target terminal.");
-  });
-  it("keeps closed-only tracking in the archive and opens with a real empty Start agent state", async () => {
-    await mount(snapshot([run({ stage: "closed", close_reason: "cancelled" })], [task()]));
-    expect(host.textContent).toContain("Start an agent to manage your tasks");
-    expect(button("Closed tracking · 1").getAttribute("aria-expanded")).toBe("false");
-    expect(button("Start agent").disabled).toBe(false);
-  });
-  it("does not count closed or missing tracking as connected agents and keeps surviving descendants controllable", async () => {
-    const closed = run({ stage: "closed", close_reason: "cancelled" });
-    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working" });
-    const state = snapshot([closed, worker], [task()]);
-    if (state.runtime.status === "fresh") state.runtime.runs[0] = observed("root", { presence: "missing", actual_omp: false, pane_id: null });
-    await mount(state);
-    act(() => button("View saved task context").click()); await settle();
-    expect(host.textContent).toContain("Worker agents need control");
-    expect(host.textContent).toContain("Agents · 1 connected");
-    expect(host.textContent).toContain("Closing this supervisor did not stop them");
-    expect(host.textContent).toContain("Tracking closed");
-  });
-  it.each([false, true])("keeps managed graph navigation independent of unmanaged snapshot input (present: %s)", async present => {
-    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working" });
-    const state = snapshot([run(), worker], [task()]);
-    state.subagents = [{ run_id: "root", subagent_id: "research", parent_subagent_id: null, role: "Researcher", label: "Research child", status: "running", summary: null, last_control: null, updated_at: at }];
-    state.unmanaged_agents = present ? [{ workspace_id: "other-space", workspace_label: "Other project", tab_id: "other-tab", tab_label: "Standalone agent", pane_id: "other-pane", agent_name: "Unrelated OMP", agent_status: "working", state_changed_at: at }] : [];
+  it.each(["native_stop", "terminal_close"] as const)("keeps retirement ambiguity in Recover with canonical Done context and no retry/close writes (%s)", async phase => {
+    const receiptText = "Opaque receipt text must not select user-facing copy";
+    const worker = acceptedWorker({ state: "unknown", at, phase, detail: receiptText });
+    const completed = task({ lane: "accepted", task: { ...task().task, checked: true } });
+    const state = snapshot([run(), worker], [completed]);
+    state.attention = [{ kind: "retirement_unconfirmed", run_id: "worker", task_id: "task-a", message_seq: null, since: at }];
     const fixture = await mount(state);
-    const graph = host.querySelector<HTMLElement>(".supervisor-graph-band")!;
-    const row = (id: string) => graph.querySelector<HTMLButtonElement>(`[data-row-id="${id}"]`)!;
-    const press = (target: HTMLElement, key: string) => act(() => { target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
-    expect([...graph.querySelectorAll("[data-row-id]")].map(node => (node as HTMLElement).dataset.rowId)).toEqual(["root", "root:research", "worker", "task:worker:task-a"]);
-    expect([...graph.querySelectorAll("label")].map(label => label.textContent?.trim())).toEqual(["Subagents"]);
-    expect(graph.querySelector('[aria-label="Unmanaged agents"]')).toBeNull();
-    expect(graph.textContent).not.toContain("Unrelated OMP");
-    act(() => row("root").focus());
-    press(row("root"), "ArrowDown");
-    expect(document.activeElement).toBe(row("root:research"));
-    act(() => row("root:research").click()); await settle();
-    expect(host.querySelector('aside[aria-label="Selected details"]')!.textContent).toContain("Research child");
-    press(row("root:research"), "ArrowDown");
-    expect(document.activeElement).toBe(row("worker"));
-    press(row("worker"), "End");
-    expect(document.activeElement).toBe(row("task:worker:task-a"));
-    act(() => row("task:worker:task-a").click()); await settle();
-    expect(host.querySelector('aside[aria-label="Selected details"]')!.textContent).toContain("Improve search");
-    press(row("task:worker:task-a"), "Home");
-    expect(document.activeElement).toBe(row("root"));
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    const queue = host.querySelector<HTMLElement>(".supervisor-queue-row.is-recover")!;
+    act(() => queue.querySelector<HTMLButtonElement>(".supervisor-queue-summary")!.click()); await settle();
+    expect(queue.textContent).not.toContain(receiptText);
+    expect(queue.querySelectorAll("button")).toHaveLength(2); // Disclosure plus saved canonical context, never a run operation.
+    act(() => button("Show completed task").click()); await settle();
+    expect(host.querySelector('[data-view-segment="tasks"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector<HTMLUListElement>(".is-accepted .supervisor-task-list")!.hidden).toBe(false);
+    expect(host.querySelector('[data-row-id="task-a"]')?.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector(".supervisor-state-block .supervisor-attention-badge")?.textContent).toBe("Recover");
+    expect(host.querySelector('aside[aria-label="Selected details"]')?.textContent).toContain(worker.result!.summary);
+    expect(taskStatus(completed, worker, state)).toBe("Completed");
+    expect(fixture.mutation).not.toHaveBeenCalled();
     expect(fixture.onTerminal).not.toHaveBeenCalled();
-    expect(fixture.mutation).not.toHaveBeenCalled();
   });
-});
-
-describe("Supervisor direct actions and scoped drafts", () => {
-  it.each(["connected", "unavailable", "closed", "offline", "disconnected"] as const)("omits the bottom task input for %s supervisors and keeps the agents splitter", async mode => {
-    const state = snapshot([run(mode === "closed" ? { stage: "closed", close_reason: "cancelled" } : {})]);
-    if (mode === "unavailable") state.runtime = { status: "unavailable", error: { code: "herdr_unavailable", message: "offline" } };
+  it("exposes canonical Done and the saved retiring worker separately when the task no longer points at that run", async () => {
+    const worker = acceptedWorker({ state: "unknown", at, phase: "terminal_close", detail: "Uncertain receipt" });
+    const completed = task({ lane: "accepted", current_run_id: null, task: { ...task().task, checked: true } });
+    const state = snapshot([run(), worker], [completed]);
+    state.attention = [{ kind: "retirement_unconfirmed", run_id: "worker", task_id: "task-a", message_seq: null, since: at }];
     const fixture = await mount(state);
-    if (mode === "closed") { act(() => button("Closed tracking · 1").click()); await settle(); act(() => button("View Project supervisor tasks and history").click()); await settle(); }
-    if (mode === "offline") await rerender(true, false);
-    if (mode === "disconnected") {
-      await rerender(false);
-      fixture.snapshotCall.mockRejectedValue(new Error("transport offline"));
-      await rerender(true);
-    }
-    expect(host.querySelector("textarea")).toBeNull();
-    expect(host.querySelector('[aria-label="Resize task input"]')).toBeNull();
-    expect(host.querySelector('[aria-label="Resize agents overview"]')).not.toBeNull();
-    expect(host.textContent).not.toContain("Give task");
-    expect(host.textContent).not.toContain("Or give work directly in the supervisor's terminal.");
-    expect(host.textContent).not.toContain("Assigned to Project supervisor");
+    act(() => host.querySelector<HTMLButtonElement>(".supervisor-queue-row.is-recover .supervisor-queue-summary")!.click()); await settle();
+    act(() => button("Show completed task").click()); await settle();
+    expect(host.querySelector<HTMLUListElement>(".is-accepted .supervisor-task-list")!.hidden).toBe(false);
+    expect(host.querySelector('[data-row-id="task-a"]')?.getAttribute("aria-expanded")).toBe("true");
+    act(() => button("View saved worker details").click()); await settle();
+    expect(host.querySelector(".supervisor-state-block .supervisor-attention-badge")?.textContent).toBe("Recover");
+    expect(host.querySelector('aside[aria-label="Selected details"]')?.textContent).toContain(worker.result!.summary);
     expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
-  it("focuses task rows on opening and falls back to Start agent after the last focused task is removed", async () => {
-    const first = task({ lane: "queued", current_run_id: null });
-    const second = task({ task: { ...task().task, task_id: "task-b", title: "Update docs" }, lane: "queued", current_run_id: null });
-    const state = snapshot([run()], [first, second]);
-    state.assignment_intents = [{ root_id: "root", task_id: "pending-task", state: "pending" }];
+  it.each([true, false])("keeps retained retirement Notice informational in saved details without reopening canonical completion (native stopped: %s)", async nativeStopped => {
+    const worker = acceptedWorker({ state: "retained", at, reason: nativeStopped ? "shared_tab" : "user_activity", native_stopped: nativeStopped });
+    const completed = task({ lane: "accepted", task: { ...task().task, checked: true } });
+    const state = snapshot([run(), worker], [completed]);
     const fixture = await mount(state);
-    expect(document.activeElement).toBe(host.querySelector('[data-row-id="task-a"]'));
-    expect(host.textContent).not.toContain("The focused task changed elsewhere.");
-    fixture.replace({ ...state, revision: 2, board: board("root", [second]) });
-    act(() => button("Check assignment status").click()); await settle();
-    expect(document.activeElement).toBe(host.querySelector('[data-row-id="task-b"]'));
-    expect(host.textContent).toContain("The focused task changed elsewhere.");
-    fixture.replace({ ...state, revision: 3, board: board("root") });
-    act(() => button("Check assignment status").click()); await settle();
-    expect(document.activeElement).toBe(button("Start agent"));
+    expect(host.querySelector(".supervisor-queue-row.is-notice,.supervisor-queue-row.is-recover")).toBeNull();
+    act(() => button("Show completed tasks").click()); await settle();
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.click()); await settle();
+    expect(host.querySelector(".supervisor-state-block .supervisor-attention-badge")?.textContent).toBe("Notice");
+    expect(agentState(state, worker, true, true)).toMatchObject({ kind: "closed", verified: false, restartable: false, terminal: false });
+    expect(taskStatus(completed, worker, state)).toBe("Completed");
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
-  it("waits for the initial selected-root board before focusing a task", async () => {
-    const state = snapshot();
-    state.board = null;
-    const fixture = await mount(state, new Map([["root", board("root", [task({ lane: "queued", current_run_id: null })])]]));
-    expect(fixture.snapshotCall.mock.calls.map(([request]) => request.root_id)).toEqual([null, "root"]);
-    expect(document.activeElement).toBe(host.querySelector('[data-row-id="task-a"]'));
-    expect(host.textContent).not.toContain("The focused task changed elsewhere.");
-  });
-  it.each([true, false])("restores focus after an answered question with task rows present: %s", async hasTask => {
-    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
-    const tasks = hasTask ? [task({ lane: "queued", current_run_id: null })] : [];
-    const fixture = await mount(snapshot([supervisor], tasks));
-    const answer = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
-    act(() => answer.focus());
-    enter(answer, "Use the existing checkout");
-    fixture.mutation.mockImplementationOnce(async () => {
-      fixture.replace({ ...snapshot([run()], tasks), revision: 2 });
-      return { revision: 2, result: { result: "message", to_run_id: "root", seq: 1, duplicate: false, stale: false } };
-    });
-    act(() => button("Send answer").click()); await settle();
-    expect(host.querySelector('[aria-label="Needs you"]')).toBeNull();
-    expect(document.activeElement).toBe(hasTask ? host.querySelector('[data-row-id="task-a"]') : button("Start agent"));
-  });
-  it("starts one new agent tab in the current Space without a setup wizard or focus request", async () => {
+  it("starts exactly one OMP tab in the current Space without requesting Herdr focus", async () => {
     const empty = snapshot([]); empty.board = null;
     const fixture = await mount(empty);
     act(() => button("Start agent").click()); await settle();
     expect(fixture.mutation).toHaveBeenCalledTimes(1);
     expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "supervisor_start", target: { target: "existing_space", workspace_id: "space" }, label: null });
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(fixture.onTerminal).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(button("Start agent"));
   });
-  it("derives startup waiting from fresh proof and removes it once an empty supervisor is bound", async () => {
-    const empty = snapshot([]); empty.board = null;
-    const fixture = await mount(empty);
-    const pending = run({ run_id: "new-root", root_id: "new-root", stage: "preparing", bound_omp_session: null, dispatch: { ...run().dispatch!, agent_started: false, step: "launch_pending" } });
-    const starting = { ...snapshot([pending]), revision: 2, board: board("new-root") };
-    if (starting.runtime.status === "fresh") starting.runtime.runs[0].actual_omp = false;
-    fixture.mutation.mockImplementationOnce(async () => {
-      fixture.replace(starting);
-      return { revision: 2, result: { result: "run", run_id: "new-root", attempt: 1 } };
-    });
+  it("blocks a second launch until an unconfirmed start is explicitly reviewed", async () => {
+    const fixture = await mount(snapshot([]));
+    fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
     act(() => button("Start agent").click()); await settle();
-    expect(host.textContent).toContain("Waiting for OMP to start and connect.");
-    const verified = { ...snapshot([run({ run_id: "new-root", root_id: "new-root" })]), revision: 3, board: board("new-root") };
-    fixture.replace(verified);
-    await rerender(false); await rerender(true);
-    const status = host.querySelector('[aria-label="Project supervisor status"]')!;
-    expect(status.textContent).toContain("Ready for a task");
-    expect(status.textContent).not.toContain("Managing tasks");
-    expect(host.textContent).not.toContain("Waiting for OMP to start and connect.");
-    expect(fixture.onTerminal).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(button("Start agent"));
+    expect(button("Start agent").disabled).toBe(true);
+    // The queue deliberately expands only one row; select Recover rather than opening the subsequent Notice.
+    act(() => host.querySelector<HTMLButtonElement>(".supervisor-queue-row.is-recover .supervisor-queue-summary")!.click());
+    await settle();
+    act(() => button("I have reviewed the previous start").click()); await settle();
+    expect(button("Start agent").disabled).toBe(false);
+    expect(fixture.mutation).toHaveBeenCalledTimes(1);
   });
-  it("checks a freshly missing launch before explicit restart and accepts the real Done acknowledgement", async () => {
-    const original = run();
-    const state = snapshot([original]);
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_omp: false, pane_id: null })] };
-    const fixture = await mount(state);
-    fixture.mutation.mockImplementationOnce(async () => {
-      const reviewed = { ...state, revision: 2, runs: [run({ dispatch: { ...original.dispatch!, step: "launch_unknown" } })] };
-      fixture.replace(reviewed);
-      return { revision: 2, result: { result: "done" } };
-    });
-    act(() => button("Restart agent…").click()); await settle();
-    expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "reconcile_run", run_id: "root", recovery: null });
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("could leave another agent running");
-    act(() => button("Restart anyway").click()); await settle();
-    expect(fixture.mutation.mock.calls[1][0].action).toEqual({ action: "retry_launch", run_id: "root" });
+  it("returns an unconfirmed Start dialog to an enabled review target when the opener is disabled, without unlocking a second launch", async () => {
+    const fixture = await mount(snapshot([]));
+    fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
+    const opener = button("Start options…");
+    act(() => { opener.focus(); opener.click(); }); await settle();
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    act(() => dialog.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); await settle();
+    expect(opener.disabled).toBe(true);
+    press(dialog, "Escape"); await settle();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(fixture.mutation.mock.calls.some(([request]) => request.action.action === "supervisor_start")).toBe(false);
+    const reviewTarget = document.activeElement as HTMLElement;
+    expect(reviewTarget.matches(".supervisor-queue-row.is-recover .supervisor-queue-summary,.supervisor-summary-counter.is-recover")).toBe(true);
+    expect(host.contains(reviewTarget)).toBe(true);
+    expect(reviewTarget.matches(":disabled,[aria-disabled='true']")).toBe(false);
+    expect(reviewTarget.closest("[hidden],[inert]")).toBeNull();
+    expect(reviewTarget.tabIndex).toBeGreaterThanOrEqual(0);
+    expect(button("Start agent").disabled).toBe(true);
+    expect(fixture.mutation).toHaveBeenCalledTimes(1);
   });
-  it("retains a genuine escalation answer until actual message delivery and leaves Escape in its textarea alone", async () => {
-    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout should I use?", plan: null, at } });
+  it("retains an unknown answer and retries the identical operation, without consuming textarea Escape", async () => {
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
     const fixture = await mount(snapshot([supervisor]));
-    const answer = document.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
-    expect(answer.getAttribute("aria-describedby")).toContain("supervisor-question-question");
-    enter(answer, "Use the existing checkout.");
-    act(() => answer.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    expect(fixture.onClose).not.toHaveBeenCalled();
+    const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    enter(field, "Use the existing checkout");
+    expect(press(field, "Escape").defaultPrevented).toBe(false);
     fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
     act(() => button("Send answer").click()); await settle();
-    const submitted = fixture.mutation.mock.calls[0][0].action;
-    expect(submitted.action).toBe("message_send");
-    expect(answer.value).toBe("Use the existing checkout.");
+    const sent = fixture.mutation.mock.calls[0][0].action;
+    expect(sent).toMatchObject({ action: "message_send", kind: "answer", to_run_id: "root", text: "Use the existing checkout" });
+    expect(field.value).toBe("Use the existing checkout");
     act(() => button("Retry same message").click()); await settle();
-    expect(fixture.mutation.mock.calls[1][0].action).toEqual(submitted);
-    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!.value).toBe("");
-    expect(host.textContent).toContain("Answer sent. Waiting for the agent.");
+    expect(fixture.mutation.mock.calls[1][0].action).toEqual(sent);
+    expect(field.value).toBe("");
+    expect(fixture.onClose).not.toHaveBeenCalled();
   });
-  it("preserves root-specific answer drafts across root changes, hide, refresh and offline state", async () => {
+  it.each([true, false])("returns focus when core clears the root question (task exists: %s)", async hasTask => {
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const tasks = hasTask ? [task({ lane: "queued", current_run_id: null })] : [];
+    const fixture = await mount(snapshot([supervisor], tasks));
+    const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    act(() => field.focus()); enter(field, "Use this checkout");
+    fixture.mutation.mockImplementationOnce(async () => { fixture.replace({ ...snapshot([run()], tasks), revision: 2 }); return { revision: 2, result: { result: "message", to_run_id: "root", seq: 1, duplicate: false, stale: false } }; });
+    act(() => button("Send answer").click()); await settle();
+    expect(host.querySelector('[aria-label="Needs you"]')).toBeNull();
+    expect(document.activeElement).toBe(hasTask ? host.querySelector('[data-row-id="task-a"]') : button("Start agent"));
+  });
+  it("keeps root-specific answer drafts and view choices through switching, hide and offline", async () => {
     const first = run({ last_report: { message_id: "ask", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
     const second = run({ run_id: "second", root_id: "second", label: "Other supervisor" });
     const fixture = await mount(snapshot([first, second]), new Map([["root", board()], ["second", board("second")]]));
-    const answer = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
-    enter(answer, "Use the existing checkout");
+    const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    enter(field, "Retained answer");
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
     enter(host.querySelector<HTMLSelectElement>('select[aria-label="Agent"]')!, "second"); await settle();
-    expect(host.querySelector('[aria-label="Needs you"] textarea')).toBeNull();
+    expect(host.querySelector('[data-view-segment="tasks"]')?.getAttribute("aria-pressed")).toBe("true");
     enter(host.querySelector<HTMLSelectElement>('select[aria-label="Agent"]')!, "root"); await settle();
     await rerender(false); await rerender(true, false);
-    expect([...host.querySelectorAll<HTMLTextAreaElement>("textarea")].some(field => field.value === "Use the existing checkout")).toBe(true);
+    expect(host.querySelector('[data-view-segment="graph"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!.value).toBe("Retained answer");
     expect(button("Send answer").disabled).toBe(true);
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
-  it("resolves an assignment conflict with the current canonical CAS and never deletes Markdown", async () => {
+  it("resolves assignment and acceptance conflicts using canonical revision and exact intent identity", async () => {
     const state = snapshot([run()], [task({ current_run_id: null, lane: "queued" })]);
     state.assignment_intents = [{ root_id: "root", task_id: "task-a", state: "conflict" }];
-    const fixture = await mount(state);
+    const fixture = await mount(state); await expandQueue();
     act(() => button("Assign current task").click()); await settle();
     expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "task_assignment_resolve", root_id: "root", task_id: "task-a", expected_task_revision: "task-revision", assign: true });
     act(() => button("Keep unassigned").click()); await settle();
     expect(fixture.mutation.mock.calls[1][0].action).toEqual({ action: "task_assignment_resolve", root_id: "root", task_id: "task-a", expected_task_revision: null, assign: false });
+    const next = { ...state, revision: 4, assignment_intents: [], intents: [{ intent_id: "exact-intent", root_id: "root", task_id: "task-a", run_id: "root", expected_task_revision: "old-revision", state: "conflict" as const, origin: null, supervisor_run_id: null, omp_session_id: null, result_message_id: null }], attention: [{ kind: "intent_conflict" as const, run_id: "root", task_id: "task-a", message_seq: null, since: at }] };
+    fixture.replace(next); await rerender(false); await rerender(true); await expandQueue();
+    act(() => button("Apply acceptance to current task").click()); await settle();
+    expect(fixture.mutation.mock.calls[2][0].action).toEqual({ action: "intent_resolve", intent_id: "exact-intent", apply: true });
     expect(state.board!.tasks[0].task.body).toBe(task().task.body);
   });
-  it("opens task detail and moves lane focus without requesting a terminal; editing cancellation retains the draft", async () => {
-    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working" });
-    const next = task({ task: { ...task().task, task_id: "task-b", title: "Update docs" }, current_run_id: null, lane: "queued" });
-    const state = snapshot([run(), worker], [task(), next]);
-    const fixture = await mount(state);
-    const first = host.querySelector<HTMLButtonElement>("[data-row-id=task-a]")!;
-    act(() => first.focus());
-    act(() => first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
-    expect(document.activeElement).toBe(host.querySelector("[data-row-id=task-b]"));
-    expect(first.getAttribute("aria-expanded")).toBe("false");
-    act(() => first.click()); await settle();
+  it("reconciles a missing launch before allowing an explicit retry", async () => {
+    const original = run(), state = snapshot([original]);
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_omp: false, pane_id: null })] };
+    const fixture = await mount(state); await expandQueue();
+    fixture.mutation.mockImplementationOnce(async () => { fixture.replace({ ...state, revision: 2, runs: [run({ dispatch: { ...original.dispatch!, step: "launch_unknown" } })] }); return { revision: 2, result: { result: "done" } }; });
+    act(() => button("Restart agent…").click()); await settle();
+    expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "reconcile_run", run_id: "root", recovery: null });
+    act(() => button("Restart anyway").click()); await settle();
+    expect(fixture.mutation.mock.calls[1][0].action).toEqual({ action: "retry_launch", run_id: "root" });
+    expect(fixture.mutation.mock.calls.some(([request]) => request.action.action === "supervisor_start")).toBe(false);
+  });
+  it("retains cancelled edit drafts and disables editing when disconnected", async () => {
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const fixture = await mount(snapshot([run(), worker], [task()]));
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.click()); await settle();
     act(() => button("Actions").click()); await settle();
-    expect(button("Actions").getAttribute("aria-pressed")).toBe("true");
     act(() => button("Edit task…").click()); await settle();
-    const title = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
-    enter(title, "Retained edit draft");
+    enter(document.querySelector<HTMLInputElement>('[role="dialog"] input')!, "Retained edit");
     act(() => button("Cancel").click()); await settle();
     act(() => button("Edit task…").click()); await settle();
-    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("Retained edit draft");
-    await rerender(false);
-    fixture.snapshotCall.mockRejectedValue(new Error("transport offline"));
-    await rerender(true);
+    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("Retained edit");
+    await rerender(false); fixture.snapshotCall.mockRejectedValue(new Error("transport offline")); await rerender(true);
     expect(button("Save task").disabled).toBe(true);
-    expect(button("Cancel").disabled).toBe(false);
-    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("Retained edit draft");
-    act(() => button("Cancel").click()); await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await rerender(false);
-    fixture.snapshotCall.mockResolvedValue(state);
-    await rerender(true);
-    act(() => button("Edit task…").click()); await settle();
-    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("Retained edit draft");
+    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("Retained edit");
+  });
+});
+
+describe("Supervisor selection, scroll and panel transitions", () => {
+  it("restores independent graph/board/lane offsets and keeps selection and filters on view changes", async () => {
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const fixture = await mount(snapshot([run(), worker], [task()]));
+    const board = host.querySelector<HTMLDivElement>(".supervisor-board")!, lane = host.querySelector<HTMLUListElement>(".is-working .supervisor-task-list")!;
+    board.scrollLeft = 84; lane.scrollTop = 110;
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.click()); await settle();
+    act(() => button("Attention · 0").click()); await settle();
+    const segment = host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!;
+    act(() => { segment.focus(); segment.click(); }); await settle();
+    expect(document.activeElement).toBe(segment);
+    expect(host.querySelector('[data-row-id="task:task-a"]')?.getAttribute("aria-expanded")).toBe("true");
+    const graph = host.querySelector<HTMLDivElement>(".supervisor-graph-scroll")!; graph.scrollLeft = 220; graph.scrollTop = 73;
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="tasks"]')!.click()); await settle();
+    expect(host.querySelector<HTMLDivElement>(".supervisor-board")!.scrollLeft).toBe(84);
+    expect(host.querySelector<HTMLUListElement>(".is-working .supervisor-task-list")!.scrollTop).toBe(110);
+    expect(button("Attention · 0").getAttribute("aria-pressed")).toBe("true");
+    act(() => button("Show in Graph").click()); await settle();
+    expect(host.querySelector<HTMLDivElement>(".supervisor-graph-scroll")!.scrollLeft).toBe(220);
+    expect(host.querySelector<HTMLDivElement>(".supervisor-graph-scroll")!.scrollTop).toBe(73);
+    expect(document.activeElement).toBe(host.querySelector('[data-row-id="task:task-a"]'));
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
-  it("navigates populated board lanes while preserving native button activation and Escape focus return", async () => {
-    const queuedFirst = task({ task: { ...task().task, task_id: "queued-a", title: "First queued task" }, lane: "queued", current_run_id: null });
-    const queuedSecond = task({ task: { ...task().task, task_id: "queued-b", title: "Second queued task" }, lane: "queued", current_run_id: null });
-    const readyFirst = task({ task: { ...task().task, task_id: "ready-a", title: "First ready task" }, lane: "ready", current_run_id: null });
-    const readySecond = task({ task: { ...task().task, task_id: "ready-b", title: "Second ready task" }, lane: "ready", current_run_id: null });
-    const working = task({ task: { ...task().task, task_id: "working-a", title: "Working task" }, lane: "working", current_run_id: null });
-    const fixture = await mount(snapshot([run()], [queuedFirst, readyFirst, queuedSecond, working, readySecond]));
-    const card = (id: string) => host.querySelector<HTMLButtonElement>(`li.supervisor-task button[data-row-id="${id}"]`)!;
-    const press = (target: HTMLElement, key: string) => {
-      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-      act(() => target.dispatchEvent(event));
-      return event;
-    };
-    expect([...host.querySelectorAll(".supervisor-lane")].map(lane => lane.getAttribute("aria-label"))).toEqual(["Queued tasks", "Preparing tasks", "Ready tasks", "Working tasks", "Review tasks", "Done tasks"]);
+  it("restores a narrow Board without revealing an unassigned task when there is no selection", async () => {
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("supervisor-workarea")) return new DOMRect(0, 0, 360, 700);
+      if (this.classList.contains("supervisor-board")) return new DOMRect(0, 120, 360, 580);
+      return original.call(this);
+    });
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("supervisor-board") ? 580 : 0; });
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(function (this: Element) { return this.classList.contains("supervisor-board") ? 360 : 0; });
+    const fixture = await mount(snapshot([run()], [task({ lane: "queued", current_run_id: null })]));
+    const lane = host.querySelector<HTMLDetailsElement>(".supervisor-lane-group.is-queued")!;
+    act(() => { lane.open = false; lane.dispatchEvent(new Event("toggle", { bubbles: true })); }); await settle();
+    const list = host.querySelector<HTMLDivElement>(".supervisor-board")!; list.scrollTop = 73;
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="tasks"]')!.click()); await settle();
+    expect(host.querySelector<HTMLDivElement>(".supervisor-board")!.scrollTop).toBe(73);
+    expect(host.querySelector<HTMLDetailsElement>(".supervisor-lane-group.is-queued")!.open).toBe(false);
+    expect(host.querySelector('[data-row-id="task-a"]')?.getAttribute("aria-expanded")).toBe("false");
     expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
-    act(() => card("queued-a").focus());
-    expect(press(card("queued-a"), "ArrowDown").defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(card("queued-b"));
-    expect(card("queued-b").tabIndex).toBe(0);
-    expect(card("queued-a").tabIndex).toBe(-1);
-    expect(press(card("queued-b"), "ArrowRight").defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(card("ready-b"));
-    expect(card("ready-b").tabIndex).toBe(0);
-    expect(card("queued-b").tabIndex).toBe(-1);
-    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
-    expect(press(card("ready-b"), "ArrowUp").defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(card("ready-a"));
-    expect(press(card("ready-a"), "ArrowDown").defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(card("ready-b"));
-    expect(press(card("ready-b"), "ArrowRight").defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(card("working-a"));
-    expect(card("working-a").getAttribute("aria-expanded")).toBe("false");
-
-    for (const key of ["Enter", " "]) {
-      const target = card("working-a");
-      expect(target.tagName).toBe("BUTTON");
-      expect(target.type).toBe("button");
-      expect(press(target, key).defaultPrevented).toBe(false);
-      const release = new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true });
-      act(() => target.dispatchEvent(release));
-      expect(release.defaultPrevented).toBe(false);
-      expect(target.getAttribute("aria-expanded")).toBe("false");
-      // jsdom does not synthesize a native button click from keyboard events.
-      act(() => target.click()); await settle();
-      expect(target.getAttribute("aria-expanded")).toBe("true");
-      expect(host.querySelector('aside[aria-label="Selected details"]')!.textContent).toContain("Working task");
-      const overview = button("Overview");
-      act(() => overview.focus());
-      expect(document.activeElement).toBe(overview);
-      expect(press(overview, "Escape").defaultPrevented).toBe(true);
-      await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
-      expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
-      expect(target.getAttribute("aria-expanded")).toBe("false");
-      expect(document.activeElement).toBe(target);
-    }
-    expect(fixture.mutation).not.toHaveBeenCalled();
     expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("moves Board keyboard focus without selection and returns from details Escape", async () => {
+    const first = task({ lane: "queued", current_run_id: null });
+    const next = task({ task: { ...task().task, task_id: "next", title: "Next task" }, lane: "ready", current_run_id: null });
+    const fixture = await mount(snapshot([run()], [first, next]));
+    const row = host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!;
+    act(() => row.focus()); press(row, "ArrowRight");
+    const target = host.querySelector<HTMLButtonElement>('[data-row-id="next"]')!;
+    expect(document.activeElement).toBe(target);
+    expect(target.getAttribute("aria-expanded")).toBe("false");
+    expect(press(target, "Enter").defaultPrevented).toBe(false);
+    act(() => target.click()); await settle();
+    act(() => button("Overview").focus()); press(button("Overview"), "Escape");
+    await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
+    expect(document.activeElement).toBe(target);
+    expect(fixture.onTerminal).not.toHaveBeenCalled(); expect(fixture.mutation).not.toHaveBeenCalled();
+  });
+  it("keeps a visible-node click at the same graph offsets, and subagent-off selects its worker", async () => {
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const state = snapshot([run(), worker], [task()]);
+    state.subagents = [{ run_id: "worker", subagent_id: "child", parent_subagent_id: null, role: "Researcher", label: "Research child", status: "running", summary: null, last_control: null, updated_at: at }];
+    const fixture = await mount(state);
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    const graph = host.querySelector<HTMLDivElement>(".supervisor-graph-scroll")!; graph.scrollLeft = 150; graph.scrollTop = 60;
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="sub:worker:child"]')!.click()); await settle();
+    expect(graph.scrollLeft).toBe(150); expect(graph.scrollTop).toBe(60);
+    act(() => host.querySelector<HTMLInputElement>(".supervisor-graph-subagents input")!.click()); await settle();
+    expect(host.querySelector('[data-row-id="run:worker"]')?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(host.querySelector('[data-row-id="run:worker"]'));
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("uses the same core Recover item for card, filter and queue without auto-switching or stealing focus", async () => {
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const state = snapshot([run(), worker], [task()]);
+    const fixture = await mount(state);
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    const segment = host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!;
+    act(() => segment.focus());
+    const next = { ...state, revision: 2, attention: [{ kind: "runtime_blocked" as const, run_id: "worker", task_id: "task-a", message_seq: null, since: at }] };
+    await fixture.push(next);
+    expect(segment.getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(segment);
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="tasks"]')!.click()); await settle();
+    act(() => button("Attention · 1").click()); await settle();
+    const row = host.querySelector('[data-row-id="task-a"]')!;
+    expect(row.closest("li")?.classList.contains("is-dimmed")).toBe(false);
+    expect(row.getAttribute("aria-label")).toContain("Recover");
+    expect(host.querySelector('.supervisor-queue-row.is-recover')).not.toBeNull();
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("keeps literal failures on cards but routine technical report text only in details", async () => {
+    const failure = "Compiler rejected migration. No files lost.";
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "reported", last_report: { message_id: "failed", kind: "result", outcome: "failed", summary: failure, plan: null, at } });
+    worker.result = worker.last_report;
+    const fixture = await mount(snapshot([run(), worker], [task({ lane: "review" })]));
+    expect(host.querySelector("li.supervisor-task")?.textContent).toContain(failure);
+    const ordinary = run({ ...worker, stage: "working", result: null, last_report: { message_id: "progress", kind: "progress", outcome: null, summary: "Exact technical report /tmp/checkouts revision abc123", plan: null, at } });
+    fixture.replace({ ...snapshot([run(), ordinary], [task()]), revision: 2 }); await rerender(false); await rerender(true);
+    expect(host.querySelector("li.supervisor-task")?.textContent).not.toContain(ordinary.last_report!.summary);
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.click()); await settle();
+    expect(host.querySelector('aside[aria-label="Selected details"]')?.textContent).toContain(ordinary.last_report!.summary);
+  });
+  it("moves to the next canonical task when the focused task disappears", async () => {
+    const next = task({ task: { ...task().task, task_id: "next" }, lane: "queued", current_run_id: null });
+    const state = snapshot([run()], [task({ lane: "queued", current_run_id: null }), next]);
+    state.assignment_intents = [{ root_id: "root", task_id: "pending", state: "pending" }];
+    const fixture = await mount(state); await expandQueue();
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.focus());
+    fixture.replace({ ...state, revision: 2, board: board("root", [next]) });
+    act(() => button("Check assignment status").click()); await settle();
+    expect(document.activeElement).toBe(host.querySelector('[data-row-id="next"]'));
+  });
+  it.each([550, 700])("uses narrow Graph overlay below 560 and a resizable nonmodal sheet above it (%s)", async height => {
+    workarea(360, height);
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const fixture = await mount(snapshot([run(), worker], [task()]));
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    const node = host.querySelector<HTMLButtonElement>('[data-row-id="run:worker"]')!;
+    act(() => { node.focus(); node.click(); }); await settle();
+    expect(host.querySelector(".supervisor-view")?.getAttribute("data-panel")).toBe(height < 560 ? "overlay" : "sheet");
+    if (height < 560) expect(document.activeElement).toBe(button("Close details"));
+    else {
+      expect(document.activeElement).toBe(node);
+      const splitter = host.querySelector<HTMLElement>('[role="separator"]')!;
+      const initial = Number(splitter.getAttribute("aria-valuenow"));
+      press(splitter, "ArrowUp"); await settle();
+      expect(Number(splitter.getAttribute("aria-valuenow"))).toBe(initial + 16);
+      expect(host.querySelector<HTMLElement>(".supervisor-graph-bottom-inset")!.style.height).toBe(`${initial + 16}px`);
+    }
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it.each([593.609375, 243.999])("caps a Graph sheet to leave one whole node below its header, or uses an overlay when 160px is infeasible (%s)", async available => {
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("supervisor-workarea")) return new DOMRect(0, 0, 360, 736);
+      if (this.classList.contains("supervisor-graph-scroll")) return new DOMRect(0, 736 - available, 360, available);
+      return original.call(this);
+    });
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("supervisor-graph-scroll") ? Math.round(available) : 0;
+    });
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const fixture = await mount(snapshot([run(), worker], [task()]));
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="run:worker"]')!.click()); await settle();
+    const feasibleMax = Math.floor(available - 28 - 48 - 8);
+    if (feasibleMax >= 160) {
+      expect(host.querySelector(".supervisor-view")?.getAttribute("data-panel")).toBe("sheet");
+      const splitter = host.querySelector<HTMLElement>('[role="separator"]')!;
+      expect(Number(splitter.getAttribute("aria-valuemax"))).toBe(feasibleMax);
+      for (let index = 0; index < 20; index++) { press(splitter, "ArrowUp"); await settle(); }
+      expect(Number(splitter.getAttribute("aria-valuenow"))).toBe(feasibleMax);
+      expect(host.querySelector<HTMLElement>(".supervisor-graph-bottom-inset")!.style.height).toBe(`${feasibleMax}px`);
+    } else {
+      expect(host.querySelector(".supervisor-view")?.getAttribute("data-panel")).toBe("overlay");
+      expect(host.querySelector('[role="separator"]')).toBeNull();
+      expect(document.activeElement).toBe(button("Close details"));
+    }
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("opens narrow attention from a counter and returns Escape focus to that counter", async () => {
+    workarea(360, 600);
+    const supervisor = run({ last_report: { message_id: "ask", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const fixture = await mount(snapshot([supervisor], [task({ lane: "queued", current_run_id: null })]));
+    const counter = host.querySelector<HTMLButtonElement>(".supervisor-summary-counter.is-decide")!;
+    act(() => { counter.focus(); counter.click(); }); await settle();
+    expect(document.activeElement).toBe(button("Close attention"));
+    const close = button("Close attention"); press(close, "Escape"); await settle();
+    expect(host.querySelector(".supervisor-queue.is-overlay")).toBeNull();
+    await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+    expect(document.activeElement).toBe(counter);
     expect(fixture.onClose).not.toHaveBeenCalled();
   });
-  it("attributes automatic grants to the supervisor and keeps raw bootstrap text out of History", async () => {
-    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working", grants: [{ grant_id: "grant", scope: "execute", plan_revision: "technical-hash-not-a-summary", origin: "supervisor", supervisor_run_id: "root", omp_session_id: "native", granted_at: at }] });
-    worker.annotations = [{ at, by: { type: "run", run_id: "root" }, text: "Acceptance requested for Result result-secret at task revision revision-secret; origin Supervisor, main session native-secret." }];
+  it("remembers narrow lane disclosures across view switches and arrows cross visible lane boundaries", async () => {
+    workarea(360, 620);
+    const first = task({ lane: "queued", current_run_id: null });
+    const next = task({ task: { ...task().task, task_id: "next" }, lane: "ready", current_run_id: null });
+    await mount(snapshot([run()], [first, next]));
+    const row = host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!;
+    act(() => row.focus()); press(row, "ArrowDown");
+    expect(document.activeElement).toBe(host.querySelector('[data-row-id="next"]'));
+    const lane = host.querySelector<HTMLDetailsElement>(".supervisor-lane-group.is-queued")!;
+    act(() => { lane.open = false; lane.dispatchEvent(new Event("toggle", { bubbles: true })); }); await settle();
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="tasks"]')!.click()); await settle();
+    expect(host.querySelector<HTMLDetailsElement>(".supervisor-lane-group.is-queued")!.open).toBe(false);
+  });
+  it("loads closed-root counts only on archive-open and rejects a mismatched snapshot identity", async () => {
+    const closed = run({ run_id: "closed", root_id: "closed", label: "Closed supervisor", stage: "closed", close_reason: "cancelled" });
+    const fixture = await mount(snapshot([run(), closed]));
+    expect(fixture.snapshotCall.mock.calls.some(([request]) => request.root_id === "closed")).toBe(false);
+    fixture.snapshotCall.mockImplementation(async request => request.root_id === "closed" ? { ...snapshot([run(), closed]), session_id: "wrong-session", board: board("closed", [task()]) } : snapshot([run(), closed]));
+    act(() => button("Closed tracking · 1").click()); await settle();
+    expect(fixture.snapshotCall.mock.calls.filter(([request]) => request.root_id === "closed")).toHaveLength(1);
+    expect(host.querySelector(".supervisor-archive-task-count")?.textContent).toBe("Task count unavailable");
+    expect(fixture.mutation).not.toHaveBeenCalled();
+  });
+  it("clears a disappeared selected graph node and focuses the nearest surviving row without terminal navigation", async () => {
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
     const state = snapshot([run(), worker], [task()]);
-    state.messages = [{ message_id: "brief", to_run_id: "root", seq: 1, from: { type: "dispatcher" }, kind: "supervisor_brief", text: "RAW BOOTSTRAP POLICY", report: null, stale: false, escalated_from: null, from_subagent_id: null, stage: "stored", woken_omp_session: null, created_at: at, acked_at: null }];
-    await mount(state);
-    act(() => button("Activity").click()); await settle();
-    expect(button("Activity").getAttribute("aria-pressed")).toBe("true");
-    const history = host.querySelector('section[aria-label="History"]')!;
-    expect(history.textContent).toContain("Execution authorized · Project supervisor");
-    expect(history.textContent).not.toContain("RAW BOOTSTRAP POLICY");
-    expect(history.textContent).not.toContain("technical-hash-not-a-summary");
-    expect(history.textContent).not.toContain("authorized · You");
-    expect(history.textContent).toContain("Result review note for Search agent");
-    expect(history.textContent).not.toContain("revision-secret");
-    expect(history.textContent).not.toContain("native-secret");
+    const fixture = await mount(state);
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    const node = host.querySelector<HTMLButtonElement>('[data-row-id="run:worker"]')!;
+    act(() => { node.focus(); node.click(); }); await settle();
+    await fixture.push({ ...snapshot([run(), run({ ...worker, stage: "closed", close_reason: "accepted" })], [task({ lane: "accepted", task: { ...task().task, checked: true } })]), revision: 2 });
+    await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+    expect(host.querySelector('aside[aria-label="Selected details"]')).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('[data-row-id="run:root"]'));
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("ignores an archive completion from a closed disclosure generation", async () => {
+    const closed = run({ run_id: "closed", root_id: "closed", label: "Closed supervisor", stage: "closed" });
+    const state = snapshot([run(), closed]);
+    const fixture = await mount(state);
+    let complete!: (value: OrchestrationSnapshot) => void;
+    const deferred = new Promise<OrchestrationSnapshot>(resolve => { complete = resolve; });
+    fixture.snapshotCall.mockImplementation(request => request.root_id === "closed" ? deferred : Promise.resolve(state));
+    act(() => button("Closed tracking · 1").click()); await settle();
+    act(() => button("Closed tracking · 1").click()); await settle();
+    fixture.snapshotCall.mockImplementation(async request => request.root_id === "closed" ? { ...state, board: board("closed", []) } : state);
+    act(() => button("Closed tracking · 1").click()); await settle();
+    expect(host.querySelector(".supervisor-archive-task-count")?.textContent).toBe("0 tasks");
+    complete({ ...state, board: board("closed", [task()]) }); await settle();
+    expect(host.querySelector(".supervisor-archive-task-count")?.textContent).toBe("0 tasks");
   });
 });

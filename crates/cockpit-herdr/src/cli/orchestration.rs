@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use cockpit_core::{
     InspectionError,
     orchestration::herdr::{
-        AgentStartRequest, AgentTabRequest, OrchestrationHerdr, RuntimePane, RuntimeView,
-        RuntimeWorkspace,
+        AgentStartRequest, AgentTabRequest, OrchestrationHerdr, PaneProcessInfo, RuntimePane,
+        RuntimeView, RuntimeWorkspace,
     },
 };
 use cockpit_protocol::orchestration::RunLocation;
@@ -26,6 +26,76 @@ fn unknown(error: InspectionError) -> InspectionError {
     } else {
         error
     }
+}
+
+fn parse_pane_process_info(
+    result: &Value,
+    pane_id: &str,
+) -> Result<PaneProcessInfo, InspectionError> {
+    let response = object(result, "pane.process_info")?;
+    if required_string(response, "type", "pane.process_info")? != "pane_process_info" {
+        return Err(InspectionError::new("malformed_response", "Unexpected process-info response type"));
+    }
+    let info = response.get("process_info").ok_or_else(|| {
+        InspectionError::new("malformed_response", "process_info is required")
+    })?;
+    let info = object(info, "process_info")?;
+    let actual_pane_id = required_string(info, "pane_id", "process_info")?;
+    if actual_pane_id != pane_id {
+        return Err(InspectionError::new(
+            "malformed_response",
+            "process_info belongs to a different pane",
+        ));
+    }
+    let optional_pid = |key: &str| -> Result<Option<u32>, InspectionError> {
+        match info.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => parse_process_pid(value, key).map(Some),
+        }
+    };
+    let processes = match info.get("foreground_processes") {
+        None => Vec::new(),
+        Some(Value::Array(processes)) => processes.iter().map(|value| {
+            let process = object(value, "foreground process")?;
+            let pid = process.get("pid").ok_or_else(|| {
+                InspectionError::new("malformed_response", "foreground process PID is required")
+            })?;
+            Ok((
+                parse_process_pid(pid, "foreground process PID")?,
+                required_string(process, "name", "foreground process")?,
+            ))
+        }).collect::<Result<Vec<_>, InspectionError>>()?,
+        Some(_) => return Err(InspectionError::new(
+            "malformed_response",
+            "foreground_processes must be an array",
+        )),
+    };
+    Ok(PaneProcessInfo {
+        pane_id: actual_pane_id,
+        shell_pid: optional_pid("shell_pid")?,
+        foreground_pgid: optional_pid("foreground_process_group_id")?,
+        processes,
+        shell_identity: None,
+    })
+}
+
+fn parse_process_pid(value: &Value, field: &str) -> Result<u32, InspectionError> {
+    value.as_u64().and_then(|pid| u32::try_from(pid).ok()).ok_or_else(|| {
+        InspectionError::new("malformed_response", format!("{field} must be a uint32"))
+    })
+}
+
+fn validate_close_receipt(result: &Value) -> Result<(), InspectionError> {
+    // Herdr v0.9.3 handle_pane_close returns ResponseResult::Ok; any other
+    // receipt is uncertain, not a refusal or proof that the pane disappeared.
+    let response = object(result, "pane.close").map_err(unknown)?;
+    if required_string(response, "type", "pane.close").ok().as_deref() != Some("ok") {
+        return Err(InspectionError::new(
+            "herdr_outcome_unknown",
+            "pane.close returned no close acknowledgement",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_start_receipt(
@@ -332,6 +402,41 @@ impl OrchestrationHerdr for HerdrCliAdapter {
             }
         }
     }
+
+    async fn pane_process_info(
+        &self,
+        session_id: &str,
+        endpoint_identity: &str,
+        pane_id: &str,
+    ) -> Result<PaneProcessInfo, InspectionError> {
+        let (result, _) = self.socket_request_with_identity(
+            session_id,
+            "pane.process_info",
+            json!({"pane_id": pane_id}),
+            Some(endpoint_identity),
+        ).await?;
+        let mut info = parse_pane_process_info(&result, pane_id)?;
+        info.shell_identity = info.shell_pid
+            .and_then(|pid| i32::try_from(pid).ok())
+            .and_then(|pid| cockpit_core::process_identity::start_identity(pid).map(|start| (pid, start)))
+            .and_then(|(pid, start)| cockpit_core::process_identity::executable_identity(pid, start).ok());
+        Ok(info)
+    }
+
+    async fn close_pane(
+        &self,
+        session_id: &str,
+        endpoint_identity: &str,
+        pane_id: &str,
+    ) -> Result<(), InspectionError> {
+        let (result, _) = self.socket_request_with_identity(
+            session_id,
+            "pane.close",
+            json!({"pane_id": pane_id}),
+            Some(endpoint_identity),
+        ).await.map_err(unknown)?;
+        validate_close_receipt(&result)
+    }
 }
 
 impl HerdrCliAdapter {
@@ -474,5 +579,100 @@ mod tests {
         let same_group_child = json!({"shell_pid":12,"foreground_process_group_id":12,"foreground_processes":[{"pid":13,"name":"bash","argv":["bash"]}]});
         assert!(!process_info_shows_shell_initialization(&same_group_child));
         assert!(!process_info_shows_shell_initialization(&json!({})));
+    }
+
+    #[test]
+    fn process_info_parses_pid_group_and_names() {
+        let response = json!({
+            "type": "pane_process_info",
+            "process_info": {
+                "pane_id": "w1:p2",
+                "shell_pid": 12,
+                "foreground_process_group_id": 20,
+                "foreground_processes": [
+                    {"pid": 20, "name": "omp", "argv": ["omp"], "cwd": "/tmp"},
+                    {"pid": 21, "name": "child"}
+                ],
+                "tty": "/dev/pts/1"
+            }
+        });
+        let parsed = parse_pane_process_info(&response, "w1:p2").unwrap();
+        assert_eq!(parsed.pane_id, "w1:p2");
+        assert_eq!(parsed.shell_pid, Some(12));
+        assert_eq!(parsed.foreground_pgid, Some(20));
+        assert_eq!(parsed.processes, vec![(20, "omp".into()), (21, "child".into())]);
+    }
+
+    #[test]
+    fn process_info_does_not_trust_wire_supplied_shell_fingerprint() {
+        let response = json!({"type":"pane_process_info","process_info":{
+            "pane_id":"w1:p2","shell_pid":12,
+            "shell_identity":{
+                "process":{"pid":12,"start_ticks":123,"kernel_boot_id":"boot"},
+                "executable_device":"1","executable_inode":"2","argv_digest":"forged"
+            }
+        }});
+        assert!(parse_pane_process_info(&response, "w1:p2").unwrap().shell_identity.is_none());
+    }
+
+    #[test]
+    fn process_info_missing_optional_evidence_remains_unobserved() {
+        let response = json!({"type":"pane_process_info","process_info":{"pane_id":"w1:p2"}});
+        let parsed = parse_pane_process_info(&response, "w1:p2").unwrap();
+        assert_eq!(parsed.shell_pid, None);
+        assert_eq!(parsed.foreground_pgid, None);
+        assert!(parsed.processes.is_empty());
+        let nulls = json!({"type":"pane_process_info","process_info":{
+            "pane_id":"w1:p2","shell_pid":null,"foreground_process_group_id":null
+        }});
+        assert_eq!(parse_pane_process_info(&nulls, "w1:p2").unwrap(), parsed);
+    }
+
+    #[test]
+    fn process_info_rejects_wrong_pane_type_and_malformed_pids() {
+        let valid = json!({"type":"pane_process_info","process_info":{
+            "pane_id":"w1:p2","shell_pid":12,"foreground_process_group_id":12,
+            "foreground_processes":[{"pid":12,"name":"sh"}]
+        }});
+        assert!(parse_pane_process_info(&valid, "w1:p3").is_err());
+        for response in [json!(null), json!({}), json!({"type":"ok"}),
+            json!({"type":"pane_process_info","process_info":null})] {
+            assert!(parse_pane_process_info(&response, "w1:p2").is_err());
+        }
+        for field in ["shell_pid", "foreground_process_group_id"] {
+            for value in [json!(-1), json!(4_294_967_296u64), json!("12"), json!(1.5)] {
+                let mut response = valid.clone();
+                response["process_info"][field] = value;
+                assert_eq!(parse_pane_process_info(&response, "w1:p2").unwrap_err().code, "malformed_response");
+            }
+        }
+        for processes in [json!(null), json!({}), json!([{"pid":12}]),
+            json!([{"pid":-1,"name":"sh"}]), json!([{"pid":12,"name":false}])] {
+            let mut response = valid.clone();
+            response["process_info"]["foreground_processes"] = processes;
+            assert!(parse_pane_process_info(&response, "w1:p2").is_err());
+        }
+    }
+
+    #[test]
+    fn close_receipt_never_infers_success_from_an_unrelated_response() {
+        assert!(validate_close_receipt(&json!({"type":"ok"})).is_ok());
+        for response in [json!(null), json!({}), json!({"type":"pane_info"}),
+            json!({"type":true}), json!({"type":"pane_closed"})] {
+            assert_eq!(validate_close_receipt(&response).unwrap_err().code, "herdr_outcome_unknown");
+        }
+    }
+
+    #[test]
+    fn close_errors_preserve_refusal_and_pre_dispatch_identity_fences() {
+        for code in ["pane_not_found", "confirmation_required", "stale_identity", "request_not_dispatched"] {
+            let error = InspectionError::new(code, "specific failure");
+            assert_eq!(unknown(error.clone()), error);
+        }
+        for code in ["request_outcome_unknown", "response_timeout", "malformed_json", "malformed_response"] {
+            let mapped = unknown(InspectionError::new(code, "specific failure"));
+            assert_eq!(mapped.code, "herdr_outcome_unknown");
+            assert_eq!(mapped.message, "specific failure");
+        }
     }
 }

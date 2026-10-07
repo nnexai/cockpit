@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { decodeControl, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseWakeSummary, prepareToolAllowed, recoverWake, reportIdentity, requireSupervisorManagement } from "./cockpit-orchestration";
+import { describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { NativeStopReceipt, RunRetirement } from "../../src/protocol/generated/v1";
+import cockpitOrchestration, { createRetirementHandler, decodeControl, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseMainWaitRead, parseWakeSummary, prepareToolAllowed, readRetirementReadiness, recoverWake, reportIdentity, requireSupervisorManagement, retirementReadiness, type RetirementReadinessInput, type MainWaitRead } from "./cockpit-orchestration";
 
 describe("durable inbox wake bookkeeping", () => {
   it("coalesces arrivals without implying a read or acknowledgement", () => {
@@ -111,5 +113,769 @@ describe("exact-subagent controls and terminal telemetry", () => {
     expect(lifecycleStatus([{ role: "assistant", stopReason: "error" }], false)).toBe("failed");
     expect(lifecycleStatus([{ role: "assistant", stopReason: "error" }, { role: "assistant", stopReason: "stop" }], false)).toBe("done");
     expect(lifecycleStatus([], false)).toBe("failed");
+  });
+});
+
+const EMPTY_RETIREMENT_TOKEN = "0".repeat(64);
+const OFFER_RETIREMENT_TOKEN = "1".repeat(64);
+const DEFER_RETIREMENT_TOKEN = "2".repeat(64);
+
+const retirementOffer: RunRetirement = {
+  retirement_id: "retirement", trigger: "accept", result_message_id: "result", task_revision: "revision",
+  created_at: "2026-10-07T03:00:00.000Z", updated_at: "2026-10-07T03:00:01.000Z",
+  identity: {
+    run_attempt: 1, launch_attempt: 1, launch_tag: "worker", endpoint_identity: "endpoint",
+    session_id: "herdr", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal",
+    herdr_boot_id: null, omp_session_id: "native-main",
+    process: { pid: process.pid, start_ticks: 123, kernel_boot_id: null },
+    shell: { process: { pid: process.ppid, start_ticks: 122, kernel_boot_id: null }, executable_device: "1", executable_inode: "2", argv_digest: "digest" },
+  },
+  state: { state: "native_stop_offered", offered_at: "2026-10-07T03:00:01.000Z" },
+};
+
+function nativeReadiness(overrides: Partial<RetirementReadinessInput> = {}): RetirementReadinessInput {
+  return {
+    retirement: retirementOffer, agentKind: "main", nativeSession: "native-main", boundSession: "native-main",
+    pid: process.pid, mode: "tui", entries: [], idle: true, pendingMessages: false, admittedSubmission: false,
+    asyncJobs: { running: [] }, mainPendingAsyncWork: false, liveSubagents: false, editorText: "", ...overrides,
+  };
+}
+
+describe("accepted-worker native readiness", () => {
+  it("permits old user messages but refuses all later user entries, including wakes and alternate branches", () => {
+    expect(retirementReadiness(nativeReadiness({ entries: [
+      { type: "message", timestamp: "2026-10-07T02:59:59.999Z", message: { role: "user", content: "original assignment" } },
+    ] }))).toEqual({ kind: "ready" });
+    for (const content of [
+      "[Cockpit inbox notification]\n1 pending inbox message(s), through sequence 12.\nRun cockpit_inbox with operation=list using the bound SDK tool.",
+      "My ordinary user prompt contains [Cockpit inbox notification] but is not a trusted system wake.",
+      "Please continue with my edits.",
+    ]) {
+      for (const timestamp of [retirementOffer.created_at, "2026-10-07T03:00:02.000Z"]) {
+        expect(retirementReadiness(nativeReadiness({ entries: [
+          { type: "message", parentId: "alternate-branch", timestamp, message: { role: "user", content } },
+        ] }))).toMatchObject({ kind: "refuse", reason: "user_activity" });
+      }
+    }
+  });
+
+  it("compares native ISO timestamps against finer Rust acceptance precision without truncating", () => {
+    const retirement = { ...retirementOffer, created_at: "2026-10-07T03:00:00.000000001Z" };
+    expect(retirementReadiness(nativeReadiness({ retirement, entries: [
+      { type: "message", timestamp: "2026-10-07T03:00:00.000Z", message: { role: "user" } },
+    ] }))).toEqual({ kind: "ready" });
+    expect(retirementReadiness(nativeReadiness({ retirement, entries: [
+      { type: "message", timestamp: "2026-10-07T04:00:00.000000001+01:00", message: { role: "user" } },
+    ] }))).toMatchObject({ kind: "refuse", reason: "user_activity" });
+  });
+
+  it("fails closed on missing journal, invalid dates, malformed messages and unsupported modes", () => {
+    for (const entries of [null, undefined, {}, [null], [{ type: "message", message: { role: "user" } }],
+      [{ type: "message", timestamp: "2026-02-30T00:00:00Z", message: { role: "user" } }],
+      [{ type: "message", timestamp: "2026-10-07T03:00:00Z", message: null }],
+      [{ type: "message", timestamp: 123, message: { role: "user" } }],
+    ]) expect(retirementReadiness(nativeReadiness({ entries }))).toMatchObject({ kind: "refuse", reason: "native_refused" });
+    for (const mode of [undefined, "print", "json", "rpc"]) {
+      expect(retirementReadiness(nativeReadiness({ mode }))).toMatchObject({ kind: "refuse", reason: "native_refused" });
+    }
+    expect(retirementReadiness(nativeReadiness({ retirement: { ...retirementOffer, created_at: "invalid" } }))).toMatchObject({ kind: "refuse", reason: "native_refused" });
+  });
+
+  it("requires the exact native main session and PID, never inherited identity", () => {
+    for (const overrides of [
+      { agentKind: "sub" }, { nativeSession: "child-session" }, { boundSession: "" }, { pid: process.pid + 1 },
+      { retirement: { ...retirementOffer, identity: null } },
+    ]) expect(retirementReadiness(nativeReadiness(overrides))).toMatchObject({ kind: "refuse", reason: "native_refused" });
+  });
+
+  it("defers every kind of pending local work and draft", () => {
+    for (const [overrides, reason] of [
+      [{ idle: false }, "busy"], [{ admittedSubmission: true }, "busy"],
+      [{ pendingMessages: true }, "pending_messages"], [{ asyncJobs: null }, "async_jobs"],
+      [{ asyncJobs: { running: ["background"] } }, "async_jobs"], [{ mainPendingAsyncWork: true }, "async_jobs"],
+      [{ liveSubagents: true }, "live_subagents"], [{ editorText: " unsent draft " }, "editor_draft"],
+    ] as const) expect(retirementReadiness(nativeReadiness(overrides))).toEqual({ kind: "defer", reason });
+    expect(retirementReadiness(nativeReadiness({ editorText: " \n " }))).toEqual({ kind: "ready" });
+    expect(retirementReadiness(nativeReadiness({ idle: false, entries: [
+      { type: "message", timestamp: retirementOffer.created_at, message: { role: "user" } },
+    ] }))).toMatchObject({ kind: "refuse", reason: "user_activity" });
+  });
+});
+
+describe("native retirement receipt authority", () => {
+  function consumer() {
+    let input = nativeReadiness();
+    let active = true;
+    const shutdown = vi.fn();
+    const receipt = vi.fn<(record: RunRetirement, outcome: NativeStopReceipt) => Promise<void>>().mockResolvedValue(undefined);
+    const handler = createRetirementHandler({
+      readiness: record => retirementReadiness({ ...input, retirement: record }),
+      receipt, shutdown, active: () => active,
+    });
+    return { handler, shutdown, receipt, setInput(overrides: Partial<RetirementReadinessInput>) { input = { ...input, ...overrides }; }, stop() { active = false; } };
+  }
+
+  it("does not shut down after a rejected receipt, but accepts a later fresh receipt", async () => {
+    const c = consumer();
+    c.receipt.mockRejectedValueOnce(new Error("retirement_state_changed"));
+    await expect(c.handler.observe(retirementOffer)).rejects.toThrow("retirement_state_changed");
+    expect(c.shutdown).not.toHaveBeenCalled();
+    await c.handler.observe(retirementOffer);
+    expect(c.receipt).toHaveBeenLastCalledWith(retirementOffer, { outcome: "shutdown_requested" });
+    expect(c.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks all native safety evidence after durable receipt before any shutdown", async () => {
+    for (const mutation of [
+      { editorText: "new draft" }, { pendingMessages: true }, { asyncJobs: { running: ["new job"] } },
+      { admittedSubmission: true }, { liveSubagents: true }, { nativeSession: "replaced" }, { mode: "rpc" },
+      { entries: [{ type: "message", timestamp: retirementOffer.created_at, message: { role: "user" } }] },
+    ]) {
+      const c = consumer();
+      c.receipt.mockImplementationOnce(async () => { c.setInput(mutation); });
+      await c.handler.observe(retirementOffer);
+      await c.handler.agentEnd();
+      expect(c.shutdown).not.toHaveBeenCalled();
+    }
+    const c = consumer();
+    c.receipt.mockImplementationOnce(async () => { c.stop(); });
+    await c.handler.observe(retirementOffer);
+    expect(c.shutdown).not.toHaveBeenCalled();
+  });
+
+  it("requests native shutdown once after receipt and re-requests on agent_end only while locally safe", async () => {
+    const c = consumer();
+    await c.handler.observe(retirementOffer);
+    await c.handler.observe(retirementOffer);
+    expect(c.receipt).toHaveBeenCalledTimes(1);
+    expect(c.shutdown).toHaveBeenCalledTimes(1);
+    await c.handler.agentEnd();
+    expect(c.shutdown).toHaveBeenCalledTimes(2);
+    c.setInput({ editorText: "do not discard this" });
+    await c.handler.agentEnd();
+    expect(c.shutdown).toHaveBeenCalledTimes(2);
+    c.setInput({ editorText: "", entries: [{ type: "message", timestamp: retirementOffer.created_at, message: { role: "user" } }] });
+    await c.handler.agentEnd();
+    expect(c.shutdown).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends typed refusal and only changed deferral reasons; unrelated states have no authority", async () => {
+    const c = consumer();
+    c.setInput({ idle: false });
+    await c.handler.observe(retirementOffer);
+    await c.handler.observe(retirementOffer);
+    expect(c.receipt).toHaveBeenCalledTimes(1);
+    c.setInput({ idle: true, editorText: "draft" });
+    await c.handler.observe(retirementOffer);
+    expect(c.receipt).toHaveBeenLastCalledWith(retirementOffer, { outcome: "deferred", reason: "editor_draft" });
+    c.setInput({ entries: [{ type: "message", timestamp: retirementOffer.created_at, message: { role: "user" } }] });
+    await c.handler.observe(retirementOffer);
+    expect(c.receipt).toHaveBeenLastCalledWith(retirementOffer, expect.objectContaining({ outcome: "refused", reason: "user_activity" }));
+    const states: RunRetirement["state"][] = [
+      { state: "waiting", blockers: [] }, { state: "native_stop_requested", at: retirementOffer.created_at },
+      { state: "retained", at: retirementOffer.created_at, reason: "user_activity", native_stopped: false },
+      { state: "unknown", at: retirementOffer.created_at, phase: "native_stop", detail: "unconfirmed" },
+    ];
+    for (const state of states) await c.handler.observe({ ...retirementOffer, state });
+    expect(c.receipt).toHaveBeenCalledTimes(3);
+    expect(c.shutdown).not.toHaveBeenCalled();
+  });
+
+  it("revokes a deferred cached offer after durable timeout retention", async () => {
+    const c = consumer();
+    c.setInput({ idle: false });
+    await c.handler.observe(retirementOffer);
+    expect(c.receipt).toHaveBeenLastCalledWith(retirementOffer, { outcome: "deferred", reason: "busy" });
+    await c.handler.observe({ ...retirementOffer, state: {
+      state: "retained", at: retirementOffer.updated_at, reason: "worker_busy_timeout", native_stopped: false,
+    } });
+    c.receipt.mockClear();
+    c.setInput({ idle: true });
+    await c.handler.agentEnd();
+    expect(c.receipt).not.toHaveBeenCalled();
+    expect(c.shutdown).not.toHaveBeenCalled();
+  });
+
+  it("revokes re-request authority when the owner ends the retirement attempt", async () => {
+    const c = consumer();
+    await c.handler.observe(retirementOffer);
+    await c.handler.observe({ ...retirementOffer, state: { state: "native_stop_requested", at: retirementOffer.created_at } });
+    await c.handler.agentEnd();
+    expect(c.shutdown).toHaveBeenCalledTimes(2);
+    await c.handler.observe({ ...retirementOffer, state: { state: "unknown", phase: "native_stop", at: retirementOffer.created_at, detail: "exit not proven" } });
+    await c.handler.agentEnd();
+    expect(c.shutdown).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("OMP18.7 native observation boundary", () => {
+  function nativeObservation() {
+    const sessionManager = { getSessionId: () => "native-main", getEntries: () => [] as unknown[] };
+    const main = {
+      id: "Main", kind: "main", status: "idle",
+      session: { sessionManager, isDisposed: false, queuedMessageCount: 0, hasAdmittedSubmission: false, hasPendingAsyncWork: () => false },
+    };
+    const refs = [main] as Array<{ id: string; kind: string; status: string; session: typeof main.session | null }>;
+    const registry = { get: (id: string) => refs.find(ref => ref.id === id), list: () => refs };
+    const pi = { pi: { AgentRegistry: { global: () => registry } } } as unknown as ExtensionAPI;
+    const ctx = {
+      agent: { id: "Main", kind: "main" }, mode: "tui", sessionManager, isIdle: () => true,
+      hasPendingMessages: () => false, getAsyncJobSnapshot: () => ({ running: [] }), ui: { getEditorText: () => "" },
+    } as unknown as ExtensionContext;
+    return { pi, ctx, main, refs, sessionManager };
+  }
+
+  it("detects actual registry work while excluding passive advisors", () => {
+    const n = nativeObservation();
+    expect(readRetirementReadiness(n.pi, n.ctx, "native-main", retirementOffer)).toEqual({ kind: "ready" });
+    n.refs.push({ id: "advisor", kind: "advisor", status: "running", session: n.main.session });
+    expect(readRetirementReadiness(n.pi, n.ctx, "native-main", retirementOffer)).toEqual({ kind: "ready" });
+    n.refs.push({ id: "child", kind: "sub", status: "running", session: null });
+    expect(readRetirementReadiness(n.pi, n.ctx, "native-main", retirementOffer)).toEqual({ kind: "defer", reason: "live_subagents" });
+    n.refs[2].status = "idle";
+    n.refs[2].session = { ...n.main.session, hasPendingAsyncWork: () => true };
+    expect(readRetirementReadiness(n.pi, n.ctx, "native-main", retirementOffer)).toEqual({ kind: "defer", reason: "live_subagents" });
+  });
+
+  it("fails closed on journal/registry observation failure and exact native session replacement", () => {
+    const n = nativeObservation();
+    n.sessionManager.getEntries = () => { throw new Error("journal unavailable"); };
+    expect(readRetirementReadiness(n.pi, n.ctx, "native-main", retirementOffer)).toMatchObject({ kind: "refuse", reason: "native_refused" });
+    const replaced = nativeObservation();
+    replaced.main.session.sessionManager = { getSessionId: () => "replacement", getEntries: () => [] };
+    expect(readRetirementReadiness(replaced.pi, replaced.ctx, "native-main", retirementOffer)).toMatchObject({ kind: "refuse", reason: "native_refused" });
+    const absent = nativeObservation();
+    absent.refs.length = 0;
+    expect(readRetirementReadiness(absent.pi, absent.ctx, "native-main", retirementOffer)).toMatchObject({ kind: "refuse", reason: "native_refused" });
+    expect(readRetirementReadiness({} as ExtensionAPI, nativeObservation().ctx, "native-main", retirementOffer)).toMatchObject({ kind: "refuse", reason: "native_refused" });
+  });
+
+  it("observes main admitted submissions, queued async delivery, and every journal branch", () => {
+    const n = nativeObservation();
+    n.main.session.hasAdmittedSubmission = true;
+    expect(readRetirementReadiness(n.pi, n.ctx, "native-main", retirementOffer)).toEqual({ kind: "defer", reason: "busy" });
+    n.main.session.hasAdmittedSubmission = false;
+    n.main.session.hasPendingAsyncWork = () => true;
+    expect(readRetirementReadiness(n.pi, n.ctx, "native-main", retirementOffer)).toEqual({ kind: "defer", reason: "async_jobs" });
+    n.main.session.hasPendingAsyncWork = () => false;
+    n.sessionManager.getEntries = () => [
+      { type: "message", parentId: "abandoned-branch", timestamp: retirementOffer.created_at, message: { role: "user", content: "keep my work" } },
+    ];
+    expect(readRetirementReadiness(n.pi, n.ctx, "native-main", retirementOffer)).toMatchObject({ kind: "refuse", reason: "user_activity" });
+  });
+});
+
+describe("native main-only lifecycle hooks", () => {
+  function extensionHost() {
+    const hooks = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const schema = { optional() { return schema; }, describe() { return schema; } };
+    const holdObservation = (signal?: AbortSignal) => {
+      const pending = Promise.withResolvers<MainWaitRead>();
+      signal?.addEventListener("abort", () => pending.resolve({
+        mode: "retirement_only", retirement_token: "3".repeat(64),
+        retirement: { ...retirementOffer, state: { state: "retained", at: retirementOffer.created_at, reason: "native_refused", native_stopped: false } },
+      }), { once: true });
+      return pending.promise;
+    };
+    const observations = vi.fn<(signal?: AbortSignal) => Promise<MainWaitRead>>()
+      .mockResolvedValueOnce({ mode: "retirement_only", retirement: retirementOffer, retirement_token: OFFER_RETIREMENT_TOKEN })
+      .mockImplementation(holdObservation);
+    const exec = vi.fn(async (_cli: string, args: string[], options: { signal?: AbortSignal }) => {
+      if (args[0] === "inbox" && args[1] === "wait") {
+        const envelope = await observations(options.signal);
+        return { code: 0, killed: false, stderr: "", stdout: JSON.stringify(envelope) };
+      }
+      return { code: 0, killed: false, stdout: "{}", stderr: "" };
+    });
+    const sessionManager = { getSessionId: () => "native-main", getEntries: () => [] as unknown[] };
+    const mainSession = { sessionManager, isDisposed: false, hasAdmittedSubmission: false, queuedMessageCount: 0, hasPendingAsyncWork: () => false };
+    const main = { id: "Main", kind: "main", status: "idle", session: mainSession };
+    const pi = {
+      zod: { object: () => schema, enum: () => schema, number: () => schema, string: () => schema },
+      registerTool: vi.fn(), appendEntry: vi.fn(), sendUserMessage: vi.fn(), exec,
+      on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { hooks.set(event, handler); },
+      pi: { AgentRegistry: { global: () => ({ get: () => main, list: () => [main] }) } },
+    } as unknown as ExtensionAPI;
+    const shutdown = vi.fn();
+    const ctx = {
+      agent: { kind: "main", id: "Main" }, sessionManager, mode: "tui", cwd: "/tmp",
+      isIdle: () => true, hasPendingMessages: () => false, getAsyncJobSnapshot: () => ({ running: [] }),
+      ui: { getEditorText: () => "", notify: vi.fn() }, shutdown,
+      setTimeout: vi.fn(() => 0), clearTimer: vi.fn(),
+    } as unknown as ExtensionContext;
+    cockpitOrchestration(pi);
+    return { hooks, exec, observations, holdObservation, ctx, pi, shutdown, sessionManager };
+  }
+
+  it("does not bind, observe, or retire an internal clone with inherited run environment", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    try {
+      const h = extensionHost();
+      const child = { ...h.ctx, agent: { ...h.ctx.agent, kind: "sub" as const } };
+      await h.hooks.get("session_start")!({}, child);
+      expect(h.exec).not.toHaveBeenCalled();
+      expect(h.shutdown).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("observes retirement through the existing inbox wait after PID bind, without a prompt wake", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const requested = Promise.withResolvers<void>();
+      h.shutdown.mockImplementation(requested.resolve);
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await requested.promise;
+      expect(h.exec.mock.calls[0][1]).toEqual(expect.arrayContaining(["run", "bind-session", "--omp-pid", String(process.pid)]));
+      const wait = h.exec.mock.calls.find(([, args]) => args[0] === "inbox" && args[1] === "wait");
+      expect(wait?.[1]).toEqual(expect.arrayContaining(["--with-retirement", "--omp-pid", String(process.pid), "--timeout", "30"]));
+      expect(h.exec.mock.calls.some(([, args]) => args[0] === "run" && args[1] === "retirement")).toBe(false);
+      const receipt = h.exec.mock.calls.find(([, args]) => args[1] === "retirement-receipt");
+      expect(receipt?.[1]).toEqual(expect.arrayContaining(["--omp-pid", String(process.pid), "--retirement", "retirement", "--shutdown-requested"]));
+      expect(h.shutdown).toHaveBeenCalledTimes(1);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not start any watcher or shutdown when native PID binding fails", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      h.exec.mockResolvedValueOnce({ code: 1, killed: false, stdout: "", stderr: "caller_mismatch" });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      expect(h.exec).toHaveBeenCalledTimes(1);
+      expect(h.shutdown).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("preserves ordinary open-inbox wakes, then consumes acceptance through that same wait", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const acceptance = Promise.withResolvers<MainWaitRead>();
+      const waiting = Promise.withResolvers<void>();
+      const woke = Promise.withResolvers<void>();
+      const requested = Promise.withResolvers<void>();
+      h.shutdown.mockImplementation(requested.resolve);
+      vi.mocked(h.pi.sendUserMessage).mockImplementation(() => { woke.resolve(); });
+      h.observations.mockReset()
+        .mockResolvedValueOnce({ mode: "open", inbox: { run_id: "retirement-test-run", pending: true, through_seq: 7, counts: [{ kind: "report", count: 1 }] }, retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN })
+        .mockImplementationOnce(() => { waiting.resolve(); return acceptance.promise; })
+        .mockImplementation(h.holdObservation);
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await woke.promise;
+      await waiting.promise;
+      const waits = h.exec.mock.calls.filter(([, args]) => args[0] === "inbox" && args[1] === "wait");
+      expect(waits[0][1]).not.toContain("--after-retirement");
+      expect(waits[1][1]).toEqual(expect.arrayContaining(["--after-retirement", EMPTY_RETIREMENT_TOKEN]));
+      expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(h.shutdown).not.toHaveBeenCalled();
+      acceptance.resolve({ mode: "retirement_only", retirement: retirementOffer, retirement_token: OFFER_RETIREMENT_TOKEN });
+      await requested.promise;
+      expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(h.shutdown).toHaveBeenCalledTimes(1);
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "retirement")).toHaveLength(0);
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("waits on the shared observation while deferred and sends only a changed reason", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      h.ctx.isIdle = () => false;
+      const next = Promise.withResolvers<MainWaitRead>();
+      const waiting = Promise.withResolvers<void>();
+      const processed = Promise.withResolvers<void>();
+      h.observations.mockImplementationOnce(() => { waiting.resolve(); return next.promise; })
+        .mockImplementationOnce(signal => { processed.resolve(); return h.holdObservation(signal); });
+      const journal = vi.spyOn(h.sessionManager, "getEntries");
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await waiting.promise;
+      expect(journal).toHaveBeenCalledTimes(2); // recovery plus the first offer
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "retirement-receipt")).toHaveLength(1);
+      expect(h.shutdown).not.toHaveBeenCalled();
+      next.resolve({ mode: "retirement_only", retirement_token: DEFER_RETIREMENT_TOKEN, retirement: { ...retirementOffer, state: {
+        state: "native_stop_deferred", offered_at: retirementOffer.created_at, at: retirementOffer.updated_at, reason: "busy",
+      } } });
+      await processed.promise;
+      expect(journal).toHaveBeenCalledTimes(3);
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "retirement-receipt")).toHaveLength(1);
+      const waits = h.exec.mock.calls.filter(([, args]) => args[0] === "inbox" && args[1] === "wait");
+      expect(waits[2][1]).toEqual(expect.arrayContaining(["--after-retirement", DEFER_RETIREMENT_TOKEN]));
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("never exits when the real CLI receipt rejects, including later agent_end", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const notice = Promise.withResolvers<void>();
+      vi.mocked(h.ctx.ui.notify).mockImplementation(() => { notice.resolve(); });
+      const original = h.exec.getMockImplementation()!;
+      h.exec.mockImplementation(async (cli, args, options) => args[1] === "retirement-receipt"
+        ? { code: 1, killed: false, stdout: "", stderr: "retirement_state_changed" }
+        : original(cli, args, options));
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await notice.promise;
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).not.toHaveBeenCalled();
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.ctx.setTimeout).toHaveBeenCalled(); // existing bounded error backoff
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("re-requests on the current main agent_end only while native input remains safe", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const requested = Promise.withResolvers<void>();
+      h.shutdown.mockImplementation(requested.resolve);
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await requested.promise;
+      await h.hooks.get("agent_end")!({ willContinue: true, messages: [] }, h.ctx);
+      expect(h.shutdown).toHaveBeenCalledTimes(1);
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).toHaveBeenCalledTimes(2);
+      h.ctx.ui.getEditorText = () => "new unsent draft";
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).toHaveBeenCalledTimes(2);
+      h.ctx.ui.getEditorText = () => "";
+      h.sessionManager.getEntries = () => [{ type: "message", timestamp: retirementOffer.created_at, message: { role: "user", content: "[Cockpit inbox notification]" } }];
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).toHaveBeenCalledTimes(2);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("discards a late accepted observation after this exact session lifecycle shuts down", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const observation = Promise.withResolvers<MainWaitRead>();
+      h.observations.mockReset().mockReturnValueOnce(observation.promise).mockImplementation(h.holdObservation);
+      await h.hooks.get("session_start")!({}, h.ctx);
+      const pendingWait = h.exec.mock.results.find((_, index) => h.exec.mock.calls[index][1][0] === "inbox")!.value;
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      observation.resolve({ mode: "retirement_only", retirement: retirementOffer, retirement_token: OFFER_RETIREMENT_TOKEN });
+      await pendingWait;
+      expect(h.shutdown).not.toHaveBeenCalled();
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "retirement-receipt")).toHaveLength(0);
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not re-request shutdown after the shared scope observation becomes unavailable", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const requested = Promise.withResolvers<void>();
+      const notice = Promise.withResolvers<void>();
+      h.shutdown.mockImplementation(requested.resolve);
+      vi.mocked(h.ctx.ui.notify).mockImplementation(() => { notice.resolve(); });
+      h.observations.mockRejectedValueOnce(new Error("caller_mismatch"));
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await requested.promise;
+      await notice.promise;
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).toHaveBeenCalledTimes(1);
+      expect(h.ctx.setTimeout).toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("sends a typed user-activity refusal for native generated wakes without creating an accepted wake", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const processed = Promise.withResolvers<void>();
+      h.sessionManager.getEntries = () => [{
+        type: "message", timestamp: retirementOffer.created_at,
+        message: { role: "user", content: "[Cockpit inbox notification]\n1 pending inbox message(s), through sequence 12." },
+      }];
+      h.observations.mockImplementationOnce(signal => { processed.resolve(); return h.holdObservation(signal); });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await processed.promise;
+      const receipt = h.exec.mock.calls.find(([, args]) => args[1] === "retirement-receipt");
+      expect(receipt?.[1]).toEqual(expect.arrayContaining(["--refuse-reason", "user_activity", "--refused"]));
+      expect(h.shutdown).not.toHaveBeenCalled();
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("retries busy-to-idle readiness through agent_end without starting another observer", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      h.ctx.isIdle = () => false;
+      const waiting = Promise.withResolvers<void>();
+      h.observations.mockImplementationOnce(signal => { waiting.resolve(); return h.holdObservation(signal); });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await waiting.promise;
+      expect(h.shutdown).not.toHaveBeenCalled();
+      h.ctx.isIdle = () => true;
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).toHaveBeenCalledTimes(1);
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "retirement-receipt")).toHaveLength(2);
+      expect(h.observations).toHaveBeenCalledTimes(2); // existing second wait stays in flight
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects cached-offer authority when the fresh agent_end receipt is revoked", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      h.ctx.isIdle = () => false;
+      const waiting = Promise.withResolvers<void>();
+      h.observations.mockImplementationOnce(signal => { waiting.resolve(); return h.holdObservation(signal); });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await waiting.promise;
+      const original = h.exec.getMockImplementation()!;
+      h.exec.mockImplementation(async (cli, args, options) => args[1] === "retirement-receipt"
+        ? { code: 1, killed: false, stdout: "", stderr: "retirement_state_changed" }
+        : original(cli, args, options));
+      h.ctx.isIdle = () => true;
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).not.toHaveBeenCalled();
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("uses the existing bounded wait deadline to retry a cleared non-turn draft", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      h.ctx.ui.getEditorText = () => "draft";
+      const deadline = Promise.withResolvers<MainWaitRead>();
+      const waiting = Promise.withResolvers<void>();
+      const requested = Promise.withResolvers<void>();
+      h.shutdown.mockImplementation(requested.resolve);
+      h.observations.mockImplementationOnce(() => { waiting.resolve(); return deadline.promise; });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await waiting.promise;
+      const waits = h.exec.mock.calls.filter(([, args]) => args[0] === "inbox" && args[1] === "wait");
+      expect(waits[0][1]).not.toContain("--after-retirement");
+      expect(waits[1][1]).toEqual(expect.arrayContaining(["--after-retirement", OFFER_RETIREMENT_TOKEN]));
+      expect(h.shutdown).not.toHaveBeenCalled();
+      h.ctx.ui.getEditorText = () => "";
+      deadline.resolve({ mode: "retirement_only", retirement: retirementOffer, retirement_token: OFFER_RETIREMENT_TOKEN });
+      await requested.promise;
+      expect(h.shutdown).toHaveBeenCalledTimes(1);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("fails closed before effects for malformed envelopes, tokens, and closed inbox leakage", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    try {
+      for (const malformed of [
+        { mode: "retirement_only", retirement: retirementOffer, retirement_token: "bad-token" },
+        { mode: "retirement_only", retirement: retirementOffer, retirement_token: OFFER_RETIREMENT_TOKEN, inbox: { messages: ["secret"] } },
+        { mode: "retirement_only", retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN },
+        { mode: "retirement_only", retirement: { ...retirementOffer, identity: null }, retirement_token: OFFER_RETIREMENT_TOKEN },
+      ]) {
+        const h = extensionHost();
+        try {
+          const notice = Promise.withResolvers<void>();
+          vi.mocked(h.ctx.ui.notify).mockImplementation(() => { notice.resolve(); });
+          h.exec.mockImplementation(async (_cli, args) => ({
+            code: 0, killed: false, stderr: "", stdout: args[0] === "inbox" ? JSON.stringify(malformed) : "{}",
+          }));
+          await h.hooks.get("session_start")!({}, h.ctx);
+          await notice.promise;
+          expect(h.shutdown).not.toHaveBeenCalled();
+          expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+          expect(h.exec.mock.calls.filter(([, args]) => args[1] === "retirement-receipt")).toHaveLength(0);
+        } finally { await h.hooks.get("session_shutdown")!({}, h.ctx); }
+      }
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("disposes a revoked observer without shutting down the native or trusting its cached offer", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    vi.useFakeTimers();
+    const h = extensionHost();
+    try {
+      Object.assign(h.ctx, { setTimeout: vi.fn(setTimeout), clearTimer: vi.fn(clearTimeout) });
+      h.ctx.ui.getEditorText = () => "unsent draft";
+      const original = h.exec.getMockImplementation()!;
+      const revoked = JSON.stringify({ code: "caller_mismatch", message: "This native is no longer authorized to observe its run." });
+      let waits = 0;
+      h.exec.mockImplementation(async (cli, args, options) => {
+        if (args[0] === "inbox" && args[1] === "wait" && ++waits > 1) {
+          return { code: 1, killed: false, stdout: "", stderr: revoked };
+        }
+        return original(cli, args, options);
+      });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(waits).toBe(2);
+      expect(h.ctx.ui.notify).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(h.ctx.ui.notify).mock.calls[0][0]).toContain(revoked);
+      expect(h.ctx.setTimeout).not.toHaveBeenCalled();
+      h.ctx.ui.getEditorText = () => "";
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).not.toHaveBeenCalled();
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "retirement-receipt")).toHaveLength(1);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers an ordinary inbox wake after an unstructured caller-mismatch transport error", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    vi.useFakeTimers();
+    const h = extensionHost();
+    try {
+      Object.assign(h.ctx, { setTimeout: vi.fn(setTimeout), clearTimer: vi.fn(clearTimeout) });
+      h.observations.mockReset().mockImplementation(h.holdObservation);
+      const original = h.exec.getMockImplementation()!;
+      let waits = 0;
+      h.exec.mockImplementation(async (cli, args, options) => {
+        if (args[0] === "inbox" && args[1] === "wait") {
+          waits++;
+          if (waits === 1) return { code: 1, killed: false, stdout: "", stderr: "transport lost before decoding caller_mismatch" };
+          if (waits === 2) return { code: 0, killed: false, stderr: "", stdout: JSON.stringify({
+            mode: "open", inbox: { run_id: "retirement-test-run", pending: true, through_seq: 7, counts: [{ kind: "report", count: 1 }] },
+            retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN,
+          }) };
+        }
+        return original(cli, args, options);
+      });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(waits).toBe(1);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(waits).toBe(3);
+      expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(h.shutdown).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops on durable timeout retention and never retries a now-terminal cached offer", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    vi.useFakeTimers();
+    const h = extensionHost();
+    try {
+      h.ctx.isIdle = () => false;
+      const timedOut = Promise.withResolvers<void>();
+      h.observations.mockImplementationOnce(async () => {
+        timedOut.resolve();
+        return { mode: "retirement_only", retirement_token: DEFER_RETIREMENT_TOKEN, retirement: { ...retirementOffer, state: {
+          state: "retained", at: retirementOffer.updated_at, reason: "worker_busy_timeout", native_stopped: false,
+        } } };
+      });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await timedOut.promise;
+      const terminalWait = h.exec.mock.results[h.exec.mock.results.length - 1].value;
+      const terminalResponse = await terminalWait;
+      expect(parseMainWaitRead(JSON.parse(terminalResponse.stdout))).toMatchObject({
+        mode: "retirement_only", retirement: { state: { state: "retained", reason: "worker_busy_timeout" } },
+      });
+      // CLI completion precedes wakeLoop's async envelope consumption. Drain
+      // that completed turn before simulating the later native agent_end.
+      await vi.runAllTimersAsync();
+      h.exec.mockClear();
+      h.ctx.isIdle = () => true;
+      await h.hooks.get("agent_end")!({ willContinue: false, messages: [] }, h.ctx);
+      expect(h.shutdown).not.toHaveBeenCalled();
+      expect(h.exec.mock.calls.some(([, args]) => args[1] === "retirement-receipt")).toBe(false);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("shared main-wait boundary parsing", () => {
+  const open: MainWaitRead = {
+    mode: "open", inbox: { run_id: "run", pending: false, through_seq: 0, counts: [] },
+    retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN,
+  };
+  const closed: MainWaitRead = { mode: "retirement_only", retirement: retirementOffer, retirement_token: OFFER_RETIREMENT_TOKEN };
+
+  it("accepts only the approved mode/token envelope, with normal counts separated from retirement", () => {
+    expect(parseMainWaitRead(open)).toEqual(open);
+    expect(parseMainWaitRead(closed)).toEqual(closed);
+    for (const retirement_token of ["short", "A".repeat(64), "g".repeat(64), "a".repeat(63), null, 3]) {
+      expect(() => parseMainWaitRead({ ...closed, retirement_token })).toThrow();
+    }
+    for (const field of ["inbox", "counts", "pending", "messages", "text", "result", "body"]) {
+      expect(() => parseMainWaitRead({ ...closed, [field]: "private payload" })).toThrow();
+    }
+    expect(() => parseMainWaitRead({ mode: "retirement_only", retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN })).toThrow();
+    expect(() => parseMainWaitRead({ ...open, mode: "unknown" })).toThrow();
+    expect(() => parseMainWaitRead({ kind: "open", inbox: open.inbox, retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN })).toThrow();
+  });
+
+  it("validates the whole retirement shape, native identity, timestamp and state before effects", () => {
+    for (const retirement of [
+      { ...retirementOffer, identity: null },
+      { ...retirementOffer, created_at: "2026-02-30T00:00:00Z" },
+      { ...retirementOffer, state: { state: "not-a-state" } },
+      { ...retirementOffer, state: { state: "native_stop_offered" } },
+      { ...retirementOffer, state: { ...retirementOffer.state, messages: ["body"] } },
+      { ...retirementOffer, identity: { ...retirementOffer.identity, process: { pid: -1, start_ticks: 123, kernel_boot_id: null } } },
+      { ...retirementOffer, identity: { ...retirementOffer.identity, process: { pid: process.pid, start_ticks: 1.5, kernel_boot_id: null } } },
+      { ...retirementOffer, identity: { ...retirementOffer.identity, shell: null } },
+      { ...retirementOffer, result: "not retirement metadata" },
+    ]) expect(() => parseMainWaitRead({ ...closed, retirement })).toThrow();
+    expect(parseMainWaitRead({ ...closed, retirement: { ...retirementOffer, identity: null, state: {
+      state: "retained", at: retirementOffer.created_at, reason: "identity_incomplete", native_stopped: false,
+    } } })).toMatchObject({ mode: "retirement_only" });
+  });
+
+  it("rejects malformed or body-bearing open counts rather than generating a wake", () => {
+    for (const inbox of [
+      { run_id: "run", pending: true, through_seq: 7, counts: [] },
+      { run_id: "run", pending: false, through_seq: 0, counts: [], messages: ["secret"] },
+      { run_id: "run", pending: true, through_seq: 7, counts: [{ kind: "report", count: 1, text: "body" }] },
+      { pending: false, through_seq: 0, counts: [] },
+    ]) expect(() => parseMainWaitRead({ ...open, inbox })).toThrow();
   });
 });

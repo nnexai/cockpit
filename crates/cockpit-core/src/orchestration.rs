@@ -3,6 +3,12 @@ pub mod dispatch;
 pub mod herdr;
 mod messages;
 mod projection;
+pub(crate) mod retirement;
+mod retire;
+#[cfg(test)]
+mod retire_tests;
+#[cfg(test)]
+mod retirement_tests;
 pub mod routing;
 mod store;
 mod tasks_md;
@@ -44,6 +50,7 @@ pub struct AgentCaller {
     pub actual_agent_kind: Option<String>,
     pub subagent_id: Option<String>,
     pub main_omp_session_id: Option<String>,
+    pub process: Option<NativeProcessIdentity>,
 }
 
 pub struct OrchestrationService {
@@ -77,6 +84,7 @@ pub(crate) enum DispatchUpdate {
     },
     TabReceipt {
         location: RunLocation,
+        launch_shell_identity: Option<NativeShellIdentity>,
     },
 }
 
@@ -169,7 +177,7 @@ impl OrchestrationService {
                     changed,
                 });
             }
-            tokio::select! { _ = subscription.changed() => {}, _ = tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+Duration::from_millis(200))) => {} }
+            tokio::select! { _ = subscription.changed() => {}, _ = tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+Duration::from_secs(1))) => {} }
         }
     }
     pub fn mutate(
@@ -278,7 +286,8 @@ impl OrchestrationService {
         }
         let reporting = matches!(request.action, OrchestrationAction::Report { .. });
         let adopting = matches!(request.action, OrchestrationAction::RunAdopt { .. });
-        let (caller, mut stale) = resolve(&state, actor, reporting, adopting)?;
+        let retiring = matches!(request.action, OrchestrationAction::RetirementNativeReceipt { .. });
+        let (caller, mut stale) = resolve(&state, actor, reporting, adopting, retiring)?;
         if let (Some(index), Actor::Agent(agent)) = (caller, actor) {
             let run = &state.runs[index];
             if run.bound_omp_session.is_some() && !session_matches(run, agent) {
@@ -313,7 +322,7 @@ impl OrchestrationService {
             }
         }
         let mut location_changed = false;
-        if !stale {
+        if !stale && !retiring {
             if let (Some(index), Actor::Agent(agent)) = (caller, actor) {
                 if let Some(location) = state.runs[index].location.as_mut() {
                     location_changed = location.pane_id != agent.pane_id
@@ -541,7 +550,25 @@ impl OrchestrationService {
                         "Run is already bound to another native session",
                     ));
                 }
+                if state.runs[index].bound_omp_process.as_ref().is_some_and(|process| {
+                    agent.process.as_ref() != Some(process)
+                }) {
+                    return Err(error("session_mismatch", "Run is already bound to another native process"));
+                }
+                state.runs[index].bound_omp_process = agent.process.clone();
                 state.runs[index].bound_omp_session = Some(omp_session_id);
+                OrchestrationActionResult::Done
+            }
+            OrchestrationAction::RetirementNativeReceipt { retirement_id, outcome } => {
+                let index = required_caller(caller)?;
+                let Actor::Agent(agent) = actor else {
+                    return Err(error("actor_forbidden", "Retirement receipts are agent-only"));
+                };
+                if matches!(outcome, NativeStopReceipt::ShutdownRequested)
+                    && !retirement::blockers(&state, &state.runs[index]).is_empty() {
+                    return Err(error("retirement_state_changed", "Worker has open descendants or running subagents"));
+                }
+                retirement::apply_native_receipt(&mut state.runs[index], agent, &retirement_id, outcome)?;
                 OrchestrationActionResult::Done
             }
             OrchestrationAction::RunPropose {
@@ -791,8 +818,7 @@ impl OrchestrationService {
                 match document.check(&task_id, &expected_task_revision, true) {
                     Ok(_) => {
                         state.task_intents.retain(|i| i.intent_id != intent_id);
-                        state.runs[index].stage = RunStage::Closed;
-                        state.runs[index].close_reason = Some(CloseReason::Accepted);
+                        retirement::close_accepted(&mut state, index, RetirementTrigger::Accept, &expected_task_revision);
                         let annotation = Annotation {
                             at: now(),
                             by: actor_ref(actor, caller, &state),
@@ -904,6 +930,8 @@ impl OrchestrationService {
                     .ok_or_else(|| error("orchestration_state_full", "Launch attempt exhausted"))?;
                 run.location = None;
                 run.bound_omp_session = None;
+                run.bound_omp_process = None;
+                run.launch_shell_identity = None;
                 if run.kind == RunKind::Supervisor {
                     run.prepare_brief = supervisor_guidance().into();
                 }
@@ -1019,8 +1047,7 @@ impl OrchestrationService {
                     let document = locked.tasks(&intent.root_id)?;
                     let revision = document.task(&intent.task_id)?.task_revision.clone();
                     document.check(&intent.task_id, &revision, true)?;
-                    state.runs[index].stage = RunStage::Closed;
-                    state.runs[index].close_reason = Some(CloseReason::Accepted);
+                    retirement::close_accepted_with_evidence(&mut state, index, RetirementTrigger::OperatorConflictResolution, &revision, intent.result_message_id.is_some());
                     state.runs[index].annotations.push(Annotation {
                         at: now(), by: ActorRef::Operator,
                         text: format!("Operator resolved acceptance conflict using current canonical task revision {revision}; prior requested Result {:?}.", intent.result_message_id),
@@ -1162,6 +1189,7 @@ impl OrchestrationService {
                     launch_attempt,
                     endpoint_identity,
                 } => {
+                    run.launch_shell_identity = None;
                     let d = run
                         .dispatch
                         .get_or_insert_with(|| dispatch(DispatchStep::LaunchIntent));
@@ -1173,7 +1201,7 @@ impl OrchestrationService {
                     d.error = None;
                     d.updated_at = now();
                 }
-                DispatchUpdate::TabReceipt { location } => {
+                DispatchUpdate::TabReceipt { location, launch_shell_identity } => {
                     let d = run
                         .dispatch
                         .as_ref()
@@ -1188,6 +1216,7 @@ impl OrchestrationService {
                         ));
                     }
                     run.location = Some(location);
+                    run.launch_shell_identity = launch_shell_identity;
                 }
             }
             run.updated_at = now();
@@ -1453,9 +1482,7 @@ impl OrchestrationService {
             };
             if outcome {
                 let index = run_index(&state, &intent.run_id)?;
-                state.runs[index].stage = RunStage::Closed;
-                state.runs[index].close_reason = Some(CloseReason::Accepted);
-                state.runs[index].updated_at = now();
+                retirement::close_accepted_with_evidence(&mut state, index, RetirementTrigger::AcceptRecovery, &intent.expected_task_revision, intent.result_message_id.is_some());
                 state
                     .task_intents
                     .retain(|i| i.intent_id != intent.intent_id);
@@ -1875,6 +1902,7 @@ fn resolve(
     actor: &Actor,
     reporting: bool,
     adopting: bool,
+    retiring: bool,
 ) -> Result<(Option<usize>, bool), InspectionError> {
     let Actor::Agent(caller) = actor else {
         return Ok((None, false));
@@ -1893,8 +1921,11 @@ fn resolve(
         let index = run_index(state, id)?;
         let run = &state.runs[index];
         scope_run(state, &caller.session_id, index)?;
-        let stale =
-            run.stage == RunStage::Closed || run.attempt != *attempt || !location_matches(run);
+        let admitted_closed = retiring && run.stage == RunStage::Closed
+            && run.close_reason == Some(CloseReason::Accepted);
+        let stale = (run.stage == RunStage::Closed && !admitted_closed)
+            || run.attempt != *attempt || !location_matches(run)
+            || (retiring && !retirement::caller_location_matches(run, caller));
         if stale && !reporting {
             return Err(error(
                 if run.attempt != *attempt || run.stage == RunStage::Closed {
@@ -2079,6 +2110,9 @@ fn new_run(
         annotations: Vec::new(),
         location: None,
         bound_omp_session: None,
+        bound_omp_process: None,
+        launch_shell_identity: None,
+        retirement: None,
         supersedes_run_id: None,
         created_at: now.clone(),
         updated_at: now,
