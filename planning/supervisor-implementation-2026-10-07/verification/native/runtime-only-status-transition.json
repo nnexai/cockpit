@@ -1,0 +1,172 @@
+{
+  "provenance": {
+    "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/runtime-only-status-transition.json",
+    "qualification": "All transitions retained unchanged; only nearest UI surface before from_at and after to_at retained per transition. Original surfaces array has 500 entries; remaining instrumentation events omitted."
+  },
+  "transitions": [
+    {
+      "revision": 19,
+      "tasks_token": "c5df5576e3a8e0901bf8401690a6724c60310f755b827aa0fc6e2723907fc929",
+      "from_at": 74625,
+      "to_at": 79646,
+      "elapsed_ms": 5021,
+      "before": {
+        "workspace_label": "Polish sample",
+        "tab_id": "w1:t2",
+        "pane_id": "w1:p2",
+        "presence": "present",
+        "workspace_id": "w1",
+        "agent_status": "working",
+        "actual_omp": true,
+        "tab_label": "ck-0af6bcc9-1-1",
+        "run_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+        "state_changed_at": null
+      },
+      "after": {
+        "workspace_label": "Polish sample",
+        "tab_id": "w1:t2",
+        "pane_id": "w1:p2",
+        "presence": "present",
+        "workspace_id": "w1",
+        "agent_status": "done",
+        "actual_omp": true,
+        "tab_label": "ck-0af6bcc9-1-1",
+        "run_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+        "state_changed_at": null
+      }
+    },
+    {
+      "revision": 23,
+      "tasks_token": "c5df5576e3a8e0901bf8401690a6724c60310f755b827aa0fc6e2723907fc929",
+      "from_at": 86627,
+      "to_at": 91637,
+      "elapsed_ms": 5010,
+      "before": {
+        "workspace_label": "Polish sample",
+        "tab_id": "w1:t2",
+        "pane_id": "w1:p2",
+        "presence": "present",
+        "workspace_id": "w1",
+        "agent_status": "working",
+        "actual_omp": true,
+        "tab_label": "ck-0af6bcc9-1-1",
+        "run_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+        "state_changed_at": null
+      },
+      "after": {
+        "workspace_label": "Polish sample",
+        "tab_id": "w1:t2",
+        "pane_id": "w1:p2",
+        "presence": "present",
+        "workspace_id": "w1",
+        "agent_status": "done",
+        "actual_omp": true,
+        "tab_label": "ck-0af6bcc9-1-1",
+        "run_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+        "state_changed_at": null
+      }
+    }
+  ],
+  "observed_surfaces": [
+    {
+      "revision": 19,
+      "before": {
+        "source_pointer": "/surfaces/296",
+        "at": 70631,
+        "view": "graph",
+        "hidden": false,
+        "graph": [
+          {
+            "text": "Supervisor\n?\nDecide\nworking\nHerdr · Polish sample",
+            "id": "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+            "label": "Supervisor, Supervisor, working, Herdr · Polish sample, Decide"
+          },
+          {
+            "text": "Native cadence smoke marker 21cd\nQueued\nnot assigned",
+            "id": "task:fd65f0f2-b920-46fd-951e-43ff819e2cd2",
+            "label": "Native cadence smoke marker 21cd, Task, Queued, not assigned"
+          }
+        ],
+        "text": "Supervisor\nStart agent\nStart options…\nSupervisor\nManaging tasks\n1 agents observed · 10:58:00 AM\n1 needs you\nDecide\nNeeds your answer · Supervisor\njust now\n\nConfirm fixture-only smoke\n\nAnswer\nSend answer\nShow in Graph\nTasks 1\nGraph 2\nAttention · 1\nSpace\nAgents · 1 connected · 0 subagents · 1 tasks\nSubagents\n\nNo worker agents yet\n\nSupervisorTasks\nSupervisor\n?\nDecide\nworking\nHerdr · Polish sample\nNative cadence smoke marker 21cd\nQueued\nnot assigned\nSupervisor\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nFollow-up sent. Waiting for the agent.\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\nGraph view · 1 agents · 0 tasks",
+        "draft_values": [
+          "",
+          "",
+          ""
+        ]
+      },
+      "after": {
+        "source_pointer": "/surfaces/298",
+        "at": 79654,
+        "view": "graph",
+        "hidden": false,
+        "graph": [
+          {
+            "text": "Supervisor\n?\nDecide\ndone\nHerdr · Polish sample",
+            "id": "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+            "label": "Supervisor, Supervisor, done, Herdr · Polish sample, Decide"
+          },
+          {
+            "text": "Native cadence smoke marker 21cd\nQueued\nnot assigned",
+            "id": "task:fd65f0f2-b920-46fd-951e-43ff819e2cd2",
+            "label": "Native cadence smoke marker 21cd, Task, Queued, not assigned"
+          }
+        ],
+        "text": "Supervisor\nStart agent\nStart options…\nSupervisor\nManaging tasks\n1 agents observed · 10:58:09 AM\n1 needs you\nDecide\nNeeds your answer · Supervisor\njust now\n\nConfirm fixture-only smoke\n\nAnswer\nSend answer\nShow in Graph\nTasks 1\nGraph 2\nAttention · 1\nSpace\nAgents · 1 connected · 0 subagents · 1 tasks\nSubagents\n\nNo worker agents yet\n\nSupervisorTasks\nSupervisor\n?\nDecide\ndone\nHerdr · Polish sample\nNative cadence smoke marker 21cd\nQueued\nnot assigned\nSupervisor\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nFollow-up sent. Waiting for the agent.\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\nGraph view · 1 agents · 0 tasks",
+        "draft_values": [
+          "",
+          "",
+          ""
+        ]
+      }
+    },
+    {
+      "revision": 23,
+      "before": {
+        "source_pointer": "/surfaces/483",
+        "at": 84630,
+        "view": "graph",
+        "hidden": false,
+        "graph": [
+          {
+            "text": "Supervisor\nworking\nHerdr · Polish sample",
+            "id": "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+            "label": "Supervisor, Supervisor, working, Herdr · Polish sample"
+          },
+          {
+            "text": "Native cadence smoke marker 21cd\nQueued\nnot assigned",
+            "id": "task:fd65f0f2-b920-46fd-951e-43ff819e2cd2",
+            "label": "Native cadence smoke marker 21cd, Task, Queued, not assigned"
+          }
+        ],
+        "text": "Supervisor\nStart agent\nStart options…\nSupervisor\nManaging tasks\n1 agents observed · 10:58:14 AM\nOpen terminal\nTasks 1\nGraph 2\nAttention · 0\nSpace\nAgents · 1 connected · 0 subagents · 1 tasks\nSubagents\n\nNo worker agents yet\n\nSupervisorTasks\nSupervisor\nworking\nHerdr · Polish sample\nNative cadence smoke marker 21cd\nQueued\nnot assigned\nSupervisor\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nFollow-up sent. Waiting for the agent.\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\nGraph view · 1 agents · 0 tasks",
+        "draft_values": [
+          "",
+          ""
+        ]
+      },
+      "after": {
+        "source_pointer": "/surfaces/485",
+        "at": 91641,
+        "view": "graph",
+        "hidden": false,
+        "graph": [
+          {
+            "text": "Supervisor\ndone\nHerdr · Polish sample",
+            "id": "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+            "label": "Supervisor, Supervisor, done, Herdr · Polish sample"
+          },
+          {
+            "text": "Native cadence smoke marker 21cd\nQueued\nnot assigned",
+            "id": "task:fd65f0f2-b920-46fd-951e-43ff819e2cd2",
+            "label": "Native cadence smoke marker 21cd, Task, Queued, not assigned"
+          }
+        ],
+        "text": "Supervisor\nStart agent\nStart options…\nSupervisor\nManaging tasks\n1 agents observed · 10:58:21 AM\nOpen terminal\nTasks 1\nGraph 2\nAttention · 0\nSpace\nAgents · 1 connected · 0 subagents · 1 tasks\nSubagents\n\nNo worker agents yet\n\nSupervisorTasks\nSupervisor\ndone\nHerdr · Polish sample\nNative cadence smoke marker 21cd\nQueued\nnot assigned\nSupervisor\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nFollow-up sent. Waiting for the agent.\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\nGraph view · 1 agents · 0 tasks",
+        "draft_values": [
+          "",
+          ""
+        ]
+      }
+    }
+  ]
+}

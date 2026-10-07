@@ -1,0 +1,317 @@
+{
+  "build_start": "2026-10-07T06:25:08.122938+00:00",
+  "build_end": "2026-10-07T06:25:10.149286+00:00",
+  "command": "bun run build",
+  "build_returncode": 0,
+  "snapshot": "/tmp/cnotes-known1440-r2h_29x3",
+  "revision": "b538420beac5d2bd843f417559b9bde552bdedee",
+  "same_notes_overlay_hashes": true,
+  "same_global_styles_hash": true,
+  "same_helper_hash": true,
+  "build_log": "vite v8.2.2 building client environment for production...\ntransforming...\n\u2713 471 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/assets/icon-D1LDh8iw.svg                                  0.42 kB \u2502 gzip:   0.26 kB\ndist/index.html                                                0.57 kB \u2502 gzip:   0.35 kB\ndist/assets/ibm-plex-mono-latin-400-normal-CvHOgSBP.woff      13.14 kB\ndist/assets/ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2     14.70 kB\ndist/assets/ibm-plex-sans-latin-400-normal-CYLoc0-x.woff      22.10 kB\ndist/assets/ibm-plex-sans-latin-400-normal-CDDApCn2.woff2     22.58 kB\ndist/assets/ibm-plex-sans-latin-600-normal-Cu4Hd6ag.woff      23.87 kB\ndist/assets/ibm-plex-sans-latin-500-normal-BgVn5rGT.woff      23.91 kB\ndist/assets/ibm-plex-sans-latin-500-normal-6ng42L7E.woff2     24.18 kB\ndist/assets/ibm-plex-sans-latin-600-normal-CuJfVYMP.woff2     24.25 kB\ndist/assets/index-6_RvH0Mj.css                               228.48 kB \u2502 gzip:  36.83 kB\ndist/assets/index-CNceJCyF.js                              2,561.41 kB \u2502 gzip: 745.83 kB\ndist/assets/mermaid.min-yiu6nxHv.js                        3,594.02 kB \u2502 gzip: 998.21 kB\n\n\u2713 built in 787ms\n$ tsc --noEmit && bunx --bun vite build\n[plugin builtin:vite-reporter] \n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\n",
+  "asset": [
+    {
+      "name": "index-CNceJCyF.js",
+      "sha256": "056930d914b87a049d2fcb1c4c71b8db68bd626323d61de9f71408cac6272ede"
+    }
+  ],
+  "fixture": "/tmp/cpol-3ei_2y7k",
+  "ledger": {
+    "root": "/tmp/cpol-3ei_2y7k",
+    "session": "polish-3ei_2y7k",
+    "socket": "/tmp/cpol-3ei_2y7k/config/herdr/sessions/polish-3ei_2y7k/herdr.sock",
+    "protected": [
+      "default",
+      "pre-existing sessions and gateways"
+    ],
+    "fixture": "/tmp/cpol-3ei_2y7k/repositories/sample",
+    "fixture_url": "http://127.0.0.1:32937/"
+  },
+  "url": "http://127.0.0.1:33503",
+  "host_sha256": "c7705fdd3c42d956f59b3ed896745fad05d7b12de50269649e8fc9fb3d6245a4",
+  "gateway_cmdline": "/tmp/cnotes-known1440-r2h_29x3/target/debug/cockpit serve --herdr-session polish-3ei_2y7k --herdr-socket /tmp/cpol-3ei_2y7k/config/herdr/sessions/polish-3ei_2y7k/herdr.sock --config /tmp/cpol-3ei_2y7k/cockpit.toml --static-dir /tmp/cnotes-known1440-r2h_29x3/dist ",
+  "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75",
+  "notes_root": "/tmp/cpol-3ei_2y7k/data/cockpit/notes",
+  "todo_id": "kd52xj7t4i",
+  "comment_count_before": 19,
+  "hashes_before": {
+    "todos.md": "4cce39e0e485b02bb16e80e0309e57cd13adbfc6d9395843c70f67353e5d5e0b",
+    "comments/kd52xj7t4i/db343d4d-be1c-4a30-a372-7ba2cc8865f0.md": "97b4640edc5b442d076a40b5b95c0bcd42ef5514ea707d911a84e9cd215d3b4a",
+    "comments/kd52xj7t4i/7b99e69e-883f-41c3-9f70-ab531de273d0.md": "700f3ad6a8cb1b821cc2823a7ae9d0b4d3a2b70250f09038a4c4f849abead5f9",
+    "comments/kd52xj7t4i/980a7c7a-1b30-465f-a43f-fb4b300e53a6.md": "ffdc7fa3b337519902173af99f345dfee8453b055230d1c3fcdcef7911f70a97",
+    "comments/kd52xj7t4i/0c6b2bba-8351-4321-8bc4-a17c566626ee.md": "edf67c162a4114b5873556fbaffa2265ad466102bdc6adb8b04c050a6ce47d85",
+    "comments/kd52xj7t4i/42b8eaf9-426b-440b-8575-2fd0cd5da128.md": "09342919109a0d147a5a85a47d1876b85aadc58290bb25d208e6c7761a1bb133",
+    "comments/kd52xj7t4i/1ab88b2d-d33b-4d53-8763-b3653569544c.md": "2e53bea7f03df6e6dcf666bae92fc5cef14e4f14d7813b9cc03112dde43e7137",
+    "comments/kd52xj7t4i/9b53e4be-406e-479f-a3dd-8bd7b0206d14.md": "725444e7a4e564b8ee0f4e13c1004aa29e867adf0b8db6dbb60f887b2fb693ac",
+    "comments/kd52xj7t4i/383aadc7-a83e-423b-9adc-9cc12cb91219.md": "2c3317bd4f5fbf9b2e3c886fba9362ce85708c0b0c4f21a0569e3cd5a5426e26",
+    "comments/kd52xj7t4i/b61369e5-44b9-4b4c-a4be-464518832ab0.md": "a87e4ee6f8f06910c392439d41a58b8cec3a6eff0e3b2fae144f962d08a3cdd4",
+    "comments/kd52xj7t4i/d1658c53-b64b-4f99-8001-b45a095e171f.md": "0e3e8da90239a1a439ca5f725c09aa9425bde722dbf1f8cfddbfe4f7cdf81adb",
+    "comments/kd52xj7t4i/7dbc5eb7-d393-4873-8602-296fa8006d50.md": "f25750b03cd006b3579ab73758feafb0a160c81b72b5c168a485335ab41e2188",
+    "comments/kd52xj7t4i/a4411af7-daf1-42e1-ab9e-65f0382d10eb.md": "3f805819d4badb1275b53e8980718f97f8dafdf0296e14121a6feca64b9ae23e",
+    "comments/kd52xj7t4i/5b6827e0-4651-4c6b-8eb6-3e4fcb2b1761.md": "37e50fa13f6de0a50f8af117ad9bd8ca982e42b0f501b31753c0708b53277a4e",
+    "comments/kd52xj7t4i/16ca8f4a-ac8b-4911-8a48-c5252caa42ca.md": "b23d43dcfc4657fa2503e336f067fd4c93ceb776ade680efee5886cd71d58181",
+    "comments/kd52xj7t4i/1a510f4e-5585-4226-90c7-5ad10a1b94e5.md": "fd6013427d5f399e0b6af048278e5f0ab76a2fa98e344386701321423ace6cb5",
+    "comments/kd52xj7t4i/484c97c6-69d4-4748-9490-53336d03e7c1.md": "c5f6c6d7ef862546dd4ee2587fad77083b4ce16e9cc712489e1ae1fd86fe9456",
+    "comments/kd52xj7t4i/aa15fb8e-f000-4aad-b1e3-e3797ffc12a3.md": "1285ed8fc17ed77e12d67a759a35630a4ae54f7480cb9f9b806a57106c8ac237",
+    "comments/kd52xj7t4i/e4f27c5c-fc5b-463c-b6da-7562851f0123.md": "9ec77ab2fbbbea438fc9509bed12451675f3ed3ac26d5df1e516ed9590dc5529",
+    "comments/kd52xj7t4i/19436f9c-4d94-441e-adc3-8344fd442306.md": "53ff247ba34df12920044930e5804bb5be57adba677abc66553d8995806787a1"
+  },
+  "browser_observed": {
+    "before": {
+      "draft": "Known-wide preserved composer draft",
+      "selection": {
+        "ranges": [
+          {
+            "anchor": 35,
+            "head": 35
+          }
+        ],
+        "main": 0
+      },
+      "thread": {
+        "scrollTop": 600,
+        "clientHeight": 406,
+        "scrollHeight": 6028,
+        "bottomDistance": 5022
+      },
+      "focus": {
+        "tag": "DIV",
+        "class": "cm-content cm-lineWrapping",
+        "label": "New comment Markdown"
+      },
+      "postDisabled": false
+    },
+    "error": {
+      "text": "Decided must be a date or RFC3339 timestamp\nnotes_invalid_input\nCheck saved state",
+      "actual": {
+        "requests": [
+          {
+            "op": "decision_create",
+            "target": {
+              "kind": "notes",
+              "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75"
+            }
+          },
+          {
+            "op": "scratchpad_read",
+            "target": {
+              "kind": "notes",
+              "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75"
+            }
+          },
+          {
+            "op": "todo_list",
+            "target": {
+              "kind": "notes",
+              "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75"
+            }
+          },
+          {
+            "op": "decision_list",
+            "target": {
+              "kind": "notes",
+              "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75"
+            }
+          }
+        ],
+        "adaptation": {
+          "originalDecided": "2026-10-01",
+          "sentDecided": "2026-13-45",
+          "operation": "decision_create"
+        },
+        "response": {
+          "status": 400,
+          "body": {
+            "code": "notes_invalid_input",
+            "message": "Decided must be a date or RFC3339 timestamp"
+          }
+        }
+      },
+      "focused": {
+        "tag": "BODY",
+        "id": ""
+      }
+    },
+    "afterReturn": {
+      "draft": "Known-wide preserved composer draft",
+      "selection": {
+        "ranges": [
+          {
+            "anchor": 35,
+            "head": 35
+          }
+        ],
+        "main": 0
+      },
+      "thread": {
+        "scrollTop": 0,
+        "clientHeight": 365,
+        "scrollHeight": 6028,
+        "bottomDistance": 5663
+      },
+      "focus": {
+        "tag": "H3",
+        "class": "",
+        "label": null
+      },
+      "postDisabled": false
+    },
+    "knownMounted": {
+      "draft": "Known-wide preserved composer draft",
+      "selection": {
+        "ranges": [
+          {
+            "anchor": 35,
+            "head": 35
+          }
+        ],
+        "main": 0
+      },
+      "thread": {
+        "scrollTop": 600,
+        "clientHeight": 365,
+        "scrollHeight": 6028,
+        "bottomDistance": 5063
+      },
+      "focus": {
+        "tag": "DIV",
+        "class": "cm-content cm-lineWrapping",
+        "label": "New comment Markdown"
+      },
+      "postDisabled": false
+    },
+    "hit": {
+      "viewport": {
+        "w": 1440,
+        "h": 1000,
+        "dpr": 1.25
+      },
+      "container": 1200,
+      "control": {
+        "id": "postCommentBtn",
+        "text": "Comment",
+        "disabled": false,
+        "rect": {
+          "x": 1331.25,
+          "y": 856,
+          "width": 94.75,
+          "height": 28,
+          "top": 856,
+          "right": 1426,
+          "bottom": 884,
+          "left": 1331.25
+        },
+        "center": {
+          "x": 1378.625,
+          "y": 870
+        }
+      },
+      "elementFromPoint": {
+        "tag": "BUTTON",
+        "id": "postCommentBtn",
+        "class": "notes-primary"
+      },
+      "unobscured": true,
+      "panel": {
+        "x": 240,
+        "y": 123,
+        "width": 1200,
+        "height": 773,
+        "top": 123,
+        "right": 1440,
+        "bottom": 896,
+        "left": 240
+      },
+      "slot": {
+        "x": 240,
+        "y": 896,
+        "width": 1200,
+        "height": 41,
+        "top": 896,
+        "right": 1440,
+        "bottom": 937,
+        "left": 240
+      },
+      "slotAfterPanels": true,
+      "panelSlotOverlap": 0,
+      "asset": [
+        "http://127.0.0.1:33503/assets/index-CNceJCyF.js"
+      ]
+    },
+    "afterClear": {
+      "draft": "Known-wide preserved composer draft",
+      "selection": {
+        "ranges": [
+          {
+            "anchor": 35,
+            "head": 35
+          }
+        ],
+        "main": 0
+      },
+      "thread": {
+        "scrollTop": 600,
+        "clientHeight": 406,
+        "scrollHeight": 6028,
+        "bottomDistance": 5022
+      },
+      "focus": {
+        "tag": "BODY",
+        "class": "",
+        "label": null
+      },
+      "postDisabled": false
+    },
+    "clearedSlotHeight": 0
+  },
+  "hashes_after": {
+    "todos.md": "4cce39e0e485b02bb16e80e0309e57cd13adbfc6d9395843c70f67353e5d5e0b",
+    "comments/kd52xj7t4i/db343d4d-be1c-4a30-a372-7ba2cc8865f0.md": "97b4640edc5b442d076a40b5b95c0bcd42ef5514ea707d911a84e9cd215d3b4a",
+    "comments/kd52xj7t4i/7b99e69e-883f-41c3-9f70-ab531de273d0.md": "700f3ad6a8cb1b821cc2823a7ae9d0b4d3a2b70250f09038a4c4f849abead5f9",
+    "comments/kd52xj7t4i/980a7c7a-1b30-465f-a43f-fb4b300e53a6.md": "ffdc7fa3b337519902173af99f345dfee8453b055230d1c3fcdcef7911f70a97",
+    "comments/kd52xj7t4i/0c6b2bba-8351-4321-8bc4-a17c566626ee.md": "edf67c162a4114b5873556fbaffa2265ad466102bdc6adb8b04c050a6ce47d85",
+    "comments/kd52xj7t4i/42b8eaf9-426b-440b-8575-2fd0cd5da128.md": "09342919109a0d147a5a85a47d1876b85aadc58290bb25d208e6c7761a1bb133",
+    "comments/kd52xj7t4i/1ab88b2d-d33b-4d53-8763-b3653569544c.md": "2e53bea7f03df6e6dcf666bae92fc5cef14e4f14d7813b9cc03112dde43e7137",
+    "comments/kd52xj7t4i/9b53e4be-406e-479f-a3dd-8bd7b0206d14.md": "725444e7a4e564b8ee0f4e13c1004aa29e867adf0b8db6dbb60f887b2fb693ac",
+    "comments/kd52xj7t4i/383aadc7-a83e-423b-9adc-9cc12cb91219.md": "2c3317bd4f5fbf9b2e3c886fba9362ce85708c0b0c4f21a0569e3cd5a5426e26",
+    "comments/kd52xj7t4i/b61369e5-44b9-4b4c-a4be-464518832ab0.md": "a87e4ee6f8f06910c392439d41a58b8cec3a6eff0e3b2fae144f962d08a3cdd4",
+    "comments/kd52xj7t4i/d1658c53-b64b-4f99-8001-b45a095e171f.md": "0e3e8da90239a1a439ca5f725c09aa9425bde722dbf1f8cfddbfe4f7cdf81adb",
+    "comments/kd52xj7t4i/7dbc5eb7-d393-4873-8602-296fa8006d50.md": "f25750b03cd006b3579ab73758feafb0a160c81b72b5c168a485335ab41e2188",
+    "comments/kd52xj7t4i/a4411af7-daf1-42e1-ab9e-65f0382d10eb.md": "3f805819d4badb1275b53e8980718f97f8dafdf0296e14121a6feca64b9ae23e",
+    "comments/kd52xj7t4i/5b6827e0-4651-4c6b-8eb6-3e4fcb2b1761.md": "37e50fa13f6de0a50f8af117ad9bd8ca982e42b0f501b31753c0708b53277a4e",
+    "comments/kd52xj7t4i/16ca8f4a-ac8b-4911-8a48-c5252caa42ca.md": "b23d43dcfc4657fa2503e336f067fd4c93ceb776ade680efee5886cd71d58181",
+    "comments/kd52xj7t4i/1a510f4e-5585-4226-90c7-5ad10a1b94e5.md": "fd6013427d5f399e0b6af048278e5f0ab76a2fa98e344386701321423ace6cb5",
+    "comments/kd52xj7t4i/484c97c6-69d4-4748-9490-53336d03e7c1.md": "c5f6c6d7ef862546dd4ee2587fad77083b4ce16e9cc712489e1ae1fd86fe9456",
+    "comments/kd52xj7t4i/aa15fb8e-f000-4aad-b1e3-e3797ffc12a3.md": "1285ed8fc17ed77e12d67a759a35630a4ae54f7480cb9f9b806a57106c8ac237",
+    "comments/kd52xj7t4i/e4f27c5c-fc5b-463c-b6da-7562851f0123.md": "9ec77ab2fbbbea438fc9509bed12451675f3ed3ac26d5df1e516ed9590dc5529",
+    "comments/kd52xj7t4i/19436f9c-4d94-441e-adc3-8344fd442306.md": "53ff247ba34df12920044930e5804bb5be57adba677abc66553d8995806787a1"
+  },
+  "all_content_bytes_unchanged": true,
+  "comment_count_after": 19,
+  "decision_count_after": 0,
+  "result": "PASS",
+  "screenshot": {
+    "name": "F43-known-comment-1440.png",
+    "sha256": "3e84560f6456fa19096def41e22676b23abd10c5d006bdd86f26c9469c260ba2",
+    "pixels": [
+      1800,
+      1250
+    ]
+  },
+  "same_asset_as_original_final": true,
+  "setup_class": "F outgoing date-only request adaptation of valid UI decision_create; R original real backend400 response unchanged",
+  "tab_remount_note": "Switching Decisions\u2192Todos remounted TaskDetail: scroll600\u21920 and heading focus observed separately; not claimed as error-slot-only movement. Mounted known slot clear preserves scroll600/caret35/draft. Check button removal leaves BODY focus, not alert focus.",
+  "retention": "Keep exact source snapshot/dist bytes until parent acceptance/root review; no further mutations/builds.",
+  "cleanup": {
+    "browser_closed": "NotesKnown1440",
+    "helper_stop": "Stopped matching fixture processes; evidence retained at /tmp/cpol-3ei_2y7k",
+    "fixture_removed": true,
+    "registry_exact_bytes_equal": true,
+    "retained_snapshot": "/tmp/cnotes-known1440-r2h_29x3",
+    "retained_dist": "/tmp/cnotes-known1440-r2h_29x3/dist",
+    "reason": "Parent requires immutable same-source asset/source retention until acceptance/root review",
+    "remaining_processes": 0,
+    "driver_files_created": 0,
+    "symlinks": "node_modules and target/debug/cockpit point to shared resources; remove only links on eventual cleanup"
+  }
+}

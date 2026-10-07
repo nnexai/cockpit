@@ -1,0 +1,14 @@
+{
+  "browser": "NotesFinal closed after emulation failure; NotesFinalFinish explicitly closed after final screenshots",
+  "helper_stop": "Stopped matching fixture processes; evidence retained at /tmp/cpol-g32vk7wo",
+  "registry_exact_bytes_equal": true,
+  "registry_sha256": "fdb0c27f0ae652843587a9077706493fa6e8625e74460dd054612f3bbe35a109",
+  "fixture_removed": "/tmp/cpol-g32vk7wo",
+  "snapshot_removed": "/tmp/cnotes-final-sqy1l4bc",
+  "throwaway_driver_files_created": 0,
+  "shared_symlink_targets_removed": false,
+  "fixture_absent": true,
+  "snapshot_absent": true,
+  "owned_process_match_count_after_stop": 0,
+  "shutdown_residue": "Herdr exit recreated config/herdr after first directory removal; no owned matching process remained; removed exactly that owned residue."
+}

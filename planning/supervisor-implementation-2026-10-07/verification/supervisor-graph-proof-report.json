@@ -1,0 +1,295 @@
+{
+  "evidenceClass": "SYNTHETIC DTO — real SupervisorView browser, no live Herdr/native/provider authority",
+  "status": "PASS after delegated corrections and tool-specific corrections",
+  "scenarios": {
+    "11": {
+      "status": "PASS graph scope",
+      "contrast": {
+        "background": [
+          18,
+          25,
+          35
+        ],
+        "titleRatio": 12.212173743790862,
+        "statusRatio": 9.973846807647334,
+        "minimumMutedRatio": 7.9331547129384985,
+        "allAncestorOpacity1": true
+      },
+      "evidence": "scenarios.11"
+    },
+    "13": {
+      "status": "PASS",
+      "sizes": [
+        [
+          1440,
+          1000
+        ],
+        [
+          760,
+          900
+        ],
+        [
+          360,
+          800
+        ],
+        [
+          1440,
+          600
+        ]
+      ],
+      "graphHeights": [
+        705,
+        605,
+        593.609375,
+        429
+      ],
+      "taskFirst": true,
+      "aboveFoldSwitch": true,
+      "noGraphHeightSplitter": true,
+      "evidence": "scenarios.13"
+    },
+    "14": {
+      "status": "PASS",
+      "dtoExact": {
+        "supervisor": 1,
+        "worker": 10,
+        "task": 9,
+        "subagent": 5
+      },
+      "missing": [],
+      "unexpected": [],
+      "encoded": "run:w2%3An",
+      "link": true,
+      "cycleAndTasklessIncluded": true,
+      "closedWorkerAndAcceptedExcluded": true,
+      "stickyHeaderTop": 295,
+      "scrollerTop": 295,
+      "forest": {
+        "nodes": 121,
+        "naturalCanvas": [
+          1072,
+          3368
+        ],
+        "all121ReachableAtAll4": true,
+        "rovingStops": 1
+      },
+      "evidence": "scenarios.14"
+    },
+    "15": {
+      "status": "PASS",
+      "rawPointerOffsets": [
+        {
+          "size": [
+            1440,
+            1000
+          ],
+          "left": 0,
+          "top": 40
+        },
+        {
+          "size": [
+            760,
+            900
+          ],
+          "left": 500,
+          "top": 40
+        },
+        {
+          "size": [
+            360,
+            800
+          ],
+          "left": 500,
+          "top": 40
+        },
+        {
+          "size": [
+            1440,
+            600
+          ],
+          "left": 0,
+          "top": 40
+        }
+      ],
+      "placements": [
+        "side",
+        "side",
+        "sheet",
+        "side"
+      ],
+      "escapeRefocus": "run:w2",
+      "replacementPanels": 1,
+      "shortNarrowOverlay": true,
+      "evidence": [
+        "scenarios.15",
+        "detailReplacement",
+        "overlay"
+      ],
+      "shortNarrowViewport": [
+        360,
+        600
+      ],
+      "overlayCloseRefocus": "run:w2"
+    },
+    "16": {
+      "status": "PASS after Escape correction",
+      "tiersMatch": true,
+      "onlyOrdinaryDimmed": true,
+      "showInGraphWideFocus": "queue Show in Graph button",
+      "showInGraphNarrowFocus": "run:root",
+      "attentionAppearanceKeepsNodeFocus": "run:w2",
+      "attentionAppearanceKeepsTextareaIdAndDraft": "Keep this graph detail draft",
+      "politeCountsOnly": true,
+      "evidence": [
+        "scenarios.16",
+        "escapeFinal"
+      ]
+    },
+    "17": {
+      "status": "PASS after narrow-offset correction",
+      "wideWorkingLaneScroll": "1491 -> 1491",
+      "selectedCard": "t-forest-15",
+      "narrowBoardScroll": "73 -> 73",
+      "narrowLaneStates": "Queued/Ready closed; Done open; exact states retained",
+      "attentionFilter": true,
+      "spaceFilter": "other-space preserved",
+      "showInTasksFocus": "t-map",
+      "viewAfterHideReopen": "graph",
+      "zeroTerminalOrMutation": true,
+      "evidence": [
+        "scenarios.17",
+        "offsetCorrection",
+        "filterMemory",
+        "viewMemory"
+      ]
+    },
+    "18": {
+      "status": "PASS after safe maximum-sheet correction",
+      "realPointer": true,
+      "keyStep": 16,
+      "shiftStep": 48,
+      "homeResets": true,
+      "side": {
+        "default": 340,
+        "min": 280,
+        "max1440": 720,
+        "max760": 380
+      },
+      "sheet": {
+        "default": 368,
+        "min": 160,
+        "ceiling75PercentOf736": 552,
+        "safeMax": 509,
+        "scrollerHeight": 593.609375,
+        "availableAboveSheet": 84.609375,
+        "selectedNodeRoundingOverlapPx": 0.390625,
+        "all25ReachableWithGeometryRelativeScroll": true
+      },
+      "evidence": [
+        "scenarios.18",
+        "splitterBounds",
+        "sheetCorrection"
+      ]
+    },
+    "19": {
+      "status": "PASS SYNTHETIC focus separation",
+      "oneRovingStop": true,
+      "realTabOneEntry": true,
+      "arrows": "Right root -> t-audit; Down -> w1 -> t-map; Right -> w2 -> lost; Left -> w2; Up w2 -> t-map; Home root; End cycle-b",
+      "enterSelects": true,
+      "escapeClosesRetainsGraph": true,
+      "noActionOrTerminalDuringNavigation": true,
+      "positiveTerminalCallbacks": 1,
+      "realHerdrFocusProof": "MAIN-owned; not claimed",
+      "evidence": "scenarios.19"
+    },
+    "20": {
+      "status": "PASS after Close/header Escape correction",
+      "graphHeight": 424,
+      "minRequired": 300,
+      "switchAndFilterSameLine": true,
+      "queue": "overlay",
+      "selectedPanel": "side",
+      "escapeFocus": "exact 1 needs you counter after scheduled restore predicate",
+      "evidence": [
+        "scenarios.20",
+        "escapeFinal"
+      ]
+    },
+    "21": {
+      "status": "PASS",
+      "node": [
+        240,
+        48
+      ],
+      "iconSlot": [
+        20,
+        20
+      ],
+      "svg": [
+        16,
+        16
+      ],
+      "glyphPosition": "static",
+      "explicitViewBoxes": true,
+      "fiveStatusGlyphsAndDocument": true,
+      "all4Anatomy": true,
+      "noNodeOverlaps": true,
+      "evidence": "scenarios.21"
+    },
+    "22": {
+      "status": "PASS applicable surfaces",
+      "tasksGraphFixtureSizeRuns": 40,
+      "detailFixtureSizeRuns": 40,
+      "detailApplicable": 36,
+      "closedRootGraph": "N/A no open supervisor; archive main-owned",
+      "topologyTaskAndGraphDetailsAll4": true,
+      "forbiddenNames": 0,
+      "onlyCrossViewNames": [
+        "Show in Graph",
+        "Show in Tasks"
+      ],
+      "evidence": [
+        "scenarios.22",
+        "wordingDetails",
+        "wordingDetailsAll"
+      ]
+    }
+  },
+  "resolvedFindings": [
+    {
+      "scenario": 18,
+      "original": "75% sheet552 hid34.39px node",
+      "corrected": "safe max509; all25 geometry-relative reachable"
+    },
+    {
+      "scenario": 20,
+      "original": "Escape from Close collapsed row and kept overlay",
+      "corrected": "single Escape closes and returns counter after scheduled focus restoration"
+    },
+    {
+      "scenario": 17,
+      "original": "unselected narrow Board73 -> 0",
+      "corrected": "73 -> 73; exact lane states retained"
+    }
+  ],
+  "toolArtifacts": [
+    "tab.press signature key,{selector}, not selector,key",
+    "Selector tab.click centers graph scroller; raw page.mouse.click preserves offsets all4",
+    "Screenshot fullPage and one nonfull timeout could mutate CSS viewport; metrics sampled before capture retained; fullPage:false bounded settle used, final DPR1 request used (runtime sometimes retains DPR1.25)",
+    "Original reachEveryNode fixed-position target unsuitable at maximum sheet; geometry-relative actual scroller movements prove all25 reachable",
+    "Immediate post-Escape BODY was transient; waitForFunction exact counter resolves",
+    "Raw page.setViewport DPR1 succeeds only inside tab.run; next managed call restores retained viewport/DPR1.25. Persistent managed viewport plus actual UI-condition waits and screenshot fences used for final images.",
+    "Early overlay/screenshot samples could precede ResizeObserver settlement; final overlay waits actual panel=overlay/Close focused."
+  ],
+  "browserErrors": [],
+  "sourceEdits": [],
+  "checks": "Only assigned browser interactions; no installs/build/lint/unit/tests/formatters/commits",
+  "evidencePath": "/tmp/supervisor-graph-proof-evidence.json",
+  "finalFencedScreenshots": {
+    "escape": "/tmp/supervisor-graph-proof-fenced-narrow-escape.png",
+    "overlay": "/tmp/supervisor-graph-proof-fenced-short-overlay-final.png",
+    "sheet": "/tmp/supervisor-graph-proof-fenced-sheet-max.png"
+  },
+  "screenshotFence": "All three final images match view/panel/epoch/focus and CSS dimensions before and after capture; inspected visually."
+}

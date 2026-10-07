@@ -1,0 +1,1733 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supervisor design review — recommendations</title>
+<!--
+  Companion to planning/supervisor-design-review-2026-10-06/DESIGN.md. Self-contained: no network, no external assets.
+  Tokens copied from src/app/styles.css :root (lines 13-88). Frames are schematics: BEFORE frames are evidence-derived
+  from supervisor.css / SupervisorView.tsx and the historical atlas screenshots; PROPOSED frames are concepts and are
+  inert (chips that look like buttons are text). Section 1b adds one static Graph-view figure (no script needed) and a
+  LOCAL DEMO: one inline script drives illustrative data inside this page only - no product code, terminal, Herdr,
+  network or storage access. All names, times and counts are illustrative.
+-->
+<style>
+:root {
+  color-scheme: dark;
+  --app-bg:#0b0e12; --sidebar-bg:#11161e; --chrome-bg:#121923; --surface:#161d27; --surface-raised:#1b2431;
+  --surface-hover:#222e3d; --surface-selected:#23354c; --select-fill:var(--surface-selected); --select-edge:var(--accent); --select-edge-size:2px;
+  --border:#2b3543; --border-strong:#3b4758; --text-primary:#cdd6f4; --text-secondary:#bac2de; --text-muted:#a6adc8;
+  --accent:#89b4fa; --focus-strong:#89b4fa; --blocked:#f38ba8; --working:#f9e2af; --warning:#f9e2af; --done:#94e2d5; --idle:#a6e3a1;
+  --terminal-bg:#0c1016; --scrim:rgb(7 9 13 / 72%);
+  --font-sans:"IBM Plex Sans","Noto Sans",sans-serif;
+  --font-mono:"IosevkaTerm Nerd Font Mono","IBM Plex Mono","Noto Sans Mono",monospace;
+  --font-size-2xs:.6875rem; --font-size-control:.75rem; --font-size-xs:.8125rem; --font-size-sm:.875rem; --font-size-md:.9375rem; --font-size-lg:1.1875rem; --font-size-xl:1.25rem; --font-size-2xl:1.4375rem;
+  --radius-small:3px; --radius-control:4px; --radius-panel:6px; --radius-pill:999px;
+}
+* { box-sizing:border-box; }
+html, body { margin:0; padding:0; }
+body { background:var(--app-bg); color:var(--text-primary); font:var(--font-size-md)/1.5 var(--font-sans); }
+a { color:var(--accent); }
+a:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--focus-strong); outline-offset:2px; border-radius:var(--radius-small); }
+h1, h2, h3, h4 { margin:0; font-weight:500; line-height:1.25; }
+p { margin:0 0 10px; }
+code { font-family:var(--font-mono); font-size:.85em; color:var(--text-primary); background:var(--terminal-bg); padding:0 4px; border-radius:var(--radius-small); }
+.skip { position:absolute; left:8px; top:-60px; background:var(--surface-raised); padding:8px 12px; z-index:100; }
+.skip:focus { top:8px; }
+
+/* page chrome */
+.top { position:sticky; top:0; z-index:20; background:var(--chrome-bg); border-bottom:1px solid var(--border); }
+.top nav { display:flex; gap:2px; overflow-x:auto; padding:0 clamp(8px,2vw,24px); max-width:1320px; margin:0 auto; }
+.top a { flex:0 0 auto; display:inline-flex; align-items:center; min-height:40px; padding:0 12px; color:var(--text-secondary); text-decoration:none; font-size:var(--font-size-sm); border-bottom:2px solid transparent; }
+.top a:hover { color:var(--text-primary); border-bottom-color:var(--border-strong); }
+main { max-width:1320px; margin:0 auto; padding:0 clamp(12px,3vw,32px) 64px; }
+header.hero { padding:28px 0 8px; }
+header.hero h1 { font-size:var(--font-size-2xl); margin-bottom:6px; }
+.lead { color:var(--text-secondary); max-width:78ch; }
+.legend { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 0; padding:0; list-style:none; }
+.legend li { font-size:var(--font-size-control); color:var(--text-secondary); display:flex; gap:6px; align-items:center; }
+.tag { display:inline-block; padding:1px 7px; border-radius:var(--radius-small); font-size:var(--font-size-2xs); font-weight:600; letter-spacing:.04em; text-transform:uppercase; border:1px solid; white-space:nowrap; }
+.tag.ev { color:var(--text-secondary); border-color:var(--border-strong); background:var(--surface); }
+.tag.cc { color:var(--accent); border-color:var(--accent); background:var(--surface-selected); }
+.tag.il { color:var(--warning); border-color:var(--warning); background:var(--surface); }
+.tag.p0 { color:var(--blocked); border-color:var(--blocked); background:var(--surface); }
+.tag.p1 { color:var(--warning); border-color:var(--warning); background:var(--surface); }
+.tag.p2 { color:var(--text-muted); border-color:var(--border-strong); background:var(--surface); }
+section.sec { padding-top:44px; scroll-margin-top:48px; }
+section.sec > h2 { font-size:var(--font-size-xl); margin-bottom:6px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.sub { color:var(--text-secondary); max-width:86ch; margin-bottom:16px; }
+.ids { font-family:var(--font-mono); font-size:var(--font-size-control); color:var(--text-muted); }
+
+/* priority summary */
+.prio { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); gap:12px; margin-top:16px; }
+.pcard { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-panel); padding:14px; display:flex; flex-direction:column; gap:8px; min-width:0; }
+.pcard.first { border-color:var(--border-strong); box-shadow:inset 0 var(--select-edge-size) 0 var(--select-edge); }
+.pcard h3 { font-size:var(--font-size-md); }
+.pcard p { color:var(--text-secondary); font-size:var(--font-size-sm); margin:0; }
+.pcard a.more { margin-top:auto; font-size:var(--font-size-control); }
+.rank { width:100%; border-collapse:collapse; margin-top:16px; font-size:var(--font-size-sm); }
+.rank th, .rank td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+.rank th { color:var(--text-muted); font-weight:500; font-size:var(--font-size-control); }
+.rank td:first-child { white-space:nowrap; }
+.rankwrap { overflow-x:auto; }
+
+/* figures */
+figure { margin:0 0 20px; min-width:0; }
+figcaption { font-size:var(--font-size-control); color:var(--text-secondary); margin-bottom:8px; display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; }
+.pair { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr)); gap:20px; align-items:start; }
+.pair > * { min-width:0; }
+.pins { margin:10px 0 0; padding-left:20px; color:var(--text-secondary); font-size:var(--font-size-sm); }
+.pins li { margin:3px 0; }
+.pin { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:var(--radius-pill); background:var(--blocked); color:var(--app-bg); font-size:10px; font-weight:700; font-style:normal; flex:0 0 16px; }
+.pin.g { background:var(--idle); }
+.scroll { overflow-x:auto; }
+.note { font-size:var(--font-size-control); color:var(--text-muted); }
+
+/* mock UI atoms (token-faithful) */
+.m { background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius-panel); overflow:hidden; font-size:var(--font-size-sm); line-height:1.4; color:var(--text-primary); position:relative; }
+.m.concept { border-color:var(--accent); }
+.m-hd { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:6px 12px; min-height:41px; background:var(--chrome-bg); border-bottom:1px solid var(--border); }
+.m-hd .sp { margin-left:auto; display:flex; gap:2px; align-items:center; }
+.m-brand { display:inline-flex; gap:7px; align-items:center; font-weight:500; }
+.m-state { display:inline-flex; gap:7px; align-items:center; color:var(--text-secondary); font-size:var(--font-size-control); }
+.ic { width:16px; height:16px; flex:0 0 16px; }
+.g { width:16px; height:16px; flex:0 0 16px; }
+.c-working { color:var(--working); } .c-idle { color:var(--idle); } .c-blocked { color:var(--blocked); } .c-done { color:var(--done); } .c-unknown { color:var(--text-muted); } .c-live { color:var(--idle); }
+.sq { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-secondary); border-radius:var(--radius-control); }
+.sq.on { background:var(--select-fill); color:var(--accent); box-shadow:inset 0 2px 0 var(--select-edge); }
+.b { display:inline-flex; align-items:center; gap:6px; min-height:26px; padding:3px 9px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-raised); color:var(--text-primary); font-size:var(--font-size-control); max-width:100%; white-space:nowrap; }
+.b.pri { background:var(--select-fill); border-color:var(--select-edge); }
+.b.quiet { background:transparent; border-color:transparent; color:var(--text-secondary); text-decoration:underline; text-decoration-color:var(--border-strong); text-underline-offset:3px; }
+.b.off { color:var(--text-muted); }
+.chip { display:inline-flex; align-items:center; gap:4px; padding:1px 6px; border:1px solid var(--border); border-radius:var(--radius-small); color:var(--text-secondary); font-size:var(--font-size-control); max-width:100%; }
+.muted { color:var(--text-muted); } .sec2 { color:var(--text-secondary); }
+.m-btnrow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.m-line { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; font-size:var(--font-size-control); color:var(--text-muted); }
+.m-line time { margin-left:auto; white-space:nowrap; }
+.m-att { padding:6px 12px; border-bottom:1px solid var(--border); background:var(--chrome-bg); }
+.m-att.compact { min-height:44px; display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; }
+.m-att.compact .m-btnrow { margin-left:auto; }
+.m-att.tall { height:164px; overflow:hidden; position:relative; }
+.clipmark { position:absolute; left:0; right:0; bottom:0; padding:26px 12px 4px; background:linear-gradient(to bottom,transparent,var(--chrome-bg) 55%); font-size:var(--font-size-2xs); color:var(--blocked); font-weight:600; }
+.amber { padding:8px 10px; border-inline-start:2px solid var(--warning); background:var(--surface-raised); margin-block:6px; }
+.amber h4 { color:var(--warning); font-size:var(--font-size-sm); display:flex; gap:7px; align-items:center; }
+.amber p { margin:4px 0 6px; }
+.ta { display:block; width:100%; height:46px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--terminal-bg); color:var(--text-muted); padding:6px 9px; font-size:var(--font-size-control); }
+/* graph */
+.m-gh { display:flex; align-items:center; justify-content:space-between; gap:12px; height:30px; padding:3px 10px; background:var(--chrome-bg); border-bottom:1px solid var(--border); font-size:var(--font-size-control); }
+.m-gh strong { font-weight:500; }
+.m-gscroll { display:flex; background:var(--chrome-bg); overflow:hidden; border-bottom:1px solid var(--border); }
+.m-gcanvas { position:relative; flex:0 0 auto; width:460px; height:280px; }
+.m-gcanvas svg.edges { position:absolute; inset:0; }
+.node { position:absolute; width:180px; height:36px; padding:2px 8px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-control); overflow:hidden; }
+.node .h { display:flex; gap:7px; align-items:center; height:18px; font-size:var(--font-size-control); font-weight:500; white-space:nowrap; }
+.node .md { color:var(--text-muted); font-size:var(--font-size-2xs); line-height:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.node .h svg { display:block; flex:0 0 16px; }
+.node.sel { background:var(--select-fill); box-shadow:inset 2px 0 0 var(--select-edge); }
+.node.hl { border-color:var(--accent); }
+.node.sub { border-style:dashed; }
+.m-tl { display:flex; flex-direction:column; gap:5px; padding:8px; border-left:1px solid var(--border); flex:0 0 220px; font-size:var(--font-size-2xs); }
+.m-tl .lab { color:var(--text-muted); font-size:var(--font-size-control); }
+.tlk { display:flex; gap:5px; align-items:center; min-height:25px; padding:3px 5px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-raised); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tlk.hl { border-color:var(--accent); background:var(--select-fill); }
+/* strip (concept) */
+.m-strip { display:flex; align-items:center; gap:6px 8px; flex-wrap:wrap; padding:5px 12px; min-height:34px; background:var(--chrome-bg); border-bottom:1px solid var(--border); font-size:var(--font-size-control); }
+.m-strip .lab { color:var(--text-secondary); margin-right:2px; }
+.agentchip { display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); font-size:var(--font-size-control); white-space:nowrap; }
+.agentchip.sel { background:var(--select-fill); box-shadow:inset 2px 0 0 var(--select-edge); }
+.agentchip.warnc { border-color:var(--blocked); }
+.arrow { color:var(--border-strong); }
+/* board */
+.m-th { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; padding:7px 12px; border-bottom:1px solid var(--border); }
+.m-th h4 { font-size:var(--font-size-sm); } .m-th h4 span { margin-left:6px; color:var(--text-muted); font-size:var(--font-size-control); font-weight:400; }
+.filt { display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:var(--font-size-control); color:var(--text-secondary); }
+.filt .box { display:inline-flex; gap:5px; align-items:center; padding:3px 7px; border:1px solid var(--border); border-radius:var(--radius-control); }
+.cb { width:12px; height:12px; border:1px solid var(--text-muted); border-radius:2px; display:inline-block; }
+.cb.on { background:var(--accent); border-color:var(--accent); }
+.m-board { display:flex; gap:8px; padding:10px; min-width:min-content; }
+.lane { flex:1 0 220px; min-width:220px; display:flex; flex-direction:column; background:var(--chrome-bg); border:1px solid var(--border); border-radius:var(--radius-panel); }
+.lane.collapsed { flex-basis:115px; min-width:115px; max-width:115px; }
+.lane > header { display:flex; align-items:center; gap:6px; height:38px; padding:7px 8px; border-bottom:1px solid var(--border); font-size:var(--font-size-xs); font-weight:500; }
+.lane > header .n { color:var(--text-muted); font-size:var(--font-size-control); font-weight:400; }
+.lane > header .chev { margin-left:auto; color:var(--border-strong); }
+.dot { width:7px; height:7px; border-radius:var(--radius-pill); background:var(--idle); flex:0 0 7px; }
+.dot.setup, .dot.ready { background:var(--accent); } .dot.working { background:var(--working); } .dot.review { background:var(--warning); } .dot.accepted { background:var(--done); }
+.lane .body { padding:7px; min-height:var(--lane-h,200px); }
+.lane .empty { padding:8px 10px; color:var(--text-muted); font-size:var(--font-size-control); }
+.card { padding:10px 11px; margin-bottom:9px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); overflow-wrap:anywhere; }
+.card.sel { background:var(--select-fill); box-shadow:inset 2px 0 0 var(--select-edge); }
+.card .t { font-weight:500; }
+.card .st { color:var(--text-secondary); font-size:var(--font-size-control); margin:5px 0; }
+.card .wk { display:flex; align-items:center; gap:6px; font-size:var(--font-size-control); }
+.card .ev { font-size:var(--font-size-control); margin-top:9px; padding-top:7px; border-top:1px solid var(--border); color:var(--text-muted); display:flex; flex-direction:column; gap:5px; }
+.card .ev .row { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.card .warn { color:var(--warning); }
+.card.c2 { padding:8px 10px; margin-bottom:7px; }
+.card.c2 .sl { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; margin-top:5px; font-size:var(--font-size-control); color:var(--text-secondary); }
+.pairchip { display:inline-flex; align-items:center; gap:0; border:1px solid var(--border); border-radius:var(--radius-small); overflow:hidden; font-size:var(--font-size-control); }
+.pairchip > span { padding:0 6px; display:inline-flex; align-items:center; gap:4px; min-height:20px; }
+.pairchip > span + span { border-left:1px solid var(--border); color:var(--text-primary); }
+.pairchip > span:first-child { color:var(--text-muted); }
+.tier { display:inline-flex; align-items:center; gap:4px; padding:0 6px; min-height:18px; border:1px solid; border-radius:var(--radius-small); font-size:var(--font-size-2xs); font-weight:600; background:var(--surface-raised); white-space:nowrap; }
+.tier.decide { color:var(--warning); border-color:var(--warning); }
+.tier.recover { color:var(--blocked); border-color:var(--blocked); }
+.tier.notice { color:var(--accent); border-color:var(--accent); }
+.tier.quiet { color:var(--text-muted); border-color:var(--border-strong); }
+/* summary bar + queue (concept) */
+.m-sum { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; padding:6px 12px; min-height:40px; background:var(--chrome-bg); border-bottom:1px solid var(--border); font-size:var(--font-size-control); }
+.m-sum .sp { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; }
+.queue { background:var(--chrome-bg); border-bottom:1px solid var(--border); padding:4px 8px; }
+.queue details { border-bottom:1px solid var(--border); }
+.queue details:last-child { border-bottom:0; }
+.queue summary { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; min-height:36px; padding:4px 6px; cursor:pointer; list-style:none; font-size:var(--font-size-sm); }
+.queue summary::-webkit-details-marker { display:none; }
+.queue summary .what { flex:1 1 220px; min-width:0; }
+.queue summary .age { color:var(--text-muted); font-size:var(--font-size-control); }
+.queue summary::before { content:"▸"; color:var(--text-muted); width:10px; }
+.queue details[open] > summary::before { content:"▾"; }
+.queue .dbody { padding:2px 6px 10px 26px; font-size:var(--font-size-sm); }
+.legend3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr)); gap:10px; margin-top:14px; }
+.legend3 > div { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-panel); padding:10px 12px; font-size:var(--font-size-sm); color:var(--text-secondary); }
+.legend3 b { display:block; margin-bottom:4px; color:var(--text-primary); font-weight:500; }
+/* detail panel */
+.panel { width:340px; max-width:100%; border:1px solid var(--border-strong); border-radius:var(--radius-panel); background:var(--surface); overflow:hidden; font-size:var(--font-size-sm); }
+.panel.concept { border-color:var(--accent); }
+.panel .ph { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--border); background:var(--chrome-bg); font-weight:500; }
+.panel .seg { display:flex; gap:4px; padding:6px 10px; border-bottom:1px solid var(--border); }
+.panel .seg span { flex:1; text-align:center; padding:4px 0; border:1px solid transparent; border-radius:var(--radius-control); font-size:var(--font-size-control); color:var(--text-secondary); }
+.panel .seg span.on { background:var(--select-fill); border-color:var(--select-edge); color:var(--text-primary); }
+.panel .pb { padding:12px 14px 14px; }
+.panel .pb.clip { height:430px; overflow:hidden; position:relative; }
+.grp { padding-block:10px; border-bottom:1px solid var(--border); }
+.grp:first-child { padding-top:0; }
+.grp h5 { margin:0 0 6px; font-size:var(--font-size-control); color:var(--text-secondary); font-weight:500; }
+.grp p { margin:0 0 6px; }
+.dup { outline:1px dashed var(--blocked); outline-offset:2px; }
+.trail { list-style:none; margin:0; padding:0; }
+.trail li { display:flex; gap:8px; align-items:flex-start; padding:3px 0; font-size:var(--font-size-control); color:var(--text-muted); }
+.trail li.done { color:var(--text-secondary); } .trail li.now { color:var(--text-primary); font-weight:500; }
+.trail .sym { width:16px; height:16px; flex:0 0 16px; }
+.trail small { display:block; color:var(--text-muted); font-weight:400; }
+.path { margin:6px 0 2px; }
+.path .r { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; padding:5px 8px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-raised); font-size:var(--font-size-control); }
+.path .r.cur { background:var(--select-fill); box-shadow:inset 2px 0 0 var(--select-edge); }
+.path .r.sub { border-style:dashed; }
+.path .lv1 { margin-left:18px; border-left:1px solid var(--border-strong); padding-left:10px; margin-top:-1px; }
+.path .lv2 { margin-left:36px; border-left:1px solid var(--border-strong); padding-left:10px; margin-top:-1px; }
+.path .r .lk { color:var(--accent); text-decoration:underline; text-underline-offset:2px; }
+details.op { border:1px solid var(--border); border-radius:var(--radius-control); margin-top:10px; background:var(--chrome-bg); }
+details.op > summary { cursor:pointer; padding:7px 10px; font-size:var(--font-size-control); color:var(--text-secondary); }
+details.op[open] > summary { border-bottom:1px solid var(--border); }
+details.op .in { padding:8px 10px; display:flex; flex-direction:column; gap:8px; }
+/* dialogs */
+.dlgs { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:16px; }
+.dlg { background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius-panel); padding:16px; box-shadow:0 12px 40px var(--scrim); font-size:var(--font-size-sm); }
+.dlg.concept { border-color:var(--accent); }
+.dlg .dh { display:flex; align-items:center; gap:9px; border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:10px; font-weight:500; font-size:var(--font-size-md); }
+.dlg .dh .ic { color:var(--accent); }
+.dlg .df { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; border-top:1px solid var(--border); padding-top:10px; margin-top:10px; }
+.dlg .warnt { color:var(--warning); }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
+.two > div { border:1px solid var(--border); border-radius:var(--radius-control); background:var(--terminal-bg); padding:6px 8px; font-size:var(--font-size-control); }
+.two b { display:block; color:var(--text-muted); font-weight:500; margin-bottom:3px; }
+.dtable { width:100%; border-collapse:collapse; font-size:var(--font-size-sm); margin-top:14px; }
+.dtable th, .dtable td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+.dtable th { color:var(--text-muted); font-weight:500; font-size:var(--font-size-control); }
+/* narrow frames */
+.nar { width:100%; max-width:360px; margin:0; }
+.nar .m-hd { padding:6px 8px; }
+.sw { display:flex; gap:4px; padding:6px 8px; border-bottom:1px solid var(--border); }
+.sw .b { flex:1; justify-content:center; }
+.lg { border-bottom:1px solid var(--border); }
+.lg > summary { display:flex; align-items:center; gap:8px; min-height:36px; padding:4px 10px; cursor:pointer; list-style:none; background:var(--chrome-bg); font-size:var(--font-size-xs); font-weight:500; }
+.lg > summary::-webkit-details-marker { display:none; }
+.lg > summary::before { content:"▸"; color:var(--text-muted); width:10px; }
+.lg[open] > summary::before { content:"▾"; }
+.lg > summary .n { color:var(--text-muted); font-weight:400; font-size:var(--font-size-control); }
+.lg .lb { padding:8px; background:var(--surface); }
+.peek { display:flex; gap:8px; padding:10px; overflow:hidden; }
+.peek .lane { flex:0 0 220px; min-width:220px; }
+.peek .lane + .lane { opacity:.9; }
+/* authority + coverage */
+.auth { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:10px; margin:0; padding:0; list-style:none; }
+.auth li { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-panel); padding:10px 12px; font-size:var(--font-size-sm); color:var(--text-secondary); }
+.auth b { color:var(--text-primary); font-weight:500; }
+.cov { display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:6px; margin:10px 0; padding:0; list-style:none; }
+.cov li { border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); padding:5px 8px; font-size:var(--font-size-control); display:flex; flex-direction:column; gap:1px; }
+.cov li b { font-family:var(--font-mono); font-weight:500; }
+.cov li span { color:var(--text-muted); }
+.cov li.chg { border-color:var(--border-strong); }
+.cov li.keep { background:transparent; }
+.cov li.sup { border-style:dashed; } .cov li.sup b { text-decoration:line-through; }
+details.big { border:1px solid var(--border); border-radius:var(--radius-panel); background:var(--surface); margin-top:12px; }
+details.big > summary { cursor:pointer; padding:10px 14px; font-size:var(--font-size-sm); color:var(--text-secondary); }
+details.big[open] > summary { border-bottom:1px solid var(--border); }
+details.big .in { padding:10px 14px 14px; overflow-x:auto; }
+.kv { width:100%; border-collapse:collapse; font-size:var(--font-size-sm); }
+.kv th, .kv td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+.kv th { color:var(--text-muted); font-weight:500; font-size:var(--font-size-control); }
+ul.lim { margin:8px 0 0; padding-left:20px; color:var(--text-secondary); font-size:var(--font-size-sm); }
+ul.lim li { margin:4px 0; }
+/* ---- Graph view concept (section 1b): static figure and local demo ---- */
+.tag.demo { color:var(--done); border-color:var(--done); background:var(--surface); }
+.vbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; padding:5px 12px; min-height:40px; background:var(--chrome-bg); border-bottom:1px solid var(--border); font-size:var(--font-size-control); }
+.vbar .sp { margin-left:auto; display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; }
+.seg2 { display:inline-flex; gap:4px; }
+.seg2 .b { min-height:30px; }
+.seg2 .b.on, .seg2 .b[aria-pressed="true"] { background:var(--select-fill); border-color:var(--select-edge); }
+.seg2 .n { color:var(--text-muted); }
+.gv-head { display:flex; align-items:center; justify-content:space-between; gap:8px 12px; flex-wrap:wrap; min-height:30px; padding:3px 12px; background:var(--chrome-bg); border-bottom:1px solid var(--border); font-size:var(--font-size-control); }
+.gv-head h4 { font-size:var(--font-size-control); font-weight:500; }
+.gv-scroll { position:relative; overflow:auto; background:var(--chrome-bg); }
+.gv-cols { position:sticky; top:0; z-index:3; height:28px; background:var(--chrome-bg); border-bottom:1px solid var(--border); }
+.gv-cols span { position:absolute; top:0; line-height:28px; font-size:var(--font-size-2xs); letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); white-space:nowrap; }
+.gv-canvas { position:relative; }
+.gv-canvas > svg.gv-edges { position:absolute; left:0; top:0; overflow:visible; pointer-events:none; }
+.ge { fill:none; stroke:var(--border-strong); stroke-width:1.5; }
+.ge.thin { stroke-width:1; }
+.ge.dash { stroke-dasharray:4 3; }
+.ge.dot { stroke-dasharray:1.5 3.5; stroke-linecap:round; }
+.ge.hl { stroke:var(--accent); stroke-width:2; }
+/* Node anatomy (bounded revision 2026-10-07): 240 x 48 grid. Icon slot 20 px | title (truncates) | tier (never shrinks); second row: status word (never shrinks) | provenance (truncates). */
+.gn { position:absolute; width:240px; height:48px; padding:4px 8px; display:grid; grid-template-columns:20px minmax(0,1fr) auto; grid-template-rows:20px 16px; grid-template-areas:"i t x" ". m m"; column-gap:8px; row-gap:2px; align-content:center; align-items:center; text-align:left; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-control); overflow:hidden; color:var(--text-primary); font:inherit; }
+button.gn { cursor:pointer; }
+button.gn:hover { border-color:var(--border-strong); }
+.gn > .gi { grid-area:i; width:20px; height:20px; display:flex; align-items:center; justify-content:center; }
+.gn > .gi > svg { display:block; position:static; width:16px; height:16px; min-width:16px; flex:0 0 16px; }
+.gn.task > .gi { color:var(--text-secondary); }
+.gn > .gt { grid-area:t; min-width:0; font-size:var(--font-size-control); font-weight:500; line-height:20px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gn > .tier { grid-area:x; justify-self:end; min-height:16px; padding:0 4px; font-size:10px; line-height:14px; }
+.gn > .md { grid-area:m; min-width:0; display:flex; gap:5px; align-items:center; overflow:hidden; font-size:var(--font-size-2xs); line-height:16px; white-space:nowrap; color:var(--text-muted); }
+.gn .md .st { flex:0 0 auto; color:var(--text-secondary); font-weight:500; }
+.gn .md .pv { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.gn .md .pv::before { content:"· "; }
+.gn.task { border-left:3px solid var(--border-strong); }
+.gn.un { border-style:dotted; }
+.gn.sub { border-style:dashed; }
+.gn.hl, button.gn.hl:hover { border-color:var(--accent); }
+.gn.sel { background:var(--select-fill); box-shadow:inset 2px 0 0 var(--select-edge); }
+.gn.dim, .card.dim { opacity:.76; }
+.gv-row { display:flex; min-width:0; }
+.gv-row > .gv-scroll { flex:1 1 0; min-width:0; }
+.gv-q { background:var(--chrome-bg); border-bottom:1px solid var(--border); padding:4px 8px; }
+.gv-q .qr { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; min-height:34px; padding:3px 6px; border-bottom:1px solid var(--border); font-size:var(--font-size-sm); }
+.gv-q .qr:last-child { border-bottom:0; }
+.gv-q .qr .what { flex:1 1 220px; min-width:0; }
+/* local demo */
+.dctl { display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; margin:0 0 10px; }
+.stage { overflow-x:auto; padding-bottom:4px; }
+.ro { display:grid; grid-template-columns:auto 1fr; gap:3px 14px; margin:12px 0 0; padding:10px 12px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-panel); font-size:var(--font-size-control); }
+.ro dt { color:var(--text-muted); } .ro dd { margin:0; font-family:var(--font-mono); overflow-wrap:anywhere; }
+.sv { position:relative; display:flex; flex-direction:column; width:var(--fw,100%); height:var(--fh,clamp(460px,calc(100vh - 150px),860px)); background:var(--surface); border:1px solid var(--accent); border-radius:var(--radius-panel); overflow:hidden; font-size:var(--font-size-sm); line-height:1.4; color:var(--text-primary); }
+.sv[hidden], .sv [hidden] { display:none !important; }
+.sv :focus-visible { outline:2px solid var(--focus-strong); outline-offset:-2px; border-radius:var(--radius-small); }
+.sv button { font:inherit; color:inherit; cursor:pointer; }
+.sv button[aria-disabled="true"] { color:var(--text-muted); cursor:default; }
+.sv-wa { position:relative; flex:1 1 0; min-height:0; display:flex; }
+.sv-main { flex:1 1 0; min-width:0; min-height:0; display:flex; flex-direction:column; }
+.sv[data-panel="overlay"] .sv-main { visibility:hidden; }
+.sv-surface { flex:1 1 0; min-height:0; display:flex; flex-direction:column; }
+.sv-strip { flex-wrap:nowrap; overflow:hidden; }
+.sv button.agentchip { cursor:pointer; }
+.sv[data-size="narrow"] .sv-strip { display:none; }
+.sv-queue { flex:0 0 auto; max-height:calc(var(--wa-h,500px) * .4); overflow:auto; }
+.sv[data-view="graph"] .sv-queue { max-height:calc(var(--wa-h,500px) * .3); }
+.sv-qh { display:none; align-items:center; justify-content:space-between; gap:8px; padding:4px 0 6px; }
+.sv[data-qmode="overlay"] .sv-queue { display:none; }
+.sv[data-qmode="overlay"][data-qopen="true"] .sv-queue { display:block; position:absolute; inset:0; z-index:8; max-height:none; background:var(--surface); }
+.sv[data-qmode="overlay"][data-qopen="true"] .sv-qh { display:flex; }
+.sv[data-qmode="overlay"][data-qopen="true"] .sv-main > :not(.sv-queue) { visibility:hidden; }
+.sv .queue summary { min-height:36px; }
+.sv button.tier { cursor:pointer; min-height:26px; padding:0 8px; font-size:var(--font-size-control); }
+.sv-board { flex:1 1 0; min-height:0; display:flex; gap:8px; padding:10px; overflow-x:auto; overflow-y:hidden; background:var(--surface); }
+.sv-lane { flex:1 0 210px; min-width:210px; display:flex; flex-direction:column; min-height:0; background:var(--chrome-bg); border:1px solid var(--border); border-radius:var(--radius-panel); }
+.sv-lane.slim { flex-basis:115px; min-width:115px; max-width:115px; }
+.sv-lane > h3 { display:flex; align-items:center; gap:6px; min-height:38px; padding:7px 8px; border-bottom:1px solid var(--border); font-size:var(--font-size-xs); font-weight:500; margin:0; }
+.sv-lane > h3 .n { color:var(--text-muted); font-size:var(--font-size-control); font-weight:400; }
+.sv-lane ul { list-style:none; margin:0; padding:7px; overflow-y:auto; flex:1 1 0; min-height:0; }
+.sv-lane li { margin:0 0 7px; }
+.sv-lane li .card { margin:0; }
+.sv-lane .empty { color:var(--text-muted); font-size:var(--font-size-control); padding:4px 2px; }
+.sv button.card { display:block; width:100%; text-align:left; cursor:pointer; }
+.sv .card .t { display:flex; flex-wrap:wrap; gap:4px 6px; align-items:center; }
+.card.hl { border-color:var(--accent); }
+.sv[data-size="narrow"] .sv-board { flex-direction:column; overflow-y:auto; overflow-x:hidden; gap:6px; }
+.sv[data-size="narrow"] .sv-lane { flex:0 0 auto; min-width:0; max-width:none; }
+.sv[data-size="narrow"] .sv-lane ul { overflow:visible; flex:0 0 auto; }
+.sv[data-size="narrow"] .vbar .seg2 { width:100%; }
+.sv[data-size="narrow"] .vbar .seg2 .b { flex:1; justify-content:center; }
+.sv[data-size="narrow"] .vbar .sp { margin-left:0; }
+.sv-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--surface); border-left:1px solid var(--border-strong); }
+.sv[data-panel="side"] .sv-panel { flex:0 0 var(--pw,340px); max-width:50%; }
+.sv[data-panel="sheet"] .sv-panel { position:absolute; left:0; right:0; bottom:0; height:var(--sh,240px); border-left:0; border-top:1px solid var(--border-strong); z-index:5; box-shadow:0 -8px 24px var(--scrim); }
+.sv[data-panel="overlay"] .sv-panel { position:absolute; inset:0; border-left:0; z-index:6; }
+.sv-panel .ph .b { padding:3px 6px; min-height:26px; }
+.sv-dscroll { flex:1 1 0; min-height:0; overflow:auto; padding:12px 14px 16px; }
+.sv .path button.r { width:100%; text-align:left; cursor:pointer; }
+.sv-split { flex:0 0 6px; width:6px; margin-left:-3px; position:relative; z-index:4; cursor:col-resize; touch-action:none; }
+.sv-split::after { content:""; position:absolute; top:0; bottom:0; left:2px; width:2px; background:transparent; }
+.sv-split:hover::after, .sv-split:focus-visible::after, .sv-split.drag::after { background:var(--accent); }
+.sv[data-panel="sheet"] .sv-split { position:absolute; left:0; right:0; bottom:var(--sh,240px); margin:0 0 -3px 0; width:auto; height:6px; flex:none; cursor:row-resize; z-index:7; }
+.sv[data-panel="sheet"] .sv-split::after { top:2px; bottom:auto; left:0; right:0; width:auto; height:2px; }
+.sv[data-panel="sheet"] .sv-board::after { content:""; flex:0 0 calc(var(--sh,240px) + 8px); }
+.sv[data-panel="sheet"] .card { scroll-margin-bottom:calc(var(--sh,240px) + 8px); }
+.sv-notice { min-height:24px; padding:3px 12px; font-size:var(--font-size-control); color:var(--text-muted); border-top:1px solid var(--border); background:var(--chrome-bg); }
+@media (max-width:800px) { main { padding-left:8px; padding-right:8px; } }
+@media (max-width:760px) {
+  header.hero { padding-top:20px; }
+  section.sec { padding-top:34px; }
+  .two { grid-template-columns:1fr; }
+}
+@media (max-width:420px) {
+  body { font-size:var(--font-size-sm); }
+  .rank th:nth-child(3), .rank td:nth-child(3) { display:none; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="g-working" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><circle cx="9" cy="9" r="3.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 5.25a3.75 3.75 0 0 0 0 7.5z" fill="currentColor"/></symbol>
+  <symbol id="g-idle" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".10"/><circle cx="9" cy="9" r="3.25" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="g-blocked" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><path d="M6.25 6.25l5.5 5.5M11.75 6.25l-5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="g-done" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><path d="M5.5 9.5l2.6 2.6 4.6-5.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="g-unknown" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".10"/><circle cx="9" cy="9" r="2.5" fill="currentColor" fill-opacity=".75"/></symbol>
+  <symbol id="g-live" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><circle cx="9" cy="9" r="3.5" fill="currentColor"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5.5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 7.1c0 2.6-7 1.4-7 3.8"/></g></symbol>
+  <symbol id="i-comment" viewBox="0 0 16 16"><path d="M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8l-3 2.5v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6"/><path d="M8 5.1v.1"/></g></symbol>
+  <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5h4l1.3 1.5H14v6.5H2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+  <symbol id="i-term" viewBox="0 0 16 16"><path d="M3 4.5l4 3.5-4 3.5M8.5 12h4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 16 16"><g fill="currentColor"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></g></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 16 16"><path d="M3 13l.6-3L10.8 2.8l2.4 2.4L6 12.4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+  <symbol id="i-back" viewBox="0 0 16 16"><path d="M13 8H3m4-4L3 8l4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 16 16"><path d="M4 2.5h5.5L12 5v8.5H4zM9.5 2.5V5H12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+</svg>
+
+<a class="skip" href="#summary">Skip to summary</a>
+<div class="top">
+  <nav aria-label="Presentation sections">
+    <a href="#summary">Summary</a>
+    <a href="#workarea">1 Work area</a>
+    <a href="#graph">1b Graph view</a>
+    <a href="#attention">2 Attention &amp; recovery</a>
+    <a href="#relationships">3 Relationships</a>
+    <a href="#details">4 Details &amp; review</a>
+    <a href="#dialogs">5 Dialogs</a>
+    <a href="#narrow">6 Narrow</a>
+    <a href="#authority">Authority</a>
+    <a href="#coverage">Coverage</a>
+    <a href="#boundaries">Boundaries</a>
+  </nav>
+</div>
+
+<main>
+<header class="hero">
+  <h1>Supervisor — design review of the atlas</h1>
+  <p class="lead">Recommendations only. The Supervisor should read as an <strong>observational task board</strong>: the supervising agent manages grants, review and acceptance; the user sees what needs a decision, what needs recovery, and what finished. Operator controls stay available but secondary. Full findings, tradeoffs, keyboard behavior and the 58-ID coverage matrix are in <code>DESIGN.md</code>.</p>
+  <ul class="legend" aria-label="How to read the frames">
+    <li><span class="tag ev">Evidence-derived schematic</span> redrawn from current CSS/TSX and atlas IDs; not a screenshot</li>
+    <li><span class="tag cc">Concept</span> proposed, not implemented</li>
+    <li><span class="tag il">Illustrative values</span> every name, time and count is example data</li>
+    <li><span class="tag demo">Local demo</span> working prototype on illustrative data (section 1b); no product, terminal or network action</li>
+  </ul>
+  <p class="note" style="margin-top:10px">Chips that look like buttons in the schematic and concept frames are inert text. The navigation links, the disclosure triangles and the section 1b <em>local demo</em> respond; the demo changes nothing outside this page.</p>
+</header>
+
+<!-- ============================ SUMMARY ============================ -->
+<section class="sec" id="summary" tabindex="-1" aria-labelledby="h-summary">
+  <h2 id="h-summary">Priority summary</h2>
+  <p class="sub">Five changes carry most of the value. They all reuse data the snapshot already provides and keep every authority rule intact.</p>
+  <div class="prio">
+    <article class="pcard first"><span class="tag p0">P0</span><h3>1 · Attention queue, one vocabulary <span class="ids">F1 F2</span></h3><p>Replace the 44/164/110 px clipping strip with an ordered, growing queue: <em>Decide</em> → <em>Recover</em> → <em>Notice</em>, one shared predicate for queue, card badge and filter.</p><span class="ids">W3 W5 R07 R08 D21 G18</span><a class="more" href="#attention">See before / proposed →</a></article>
+    <article class="pcard"><span class="tag p0">P0</span><h3>2 · Task-first work area, full graph one switch away <span class="ids">F3</span></h3><p>The Board owns the height and Tasks is the initial view. The complete agent/task graph is a labelled <em>Graph</em> view of the whole workarea, with a one-line agents strip as a glance — no 220 px band.</p><span class="ids">W4 W5 W6 G01 G05 G16–G19</span><a class="more" href="#workarea">See before / proposed →</a> <a class="more" href="#graph">Graph view + demo →</a></article>
+    <article class="pcard"><span class="tag p0">P0</span><h3>3 · Review-first details <span class="ids">F4</span></h3><p>State, Result and a progress trail first; routine actions visible; operator overrides in one collapsed group.</p><span class="ids">D01–D16</span><a class="more" href="#details">See before / proposed →</a></article>
+    <article class="pcard"><span class="tag p0">P0</span><h3>4 · Recovery with one next step <span class="ids">F5</span></h3><p>Check status first, consequence shown under Restart, Close tracking out of the healthy-agent row.</p><span class="ids">R03 R04 R05 R07 D13</span><a class="more" href="#attention">See recovery rows →</a></article>
+    <article class="pcard"><span class="tag p1">P1</span><h3>5 · Relationship path <span class="ids">F7</span></h3><p>Task ↔ worker ↔ subagent as a navigable path with provenance and “no terminal”, instead of three scattered views.</p><span class="ids">G05–G08 G10–G13 D04</span><a class="more" href="#relationships">See before / proposed →</a></article>
+  </div>
+  <div class="rankwrap">
+  <table class="rank">
+    <caption class="note" style="text-align:left;padding:14px 0 4px">All 13 findings in priority order</caption>
+    <thead><tr><th scope="col">#</th><th scope="col">Recommendation</th><th scope="col">Atlas IDs</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag p0">P0</span> F1</td><td>Attention queue replaces fixed status strip</td><td class="ids">W3 W8 R07 R08 D21 G18</td></tr>
+      <tr><td><span class="tag p0">P0</span> F2</td><td>Decide / Recover / Notice vocabulary; one predicate (UI ignores core <code>attention</code> today; blocked worker is not “needs attention” on its card)</td><td class="ids">W3 W5 R07 R08</td></tr>
+      <tr><td><span class="tag p0">P0</span> F3</td><td>Task-first work area; Tasks · Graph switch at every size; Graph view uses the whole workarea</td><td class="ids">W4 W5 W6 G01 G05 G16–G19</td></tr>
+      <tr><td><span class="tag p0">P0</span> F4</td><td>Review-first details, routine vs operator actions</td><td class="ids">D01–D16</td></tr>
+      <tr><td><span class="tag p0">P0</span> F5</td><td>Recovery cards: one suggested step, consequence visible</td><td class="ids">R03 R04 R05 R07 D13 W3</td></tr>
+      <tr><td><span class="tag p1">P1</span> F6</td><td>Two-line cards, paired reported / observed chips</td><td class="ids">W5 G09 G10 D03 D21</td></tr>
+      <tr><td><span class="tag p1">P1</span> F7</td><td>Relationship path, scroll-into-view highlight</td><td class="ids">G05–G08 G10–G13 D04</td></tr>
+      <tr><td><span class="tag p1">P1</span> F8</td><td>Dialog labels, inline validation, stale/deleted edit</td><td class="ids">R01–R06 D08–D10 D15</td></tr>
+      <tr><td><span class="tag p1">P1</span> F9</td><td>Header: Start weight, “Hide Supervisor”, selector shows needs-you, one panel name</td><td class="ids">W1 W2 G19 D17 D20 R01</td></tr>
+      <tr><td><span class="tag p1">P1</span> F10</td><td>Activity readable first; Diagnostics summary before raw</td><td class="ids">D17 D18 D19 R08</td></tr>
+      <tr><td><span class="tag p1">P1</span> F11</td><td>One banner for offline; one centered empty board</td><td class="ids">W7 W8 G02 G15 R07 D21</td></tr>
+      <tr><td><span class="tag p1">P1</span> F12</td><td>Narrow: summary bar, attention overlay, lane groups with counts, same Tasks · Graph switch</td><td class="ids">W6 G17 G18 D01</td></tr>
+      <tr><td><span class="tag p2">P2</span> F13</td><td>Details-splitter values, dim contrast, disabled reasons, queue roving, graph arrows</td><td class="ids">W9 G13 G16 D22 W5</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============================ 1 WORK AREA ============================ -->
+<section class="sec" id="workarea" tabindex="-1" aria-labelledby="h-work">
+  <h2 id="h-work">1 · Task-first work area <span class="tag p0">P0</span><span class="ids">F3 F6 · W4 W5 W6 G01 G05 G16–G19</span></h2>
+  <p class="sub">Wide layout, about 1200 px workarea. The agent graph sits above the Board in a 220 px band (100 px when anything needs attention) that cannot show the whole topology, yet it takes the Board's height. Lane bodies are full-height and mostly empty while each card carries up to six lines of evidence. The concept keeps Tasks first and moves the complete graph into its own view (section 1b).</p>
+
+  <figure>
+    <figcaption><span class="tag ev">Evidence-derived schematic</span><strong>Before</strong> — current layout. Sources: <code>supervisor.css:33,53,76–95,203–204</code>, <code>SupervisorView.tsx:252–262,282,309</code>, historical <code>synthetic-populated-board-graph.png</code> (composer and “Other agents” omitted: removed in current source). Illustrative values.</figcaption>
+    <div class="scroll" tabindex="0" role="region" aria-label="Scrollable schematic: current wide layout">
+    <div class="m" style="min-width:1180px" role="group" aria-label="Schematic of the current Supervisor workarea">
+      <div class="m-hd">
+        <span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-branch"/></svg>Supervisor</span>
+        <span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg>Managing tasks</span>
+        <span class="sp"><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-comment"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-info"/></svg></span>
+          <span class="b pri"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Start agent</span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-dots"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></span></span>
+      </div>
+      <div class="m-att compact">
+        <span class="m-line">Reported · Atlas supervisor <time style="margin-left:0">7m ago</time></span>
+        <span class="m-line">Observed · Herdr <svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg> working</span>
+        <span class="m-btnrow"><span class="b"><svg class="ic" aria-hidden="true"><use href="#i-term"/></svg>Open terminal</span><span class="b"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>Close tracking…</span></span>
+      </div>
+      <div class="m-gh"><strong>Agents · 6 connected</strong><span class="filt"><span class="cb on" aria-hidden="true"></span> Subagents</span></div>
+      <div class="m-gscroll" style="height:190px">
+        <div class="m-gcanvas">
+          <svg class="edges" width="460" height="280" viewBox="0 0 460 280" aria-hidden="true" focusable="false"><g fill="none" stroke="var(--border-strong)" stroke-width="1.5"><path d="M188 114 C206 114 206 26 224 26"/><path d="M188 114 C206 114 206 70 224 70"/><path d="M188 114 C206 114 206 114 224 114"/><path d="M188 114 C206 114 206 158 224 158"/><path d="M188 114 C206 114 206 202 224 202"/><path d="M188 114 C206 114 206 246 224 246"/><path d="M404 158 L440 158"/></g></svg>
+          <div class="node" style="left:8px;top:96px"><div class="h"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg>Atlas supervisor</div><div class="md">Supervisor · working · Project</div></div>
+          <div class="node" style="left:224px;top:8px"><div class="h"><svg class="g c-unknown" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-unknown"/></svg>Worker 1</div><div class="md">Worker · unobserved · Project</div></div>
+          <div class="node" style="left:224px;top:52px"><div class="h"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg>Worker 2</div><div class="md">Worker · working · Project</div></div>
+          <div class="node" style="left:224px;top:96px"><div class="h"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg>Worker 3</div><div class="md">Worker · working · Project</div></div>
+          <div class="node" style="left:224px;top:140px"><div class="h"><svg class="g c-blocked" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-blocked"/></svg>Worker 4</div><div class="md">Worker · blocked · Project</div></div>
+          <div class="node" style="left:224px;top:184px"><div class="h"><svg class="g c-done" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-done"/></svg>Worker 5</div><div class="md">Worker · done · Project</div></div>
+          <div class="node" style="left:224px;top:228px"><div class="h"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg>Worker 6</div><div class="md">Worker · working · Project</div></div>
+        </div>
+        <div class="m-gcanvas" style="width:200px;height:280px;margin-left:-20px"><div class="node sub" style="left:0;top:140px"><div class="h"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg>Read-only scout</div><div class="md">scout · OMP running · Project</div></div></div>
+        <div class="m-tl"><span class="lab">Task links</span>
+          <span class="tlk">Worker 1 → Task · Audit shortcuts</span><span class="tlk">Worker 2 → Task · Map sidebar</span><span class="tlk">Worker 3 → Task · Improve file search</span><span class="tlk">Worker 4 → Task · Document supervisor</span><span class="tlk">Worker 5 → Task · Review migration</span></div>
+      </div>
+      <div class="m-th"><h4>Tasks <span>5 open</span></h4><div class="filt"><span class="box"><span class="cb" aria-hidden="true"></span>Needs attention (dims other tasks)</span><span>Space <span class="chip">All Spaces</span></span></div></div>
+      <div class="scroll" style="background:var(--surface)"><div class="m-board">
+        <section class="lane" aria-label="Queued"><header><span class="dot"></span>Queued <span class="n">1</span><span class="chev">›</span></header><div class="body"><div class="card"><div class="t">Audit shortcuts</div><div class="st">Queued</div><div class="wk"><svg class="g c-unknown" aria-hidden="true"><use href="#g-unknown"/></svg>Worker 1</div><div class="ev"><div><span class="chip"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg>Project</span></div><div class="row"><span>Reported · Worker 1</span><span>7m ago</span></div><div class="row"><span>Observed · Herdr working</span><span>2:00:00 PM</span></div></div></div></div></section>
+        <section class="lane" aria-label="Preparing"><header><span class="dot setup"></span>Preparing <span class="n">1</span><span class="chev">›</span></header><div class="body"><div class="card"><div class="t">Map sidebar</div><div class="st">Preparing</div><div class="wk"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Worker 2</div><div class="ev"><div><span class="chip"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg>Project</span></div><div class="row"><span>Reported · Worker 2</span><span>7m ago</span></div><div class="row"><span>Observed · Herdr working</span><span>2:00:00 PM</span></div></div></div></div></section>
+        <section class="lane" aria-label="Ready"><header><span class="dot ready"></span>Ready <span class="n">1</span><span class="chev">›</span></header><div class="body"><div class="card"><div class="t">Improve file search</div><div class="st">Preparing</div><div class="wk"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Worker 3</div><div class="ev"><div><span class="chip"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg>Project</span></div><div class="row"><span>Reported · Worker 3</span><span>7m ago</span></div><div class="row"><span>Observed · Herdr working</span><span>2:00:00 PM</span></div></div></div></div></section>
+        <section class="lane" aria-label="Working"><header><span class="dot working"></span>Working <span class="n">1</span><span class="chev">›</span></header><div class="body"><div class="card"><div class="t">Document supervisor</div><div class="st">Working</div><div class="wk"><svg class="g c-blocked" aria-hidden="true"><use href="#g-blocked"/></svg>Worker 4</div><div class="ev"><div><span class="chip"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg>Project</span></div><div class="row"><span>Reported · Worker 4</span><span>7m ago</span></div><div class="row"><span>Observed · Herdr blocked</span><span>2:00:00 PM</span></div><div class="warn">Agent is blocked; no question reported. <span class="b">Open terminal</span> <span class="b">Check status</span></div></div></div></div></section>
+        <section class="lane" aria-label="Review"><header><span class="dot review"></span>Review <span class="n">1</span><span class="chev">›</span></header><div class="body"><div class="card"><div class="t">Review migration</div><div class="st">Reviewing result</div><div class="wk"><svg class="g c-done" aria-hidden="true"><use href="#g-done"/></svg>Worker 5</div><div class="ev"><div><span class="chip"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg>Project</span></div><div class="row"><span>Reported · Worker 5</span><span>7m ago</span></div><div class="row"><span>Observed · Herdr done</span><span>2:00:00 PM</span></div></div></div></div></section>
+        <section class="lane collapsed" aria-label="Done"><header><span class="dot accepted"></span>Done <span class="n">1</span><span class="chev">⌄</span></header><div class="body" style="min-height:var(--lane-h,200px)"></div></section>
+      </div></div>
+    </div>
+    </div>
+    <ol class="pins">
+      <li><i class="pin">1</i> The graph band clips: four workers fit; Worker 5, Worker 6 and the layout below are out of sight (band 220 px minus 30 px heading; 100 px when attention is present).</li>
+      <li><i class="pin">2</i> “Working” lane card shows a <em>blocked</em> glyph and a warning, but the card has no attention badge, and the “Needs attention” filter would dim it (<code>SupervisorView.tsx:249,259</code>).</li>
+      <li><i class="pin">3</i> Each card repeats lane word, identical Space chip and the same observed time; lane bodies are tall and empty.</li>
+      <li><i class="pin">4</i> <em>Start agent</em> is the primary-weight control while a verified supervisor is managing tasks; <em>Close tracking…</em> sits next to <em>Open terminal</em>.</li>
+    </ol>
+  </figure>
+
+  <figure>
+    <figcaption><span class="tag cc">Concept</span><strong>Proposed</strong> — summary bar, one-line agents strip, <em>Tasks · Graph</em> switch, two-line cards. Same data, same lanes, same keyboard model. The full graph is the <em>Graph</em> view (section 1b). Illustrative values.</figcaption>
+    <div class="scroll" tabindex="0" role="region" aria-label="Scrollable concept: proposed task-first layout">
+    <div class="m concept" style="min-width:1180px" role="group" aria-label="Concept of the proposed task-first workarea">
+      <div class="m-hd">
+        <span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-branch"/></svg>Supervisor</span>
+        <span class="sp"><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-comment"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-info"/></svg></span>
+          <span class="b"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Start agent</span><span class="b quiet">Start options…</span><span class="b quiet">Hide Supervisor</span></span>
+      </div>
+      <div class="m-sum">
+        <span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg><strong style="color:var(--text-primary);font-weight:500">Atlas supervisor</strong> · Managing tasks</span>
+        <span class="muted">6 agents observed · 2:00 PM</span>
+        <span class="sp"><span class="tier recover">⚠ 1 Recover</span><span class="b"><svg class="ic" aria-hidden="true"><use href="#i-term"/></svg>Open terminal</span></span>
+      </div>
+      <div class="m-strip"><span class="lab"><strong style="font-weight:500">Agents</strong> · 6 observed</span>
+        <span class="agentchip sel"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Atlas supervisor</span><span class="arrow">›</span>
+        <span class="agentchip"><svg class="g c-unknown" aria-hidden="true"><use href="#g-unknown"/></svg>Worker 1</span>
+        <span class="agentchip"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Worker 2</span>
+        <span class="agentchip"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Worker 3</span>
+        <span class="agentchip warnc"><svg class="g c-blocked" aria-hidden="true"><use href="#g-blocked"/></svg>Worker 4 <span class="muted">+1 subagent</span></span>
+        <span class="agentchip"><svg class="g c-done" aria-hidden="true"><use href="#g-done"/></svg>Worker 5</span>
+        <span class="agentchip"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Worker 6</span>
+        <span class="b" style="margin-left:auto">Graph ›</span>
+      </div>
+      <div class="vbar"><div class="seg2" role="group" aria-label="Workarea view (concept)"><span class="b on">Tasks <span class="n">5</span></span><span class="b">Graph <span class="n">9</span></span></div><span class="sp filt"><span class="box"><span class="cb" aria-hidden="true"></span>Attention · 1</span><span>Space <span class="chip">All Spaces</span></span></span></div>
+      <div style="background:var(--surface)"><div class="m-board" style="--lane-h:70px">
+        <section class="lane" aria-label="Queued"><header><span class="dot"></span>Queued <span class="n">1</span></header><div class="body" style="min-height:70px"><div class="card c2"><div class="t">Audit shortcuts</div><div class="sl"><svg class="g c-unknown" aria-hidden="true"><use href="#g-unknown"/></svg>Worker 1 <span class="pairchip"><span>reported 7m</span><span>observed ● unobserved</span></span></div></div></div></section>
+        <section class="lane" aria-label="Preparing"><header><span class="dot setup"></span>Preparing <span class="n">1</span></header><div class="body" style="min-height:70px"><div class="card c2"><div class="t">Map sidebar</div><div class="sl"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Worker 2 <span class="pairchip"><span>reported 7m</span><span>observed working</span></span></div></div></div></section>
+        <section class="lane" aria-label="Ready"><header><span class="dot ready"></span>Ready <span class="n">1</span></header><div class="body" style="min-height:70px"><div class="card c2"><div class="t">Improve file search</div><div class="sl"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Worker 3 <span class="pairchip"><span>reported 7m</span><span>observed working</span></span></div></div></div></section>
+        <section class="lane" aria-label="Working"><header><span class="dot working"></span>Working <span class="n">1</span></header><div class="body" style="min-height:70px"><div class="card c2 sel"><div class="t">Document supervisor <span class="tier recover">⚠ Recover</span></div><div class="sl"><svg class="g c-blocked" aria-hidden="true"><use href="#g-blocked"/></svg>Worker 4 <span class="pairchip"><span>reported 7m</span><span>observed blocked</span></span></div></div></div></section>
+        <section class="lane" aria-label="Review"><header><span class="dot review"></span>Review <span class="n">1</span></header><div class="body" style="min-height:70px"><div class="card c2"><div class="t">Review migration</div><div class="sl"><svg class="g c-done" aria-hidden="true"><use href="#g-done"/></svg>Supervisor reviewing · Worker 5 <span class="pairchip"><span>reported 7m</span><span>observed done</span></span></div></div></div></section>
+        <section class="lane collapsed" aria-label="Done"><header><span class="dot accepted"></span>Done <span class="n">1</span><span class="chev">⌄</span></header><div class="body" style="min-height:70px"></div></section>
+      </div></div>
+    </div>
+    </div>
+    <ol class="pins">
+      <li><i class="pin g">A</i> Summary bar replaces the compact status row; Open terminal stays one click away; Close tracking moves to Details › Operator intervention.</li>
+      <li><i class="pin g">B</i> One-line agents strip: a chip per run (glyph + name), <code>+N subagents</code>, and <em>Graph ›</em>. It is a glance only — it never expands; the full graph is the <em>Graph</em> view.</li>
+      <li><i class="pin g">C</i> Two-line cards; reported and observed stay <em>two separate chips</em> (provenance preserved); lane body sized to content.</li>
+      <li><i class="pin g">D</i> The blocked worker is a <em>Recover</em> card with text + glyph; the filter chip shows a count and still dims rather than removes.</li>
+      <li><i class="pin g">E</i> <em>Tasks · Graph</em> switch in one view bar at every size (the existing narrow switch, always shown); Tasks is pressed on first open.</li>
+    </ol>
+    <p class="note">Tradeoff: one click to see the whole graph. Mitigated by the strip, the relationship path (section 3), <em>Show in Graph</em> on queue rows and details. Alternatives in <code>DESIGN.md §7</code>.</p>
+  </figure>
+</section>
+
+<!-- ============================ 1b GRAPH VIEW ============================ -->
+<section class="sec" id="graph" tabindex="-1" aria-labelledby="h-graph">
+  <h2 id="h-graph">1b · Full graph view <span class="tag p0">P0</span><span class="ids">F3 F7 F12 F13 · G01–G03 G05 G07 G08 G12 G13 G16–G18</span></h2>
+  <p class="sub">The Supervisor occupies the whole window, so the complete topology gets the whole workarea — in its own <strong>Graph</strong> view behind a visible switch, not in a fixed band or a row of chips. Everything else stays as proposed: summary bar, attention queue and details keep their places; only the Board is swapped for the graph. Static figure first (no script needed), then a local working demo.</p>
+
+  <figure>
+    <figcaption><span class="tag cc">Concept</span><strong>Graph view</strong> — wide workarea, Worker 4 selected, details beside the graph. Smaller sample than the demo. Every node is 240 × 48 with separate icon, title, tier, status and provenance regions (bounded revision, see <code>DESIGN.md §F3 Node anatomy</code>). Illustrative values.</figcaption>
+    <div class="scroll" tabindex="0" role="region" aria-label="Scrollable concept: full graph view">
+    <div class="m concept" style="min-width:1700px" role="group" aria-label="Concept of the Graph view at wide size">
+      <div class="m-hd"><span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-branch"/></svg>Supervisor</span><span class="sp"><span class="b quiet">Hide Supervisor</span></span></div>
+      <div class="m-sum"><span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg><strong style="color:var(--text-primary);font-weight:500">Atlas supervisor</strong> · Managing tasks</span><span class="muted">6 agents observed · 2:00 PM</span><span class="sp"><span class="tier decide">✉ 1 Decide</span><span class="tier recover">⚠ 1 Recover</span><span class="tier notice">ℹ 2 Notice</span></span></div>
+      <div class="gv-q" role="region" aria-label="Attention queue (concept), capped at 30% in the Graph view">
+        <div class="qr"><span class="tier decide">✉ Decide</span><span class="what"><strong style="font-weight:500">Atlas supervisor asks:</strong> Which task should get priority?</span><span class="b">Show in Graph</span><span class="muted">2m</span></div>
+        <div class="qr"><span class="tier recover">⚠ Recover</span><span class="what"><strong style="font-weight:500">Worker 4</strong> is blocked; no question reported</span><span class="b pri">Check status</span><span class="b">Show in Graph</span><span class="muted">7m</span></div>
+        <div class="qr"><span class="tier notice">ℹ Notice</span><span class="what"><strong style="font-weight:500">Review migration</strong> changed during acceptance</span><span class="b">Show in Graph</span><span class="muted">14m</span></div>
+      </div>
+      <div class="vbar"><div class="seg2" role="group" aria-label="Workarea view (concept)"><span class="b">Tasks <span class="n">7</span></span><span class="b on">Graph <span class="n">11</span></span></div><span class="sp filt"><span class="box"><span class="cb" aria-hidden="true"></span>Attention · 3</span></span></div>
+      <div class="gv-head"><h4>Agents · 6 connected · 4 subagents · 7 tasks</h4><span class="filt"><span class="cb on" aria-hidden="true"></span> Subagents</span></div>
+      <div class="gv-row">
+        <div class="gv-scroll" style="height:510px" tabindex="0" role="region" aria-label="Scrollable concept: agent graph">
+          <div class="gv-cols" style="width:1344px" aria-hidden="true"><span style="left:10px">Supervisor</span><span style="left:282px">Task</span><span style="left:554px">Worker · Herdr</span><span style="left:826px">OMP subagent</span><span style="left:1098px">Nested</span></div>
+          <div class="gv-canvas" role="group" aria-label="Agent relationships (concept)" style="width:1344px;height:478px">
+            <svg class="gv-edges" width="1344" height="478" viewBox="0 0 1344 478" aria-hidden="true" focusable="false">
+              <path class="ge thin" d="M248 239 C264 239 264 32 280 32"/><path class="ge thin" d="M248 239 C264 239 264 88 280 88"/><path class="ge thin" d="M248 239 C264 239 264 144 280 144"/><path class="ge thin hl" d="M248 239 C264 239 264 228 280 228"/><path class="ge thin" d="M248 239 C264 239 264 312 280 312"/><path class="ge thin" d="M248 239 C264 239 264 368 280 368"/><path class="ge dot" d="M248 239 C264 239 264 446 280 446"/>
+              <path class="ge" d="M520 32 L552 32"/><path class="ge" d="M520 88 L552 88"/><path class="ge" d="M520 144 L552 144"/><path class="ge hl" d="M520 228 L552 228"/><path class="ge" d="M520 312 L552 312"/><path class="ge" d="M520 368 L552 368"/>
+              <path class="ge dash" d="M792 88 L824 88"/><path class="ge dash" d="M792 228 C808 228 808 200 824 200"/><path class="ge dash" d="M792 228 C808 228 808 256 824 256"/><path class="ge dash" d="M1064 200 L1096 200"/>
+            </svg>
+            <div class="gn hl" style="left:8px;top:215px"><span class="gi"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg></span><strong class="gt">Atlas supervisor</strong><span class="tier decide">✉ Decide</span><span class="md"><span class="st">working</span><span class="pv">Herdr · Project</span></span></div>
+            <div class="gn task" style="left:280px;top:8px"><span class="gi"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg></span><strong class="gt">Audit shortcuts</strong><span class="md"><span class="st">Queued</span><span class="pv">Worker 1</span></span></div>
+            <div class="gn" style="left:552px;top:8px"><span class="gi"><svg class="g c-unknown" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-unknown"/></svg></span><strong class="gt">Worker 1</strong><span class="md"><span class="st">unobserved</span><span class="pv">Herdr · Project</span></span></div>
+            <div class="gn task" style="left:280px;top:64px"><span class="gi"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg></span><strong class="gt">Map sidebar</strong><span class="md"><span class="st">Preparing</span><span class="pv">Worker 2</span></span></div>
+            <div class="gn" style="left:552px;top:64px"><span class="gi"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg></span><strong class="gt">Worker 2</strong><span class="md"><span class="st">working</span><span class="pv">Herdr · Project</span></span></div>
+            <div class="gn sub" style="left:824px;top:64px"><span class="gi"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg></span><strong class="gt">Test runner</strong><span class="md"><span class="st">running</span><span class="pv">OMP events · no terminal</span></span></div>
+            <div class="gn task" style="left:280px;top:120px"><span class="gi"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg></span><strong class="gt">Improve file search</strong><span class="md"><span class="st">Ready</span><span class="pv">Worker 3</span></span></div>
+            <div class="gn" style="left:552px;top:120px"><span class="gi"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg></span><strong class="gt">Worker 3</strong><span class="md"><span class="st">working</span><span class="pv">Herdr · Project</span></span></div>
+            <div class="gn task hl" style="left:280px;top:204px"><span class="gi"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg></span><strong class="gt">Document supervisor</strong><span class="tier recover">⚠ Recover</span><span class="md"><span class="st">Working</span><span class="pv">Worker 4</span></span></div>
+            <div class="gn sel" style="left:552px;top:204px"><span class="gi"><svg class="g c-blocked" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-blocked"/></svg></span><strong class="gt">Worker 4</strong><span class="tier recover">⚠ Recover</span><span class="md"><span class="st">blocked</span><span class="pv">Herdr · Project</span></span></div>
+            <div class="gn sub" style="left:824px;top:176px"><span class="gi"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg></span><strong class="gt">Read-only scout</strong><span class="md"><span class="st">running</span><span class="pv">OMP events · no terminal</span></span></div>
+            <div class="gn sub" style="left:1096px;top:176px"><span class="gi"><svg class="g c-done" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-done"/></svg></span><strong class="gt">Doc linter</strong><span class="md"><span class="st">done</span><span class="pv">OMP events · no terminal</span></span></div>
+            <div class="gn sub" style="left:824px;top:232px"><span class="gi"><svg class="g c-done" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-done"/></svg></span><strong class="gt">Schema checker</strong><span class="md"><span class="st">done</span><span class="pv">OMP events · no terminal</span></span></div>
+            <div class="gn task" style="left:280px;top:288px"><span class="gi"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg></span><strong class="gt">Review migration</strong><span class="tier notice">ℹ Notice</span><span class="md"><span class="st">Review</span><span class="pv">Worker 5</span></span></div>
+            <div class="gn" style="left:552px;top:288px"><span class="gi"><svg class="g c-done" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-done"/></svg></span><strong class="gt">Worker 5</strong><span class="md"><span class="st">done</span><span class="pv">Herdr · Project</span></span></div>
+            <div class="gn task" style="left:280px;top:344px"><span class="gi"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg></span><strong class="gt">Plan release checklist</strong><span class="md"><span class="st">Working</span><span class="pv">Worker 6</span></span></div>
+            <div class="gn" style="left:552px;top:344px"><span class="gi"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg></span><strong class="gt">Worker 6</strong><span class="md"><span class="st">working</span><span class="pv">Herdr · Project</span></span></div>
+            <div class="gn task un" style="left:280px;top:422px"><span class="gi"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg></span><strong class="gt">Draft release notes</strong><span class="md"><span class="st">Queued</span><span class="pv">not assigned</span></span></div>
+          </div>
+        </div>
+        <div class="panel concept" style="width:340px;flex:0 0 340px;border-radius:0;border-width:0 0 0 1px" role="group" aria-label="Concept of details beside the graph">
+          <div class="ph"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg>Worker 4</div>
+          <div class="pb">
+            <div class="grp"><h5>State</h5><p><strong style="font-weight:500">Worker 4 is blocked; no question reported.</strong></p><p><span class="tier recover">⚠ Recover</span></p></div>
+            <div class="grp"><h5>Relationship</h5><div class="path">
+              <div class="r"><span class="muted">Task</span><svg class="ic" aria-hidden="true"><use href="#i-doc"/></svg><span class="lk">Document supervisor</span></div>
+              <div class="r cur lv1" aria-current="true"><span class="muted">Task agent</span><svg class="g c-blocked" aria-hidden="true"><use href="#g-blocked"/></svg><span class="lk">Worker 4</span><span class="chip">Herdr · blocked</span></div>
+              <div class="r sub lv2"><span class="muted">OMP subagent</span><span class="lk">Read-only scout</span><span class="chip">no terminal of its own</span></div>
+            </div></div>
+            <div class="grp" style="border-bottom:0"><div class="m-btnrow"><span class="b">Show in Tasks</span><span class="b"><svg class="ic" aria-hidden="true"><use href="#i-term"/></svg>Open terminal</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+    <ol class="pins">
+      <li><i class="pin g">A</i> Switch in the view bar; <em>Graph</em> is pressed. <em>Tasks</em> is the initial view on first open.</li>
+      <li><i class="pin g">B</i> The graph scroller fills the rest of the workarea and scrolls both ways; column headings stay put; the heading gives totals so nothing is silently cut off.</li>
+      <li><i class="pin g">C</i> Task column between supervisor and worker replaces the far-right <em>Task links</em> list; the unassigned task is dotted; subagents are dashed and say “no terminal”.</li>
+      <li><i class="pin g">D</i> Tier badges (glyph + word) sit on the affected nodes; the queue stays above, capped at 30% of the workarea, with <em>Show in Graph</em> per row (<em>Show in Tasks</em> when the Tasks view is open).</li>
+      <li><i class="pin g">E</i> Details open beside the graph (340 px, resizable); the graph keeps its scroll offsets and the selected chain stays highlighted. At ≤719 px they become a bottom sheet.</li>
+      <li><i class="pin g">F</i> Node anatomy: 20 px icon slot (status glyph or task document) · title, which may end in an ellipsis · tier badge, which never shrinks; second line: status word, which never shrinks · provenance (<em>Herdr</em> or <em>OMP events</em>), which may end in an ellipsis. Edges are drawn in their own layer and never touch the icons.</li>
+    </ol>
+  </figure>
+
+  <div class="rankwrap"><table class="kv">
+    <caption class="note" style="text-align:left;padding:4px 0">Current band versus Graph view</caption>
+    <thead><tr><th scope="col">Aspect</th><th scope="col">Current (section 1, before)</th><th scope="col">Concept</th></tr></thead>
+    <tbody>
+      <tr><td>Reach</td><td>Band on wide screens; full-area graph only at ≤719 px or ≤600 px high, called “Agents”</td><td>One <em>Tasks · Graph</em> switch at every size; Tasks first</td></tr>
+      <tr><td>Space</td><td>220 px band (100 px with attention)</td><td>Everything under the view bar</td></tr>
+      <tr><td>Content</td><td>Agents plus a separate far-right Task links column</td><td>Supervisor → Task → Worker → Subagent columns, tier badges, unassigned tasks</td></tr>
+      <tr><td>Details</td><td>Right panel; at ≤719 px a full overlay hides the graph</td><td>Side panel with splitter; bottom sheet at ≤719 px (overlay if the workarea is &lt;560 px high)</td></tr>
+      <tr><td>Attention</td><td>Status box above; band shrinks to 100 px</td><td>Counters + queue (30% cap) or overlay; badges, dim toggle, <em>Show in Graph</em> / <em>Show in Tasks</em></td></tr>
+      <tr><td>Return</td><td>—</td><td>Tasks segment or <em>Show in Tasks</em>; selection and scroll offsets restored</td></tr>
+    </tbody></table></div>
+
+  <h3 style="margin:30px 0 6px;font-size:var(--font-size-md)" id="h-demo">Local demo <span class="tag demo">Local demo</span></h3>
+  <p class="sub">A working prototype of the concept on <strong>illustrative data</strong> (9 workers, 5 subagents, 12 tasks). It runs only inside this page: nothing is sent, no terminal or Herdr call exists, no storage is used. The frame size buttons stand in for the window: width &lt;720 px behaves as “narrow”, frame height ≤600 px as “short”.</p>
+  <ol class="pins" style="margin:0 0 12px">
+    <li>Press <strong>Graph</strong>, click <strong>Worker 4</strong>: details open beside the graph; scroll the graph, select another node, press <kbd>Esc</kbd>.</li>
+    <li>Keyboard: <kbd>Tab</kbd> into the graph (one stop), <kbd>↑</kbd>/<kbd>↓</kbd> reading order, <kbd>←</kbd> parent, <kbd>→</kbd> first child, <kbd>Enter</kbd> selects. In the details, drag or arrow-key the divider.</li>
+    <li>Use <em>Show in Graph</em> / <em>Show in Tasks</em> in the attention list, the <em>Attention</em> toggle, the Subagents switch, and the frame sizes <em>Narrow</em> and <em>Short</em>.</li>
+  </ol>
+  <div class="dctl" role="group" aria-label="Demo frame size and reset"><span class="note">Frame</span>
+    <button type="button" class="b" data-preset="fit" aria-pressed="true">Fit page</button>
+    <button type="button" class="b" data-preset="wide" aria-pressed="false">Wide 1280×800</button>
+    <button type="button" class="b" data-preset="medium" aria-pressed="false">Medium 740×800</button>
+    <button type="button" class="b" data-preset="narrow" aria-pressed="false">Narrow 360×720</button>
+    <button type="button" class="b" data-preset="short" aria-pressed="false">Short 1280×520</button>
+    <button type="button" class="b" id="demo-reset">Reset demo</button>
+  </div>
+  <noscript><p class="note">The demo needs scripts; the static figure above shows the same state.</p></noscript>
+  <div class="stage">
+    <p class="note" id="demo-fallback">The interactive demo needs scripts. If this message stays, scripts are disabled or stripped by the host; the static figure above shows the same concept.</p>
+    <div class="sv" id="sv" data-view="tasks" data-size="wide" data-short="false" data-qmode="inline" data-qopen="false" data-panel="none" role="group" aria-label="Local demo of the Supervisor Tasks and Graph views (concept, illustrative data)" hidden>
+      <div class="m-hd"><span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-branch"/></svg>Supervisor</span><span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg>Atlas supervisor · Managing tasks</span><span class="sp"><span class="muted" aria-hidden="true">Hide Supervisor (inert)</span></span></div>
+      <div class="sv-wa" id="sv-wa">
+        <div class="sv-main">
+          <div class="m-sum" role="group" aria-label="Supervisor status">
+            <span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg><strong style="color:var(--text-primary);font-weight:500">Atlas supervisor</strong> · 9 agents observed</span>
+            <span class="sp" id="sv-counters" role="group" aria-label="Attention counters"><button type="button" class="tier decide" data-tier="decide">✉ 1 Decide</button><button type="button" class="tier recover" data-tier="recover">⚠ 1 Recover</button><button type="button" class="tier notice" data-tier="notice">ℹ 2 Notice</button></span>
+          </div>
+          <section class="queue sv-queue" id="sv-queue" role="region" aria-label="Attention queue (concept)">
+            <div class="sv-qh"><strong style="font-weight:500">Attention</strong><button type="button" class="b" id="sv-qclose" aria-label="Close attention list"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>Close</button></div>
+            <div id="sv-qlist"></div>
+          </section>
+          <div class="vbar">
+            <div class="seg2" role="group" aria-label="Workarea view"><button type="button" class="b" id="sv-btn-tasks" aria-pressed="true">Tasks</button><button type="button" class="b" id="sv-btn-graph" aria-pressed="false">Graph</button></div>
+            <span class="sp filt"><label class="box"><input type="checkbox" id="sv-attn"><span id="sv-attn-l">Attention · 4</span></label><span class="chip" title="Inert in the demo">Space: All Spaces</span></span>
+          </div>
+          <section class="sv-surface" id="sv-tasks" aria-label="Tasks">
+            <div class="m-strip sv-strip" id="sv-strip"></div>
+            <div class="sv-board" id="sv-board" role="group" aria-label="Task board"></div>
+          </section>
+          <section class="sv-surface" id="sv-graphview" aria-label="Agent graph view" hidden>
+            <div class="gv-head"><h4 id="sv-gh"></h4><label class="filt"><input type="checkbox" id="sv-sub" checked> Subagents</label></div>
+            <div class="gv-scroll" id="sv-gscroll" style="flex:1 1 0;min-height:0" role="region" aria-label="Agent graph, scrollable"><div id="sv-gcontent"></div><div id="sv-gspacer"></div></div>
+          </section>
+        </div>
+        <div class="sv-split" id="sv-split" tabindex="0" role="separator" hidden></div>
+        <aside class="sv-panel" id="sv-details" aria-label="Selected details" hidden>
+          <div class="ph"><button type="button" class="b" id="sv-details-close" aria-label="Close details"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg></button><strong id="sv-d-title" style="font-weight:500"></strong></div>
+          <div class="sv-dscroll" id="sv-d-body"></div>
+        </aside>
+      </div>
+      <div class="sv-notice" id="sv-status" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+  <dl class="ro" id="demo-readout" aria-label="Demo state readout">
+    <dt>View</dt><dd id="ro-view"></dd>
+    <dt>Selection</dt><dd id="ro-sel"></dd>
+    <dt>DOM focus</dt><dd id="ro-dom">(none)</dd>
+    <dt>Herdr focus</dt><dd id="ro-herdr">unchanged — this page has no access to Herdr or any terminal</dd>
+    <dt>Layout</dt><dd id="ro-layout"></dd>
+  </dl>
+
+  <details class="big"><summary>Focus transitions and layout by size (summary of DESIGN.md §5.1 and F3)</summary>
+    <div class="in"><table class="kv">
+      <thead><tr><th scope="col">Trigger</th><th scope="col">Selection</th><th scope="col">DOM focus</th></tr></thead>
+      <tbody>
+        <tr><td>Tasks / Graph segment</td><td>unchanged</td><td>stays on the segment; target view restores its scroll offsets and reveals the selection only if outside them</td></tr>
+        <tr><td>Click / Enter on node or card</td><td>set (same item clears)</td><td>stays on the item; moves to <em>Close</em> only when details are a full overlay</td></tr>
+        <tr><td>Arrows in graph</td><td>unchanged</td><td>roving: ↑↓ reading order, ← parent, → first child</td></tr>
+        <tr><td>Escape with details open</td><td>cleared</td><td>back to the invoker node/card</td></tr>
+        <tr><td>Queue row <em>Show in Graph</em> / <em>Show in Tasks</em> · path row</td><td>moves to that item</td><td>stays on the activated control</td></tr>
+        <tr><td>Details <em>Show in Graph</em> / <em>Show in Tasks</em></td><td>unchanged</td><td>DOM focus moves to that node/card (explicit navigation)</td></tr>
+        <tr><td>Any of the above</td><td colspan="2">Herdr focus unchanged. Only the explicit <em>Open terminal</em> action changes it.</td></tr>
+      </tbody></table>
+      <table class="kv" style="margin-top:14px">
+        <thead><tr><th scope="col">Size (container × window)</th><th scope="col">Graph details</th><th scope="col">Attention</th></tr></thead>
+        <tbody>
+          <tr><td>≥720 px wide, &gt;600 px high (1440×1000)</td><td>side panel, resizable</td><td>inline queue</td></tr>
+          <tr><td>≥720 px wide, ≤600 px high (1440×600)</td><td>side panel</td><td>counters → overlay</td></tr>
+          <tr><td>≤719 px wide, workarea ≥560 px high (360×800)</td><td>bottom sheet, resizable</td><td>counters → overlay</td></tr>
+          <tr><td>≤719 px wide, workarea &lt;560 px high</td><td>full overlay (existing)</td><td>overlay</td></tr>
+        </tbody></table>
+    </div></details>
+</section>
+
+<!-- ============================ 2 ATTENTION ============================ -->
+<section class="sec" id="attention" tabindex="-1" aria-labelledby="h-att">
+  <h2 id="h-att">2 · Attention &amp; recovery <span class="tag p0">P0</span><span class="ids">F1 F2 F5 · W3 W5 R07 R08 D13 D21 G18</span></h2>
+  <p class="sub">The status region is a fixed box with <code>overflow:auto</code>. Five different kinds of item share one amber “Needs you” style, so a genuine question looks like a recovery card or a stale-task notice. Core already derives attention kinds (<code>snapshot.attention</code>), but the UI never reads them.</p>
+
+  <div class="pair">
+    <figure>
+      <figcaption><span class="tag ev">Evidence-derived schematic</span><strong>Before</strong> — attention present, ≤719 px container rule (single-column “Needs you”). <code>supervisor.css:33,45–51,203</code>; <code>SupervisorView.tsx:286–298</code>; historical <code>synthetic-needs-input.png</code>, <code>synthetic-conflicts.png</code>.</figcaption>
+      <div class="m" role="group" aria-label="Schematic of the current attention region">
+        <div class="m-hd"><span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-branch"/></svg>Supervisor</span><span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg>Managing tasks</span></div>
+        <div class="m-att tall">
+          <div class="amber"><h4><svg class="ic" aria-hidden="true"><use href="#i-comment"/></svg>Needs you · Atlas supervisor</h4><p>Which task should get priority?</p><p class="muted" style="font-size:var(--font-size-control)">Reported by Atlas supervisor · 10/6/2026, 2:00 PM</p><span class="ta">Answer</span><div style="margin-top:6px"><span class="b off">Send answer</span></div></div>
+          <div class="amber"><h4>Task needs recovery</h4><p>Worker 4 — Agent terminal is gone.</p><div class="m-btnrow"><span class="b">Check status</span><span class="b">Restart agent…</span><span class="b">Close tracking…</span></div></div>
+          <div class="amber"><h4>Task changed elsewhere · Not assigned</h4><p>Audit shortcuts</p><div class="m-btnrow"><span class="b">Assign current task</span><span class="b">Keep unassigned</span></div></div>
+          <div class="amber"><h4>Task changed during acceptance</h4><p>Review migration · …</p></div>
+          <span class="clipmark">▼ box ends at 164 px — the remaining sections are reachable only by scrolling inside it</span>
+        </div>
+        <div class="m-gh"><strong>Agents · 6 connected</strong><span class="filt"><span class="cb on" aria-hidden="true"></span> Subagents</span></div>
+        <div style="height:100px;background:var(--chrome-bg);padding:8px;color:var(--text-muted);font-size:var(--font-size-control);overflow:hidden">Graph band shrinks to 100 px while attention is shown (<code>supervisor.css:204</code>). Worker 1, then Worker 2 …</div>
+      </div>
+      <ol class="pins">
+        <li><i class="pin">1</i> Amber “Needs you” style is reused for recovery, assignment and acceptance conflicts.</li>
+        <li><i class="pin">2</i> Two of four sections are cut by the 164 px box; actions of the 2nd sit near the clip line.</li>
+        <li><i class="pin">3</i> Attention steals from the graph as well (100 px).</li>
+      </ol>
+    </figure>
+
+    <figure>
+      <figcaption><span class="tag cc">Concept</span><strong>Proposed</strong> — summary bar counters + ordered queue; one row open at a time; the question and Answer stay literal and together. Illustrative values.</figcaption>
+      <div class="m concept" role="group" aria-label="Concept of the proposed attention queue">
+        <div class="m-hd"><span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-branch"/></svg>Supervisor</span></div>
+        <div class="m-sum"><span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg><strong style="color:var(--text-primary);font-weight:500">Atlas supervisor</strong> · Managing tasks</span>
+          <span class="sp"><span class="tier decide">✉ 1 Decide</span><span class="tier recover">⚠ 1 Recover</span><span class="tier notice">ℹ 2 Notice</span></span></div>
+        <div class="queue" role="region" aria-label="Attention queue (concept)">
+          <details name="attn" open><summary><span class="tier decide">✉ Decide</span><span class="what"><strong style="font-weight:500">Atlas supervisor asks:</strong> Which task should get priority?</span><span class="age">2m</span></summary>
+            <div class="dbody"><p class="muted" style="font-size:var(--font-size-control)">Reported by Atlas supervisor · 2:00 PM</p><span class="ta">Answer</span><div style="margin-top:6px" class="m-btnrow"><span class="b off">Send answer</span></div></div></details>
+          <details name="attn"><summary><span class="tier recover">⚠ Recover</span><span class="what"><strong style="font-weight:500">Worker 4</strong> terminal is gone</span><span class="b pri">Check status</span><span class="age">7m</span></summary>
+            <div class="dbody"><p>The last observed terminal is no longer available. Tasks and history are saved.</p><div class="m-btnrow"><span class="b pri">Check status</span><span class="b">Restart agent… <span class="muted">may open another terminal</span></span><span class="b quiet">Close tracking…</span></div></div></details>
+          <details name="attn"><summary><span class="tier notice">ℹ Notice</span><span class="what"><strong style="font-weight:500">Audit shortcuts</strong> changed elsewhere — not assigned</span><span class="b">Review</span><span class="age">11m</span></summary>
+            <div class="dbody"><p>Current task text is shown, then <em>Assign current task</em> or <em>Keep unassigned</em> (exact revision).</p></div></details>
+          <details name="attn"><summary><span class="tier notice">ℹ Notice</span><span class="what"><strong style="font-weight:500">Review migration</strong> changed during acceptance</span><span class="b">Review</span><span class="age">14m</span></summary>
+            <div class="dbody"><p>Apply acceptance to the current task, or keep the task unchanged.</p></div></details>
+        </div>
+        <div class="m-strip"><span class="lab"><strong style="font-weight:500">Agents</strong> · 6 observed</span><span class="agentchip sel"><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg>Atlas supervisor</span><span class="agentchip warnc"><svg class="g c-blocked" aria-hidden="true"><use href="#g-blocked"/></svg>Worker 4</span><span class="muted">+5</span></div>
+      </div>
+      <ol class="pins">
+        <li><i class="pin g">A</i> Rows never clip; the queue grows to ~40% of the workarea, then scrolls with an “n more” row.</li>
+        <li><i class="pin g">B</i> Native disclosure: Enter/Space toggles, Up/Down roves in the real build, Escape collapses.</li>
+        <li><i class="pin g">C</i> <em>Awaiting review</em> (supervisor’s job) is deliberately not in the queue.</li>
+      </ol>
+    </figure>
+  </div>
+
+  <div class="legend3" aria-label="Attention vocabulary (concept)">
+    <div><span class="tier decide">✉ Decide</span><b style="margin-top:6px">Only the user can act</b>Unanswered question addressed to the user (R08 NeedsInput on the root).</div>
+    <div><span class="tier recover">⚠ Recover</span><b style="margin-top:6px">Operational failure</b>Terminal gone, setup/launch unconfirmed, endpoint changed, blocked with no question, orphaned workers, start/navigation errors.</div>
+    <div><span class="tier notice">ℹ Notice</span><b style="margin-top:6px">Review current state</b>Assignment / acceptance conflicts, unidentified task items, stale evidence, and core-derived kinds such as idle-without-report. No new review timeout is proposed.</div>
+    <div><span class="tier quiet">Not attention</span><b style="margin-top:6px">Supervisor-owned steps</b>Awaiting prepare/execute, to-accept: shown as ordinary state (“Waiting for supervisor”); no manual approval is implied.</div>
+  </div>
+
+  <h3 style="margin:26px 0 8px;font-size:var(--font-size-md)">Recovery rows (F5)</h3>
+  <div class="pair">
+    <figure>
+      <figcaption><span class="tag ev">Evidence-derived schematic</span><strong>Before</strong> — <code>AgentRecovery</code> (<code>SupervisorActions.tsx:98–104</code>)</figcaption>
+      <div class="m" style="padding:10px 12px" role="group" aria-label="Schematic of current recovery row">
+        <div class="m-state" style="justify-content:space-between;width:100%"><strong style="color:var(--text-primary)">Worker 4</strong><span><svg class="g c-unknown" style="vertical-align:-3px" aria-hidden="true"><use href="#g-unknown"/></svg> Agent terminal is gone</span></div>
+        <p class="sec2" style="margin:6px 0">The last observed terminal is no longer available. Tasks and history are saved.</p>
+        <div class="m-btnrow"><span class="b"><svg class="ic" aria-hidden="true"><use href="#i-term"/></svg>Open terminal</span><span class="b">Check status</span><span class="b">Restart agent…</span><span class="b"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>Close tracking…</span></div>
+      </div>
+    </figure>
+    <figure>
+      <figcaption><span class="tag cc">Concept</span><strong>Proposed</strong> — suggested step first, consequence visible, Close tracking quiet</figcaption>
+      <div class="m concept" style="padding:10px 12px" role="group" aria-label="Concept of proposed recovery row">
+        <div class="m-state" style="justify-content:space-between;width:100%"><strong style="color:var(--text-primary)">Worker 4</strong><span class="tier recover">⚠ Recover</span></div>
+        <p class="sec2" style="margin:6px 0">The last observed terminal is no longer available. Tasks and history are saved.</p>
+        <div class="m-btnrow"><span class="b pri">Check status</span><span class="b">Restart agent… <span class="muted">may open another terminal</span></span><span class="b quiet">Close tracking…</span></div>
+        <p class="note" style="margin:8px 0 0">Healthy agents show only <em>Open terminal</em>; <em>Close tracking…</em> lives in Details › Operator intervention.</p>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<!-- ============================ 3 RELATIONSHIPS ============================ -->
+<section class="sec" id="relationships" tabindex="-1" aria-labelledby="h-rel">
+  <h2 id="h-rel">3 · Task ↔ agent relationships <span class="tag p1">P1</span><span class="ids">F7 · G05–G08 G10–G13 D04 W5</span></h2>
+  <p class="sub">The same relationship appears on the card, in the graph, and in the “Task links” column at the far right. When attention shrinks the band to 100 px, the highlighted node can sit outside the visible band. A subagent shows its parent’s Space although it has no terminal.</p>
+  <div class="pair">
+    <figure>
+      <figcaption><span class="tag ev">Evidence-derived schematic</span><strong>Before</strong> — task “Document supervisor” selected; band at 100 px. <code>SupervisorGraph.tsx:51–66,113,117–122</code>; <code>supervisor.css:204</code>.</figcaption>
+      <div class="m" role="group" aria-label="Schematic of current relationship display">
+        <div class="m-gh"><strong>Agents · 6 connected</strong><span class="filt"><span class="cb on" aria-hidden="true"></span> Subagents</span></div>
+        <div class="m-gscroll" style="height:100px;position:relative">
+          <div class="m-gcanvas" style="height:280px;width:430px">
+            <svg class="edges" width="430" height="280" viewBox="0 0 430 280" aria-hidden="true" focusable="false"><g fill="none" stroke="var(--border-strong)" stroke-width="1.5"><path d="M188 114 C206 114 206 26 224 26"/><path d="M188 114 C206 114 206 70 224 70"/><path d="M188 114 C206 114 206 114 224 114"/><path d="M188 114 C206 114 206 158 224 158" stroke="var(--accent)" stroke-width="2"/></g></svg>
+            <div class="node" style="left:8px;top:96px"><div class="h"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg>Atlas supervisor</div><div class="md">Supervisor · working · Project</div></div>
+            <div class="node" style="left:224px;top:8px"><div class="h"><svg class="g c-unknown" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-unknown"/></svg>Worker 1</div><div class="md">Worker · unobserved · Project</div></div>
+            <div class="node" style="left:224px;top:52px"><div class="h"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg>Worker 2</div><div class="md">Worker · working · Project</div></div>
+            <div class="node" style="left:224px;top:96px"><div class="h"><svg class="g c-working" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-working"/></svg>Worker 3</div><div class="md">Worker · working · Project</div></div>
+            <div class="node hl" style="left:224px;top:140px"><div class="h"><svg class="g c-blocked" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#g-blocked"/></svg>Worker 4</div><div class="md">Worker · blocked · Project</div></div>
+          </div>
+          <div class="m-tl" style="flex-basis:190px"><span class="lab">Task links</span><span class="tlk">Worker 1 → Task · Audit short…</span><span class="tlk">Worker 2 → Task · Map sidebar</span><span class="tlk">Worker 3 → Task · Improve fi…</span><span class="tlk hl">Worker 4 → Task · Document s…</span></div>
+        </div>
+        <div style="padding:10px"><div class="card sel" style="margin:0"><div class="t">Document supervisor</div><div class="st">Working</div><div class="wk"><svg class="g c-blocked" aria-hidden="true"><use href="#g-blocked"/></svg>Worker 4</div></div></div>
+      </div>
+      <ol class="pins">
+        <li><i class="pin">1</i> Highlighted Worker 4 (accent border/edge) is below the 100 px band and the linked task row is far right.</li>
+        <li><i class="pin">2</i> Children and subagents are only visible after scrolling the graph.</li>
+      </ol>
+    </figure>
+
+    <figure>
+      <figcaption><span class="tag cc">Concept</span><strong>Proposed</strong> — relationship path in Details; each row selects that item; provenance and “no terminal” stated plainly. Illustrative values.</figcaption>
+      <div class="panel concept" role="group" aria-label="Concept of relationship path in the details panel" style="width:100%">
+        <div class="ph"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg>Document supervisor</div>
+        <div class="seg"><span class="on">Overview</span><span>Activity</span><span>Actions</span></div>
+        <div class="pb">
+          <div class="grp"><h5>Relationship</h5>
+            <div class="path" role="list" aria-label="Task, worker and subagent">
+              <div class="r" role="listitem"><span class="muted">Task</span><span class="lk">Document supervisor</span><span class="chip">Working lane</span></div>
+              <div class="r cur lv1" role="listitem" aria-current="true"><span class="muted">Task agent</span><svg class="g c-blocked" aria-hidden="true"><use href="#g-blocked"/></svg><span class="lk">Worker 4</span><span class="chip">Herdr · blocked</span><span class="chip">Project</span></div>
+              <div class="r sub lv2" role="listitem"><span class="muted">OMP subagent</span><svg class="g c-working" aria-hidden="true"><use href="#g-working"/></svg><span class="lk">Read-only scout</span><span class="chip">OMP events · running</span><span class="chip">no terminal of its own</span></div>
+            </div>
+            <p class="note" style="margin-top:8px">Parent: Atlas supervisor (Supervisor). Subagent receipts are not the worker’s Ready/Result.</p>
+          </div>
+          <div class="grp"><h5>Evidence</h5><div class="m-line"><span class="pairchip"><span>reported 7m</span><span>observed ● blocked</span></span></div></div>
+        </div>
+      </div>
+      <ol class="pins">
+        <li><i class="pin g">A</i> Reading order task → agent → subagent; works at 360 px and with the keyboard (each row is a link/button).</li>
+        <li><i class="pin g">B</i> The Graph view (section 1b) draws the same chain as columns and reveals the highlighted node; cards show <code>+1 subagent</code>.</li>
+        <li><i class="pin g">C</i> Rows only <em>select</em>; they imply no control authority over siblings or parents.</li>
+      </ol>
+    </figure>
+  </div>
+</section>
+
+<!-- ============================ 4 DETAILS ============================ -->
+<section class="sec" id="details" tabindex="-1" aria-labelledby="h-det">
+  <h2 id="h-det">4 · Details &amp; result review <span class="tag p0">P0</span><span class="ids">F4 · D01–D16</span></h2>
+  <p class="sub">The Result lives under Activity; Actions is a flat stack in which the operator override sits beside notes, and two headings are duplicated. Concept: lead with state and result, show supervisor-authorized steps as normal history, keep operator overrides one disclosure away.</p>
+  <div class="pair">
+    <figure>
+      <figcaption><span class="tag ev">Evidence-derived schematic</span><strong>Before</strong> — Review task, <em>Actions</em> segment (top 430 px). <code>SupervisorActions.tsx:176–187</code>; historical <code>synthetic-result-actions.png</code>.</figcaption>
+      <div class="panel" role="group" aria-label="Schematic of the current Actions segment">
+        <div class="ph"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg>Review migration</div>
+        <div class="seg"><span>Overview</span><span>Activity</span><span class="on">Actions</span></div>
+        <div class="pb clip">
+          <div class="grp"><h5>Edit task</h5><span class="b">Edit task…</span></div>
+          <div class="grp"><h5>Request stop</h5><span class="b">Request stop…</span></div>
+          <div class="grp"><h5>Follow-up to agent</h5><p class="dup" style="font-weight:500;font-size:var(--font-size-control)">Follow-up to agent</p><span class="ta" style="height:44px"></span><div style="margin-top:6px"><span class="b off">Send follow-up</span></div></div>
+          <div class="grp"><h5>Durable note</h5><p class="dup" style="font-weight:500;font-size:var(--font-size-control)">Durable note</p><span class="ta" style="height:44px"></span><div style="margin-top:6px"><span class="b off">Save note</span></div></div>
+          <div class="grp"><h5>Operator result review override</h5><p>The supervisor normally reviews this result. Acceptance uses the exact current canonical task revision, not runtime Done.</p><span class="b">Accept explicit result</span></div>
+          <span class="clipmark" style="padding-top:30px">▼ Send back, Close agent tracking… and plan override follow below</span>
+        </div>
+      </div>
+      <ol class="pins">
+        <li><i class="pin">1</i> Dashed outlines: heading repeated as the field label.</li>
+        <li><i class="pin">2</i> Operator acceptance and routine note have the same weight and sit in one scroll.</li>
+        <li><i class="pin">3</i> The Result text is not on this screen — it is under <em>Activity</em> (D05).</li>
+      </ol>
+    </figure>
+
+    <figure>
+      <figcaption><span class="tag cc">Concept</span><strong>Proposed</strong> — Overview for the same task. State block, Result, progress trail, routine actions, operator group collapsed (this disclosure works). Illustrative values.</figcaption>
+      <div class="panel concept" role="group" aria-label="Concept of the proposed review-first details panel">
+        <div class="ph"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg>Review migration</div>
+        <div class="seg"><span class="on">Overview</span><span>Activity</span><span>Actions</span></div>
+        <div class="pb">
+          <div class="grp"><h5>State</h5><p><strong style="font-weight:500">Supervisor is reviewing this result.</strong> No action needed from you.</p><div class="m-line"><svg class="g c-done" aria-hidden="true"><use href="#g-done"/></svg>Worker 5 <span class="pairchip"><span>reported 12m</span><span>observed ● done</span></span></div></div>
+          <div class="grp"><h5>Result · succeeded</h5><p>Migration reviewed; two follow-ups listed.</p><p class="note">Explicit report from Worker 5 · Awaiting review</p></div>
+          <div class="grp"><h5>Progress</h5>
+            <ol class="trail">
+              <li class="done"><svg class="sym c-done" aria-hidden="true"><use href="#g-done"/></svg><span>Assigned<small>canonical task revision r4</small></span></li>
+              <li class="done"><svg class="sym c-done" aria-hidden="true"><use href="#g-done"/></svg><span>Prepared<small>authorized by Atlas supervisor · exact plan</small></span></li>
+              <li class="done"><svg class="sym c-done" aria-hidden="true"><use href="#g-done"/></svg><span>Executing<small>authorized by Atlas supervisor</small></span></li>
+              <li class="done"><svg class="sym c-done" aria-hidden="true"><use href="#g-done"/></svg><span>Result reported</span></li>
+              <li class="now"><svg class="sym c-working" aria-hidden="true"><use href="#g-working"/></svg><span>Accepted<small>pending supervisor review</small></span></li>
+            </ol></div>
+          <div class="grp" style="border-bottom:0"><h5>Routine</h5><div class="m-btnrow"><span class="b"><svg class="ic" aria-hidden="true"><use href="#i-term"/></svg>Open terminal</span><span class="b">Follow-up…</span><span class="b">Edit task…</span><span class="b">Note…</span></div></div>
+          <details class="op"><summary>Operator intervention — normally handled by the supervisor</summary>
+            <div class="in"><span class="b">Accept explicit result <span class="muted">(exact task revision)</span></span><span class="b">Send back…</span><span class="b">Close agent tracking…</span><span class="note">Plan override appears here only at awaiting-prepare / ready, with its exact-plan review.</span></div></details>
+        </div>
+      </div>
+      <ol class="pins">
+        <li><i class="pin g">A</i> Supervisor grants appear as ordinary completed steps — the user sees no manual approval was needed.</li>
+        <li><i class="pin g">B</i> Accept keeps its gates: explicit successful Result, current exact revision, no diagnostic, matching current run.</li>
+        <li><i class="pin g">C</i> Reported vs observed stay separate chips; progress steps derive from existing run fields.</li>
+      </ol>
+    </figure>
+  </div>
+</section>
+
+<!-- ============================ 5 DIALOGS ============================ -->
+<section class="sec" id="dialogs" tabindex="-1" aria-labelledby="h-dlg">
+  <h2 id="h-dlg">5 · Dialogs <span class="tag p1">P1</span><span class="ids">F8 · R01–R06 D08–D10 D15</span></h2>
+  <p class="sub">All six modals share a correct shell (portal, focus restore, Tab wrap, Escape when idle, initial focus on the safe button for destructive modes) — that stays. The problems are label ambiguity, validation placement and stale/deleted edit handling. Three representative pairs; the table covers all six.</p>
+
+  <div class="pair">
+    <figure>
+      <figcaption><span class="tag ev">Evidence-derived schematic</span><strong>Before</strong> — R06 Cancel subagent, R05 Recover setup, R02 stale edit. <code>SupervisorDialogs.tsx:26,94,99–105</code>; historical <code>synthetic-subagent-cancel.png</code>, <code>synthetic-setup-recovery.png</code>.</figcaption>
+      <div class="dlgs">
+        <div class="dlg" role="group" aria-label="Schematic: current Cancel subagent dialog"><div class="dh"><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg>Cancel subagent</div><p style="margin:0">Request cancellation of Read-only scout. Its OMP control receipt, not this request, confirms whether it stopped.</p><div class="df"><span class="b">Cancel</span><span class="b pri">Cancel subagent</span></div></div>
+        <div class="dlg" role="group" aria-label="Schematic: current Recover setup dialog"><div class="dh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg>Recover setup</div><p style="margin:0 0 8px">Setup for Atlas supervisor needs review before launch. Existing resources are kept.</p><p style="margin:0">Confirm using the existing worktree receipt rather than creating another worktree.</p><div class="df"><span class="b">Cancel</span><span class="b pri">Recover setup</span></div></div>
+        <div class="dlg" role="group" aria-label="Schematic: current stale edit dialog"><div class="dh"><svg class="ic" aria-hidden="true"><use href="#i-edit"/></svg>Edit task</div><p class="warnt" style="margin:0 0 8px">Task changed elsewhere. Saving will not overwrite those changes without your review. Your draft is kept.</p><p class="sec2" style="margin:0 0 8px">▸ Review current task</p><span class="b" style="white-space:normal;text-align:left">I reviewed the current task; keep my draft for saving</span><div class="df"><span class="b">Cancel</span><span class="b pri">Save task</span></div></div>
+      </div>
+      <ol class="pins"><li><i class="pin">1</i> “Cancel” (dismiss) beside “Cancel subagent” (confirm) are one word apart.</li><li><i class="pin">2</i> “Recover setup” is the label for three different operations (use worktree / retry environment / reconcile only).</li><li><i class="pin">3</i> Stale draft: long label; Save stays enabled; for a deleted task there is no rebase control but Save is still enabled.</li></ol>
+    </figure>
+
+    <figure>
+      <figcaption><span class="tag cc">Concept</span><strong>Proposed</strong> — same shell and payloads; labels name the effect. Illustrative values.</figcaption>
+      <div class="dlgs">
+        <div class="dlg concept" role="group" aria-label="Concept: Cancel subagent dialog"><div class="dh"><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg>Cancel subagent</div><p style="margin:0">Request cancellation of Read-only scout. Its OMP control receipt, not this request, confirms whether it stopped.</p><div class="df"><span class="b pri">Keep running</span><span class="b">Request cancellation</span></div><p class="note" style="margin:6px 0 0">Initial focus stays on the safe button.</p></div>
+        <div class="dlg concept" role="group" aria-label="Concept: Recover setup dialog"><div class="dh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg>Recover setup</div><p style="margin:0 0 8px">Setup for Atlas supervisor needs review before launch. Existing resources are kept.</p><p style="margin:0">Confirm using the existing worktree receipt rather than creating another worktree.</p><div class="df"><span class="b">Cancel</span><span class="b pri">Use existing worktree</span></div><p class="note" style="margin:6px 0 0">Primary varies with the recorded recovery: Use existing worktree · Retry setup · Check setup.</p></div>
+        <div class="dlg concept" role="group" aria-label="Concept: stale edit dialog"><div class="dh"><svg class="ic" aria-hidden="true"><use href="#i-edit"/></svg>Edit task</div><p class="warnt" style="margin:0">Task changed elsewhere. Your draft is kept.</p><div class="two"><div><b>Your draft</b>Audit shortcuts — add key-conflict table</div><div><b>Current task</b>Audit shortcuts — add key-conflict table and Windows notes</div></div><div class="df"><span class="b">Cancel</span><span class="b">Use current</span><span class="b pri">Keep my draft</span></div><p class="note" style="margin:6px 0 0">Deleted task: Save disabled, “This task no longer exists”, Copy draft.</p></div>
+      </div>
+    </figure>
+  </div>
+
+  <div class="rankwrap"><table class="dtable">
+    <caption class="note" style="text-align:left;padding-bottom:4px">All six modes (R01–R06) — change summary</caption>
+    <thead><tr><th scope="col">Mode</th><th scope="col">Recommendation</th><th scope="col">Primary / dismiss</th></tr></thead>
+    <tbody>
+      <tr><td>R01 Start agent</td><td>Inline field errors; one-line destination summary; disabled Space with muted reason when none available</td><td>Start agent / Cancel (unchanged)</td></tr>
+      <tr><td>R02 Edit task</td><td>Side-by-side stale view; Use current vs Keep my draft; deleted task disables Save, Copy draft</td><td>Save task, Keep my draft / Cancel</td></tr>
+      <tr><td>R03 Restart agent</td><td>“Last observed” line; in-dialog Check again first (existing read-only reconcile)</td><td>Restart anyway / Back (unchanged)</td></tr>
+      <tr><td>R04 Close tracking</td><td>Name up to three surviving descendants; keep focus on Keep tracking</td><td>Close tracking / Keep tracking (unchanged)</td></tr>
+      <tr><td>R05 Recover setup</td><td>Primary reflects the recorded recovery</td><td>Use existing worktree · Retry setup · Check setup / Cancel</td></tr>
+      <tr><td>R06 Cancel subagent</td><td>Remove “Cancel” beside “Cancel subagent”</td><td>Request cancellation / Keep running</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================ 6 NARROW ============================ -->
+<section class="sec" id="narrow" tabindex="-1" aria-labelledby="h-nar">
+  <h2 id="h-nar">6 · Narrow layout <span class="tag p1">P1</span><span class="ids">F12 · W6 G17 G18 D01</span></h2>
+  <p class="sub">Container ≤719 px or viewport height ≤600 px. Today the header wraps, the 110–164 px status box is still above, a Board/Agents switch picks one surface, and only one 220 px lane is visible, so the counts of the other five lanes are unseen. Concept: a summary bar opens the queue as an overlay, and lanes become vertical groups with counts.</p>
+  <div class="pair" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))">
+    <figure>
+      <figcaption><span class="tag ev">Evidence-derived schematic</span><strong>Before</strong> · 360 px · <code>supervisor.css:151–169,203</code></figcaption>
+      <div class="m nar" role="group" aria-label="Schematic of current narrow layout">
+        <div class="m-hd"><span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-branch"/></svg></span><span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg>Managing tasks</span><span class="b pri" style="margin-left:auto"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Start agent</span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-dots"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></span><span class="sp" style="flex-basis:100%;justify-content:flex-end"><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-comment"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-info"/></svg></span></span></div>
+        <div class="m-att tall" style="padding:6px 8px">
+          <div class="amber"><h4>Needs you · Atlas supervisor</h4><p>Which task should get priority?</p><span class="ta">Answer</span></div>
+          <div class="amber"><h4>Task needs recovery</h4><p>Worker 4 — Agent terminal is gone.</p></div>
+          <span class="clipmark">▼ clipped at 164 px</span>
+        </div>
+        <div class="sw"><span class="b pri">Board</span><span class="b">Agents</span></div>
+        <div class="m-th" style="padding:7px 8px"><h4>Tasks <span>5 open</span></h4><div class="filt"><span class="box"><span class="cb" aria-hidden="true"></span>Needs attention (dims…)</span></div></div>
+        <div class="peek" style="background:var(--surface)"><section class="lane"><header><span class="dot"></span>Queued <span class="n">1</span><span class="chev">›</span></header><div class="body" style="min-height:90px"><div class="card c2"><div class="t">Audit shortcuts</div><div class="st" style="margin:3px 0 0">Queued</div></div></div></section><section class="lane"><header><span class="dot setup"></span>Preparing <span class="n">1</span></header></section></div>
+        <p class="note" style="padding:0 10px 10px">Lane 1 of 6; scroll-snap hides the rest.</p>
+      </div>
+    </figure>
+
+    <figure>
+      <figcaption><span class="tag cc">Concept</span><strong>Proposed</strong> · 360 px · summary bar + lane groups (disclosures work)</figcaption>
+      <div class="m concept nar" role="group" aria-label="Concept of proposed narrow layout">
+        <div class="m-hd"><span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-branch"/></svg></span><span class="m-state"><svg class="g c-live" aria-hidden="true"><use href="#g-live"/></svg>Atlas supervisor</span><span class="sq" style="margin-left:auto"><svg class="ic" aria-hidden="true"><use href="#i-comment"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-info"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        <div class="m-sum"><span class="tier decide">✉ 1</span><span class="tier recover">⚠ 1</span><span class="tier notice">ℹ 2</span><span class="b sp">Attention ›</span></div>
+        <div class="sw"><span class="b pri">Tasks</span><span class="b">Graph</span></div>
+        <details class="lg" open><summary><span class="dot working"></span>Working <span class="n">1</span></summary><div class="lb"><div class="card c2 sel" style="margin:0"><div class="t">Document supervisor <span class="tier recover">⚠ Recover</span></div><div class="sl"><svg class="g c-blocked" aria-hidden="true"><use href="#g-blocked"/></svg>Worker 4 <span class="pairchip"><span>rep. 7m</span><span>obs. blocked</span></span></div></div></div></details>
+        <details class="lg" open><summary><span class="dot review"></span>Review <span class="n">1</span></summary><div class="lb"><div class="card c2" style="margin:0"><div class="t">Review migration</div><div class="sl">Supervisor reviewing</div></div></div></details>
+        <details class="lg"><summary><span class="dot"></span>Queued <span class="n">1</span></summary><div class="lb"><div class="card c2" style="margin:0"><div class="t">Audit shortcuts</div></div></div></details>
+        <details class="lg"><summary><span class="dot setup"></span>Preparing <span class="n">1</span></summary><div class="lb"><div class="card c2" style="margin:0"><div class="t">Map sidebar</div></div></div></details>
+        <details class="lg"><summary><span class="dot ready"></span>Ready <span class="n">1</span></summary><div class="lb"><div class="card c2" style="margin:0"><div class="t">Improve file search</div></div></div></details>
+        <details class="lg"><summary><span class="dot accepted"></span>Done <span class="n">1</span></summary><div class="lb"><div class="card c2" style="margin:0"><div class="t">Complete prior work</div></div></div></details>
+      </div>
+    </figure>
+
+    <figure>
+      <figcaption><span class="tag cc">Concept</span><strong>Attention overlay</strong> · 360 px · opened from the summary bar (reuses the details-overlay slot)</figcaption>
+      <div class="m concept nar" role="group" aria-label="Concept of the narrow attention overlay">
+        <div class="m-hd"><span class="m-brand"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg>Attention</span><span class="note" style="margin-left:auto">focus lands here</span></div>
+        <div class="queue" style="background:var(--surface);border:0">
+          <details name="nattn" open><summary><span class="tier decide">✉ Decide</span><span class="what">Which task should get priority?</span></summary><div class="dbody" style="padding-left:6px"><span class="ta">Answer</span><div style="margin-top:6px"><span class="b off">Send answer</span></div></div></details>
+          <details name="nattn"><summary><span class="tier recover">⚠ Recover</span><span class="what">Worker 4 terminal is gone</span></summary><div class="dbody" style="padding-left:6px"><div class="m-btnrow"><span class="b pri">Check status</span><span class="b quiet">Restart…</span></div></div></details>
+          <details name="nattn"><summary><span class="tier notice">ℹ Notice</span><span class="what">Audit shortcuts changed elsewhere</span></summary><div class="dbody" style="padding-left:6px"><span class="b">Review</span></div></details>
+          <details name="nattn"><summary><span class="tier notice">ℹ Notice</span><span class="what">Review migration changed during acceptance</span></summary><div class="dbody" style="padding-left:6px"><span class="b">Review</span></div></details>
+        </div>
+        <p class="note" style="padding:0 12px 12px">Escape or back returns focus to the summary-bar “Attention” chip.</p>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<!-- ============================ AUTHORITY ============================ -->
+<section class="sec" id="authority" tabindex="-1" aria-labelledby="h-auth">
+  <h2 id="h-auth">Authority invariants preserved</h2>
+  <p class="sub">Nothing above changes who may act, which revision fences a write, or what counts as proof. The full list (A1–A10) is in <code>DESIGN.md §1.1</code>.</p>
+  <ul class="auth">
+    <li><b>Task source.</b> Canonical Markdown stays the only store; writes keep exact revisions (A1).</li>
+    <li><b>Supervisor authorizes.</b> Prepare/Execute by the bound supervisor; operator override stays explicit, exact-plan, same-user-policy copy kept (A2).</li>
+    <li><b>Acceptance.</b> Explicit successful Result + current exact task revision; runtime Done is not acceptance (A3).</li>
+    <li><b>Provenance.</b> Reported ≠ observed ≠ receipt; unavailable ≠ absent; “unobserved” stays (A4).</li>
+    <li><b>Close ≠ kill.</b> Descendants and resources remain; Check status is read-only; Restart guarded (A5).</li>
+    <li><b>Unknown writes.</b> Drafts and operation identity retained; no blind replay (A6).</li>
+    <li><b>Subagents.</b> No terminal; stored ≠ applied ≠ completed; not the parent’s Result (A7).</li>
+    <li><b>Focus.</b> Selection ≠ DOM focus ≠ Herdr focus; terminal hand-off explicit and fenced. The Tasks · Graph switch, selection and <em>Show in Graph</em> / <em>Show in Tasks</em> never change Herdr focus (A8).</li>
+    <li><b>Intentional removals.</b> No task composer, no “Other agents”, no empty-state paragraph reintroduced (A9).</li>
+  </ul>
+</section>
+
+<!-- ============================ COVERAGE ============================ -->
+<section class="sec" id="coverage" tabindex="-1" aria-labelledby="h-cov">
+  <h2 id="h-cov">Coverage — 58 atlas IDs</h2>
+  <p class="sub">Every ID is dispositioned. Solid border = change recommended; plain = keep (reason in <code>DESIGN.md</code> Appendix A); dashed with strike = superseded by current source.</p>
+  <ul class="cov" aria-label="W1 to W9">
+    <li class="chg"><b>W1</b><span>F9 (keep entry)</span></li><li class="chg"><b>W2</b><span>F9 F13</span></li><li class="chg"><b>W3</b><span>F1 F2 F5 F12</span></li><li class="chg"><b>W4</b><span>F3 F11 F12</span></li><li class="chg"><b>W5</b><span>F2 F3 F6 F13</span></li><li class="chg"><b>W6</b><span>F3 F12</span></li><li class="keep"><b>W7</b><span>keep · F2 F11</span></li><li class="chg"><b>W8</b><span>F11</span></li><li class="keep"><b>W9</b><span>keep · F13</span></li>
+  </ul>
+  <ul class="cov" aria-label="G01 to G19">
+    <li class="keep"><b>G01</b><span>F3 F6</span></li><li class="keep"><b>G02</b><span>F3 F11</span></li><li class="keep"><b>G03</b><span>F3</span></li><li class="sup"><b>G04</b><span>superseded</span></li><li class="chg"><b>G05</b><span>F3 F7</span></li><li class="chg"><b>G06</b><span>F7</span></li><li class="keep"><b>G07</b><span>keep · F3 F7</span></li><li class="chg"><b>G08</b><span>F3 F7</span></li><li class="chg"><b>G09</b><span>F6</span></li><li class="chg"><b>G10</b><span>F6 F7</span></li><li class="keep"><b>G11</b><span>F7 F13</span></li><li class="chg"><b>G12</b><span>F2 F3 F7</span></li><li class="chg"><b>G13</b><span>F3 F13</span></li><li class="sup"><b>G14</b><span>superseded</span></li><li class="chg"><b>G15</b><span>F11</span></li><li class="chg"><b>G16</b><span>F3 F13</span></li><li class="chg"><b>G17</b><span>F3 F12</span></li><li class="chg"><b>G18</b><span>F1 F3</span></li><li class="chg"><b>G19</b><span>F9</span></li>
+  </ul>
+  <ul class="cov" aria-label="D01 to D22">
+    <li class="keep"><b>D01</b><span>F4 F12 F13</span></li><li class="chg"><b>D02</b><span>F4</span></li><li class="chg"><b>D03</b><span>F4 F6</span></li><li class="chg"><b>D04</b><span>F4 F7</span></li><li class="chg"><b>D05</b><span>F4</span></li><li class="keep"><b>D06</b><span>F4</span></li><li class="keep"><b>D07</b><span>F4</span></li><li class="keep"><b>D08</b><span>F4 F8</span></li><li class="keep"><b>D09</b><span>F4 F8</span></li><li class="keep"><b>D10</b><span>F4 F8</span></li><li class="keep"><b>D11</b><span>F4</span></li><li class="keep"><b>D12</b><span>F4</span></li><li class="chg"><b>D13</b><span>F4 F5</span></li><li class="keep"><b>D14</b><span>F4</span></li><li class="keep"><b>D15</b><span>F4 F8</span></li><li class="keep"><b>D16</b><span>F4</span></li><li class="chg"><b>D17</b><span>F9 F10</span></li><li class="chg"><b>D18</b><span>F10</span></li><li class="keep"><b>D19</b><span>F10</span></li><li class="chg"><b>D20</b><span>F9 F10 F11</span></li><li class="chg"><b>D21</b><span>F6 F11</span></li><li class="keep"><b>D22</b><span>keep · F11 F13</span></li>
+  </ul>
+  <ul class="cov" aria-label="R01 to R08">
+    <li class="chg"><b>R01</b><span>F8 F9</span></li><li class="chg"><b>R02</b><span>F8</span></li><li class="chg"><b>R03</b><span>F5 F8</span></li><li class="chg"><b>R04</b><span>F5 F8</span></li><li class="chg"><b>R05</b><span>F5 F8</span></li><li class="chg"><b>R06</b><span>F8</span></li><li class="chg"><b>R07</b><span>F1 F5 F11</span></li><li class="chg"><b>R08</b><span>F1 F2 F5</span></li>
+  </ul>
+  <details class="big"><summary>Surfaces not drawn above (covered in text): header, Activity, Diagnostics, archive, empty/offline/loading</summary>
+    <div class="in"><table class="kv">
+      <thead><tr><th scope="col">Surface</th><th scope="col">Recommendation</th><th scope="col">Finding</th></tr></thead>
+      <tbody>
+        <tr><td>Header</td><td>Start agent secondary when a verified root exists; “Hide Supervisor”; selector shows <code>needs_you</code>; panel named “Activity” everywhere (today: Activity / History / Earlier)</td><td>F9</td></tr>
+        <tr><td>Activity / Earlier</td><td>Group by day; actor chips; task/run links; supervisor grants as normal rows</td><td>F10</td></tr>
+        <tr><td>Diagnostics</td><td>Summary table first, raw JSON in existing disclosures; “receipts are not process proof” banner stays on top</td><td>F10</td></tr>
+        <tr><td>Closed tracking</td><td>Date, task count and still-open descendants per closed root</td><td>F10 F11</td></tr>
+        <tr><td>Offline</td><td>One banner; hollow glyph + “unobserved”; drop per-card “Saved reports only”</td><td>F11</td></tr>
+        <tr><td>Empty root</td><td>One centered heading + Open terminal; no paragraph (intentionally removed)</td><td>F11</td></tr>
+        <tr><td>Keyboard / a11y</td><td>Splitter value attributes; dim without losing text contrast; disabled reasons; queue roving + polite count</td><td>F13</td></tr>
+        <tr><td>Graph view</td><td>Tasks · Graph switch at every size; whole-workarea graph; details side panel / sheet; Show in Graph / Show in Tasks; attention badges; scroll save/restore; separated node anatomy</td><td>F3 F7 F12 F13</td></tr>
+      </tbody></table></div></details>
+</section>
+
+<!-- ============================ BOUNDARIES ============================ -->
+<section class="sec" id="boundaries" tabindex="-1" aria-labelledby="h-bound">
+  <h2 id="h-bound">Evidence boundaries &amp; current-source discrepancies</h2>
+  <p class="sub">Current source outranks the frozen atlas and its screenshots. These differences were found by reading <code>src/app/supervisor/*</code> as checked out today.</p>
+  <div class="rankwrap"><table class="kv">
+    <thead><tr><th scope="col">#</th><th scope="col">Current source</th><th scope="col">Atlas / screenshots</th><th scope="col">Effect</th></tr></thead>
+    <tbody>
+      <tr><td>X1</td><td>Graph has only a “Subagents” switch; no “Other agents”, no unmanaged list (<code>SupervisorGraph.tsx:78–92</code>; test asserts absence)</td><td>G04, G14 and screenshots show “Other agents”</td><td>G04, G14 superseded; not reintroduced</td></tr>
+      <tr><td>X2</td><td>No-root state is heading only (<code>SupervisorView.tsx:323</code>)</td><td>Pinned copy “Give it work here or in its terminal…”; images show the paragraph</td><td>W8; empty-state recommendations keep heading-only</td></tr>
+      <tr><td>X3</td><td>Start agent tooltip is destination-only</td><td>Frozen tooltip also said “Starts OMP without switching terminal focus”</td><td>Sentence remains in the Start options dialog</td></tr>
+      <tr><td>X4</td><td>CSS 224 lines, unmanaged rules gone</td><td>Frozen 243 lines</td><td>Layout only</td></tr>
+      <tr><td>X5</td><td>Actions / Dialogs / boardNavigation: same line counts as frozen</td><td>—</td><td>Not diffed line by line</td></tr>
+    </tbody></table></div>
+  <h3 style="margin:20px 0 4px;font-size:var(--font-size-md)">Limitations</h3>
+  <ul class="lim">
+    <li>No browser, build, test, native or live OMP/Herdr run was performed for the original review; its frames are schematics, not screenshots. Revision 2026-10-07 adds a static Graph figure and a local demo; the author did not run them in a browser, and this page claims no browser verification.</li>
+    <li>Atlas screenshots are historical (composer, “Other agents” and empty-state paragraph present); only layout behavior is taken from them. Populated, attention, detail and dialog images are synthetic component states; live images cover empty workarea, Activity/Diagnostics, narrow Diagnostics and Start options only.</li>
+    <li>The ≈3.4 : 1 contrast figure for dimmed muted text is arithmetic from CSS tokens, not a browser measurement.</li>
+    <li>All names, times, counts and statuses in the frames are illustrative; no metrics were measured.</li>
+    <li>Schematic and concept frames are inert; only the navigation links, disclosure triangles and the section 1b local demo respond. The demo uses illustrative data and performs no product, terminal, Herdr, network or storage action. Hosts that strip scripts show the static figures but not a working demo.</li>
+  </ul>
+</section>
+</main>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var frame = $('sv');
+  if (!frame) return;
+  $('demo-fallback').hidden = true;
+  frame.hidden = false;
+
+  var NW = 240, NH = 48, CG = 32, RG = 56, PAD = 8, HEAD = 28;
+  var GL = { working: 'g-working', idle: 'g-idle', blocked: 'g-blocked', done: 'g-done', unknown: 'g-unknown' };
+  var GC = { working: 'c-working', idle: 'c-idle', blocked: 'c-blocked', done: 'c-done', unknown: 'c-unknown' };
+  var TI = { decide: '✉ Decide', recover: '⚠ Recover', notice: 'ℹ Notice' };
+  var TW = { decide: 'Decide', recover: 'Recover', notice: 'Notice' };
+  var LANES = [['queued', 'Queued', ''], ['preparing', 'Preparing', 'setup'], ['ready', 'Ready', 'ready'], ['working', 'Working', 'working'], ['review', 'Review', 'review'], ['done', 'Done', 'accepted']];
+  var LW = { queued: 'Queued', preparing: 'Preparing', ready: 'Ready', working: 'Working', review: 'Review', done: 'Done' };
+  var workers = [
+    { id: 'w1', label: 'Worker 1', st: 'unknown', obs: 'unobserved' }, { id: 'w2', label: 'Worker 2', st: 'working' },
+    { id: 'w3', label: 'Worker 3', st: 'working' }, { id: 'w4', label: 'Worker 4', st: 'blocked' },
+    { id: 'w5', label: 'Worker 5', st: 'done' }, { id: 'w6', label: 'Worker 6', st: 'working' },
+    { id: 'w7', label: 'Worker 7', st: 'working' }, { id: 'w8', label: 'Worker 8', st: 'done' },
+    { id: 'w9', label: 'Worker 9', st: 'idle' }
+  ];
+  var tasks = [
+    { id: 't1', title: 'Audit shortcuts', lane: 'queued', w: 'w1', note: 'Changed elsewhere — review' },
+    { id: 't2', title: 'Map sidebar', lane: 'preparing', w: 'w2' },
+    { id: 't3', title: 'Improve file search', lane: 'ready', w: 'w3' },
+    { id: 't4', title: 'Document supervisor', lane: 'working', w: 'w4' },
+    { id: 't5', title: 'Review migration', lane: 'review', w: 'w5', note: 'Changed during acceptance' },
+    { id: 't6', title: 'Plan release checklist', lane: 'working', w: 'w6' },
+    { id: 't7', title: 'Refactor settings store', lane: 'working', w: 'w7' },
+    { id: 't8', title: 'Update onboarding copy', lane: 'review', w: 'w8' },
+    { id: 't9', title: 'Benchmark startup', lane: 'ready', w: 'w9' },
+    { id: 't10', title: 'Draft release notes', lane: 'queued', w: null },
+    { id: 't11', title: 'Triage backlog', lane: 'queued', w: null },
+    { id: 't12', title: 'Complete prior work', lane: 'done', w: null, done: true }
+  ];
+  var subs = [
+    { id: 's1', label: 'Test runner', parent: 'w2', st: 'running' }, { id: 's2', label: 'Read-only scout', parent: 'w4', st: 'running' },
+    { id: 's3', label: 'Doc linter', parent: 's2', st: 'done' }, { id: 's4', label: 'Schema checker', parent: 'w4', st: 'done' },
+    { id: 's5', label: 'Type checker', parent: 'w7', st: 'running' }
+  ];
+  var tiers = { root: 'decide', w4: 'recover', t1: 'notice', t5: 'notice' };
+  var queue = [
+    { tier: 'decide', target: 'root', what: '<strong style="font-weight:500">Atlas supervisor asks:</strong> Which task should get priority?', age: '2m', open: true },
+    { tier: 'recover', target: 'w4', what: '<strong style="font-weight:500">Worker 4</strong> is blocked; no question reported', age: '7m', body: 'The supervisor is the party that can act; Check status is a read-only reconcile.', act: 'Check status' },
+    { tier: 'notice', target: 't1', what: '<strong style="font-weight:500">Audit shortcuts</strong> changed elsewhere', age: '11m', body: 'Review the current task text before any assignment.' },
+    { tier: 'notice', target: 't5', what: '<strong style="font-weight:500">Review migration</strong> changed during acceptance', age: '14m', body: 'Apply acceptance to the current task, or keep it unchanged.' }
+  ];
+
+  var ent = {}, byId = {}, order = [], layout = null, state = null, rov = null, invoker = null, qInvoker = null, dragging = false;
+
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function glyph(st) { return '<svg class="g ' + GC[st] + '" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><use href="#' + GL[st] + '"/></svg>'; }
+  function docIcon() { return '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg>'; }
+  function tierChip(t) { return t ? '<span class="tier ' + t + '">' + TI[t] + '</span>' : ''; }
+  function subSt(s) { return s === 'running' ? 'working' : s === 'done' ? 'done' : s === 'failed' ? 'blocked' : 'unknown'; }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function isNarrow() { return frame.getAttribute('data-size') === 'narrow'; }
+  function announce(msg) { $('sv-status').textContent = msg; }
+  function qa(sel, root) { return Array.prototype.slice.call((root || frame).querySelectorAll(sel)); }
+  function nodeEl(id) { return $('sv-gcontent').querySelector('.gn[data-id="' + id + '"]'); }
+  function cardEl(id) { return $('sv-board').querySelector('.card[data-id="' + id + '"]'); }
+
+  function buildEnt() {
+    ent.root = { id: 'root', kind: 'root', label: 'Atlas supervisor', st: 'working', parentId: null };
+    tasks.forEach(function (t) { ent[t.id] = { id: t.id, kind: 'task', label: t.title, task: t, workerId: t.w, parentId: 'root' }; });
+    workers.forEach(function (w) {
+      var t = tasks.filter(function (x) { return x.w === w.id; })[0];
+      ent[w.id] = { id: w.id, kind: 'worker', label: w.label, st: w.st, obs: w.obs, parentId: t.id };
+    });
+    subs.forEach(function (s) { ent[s.id] = { id: s.id, kind: 'sub', label: s.label, st: s.st, parentId: s.parent }; });
+  }
+  function tierOf(id) {
+    if (tiers[id]) return tiers[id];
+    var e = ent[id];
+    return e && e.kind === 'task' && e.workerId && tiers[e.workerId] ? tiers[e.workerId] : null;
+  }
+  function taskIdFor(id) {
+    var e = ent[id];
+    while (e && e.kind !== 'task') e = e.parentId ? ent[e.parentId] : null;
+    return e ? e.id : null;
+  }
+  function workerOfSub(e) {
+    while (e && e.kind !== 'worker') e = e.parentId ? ent[e.parentId] : null;
+    return e;
+  }
+  function chainOf(id) {
+    var set = {};
+    if (!id) return set;
+    var e = ent[id];
+    while (e) { set[e.id] = true; e = e.parentId ? ent[e.parentId] : null; }
+    if (ent[id].kind === 'task' && ent[id].workerId) set[ent[id].workerId] = true;
+    return set;
+  }
+  function openTaskCount() { return tasks.filter(function (t) { return !t.done; }).length; }
+
+  /* ---------- graph layout (deterministic forest, Task column inserted) ---------- */
+  function buildGraph() {
+    byId = {};
+    var list = [];
+    function add(id, parent) { var n = { id: id, parent: parent, kids: [] }; byId[id] = n; list.push(n); if (parent) byId[parent].kids.push(id); }
+    add('root', null);
+    tasks.forEach(function (t) { if (!t.done) add(t.id, 'root'); });
+    workers.forEach(function (w) { add(w.id, ent[w.id].parentId); });
+    if (state.sub) subs.forEach(function (s) { add(s.id, s.parent); });
+    var row = 0, gap = false;
+    function place(id) {
+      var n = byId[id], e = ent[id];
+      if (e.kind === 'task' && !e.workerId && !gap) { gap = true; row += 0.4; }
+      if (!n.kids.length) { n.row = row; row += 1; return; }
+      n.kids.forEach(place);
+      n.row = (byId[n.kids[0]].row + byId[n.kids[n.kids.length - 1]].row) / 2;
+    }
+    place('root');
+    var W = 0, H = 0, maxCol = 0;
+    list.forEach(function (n) {
+      n.col = n.parent ? byId[n.parent].col + 1 : 0;
+      n.x = PAD + n.col * (NW + CG);
+      n.y = Math.round(PAD + n.row * RG);
+      W = Math.max(W, n.x + NW + PAD); H = Math.max(H, n.y + NH + PAD); maxCol = Math.max(maxCol, n.col);
+    });
+    order = [];
+    (function walk(id) { order.push(id); byId[id].kids.forEach(walk); })('root');
+    layout = { W: W, H: H, maxCol: maxCol, list: list };
+  }
+  function epath(a, b) {
+    var x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2, xm = (x1 + x2) / 2;
+    return y1 === y2 ? 'M' + x1 + ' ' + y1 + ' L' + x2 + ' ' + y2 : 'M' + x1 + ' ' + y1 + ' C' + xm + ' ' + y1 + ' ' + xm + ' ' + y2 + ' ' + x2 + ' ' + y2;
+  }
+  function nodeHtml(n) {
+    var e = ent[n.id], st = e.kind === 'sub' ? subSt(e.st) : e.st, tier = tierOf(e.id), sw, pv, md, aria, cls = 'gn';
+    if (e.kind === 'root') { sw = 'working'; pv = 'Herdr · Project'; aria = 'Atlas supervisor, Supervisor, Herdr working'; }
+    else if (e.kind === 'task') {
+      cls += ' task' + (e.workerId ? '' : ' un');
+      sw = LW[e.task.lane]; pv = e.workerId ? ent[e.workerId].label : 'not assigned';
+      aria = 'Task ' + e.label + ', ' + LW[e.task.lane] + ', ' + (e.workerId ? 'assigned to ' + ent[e.workerId].label : 'not assigned');
+    } else if (e.kind === 'worker') {
+      sw = e.obs || e.st; pv = 'Herdr · Project';
+      aria = e.label + ', Task agent, Herdr ' + (e.obs || e.st) + ', task ' + ent[e.parentId].label;
+    } else {
+      cls += ' sub';
+      sw = e.st; pv = 'OMP events · no terminal';
+      aria = e.label + ', OMP subagent, OMP events ' + e.st + ', in ' + ent[e.parentId].label + ', no terminal';
+    }
+    md = sw + ' · ' + pv;
+    if (tier) aria += ', ' + TW[tier] + ' attention';
+    var icon = e.kind === 'task' ? docIcon() : glyph(st);
+    return '<button type="button" class="' + cls + '" data-id="' + e.id + '" tabindex="-1" aria-expanded="false" aria-controls="sv-details" aria-label="' + esc(aria) + '" title="' + esc(e.label + ' — ' + md) + '" style="left:' + n.x + 'px;top:' + n.y + 'px"><span class="gi">' + icon + '</span><strong class="gt">' + esc(e.label) + '</strong>' + tierChip(tier) + '<span class="md"><span class="st">' + esc(sw) + '</span><span class="pv">' + esc(pv) + '</span></span></button>';
+  }
+  function renderGraph() {
+    var cols = ['Supervisor', 'Task', 'Worker · Herdr', 'OMP subagent', 'Nested'], h = '<div class="gv-cols" style="width:' + layout.W + 'px" aria-hidden="true">';
+    for (var c = 0; c <= layout.maxCol; c++) h += '<span style="left:' + (PAD + c * (NW + CG) + 2) + 'px">' + cols[c] + '</span>';
+    h += '</div><div class="gv-canvas" role="group" aria-label="Agent relationships" style="width:' + layout.W + 'px;height:' + layout.H + 'px"><svg class="gv-edges" width="' + layout.W + '" height="' + layout.H + '" viewBox="0 0 ' + layout.W + ' ' + layout.H + '" aria-hidden="true" focusable="false">';
+    layout.list.forEach(function (n) {
+      if (!n.parent) return;
+      var e = ent[n.id], cls = e.kind === 'sub' ? 'dash' : e.kind === 'worker' ? '' : e.workerId ? 'thin' : 'dot';
+      h += '<path class="ge ' + cls + '" data-from="' + n.parent + '" data-to="' + n.id + '" d="' + epath(byId[n.parent], n) + '"/>';
+    });
+    h += '</svg>';
+    layout.list.forEach(function (n) { h += nodeHtml(n); });
+    $('sv-gcontent').innerHTML = h + '</div>';
+  }
+
+  /* ---------- board ---------- */
+  function cardHtml(t) {
+    var w = t.w ? ent[t.w] : null, tier = tierOf(t.id);
+    var aria = t.title + ', ' + LW[t.lane] + (w ? ', ' + w.label : ', not assigned') + (tier ? ', ' + TW[tier] + ' attention' : '');
+    return '<li><button type="button" class="card c2" data-id="' + t.id + '" tabindex="-1" aria-expanded="false" aria-controls="sv-details" aria-label="' + esc(aria) + '"><span class="t">' + esc(t.title) + tierChip(tier) + '</span><span class="sl">' +
+      (w ? glyph(w.st) + esc(w.label) + ' <span class="pairchip"><span>reported 7m</span><span>observed ' + esc(w.obs || w.st) + '</span></span>' : '<span class="muted">Not assigned</span>') + '</span>' +
+      (t.note ? '<span class="sl muted">' + esc(t.note) + '</span>' : '') + '</button></li>';
+  }
+  function renderBoard() {
+    var h = '';
+    LANES.forEach(function (l) {
+      var ts = tasks.filter(function (t) { return t.lane === l[0]; });
+      h += '<section class="sv-lane' + (l[0] === 'done' ? ' done-lane' : '') + '" data-lane="' + l[0] + '" aria-label="' + l[1] + ' tasks"><h3><span class="dot ' + l[2] + '"></span>' + l[1] + ' <span class="n">' + ts.length + '</span></h3><ul' + (l[0] === 'done' ? ' hidden' : '') + '>';
+      ts.forEach(function (t) { h += cardHtml(t); });
+      h += (ts.length ? '' : '<li class="empty">No tasks</li>') + '</ul></section>';
+    });
+    $('sv-board').innerHTML = h;
+    qa('.done-lane', $('sv-board')).forEach(function (l) { l.classList.add('slim'); });
+  }
+  function visibleCards() { return qa('.card', $('sv-board')).filter(function (c) { return !c.closest('ul').hidden; }); }
+  function laneCards() {
+    return qa('.sv-lane', $('sv-board')).map(function (ln) { return ln.querySelector('ul').hidden ? [] : qa('.card', ln); });
+  }
+
+  /* ---------- chrome: counts, heading, strip, queue ---------- */
+  function chrome() {
+    var open = openTaskCount(), agents = 1 + workers.length, connected = 1 + workers.filter(function (w) { return !w.obs; }).length;
+    $('sv-btn-tasks').innerHTML = 'Tasks <span class="n">' + open + '</span>';
+    $('sv-btn-graph').innerHTML = 'Graph <span class="n">' + (agents + (state.sub ? subs.length : 0)) + '</span>';
+    $('sv-gh').textContent = 'Agents · ' + connected + ' connected · ' + (state.sub ? subs.length + ' subagents' : 'subagents hidden') + ' · ' + open + ' tasks · ' + tasks.filter(function (t) { return t.done; }).length + ' completed hidden';
+    $('sv-attn-l').textContent = 'Attention · ' + queue.length;
+  }
+  function renderStrip() {
+    var el = $('sv-strip');
+    if (isNarrow()) return;
+    var f = document.activeElement && document.activeElement.getAttribute ? document.activeElement.getAttribute('data-chip') : null;
+    var n = Math.max(2, Math.floor((el.clientWidth - 360) / 120));
+    var ids = ['root', 'w4'].concat(workers.map(function (w) { return w.id; }).filter(function (id) { return id !== 'w4'; }));
+    var shown = ids.slice(0, n), more = ids.length - shown.length;
+    var connected = 1 + workers.filter(function (w) { return !w.obs; }).length;
+    var h = '<span class="lab"><strong style="font-weight:500">Agents</strong> · ' + connected + ' observed</span>';
+    shown.forEach(function (id) {
+      var e = ent[id];
+      h += '<button type="button" class="agentchip' + (tiers[id] === 'recover' ? ' warnc' : '') + (state.sel === id ? ' sel' : '') + '" data-chip="' + id + '" aria-label="' + esc(e.label + (tiers[id] ? ', ' + TW[tiers[id]] + ' attention' : '')) + '">' + glyph(e.st) + esc(e.label) + '</button>';
+    });
+    if (more > 0) h += '<span class="muted">+' + more + ' more</span>';
+    h += '<span class="muted">+' + subs.length + ' subagents</span><button type="button" class="b" id="sv-strip-graph" style="margin-left:auto">Graph ›</button>';
+    el.innerHTML = h;
+    if (f) { var again = el.querySelector('[data-chip="' + f + '"]'); if (again) again.focus({ preventScroll: true }); }
+  }
+  function renderQueue() {
+    var h = '';
+    queue.forEach(function (q, i) {
+      var body = q.tier === 'decide'
+        ? '<p class="note">Reported by Atlas supervisor · 2:00 PM</p><textarea class="ta" rows="2" aria-label="Answer (demo: nothing is sent)"></textarea><div class="m-btnrow" style="margin-top:6px"><button type="button" class="b" aria-disabled="true">Send answer</button><span class="note">Demo: nothing is sent.</span>'
+        : '<p>' + esc(q.body) + '</p><div class="m-btnrow">' + (q.act ? '<button type="button" class="b pri" aria-disabled="true">' + q.act + '</button>' : '');
+      h += '<details name="sv-attn"' + (q.open ? ' open' : '') + '><summary data-tier="' + q.tier + '"><span class="tier ' + q.tier + '">' + TI[q.tier] + '</span><span class="what">' + q.what + '</span><span class="age">' + q.age + '</span></summary><div class="dbody">' + body + '<button type="button" class="b" data-locate="' + q.target + '"></button></div></div></details>';
+    });
+    $('sv-qlist').innerHTML = h;
+    updateLocate();
+  }
+  function updateLocate() {
+    qa('[data-locate]').forEach(function (b) { b.textContent = 'Show in ' + (state.view === 'graph' ? 'Graph' : 'Tasks'); });
+  }
+
+  /* ---------- selection painting and roving stops ---------- */
+  function paint() {
+    var sel = state.sel, chain = chainOf(sel);
+    qa('.gn', $('sv-gcontent')).forEach(function (el) {
+      var id = el.getAttribute('data-id');
+      el.classList.toggle('sel', id === sel);
+      el.classList.toggle('hl', !!chain[id] && id !== sel);
+      el.classList.toggle('dim', state.attn && !tierOf(id) && !chain[id]);
+      el.setAttribute('aria-expanded', String(id === sel));
+    });
+    qa('path.ge', $('sv-gcontent')).forEach(function (p) { p.classList.toggle('hl', !!chain[p.getAttribute('data-from')] && !!chain[p.getAttribute('data-to')]); });
+    qa('.card', $('sv-board')).forEach(function (el) {
+      var id = el.getAttribute('data-id');
+      el.classList.toggle('sel', id === sel);
+      el.classList.toggle('hl', !!chain[id] && id !== sel);
+      el.classList.toggle('dim', state.attn && !tierOf(id) && !chain[id]);
+      el.setAttribute('aria-expanded', String(id === sel));
+    });
+    qa('[data-chip]', $('sv-strip')).forEach(function (el) { el.classList.toggle('sel', el.getAttribute('data-chip') === sel); });
+    readout();
+  }
+  function updateRoving() {
+    var gs = state.sel && byId[state.sel] ? state.sel : (rov.g && byId[rov.g] ? rov.g : 'root');
+    qa('.gn', $('sv-gcontent')).forEach(function (el) { el.tabIndex = el.getAttribute('data-id') === gs ? 0 : -1; });
+    var cards = visibleCards(), ids = cards.map(function (c) { return c.getAttribute('data-id'); }), tid = state.sel ? taskIdFor(state.sel) : null;
+    var bs = tid && ids.indexOf(tid) >= 0 ? tid : (rov.b && ids.indexOf(rov.b) >= 0 ? rov.b : ids[0]);
+    cards.forEach(function (c) { c.tabIndex = c.getAttribute('data-id') === bs ? 0 : -1; });
+  }
+  function readout() {
+    $('ro-view').textContent = state.view === 'graph' ? 'Graph' : 'Tasks';
+    $('ro-sel').textContent = state.sel ? ent[state.sel].kind + ' · ' + ent[state.sel].label : 'none';
+    $('ro-layout').textContent = frame.getAttribute('data-size') + ' · details: ' + frame.getAttribute('data-panel') + ' · queue: ' + frame.getAttribute('data-qmode') + ' · frame ' + frame.clientWidth + '×' + frame.clientHeight;
+  }
+
+  /* ---------- scrolling helpers ---------- */
+  function sheetOverlap(sc) {
+    if (frame.getAttribute('data-panel') !== 'sheet') return 0;
+    return Math.max(0, sc.getBoundingClientRect().bottom - $('sv-details').getBoundingClientRect().top);
+  }
+  function scrollWithin(sc, el, padB, padT) {
+    if (!sc || !el || !sc.clientHeight) return;
+    var s = sc.getBoundingClientRect(), r = el.getBoundingClientRect();
+    if (r.top < s.top + padT) sc.scrollTop += r.top - s.top - padT - 8;
+    else if (r.bottom > s.bottom - padB) sc.scrollTop += r.bottom - (s.bottom - padB) + 8;
+    if (r.left < s.left) sc.scrollLeft += r.left - s.left - 8;
+    else if (r.right > s.right) sc.scrollLeft += r.right - s.right + 8;
+  }
+  function revealGraph(id) { var g = $('sv-gscroll'); scrollWithin(g, nodeEl(id), sheetOverlap(g), HEAD); }
+  function revealCard(el) {
+    if (!el || !el.offsetParent) return;
+    var b = $('sv-board');
+    scrollWithin(el.closest('ul'), el, 0, 0);
+    scrollWithin(b, el, sheetOverlap(b), 0);
+  }
+  function reveal(id) {
+    if (!id) return;
+    if (state.view === 'graph') revealGraph(id);
+    else { var tid = taskIdFor(id); if (tid) revealCard(cardEl(tid)); }
+  }
+  function saveScroll() {
+    if (state.view === 'graph') { var g = $('sv-gscroll'); state.scroll.graph = { x: g.scrollLeft, y: g.scrollTop }; }
+    else { var b = $('sv-board'); state.scroll.tasks = { x: b.scrollLeft, y: b.scrollTop }; }
+  }
+  function restoreScroll() {
+    if (state.view === 'graph') { var g = $('sv-gscroll'); g.scrollLeft = state.scroll.graph.x; g.scrollTop = state.scroll.graph.y; }
+    else { var b = $('sv-board'); b.scrollLeft = state.scroll.tasks.x; b.scrollTop = state.scroll.tasks.y; }
+  }
+
+  /* ---------- layout: frame size, details panel, splitter ---------- */
+  function panelMode(waH) {
+    if (!state.sel) return 'none';
+    if (!isNarrow()) return 'side';
+    return state.view === 'graph' && waH >= 560 ? 'sheet' : 'overlay';
+  }
+  function setSep(orient, min, max, now) {
+    var s = $('sv-split');
+    s.setAttribute('aria-orientation', orient); s.setAttribute('aria-valuemin', String(min)); s.setAttribute('aria-valuemax', String(max));
+    s.setAttribute('aria-valuenow', String(now)); s.setAttribute('aria-valuetext', now + ' px'); s.setAttribute('aria-label', 'Resize details'); s.setAttribute('aria-controls', 'sv-details');
+  }
+  function applyLayout() {
+    var wa = $('sv-wa'), waW = wa.clientWidth, waH = wa.clientHeight, mode = panelMode(waH);
+    frame.style.setProperty('--wa-h', waH + 'px');
+    frame.setAttribute('data-panel', mode);
+    $('sv-details').hidden = mode === 'none';
+    $('sv-split').hidden = !(mode === 'side' || mode === 'sheet');
+    $('sv-gspacer').style.height = '0px';
+    if (mode === 'side') {
+      var max = Math.floor(waW * 0.5);
+      state.pw = clamp(state.pw, 280, max);
+      frame.style.setProperty('--pw', state.pw + 'px');
+      setSep('vertical', 280, max, state.pw);
+    } else if (mode === 'sheet') {
+      var maxh = Math.floor(waH * 0.75);
+      if (state.sh === null) state.sh = Math.round(waH * 0.5);
+      state.sh = clamp(state.sh, 160, maxh);
+      frame.style.setProperty('--sh', state.sh + 'px');
+      $('sv-gspacer').style.height = state.view === 'graph' ? state.sh + 'px' : '0px';
+      setSep('horizontal', 160, maxh, state.sh);
+    }
+  }
+  function measure() {
+    var w = frame.clientWidth, h = frame.clientHeight, narrow = w < 720, short = h <= 600, qm = narrow || short ? 'overlay' : 'inline';
+    frame.setAttribute('data-size', narrow ? 'narrow' : 'wide');
+    frame.setAttribute('data-short', short ? 'true' : 'false');
+    frame.setAttribute('data-qmode', qm);
+    if (qm === 'inline' && state.qopen) { state.qopen = false; frame.setAttribute('data-qopen', 'false'); }
+    applyLayout();
+    renderStrip();
+    updateRoving();
+    readout();
+  }
+
+  /* ---------- details ---------- */
+  function stateText(e) {
+    var n = openTaskCount();
+    if (e.kind === 'root') return '<strong style="font-weight:500">Atlas supervisor</strong> is managing ' + n + ' tasks. It asks you a question — answer it in the attention list.';
+    if (e.kind === 'task') {
+      return e.workerId ? 'In the ' + LW[e.task.lane] + ' lane, assigned to ' + esc(ent[e.workerId].label) + '.' + (e.task.note ? ' ' + esc(e.task.note) + '.' : '') : 'In the Queued lane — not assigned yet. The supervisor handles assignment.';
+    }
+    if (e.kind === 'worker') {
+      var t = ent[e.parentId].task;
+      if (e.st === 'blocked') return esc(e.label) + ' is blocked; no question reported.';
+      if (e.obs) return esc(e.label) + ' is unobserved — saved reports only.';
+      if (e.st === 'done') return esc(e.label) + ' reported done; the supervisor is reviewing the result.';
+      return esc(e.label) + ' is ' + e.st + ' on “' + esc(t.title) + '”.';
+    }
+    return esc(e.label) + ' runs inside ' + esc(workerOfSub(e).label) + ' and has no terminal of its own. Its receipts are not the worker’s Ready/Result.';
+  }
+  function pathHtml(e) {
+    if (e.kind === 'root') return '<p class="note">Supervises ' + openTaskCount() + ' tasks · ' + workers.length + ' workers · ' + subs.length + ' subagents. Select a task, worker or subagent to see its chain.</p>';
+    var chain = [], c = e, kids = [];
+    while (c && c.kind !== 'root') { chain.unshift(c); c = c.parentId ? ent[c.parentId] : null; }
+    if (e.kind === 'task' && e.workerId) kids = [ent[e.workerId]];
+    else if ((e.kind === 'worker' || e.kind === 'sub') && state.sub) kids = subs.filter(function (s) { return s.parent === e.id; }).map(function (s) { return ent[s.id]; });
+    var rows = chain.concat(kids), h = '<div class="path" role="group" aria-label="Task, worker and subagent">';
+    rows.forEach(function (r, i) {
+      var role = r.kind === 'task' ? 'Task' : r.kind === 'worker' ? 'Task agent' : 'OMP subagent';
+      var ic = r.kind === 'task' ? docIcon() : glyph(r.kind === 'sub' ? subSt(r.st) : r.st);
+      var chips = r.kind === 'task' ? '<span class="chip">' + LW[r.task.lane] + ' lane</span>' : r.kind === 'worker' ? '<span class="chip">Herdr · ' + esc(r.obs || r.st) + '</span>' : '<span class="chip">OMP events · ' + esc(r.st) + '</span><span class="chip">no terminal of its own</span>';
+      h += '<button type="button" class="r' + (r.id === e.id ? ' cur' : '') + (r.kind === 'sub' ? ' sub' : '') + '" data-pid="' + r.id + '" style="margin-left:' + (i * 16) + 'px' + (i ? ';margin-top:-1px' : '') + '"' + (r.id === e.id ? ' aria-current="true"' : '') + '><span class="muted">' + role + '</span>' + ic + '<span class="lk">' + esc(r.label) + '</span>' + chips + '</button>';
+    });
+    return h + '</div>';
+  }
+  function renderDetails() {
+    var id = state.sel;
+    if (!id) return;
+    var e = ent[id], tier = tierOf(id);
+    $('sv-d-title').textContent = e.label;
+    var h = '<div class="grp"><h5>State</h5><p>' + stateText(e) + '</p>' + (tier ? '<p>' + tierChip(tier) + '</p>' : '') + '</div>';
+    h += '<div class="grp"><h5>Relationship</h5>' + pathHtml(e) + '</div>';
+    if (e.kind === 'worker') h += '<div class="grp"><h5>Evidence</h5><div class="m-line"><span class="pairchip"><span>reported 7m</span><span>observed ● ' + esc(e.obs || e.st) + '</span></span></div></div>';
+    h += '<div class="grp" style="border-bottom:0"><h5>Navigate</h5><div class="m-btnrow">';
+    if (state.view === 'tasks') h += '<button type="button" class="b" data-act="graph">Show in Graph</button>';
+    else if (taskIdFor(id)) h += '<button type="button" class="b" data-act="board">Show in Tasks</button>';
+    if (e.kind === 'worker') h += '<button type="button" class="b" aria-disabled="true" aria-describedby="sv-d-why">Open terminal</button>';
+    h += '</div><p class="note" id="sv-d-why">' + (e.kind === 'sub' ? 'No terminal of its own.' : 'Demo: nothing is opened and Herdr focus is never changed. In the product, Open terminal is the only control that moves it.') + '</p></div>';
+    $('sv-d-body').innerHTML = h;
+  }
+
+  /* ---------- actions ---------- */
+  function select(id, o) {
+    o = o || {};
+    if (o.toggle && state.sel === id) id = null;
+    state.sel = id;
+    if (id && o.invoker) invoker = o.invoker;
+    if (id) renderDetails();
+    applyLayout();
+    paint();
+    updateRoving();
+    if (id) reveal(id);
+    announce(id ? 'Selected ' + ent[id].label + (tierOf(id) ? ' · ' + TW[tierOf(id)] : '') : 'Selection cleared');
+    if (id && frame.getAttribute('data-panel') === 'overlay') $('sv-details-close').focus();
+  }
+  function visibleEl(el) { return el && el.isConnected && el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden'; }
+  function closeDetails() {
+    var was = state.sel;
+    state.sel = null;
+    applyLayout(); paint(); updateRoving();
+    var t = visibleEl(invoker) ? invoker : null;
+    if (!t && was) t = state.view === 'graph' ? nodeEl(was) : (taskIdFor(was) ? cardEl(taskIdFor(was)) : null);
+    if (!visibleEl(t)) t = $('sv-btn-' + state.view);
+    t.focus({ preventScroll: true });
+    announce('Details closed');
+  }
+  function setView(v) {
+    if (v === state.view) return;
+    saveScroll();
+    state.view = v;
+    frame.setAttribute('data-view', v);
+    $('sv-tasks').hidden = v !== 'tasks';
+    $('sv-graphview').hidden = v !== 'graph';
+    $('sv-btn-tasks').setAttribute('aria-pressed', String(v === 'tasks'));
+    $('sv-btn-graph').setAttribute('aria-pressed', String(v === 'graph'));
+    if (state.sel) renderDetails();
+    applyLayout();
+    restoreScroll();
+    if (state.sel) reveal(state.sel);
+    updateLocate(); updateRoving(); readout();
+    if (state.sel && frame.getAttribute('data-panel') === 'overlay') $('sv-details-close').focus();
+    announce(v === 'graph' ? 'Graph view · ' + (1 + workers.length + (state.sub ? subs.length : 0)) + ' agents · ' + openTaskCount() + ' tasks' : 'Tasks view · ' + openTaskCount() + ' open tasks');
+  }
+  function showIn(v) {
+    var id = state.sel;
+    if (!id) return;
+    setView(v === 'graph' ? 'graph' : 'tasks');
+    var el = v === 'graph' ? nodeEl(id) : (taskIdFor(id) ? cardEl(taskIdFor(id)) : null);
+    if (visibleEl(el)) { invoker = el; el.focus({ preventScroll: true }); reveal(id); }
+  }
+  function openOverlay(inv) {
+    qInvoker = inv; state.qopen = true;
+    frame.setAttribute('data-qopen', 'true');
+    $('sv-qclose').focus();
+    announce('Attention list opened');
+  }
+  function closeOverlay(noFocus) {
+    state.qopen = false;
+    frame.setAttribute('data-qopen', 'false');
+    if (!noFocus && qInvoker && qInvoker.isConnected) qInvoker.focus();
+  }
+  function locate(target, btn) {
+    var overlay = frame.getAttribute('data-qmode') === 'overlay';
+    invoker = btn;
+    if (overlay) closeOverlay(true);
+    select(target, { invoker: btn });
+    if (overlay && frame.getAttribute('data-panel') !== 'overlay') {
+      var el = state.view === 'graph' ? nodeEl(target) : (taskIdFor(target) ? cardEl(taskIdFor(target)) : null);
+      if (!visibleEl(el)) el = $('sv-btn-' + state.view);
+      invoker = el; el.focus({ preventScroll: true });
+    }
+  }
+
+  /* ---------- keyboard ---------- */
+  function focusNode(id) {
+    rov.g = id; updateRoving();
+    var el = nodeEl(id);
+    if (el) { el.focus({ preventScroll: true }); revealGraph(id); }
+  }
+  function graphKey(e) {
+    var el = e.target.closest ? e.target.closest('.gn') : null;
+    if (!el || e.ctrlKey || e.metaKey || e.altKey) return;
+    var id = el.getAttribute('data-id'), i = order.indexOf(id), n = byId[id], to = null;
+    if (e.key === 'ArrowDown') to = order[Math.min(i + 1, order.length - 1)];
+    else if (e.key === 'ArrowUp') to = order[Math.max(i - 1, 0)];
+    else if (e.key === 'Home') to = order[0];
+    else if (e.key === 'End') to = order[order.length - 1];
+    else if (e.key === 'ArrowRight') to = n.kids.length ? n.kids[0] : null;
+    else if (e.key === 'ArrowLeft') to = n.parent;
+    else return;
+    e.preventDefault();
+    if (to) focusNode(to);
+  }
+  function boardKey(e) {
+    var el = e.target.closest ? e.target.closest('.card') : null;
+    if (!el || e.ctrlKey || e.metaKey || e.altKey) return;
+    var lanes = laneCards(), narrow = isNarrow(), li = -1, ci = -1, to = null, flat = [].concat.apply([], lanes);
+    lanes.forEach(function (arr, i) { var j = arr.indexOf(el); if (j >= 0) { li = i; ci = j; } });
+    if (li < 0) return;
+    if (e.key === 'Home') to = flat[0];
+    else if (e.key === 'End') to = flat[flat.length - 1];
+    else if (e.key === 'ArrowDown') to = narrow ? flat[flat.indexOf(el) + 1] : lanes[li][ci + 1];
+    else if (e.key === 'ArrowUp') to = narrow ? flat[flat.indexOf(el) - 1] : lanes[li][ci - 1];
+    else if (!narrow && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+      var d = e.key === 'ArrowRight' ? 1 : -1;
+      for (var k = li + d; k >= 0 && k < lanes.length; k += d) if (lanes[k].length) { to = lanes[k][Math.min(ci, lanes[k].length - 1)]; break; }
+    } else return;
+    e.preventDefault();
+    if (to) { rov.b = to.getAttribute('data-id'); updateRoving(); to.focus({ preventScroll: true }); revealCard(to); }
+  }
+
+  /* ---------- wiring ---------- */
+  $('sv-btn-tasks').addEventListener('click', function () { setView('tasks'); });
+  $('sv-btn-graph').addEventListener('click', function () { setView('graph'); });
+  $('sv-attn').addEventListener('change', function () { state.attn = this.checked; paint(); announce(state.attn ? 'Attention filter on: other items dimmed' : 'Attention filter off'); });
+  $('sv-sub').addEventListener('change', function () {
+    var was = state.sel, parent = null;
+    state.sub = this.checked;
+    if (!state.sub && was && ent[was].kind === 'sub') { parent = workerOfSub(ent[was]).id; state.sel = parent; renderDetails(); }
+    buildGraph(); renderGraph(); chrome(); applyLayout(); paint(); updateRoving();
+    if (parent) { var el = nodeEl(parent); if (el) el.focus({ preventScroll: true }); }
+    announce(state.sub ? 'Subagents shown' : 'Subagents hidden');
+  });
+  $('sv-gscroll').addEventListener('click', function (e) {
+    var el = e.target.closest('.gn');
+    if (!el) return;
+    rov.g = el.getAttribute('data-id');
+    select(rov.g, { toggle: true, invoker: el });
+  });
+  $('sv-gscroll').addEventListener('keydown', graphKey);
+  $('sv-board').addEventListener('click', function (e) {
+    var el = e.target.closest('.card');
+    if (!el) return;
+    rov.b = el.getAttribute('data-id');
+    select(rov.b, { toggle: true, invoker: el });
+  });
+  $('sv-board').addEventListener('keydown', boardKey);
+  $('sv-strip').addEventListener('click', function (e) {
+    var chip = e.target.closest('[data-chip]');
+    if (chip) { select(chip.getAttribute('data-chip'), { toggle: true, invoker: chip }); return; }
+    if (e.target.closest('#sv-strip-graph')) { setView('graph'); $('sv-btn-graph').focus({ preventScroll: true }); }
+  });
+  $('sv-counters').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-tier]');
+    if (!b) return;
+    if (frame.getAttribute('data-qmode') === 'overlay') { openOverlay(b); return; }
+    var s = $('sv-qlist').querySelector('summary[data-tier="' + b.getAttribute('data-tier') + '"]');
+    if (s) { s.parentNode.open = true; s.focus({ preventScroll: true }); scrollWithin($('sv-queue'), s, 0, 0); }
+  });
+  $('sv-qclose').addEventListener('click', function () { closeOverlay(false); });
+  $('sv-qlist').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-locate]');
+    if (b) locate(b.getAttribute('data-locate'), b);
+  });
+  $('sv-qlist').addEventListener('keydown', function (e) {
+    var s = e.target.tagName === 'SUMMARY' ? e.target : null;
+    if (!s) return;
+    var all = qa('summary', $('sv-qlist')), i = all.indexOf(s);
+    if (e.key === 'ArrowDown') { e.preventDefault(); (all[i + 1] || s).focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); (all[i - 1] || s).focus(); }
+    else if (e.key === 'Home') { e.preventDefault(); all[0].focus(); }
+    else if (e.key === 'End') { e.preventDefault(); all[all.length - 1].focus(); }
+    else if (e.key === 'Escape' && s.parentNode.open) { e.preventDefault(); s.parentNode.open = false; }
+  });
+  $('sv-details-close').addEventListener('click', closeDetails);
+  $('sv-d-body').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    if (b.hasAttribute('data-pid')) {
+      var pid = b.getAttribute('data-pid');
+      select(pid, { invoker: invoker });
+      var again = $('sv-d-body').querySelector('[data-pid="' + pid + '"]');
+      if (again) again.focus({ preventScroll: true });
+    } else if (b.getAttribute('data-act')) showIn(b.getAttribute('data-act'));
+  });
+  frame.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || e.isComposing || e.defaultPrevented) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    e.preventDefault();
+    if (state.qopen) closeOverlay(false);
+    else if (state.sel) closeDetails();
+    else announce('Escape would hide Supervisor in the product; the demo ignores it.');
+  });
+  frame.addEventListener('focusin', function (e) {
+    var n = e.target.closest ? e.target.closest('.gn') : null, c = e.target.closest ? e.target.closest('.card') : null;
+    if (n) rov.g = n.getAttribute('data-id');
+    if (c) rov.b = c.getAttribute('data-id');
+  });
+  document.addEventListener('focusin', function (e) {
+    var el = e.target;
+    if (!el || el === document.body || !el.getAttribute) { $('ro-dom').textContent = '(none)'; return; }
+    var lbl = el.getAttribute('aria-label') || (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 48) || el.tagName;
+    $('ro-dom').textContent = (frame.contains(el) ? 'demo · ' : 'page · ') + el.tagName.toLowerCase() + ' “' + lbl + '”';
+  });
+
+  var split = $('sv-split');
+  split.addEventListener('keydown', function (e) {
+    var mode = frame.getAttribute('data-panel'), step = e.shiftKey ? 48 : 16;
+    if (mode === 'side') {
+      if (e.key === 'ArrowLeft') state.pw += step; else if (e.key === 'ArrowRight') state.pw -= step; else if (e.key === 'Home') state.pw = 340; else return;
+    } else if (mode === 'sheet') {
+      if (e.key === 'ArrowUp') state.sh += step; else if (e.key === 'ArrowDown') state.sh -= step; else if (e.key === 'Home') state.sh = null; else return;
+    } else return;
+    e.preventDefault();
+    applyLayout();
+    if (state.sel) reveal(state.sel);
+  });
+  split.addEventListener('pointerdown', function (e) { dragging = true; split.classList.add('drag'); split.setPointerCapture(e.pointerId); e.preventDefault(); });
+  split.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    var r = $('sv-wa').getBoundingClientRect(), mode = frame.getAttribute('data-panel');
+    if (mode === 'side') state.pw = r.right - e.clientX; else if (mode === 'sheet') state.sh = r.bottom - e.clientY; else return;
+    applyLayout();
+  });
+  function endDrag() { if (!dragging) return; dragging = false; split.classList.remove('drag'); if (state.sel) reveal(state.sel); }
+  split.addEventListener('pointerup', endDrag);
+  split.addEventListener('pointercancel', endDrag);
+
+  var presets = { fit: [null, null], wide: ['1280px', '800px'], medium: ['740px', '800px'], narrow: ['360px', '720px'], short: ['1280px', '520px'] };
+  qa('[data-preset]', document).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var p = presets[b.getAttribute('data-preset')];
+      if (p[0]) { frame.style.setProperty('--fw', p[0]); frame.style.setProperty('--fh', p[1]); } else { frame.style.removeProperty('--fw'); frame.style.removeProperty('--fh'); }
+      qa('[data-preset]', document).forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+      measure();
+    });
+  });
+
+  function init() {
+    state = { view: 'tasks', sel: null, attn: false, sub: true, pw: 340, sh: null, scroll: { tasks: { x: 0, y: 0 }, graph: { x: 0, y: 0 } }, qopen: false };
+    rov = { g: 'root', b: null }; invoker = null; qInvoker = null;
+    frame.setAttribute('data-view', 'tasks'); frame.setAttribute('data-qopen', 'false'); frame.setAttribute('data-panel', 'none');
+    $('sv-tasks').hidden = false; $('sv-graphview').hidden = true;
+    $('sv-btn-tasks').setAttribute('aria-pressed', 'true'); $('sv-btn-graph').setAttribute('aria-pressed', 'false');
+    $('sv-attn').checked = false; $('sv-sub').checked = true;
+    $('sv-details').hidden = true; $('sv-split').hidden = true;
+    renderQueue(); renderBoard(); buildGraph(); renderGraph(); chrome();
+    measure(); paint(); updateRoving();
+    announce('Tasks view · ' + openTaskCount() + ' open tasks');
+  }
+  $('demo-reset').addEventListener('click', init);
+  buildEnt();
+  init();
+  if (window.ResizeObserver) new ResizeObserver(function () { measure(); }).observe(frame);
+  else window.addEventListener('resize', measure);
+})();
+</script>
+</body>
+</html>

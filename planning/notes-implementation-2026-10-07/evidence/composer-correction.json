@@ -1,0 +1,2585 @@
+{
+  "snapshot": "/tmp/cnotes-composer-fixed-0m5egf_c",
+  "revision": "b538420beac5d2bd843f417559b9bde552bdedee",
+  "original_asset": "index-CNceJCyF.js",
+  "corrected_notes_css_sha256": "00827bbf127ce68d345f18ad5d52fda334e7fba83bda730e82d934405eec6652",
+  "all_other_notes_hashes_match_original": true,
+  "exact_global_rule_hash_unchanged": true,
+  "helper_hash_unchanged": true,
+  "scope": "Only authorized206 .notes-view .notes-composer-author min-width:min-content correction; worker makes no product edits",
+  "build_start": "2026-10-07T06:32:03.929936+00:00",
+  "build_end_observed": "2026-10-07T06:32:17.665418+00:00",
+  "build_returncode": 0,
+  "build_log": "vite v8.2.2 building client environment for production...\ntransforming...\n\u2713 471 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/assets/icon-D1LDh8iw.svg                                  0.42 kB \u2502 gzip:   0.26 kB\ndist/index.html                                                0.57 kB \u2502 gzip:   0.35 kB\ndist/assets/ibm-plex-mono-latin-400-normal-CvHOgSBP.woff      13.14 kB\ndist/assets/ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2     14.70 kB\ndist/assets/ibm-plex-sans-latin-400-normal-CYLoc0-x.woff      22.10 kB\ndist/assets/ibm-plex-sans-latin-400-normal-CDDApCn2.woff2     22.58 kB\ndist/assets/ibm-plex-sans-latin-600-normal-Cu4Hd6ag.woff      23.87 kB\ndist/assets/ibm-plex-sans-latin-500-normal-BgVn5rGT.woff      23.91 kB\ndist/assets/ibm-plex-sans-latin-500-normal-6ng42L7E.woff2     24.18 kB\ndist/assets/ibm-plex-sans-latin-600-normal-CuJfVYMP.woff2     24.25 kB\ndist/assets/index-BdhTxX7L.css                               228.50 kB \u2502 gzip:  36.84 kB\ndist/assets/index-CRpoD7vq.js                              2,561.41 kB \u2502 gzip: 745.83 kB\ndist/assets/mermaid.min-yiu6nxHv.js                        3,594.02 kB \u2502 gzip: 998.21 kB\n\n\u2713 built in 741ms\n$ tsc --noEmit && bunx --bun vite build\n[plugin builtin:vite-reporter] \n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\n",
+  "assets": [
+    {
+      "name": "index-CRpoD7vq.js",
+      "sha256": "056930d914b87a049d2fcb1c4c71b8db68bd626323d61de9f71408cac6272ede"
+    }
+  ],
+  "fixture": "/tmp/cpol-u7_y9k7f",
+  "ledger": {
+    "root": "/tmp/cpol-u7_y9k7f",
+    "session": "polish-u7_y9k7f",
+    "socket": "/tmp/cpol-u7_y9k7f/config/herdr/sessions/polish-u7_y9k7f/herdr.sock",
+    "protected": [
+      "default",
+      "pre-existing sessions and gateways"
+    ],
+    "fixture": "/tmp/cpol-u7_y9k7f/repositories/sample",
+    "fixture_url": "http://127.0.0.1:33727/"
+  },
+  "url": "http://127.0.0.1:35897",
+  "gateway_cmdline": "/tmp/cnotes-composer-fixed-0m5egf_c/target/debug/cockpit serve --herdr-session polish-u7_y9k7f --herdr-socket /tmp/cpol-u7_y9k7f/config/herdr/sessions/polish-u7_y9k7f/herdr.sock --config /tmp/cpol-u7_y9k7f/cockpit.toml --static-dir /tmp/cnotes-composer-fixed-0m5egf_c/dist ",
+  "notes_id": "4f45b8c1-ddba-4363-a382-c505e4ab4a94",
+  "notes_root": "/tmp/cpol-u7_y9k7f/data/cockpit/notes",
+  "todo_id": "ytvx01zu9c",
+  "count_before": 19,
+  "hashes_before": {
+    "todos.md": "301b93c86f7a27b395f5e328b1402aeceb5b122d5f1151199b4dff74becaedda",
+    "comments/ytvx01zu9c/47aaed47-7bc5-4685-872d-7bd8ccdc615f.md": "ee7c2e77543cc917c39aece9f5f7c170b19b08d33719c09562888d9f992237d1",
+    "comments/ytvx01zu9c/4fb0e556-2a4d-4171-a581-b4d8f007a8f6.md": "dcde0ead0b2a11454b7299fa3b5bfe9ee8cd0f80fb34c6f18ae767e94b513682",
+    "comments/ytvx01zu9c/be37e77b-f815-4af8-a411-b4c35c1da0bd.md": "534185c38872b53b9d88d5a7edeadbd7529255ae8e045c611c9e52993dc43c1a",
+    "comments/ytvx01zu9c/b22d5f70-446a-48f2-8af0-6ac34bb0e05f.md": "64c8a0c0e7f0995c222c48b11c39956cf1024e00b93acadf055be622a6d979b7",
+    "comments/ytvx01zu9c/65dd823b-277b-4763-9e65-f78a3004a26f.md": "089dec907d3b0337a9776b1aa0bdb25cce22c73424f513696aadca8546caefb4",
+    "comments/ytvx01zu9c/09f04324-93bc-42bc-88fe-99beb374ac98.md": "91ba511266fa76cf5922cd1b51581e56fc94b89fa808cfdbae9573e521bdbb90",
+    "comments/ytvx01zu9c/427c2d6d-bcd3-48b4-860f-8a72fc36a641.md": "6a1c7580913335afe763608f9575ac8861f483eb7fd7fdc2035f894b99055632",
+    "comments/ytvx01zu9c/1d6b4720-5886-452f-ac7b-395aac4ef6a9.md": "126a19605d5401ebe09ad1e9a0ec2469a1eb49a75d88cfd5f373cb172f140ce5",
+    "comments/ytvx01zu9c/d0198148-7f63-4556-9d2b-3ba2e530a2b3.md": "8329f49bcf97865b5184fc0bcec201928744f37d517aeeccbae2ccf4549b5c05",
+    "comments/ytvx01zu9c/47f6403b-470e-4142-8a38-9199520a3727.md": "84d06ffcaa2f44b890070159622d6a6c85c045d587d9a1e216885b45e1f84c68",
+    "comments/ytvx01zu9c/59070bdb-1cac-4a84-8ebe-d090ccfd1aff.md": "40ab82af0049dd574ffa836d3815e5e3010ed36d59b355d5c80978b37f24bf2f",
+    "comments/ytvx01zu9c/ee8b8fb6-c68d-48a6-84aa-f86968fb447e.md": "b0edded2c95b2062ab6da563ada7c995c4f4ed3da0480f579a157079999560e1",
+    "comments/ytvx01zu9c/935ee145-ad26-4ab8-818c-acef0fea0ae1.md": "ed1741f7feb2e2cf32e87effb9dc26db27342bec9d50d72f106aa02bcf49c9b7",
+    "comments/ytvx01zu9c/b0d4a18e-51c8-4b96-adeb-f4e27c846839.md": "3407d1548f97bad46d632e175717370a7377faac65ccb08cea1dc9ef19541dd7",
+    "comments/ytvx01zu9c/c0aaed7a-51a2-4755-a217-b1719afcdea7.md": "9e2ddae35749bd1f343511f5c6ebfe5365abaa2e9fd1e996cdf65d0b4c24436a",
+    "comments/ytvx01zu9c/ad0adaa6-65dd-4fbd-9e71-66e804c9984a.md": "aa83132bef07666ca9c782d1d2f6eb6eee1b2f81dcee6c14cdafc0df53abcb6b",
+    "comments/ytvx01zu9c/514fa11c-6ce9-4806-9ab5-622ccb9ce01b.md": "99d1a438d55b2d0dc1fb97f243fcb9c9ea4f80af5ba32c8751b2ef5852ce48dd",
+    "comments/ytvx01zu9c/9148ff48-945c-4e62-abab-6642ab067982.md": "740ac028523a1d2ea8be405d7ccb6b1c6c21d928d5f7a1092da64eb4c5d2ec88",
+    "comments/ytvx01zu9c/b88934fc-1915-45cb-a63f-d761b0e3ca22.md": "b3952da733f5174a713488f54b3db222b40231bc911337388db71159d7a7aa54"
+  },
+  "result": "PASS scoped NR26 correction",
+  "observations": {
+    "uuid": "4f45b8c1-ddba-4363-a382-c505e4ab4a94",
+    "assets": [
+      "http://127.0.0.1:35897/assets/index-CRpoD7vq.js"
+    ],
+    "states": {
+      "empty": {
+        "360": {
+          "viewport": {
+            "w": 360,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 360,
+          "containerWidth": 360,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 14,
+                "y": 902.296875,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 49.390625,
+                "bottom": 919.6875,
+                "left": 14
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 54.390625,
+                "y": 902.296875,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 108.09375,
+                "bottom": 919.6875,
+                "left": 54.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 113.09375,
+                "y": 898.296875,
+                "width": 132.15625,
+                "height": 25.390625,
+                "top": 898.296875,
+                "right": 245.25,
+                "bottom": 923.6875,
+                "left": 113.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": null,
+            "discard": null,
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": true,
+              "rect": {
+                "x": 251.25,
+                "y": 897,
+                "width": 94.75,
+                "height": 28,
+                "top": 897,
+                "right": 346,
+                "bottom": 925,
+                "left": 251.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 14,
+            "y": 897,
+            "width": 332,
+            "height": 28,
+            "top": 897,
+            "right": 346,
+            "bottom": 925,
+            "left": 14
+          },
+          "composer": {
+            "x": 0,
+            "y": 751,
+            "width": 360,
+            "height": 186,
+            "top": 751,
+            "right": 360,
+            "bottom": 937,
+            "left": 0
+          },
+          "slot": {
+            "x": 0,
+            "y": 937,
+            "width": 360,
+            "height": 0,
+            "top": 937,
+            "right": 360,
+            "bottom": 937,
+            "left": 0
+          },
+          "slotText": "",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 0,
+                "head": 0
+              }
+            ],
+            "main": 0
+          },
+          "draft": "",
+          "threadScroll": 5622,
+          "focus": {
+            "tag": "H3",
+            "class": "",
+            "label": null
+          },
+          "overflow": 19,
+          "authorMinWidth": "min-content"
+        },
+        "420": {
+          "viewport": {
+            "w": 420,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 420,
+          "containerWidth": 420,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 14,
+                "y": 902.296875,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 49.390625,
+                "bottom": 919.6875,
+                "left": 14
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 54.390625,
+                "y": 902.296875,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 108.09375,
+                "bottom": 919.6875,
+                "left": 54.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 113.09375,
+                "y": 898.296875,
+                "width": 192.15625,
+                "height": 25.390625,
+                "top": 898.296875,
+                "right": 305.25,
+                "bottom": 923.6875,
+                "left": 113.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": null,
+            "discard": null,
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": true,
+              "rect": {
+                "x": 311.25,
+                "y": 897,
+                "width": 94.75,
+                "height": 28,
+                "top": 897,
+                "right": 406,
+                "bottom": 925,
+                "left": 311.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 14,
+            "y": 897,
+            "width": 392,
+            "height": 28,
+            "top": 897,
+            "right": 406,
+            "bottom": 925,
+            "left": 14
+          },
+          "composer": {
+            "x": 0,
+            "y": 751,
+            "width": 420,
+            "height": 186,
+            "top": 751,
+            "right": 420,
+            "bottom": 937,
+            "left": 0
+          },
+          "slot": {
+            "x": 0,
+            "y": 937,
+            "width": 420,
+            "height": 0,
+            "top": 937,
+            "right": 420,
+            "bottom": 937,
+            "left": 0
+          },
+          "slotText": "",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 0,
+                "head": 0
+              }
+            ],
+            "main": 0
+          },
+          "draft": "",
+          "threadScroll": 5215,
+          "focus": {
+            "tag": "H3",
+            "class": "",
+            "label": null
+          },
+          "overflow": 0,
+          "authorMinWidth": "min-content"
+        },
+        "1440": {
+          "viewport": {
+            "w": 1440,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 360,
+          "containerWidth": 1200,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 1095,
+                "y": 902.296875,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 1130.390625,
+                "bottom": 919.6875,
+                "left": 1095
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 1135.390625,
+                "y": 902.296875,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 1189.09375,
+                "bottom": 919.6875,
+                "left": 1135.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 1194.09375,
+                "y": 898.296875,
+                "width": 131.15625,
+                "height": 25.390625,
+                "top": 898.296875,
+                "right": 1325.25,
+                "bottom": 923.6875,
+                "left": 1194.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": null,
+            "discard": null,
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": true,
+              "rect": {
+                "x": 1331.25,
+                "y": 897,
+                "width": 94.75,
+                "height": 28,
+                "top": 897,
+                "right": 1426,
+                "bottom": 925,
+                "left": 1331.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 1095,
+            "y": 897,
+            "width": 331,
+            "height": 28,
+            "top": 897,
+            "right": 1426,
+            "bottom": 925,
+            "left": 1095
+          },
+          "composer": {
+            "x": 1081,
+            "y": 751,
+            "width": 359,
+            "height": 186,
+            "top": 751,
+            "right": 1440,
+            "bottom": 937,
+            "left": 1081
+          },
+          "slot": {
+            "x": 240,
+            "y": 937,
+            "width": 1200,
+            "height": 0,
+            "top": 937,
+            "right": 1440,
+            "bottom": 937,
+            "left": 240
+          },
+          "slotText": "",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 0,
+                "head": 0
+              }
+            ],
+            "main": 0
+          },
+          "draft": "",
+          "threadScroll": 5622,
+          "focus": {
+            "tag": "H3",
+            "class": "",
+            "label": null
+          },
+          "overflow": 0,
+          "authorMinWidth": "min-content"
+        }
+      },
+      "dirty": {
+        "360": {
+          "viewport": {
+            "w": 360,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 360,
+          "containerWidth": 360,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 14,
+                "y": 868.296875,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 868.296875,
+                "right": 49.390625,
+                "bottom": 885.6875,
+                "left": 14
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 54.390625,
+                "y": 868.296875,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 868.296875,
+                "right": 108.09375,
+                "bottom": 885.6875,
+                "left": 54.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 113.09375,
+                "y": 864.296875,
+                "width": 106.703125,
+                "height": 25.390625,
+                "top": 864.296875,
+                "right": 219.796875,
+                "bottom": 889.6875,
+                "left": 113.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 225.796875,
+                "y": 868.296875,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 868.296875,
+                "right": 279.359375,
+                "bottom": 885.6875,
+                "left": 225.796875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 285.359375,
+                "y": 863,
+                "width": 60.640625,
+                "height": 28,
+                "top": 863,
+                "right": 346,
+                "bottom": 891,
+                "left": 285.359375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 251.25,
+                "y": 897,
+                "width": 94.75,
+                "height": 28,
+                "top": 897,
+                "right": 346,
+                "bottom": 925,
+                "left": 251.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 14,
+            "y": 863,
+            "width": 332,
+            "height": 62,
+            "top": 863,
+            "right": 346,
+            "bottom": 925,
+            "left": 14
+          },
+          "composer": {
+            "x": 0,
+            "y": 717,
+            "width": 360,
+            "height": 220,
+            "top": 717,
+            "right": 360,
+            "bottom": 937,
+            "left": 0
+          },
+          "slot": {
+            "x": 0,
+            "y": 937,
+            "width": 360,
+            "height": 0,
+            "top": 937,
+            "right": 360,
+            "bottom": 937,
+            "left": 0
+          },
+          "slotText": "",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 600,
+          "focus": {
+            "tag": "DIV",
+            "class": "cm-content cm-lineWrapping",
+            "label": "New comment Markdown"
+          },
+          "overflow": 19,
+          "authorMinWidth": "min-content"
+        },
+        "420": {
+          "viewport": {
+            "w": 420,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 420,
+          "containerWidth": 420,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 14,
+                "y": 902.296875,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 49.390625,
+                "bottom": 919.6875,
+                "left": 14
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 54.390625,
+                "y": 902.296875,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 108.09375,
+                "bottom": 919.6875,
+                "left": 54.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 113.09375,
+                "y": 898.296875,
+                "width": 65.953125,
+                "height": 25.390625,
+                "top": 898.296875,
+                "right": 179.046875,
+                "bottom": 923.6875,
+                "left": 113.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 185.046875,
+                "y": 902.296875,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 902.296875,
+                "right": 238.609375,
+                "bottom": 919.6875,
+                "left": 185.046875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 244.609375,
+                "y": 897,
+                "width": 60.640625,
+                "height": 28,
+                "top": 897,
+                "right": 305.25,
+                "bottom": 925,
+                "left": 244.609375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 311.25,
+                "y": 897,
+                "width": 94.75,
+                "height": 28,
+                "top": 897,
+                "right": 406,
+                "bottom": 925,
+                "left": 311.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 14,
+            "y": 897,
+            "width": 392,
+            "height": 28,
+            "top": 897,
+            "right": 406,
+            "bottom": 925,
+            "left": 14
+          },
+          "composer": {
+            "x": 0,
+            "y": 751,
+            "width": 420,
+            "height": 186,
+            "top": 751,
+            "right": 420,
+            "bottom": 937,
+            "left": 0
+          },
+          "slot": {
+            "x": 0,
+            "y": 937,
+            "width": 420,
+            "height": 0,
+            "top": 937,
+            "right": 420,
+            "bottom": 937,
+            "left": 0
+          },
+          "slotText": "",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 557,
+          "focus": {
+            "tag": "DIV",
+            "class": "cm-content cm-lineWrapping",
+            "label": "New comment Markdown"
+          },
+          "overflow": 0,
+          "authorMinWidth": "min-content"
+        },
+        "1440": {
+          "viewport": {
+            "w": 1440,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 360,
+          "containerWidth": 1200,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 1095,
+                "y": 868.296875,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 868.296875,
+                "right": 1130.390625,
+                "bottom": 885.6875,
+                "left": 1095
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 1135.390625,
+                "y": 868.296875,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 868.296875,
+                "right": 1189.09375,
+                "bottom": 885.6875,
+                "left": 1135.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 1194.09375,
+                "y": 864.296875,
+                "width": 105.703125,
+                "height": 25.390625,
+                "top": 864.296875,
+                "right": 1299.796875,
+                "bottom": 889.6875,
+                "left": 1194.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 1305.796875,
+                "y": 868.296875,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 868.296875,
+                "right": 1359.359375,
+                "bottom": 885.6875,
+                "left": 1305.796875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 1365.359375,
+                "y": 863,
+                "width": 60.640625,
+                "height": 28,
+                "top": 863,
+                "right": 1426,
+                "bottom": 891,
+                "left": 1365.359375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 1331.25,
+                "y": 897,
+                "width": 94.75,
+                "height": 28,
+                "top": 897,
+                "right": 1426,
+                "bottom": 925,
+                "left": 1331.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 1095,
+            "y": 863,
+            "width": 331,
+            "height": 62,
+            "top": 863,
+            "right": 1426,
+            "bottom": 925,
+            "left": 1095
+          },
+          "composer": {
+            "x": 1081,
+            "y": 717,
+            "width": 359,
+            "height": 220,
+            "top": 717,
+            "right": 1440,
+            "bottom": 937,
+            "left": 1081
+          },
+          "slot": {
+            "x": 240,
+            "y": 937,
+            "width": 1200,
+            "height": 0,
+            "top": 937,
+            "right": 1440,
+            "bottom": 937,
+            "left": 240
+          },
+          "slotText": "",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 600,
+          "focus": {
+            "tag": "DIV",
+            "class": "cm-content cm-lineWrapping",
+            "label": "New comment Markdown"
+          },
+          "overflow": 0,
+          "authorMinWidth": "min-content"
+        }
+      },
+      "known": {
+        "360": {
+          "viewport": {
+            "w": 360,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 360,
+          "containerWidth": 360,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 14,
+                "y": 801.90625,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 801.90625,
+                "right": 49.390625,
+                "bottom": 819.296875,
+                "left": 14
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 54.390625,
+                "y": 801.90625,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 801.90625,
+                "right": 108.09375,
+                "bottom": 819.296875,
+                "left": 54.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 113.09375,
+                "y": 797.90625,
+                "width": 106.703125,
+                "height": 25.390625,
+                "top": 797.90625,
+                "right": 219.796875,
+                "bottom": 823.296875,
+                "left": 113.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 225.796875,
+                "y": 801.90625,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 801.90625,
+                "right": 279.359375,
+                "bottom": 819.296875,
+                "left": 225.796875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 285.359375,
+                "y": 796.609375,
+                "width": 60.640625,
+                "height": 28,
+                "top": 796.609375,
+                "right": 346,
+                "bottom": 824.609375,
+                "left": 285.359375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 251.25,
+                "y": 830.609375,
+                "width": 94.75,
+                "height": 28,
+                "top": 830.609375,
+                "right": 346,
+                "bottom": 858.609375,
+                "left": 251.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 14,
+            "y": 796.609375,
+            "width": 332,
+            "height": 62,
+            "top": 796.609375,
+            "right": 346,
+            "bottom": 858.609375,
+            "left": 14
+          },
+          "composer": {
+            "x": 0,
+            "y": 650.609375,
+            "width": 360,
+            "height": 220,
+            "top": 650.609375,
+            "right": 360,
+            "bottom": 870.609375,
+            "left": 0
+          },
+          "slot": {
+            "x": 0,
+            "y": 870.609375,
+            "width": 360,
+            "height": 66.390625,
+            "top": 870.609375,
+            "right": 360,
+            "bottom": 937,
+            "left": 0
+          },
+          "slotText": "Decided must be a date or RFC3339 timestampnotes_invalid_inputCheck saved state",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 600,
+          "focus": {
+            "tag": "DIV",
+            "class": "cm-content cm-lineWrapping",
+            "label": "New comment Markdown"
+          },
+          "overflow": 19,
+          "authorMinWidth": "min-content"
+        },
+        "420": {
+          "viewport": {
+            "w": 420,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 420,
+          "containerWidth": 420,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 14,
+                "y": 818.515625,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 818.515625,
+                "right": 49.390625,
+                "bottom": 835.90625,
+                "left": 14
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 54.390625,
+                "y": 818.515625,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 818.515625,
+                "right": 108.09375,
+                "bottom": 835.90625,
+                "left": 54.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 113.09375,
+                "y": 814.515625,
+                "width": 65.953125,
+                "height": 25.390625,
+                "top": 814.515625,
+                "right": 179.046875,
+                "bottom": 839.90625,
+                "left": 113.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 185.046875,
+                "y": 818.515625,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 818.515625,
+                "right": 238.609375,
+                "bottom": 835.90625,
+                "left": 185.046875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 244.609375,
+                "y": 813.21875,
+                "width": 60.640625,
+                "height": 28,
+                "top": 813.21875,
+                "right": 305.25,
+                "bottom": 841.21875,
+                "left": 244.609375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 311.25,
+                "y": 813.21875,
+                "width": 94.75,
+                "height": 28,
+                "top": 813.21875,
+                "right": 406,
+                "bottom": 841.21875,
+                "left": 311.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 14,
+            "y": 813.21875,
+            "width": 392,
+            "height": 28,
+            "top": 813.21875,
+            "right": 406,
+            "bottom": 841.21875,
+            "left": 14
+          },
+          "composer": {
+            "x": 0,
+            "y": 667.21875,
+            "width": 420,
+            "height": 186,
+            "top": 667.21875,
+            "right": 420,
+            "bottom": 853.21875,
+            "left": 0
+          },
+          "slot": {
+            "x": 0,
+            "y": 853.21875,
+            "width": 420,
+            "height": 83.78125,
+            "top": 853.21875,
+            "right": 420,
+            "bottom": 937,
+            "left": 0
+          },
+          "slotText": "Decided must be a date or RFC3339 timestampnotes_invalid_inputCheck saved state",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 557,
+          "focus": {
+            "tag": "DIV",
+            "class": "cm-content cm-lineWrapping",
+            "label": "New comment Markdown"
+          },
+          "overflow": 0,
+          "authorMinWidth": "min-content"
+        },
+        "1440": {
+          "viewport": {
+            "w": 1440,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 360,
+          "containerWidth": 1200,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 1095,
+                "y": 827.296875,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 827.296875,
+                "right": 1130.390625,
+                "bottom": 844.6875,
+                "left": 1095
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 1135.390625,
+                "y": 827.296875,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 827.296875,
+                "right": 1189.09375,
+                "bottom": 844.6875,
+                "left": 1135.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 1194.09375,
+                "y": 823.296875,
+                "width": 105.703125,
+                "height": 25.390625,
+                "top": 823.296875,
+                "right": 1299.796875,
+                "bottom": 848.6875,
+                "left": 1194.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 1305.796875,
+                "y": 827.296875,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 827.296875,
+                "right": 1359.359375,
+                "bottom": 844.6875,
+                "left": 1305.796875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 1365.359375,
+                "y": 822,
+                "width": 60.640625,
+                "height": 28,
+                "top": 822,
+                "right": 1426,
+                "bottom": 850,
+                "left": 1365.359375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 1331.25,
+                "y": 856,
+                "width": 94.75,
+                "height": 28,
+                "top": 856,
+                "right": 1426,
+                "bottom": 884,
+                "left": 1331.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 1095,
+            "y": 822,
+            "width": 331,
+            "height": 62,
+            "top": 822,
+            "right": 1426,
+            "bottom": 884,
+            "left": 1095
+          },
+          "composer": {
+            "x": 1081,
+            "y": 676,
+            "width": 359,
+            "height": 220,
+            "top": 676,
+            "right": 1440,
+            "bottom": 896,
+            "left": 1081
+          },
+          "slot": {
+            "x": 240,
+            "y": 896,
+            "width": 1200,
+            "height": 41,
+            "top": 896,
+            "right": 1440,
+            "bottom": 937,
+            "left": 240
+          },
+          "slotText": "Decided must be a date or RFC3339 timestampnotes_invalid_inputCheck saved state",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 600,
+          "focus": {
+            "tag": "DIV",
+            "class": "cm-content cm-lineWrapping",
+            "label": "New comment Markdown"
+          },
+          "overflow": 0,
+          "authorMinWidth": "min-content"
+        }
+      },
+      "unknown": {
+        "360": {
+          "viewport": {
+            "w": 360,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 360,
+          "containerWidth": 360,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 14,
+                "y": 727.1875,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 727.1875,
+                "right": 49.390625,
+                "bottom": 744.578125,
+                "left": 14
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 54.390625,
+                "y": 727.1875,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 727.1875,
+                "right": 108.09375,
+                "bottom": 744.578125,
+                "left": 54.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 113.09375,
+                "y": 723.1875,
+                "width": 106.703125,
+                "height": 25.390625,
+                "top": 723.1875,
+                "right": 219.796875,
+                "bottom": 748.578125,
+                "left": 113.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 225.796875,
+                "y": 727.1875,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 727.1875,
+                "right": 279.359375,
+                "bottom": 744.578125,
+                "left": 225.796875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 285.359375,
+                "y": 721.890625,
+                "width": 60.640625,
+                "height": 28,
+                "top": 721.890625,
+                "right": 346,
+                "bottom": 749.890625,
+                "left": 285.359375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": true,
+              "rect": {
+                "x": 251.25,
+                "y": 755.890625,
+                "width": 94.75,
+                "height": 28,
+                "top": 755.890625,
+                "right": 346,
+                "bottom": 783.890625,
+                "left": 251.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 14,
+            "y": 721.890625,
+            "width": 332,
+            "height": 62,
+            "top": 721.890625,
+            "right": 346,
+            "bottom": 783.890625,
+            "left": 14
+          },
+          "composer": {
+            "x": 0,
+            "y": 575.890625,
+            "width": 360,
+            "height": 220,
+            "top": 575.890625,
+            "right": 360,
+            "bottom": 795.890625,
+            "left": 0
+          },
+          "slot": {
+            "x": 0,
+            "y": 795.890625,
+            "width": 360,
+            "height": 141.109375,
+            "top": 795.890625,
+            "right": 360,
+            "bottom": 937,
+            "left": 0
+          },
+          "slotText": "Could not confirm whether the change was saved. Your drafts are kept. Check saved state before choosing any next write; posting again may duplicate. notes_outcome_unknownCheck saved state",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 600,
+          "focus": {
+            "tag": "BODY",
+            "class": "",
+            "label": null
+          },
+          "overflow": 19,
+          "authorMinWidth": "min-content"
+        },
+        "420": {
+          "viewport": {
+            "w": 420,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 420,
+          "containerWidth": 420,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 14,
+                "y": 778.578125,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 778.578125,
+                "right": 49.390625,
+                "bottom": 795.96875,
+                "left": 14
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 54.390625,
+                "y": 778.578125,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 778.578125,
+                "right": 108.09375,
+                "bottom": 795.96875,
+                "left": 54.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 113.09375,
+                "y": 774.578125,
+                "width": 65.953125,
+                "height": 25.390625,
+                "top": 774.578125,
+                "right": 179.046875,
+                "bottom": 799.96875,
+                "left": 113.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 185.046875,
+                "y": 778.578125,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 778.578125,
+                "right": 238.609375,
+                "bottom": 795.96875,
+                "left": 185.046875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 244.609375,
+                "y": 773.28125,
+                "width": 60.640625,
+                "height": 28,
+                "top": 773.28125,
+                "right": 305.25,
+                "bottom": 801.28125,
+                "left": 244.609375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": true,
+              "rect": {
+                "x": 311.25,
+                "y": 773.28125,
+                "width": 94.75,
+                "height": 28,
+                "top": 773.28125,
+                "right": 406,
+                "bottom": 801.28125,
+                "left": 311.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 14,
+            "y": 773.28125,
+            "width": 392,
+            "height": 28,
+            "top": 773.28125,
+            "right": 406,
+            "bottom": 801.28125,
+            "left": 14
+          },
+          "composer": {
+            "x": 0,
+            "y": 627.28125,
+            "width": 420,
+            "height": 186,
+            "top": 627.28125,
+            "right": 420,
+            "bottom": 813.28125,
+            "left": 0
+          },
+          "slot": {
+            "x": 0,
+            "y": 813.28125,
+            "width": 420,
+            "height": 123.71875,
+            "top": 813.28125,
+            "right": 420,
+            "bottom": 937,
+            "left": 0
+          },
+          "slotText": "Could not confirm whether the change was saved. Your drafts are kept. Check saved state before choosing any next write; posting again may duplicate. notes_outcome_unknownCheck saved state",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 557,
+          "focus": {
+            "tag": "BODY",
+            "class": "",
+            "label": null
+          },
+          "overflow": 0,
+          "authorMinWidth": "min-content"
+        },
+        "1440": {
+          "viewport": {
+            "w": 1440,
+            "h": 1000,
+            "dpr": 1.25
+          },
+          "detailWidth": 360,
+          "containerWidth": 1200,
+          "nodes": {
+            "author": {
+              "text": "author",
+              "disabled": false,
+              "rect": {
+                "x": 1095,
+                "y": 779.359375,
+                "width": 35.390625,
+                "height": 17.390625,
+                "top": 779.359375,
+                "right": 1130.390625,
+                "bottom": 796.75,
+                "left": 1095
+              },
+              "hit": "SPAN",
+              "unobscured": true,
+              "visible": true
+            },
+            "unverified": {
+              "text": "unverified",
+              "disabled": false,
+              "rect": {
+                "x": 1135.390625,
+                "y": 779.359375,
+                "width": 53.703125,
+                "height": 17.390625,
+                "top": 779.359375,
+                "right": 1189.09375,
+                "bottom": 796.75,
+                "left": 1135.390625
+              },
+              "hit": "notes-composer-author-note",
+              "unobscured": true,
+              "visible": true
+            },
+            "input": {
+              "text": "",
+              "value": "Local user",
+              "disabled": false,
+              "rect": {
+                "x": 1194.09375,
+                "y": 775.359375,
+                "width": 105.703125,
+                "height": 25.390625,
+                "top": 775.359375,
+                "right": 1299.796875,
+                "bottom": 800.75,
+                "left": 1194.09375
+              },
+              "hit": "INPUT",
+              "unobscured": true,
+              "visible": true
+            },
+            "draft": {
+              "text": "Draft kept",
+              "disabled": false,
+              "rect": {
+                "x": 1305.796875,
+                "y": 779.359375,
+                "width": 53.5625,
+                "height": 17.390625,
+                "top": 779.359375,
+                "right": 1359.359375,
+                "bottom": 796.75,
+                "left": 1305.796875
+              },
+              "hit": "SMALL",
+              "unobscured": true,
+              "visible": true
+            },
+            "discard": {
+              "text": "Discard",
+              "value": "",
+              "disabled": false,
+              "rect": {
+                "x": 1365.359375,
+                "y": 774.0625,
+                "width": 60.640625,
+                "height": 28,
+                "top": 774.0625,
+                "right": 1426,
+                "bottom": 802.0625,
+                "left": 1365.359375
+              },
+              "hit": "BUTTON",
+              "unobscured": true,
+              "visible": true
+            },
+            "comment": {
+              "text": "Comment",
+              "value": "",
+              "disabled": true,
+              "rect": {
+                "x": 1331.25,
+                "y": 808.0625,
+                "width": 94.75,
+                "height": 28,
+                "top": 808.0625,
+                "right": 1426,
+                "bottom": 836.0625,
+                "left": 1331.25
+              },
+              "hit": "postCommentBtn",
+              "unobscured": true,
+              "visible": true
+            }
+          },
+          "overlaps": [],
+          "footer": {
+            "x": 1095,
+            "y": 774.0625,
+            "width": 331,
+            "height": 62,
+            "top": 774.0625,
+            "right": 1426,
+            "bottom": 836.0625,
+            "left": 1095
+          },
+          "composer": {
+            "x": 1081,
+            "y": 628.0625,
+            "width": 359,
+            "height": 220,
+            "top": 628.0625,
+            "right": 1440,
+            "bottom": 848.0625,
+            "left": 1081
+          },
+          "slot": {
+            "x": 240,
+            "y": 848.0625,
+            "width": 1200,
+            "height": 88.9375,
+            "top": 848.0625,
+            "right": 1440,
+            "bottom": 937,
+            "left": 240
+          },
+          "slotText": "Could not confirm whether the change was saved. Your drafts are kept. Check saved state before choosing any next write; posting again may duplicate. notes_outcome_unknownCheck saved state",
+          "selection": {
+            "ranges": [
+              {
+                "anchor": 34,
+                "head": 34
+              }
+            ],
+            "main": 0
+          },
+          "draft": "Preserved corrected composer draft",
+          "threadScroll": 600,
+          "focus": {
+            "tag": "BODY",
+            "class": "",
+            "label": null
+          },
+          "overflow": 0,
+          "authorMinWidth": "min-content"
+        }
+      }
+    },
+    "beforeUnknown": {
+      "viewport": {
+        "w": 1440,
+        "h": 1000,
+        "dpr": 1.25
+      },
+      "detailWidth": 360,
+      "containerWidth": 1200,
+      "nodes": {
+        "author": {
+          "text": "author",
+          "disabled": false,
+          "rect": {
+            "x": 1095,
+            "y": 827.296875,
+            "width": 35.390625,
+            "height": 17.390625,
+            "top": 827.296875,
+            "right": 1130.390625,
+            "bottom": 844.6875,
+            "left": 1095
+          },
+          "hit": "SPAN",
+          "unobscured": true,
+          "visible": true
+        },
+        "unverified": {
+          "text": "unverified",
+          "disabled": false,
+          "rect": {
+            "x": 1135.390625,
+            "y": 827.296875,
+            "width": 53.703125,
+            "height": 17.390625,
+            "top": 827.296875,
+            "right": 1189.09375,
+            "bottom": 844.6875,
+            "left": 1135.390625
+          },
+          "hit": "notes-composer-author-note",
+          "unobscured": true,
+          "visible": true
+        },
+        "input": {
+          "text": "",
+          "value": "Local user",
+          "disabled": false,
+          "rect": {
+            "x": 1194.09375,
+            "y": 823.296875,
+            "width": 105.703125,
+            "height": 25.390625,
+            "top": 823.296875,
+            "right": 1299.796875,
+            "bottom": 848.6875,
+            "left": 1194.09375
+          },
+          "hit": "INPUT",
+          "unobscured": true,
+          "visible": true
+        },
+        "draft": {
+          "text": "Draft kept",
+          "disabled": false,
+          "rect": {
+            "x": 1305.796875,
+            "y": 827.296875,
+            "width": 53.5625,
+            "height": 17.390625,
+            "top": 827.296875,
+            "right": 1359.359375,
+            "bottom": 844.6875,
+            "left": 1305.796875
+          },
+          "hit": "SMALL",
+          "unobscured": true,
+          "visible": true
+        },
+        "discard": {
+          "text": "Discard",
+          "value": "",
+          "disabled": false,
+          "rect": {
+            "x": 1365.359375,
+            "y": 822,
+            "width": 60.640625,
+            "height": 28,
+            "top": 822,
+            "right": 1426,
+            "bottom": 850,
+            "left": 1365.359375
+          },
+          "hit": "BUTTON",
+          "unobscured": true,
+          "visible": true
+        },
+        "comment": {
+          "text": "Comment",
+          "value": "",
+          "disabled": false,
+          "rect": {
+            "x": 1331.25,
+            "y": 856,
+            "width": 94.75,
+            "height": 28,
+            "top": 856,
+            "right": 1426,
+            "bottom": 884,
+            "left": 1331.25
+          },
+          "hit": "postCommentBtn",
+          "unobscured": true,
+          "visible": true
+        }
+      },
+      "overlaps": [],
+      "footer": {
+        "x": 1095,
+        "y": 822,
+        "width": 331,
+        "height": 62,
+        "top": 822,
+        "right": 1426,
+        "bottom": 884,
+        "left": 1095
+      },
+      "composer": {
+        "x": 1081,
+        "y": 676,
+        "width": 359,
+        "height": 220,
+        "top": 676,
+        "right": 1440,
+        "bottom": 896,
+        "left": 1081
+      },
+      "slot": {
+        "x": 240,
+        "y": 896,
+        "width": 1200,
+        "height": 41,
+        "top": 896,
+        "right": 1440,
+        "bottom": 937,
+        "left": 240
+      },
+      "slotText": "Decided must be a date or RFC3339 timestampnotes_invalid_inputCheck saved state",
+      "selection": {
+        "ranges": [
+          {
+            "anchor": 34,
+            "head": 34
+          }
+        ],
+        "main": 0
+      },
+      "draft": "Preserved corrected composer draft",
+      "threadScroll": 600,
+      "focus": {
+        "tag": "DIV",
+        "class": "cm-content cm-lineWrapping",
+        "label": "New comment Markdown"
+      },
+      "overflow": 0,
+      "authorMinWidth": "min-content"
+    },
+    "ledger": {
+      "requests": [
+        "decision_create",
+        "scratchpad_read",
+        "todo_list",
+        "decision_list",
+        "comment_list",
+        "decision_list",
+        "target_resolve",
+        "comment_add",
+        "scratchpad_read",
+        "todo_list",
+        "decision_list",
+        "decision_list"
+      ],
+      "known": {
+        "originalDecided": "2026-10-01",
+        "sentDecided": "2026-13-45",
+        "status": 400,
+        "body": {
+          "code": "notes_invalid_input",
+          "message": "Decided must be a date or RFC3339 timestamp"
+        }
+      },
+      "forwarded": {
+        "status": 200,
+        "changed": true,
+        "kind": "comment",
+        "comment_id": "d195c932-f39f-41ae-8bb0-1c17349a5948"
+      }
+    },
+    "recovery": {
+      "360": [
+        {
+          "text": "Check saved state",
+          "disabled": false,
+          "rect": {
+            "x": 32,
+            "y": 901,
+            "width": 117.53125,
+            "height": 28,
+            "top": 901,
+            "right": 149.53125,
+            "bottom": 929,
+            "left": 32
+          },
+          "unobscured": true
+        }
+      ],
+      "420": [
+        {
+          "text": "Check saved state",
+          "disabled": false,
+          "rect": {
+            "x": 32,
+            "y": 901,
+            "width": 117.53125,
+            "height": 28,
+            "top": 901,
+            "right": 149.53125,
+            "bottom": 929,
+            "left": 32
+          },
+          "unobscured": true
+        }
+      ],
+      "1440": [
+        {
+          "text": "Check saved state",
+          "disabled": false,
+          "rect": {
+            "x": 272,
+            "y": 901,
+            "width": 117.53125,
+            "height": 28,
+            "top": 901,
+            "right": 389.53125,
+            "bottom": 929,
+            "left": 272
+          },
+          "unobscured": true
+        }
+      ]
+    },
+    "proof": {
+      "steps": 3,
+      "postDisabled": true,
+      "draft": "Preserved corrected composer draft",
+      "buttons": [
+        {
+          "text": "Check saved state",
+          "disabled": false,
+          "unobscured": true
+        },
+        {
+          "text": "I checked saved state; allow next write",
+          "disabled": false,
+          "unobscured": false
+        }
+      ],
+      "ackAfterScroll": {
+        "rect": {
+          "x": 145.15625,
+          "y": 1151.109375,
+          "width": 228.765625,
+          "height": 28,
+          "top": 1151.109375,
+          "right": 373.921875,
+          "bottom": 1179.109375,
+          "left": 145.15625
+        },
+        "unobscured": true,
+        "slotScroll": 11
+      }
+    },
+    "afterAck": {
+      "postDisabled": false,
+      "draft": "Preserved corrected composer draft",
+      "adds": 1
+    },
+    "resizeAnchor": {
+      "360": {
+        "threadScroll": 600,
+        "comment": "Fixture\u00b7 unverified label10/7/2026, 8:33:17 AMCorrected source thread01\nSynthetic context Synthetic context Synthetic context Synt",
+        "relativeTop": -282.71875,
+        "selection": {
+          "ranges": [
+            {
+              "anchor": 34,
+              "head": 34
+            }
+          ],
+          "main": 0
+        },
+        "draft": "Preserved corrected composer draft"
+      },
+      "420": {
+        "threadScroll": 557,
+        "comment": "Fixture\u00b7 unverified label10/7/2026, 8:33:17 AMCorrected source thread01\nSynthetic context Synthetic context Synthetic context Synt",
+        "relativeTop": -261.15625,
+        "selection": {
+          "ranges": [
+            {
+              "anchor": 34,
+              "head": 34
+            }
+          ],
+          "main": 0
+        },
+        "draft": "Preserved corrected composer draft"
+      },
+      "1440": {
+        "threadScroll": 600,
+        "comment": "Fixture\u00b7 unverified label10/7/2026, 8:33:17 AMCorrected source thread01\nSynthetic context Synthetic context Synthetic context Synt",
+        "relativeTop": -282.71875,
+        "selection": {
+          "ranges": [
+            {
+              "anchor": 34,
+              "head": 34
+            }
+          ],
+          "main": 0
+        },
+        "draft": "Preserved corrected composer draft"
+      }
+    },
+    "ledgerFinal": {
+      "requests": [
+        "decision_create",
+        "scratchpad_read",
+        "todo_list",
+        "decision_list",
+        "comment_list",
+        "decision_list",
+        "target_resolve",
+        "comment_add",
+        "scratchpad_read",
+        "todo_list",
+        "decision_list",
+        "decision_list",
+        "target_resolve",
+        "scratchpad_read",
+        "todo_list",
+        "decision_list",
+        "decision_list",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "scratchpad_read",
+        "todo_list",
+        "decision_list",
+        "comment_list",
+        "decision_list",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "scratchpad_read",
+        "todo_list",
+        "decision_list",
+        "decision_list",
+        "target_resolve",
+        "scratchpad_read",
+        "todo_list",
+        "decision_list",
+        "target_resolve",
+        "decision_list",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "comment_list",
+        "target_resolve",
+        "target_resolve",
+        "comment_list",
+        "target_resolve"
+      ],
+      "known": {
+        "originalDecided": "2026-10-01",
+        "sentDecided": "2026-13-45",
+        "status": 400,
+        "body": {
+          "code": "notes_invalid_input",
+          "message": "Decided must be a date or RFC3339 timestamp"
+        }
+      },
+      "forwarded": {
+        "status": 200,
+        "changed": true,
+        "kind": "comment",
+        "comment_id": "d195c932-f39f-41ae-8bb0-1c17349a5948"
+      }
+    },
+    "overflow360": {
+      "viewport": 360,
+      "scrollWidth": 379,
+      "detail": {
+        "x": 0,
+        "y": 123,
+        "width": 360,
+        "height": 814,
+        "top": 123,
+        "right": 360,
+        "bottom": 937,
+        "left": 0
+      },
+      "footer": {
+        "x": 14,
+        "y": 863,
+        "width": 332,
+        "height": 62,
+        "top": 863,
+        "right": 346,
+        "bottom": 925,
+        "left": 14
+      },
+      "outside": [
+        {
+          "tag": "BUTTON",
+          "class": "tab-strip-action",
+          "label": "Supervisor",
+          "rect": {
+            "x": 289.3125,
+            "y": 6,
+            "width": 81.21875,
+            "height": 28,
+            "top": 6,
+            "right": 370.53125,
+            "bottom": 34,
+            "left": 289.3125
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "class": "",
+          "label": "Decisions \u2014 0 records (Current and History)",
+          "rect": {
+            "x": 267.3125,
+            "y": 82,
+            "width": 102.90625,
+            "height": 40,
+            "top": 82,
+            "right": 370.21875,
+            "bottom": 122,
+            "left": 267.3125
+          }
+        }
+      ]
+    }
+  },
+  "hashes_after": {
+    "todos.md": "301b93c86f7a27b395f5e328b1402aeceb5b122d5f1151199b4dff74becaedda",
+    "comments/ytvx01zu9c/d195c932-f39f-41ae-8bb0-1c17349a5948.md": "e94b909f1b3288caf3edb9a6bcc018d94f758242fb381fdf80837b0d6f562acc",
+    "comments/ytvx01zu9c/47aaed47-7bc5-4685-872d-7bd8ccdc615f.md": "ee7c2e77543cc917c39aece9f5f7c170b19b08d33719c09562888d9f992237d1",
+    "comments/ytvx01zu9c/4fb0e556-2a4d-4171-a581-b4d8f007a8f6.md": "dcde0ead0b2a11454b7299fa3b5bfe9ee8cd0f80fb34c6f18ae767e94b513682",
+    "comments/ytvx01zu9c/be37e77b-f815-4af8-a411-b4c35c1da0bd.md": "534185c38872b53b9d88d5a7edeadbd7529255ae8e045c611c9e52993dc43c1a",
+    "comments/ytvx01zu9c/b22d5f70-446a-48f2-8af0-6ac34bb0e05f.md": "64c8a0c0e7f0995c222c48b11c39956cf1024e00b93acadf055be622a6d979b7",
+    "comments/ytvx01zu9c/65dd823b-277b-4763-9e65-f78a3004a26f.md": "089dec907d3b0337a9776b1aa0bdb25cce22c73424f513696aadca8546caefb4",
+    "comments/ytvx01zu9c/09f04324-93bc-42bc-88fe-99beb374ac98.md": "91ba511266fa76cf5922cd1b51581e56fc94b89fa808cfdbae9573e521bdbb90",
+    "comments/ytvx01zu9c/427c2d6d-bcd3-48b4-860f-8a72fc36a641.md": "6a1c7580913335afe763608f9575ac8861f483eb7fd7fdc2035f894b99055632",
+    "comments/ytvx01zu9c/1d6b4720-5886-452f-ac7b-395aac4ef6a9.md": "126a19605d5401ebe09ad1e9a0ec2469a1eb49a75d88cfd5f373cb172f140ce5",
+    "comments/ytvx01zu9c/d0198148-7f63-4556-9d2b-3ba2e530a2b3.md": "8329f49bcf97865b5184fc0bcec201928744f37d517aeeccbae2ccf4549b5c05",
+    "comments/ytvx01zu9c/47f6403b-470e-4142-8a38-9199520a3727.md": "84d06ffcaa2f44b890070159622d6a6c85c045d587d9a1e216885b45e1f84c68",
+    "comments/ytvx01zu9c/59070bdb-1cac-4a84-8ebe-d090ccfd1aff.md": "40ab82af0049dd574ffa836d3815e5e3010ed36d59b355d5c80978b37f24bf2f",
+    "comments/ytvx01zu9c/ee8b8fb6-c68d-48a6-84aa-f86968fb447e.md": "b0edded2c95b2062ab6da563ada7c995c4f4ed3da0480f579a157079999560e1",
+    "comments/ytvx01zu9c/935ee145-ad26-4ab8-818c-acef0fea0ae1.md": "ed1741f7feb2e2cf32e87effb9dc26db27342bec9d50d72f106aa02bcf49c9b7",
+    "comments/ytvx01zu9c/b0d4a18e-51c8-4b96-adeb-f4e27c846839.md": "3407d1548f97bad46d632e175717370a7377faac65ccb08cea1dc9ef19541dd7",
+    "comments/ytvx01zu9c/c0aaed7a-51a2-4755-a217-b1719afcdea7.md": "9e2ddae35749bd1f343511f5c6ebfe5365abaa2e9fd1e996cdf65d0b4c24436a",
+    "comments/ytvx01zu9c/ad0adaa6-65dd-4fbd-9e71-66e804c9984a.md": "aa83132bef07666ca9c782d1d2f6eb6eee1b2f81dcee6c14cdafc0df53abcb6b",
+    "comments/ytvx01zu9c/514fa11c-6ce9-4806-9ab5-622ccb9ce01b.md": "99d1a438d55b2d0dc1fb97f243fcb9c9ea4f80af5ba32c8751b2ef5852ce48dd",
+    "comments/ytvx01zu9c/9148ff48-945c-4e62-abab-6642ab067982.md": "740ac028523a1d2ea8be405d7ccb6b1c6c21d928d5f7a1092da64eb4c5d2ec88",
+    "comments/ytvx01zu9c/b88934fc-1915-45cb-a63f-d761b0e3ca22.md": "b3952da733f5174a713488f54b3db222b40231bc911337388db71159d7a7aa54"
+  },
+  "exact_added_comment_file": [
+    "comments/ytvx01zu9c/d195c932-f39f-41ae-8bb0-1c17349a5948.md"
+  ],
+  "existing_content_bytes_unchanged": true,
+  "count_after": 20,
+  "decision_count_after": 0,
+  "source_hashes": {
+    "src/app/notes/AgentAccess.tsx": "8183db2f5a096be9cb338b6a1cf4e956f476bea08024eef0b9b5d7325c3f3d05",
+    "src/app/notes/Decisions.tsx": "c470cdcf620a1bc265534e25ba7140a965e415164490edf849eb7d4c90594b27",
+    "src/app/notes/Kanban.tsx": "4a828f794033ab90ecc02eea80e61d31ae4c30f217ade6cc7b862c094dd5c1d7",
+    "src/app/notes/MarkdownEditor.tsx": "1adbd64f9240a36028f4bb8babd7b0ab744039d0de0b230856c5135cd0c2d88a",
+    "src/app/notes/NotesView.behavior.test.tsx": "0c095480d681279e9c6acdd88e237a32dae4ee50d3752b292ef82c4063968943",
+    "src/app/notes/NotesView.tsx": "026b301d6543b5657ec918e4987e71bdadd8e9c742373afddd7ae42b3bc35fdc",
+    "src/app/notes/RetainedDrafts.tsx": "5df00f0eb720544bdd567c139781bc0741bdf3730ee3b79ceac0719576445989",
+    "src/app/notes/TaskDetail.tsx": "cc23abf31e2c09daba86fe1118296c7ae21391ebf0490c19e5a399bbf2e11c5f",
+    "src/app/notes/TodoTitle.tsx": "aa99effb94192c3208dbfa69a6ddd5db811973b8391131156c0bcab5e6fdfd08",
+    "src/app/notes/boardState.ts": "efb8fe727ada102ad66dc56ebdbed2de9261c6a9403673ad0c0b60015383ff5e",
+    "src/app/notes/drafts.ts": "eb861f48d6b77a86889cedb962a7bdf2ee54bc0bae7aab1ef5f9f4ccbe04ee70",
+    "src/app/notes/notes.css": "00827bbf127ce68d345f18ad5d52fda334e7fba83bda730e82d934405eec6652",
+    "src/app/notes/notesSensors.ts": "76f0ad41c355650aed547bd5dd159a97ec8b57382d40d32f915c558ebaaef2e9",
+    "src/app/notes/notesState.test.ts": "a0cbe37c6689089a73ebbd8d4cf0216e1734a151689af90b690712c6690953ed",
+    "src/app/notes/useNotes.ts": "a79a210305587e0cc5a6aefc2712c1bb773594c2f2e1c57c2b86c1b373623bf2"
+  },
+  "new_asset_distinct_from_pre_correction": true,
+  "scope_boundaries": "Original66+known1440 captures represent pre-correction source; F26 captures represent corrected CSS/new loaded asset only. F date-only request adaptation and forwarded real successful comment followed by wrong DTO, not real network-loss.",
+  "scroll_comparison": "Within each width dirty/known/unknown scroll unchanged:600 at1440/detail360 and360;557 at420. Resizing changes Markdown wrapping/scroll anchoring, recorded explicitly; not a fixed cross-width600 claim.",
+  "recovery_note": "Narrow proof step3 requires bounded problem-slot scrolling; initial ack hit off-scrollport false, explicit scrollIntoView made acknowledgement reachable and actual ack succeeded with no replay. Not simultaneous visibility of every step.",
+  "outside_scope": "Atviewport360 document overflow19px originates Supervisor topbar and Decisions tab, not composer; footerx14..346 fits360.420/1440 overflow0; unrelated chrome not edited.",
+  "cleanup": {
+    "browser_closed": "NotesComposerFixed",
+    "helper_stop": "Stopped matching fixture processes; evidence retained at /tmp/cpol-u7_y9k7f",
+    "fixture_absent": true,
+    "registry_exact_bytes_equal": true,
+    "remaining_processes": 0,
+    "retained_snapshots": [
+      "/tmp/cnotes-known1440-r2h_29x3",
+      "/tmp/cnotes-composer-fixed-0m5egf_c"
+    ],
+    "retained_dist_dirs": [
+      "/tmp/cnotes-known1440-r2h_29x3/dist",
+      "/tmp/cnotes-composer-fixed-0m5egf_c/dist"
+    ],
+    "retention": "Immutable source/dist retained through parent root review; no further rebuild/source edits",
+    "shared_dependency_targets_removed": false,
+    "driver_files_created": 0
+  }
+}

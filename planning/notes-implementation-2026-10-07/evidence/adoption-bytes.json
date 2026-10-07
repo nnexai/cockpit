@@ -1,0 +1,10 @@
+{
+  "repair_changed_lines": [
+    [
+      "- [ ] Duplicate A <!-- cockpit id=duplicate_probe -->",
+      "- [ ] Duplicate A <!-- cockpit id=rv46xrg5y1 -->"
+    ]
+  ],
+  "duplicate_B_unchanged": true,
+  "adopted_id": "5kqq0s89l6"
+}

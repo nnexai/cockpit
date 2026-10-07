@@ -1,0 +1,70 @@
+{
+  "revision": "b538420beac5d2bd843f417559b9bde552bdedee",
+  "snapshot": "/tmp/cnotes-final-sqy1l4bc",
+  "overlays": {
+    "src/app/notes/AgentAccess.tsx": "8183db2f5a096be9cb338b6a1cf4e956f476bea08024eef0b9b5d7325c3f3d05",
+    "src/app/notes/Decisions.tsx": "c470cdcf620a1bc265534e25ba7140a965e415164490edf849eb7d4c90594b27",
+    "src/app/notes/Kanban.tsx": "4a828f794033ab90ecc02eea80e61d31ae4c30f217ade6cc7b862c094dd5c1d7",
+    "src/app/notes/MarkdownEditor.tsx": "1adbd64f9240a36028f4bb8babd7b0ab744039d0de0b230856c5135cd0c2d88a",
+    "src/app/notes/NotesView.behavior.test.tsx": "0c095480d681279e9c6acdd88e237a32dae4ee50d3752b292ef82c4063968943",
+    "src/app/notes/NotesView.tsx": "026b301d6543b5657ec918e4987e71bdadd8e9c742373afddd7ae42b3bc35fdc",
+    "src/app/notes/RetainedDrafts.tsx": "5df00f0eb720544bdd567c139781bc0741bdf3730ee3b79ceac0719576445989",
+    "src/app/notes/TaskDetail.tsx": "cc23abf31e2c09daba86fe1118296c7ae21391ebf0490c19e5a399bbf2e11c5f",
+    "src/app/notes/TodoTitle.tsx": "aa99effb94192c3208dbfa69a6ddd5db811973b8391131156c0bcab5e6fdfd08",
+    "src/app/notes/boardState.ts": "efb8fe727ada102ad66dc56ebdbed2de9261c6a9403673ad0c0b60015383ff5e",
+    "src/app/notes/drafts.ts": "eb861f48d6b77a86889cedb962a7bdf2ee54bc0bae7aab1ef5f9f4ccbe04ee70",
+    "src/app/notes/notes.css": "de6479e5dc0ee552e925a3fe7947506f28e2404a7cf6b0ab882420837941114b",
+    "src/app/notes/notesSensors.ts": "76f0ad41c355650aed547bd5dd159a97ec8b57382d40d32f915c558ebaaef2e9",
+    "src/app/notes/notesState.test.ts": "a0cbe37c6689089a73ebbd8d4cf0216e1734a151689af90b690712c6690953ed",
+    "src/app/notes/useNotes.ts": "a79a210305587e0cc5a6aefc2712c1bb773594c2f2e1c57c2b86c1b373623bf2"
+  },
+  "nr49_rule": ".tab-strip-actions .tab-strip-action[aria-pressed=\"true\"]:not(:disabled) { background: var(--select-fill); color: var(--accent); border-color: var(--border-strong); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); }",
+  "helper_sha256": "67cefd0a983dc5f83239437dc472e6e9c48bdb479dcaca3b95273215a451dedf",
+  "host_sha256": "c7705fdd3c42d956f59b3ed896745fad05d7b12de50269649e8fc9fb3d6245a4",
+  "registry_sha256": "fdb0c27f0ae652843587a9077706493fa6e8625e74460dd054612f3bbe35a109",
+  "fixture": "/tmp/cpol-g32vk7wo",
+  "ledger": {
+    "root": "/tmp/cpol-g32vk7wo",
+    "session": "polish-g32vk7wo",
+    "socket": "/tmp/cpol-g32vk7wo/config/herdr/sessions/polish-g32vk7wo/herdr.sock",
+    "protected": [
+      "default",
+      "pre-existing sessions and gateways"
+    ],
+    "fixture": "/tmp/cpol-g32vk7wo/repositories/sample",
+    "fixture_url": "http://127.0.0.1:36583/"
+  },
+  "asset": [
+    [
+      "index-CNceJCyF.js",
+      "056930d914b87a049d2fcb1c4c71b8db68bd626323d61de9f71408cac6272ede"
+    ]
+  ],
+  "gateway_cmdline": "/tmp/cnotes-final-sqy1l4bc/target/debug/cockpit serve --herdr-session polish-g32vk7wo --herdr-socket /tmp/cpol-g32vk7wo/config/herdr/sessions/polish-g32vk7wo/herdr.sock --config /tmp/cpol-g32vk7wo/cockpit.toml --static-dir /tmp/cnotes-final-sqy1l4bc/dist ",
+  "build": {
+    "command": "bun run build",
+    "typecheck": "PASS",
+    "vite": "PASS",
+    "transformed_modules": 471,
+    "bundle_warning": "chunk exceeds 500kB (not suppressed)",
+    "loaded_asset": "http://127.0.0.1:34591/assets/index-CNceJCyF.js"
+  },
+  "final_source_hashes": {
+    "src/app/styles.css": "70bffe99969ce0a4fe6c92e7ae4f272e41e3456b0041979ce88c6891f404e3b9",
+    "scripts/verify/ui_polish_runtime.py": "67cefd0a983dc5f83239437dc472e6e9c48bdb479dcaca3b95273215a451dedf"
+  },
+  "superseding_nr26_correction": {
+    "evidence": "composer-correction.json",
+    "snapshot": "/tmp/cnotes-composer-fixed-0m5egf_c",
+    "notes_css_sha256": "00827bbf127ce68d345f18ad5d52fda334e7fba83bda730e82d934405eec6652",
+    "all_other_notes_hashes_equal": true,
+    "assets": [
+      {
+        "name": "index-CRpoD7vq.js",
+        "sha256": "056930d914b87a049d2fcb1c4c71b8db68bd626323d61de9f71408cac6272ede"
+      }
+    ],
+    "affected_afterproof_images": "F26-composer-fixed*.png",
+    "original_full_smoke_images_and_known1440": "Pre-correction assets/source retained; not relabelled as corrected-source captures"
+  }
+}

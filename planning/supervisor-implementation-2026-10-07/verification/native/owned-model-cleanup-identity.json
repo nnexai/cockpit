@@ -1,0 +1,10 @@
+[
+  {
+    "pid": 39742,
+    "start_ticks": 26527779,
+    "pgid": 39742,
+    "exe": "/home/linuxbrew/.linuxbrew/Cellar/omp/18.7.0/bin/omp",
+    "session_id": "polish-vi26eqaa",
+    "root_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6"
+  }
+]

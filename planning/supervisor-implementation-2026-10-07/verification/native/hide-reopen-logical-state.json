@@ -1,0 +1,49 @@
+{
+  "raw_evidence": "hide-reopen.json",
+  "before": {
+    "view": "graph",
+    "selected": [
+      "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6"
+    ],
+    "scrolls": [
+      {
+        "left": 0,
+        "top": 0,
+        "class": "supervisor-graph-scroll"
+      },
+      {
+        "left": 0,
+        "top": 0,
+        "class": "supervisor-detail-scroll"
+      }
+    ],
+    "draft_values": [
+      "Retained unsent native cadence draft 21cd",
+      ""
+    ]
+  },
+  "after": {
+    "view": "graph",
+    "selected": [
+      "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6"
+    ],
+    "scrolls": [
+      {
+        "left": 0,
+        "top": 0,
+        "class": "supervisor-graph-scroll"
+      },
+      {
+        "left": 0,
+        "top": 0,
+        "class": "supervisor-detail-scroll"
+      }
+    ],
+    "draft_values": [
+      "Retained unsent native cadence draft 21cd",
+      ""
+    ]
+  },
+  "logical_state_unchanged": true,
+  "qualification": "Raw equality failed only because React textarea useId DOM IDs changed (_r_8_/_r_a_ to _r_i_/_r_k_). Same already-exercised evidence, no rerun."
+}

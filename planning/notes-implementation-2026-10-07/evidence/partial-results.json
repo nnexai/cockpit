@@ -1,0 +1,502 @@
+{
+  "G3": {
+    "text": "Attach existing notes\n\nChoose the exact Notes ID. Files stay outside the repository.\n\nNotes path does not exist\nnotes_not_found\nRetry reading catalog\nAttach\nCancel",
+    "attachDisabled": true,
+    "screenshot": "F03-catalog-error.png"
+  },
+  "catalogCancel": "Attach existing notes…",
+  "emptyCatalog": {
+    "text": "Attach existing notes\n\nChoose the exact Notes ID. Files stay outside the repository.\n\nNo existing notes found.\n\nAttach\nCancel",
+    "screenshot": "F03-empty-catalog.png"
+  },
+  "G18": [
+    {
+      "id": "f-scratchpad",
+      "name": "Scratchpad"
+    },
+    {
+      "id": "f-todos",
+      "name": "Todos — 8 open"
+    },
+    {
+      "id": "f-kanban",
+      "name": "Kanban — 3 on board"
+    },
+    {
+      "id": "f-decisions",
+      "name": "Decisions — 3 records (Current and History)"
+    }
+  ],
+  "rove": "f-kanban",
+  "home": "f-scratchpad",
+  "end": "f-decisions",
+  "nesting": [
+    {
+      "id": "cm85y7b49j",
+      "depth": "0",
+      "pad": "12px",
+      "image": "none"
+    },
+    {
+      "id": "s75cx4p80l",
+      "depth": "0",
+      "pad": "12px",
+      "image": "none"
+    },
+    {
+      "id": "lkrpwm6tcv",
+      "depth": "0",
+      "pad": "12px",
+      "image": "none"
+    },
+    {
+      "id": "wa8j9p8ovc",
+      "depth": "0",
+      "pad": "12px",
+      "image": "none"
+    },
+    {
+      "id": "lkoxd53fnk",
+      "depth": "0",
+      "pad": "12px",
+      "image": "none"
+    },
+    {
+      "id": "L6@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "depth": "0",
+      "pad": "12px",
+      "image": "none"
+    },
+    {
+      "id": "L7@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "depth": "1",
+      "pad": "24px",
+      "image": "repeating-linear-gradient(to right, rgb(43, 53, 67) 0px, rgb(43, 53, 67) 1px, rgba(0, 0, 0, 0) 1px, rgba(0, 0, 0, 0) 12px)"
+    },
+    {
+      "id": "L8@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "depth": "2",
+      "pad": "36px",
+      "image": "repeating-linear-gradient(to right, rgb(43, 53, 67) 0px, rgb(43, 53, 67) 1px, rgba(0, 0, 0, 0) 1px, rgba(0, 0, 0, 0) 12px)"
+    },
+    {
+      "id": "L9@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "depth": "0",
+      "pad": "12px",
+      "image": "none"
+    }
+  ],
+  "widths": {
+    "narrow": {
+      "x": 0,
+      "y": 41,
+      "height": 831,
+      "width": 420
+    }
+  },
+  "G4": {
+    "420": {
+      ".notes-view": {
+        "x": 0,
+        "w": 420,
+        "pL": "0px",
+        "textX": 0
+      },
+      ".notes-editor-toolbar": {
+        "x": 18,
+        "w": 384,
+        "pL": "0px",
+        "textX": 18
+      },
+      ".cm-line": {
+        "x": 18,
+        "w": 384,
+        "pL": "0px",
+        "textX": 18
+      },
+      ".notes-scratchpad>.notes-save-row": null,
+      ".notes-preview-scroll": null
+    },
+    "900": {
+      ".notes-view": {
+        "x": 240,
+        "w": 660,
+        "pL": "0px",
+        "textX": 240
+      },
+      ".notes-editor-toolbar": {
+        "x": 258,
+        "w": 624,
+        "pL": "46px",
+        "textX": 304
+      },
+      ".cm-line": {
+        "x": 304,
+        "w": 532,
+        "pL": "0px",
+        "textX": 304
+      },
+      ".notes-scratchpad>.notes-save-row": null,
+      ".notes-preview-scroll": null
+    },
+    "1100": {
+      ".notes-view": {
+        "x": 240,
+        "w": 860,
+        "pL": "0px",
+        "textX": 240
+      },
+      ".notes-editor-toolbar": {
+        "x": 264,
+        "w": 812,
+        "pL": "140px",
+        "textX": 404
+      },
+      ".cm-line": {
+        "x": 404,
+        "w": 532,
+        "pL": "0px",
+        "textX": 404
+      },
+      ".notes-scratchpad>.notes-save-row": null,
+      ".notes-preview-scroll": null
+    },
+    "1440": {
+      ".notes-view": {
+        "x": 240,
+        "w": 1200,
+        "pL": "0px",
+        "textX": 240
+      },
+      ".notes-editor-toolbar": {
+        "x": 264,
+        "w": 1152,
+        "pL": "310px",
+        "textX": 574
+      },
+      ".cm-line": {
+        "x": 574,
+        "w": 532,
+        "pL": "0px",
+        "textX": 574
+      },
+      ".notes-scratchpad>.notes-save-row": null,
+      ".notes-preview-scroll": null
+    }
+  },
+  "editorBefore": {
+    "scroll": 1294,
+    "anchor": 7,
+    "focus": 7
+  },
+  "editorAfter": {
+    "scroll": 1977,
+    "anchor": 0,
+    "focus": 0
+  },
+  "cmBefore": {
+    "selection": {
+      "ranges": [
+        {
+          "anchor": 2619,
+          "head": 2619
+        }
+      ],
+      "main": 0
+    },
+    "scroll": 1977,
+    "doc": "Line 001: synthetic Markdown **evidence**.\nLine 002: synthetic Markdown **evidence**.\nLine 003: synthetic Markdown **evidence**.\nLine 004: synthetic Markdown **evidence**.\nLine 005: synthetic Markdown **evidence**.\nLine 006: synthetic Markdown **evidence**.\nLine 007: synthetic Markdown **evidence**.\nLine 008: synthetic Markdown **evidence**.\nLine 009: synthetic Markdown **evidence**.\nLine 010: synthetic Markdown **evidence**.\nLine 011: synthetic Markdown **evidence**.\nLine 012: synthetic Markdown **evidence**.\nLine 013: synthetic Markdown **evidence**.\nLine 014: synthetic Markdown **evidence**.\nLine 015: synthetic Markdown **evidence**.\nLine 016: synthetic Markdown **evidence**.\nLine 017: synthetic Markdown **evidence**.\nLine 018: synthetic Markdown **evidence**.\nLine 019: synthetic Markdown **evidence**.\nLine 020: synthetic Markdown **evidence**.\nLine 021: synthetic Markdown **evidence**.\nLine 022: synthetic Markdown **evidence**.\nLine 023: synthetic Markdown **evidence**.\nLine 024: synthetic Markdown **evidence**.\nLine 025: synthetic Markdown **evidence**.\nLine 026: synthetic Markdown **evidence**.\nLine 027: synthetic Markdown **evidence**.\nLine 028: synthetic Markdown **evidence**.\nLine 029: synthetic Markdown **evidence**.\nLine 030: synthetic Markdown **evidence**.\nLine 031: synthetic Markdown **evidence**.\nLine 032: synthetic Markdown **evidence**.\nLine 033: synthetic Markdown **evidence**.\nLine 034: synthetic Markdown **evidence**.\nLine 035: synthetic Markdown **evidence**.\nLine 036: synthetic Markdown **evidence**.\nLine 037: synthetic Markdown **evidence**.\nLine 038: synthetic Markdown **evidence**.\nLine 039: synthetic Markdown **evidence**.\nLine 040: synthetic Markdown **evidence**.\nLine 041: synthetic Markdown **evidence**.\nLine 042: synthetic Markdown **evidence**.\nLine 043: synthetic Markdown **evidence**.\nLine 044: synthetic Markdown **evidence**.\nLine 045: synthetic Markdown **evidence**.\nLine 046: synthetic Markdown **evidence**.\nLine 047: synthetic Markdown **evidence**.\nLine 048: synthetic Markdown **evidence**.\nLine 049: synthetic Markdown **evidence**.\nLine 050: synthetic Markdown **evidence**.\nLine 051: synthetic Markdown **evidence**.\nLine 052: synthetic Markdown **evidence**.\nLine 053: synthetic Markdown **evidence**.\nLine 054: synthetic Markdown **evidence**.\nLine 055: synthetic Markdown **evidence**.\nLine 056: synthetic Markdown **evidence**.\nLine 057: synthetic Markdown **evidence**.\nLine 058: synthetic Markdown **evidence**.\nLine 059: synthetic Markdown **evidence**.\nLine 060: synthetic Markdown **evidence**.\nLine 061: synthetic Markdown **evidence**.\nLine 062: synthetic Markdown **evidence**.\nLine 063: synthetic Markdown **evidence**.\nLine 064: synthetic Markdown **evidence**.\nLine 065: synthetic Markdown **evidence**.\nLine 066: synthetic Markdown **evidence**.\nLine 067: synthetic Markdown **evidence**.\nLine 068: synthetic Markdown **evidence**.\nLine 069: synthetic Markdown **evidence**.\nLine 070: synthetic Markdown **evidence**.\nLine 071: synthetic Markdown **evidence**.\nLine 072: synthetic Markdown **evidence**.\nLine 073: synthetic Markdown **evidence**.\nLine 074: synthetic Markdown **evidence**.\nLine 075: synthetic Markdown **evidence**.\nLine 076: synthetic Markdown **evidence**.\nLine 077: synthetic Markdown **evidence**.\nLine 078: synthetic Markdown **evidence**.\nLine 079: synthetic Markdown **evidence**.\nLine 080: synthetic Markdown **evidence**.\nLine 081: synthetic Markdown **evidence**.\nLine 082: synthetic Markdown **evidence**.\nLine 083: synthetic Markdown **evidence**.\nLine 084: synthetic Markdown **evidence**.\nLine 085: synthetic Markdown **evidence**.\nLine 086: synthetic Markdown **evidence**.\nLine 087: synthetic Markdown **evidence**.\nLine 088: synthetic Markdown **evidence**.\nLine 089: synthetic Markdown **evidence**.\nLine 090: synthetic Markdown **evidence**.\nLine 091: synthetic Markdown **evidence**.\nLine 092: synthetic Markdown **evidence**.\nLine 093: synthetic Markdown **evidence**.\nLine 094: synthetic Markdown **evidence**.\nLine 095: synthetic Markdown **evidence**.\nLine 096: synthetic Markdown **evidence**.\nLine 097: synthetic Markdown **evidence**.\nLine 098: synthetic Markdown **evidence**.\nLine 099: synthetic Markdown **evidence**.\nLine 100: synthetic Markdown **evidence**.\nLine 101: synthetic Markdown **evidence**.\nLine 102: synthetic Markdown **evidence**.\nLine 103: synthetic Markdown **evidence**.\nLine 104: synthetic Markdown **evidence**.\nLine 105: synthetic Markdown **evidence**.\nLine 106: synthetic Markdown **evidence**.\nLine 107: synthetic Markdown **evidence**.\nLine 108: synthetic Markdown **evidence**.\nLine 109: synthetic Markdown **evidence**.\nLine 110: synthetic Markdown **evidence**.\nLine 111: synthetic Markdown **evidence**.\nLine 112: synthetic Markdown **evidence**.\nLine 113: synthetic Markdown **evidence**.\nLine 114: synthetic Markdown **evidence**.\nLine 115: synthetic Markdown **evidence**.\nLine 116: synthetic Markdown **evidence**.\nLine 117: synthetic Markdown **evidence**.\nLine 118: synthetic Markdown **evidence**.\nLine 119: synthetic Markdown **evidence**.\nLine 120: synthetic Markdown **evidence**.\n",
+    "focus": true
+  },
+  "cmAfter": {
+    "selection": {
+      "ranges": [
+        {
+          "anchor": 2619,
+          "head": 2619
+        }
+      ],
+      "main": 0
+    },
+    "scroll": 1734,
+    "doc": "Line 001: synthetic Markdown **evidence**.\nLine 002: synthetic Markdown **evidence**.\nLine 003: synthetic Markdown **evidence**.\nLine 004: synthetic Markdown **evidence**.\nLine 005: synthetic Markdown **evidence**.\nLine 006: synthetic Markdown **evidence**.\nLine 007: synthetic Markdown **evidence**.\nLine 008: synthetic Markdown **evidence**.\nLine 009: synthetic Markdown **evidence**.\nLine 010: synthetic Markdown **evidence**.\nLine 011: synthetic Markdown **evidence**.\nLine 012: synthetic Markdown **evidence**.\nLine 013: synthetic Markdown **evidence**.\nLine 014: synthetic Markdown **evidence**.\nLine 015: synthetic Markdown **evidence**.\nLine 016: synthetic Markdown **evidence**.\nLine 017: synthetic Markdown **evidence**.\nLine 018: synthetic Markdown **evidence**.\nLine 019: synthetic Markdown **evidence**.\nLine 020: synthetic Markdown **evidence**.\nLine 021: synthetic Markdown **evidence**.\nLine 022: synthetic Markdown **evidence**.\nLine 023: synthetic Markdown **evidence**.\nLine 024: synthetic Markdown **evidence**.\nLine 025: synthetic Markdown **evidence**.\nLine 026: synthetic Markdown **evidence**.\nLine 027: synthetic Markdown **evidence**.\nLine 028: synthetic Markdown **evidence**.\nLine 029: synthetic Markdown **evidence**.\nLine 030: synthetic Markdown **evidence**.\nLine 031: synthetic Markdown **evidence**.\nLine 032: synthetic Markdown **evidence**.\nLine 033: synthetic Markdown **evidence**.\nLine 034: synthetic Markdown **evidence**.\nLine 035: synthetic Markdown **evidence**.\nLine 036: synthetic Markdown **evidence**.\nLine 037: synthetic Markdown **evidence**.\nLine 038: synthetic Markdown **evidence**.\nLine 039: synthetic Markdown **evidence**.\nLine 040: synthetic Markdown **evidence**.\nLine 041: synthetic Markdown **evidence**.\nLine 042: synthetic Markdown **evidence**.\nLine 043: synthetic Markdown **evidence**.\nLine 044: synthetic Markdown **evidence**.\nLine 045: synthetic Markdown **evidence**.\nLine 046: synthetic Markdown **evidence**.\nLine 047: synthetic Markdown **evidence**.\nLine 048: synthetic Markdown **evidence**.\nLine 049: synthetic Markdown **evidence**.\nLine 050: synthetic Markdown **evidence**.\nLine 051: synthetic Markdown **evidence**.\nLine 052: synthetic Markdown **evidence**.\nLine 053: synthetic Markdown **evidence**.\nLine 054: synthetic Markdown **evidence**.\nLine 055: synthetic Markdown **evidence**.\nLine 056: synthetic Markdown **evidence**.\nLine 057: synthetic Markdown **evidence**.\nLine 058: synthetic Markdown **evidence**.\nLine 059: synthetic Markdown **evidence**.\nLine 060: synthetic Markdown **evidence**.\nLine 061: synthetic Markdown **evidence**.\nLine 062: synthetic Markdown **evidence**.\nLine 063: synthetic Markdown **evidence**.\nLine 064: synthetic Markdown **evidence**.\nLine 065: synthetic Markdown **evidence**.\nLine 066: synthetic Markdown **evidence**.\nLine 067: synthetic Markdown **evidence**.\nLine 068: synthetic Markdown **evidence**.\nLine 069: synthetic Markdown **evidence**.\nLine 070: synthetic Markdown **evidence**.\nLine 071: synthetic Markdown **evidence**.\nLine 072: synthetic Markdown **evidence**.\nLine 073: synthetic Markdown **evidence**.\nLine 074: synthetic Markdown **evidence**.\nLine 075: synthetic Markdown **evidence**.\nLine 076: synthetic Markdown **evidence**.\nLine 077: synthetic Markdown **evidence**.\nLine 078: synthetic Markdown **evidence**.\nLine 079: synthetic Markdown **evidence**.\nLine 080: synthetic Markdown **evidence**.\nLine 081: synthetic Markdown **evidence**.\nLine 082: synthetic Markdown **evidence**.\nLine 083: synthetic Markdown **evidence**.\nLine 084: synthetic Markdown **evidence**.\nLine 085: synthetic Markdown **evidence**.\nLine 086: synthetic Markdown **evidence**.\nLine 087: synthetic Markdown **evidence**.\nLine 088: synthetic Markdown **evidence**.\nLine 089: synthetic Markdown **evidence**.\nLine 090: synthetic Markdown **evidence**.\nLine 091: synthetic Markdown **evidence**.\nLine 092: synthetic Markdown **evidence**.\nLine 093: synthetic Markdown **evidence**.\nLine 094: synthetic Markdown **evidence**.\nLine 095: synthetic Markdown **evidence**.\nLine 096: synthetic Markdown **evidence**.\nLine 097: synthetic Markdown **evidence**.\nLine 098: synthetic Markdown **evidence**.\nLine 099: synthetic Markdown **evidence**.\nLine 100: synthetic Markdown **evidence**.\nLine 101: synthetic Markdown **evidence**.\nLine 102: synthetic Markdown **evidence**.\nLine 103: synthetic Markdown **evidence**.\nLine 104: synthetic Markdown **evidence**.\nLine 105: synthetic Markdown **evidence**.\nLine 106: synthetic Markdown **evidence**.\nLine 107: synthetic Markdown **evidence**.\nLine 108: synthetic Markdown **evidence**.\nLine 109: synthetic Markdown **evidence**.\nLine 110: synthetic Markdown **evidence**.\nLine 111: synthetic Markdown **evidence**.\nLine 112: synthetic Markdown **evidence**.\nLine 113: synthetic Markdown **evidence**.\nLine 114: synthetic Markdown **evidence**.\nLine 115: synthetic Markdown **evidence**.\nLine 116: synthetic Markdown **evidence**.\nLine 117: synthetic Markdown **evidence**.\nLine 118: synthetic Markdown **evidence**.\nLine 119: synthetic Markdown **evidence**.\nLine 120: synthetic Markdown **evidence**.\n",
+    "focus": true
+  },
+  "modS": [
+    {
+      "op": "scratchpad_replace",
+      "target": {
+        "kind": "notes",
+        "notes_id": "fe8bb635-e5ae-4709-9e35-cbbd96dcdaa4"
+      },
+      "time": 1791347364459
+    }
+  ],
+  "conflictDraft": {
+    "selection": {
+      "ranges": [
+        {
+          "anchor": 2655,
+          "head": 2655
+        }
+      ],
+      "main": 0
+    },
+    "scroll": 1693,
+    "doc": "Line 001: synthetic Markdown **evidence**.\nLine 002: synthetic Markdown **evidence**.\nLine 003: synthetic Markdown **evidence**.\nLine 004: synthetic Markdown **evidence**.\nLine 005: synthetic Markdown **evidence**.\nLine 006: synthetic Markdown **evidence**.\nLine 007: synthetic Markdown **evidence**.\nLine 008: synthetic Markdown **evidence**.\nLine 009: synthetic Markdown **evidence**.\nLine 010: synthetic Markdown **evidence**.\nLine 011: synthetic Markdown **evidence**.\nLine 012: synthetic Markdown **evidence**.\nLine 013: synthetic Markdown **evidence**.\nLine 014: synthetic Markdown **evidence**.\nLine 015: synthetic Markdown **evidence**.\nLine 016: synthetic Markdown **evidence**.\nLine 017: synthetic Markdown **evidence**.\nLine 018: synthetic Markdown **evidence**.\nLine 019: synthetic Markdown **evidence**.\nLine 020: synthetic Markdown **evidence**.\nLine 021: synthetic Markdown **evidence**.\nLine 022: synthetic Markdown **evidence**.\nLine 023: synthetic Markdown **evidence**.\nLine 024: synthetic Markdown **evidence**.\nLine 025: synthetic Markdown **evidence**.\nLine 026: synthetic Markdown **evidence**.\nLine 027: synthetic Markdown **evidence**.\nLine 028: synthetic Markdown **evidence**.\nLine 029: synthetic Markdown **evidence**.\nLine 030: synthetic Markdown **evidence**.\nLine 031: synthetic Markdown **evidence**.\nLine 032: synthetic Markdown **evidence**.\nLine 033: synthetic Markdown **evidence**.\nLine 034: synthetic Markdown **evidence**.\nLine 035: synthetic Markdown **evidence**.\nLine 036: synthetic Markdown **evidence**.\nLine 037: synthetic Markdown **evidence**.\nLine 038: synthetic Markdown **evidence**.\nLine 039: synthetic Markdown **evidence**.\nLine 040: synthetic Markdown **evidence**.\nLine 041: synthetic Markdown **evidence**.\nLine 042: synthetic Markdown **evidence**.\nLine 043: synthetic Markdown **evidence**.\nLine 044: synthetic Markdown **evidence**.\nLine 045: synthetic Markdown **evidence**.\nLine 046: synthetic Markdown **evidence**.\nLine 047: synthetic Markdown **evidence**.\nLine 048: synthetic Markdown **evidence**.\nLine 049: synthetic Markdown **evidence**.\nLine 050: synthetic Markdown **evidence**.\nLine 051: synthetic Markdown **evidence**.\nLine 052: synthetic Markdown **evidence**.\nLine 053: synthetic Markdown **evidence**.\nLine 054: synthetic Markdown **evidence**.\nLine 055: synthetic Markdown **evidence**.\nLine 056: synthetic Markdown **evidence**.\nLine 057: synthetic Markdown **evidence**.\nLine 058: synthetic Markdown **evidence**.\nLine 059: synthetic Markdown **evidence**.\nLine 060: synthetic Markdown **evidence**.\nLine 061: synthetic Markdown **evidence**. final Mod-s dirty conflict draft\nLine 062: synthetic Markdown **evidence**.\nLine 063: synthetic Markdown **evidence**.\nLine 064: synthetic Markdown **evidence**.\nLine 065: synthetic Markdown **evidence**.\nLine 066: synthetic Markdown **evidence**.\nLine 067: synthetic Markdown **evidence**.\nLine 068: synthetic Markdown **evidence**.\nLine 069: synthetic Markdown **evidence**.\nLine 070: synthetic Markdown **evidence**.\nLine 071: synthetic Markdown **evidence**.\nLine 072: synthetic Markdown **evidence**.\nLine 073: synthetic Markdown **evidence**.\nLine 074: synthetic Markdown **evidence**.\nLine 075: synthetic Markdown **evidence**.\nLine 076: synthetic Markdown **evidence**.\nLine 077: synthetic Markdown **evidence**.\nLine 078: synthetic Markdown **evidence**.\nLine 079: synthetic Markdown **evidence**.\nLine 080: synthetic Markdown **evidence**.\nLine 081: synthetic Markdown **evidence**.\nLine 082: synthetic Markdown **evidence**.\nLine 083: synthetic Markdown **evidence**.\nLine 084: synthetic Markdown **evidence**.\nLine 085: synthetic Markdown **evidence**.\nLine 086: synthetic Markdown **evidence**.\nLine 087: synthetic Markdown **evidence**.\nLine 088: synthetic Markdown **evidence**.\nLine 089: synthetic Markdown **evidence**.\nLine 090: synthetic Markdown **evidence**.\nLine 091: synthetic Markdown **evidence**.\nLine 092: synthetic Markdown **evidence**.\nLine 093: synthetic Markdown **evidence**.\nLine 094: synthetic Markdown **evidence**.\nLine 095: synthetic Markdown **evidence**.\nLine 096: synthetic Markdown **evidence**.\nLine 097: synthetic Markdown **evidence**.\nLine 098: synthetic Markdown **evidence**.\nLine 099: synthetic Markdown **evidence**.\nLine 100: synthetic Markdown **evidence**.\nLine 101: synthetic Markdown **evidence**.\nLine 102: synthetic Markdown **evidence**.\nLine 103: synthetic Markdown **evidence**.\nLine 104: synthetic Markdown **evidence**.\nLine 105: synthetic Markdown **evidence**.\nLine 106: synthetic Markdown **evidence**.\nLine 107: synthetic Markdown **evidence**.\nLine 108: synthetic Markdown **evidence**.\nLine 109: synthetic Markdown **evidence**.\nLine 110: synthetic Markdown **evidence**.\nLine 111: synthetic Markdown **evidence**.\nLine 112: synthetic Markdown **evidence**.\nLine 113: synthetic Markdown **evidence**.\nLine 114: synthetic Markdown **evidence**.\nLine 115: synthetic Markdown **evidence**.\nLine 116: synthetic Markdown **evidence**.\nLine 117: synthetic Markdown **evidence**.\nLine 118: synthetic Markdown **evidence**.\nLine 119: synthetic Markdown **evidence**.\nLine 120: synthetic Markdown **evidence**.\n",
+    "focus": true
+  },
+  "G5": {
+    "text": "Scratchpad changed elsewhere. Current saved version:\n\nShow saved Markdown\nSaved version (read-only)\n\nLine 001: synthetic Markdown evidence. Line 002: synthetic Markdown evidence. Line 003: synthetic Markdown evidence. Line 004: synthetic Markdown evidence. Line 005: synthetic Markdown evidence. Line 006: synthetic Markdown evidence. Line 007: synthetic Markdown evidence. Line 008: synthetic Markdown evidence. Line 009: synthetic Markdown evidence. Line 010: synthetic Markdown evidence. Line 011: synthetic Markdown evidence. Line 012: synthetic Markdown evidence. Line 013: synthetic Markdown evidence. Line 014: synthetic Markdown evidence. Line 015: synthetic Markdown evidence. Line 016: synthetic Markdown evidence. Line 017: synthetic Markdown evidence. Line 018: synthetic Markdown evidence. Line 019: synthetic Markdown evidence. Line 020: synthetic Markdown evidence. Line 021: synthetic Markdown evidence. Line 022: synthetic Markdown evidence. Line 023: synthetic Markdown evidence. Line 024: synthetic Markdown evidence. Line 025: synthetic Markdown evidence. Line 026: synthetic Markdown evidence. Line 027: synthetic Markdown evidence. Line 028: synthetic Markdown evidence. Line 029: synthetic Markdown evidence. Line 030: synthetic Markdown evidence. Line 031: synthetic Markdown evidence. Line 032: synthetic Markdown evidence. Line 033: synthetic Markdown evidence. Line 034: synthetic Markdown evidence. Line 035: synthetic Markdown evidence. Line 036: synthetic Markdown evidence. Line 037: synthetic Markdown evidence. Line 038: synthetic Markdown evidence. Line 039: synthetic Markdown evidence. Line 040: synthetic Markdown evidence. Line 041: synthetic Markdown evidence. Line 042: synthetic Markdown evidence. Line 043: synthetic Markdown evidence. Line 044: synthetic Markdown evidence. Line 045: synthetic Markdown evidence. Line 046: synthetic Markdown evidence. Line 047: synthetic Markdown evidence. Line 048: synthetic Markdown evidence. Line 049: synthetic Markdown evidence. Line 050: synthetic Markdown evidence. Line 051: synthetic Markdown evidence. Line 052: synthetic Markdown evidence. Line 053: synthetic Markdown evidence. Line 054: synthetic Markdown evidence. Line 055: synthetic Markdown evidence. Line 056: synthetic Markdown evidence. Line 057: synthetic Markdown evidence. Line 058: synthetic Markdown evidence. Line 059: synthetic Markdown evidence. Line 060: synthetic Markdown evidence. Line 061: synthetic Markdown evidence. final Mod-s Line 062: synthetic Markdown evidence. Line 063: synthetic Markdown evidence. Line 064: synthetic Markdown evidence. Line 065: synthetic Markdown evidence. Line 066: synthetic Markdown evidence. Line 067: synthetic Markdown evidence. Line 068: synthetic Markdown evidence. Line 069: synthetic Markdown evidence. Line 070: synthetic Markdown evidence. Line 071: synthetic Markdown evidence. Line 072: synthetic Markdown evidence. Line 073: synthetic Markdown evidence. Line 074: synthetic Markdown evidence. Line 075: synthetic Markdown evidence. Line 076: synthetic Markdown evidence. Line 077: synthetic Markdown evidence. Line 078: synthetic Markdown evidence. Line 079: synthetic Markdown evidence. Line 080: synthetic Markdown evidence. Line 081: synthetic Markdown evidence. Line 082: synthetic Markdown evidence. Line 083: synthetic Markdown evidence. Line 084: synthetic Markdown evidence. Line 085: synthetic Markdown evidence. Line 086: synthetic Markdown evidence. Line 087: synthetic Markdown evidence. Line 088: synthetic Markdown evidence. Line 089: synthetic Markdown evidence. Line 090: synthetic Markdown evidence. Line 091: synthetic Markdown evidence. Line 092: synthetic Markdown evidence. Line 093: synthetic Markdown evidence. Line 094: synthetic Markdown evidence. Line 095: synthetic Markdown evidence. Line 096: synthetic Markdown evidence. Line 097: synthetic Markdown evidence. Line 098: synthetic Markdown evidence. Line 099: synthetic Markdown evidence. Line 100: synthetic Markdown evidence. Line 101: synthetic Markdown evidence. Line 102: synthetic Markdown evidence. Line 103: synthetic Markdown evidence. Line 104: synthetic Markdown evidence. Line 105: synthetic Markdown evidence. Line 106: synthetic Markdown evidence. Line 107: synthetic Markdown evidence. Line 108: synthetic Markdown evidence. Line 109: synthetic Markdown evidence. Line 110: synthetic Markdown evidence. Line 111: synthetic Markdown evidence. Line 112: synthetic Markdown evidence. Line 113: synthetic Markdown evidence. Line 114: synthetic Markdown evidence. Line 115: synthetic Markdown evidence. Line 116: synthetic Markdown evidence. Line 117: synthetic Markdown evidence. Line 118: synthetic Markdown evidence. Line 119: synthetic Markdown evidence. Line 120: synthetic Markdown evidence.\n\nExternal conflict A\n\nKeep mine and save\nReload (discard my draft)\n\nKeep mine overwrites the saved version. Reload discards your draft.",
+    "styles": [
+      {
+        "name": "Keep mine and save",
+        "bg": "rgb(22, 29, 39)",
+        "border": "rgb(43, 53, 67)",
+        "color": "rgb(186, 194, 222)"
+      },
+      {
+        "name": "Reload (discard my draft)",
+        "bg": "rgb(22, 29, 39)",
+        "border": "rgb(43, 53, 67)",
+        "color": "rgb(186, 194, 222)"
+      }
+    ],
+    "markdown": {
+      "font-size": "14px",
+      "line-height": "21.7px"
+    },
+    "screenshot": "F05-conflict.png"
+  },
+  "keepDraft": "Keep-mine draft BLine 001: synthetic Markdown **evidence**.\nLine 002: synthetic Markdown **evidence**.\nLine 003: synthetic Markdown **evidence**.\nLine 004: synthetic Markdown **evidence**.\nLine 005: synthetic Markdown **evidence**.\nLine 006: synthetic Markdown **evidence**.\nLine 007: synthetic Markdown **evidence**.\nLine 008: synthetic Markdown **evidence**.\nLine 009: synthetic Markdown **evidence**.\nLine 010: synthetic Markdown **evidence**.\nLine 011: synthetic Markdown **evidence**.\nLine 012: synthetic Markdown **evidence**.\nLine 013: synthetic Markdown **evidence**.\nLine 014: synthetic Markdown **evidence**.\nLine 015: synthetic Markdown **evidence**.\nLine 016: synthetic Markdown **evidence**.\nLine 017: synthetic Markdown **evidence**.\nLine 018: synthetic Markdown **evidence**.\nLine 019: synthetic Markdown **evidence**.\nLine 020: synthetic Markdown **evidence**.\nLine 021: synthetic Markdown **evidence**.\nLine 022: synthetic Markdown **evidence**.\nLine 023: synthetic Markdown **evidence**.\nLine 024: synthetic Markdown **evidence**.\nLine 025: synthetic Markdown **evidence**.\nLine 026: synthetic Markdown **evidence**.\nLine 027: synthetic Markdown **evidence**.\nLine 028: synthetic Markdown **evidence**.\nLine 029: synthetic Markdown **evidence**.\nLine 030: synthetic Markdown **evidence**.\nLine 031: synthetic Markdown **evidence**.\nLine 032: synthetic Markdown **evidence**.\nLine 033: synthetic Markdown **evidence**.\nLine 034: synthetic Markdown **evidence**.\nLine 035: synthetic Markdown **evidence**.\nLine 036: synthetic Markdown **evidence**.\nLine 037: synthetic Markdown **evidence**.\nLine 038: synthetic Markdown **evidence**.\nLine 039: synthetic Markdown **evidence**.\nLine 040: synthetic Markdown **evidence**.\nLine 041: synthetic Markdown **evidence**.\nLine 042: synthetic Markdown **evidence**.\nLine 043: synthetic Markdown **evidence**.\nLine 044: synthetic Markdown **evidence**.\nLine 045: synthetic Markdown **evidence**.\nLine 046: synthetic Markdown **evidence**.\nLine 047: synthetic Markdown **evidence**.\nLine 048: synthetic Markdown **evidence**.\nLine 049: synthetic Markdown **evidence**.\nLine 050: synthetic Markdown **evidence**.\nLine 051: synthetic Markdown **evidence**.\nLine 052: synthetic Markdown **evidence**.\nLine 053: synthetic Markdown **evidence**.\nLine 054: synthetic Markdown **evidence**.\nLine 055: synthetic Markdown **evidence**.\nLine 056: synthetic Markdown **evidence**.\nLine 057: synthetic Markdown **evidence**.\nLine 058: synthetic Markdown **evidence**.\nLine 059: synthetic Markdown **evidence**.\nLine 060: synthetic Markdown **evidence**.\nLine 061: synthetic Markdown **evidence**. final Mod-s\nLine 062: synthetic Markdown **evidence**.\nLine 063: synthetic Markdown **evidence**.\nLine 064: synthetic Markdown **evidence**.\nLine 065: synthetic Markdown **evidence**.\nLine 066: synthetic Markdown **evidence**.\nLine 067: synthetic Markdown **evidence**.\nLine 068: synthetic Markdown **evidence**.\nLine 069: synthetic Markdown **evidence**.\nLine 070: synthetic Markdown **evidence**.\nLine 071: synthetic Markdown **evidence**.\nLine 072: synthetic Markdown **evidence**.\nLine 073: synthetic Markdown **evidence**.\nLine 074: synthetic Markdown **evidence**.\nLine 075: synthetic Markdown **evidence**.\nLine 076: synthetic Markdown **evidence**.\nLine 077: synthetic Markdown **evidence**.\nLine 078: synthetic Markdown **evidence**.\nLine 079: synthetic Markdown **evidence**.\nLine 080: synthetic Markdown **evidence**.\nLine 081: synthetic Markdown **evidence**.\nLine 082: synthetic Markdown **evidence**.\nLine 083: synthetic Markdown **evidence**.\nLine 084: synthetic Markdown **evidence**.\nLine 085: synthetic Markdown **evidence**.\nLine 086: synthetic Markdown **evidence**.\nLine 087: synthetic Markdown **evidence**.\nLine 088: synthetic Markdown **evidence**.\nLine 089: synthetic Markdown **evidence**.\nLine 090: synthetic Markdown **evidence**.\nLine 091: synthetic Markdown **evidence**.\nLine 092: synthetic Markdown **evidence**.\nLine 093: synthetic Markdown **evidence**.\nLine 094: synthetic Markdown **evidence**.\nLine 095: synthetic Markdown **evidence**.\nLine 096: synthetic Markdown **evidence**.\nLine 097: synthetic Markdown **evidence**.\nLine 098: synthetic Markdown **evidence**.\nLine 099: synthetic Markdown **evidence**.\nLine 100: synthetic Markdown **evidence**.\nLine 101: synthetic Markdown **evidence**.\nLine 102: synthetic Markdown **evidence**.\nLine 103: synthetic Markdown **evidence**.\nLine 104: synthetic Markdown **evidence**.\nLine 105: synthetic Markdown **evidence**.\nLine 106: synthetic Markdown **evidence**.\nLine 107: synthetic Markdown **evidence**.\nLine 108: synthetic Markdown **evidence**.\nLine 109: synthetic Markdown **evidence**.\nLine 110: synthetic Markdown **evidence**.\nLine 111: synthetic Markdown **evidence**.\nLine 112: synthetic Markdown **evidence**.\nLine 113: synthetic Markdown **evidence**.\nLine 114: synthetic Markdown **evidence**.\nLine 115: synthetic Markdown **evidence**.\nLine 116: synthetic Markdown **evidence**.\nLine 117: synthetic Markdown **evidence**.\nLine 118: synthetic Markdown **evidence**.\nLine 119: synthetic Markdown **evidence**.\nLine 120: synthetic Markdown **evidence**.\n\nExternal conflict A\n",
+  "G7": [
+    {
+      "text": "B",
+      "name": "On board · Backlog",
+      "opacity": "0.65"
+    },
+    {
+      "text": "Do",
+      "name": "On board · Doing",
+      "opacity": "0.65"
+    },
+    {
+      "text": "B",
+      "name": "On board · Backlog",
+      "opacity": "0.65"
+    }
+  ],
+  "G9": {
+    "returnFocus": "notes-icon-button notes-comment-delete"
+  },
+  "threadStyles": {
+    "header": "12px",
+    "errorHeight": 0,
+    "author": "· unverified label",
+    "composer": "unverified"
+  },
+  "G10": {
+    "back": true,
+    "close": false,
+    "deleteEscape": "",
+    "editEscape": "Fixture\n· unverified label\n10/7/2026, 6:27:56 AM\nDiscard edit\n\nedited browserSeed comment\n\nDraft kept\nRecord details",
+    "closeEscape": "Comments 19",
+    "backFocus": null
+  },
+  "NR24": {
+    "error": "Comments unavailable: Notes documents must be UTF-8\nRetry reading",
+    "screenshot": "F24-real-invalid-utf8.png",
+    "explicitRetry": true
+  },
+  "NR25": {
+    "unboarded": "Not on the board\nAdd to board",
+    "screenshot": "F25-unboarded.png"
+  },
+  "NR27": {
+    "newBelow": "1 new comments below",
+    "screenshot": "F27-new-below.png"
+  },
+  "G11": {
+    "box": {
+      "x": 265,
+      "y": 339.296875,
+      "height": 58.296875,
+      "width": 363.328125
+    },
+    "cursors": {
+      "card": "pointer",
+      "title": "text",
+      "handle": "grab",
+      "actions": 0
+    },
+    "keys": [
+      {
+        "key": " ",
+        "code": "Space",
+        "trusted": true,
+        "target": "kanban-card-handle"
+      },
+      {
+        "key": "ArrowRight",
+        "code": "ArrowRight",
+        "trusted": true,
+        "target": "kanban-card-handle"
+      },
+      {
+        "key": " ",
+        "code": "Space",
+        "trusted": true,
+        "target": "kanban-card-handle"
+      }
+    ],
+    "rapid1": "One-line no-comment board task moved to Doing. File order kept.",
+    "rapid2": "One-line no-comment board task moved to Done. File order kept.",
+    "escapeFocus": "Move card: One-line no-comment board task",
+    "tabFocus": "Move card: One-line no-comment board task",
+    "clamp": "One-line no-comment board task moved to Backlog. File order kept.",
+    "screenshot": "F11-board-1440.png"
+  },
+  "cardOrder": [
+    {
+      "tag": "BUTTON",
+      "label": "Move card: One-line no-comment board task",
+      "class": "kanban-card-handle"
+    },
+    {
+      "tag": "INPUT",
+      "label": "Complete One-line no-comment board task",
+      "class": "kanban-card-check"
+    },
+    {
+      "tag": "TEXTAREA",
+      "label": "Task title: One-line no-comment board task",
+      "class": ""
+    },
+    {
+      "tag": "BUTTON",
+      "label": "Comments",
+      "class": "kanban-card-comments"
+    },
+    {
+      "tag": "SUMMARY",
+      "label": "Card actions: One-line no-comment board task",
+      "class": ""
+    }
+  ],
+  "G12": [
+    "Add a card to Backlog",
+    "Add a card to Backlog",
+    "Add a card to Backlog"
+  ],
+  "G12Focus": "kanbanAddInput",
+  "G13": {
+    "before": 16,
+    "mask": {
+      "mask-image": "linear-gradient(90deg, rgb(0, 0, 0) calc(100% - 16px), rgba(0, 0, 0, 0))"
+    },
+    "chips": {
+      "border-width": "1px",
+      "border-style": "solid"
+    },
+    "live": {
+      "font-size": "12px"
+    },
+    "after": 263
+  },
+  "G14": {
+    "before": "Short decision\nRecorded 10/7/2026\nCurrent\nKeep Markdown files, revised\nRecorded 10/7/2026\nCurrent",
+    "sortBefore": "Sort order: Newest first. Activate to show oldest first.",
+    "after": "Keep Markdown files, revised\nRecorded 10/7/2026\nCurrent\nShort decision\nRecorded 10/7/2026\nCurrent",
+    "sortAfter": "Sort order: Oldest first. Activate to show newest first.",
+    "context": "This record isn't in the current list filter."
+  },
+  "G15": {
+    "decided": "Recorded 10/7/2026, 6:27:56 AM\nDecided 2026-10-01\nReplaced\nDetails & replacement\nRecorded (immutable): 2026-10-07T04:27:56.560990123Z\nDecided: 2026-10-01\nReference\nFile\nReplaced by Keep Markdown files, revised\nReplace with a new decision\nAlready replaced. Follow the successor instead.",
+    "replaceDisabled": true,
+    "void": 40
+  },
+  "NR42": {
+    "listShot": "F42-decision-list-420.png",
+    "draft": "Retained narrow decision draft"
+  },
+  "known": {
+    "text": "Decided must be a date or RFC3339 timestamp\nnotes_invalid_input\nCheck saved state",
+    "screenshot": "F43-known-1440.png",
+    "saveWide": {
+      "ok": true,
+      "hit": "notes-primary",
+      "slot": {
+        "x": 240,
+        "y": 896,
+        "width": 1200,
+        "height": 41,
+        "top": 896,
+        "right": 1440,
+        "bottom": 937,
+        "left": 240
+      }
+    },
+    "saveNarrow": {
+      "ok": true,
+      "hit": "notes-primary"
+    },
+    "commentNarrow": {
+      "rect": {
+        "x": 311.25,
+        "y": 713.21875,
+        "w": 94.75,
+        "h": 28
+      },
+      "hit": "notes-primary",
+      "ok": true
+    }
+  },
+  "G16": {
+    "before": {
+      "scroll": 3883,
+      "selection": {
+        "ranges": [
+          {
+            "anchor": 18,
+            "head": 18
+          }
+        ],
+        "main": 0
+      }
+    },
+    "fault": {
+      "fault": {
+        "adds": 1,
+        "forwarded": [
+          {
+            "status": 200,
+            "changed": true,
+            "kind": "comment",
+            "id": "bd511cdf-2e4c-47fc-9f28-da91f4b7debc"
+          }
+        ],
+        "readFail": false
+      },
+      "lis": 2,
+      "postDisabled": true,
+      "addDisabled": true,
+      "draft": "fault probe narrow",
+      "scroll": 3883
+    },
+    "failedRead": {
+      "text": "Could not confirm whether the change was saved. Your drafts are kept. Check saved state before choosing any next write; posting again may duplicate. notes_outcome_unknown\nCheck saved state",
+      "lis": 2,
+      "blocked": true
+    },
+    "successRead": "Could not confirm whether the change was saved. Your drafts are kept. Check saved state before choosing any next write; posting again may duplicate. notes_outcome_unknown\nCheck saved state\nSaved state was read. Review it first: the next write may duplicate the unconfirmed change.I checked saved state; allow next write",
+    "remount": {
+      "text": "Could not confirm whether the change was saved. Your drafts are kept. Check saved state before choosing any next write; posting again may duplicate. notes_outcome_unknown\nCheck saved state",
+      "lis": 2
+    },
+    "ack": {
+      "draft": "fault probe narrow",
+      "addDraft": "",
+      "adds": 1
+    }
+  }
+}

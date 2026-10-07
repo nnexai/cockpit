@@ -1,0 +1,208 @@
+{
+  "before": {
+    "draft": "Known-wide preserved composer draft",
+    "selection": {
+      "ranges": [
+        {
+          "anchor": 35,
+          "head": 35
+        }
+      ],
+      "main": 0
+    },
+    "thread": {
+      "scrollTop": 600,
+      "clientHeight": 406,
+      "scrollHeight": 6028,
+      "bottomDistance": 5022
+    },
+    "focus": {
+      "tag": "DIV",
+      "class": "cm-content cm-lineWrapping",
+      "label": "New comment Markdown"
+    },
+    "postDisabled": false
+  },
+  "error": {
+    "text": "Decided must be a date or RFC3339 timestamp\nnotes_invalid_input\nCheck saved state",
+    "actual": {
+      "requests": [
+        {
+          "op": "decision_create",
+          "target": {
+            "kind": "notes",
+            "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75"
+          }
+        },
+        {
+          "op": "scratchpad_read",
+          "target": {
+            "kind": "notes",
+            "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75"
+          }
+        },
+        {
+          "op": "todo_list",
+          "target": {
+            "kind": "notes",
+            "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75"
+          }
+        },
+        {
+          "op": "decision_list",
+          "target": {
+            "kind": "notes",
+            "notes_id": "535a3c69-66e9-49e2-b510-01c740faff75"
+          }
+        }
+      ],
+      "adaptation": {
+        "originalDecided": "2026-10-01",
+        "sentDecided": "2026-13-45",
+        "operation": "decision_create"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "code": "notes_invalid_input",
+          "message": "Decided must be a date or RFC3339 timestamp"
+        }
+      }
+    },
+    "focused": {
+      "tag": "BODY",
+      "id": ""
+    }
+  },
+  "afterReturn": {
+    "draft": "Known-wide preserved composer draft",
+    "selection": {
+      "ranges": [
+        {
+          "anchor": 35,
+          "head": 35
+        }
+      ],
+      "main": 0
+    },
+    "thread": {
+      "scrollTop": 0,
+      "clientHeight": 365,
+      "scrollHeight": 6028,
+      "bottomDistance": 5663
+    },
+    "focus": {
+      "tag": "H3",
+      "class": "",
+      "label": null
+    },
+    "postDisabled": false
+  },
+  "knownMounted": {
+    "draft": "Known-wide preserved composer draft",
+    "selection": {
+      "ranges": [
+        {
+          "anchor": 35,
+          "head": 35
+        }
+      ],
+      "main": 0
+    },
+    "thread": {
+      "scrollTop": 600,
+      "clientHeight": 365,
+      "scrollHeight": 6028,
+      "bottomDistance": 5063
+    },
+    "focus": {
+      "tag": "DIV",
+      "class": "cm-content cm-lineWrapping",
+      "label": "New comment Markdown"
+    },
+    "postDisabled": false
+  },
+  "hit": {
+    "viewport": {
+      "w": 1440,
+      "h": 1000,
+      "dpr": 1.25
+    },
+    "container": 1200,
+    "control": {
+      "id": "postCommentBtn",
+      "text": "Comment",
+      "disabled": false,
+      "rect": {
+        "x": 1331.25,
+        "y": 856,
+        "width": 94.75,
+        "height": 28,
+        "top": 856,
+        "right": 1426,
+        "bottom": 884,
+        "left": 1331.25
+      },
+      "center": {
+        "x": 1378.625,
+        "y": 870
+      }
+    },
+    "elementFromPoint": {
+      "tag": "BUTTON",
+      "id": "postCommentBtn",
+      "class": "notes-primary"
+    },
+    "unobscured": true,
+    "panel": {
+      "x": 240,
+      "y": 123,
+      "width": 1200,
+      "height": 773,
+      "top": 123,
+      "right": 1440,
+      "bottom": 896,
+      "left": 240
+    },
+    "slot": {
+      "x": 240,
+      "y": 896,
+      "width": 1200,
+      "height": 41,
+      "top": 896,
+      "right": 1440,
+      "bottom": 937,
+      "left": 240
+    },
+    "slotAfterPanels": true,
+    "panelSlotOverlap": 0,
+    "asset": [
+      "http://127.0.0.1:33503/assets/index-CNceJCyF.js"
+    ]
+  },
+  "afterClear": {
+    "draft": "Known-wide preserved composer draft",
+    "selection": {
+      "ranges": [
+        {
+          "anchor": 35,
+          "head": 35
+        }
+      ],
+      "main": 0
+    },
+    "thread": {
+      "scrollTop": 600,
+      "clientHeight": 406,
+      "scrollHeight": 6028,
+      "bottomDistance": 5022
+    },
+    "focus": {
+      "tag": "BODY",
+      "class": "",
+      "label": null
+    },
+    "postDisabled": false
+  },
+  "clearedSlotHeight": 0
+}

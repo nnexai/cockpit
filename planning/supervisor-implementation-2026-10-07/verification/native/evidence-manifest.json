@@ -1,0 +1,149 @@
+{
+  "scope": "Actual frozen-source packaged/native Supervisor cadence, separate from synthetic browser consumers, CPU measurements and independent retirement execution.",
+  "source_directory": "/tmp/supervisor-native-cadence-smoke-21cd-evidence",
+  "retained_files": [
+    {
+      "path": "native/native-cadence-summary.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/native-cadence-summary.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 3568,
+      "sha256": "78f4df927ca1e83d5066214f387f37cf74a67b5540b740b401cdf748d1404f6b"
+    },
+    {
+      "path": "native/durable-immediate-path.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/durable-immediate-path.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 211,
+      "sha256": "62fd68b4563c78f8ad7d3ee387d00342d4a6d671abce5f0c687c55371f1b689b"
+    },
+    {
+      "path": "native/answer-immediate-callbacks.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/answer-immediate-callbacks.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 15078,
+      "sha256": "8bc1004a1b1e90de7cee653608952fc5ecb3d37f71b2f81bad97433ec529743e"
+    },
+    {
+      "path": "native/pending-action-observability.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/pending-action-observability.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 7077,
+      "sha256": "1b72f4239154d8f5e5bdd8762ef2ef870ba7a5f142419c943f96db02c8166684"
+    },
+    {
+      "path": "native/hide-reopen.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/hide-reopen.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 1051,
+      "sha256": "9cfce0b0e5b49e0b9e7030e2ca9c6e08e9c4c50f651f282584a38001955e5af6"
+    },
+    {
+      "path": "native/hide-reopen-logical-state.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/hide-reopen-logical-state.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 1079,
+      "sha256": "5b1438dae76f64c9c4eca6b26cb2795f22ae0b77d40222542465c8c0549e648c"
+    },
+    {
+      "path": "native/bound-root-task-question.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/bound-root-task-question.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 12000,
+      "sha256": "2e130395b52ff9fd9d3c014b9e8206281d035dc2ba56f709362e1c7d7ad707dc"
+    },
+    {
+      "path": "native/final-native-snapshot.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/final-native-snapshot.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 12834,
+      "sha256": "110935df28d40133c99d1a9c9a77ef44a851d18907795bf0f6af05b8af5b5b12"
+    },
+    {
+      "path": "native/auth-config-before-redacted.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/auth-config-before-redacted.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 317,
+      "sha256": "0a160ccbcbad3711b06fbda230a965eb24d73454c9c7845a2f1e6951617b86a3"
+    },
+    {
+      "path": "native/auth-config-after-redacted.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/auth-config-after-redacted.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 317,
+      "sha256": "0a160ccbcbad3711b06fbda230a965eb24d73454c9c7845a2f1e6951617b86a3"
+    },
+    {
+      "path": "native/owned-model-cleanup.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/owned-model-cleanup.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 263,
+      "sha256": "4ddbc28d00421e441050009dd8f5332cc66e2353c9b3c4ac570188e73e3b79d4"
+    },
+    {
+      "path": "native/owned-model-cleanup-identity.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/owned-model-cleanup-identity.json",
+      "mode": "unchanged original text bytes",
+      "bytes": 235,
+      "sha256": "f2533ec6020a487e44ddc9d8fbcaee8bf277756d0b657b98e6041c4c240ee0a3"
+    },
+    {
+      "path": "native/frozen-pair-identity.json",
+      "source": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/frozen-pair-identity.json",
+      "mode": "unchanged original text bytes; historical limits preserved",
+      "bytes": 2476,
+      "sha256": "f0025161332bb177dd977c131763542e9f5a1bb61bb055d9c4c3dc9de96d2b97"
+    },
+    {
+      "path": "native/native-orchestration-ipc.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/result.json",
+      "mode": "bounded projection; see file provenance and source_pointer fields",
+      "bytes": 409489,
+      "sha256": "7c0be1c1a3d98cffc53c07b4348aa6bbe03ac13eb96c37c55b6fd26a0bd69243",
+      "source_bytes": 21766144,
+      "source_sha256": "f67711c71c7df56c59562a19bd9cc96d71f83e0d72f0ec1aa170ceb03defa5f3"
+    },
+    {
+      "path": "native/runtime-only-status-transition.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/runtime-only-status-transition.json",
+      "mode": "bounded projection; see file provenance and source_pointer fields",
+      "bytes": 8128,
+      "sha256": "a3206202996205bed444141a3310cf69240086bfdad176c653599bc0e06e3ca0",
+      "source_bytes": 1607890,
+      "source_sha256": "579f7a0a4ee9734a8bddff60416b037d089daca820fa29c96f22d9ba6ec45a88"
+    },
+    {
+      "path": "native/same-revision-cadence.json",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/same-revision-cadence.json",
+      "mode": "bounded projection; see file provenance and source_pointer fields",
+      "bytes": 4500,
+      "sha256": "ecda0d24fcee24d93416f1f63be64fe5e086f52b99516757152c877ec6c12fe3",
+      "source_bytes": 1575309,
+      "source_sha256": "75052ff1e879803f84654f038df27660d3a1ebb77ec859d7003a6cc8266b42dd"
+    },
+    {
+      "path": "native/actual-native-supervisor-graph-draft.png",
+      "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/actual-native-supervisor-graph-draft.png",
+      "mode": "unchanged original binary bytes; native appearance evidence only, not browser geometry acceptance",
+      "bytes": 91571,
+      "sha256": "e419dd71ee317223267073387db126916be131d0000e8feb09f50048db55a00f",
+      "pixel_dimensions": {
+        "width": 1384,
+        "height": 1749
+      }
+    }
+  ],
+  "omissions": [
+    "result.json raw terminal frames and all non-orchestration request/callbacks",
+    "same-revision-cadence.json actual_surface_changes instrumentation",
+    "runtime-only-status-transition.json unselected surfaces",
+    "compositor.log",
+    "webdriver.log",
+    "niri.kdl",
+    "control.json"
+  ],
+  "qualifications": [
+    "No new runtime probe/build/test was run by retention worker.",
+    "No host/native binary was rehashed; immutable-pair identity and native loaded-asset observations were retained from supplied evidence.",
+    "No credential contents were read; only the supplied redacted identity records were retained."
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "mutation_fulfilled_at_ms": 80326,
+  "snapshot_fulfilled_at_ms": 80434,
+  "delay_ms": 108,
+  "mutation_revision": 20,
+  "snapshot_revision": 20,
+  "source": "real native UI Answer + actual Tauri callbacks"
+}

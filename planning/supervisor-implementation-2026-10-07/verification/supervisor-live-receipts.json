@@ -1,0 +1,34 @@
+{
+  "provenance": "Read-only final own disposable state.json, revision27; canonical task file independently read",
+  "fixture": "/tmp/cpol-ojup1a3v",
+  "run_id": "5e011a66-07c8-4777-b964-ddd6f341c03a",
+  "bound_omp_session": "01a11491-cff9-7309-bb79-1e938e3d53f4",
+  "rootStage": "active",
+  "receipts": [
+    {
+      "message_id": "fixture-smoke-confirmation",
+      "kind": "report",
+      "stage": "acked",
+      "text": "Confirm fixture-only smoke"
+    },
+    {
+      "message_id": "6ae5d43a-de1d-4f76-967a-f29462d3de0d",
+      "kind": "answer",
+      "stage": "acked",
+      "text": "Confirmed: fixture-only read-only smoke; leave the canonical task unchecked."
+    },
+    {
+      "message_id": "fixture-smoke-answer-received",
+      "kind": "report",
+      "stage": "acked",
+      "text": "Fixture answer received"
+    }
+  ],
+  "canonicalTask": {
+    "task_id": "cdbe0c87-a00c-436d-8482-2f1d8dd868ea",
+    "title": "UI smoke marker",
+    "checked": false,
+    "body": "Read-only presentation verification; leave unchecked."
+  },
+  "limits": "No worker execution, retirement, explicit Result or acceptance exercised by this root."
+}

@@ -1,0 +1,7 @@
+{
+  "count": 23,
+  "labels_order_equal": true,
+  "normalized_all_values_equal": true,
+  "normalization": "root, Notes UUID and actual revisions only; same L6 unadopted parent and no selected decision",
+  "controlled_setup": "UUID view preference reset only, then reload and real reads; no DTO/model replacement"
+}

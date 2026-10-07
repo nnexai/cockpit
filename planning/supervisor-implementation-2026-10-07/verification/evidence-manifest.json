@@ -1,0 +1,500 @@
+{
+  "provenance": "Copied supplied observations; original JSON and PNG bytes retained. No probes/builds/tests executed by evidence-retention worker.",
+  "reports": [
+    {
+      "source": "/tmp/supervisor-main-proof-report.json",
+      "retained": "supervisor-main-proof-report.json",
+      "bytes": 18452,
+      "sha256": "73a9589ab27467228153b37da43e981176e5984f3a3df4e535a6725a8b799249"
+    },
+    {
+      "source": "/tmp/supervisor-graph-proof-report.json",
+      "retained": "supervisor-graph-proof-report.json",
+      "bytes": 8355,
+      "sha256": "069b1daa9ed3a82e933b9758d66b3acf70956964743b7e56df8f399e72a4be55"
+    },
+    {
+      "source": "/tmp/supervisor-graph-proof-evidence.json",
+      "retained": "supervisor-graph-proof-evidence.json",
+      "bytes": 13863801,
+      "sha256": "9f352016086e483e66c5f20a063288a308b3bc58524f4084494e95b6d1490dc1"
+    },
+    {
+      "source": "/tmp/supervisor-detail-proof-report.json",
+      "retained": "supervisor-detail-proof-report.json",
+      "bytes": 816201,
+      "sha256": "7417ae4d46cb91a5a426d51ee3949c752c7bdd197eaa6de46bff9a36dc25f09a"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-report.json",
+      "retained": "supervisor-retirement-ui-proof-report.json",
+      "bytes": 528484,
+      "sha256": "67671d6e9d7d5a068d1b3af888604a67cf3843c8325c04364f66f83e27971a3d"
+    },
+    {
+      "source": "/tmp/supervisor-live-receipts.json",
+      "retained": "supervisor-live-receipts.json",
+      "bytes": 1137,
+      "sha256": "ebac95b69d136f1251c63bd9a26ef586106bdc1209939ef1f11bf0c5d760ce0a"
+    },
+    {
+      "source": "/tmp/supervisor-plan-override-supplement.json",
+      "retained": "supervisor-plan-override-supplement.json",
+      "bytes": 84502,
+      "sha256": "b1c22a5fbbf079a39d37c4503ed7f2091f2167a7c1fbd55dcf878f55aabcf766"
+    },
+    {
+      "source": "/tmp/supervisor-acceptance-supplement.json",
+      "retained": "supervisor-acceptance-supplement.json",
+      "bytes": 847115,
+      "sha256": "7f5837cdae9c1f01547ac83bb2d91cb50d3f22de534ac34bc772e86016033c2e"
+    },
+    {
+      "source": "/tmp/supervisor-board-contrast.json",
+      "retained": "supervisor-board-contrast.json",
+      "bytes": 10455,
+      "sha256": "27c4a33a7d8bd15a3eef1653013b2f9be0a253387cd5a4cde7dcba5b7802761f"
+    },
+    {
+      "source": "/tmp/supervisor-hollow-glyph-after.json",
+      "retained": "supervisor-hollow-glyph-after.json",
+      "bytes": 299110,
+      "sha256": "95e0baad143537987e4c4171fdb35ffa0713982f323bef7c94d3c2b3550afd58"
+    },
+    {
+      "source": "/tmp/supervisor-hollow-check.json",
+      "retained": "supervisor-hollow-check.json",
+      "bytes": 562,
+      "sha256": "eb48c145aae32f7af52c43126cde58521ae4f211c3d27f527814691e4a4934f1"
+    }
+  ],
+  "screenshots": [
+    {
+      "source": "/tmp/supervisor-main-proof-v2-tasks-final-1440.png",
+      "retained": "supervisor-main-proof-v2-tasks-final-1440.png",
+      "bytes": 150719,
+      "sha256": "511e06f0bceaacd4ad369e66571c1861be53deb5b254324b715258b8f840a318",
+      "fenceReference": "supervisor-main-proof-report.json#/checks/screenshots/0"
+    },
+    {
+      "source": "/tmp/supervisor-main-proof-v2-queue-after-1440.png",
+      "retained": "supervisor-main-proof-v2-queue-after-1440.png",
+      "bytes": 180880,
+      "sha256": "dc11d9fb78ca94cc0762d136c6d2e581daf65bacf3b1ee662dc71f8152eb631e",
+      "fenceReference": "supervisor-main-proof-report.json#/checks/screenshots/1"
+    },
+    {
+      "source": "/tmp/supervisor-main-proof-v2-queue-after-760.png",
+      "retained": "supervisor-main-proof-v2-queue-after-760.png",
+      "bytes": 179081,
+      "sha256": "a0ebd2faa86514291060500a8d9842ae564f8f3c4647afc7d1886482fa1dc788",
+      "fenceReference": "supervisor-main-proof-report.json#/checks/screenshots/2"
+    },
+    {
+      "source": "/tmp/supervisor-graph-proof-fenced-narrow-escape.png",
+      "retained": "supervisor-graph-proof-fenced-narrow-escape.png",
+      "bytes": 68233,
+      "sha256": "fa56f26ec11439d588de721e43e0ac86241555c0a4a2658d1241fdc13ac305dc",
+      "fenceReference": "supervisor-graph-proof-evidence.json#/finalFencedCaptures/escape"
+    },
+    {
+      "source": "/tmp/supervisor-graph-proof-fenced-short-overlay-final.png",
+      "retained": "supervisor-graph-proof-fenced-short-overlay-final.png",
+      "bytes": 58063,
+      "sha256": "55965a742d8fb715be62e89180807fd6ee311842a2ed2d457363af174e6b025b",
+      "fenceReference": "supervisor-graph-proof-evidence.json#/finalFencedCaptures/overlay/image"
+    },
+    {
+      "source": "/tmp/supervisor-graph-proof-fenced-sheet-max.png",
+      "retained": "supervisor-graph-proof-fenced-sheet-max.png",
+      "bytes": 84874,
+      "sha256": "ec850a5eeee1a086112683fc52cf917a72337967691bbbb4b2268ad027f5061e",
+      "fenceReference": "supervisor-graph-proof-evidence.json#/finalFencedCaptures/sheet/image"
+    },
+    {
+      "source": "/tmp/supervisor-detail-proof-review-wide-final.png",
+      "retained": "supervisor-detail-proof-review-wide-final.png",
+      "bytes": 115451,
+      "sha256": "c8c8dca3030572829d1a8f987b161b87e27b6a34a4f76b4533fdf2bfc940a2e5",
+      "fenceReference": "supervisor-detail-proof-report.json#/finalScreenshots/0"
+    },
+    {
+      "source": "/tmp/supervisor-detail-proof-review-narrow-final.png",
+      "retained": "supervisor-detail-proof-review-narrow-final.png",
+      "bytes": 47720,
+      "sha256": "fd710c6cb86f76d030ce7a28b7a965f29a69bc8e0342939c452cf7d693c0e1dc",
+      "fenceReference": "supervisor-detail-proof-report.json#/finalScreenshots/1"
+    },
+    {
+      "source": "/tmp/supervisor-detail-proof-relationship-wide-final.png",
+      "retained": "supervisor-detail-proof-relationship-wide-final.png",
+      "bytes": 195014,
+      "sha256": "dd7eb1141edab646addd31b74699e0570a5c8a23c61d84afb06377ef58c5e4b3",
+      "fenceReference": "supervisor-detail-proof-report.json#/finalScreenshots/2"
+    },
+    {
+      "source": "/tmp/supervisor-detail-proof-edit-stale-wide-final.png",
+      "retained": "supervisor-detail-proof-edit-stale-wide-final.png",
+      "bytes": 166158,
+      "sha256": "8b14613cdb96ec85bde57805675eb53755703d1c0a546e60d71ebd104d71699c",
+      "fenceReference": "supervisor-detail-proof-report.json#/finalScreenshots/3"
+    },
+    {
+      "source": "/tmp/supervisor-detail-proof-edit-stale-narrow-footer.png",
+      "retained": "supervisor-detail-proof-edit-stale-narrow-footer.png",
+      "bytes": 59280,
+      "sha256": "3054b72d8bab1c60604150f37f678a1063ebd5cc6fafdf67c491e4c881076832",
+      "fenceReference": "supervisor-detail-proof-report.json#/finalScreenshots/4"
+    },
+    {
+      "source": "/tmp/supervisor-detail-proof-guarded-recovery-final.png",
+      "retained": "supervisor-detail-proof-guarded-recovery-final.png",
+      "bytes": 125051,
+      "sha256": "1454e70d2885d08a437cb67f429d97eb5c26b65ee2ca268646e66eb0c3547662",
+      "fenceReference": "supervisor-detail-proof-report.json#/finalScreenshots/5"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-waiting.png",
+      "retained": "supervisor-retirement-ui-proof-waiting.png",
+      "bytes": 102203,
+      "sha256": "4802aed016d568bd2912d422ccc786ca7941b902b42194eb968c283e60fb0cc0",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/0"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-waiting-blockers.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-waiting-blockers.png",
+      "bytes": 111161,
+      "sha256": "e0978ba2747c235d35bad6b58834c5f6ea125c36200f05f2f29def109762a13d",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/1"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-offered.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-offered.png",
+      "bytes": 102242,
+      "sha256": "4b5fca72b5289d0f60a540f24d81cbcda0dbe7728458f2edb68e76d7559b859b",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/2"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-editor-draft.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-editor-draft.png",
+      "bytes": 105291,
+      "sha256": "76a36e909a77ac6e432f117d2a1c2890a4bb20716fffda548277610cf37f9f41",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/3"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-busy.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-busy.png",
+      "bytes": 102576,
+      "sha256": "9f2595e8694ec4f36f8408f70e0f5d7c8b7b84121fa97a38e22e4b78ccdcce00",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/4"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-requested.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-requested.png",
+      "bytes": 102218,
+      "sha256": "5b841473b30348759dddb39f02353241f65d069793e7187a647439ddd3a71474",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/5"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-stopped.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-stopped.png",
+      "bytes": 104619,
+      "sha256": "6a9095932e4e193d7e8343ec1fda76944c6ff1c0a91ebc27e332c00ec066e7f5",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/6"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-already-stopped.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-already-stopped.png",
+      "bytes": 104619,
+      "sha256": "6a9095932e4e193d7e8343ec1fda76944c6ff1c0a91ebc27e332c00ec066e7f5",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/7"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-close-intent.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-close-intent.png",
+      "bytes": 104619,
+      "sha256": "6a9095932e4e193d7e8343ec1fda76944c6ff1c0a91ebc27e332c00ec066e7f5",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/8"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-retained-running.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-retained-running.png",
+      "bytes": 112753,
+      "sha256": "b92a5bd8f99d0860aa1e5e4fa06995ddb2eb7c836e721df0198807e70e2c5cf2",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/9"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-retained-stopped.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-retained-stopped.png",
+      "bytes": 102823,
+      "sha256": "60d26e4ea0d3a08820bb5ca03588754f14c63f182432f8b9344c426c28ff54f3",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/10"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-retained-incomplete.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-retained-incomplete.png",
+      "bytes": 106886,
+      "sha256": "6876916eb80dc2c5cadf917907af90fa281b0aa9e1519668f2be615a61012506",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/11"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-unknown-native.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-unknown-native.png",
+      "bytes": 111969,
+      "sha256": "9815eb508fc4d85d9b8e808063e7770cf0c7970827eb010dec4d7d10985e6ae7",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/12"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-unknown-close.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-unknown-close.png",
+      "bytes": 109737,
+      "sha256": "a91aab23226a2c1ec1716751c8e8fe7005c5f0d81eb65446665c5aac60023327",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/13"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-retired.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-retired.png",
+      "bytes": 109817,
+      "sha256": "6e8244cd7e6372be0c2d90fd96c31572574cba988a80a35dbe0f44207e9524bb",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/14"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-already-absent.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-already-absent.png",
+      "bytes": 102281,
+      "sha256": "bcb0701ec423c21c7392b965fe361d41d1ed5ffd81499490d766bf776583fbbb",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/15"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-absent-after-uncertain.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-absent-after-uncertain.png",
+      "bytes": 102281,
+      "sha256": "bcb0701ec423c21c7392b965fe361d41d1ed5ffd81499490d766bf776583fbbb",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/16"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retirement-no-record.png",
+      "retained": "supervisor-retirement-ui-proof-retirement-no-record.png",
+      "bytes": 97743,
+      "sha256": "86839e67b6b3037c61a1633d12c2080de4697caf578c89ecb72113c193612a95",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/17"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-no-record-fresh.png",
+      "retained": "supervisor-retirement-ui-proof-no-record-fresh.png",
+      "bytes": 98020,
+      "sha256": "737e84eeccf9193c876c132ab3533459517c31a410f4059ec3b82a17390e2ad8",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/18"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-legacy-cancelled.png",
+      "retained": "supervisor-retirement-ui-proof-legacy-cancelled.png",
+      "bytes": 149813,
+      "sha256": "521bb1f4d0bde2ae01c6cc61eec1fe7837d401efd3e3522a1d8911a477f8d38c",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/19"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retained-running-activity.png",
+      "retained": "supervisor-retirement-ui-proof-retained-running-activity.png",
+      "bytes": 53401,
+      "sha256": "58a3997fd29a83ab18e3973678730091dd5e5a373a1ad8ae81958683b242dee6",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/20"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retained-running-diagnostics.png",
+      "retained": "supervisor-retirement-ui-proof-retained-running-diagnostics.png",
+      "bytes": 102687,
+      "sha256": "429e5df7d08811516ad5f33666c198d421aa11b61b432dcec3bb92df9a1ae753",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/21"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-unknown-close-diagnostics-raw.png",
+      "retained": "supervisor-retirement-ui-proof-unknown-close-diagnostics-raw.png",
+      "bytes": 127754,
+      "sha256": "2f9531d5b8fb07fcec436190059d69edc1b5db4adf5b619e3a4656d86320e334",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/22"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-retained-running-narrow.png",
+      "retained": "supervisor-retirement-ui-proof-retained-running-narrow.png",
+      "bytes": 60898,
+      "sha256": "9062d2797dbceec0ec244217a4991d198456338533050440710f6082a0f4bea6",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/23"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-unknown-native-narrow.png",
+      "retained": "supervisor-retirement-ui-proof-unknown-native-narrow.png",
+      "bytes": 56317,
+      "sha256": "3bc1c9079af6db66eb585100b8c58b5855a51cd364ef7e738978a11ac5e9d030",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/24"
+    },
+    {
+      "source": "/tmp/supervisor-retirement-ui-proof-unknown-native-narrow-queue.png",
+      "retained": "supervisor-retirement-ui-proof-unknown-native-narrow-queue.png",
+      "bytes": 16404,
+      "sha256": "01a0a26dbc5949adaa377b6c716265ac0e1701d52218b7d99a1ef2a7386af1dd",
+      "fenceReference": "supervisor-retirement-ui-proof-report.json#/screenshots/25"
+    },
+    {
+      "source": "/tmp/SupervisorPlanOverrideSupplement-awaiting-prepare.png",
+      "retained": "SupervisorPlanOverrideSupplement-awaiting-prepare.png",
+      "bytes": 132471,
+      "sha256": "fbac21dc051b870ef48095c24321bd9cedefa910c7b20ea1b0eb9d413ca2647e",
+      "fenceReference": "supervisor-plan-override-supplement.json#/screenshots/0"
+    },
+    {
+      "source": "/tmp/SupervisorPlanOverrideSupplement-ready.png",
+      "retained": "SupervisorPlanOverrideSupplement-ready.png",
+      "bytes": 133570,
+      "sha256": "5b0efd2d61a5185f45c30d98805c0d735f50d2004fcece94321305d9b5b30bed",
+      "fenceReference": "supervisor-plan-override-supplement.json#/screenshots/1"
+    },
+    {
+      "source": "/tmp/SupervisorPlanOverrideSupplement-working.png",
+      "retained": "SupervisorPlanOverrideSupplement-working.png",
+      "bytes": 105068,
+      "sha256": "2557029d4e50420153c611b7deb3989f615dadf716c2ca7cd9014f1bc14eeeea",
+      "fenceReference": "supervisor-plan-override-supplement.json#/screenshots/2"
+    },
+    {
+      "source": "/tmp/SupervisorPlanOverrideSupplement-closed.png",
+      "retained": "SupervisorPlanOverrideSupplement-closed.png",
+      "bytes": 96582,
+      "sha256": "dad87c72a293d44a041ac04083670d3a4fa648d6e000c242ad6021143796b106",
+      "fenceReference": "supervisor-plan-override-supplement.json#/screenshots/3"
+    },
+    {
+      "source": "/tmp/SupervisorPlanOverrideSupplement-diagnostic-disabled.png",
+      "retained": "SupervisorPlanOverrideSupplement-diagnostic-disabled.png",
+      "bytes": 125219,
+      "sha256": "c6ae44896f0c9a3c5d484989b3b9ec1ac27258d654befb366d768f5751850d83",
+      "fenceReference": "supervisor-plan-override-supplement.json#/screenshots/4"
+    },
+    {
+      "source": "/tmp/SupervisorPlanOverrideSupplement-mismatch-disabled.png",
+      "retained": "SupervisorPlanOverrideSupplement-mismatch-disabled.png",
+      "bytes": 114847,
+      "sha256": "41a4f1cd8a8a5562658f414e914f061db14b85c9e94632b1b4a0a26124944ee6",
+      "fenceReference": "supervisor-plan-override-supplement.json#/screenshots/5"
+    },
+    {
+      "source": "/tmp/SupervisorPlanOverrideSupplement-awaiting_prepare-offline.png",
+      "retained": "SupervisorPlanOverrideSupplement-awaiting_prepare-offline.png",
+      "bytes": 144814,
+      "sha256": "bf2522f35ce3094973283c8185e81c12325c64169eb98cf9c88a64ecf01856e4",
+      "fenceReference": "supervisor-plan-override-supplement.json#/screenshots/6"
+    },
+    {
+      "source": "/tmp/SupervisorPlanOverrideSupplement-ready-offline.png",
+      "retained": "SupervisorPlanOverrideSupplement-ready-offline.png",
+      "bytes": 140525,
+      "sha256": "2835ceaf7a40f11f3adfafc2fea35a479a4d7898ddcebdeede51130b14502627",
+      "fenceReference": "supervisor-plan-override-supplement.json#/screenshots/7"
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-medium-assignment.png",
+      "retained": "SupervisorAcceptanceSupplement-medium-assignment.png",
+      "bytes": 126954,
+      "sha256": "c4a5fb0b840f6bc7d606eecb635a5ca59cc42b663bdcd2b37bd9269902511cc6",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/0",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-medium-question.png",
+      "retained": "SupervisorAcceptanceSupplement-medium-question.png",
+      "bytes": 121834,
+      "sha256": "945b9f3de949046f7268acf99ec0c7be802645e2a245983c094f93b8d1f93145",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/1",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-narrow-close-initial-focus.png",
+      "retained": "SupervisorAcceptanceSupplement-narrow-close-initial-focus.png",
+      "bytes": 49710,
+      "sha256": "aba082990c79b344821babac1da214b4cd4ccb8b48ba9c5018059e758086648a",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/2",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-board-arrows-old-selection.png",
+      "retained": "SupervisorAcceptanceSupplement-board-arrows-old-selection.png",
+      "bytes": 202790,
+      "sha256": "4c44f2aed395cdd1a93d8330ec6e5ddb51c7a735c2b9bd6daab6293c9a3bdbc4",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/3",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-offline-one-banner-glyph-controls.png",
+      "retained": "SupervisorAcceptanceSupplement-offline-one-banner-glyph-controls.png",
+      "bytes": 139333,
+      "sha256": "f02cbe943a25224f0d6c4c937e9c8c65aa04a648b97dc2698604649d76001736",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/4",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-760-assignment-current-task.png",
+      "retained": "SupervisorAcceptanceSupplement-760-assignment-current-task.png",
+      "bytes": 108127,
+      "sha256": "21cb74b49875b1749a41692b1d3eb6407448786ea7fd3ff09c4971d7bbce4bec",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/5",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-1440-assignment-current-task.png",
+      "retained": "SupervisorAcceptanceSupplement-1440-assignment-current-task.png",
+      "bytes": 118683,
+      "sha256": "552abc8e33555efc3f5ebc711b2f8aed6775161513e6e056e07adf245c92bd4c",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/6",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-1440-recovery-expanded.png",
+      "retained": "SupervisorAcceptanceSupplement-1440-recovery-expanded.png",
+      "bytes": 141124,
+      "sha256": "caa8552c3964052473e4be6e352eb123f7b5d91bcd5a9fb6e08fc3b8df2fbdef",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/7",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/SupervisorAcceptanceSupplement-760-recovery-expanded.png",
+      "retained": "SupervisorAcceptanceSupplement-760-recovery-expanded.png",
+      "bytes": 129316,
+      "sha256": "084c353436da8cee92a1cf6a378d17204f697204e8020a1510c999895f99123c",
+      "fenceReference": "supervisor-acceptance-supplement.json#/screenshots/8",
+      "evidenceLimit": "Immediate viewport/focus/view/epoch fence only; no next-action unreset guard. NOT authoritative final geometry proof."
+    },
+    {
+      "source": "/tmp/supervisor-hollow-after-offline-graph.png",
+      "retained": "supervisor-hollow-after-offline-graph.png",
+      "bytes": 117374,
+      "sha256": "63dd54373e7e19270b4c91532ee828e56d8e2c935092169f27a6fb3fc38cf759",
+      "fenceReference": "supervisor-hollow-glyph-after.json#/screens/0"
+    },
+    {
+      "source": "/tmp/supervisor-hollow-after-offline-tasks.png",
+      "retained": "supervisor-hollow-after-offline-tasks.png",
+      "bytes": 127665,
+      "sha256": "c8f89352317c64fd4f6bc562161583086d9934019f88a7021fc2c9325059de41",
+      "fenceReference": "supervisor-hollow-glyph-after.json#/screens/1"
+    },
+    {
+      "source": "/tmp/supervisor-hollow-after-sidebar-natural-and-16px.png",
+      "retained": "supervisor-hollow-after-sidebar-natural-and-16px.png",
+      "bytes": 55085,
+      "sha256": "44cf58851b256c45aec1231a7cac25c157efb17435757ac3ae89d30df58b28f2",
+      "fenceReference": "supervisor-hollow-glyph-after.json#/screens/2"
+    }
+  ],
+  "exclusions": "Only final captures with matching before/after viewport fences retained. Older screenshot references inside original reports are historical, not retained product evidence.",
+  "explicitlyExcluded": [
+    {
+      "path": "/tmp/SupervisorAcceptanceSupplement-20261007-valid1440-assignment.png",
+      "reason": "Later viewport drift after immediate fences; excluded per parent instruction."
+    },
+    {
+      "path": "/tmp/SupervisorAcceptanceSupplement-20261007-valid1440-question.png",
+      "reason": "Later viewport drift after immediate fences; excluded per parent instruction."
+    }
+  ],
+  "captureNotes": "Post-repair hollow-glyph captures use actual1400x813 DPR1 (Supervisor) and800x700 DPR1.25 (Sidebar), not requested1440 dimensions. Timed-out pending busy screenshot is excluded; busy DOM/action observations remain retained."
+}

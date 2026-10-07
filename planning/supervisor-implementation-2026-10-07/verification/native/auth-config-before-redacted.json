@@ -1,0 +1,13 @@
+{
+  "/home/nnex/.omp/agent/config.yml": {
+    "exists": true,
+    "sha256": "862cb96eb144295e8da26b25809f078c389290a9226c0378f6a6f62b03af4a76",
+    "mtime_ns": 1791008595840068770
+  },
+  "/home/nnex/.omp/agent/auth.json": {
+    "exists": false
+  },
+  "/home/nnex/.omp/agent/settings.json": {
+    "exists": false
+  }
+}

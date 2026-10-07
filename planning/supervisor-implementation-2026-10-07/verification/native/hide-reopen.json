@@ -1,0 +1,59 @@
+{
+  "before": {
+    "scrolls": [
+      {
+        "left": 0,
+        "top": 0,
+        "class": "supervisor-graph-scroll"
+      },
+      {
+        "left": 0,
+        "top": 0,
+        "class": "supervisor-detail-scroll"
+      }
+    ],
+    "selected": [
+      "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6"
+    ],
+    "drafts": [
+      {
+        "id": "_r_8_",
+        "value": "Retained unsent native cadence draft 21cd"
+      },
+      {
+        "id": "_r_a_",
+        "value": ""
+      }
+    ],
+    "view": "graph"
+  },
+  "after": {
+    "scrolls": [
+      {
+        "left": 0,
+        "top": 0,
+        "class": "supervisor-graph-scroll"
+      },
+      {
+        "left": 0,
+        "top": 0,
+        "class": "supervisor-detail-scroll"
+      }
+    ],
+    "selected": [
+      "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6"
+    ],
+    "drafts": [
+      {
+        "id": "_r_i_",
+        "value": "Retained unsent native cadence draft 21cd"
+      },
+      {
+        "id": "_r_k_",
+        "value": ""
+      }
+    ],
+    "view": "graph"
+  },
+  "unchanged": false
+}

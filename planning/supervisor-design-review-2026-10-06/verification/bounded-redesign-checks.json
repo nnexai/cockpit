@@ -1,0 +1,385 @@
+[
+  {
+    "scenario": "graph node geometry all static/demo",
+    "nodes": 44,
+    "staticNodes": 18,
+    "bad": [],
+    "variants": [
+      "#g-working",
+      "#i-doc",
+      "#g-unknown",
+      "#g-blocked",
+      "#g-done",
+      "#g-idle"
+    ],
+    "beforeIcons": [
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      },
+      {
+        "box": [
+          16,
+          16
+        ],
+        "viewBox": "0 0 18 18"
+      }
+    ]
+  },
+  {
+    "scenario": "wide",
+    "width": 1440,
+    "height": 1000,
+    "view": "graph",
+    "size": "wide",
+    "short": "false",
+    "panel": "side",
+    "pageOverflow": false,
+    "allNodeGeometryFailures": [],
+    "selection": "worker · Worker 4",
+    "closeFocus": "w4"
+  },
+  {
+    "scenario": "medium",
+    "width": 760,
+    "height": 900,
+    "view": "graph",
+    "size": "wide",
+    "short": "false",
+    "panel": "side",
+    "pageOverflow": false,
+    "allNodeGeometryFailures": [],
+    "selection": "worker · Worker 4",
+    "closeFocus": "w4"
+  },
+  {
+    "scenario": "narrow",
+    "width": 360,
+    "height": 800,
+    "view": "graph",
+    "size": "narrow",
+    "short": "false",
+    "panel": "sheet",
+    "pageOverflow": false,
+    "allNodeGeometryFailures": [],
+    "selection": "worker · Worker 4",
+    "closeFocus": "w4"
+  },
+  {
+    "scenario": "short",
+    "width": 1440,
+    "height": 600,
+    "view": "graph",
+    "size": "wide",
+    "short": "true",
+    "panel": "side",
+    "pageOverflow": false,
+    "allNodeGeometryFailures": [],
+    "selection": "worker · Worker 4",
+    "closeFocus": "w4"
+  },
+  {
+    "scenario": "short-narrow",
+    "width": 360,
+    "height": 600,
+    "view": "graph",
+    "size": "narrow",
+    "short": "true",
+    "panel": "overlay",
+    "pageOverflow": false,
+    "allNodeGeometryFailures": [],
+    "selection": "worker · Worker 4",
+    "closeFocus": "w4"
+  },
+  {
+    "scenario": "Tasks initial",
+    "value": "tasks"
+  },
+  {
+    "scenario": "all 26 selectable nodes",
+    "selected": [
+      {
+        "id": "root",
+        "title": "Atlas supervisor",
+        "selection": "root · Atlas supervisor"
+      },
+      {
+        "id": "t1",
+        "title": "Audit shortcuts",
+        "selection": "task · Audit shortcuts"
+      },
+      {
+        "id": "t2",
+        "title": "Map sidebar",
+        "selection": "task · Map sidebar"
+      },
+      {
+        "id": "t3",
+        "title": "Improve file search",
+        "selection": "task · Improve file search"
+      },
+      {
+        "id": "t4",
+        "title": "Document supervisor",
+        "selection": "task · Document supervisor"
+      },
+      {
+        "id": "t5",
+        "title": "Review migration",
+        "selection": "task · Review migration"
+      },
+      {
+        "id": "t6",
+        "title": "Plan release checklist",
+        "selection": "task · Plan release checklist"
+      },
+      {
+        "id": "t7",
+        "title": "Refactor settings store",
+        "selection": "task · Refactor settings store"
+      },
+      {
+        "id": "t8",
+        "title": "Update onboarding copy",
+        "selection": "task · Update onboarding copy"
+      },
+      {
+        "id": "t9",
+        "title": "Benchmark startup",
+        "selection": "task · Benchmark startup"
+      },
+      {
+        "id": "t10",
+        "title": "Draft release notes",
+        "selection": "task · Draft release notes"
+      },
+      {
+        "id": "t11",
+        "title": "Triage backlog",
+        "selection": "task · Triage backlog"
+      },
+      {
+        "id": "w1",
+        "title": "Worker 1",
+        "selection": "worker · Worker 1"
+      },
+      {
+        "id": "w2",
+        "title": "Worker 2",
+        "selection": "worker · Worker 2"
+      },
+      {
+        "id": "w3",
+        "title": "Worker 3",
+        "selection": "worker · Worker 3"
+      },
+      {
+        "id": "w4",
+        "title": "Worker 4",
+        "selection": "worker · Worker 4"
+      },
+      {
+        "id": "w5",
+        "title": "Worker 5",
+        "selection": "worker · Worker 5"
+      },
+      {
+        "id": "w6",
+        "title": "Worker 6",
+        "selection": "worker · Worker 6"
+      },
+      {
+        "id": "w7",
+        "title": "Worker 7",
+        "selection": "worker · Worker 7"
+      },
+      {
+        "id": "w8",
+        "title": "Worker 8",
+        "selection": "worker · Worker 8"
+      },
+      {
+        "id": "w9",
+        "title": "Worker 9",
+        "selection": "worker · Worker 9"
+      },
+      {
+        "id": "s1",
+        "title": "Test runner",
+        "selection": "sub · Test runner"
+      },
+      {
+        "id": "s2",
+        "title": "Read-only scout",
+        "selection": "sub · Read-only scout"
+      },
+      {
+        "id": "s3",
+        "title": "Doc linter",
+        "selection": "sub · Doc linter"
+      },
+      {
+        "id": "s4",
+        "title": "Schema checker",
+        "selection": "sub · Schema checker"
+      },
+      {
+        "id": "s5",
+        "title": "Type checker",
+        "selection": "sub · Type checker"
+      }
+    ]
+  },
+  {
+    "scenario": "nested roving keyboard",
+    "k1": "s2",
+    "k2": "s3",
+    "ksel": "sub · Doc linter",
+    "kview": "graph",
+    "kend": "t11"
+  },
+  {
+    "scenario": "cross-view navigation",
+    "nav1": {
+      "view": "tasks",
+      "sel": "task · Document supervisor",
+      "focus": "t4",
+      "queueLabel": "Show in Tasks"
+    },
+    "nav2": {
+      "view": "graph",
+      "sel": "task · Document supervisor",
+      "focus": "t4",
+      "queueLabel": "Show in Graph"
+    }
+  },
+  {
+    "scenario": "side splitter keyboard",
+    "before": "340",
+    "after": "356"
+  },
+  {
+    "scenario": "filters retain topology",
+    "dim": 21,
+    "withoutSubs": 21,
+    "withSubs": 26
+  },
+  {
+    "scenario": "narrow attention navigation",
+    "queueOpen": "true",
+    "locateLabel": "Show in Graph",
+    "after": "false",
+    "selection": "worker · Worker 4",
+    "panel": "sheet"
+  },
+  {
+    "scenario": "sheet splitter keyboard",
+    "before": "283",
+    "after": "299"
+  },
+  {
+    "scenario": "status and before schematic geometry",
+    "statusTierAndBeforeFailures": [],
+    "edgeSvgCount": 2
+  },
+  {
+    "scenario": "Graph scroll restored",
+    "savedOffsets": [
+      350,
+      120
+    ],
+    "restoredOffsets": [
+      350,
+      120
+    ]
+  },
+  {
+    "scenario": "review task details retained",
+    "resultText": "State\n\nIn the Review lane, assigned to Worker 5. Changed during acceptance.\n\nℹ Notice\n\nRelationship\nTask\nReview migration\nReview lane\nTask agent\nWorker 5\nHerdr · done\nNavigate\nShow in Graph\n\nDemo: nothing is opened and Herdr focus is never changed. In the product, Open terminal is the only control that moves it."
+  },
+  {
+    "scenario": "task selection toggles",
+    "selectedTask": "task · Document supervisor",
+    "toggled": "none"
+  }
+]

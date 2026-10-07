@@ -1,0 +1,3050 @@
+{
+  "evidenceClass": "Actual browser, synthetic DTO, actual unchanged SupervisorView React consumer",
+  "scenario": 5,
+  "sourceEdits": false,
+  "isolatedServer": "http://127.0.0.1:5219/",
+  "sourceCopy": "/tmp/cockpit-supervisor-stageproof-21cd/supervisor-redesign-harness.tsx",
+  "configuration": "/tmp/cockpit-supervisor-stageproof-21cd/vite.config.mjs",
+  "observations": {
+    "reportedCollapsed": {
+      "epoch": 0,
+      "revision": 1,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "BUTTON",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Actions",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "reported",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": false
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nEdit task…\nRequest stop…\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · Worker 5 · Assigned to Worker 5",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Worker · Worker 5done · Herdr · Project · Assigned to task Review migration",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Open terminal",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 185.796875,
+            "width": 109.625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 331.375,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 410.375,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 444.375,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 585.953125,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Accept explicit result",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 810.921875,
+            "width": 151.8125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send back",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 956.5,
+            "width": 85.21875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 1056.5,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "reported": {
+      "epoch": 0,
+      "revision": 1,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "reported",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nEdit task…\nRequest stop…\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\n\nThe supervisor normally reviews this result. Acceptance uses the exact current canonical task revision, not runtime Done.\n\nAccept explicit result\nRequested changes\nSend back\nClose agent tracking…",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · Worker 5 · Assigned to Worker 5",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Worker · Worker 5done · Herdr · Project · Assigned to task Review migration",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Open terminal",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 185.796875,
+            "width": 109.625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 331.375,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 410.375,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 444.375,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 585.953125,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Accept explicit result",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 810.921875,
+            "width": 151.8125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send back",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 956.5,
+            "width": 85.21875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 1056.5,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "awaitingPrepare": {
+      "epoch": 0,
+      "revision": 2,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "awaiting_prepare",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nEdit task…\nRequest stop…\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\nOperator plan override\n\nThe supervisor handles routine authorization. Use this only for deliberate intervention.\n\nPrepare override · exact plan\nPrepare migration checkout without changing user files.\n\nThis deliberate operator action replaces the supervisor's decision for this exact plan. Same-user policy, not an OS sandbox.\n\nOverride prepare…\nClose agent tracking…",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · Worker 5 · Assigned to Worker 5",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Worker · Worker 5unobserved · Herdr · Assigned to task Review migration",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Open terminal",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": -27.203125,
+            "width": 109.625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 118.375,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 197.375,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 231.375,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 372.953125,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Override prepare…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 761.09375,
+            "width": 137.46875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 827.09375,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine",
+        "Operator plan override"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "ready": {
+      "epoch": 0,
+      "revision": 3,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "ready",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nEdit task…\nRequest stop…\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\nOperator plan override\n\nThe supervisor handles routine authorization. Use this only for deliberate intervention.\n\nExecute override · exact plan\nReview migration and preserve existing rows.\n\nThis deliberate operator action replaces the supervisor's decision for this exact plan. Same-user policy, not an OS sandbox.\n\nOptional execution note\nOverride execute…\nClose agent tracking…",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · Worker 5 · Assigned to Worker 5",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Worker · Worker 5done · Herdr · Project · Assigned to task Review migration",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Open terminal",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": -94.203125,
+            "width": 109.625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 51.375,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 130.375,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 164.375,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 305.953125,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Override execute…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 760.890625,
+            "width": 137.921875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 826.890625,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine",
+        "Operator plan override"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "working": {
+      "epoch": 0,
+      "revision": 4,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "working",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nEdit task…\nRequest stop…\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\nClose agent tracking…",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · Worker 5 · Assigned to Worker 5",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Worker · Worker 5done · Herdr · Project · Assigned to task Review migration",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Open terminal",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 185.796875,
+            "width": 109.625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 331.375,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 410.375,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 444.375,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 585.953125,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 740.140625,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "closed": {
+      "epoch": 0,
+      "revision": 5,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "closed",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nFollow-up to agent\nSend follow-up\n\nTracking is closed; follow-up is unavailable.\n\nEdit task…\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · worker closed",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_2_-followup",
+          "reason": "Tracking is closed; follow-up is unavailable.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 287.375,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 389.171875,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 534.75,
+            "width": 81.609375,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "diagnostic": {
+      "epoch": 1,
+      "revision": 2,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "reported",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": "Synthetic duplicate task identity"
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nEdit task…\n\nResolve the canonical task diagnostic before editing.\n\nRequest stop…\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\n\nThe supervisor normally reviews this result. Acceptance uses the exact current canonical task revision, not runtime Done.\n\nAccept explicit result\n\nResolve the canonical task diagnostic before acceptance.\n\nRequested changes\nSend back\nClose agent tracking…",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · Worker 5 · Assigned to Worker 5",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Worker · Worker 5done · Herdr · Project · Assigned to task Review migration",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Open terminal",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": -95.203125,
+            "width": 109.625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 50.375,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_b_-edit",
+          "reason": "Resolve the canonical task diagnostic before editing.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 129.375,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 192.171875,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 333.75,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Accept explicit result",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_b_-accept",
+          "reason": "Resolve the canonical task diagnostic before acceptance.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 558.71875,
+            "width": 151.8125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send back",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 727.09375,
+            "width": 85.21875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 827.09375,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "mismatch": {
+      "epoch": 2,
+      "revision": 2,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "reported",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w2"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nEdit task…\nRequest stop…\nDurable note\nSave note\nOperator intervention — normally handled by the supervisor\n\nThe supervisor normally reviews this result. Acceptance uses the exact current canonical task revision, not runtime Done.\n\nAccept explicit result\n\nThis is not the task's current run.\n\nRequested changes\nSend back\nClose agent tracking…",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Worker · Worker 5done · Herdr · Project · Delegated by Atlas supervisor",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Open terminal",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": -66.203125,
+            "width": 109.625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 79.375,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 158.375,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 192.375,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 333.953125,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Accept explicit result",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_k_-accept",
+          "reason": "This is not the task's current run.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 558.921875,
+            "width": 151.8125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Send back",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 727.296875,
+            "width": 85.21875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 827.296875,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "awaiting_prepareOffline": {
+      "epoch": 3,
+      "revision": 3,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "awaiting_prepare",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nFollow-up to agent\nSend follow-up\n\nCheck connection and current agent status first.\n\nEdit task…\n\nCheck connection and current agent status first.\n\nRequest stop…\n\nCheck connection and current agent status first.\n\nDurable note\nSave note\n\nCheck connection and current agent status first.\n\nOperator intervention — normally handled by the supervisor\nOperator plan override\n\nThe supervisor handles routine authorization. Use this only for deliberate intervention.\n\nPrepare override · exact plan\nPrepare migration checkout without changing user files.\n\nThis deliberate operator action replaces the supervisor's decision for this exact plan. Same-user policy, not an OS sandbox.\n\nOverride prepare…\nClose agent tracking…\n\nCheck connection and current agent status first.",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · Worker 5 · Assigned to Worker 5",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Worker · Worker 5unobserved · Herdr · Assigned to task Review migration",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_t_-followup",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": -7.625,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_t_-edit",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 94.171875,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_t_-stop",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 156.96875,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_t_-note",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 321.34375,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Override prepare…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 732.28125,
+            "width": 137.46875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_t_-close",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 798.28125,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine",
+        "Operator plan override"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    },
+    "readyOffline": {
+      "epoch": 4,
+      "revision": 3,
+      "fixture": "review-result",
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "dpr": 1.25
+      },
+      "focus": {
+        "tag": "SUMMARY",
+        "id": "",
+        "rowId": null,
+        "ariaLabel": null,
+        "text": "Operator intervention — normally handled by the supervisor",
+        "role": null,
+        "classes": "",
+        "value": null
+      },
+      "dto": {
+        "runs": [
+          {
+            "runId": "root",
+            "stage": "active",
+            "preparePlan": null,
+            "workPlan": null,
+            "result": null
+          },
+          {
+            "runId": "w5",
+            "stage": "ready",
+            "preparePlan": {
+              "plan_revision": "prepare-exact-w5",
+              "text": "Prepare migration checkout without changing user files.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "workPlan": {
+              "plan_revision": "work-exact-w5",
+              "text": "Review migration and preserve existing rows.",
+              "created_at": "2026-10-07T11:50:00Z"
+            },
+            "result": {
+              "message_id": "result-w5",
+              "kind": "result",
+              "outcome": "succeeded",
+              "summary": "Migration reviewed. Exact result: existing rows retained, transaction boundary verified, and migration rollback documented.",
+              "plan": null,
+              "at": "2026-10-07T11:50:00Z"
+            }
+          }
+        ],
+        "tasks": [
+          {
+            "task": {
+              "task_id": "t-review",
+              "title": "Review migration",
+              "body": "Review migration\nPreserve existing behavior.\nExact SYNTHETIC DTO body for t-review.",
+              "checked": false,
+              "line": 1,
+              "task_revision": "task-revision-t-review",
+              "diagnostic": null
+            },
+            "lane": "review",
+            "current_run_id": "w5"
+          }
+        ]
+      },
+      "operator": {
+        "present": true,
+        "open": true
+      },
+      "text": "Review migration\nOverview\nActivity\nActions\nRoutine\nFollow-up to agent\nSend follow-up\n\nCheck connection and current agent status first.\n\nEdit task…\n\nCheck connection and current agent status first.\n\nRequest stop…\n\nCheck connection and current agent status first.\n\nDurable note\nSave note\n\nCheck connection and current agent status first.\n\nOperator intervention — normally handled by the supervisor\nOperator plan override\n\nThe supervisor handles routine authorization. Use this only for deliberate intervention.\n\nExecute override · exact plan\nReview migration and preserve existing rows.\n\nThis deliberate operator action replaces the supervisor's decision for this exact plan. Same-user policy, not an OS sandbox.\n\nOptional execution note\nOverride execute…\nClose agent tracking…\n\nCheck connection and current agent status first.",
+      "buttons": [
+        {
+          "text": "",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 71,
+            "width": 26,
+            "height": 30
+          }
+        },
+        {
+          "text": "Overview",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1111,
+            "y": 113,
+            "width": 103.65625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Activity",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1218.65625,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Actions",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1326.328125,
+            "y": 113,
+            "width": 103.671875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Task · Review migrationReview · Worker 5 · Assigned to Worker 5",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Worker · Worker 5unobserved · Herdr · Assigned to task Review migration",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Show in Graph",
+          "disabled": false,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "text": "Send follow-up",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_14_-followup",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": -74.625,
+            "width": 115.1875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Edit task…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_14_-edit",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 27.171875,
+            "width": 85.703125,
+            "height": 30
+          }
+        },
+        {
+          "text": "Request stop…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_14_-stop",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 89.96875,
+            "width": 113.640625,
+            "height": 30
+          }
+        },
+        {
+          "text": "Save note",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_14_-note",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 254.34375,
+            "width": 81.609375,
+            "height": 30
+          }
+        },
+        {
+          "text": "Override execute…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": null,
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 732.078125,
+            "width": 137.921875,
+            "height": 30
+          }
+        },
+        {
+          "text": "Close agent tracking…",
+          "disabled": true,
+          "ariaDisabled": null,
+          "describedBy": "_r_14_-close",
+          "reason": "Check connection and current agent status first.",
+          "visible": true,
+          "rect": {
+            "x": 1115,
+            "y": 798.078125,
+            "width": 158.953125,
+            "height": 30
+          }
+        }
+      ],
+      "headings": [
+        "State",
+        "Result · succeeded",
+        "Progress trail",
+        "Relationship path",
+        "Task description",
+        "Work plan",
+        "Initialization report",
+        "Routine",
+        "Operator plan override"
+      ],
+      "actions": [],
+      "terminalEvents": []
+    }
+  },
+  "screenshots": [
+    {
+      "path": "/tmp/SupervisorPlanOverrideSupplement-awaiting-prepare.png",
+      "fullPage": false,
+      "before": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 0,
+        "revision": 2,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "after": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 0,
+        "revision": 2,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "valid": true
+    },
+    {
+      "path": "/tmp/SupervisorPlanOverrideSupplement-ready.png",
+      "fullPage": false,
+      "before": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 0,
+        "revision": 3,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "after": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 0,
+        "revision": 3,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "valid": true
+    },
+    {
+      "path": "/tmp/SupervisorPlanOverrideSupplement-working.png",
+      "fullPage": false,
+      "before": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 0,
+        "revision": 4,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "after": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 0,
+        "revision": 4,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "valid": true
+    },
+    {
+      "path": "/tmp/SupervisorPlanOverrideSupplement-closed.png",
+      "fullPage": false,
+      "before": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 0,
+        "revision": 5,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "after": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 0,
+        "revision": 5,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "valid": true
+    },
+    {
+      "path": "/tmp/SupervisorPlanOverrideSupplement-diagnostic-disabled.png",
+      "fullPage": false,
+      "before": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 1,
+        "revision": 2,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "after": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 1,
+        "revision": 2,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "valid": true
+    },
+    {
+      "path": "/tmp/SupervisorPlanOverrideSupplement-mismatch-disabled.png",
+      "fullPage": false,
+      "before": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 2,
+        "revision": 2,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "after": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 2,
+        "revision": 2,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "valid": true
+    },
+    {
+      "path": "/tmp/SupervisorPlanOverrideSupplement-awaiting_prepare-offline.png",
+      "fullPage": false,
+      "before": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 3,
+        "revision": 3,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "after": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 3,
+        "revision": 3,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "valid": true
+    },
+    {
+      "path": "/tmp/SupervisorPlanOverrideSupplement-ready-offline.png",
+      "fullPage": false,
+      "before": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 4,
+        "revision": 3,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "after": {
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "dpr": 1.25
+        },
+        "epoch": 4,
+        "revision": 3,
+        "focus": {
+          "tag": "SUMMARY",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "Operator intervention — normally handled by the supervisor",
+          "role": null,
+          "classes": "",
+          "value": null
+        },
+        "operatorOpen": true
+      },
+      "valid": true
+    }
+  ],
+  "notClaimed": [
+    "Acceptance operation",
+    "Prepare or execute grant",
+    "Native lifecycle",
+    "Real backend behavior"
+  ],
+  "assertions": {
+    "operatorInitiallyCollapsed": true,
+    "awaitingPrepareEnabled": true,
+    "awaitingPrepareExcludesExecute": true,
+    "readyExecuteEnabled": true,
+    "readyExcludesPrepare": true,
+    "workingOverrideAbsent": true,
+    "closedOverrideAbsent": true,
+    "reportedOverrideAbsent": true,
+    "prepareOfflineNativeDisabled": true,
+    "executeOfflineNativeDisabled": true,
+    "diagnosticNativeDisabled": true,
+    "diagnosticReasonAssociated": true,
+    "mismatchNativeDisabled": true,
+    "mismatchReasonAssociated": true,
+    "noConsumerMutations": true,
+    "noTerminalCallbacks": true,
+    "allCapturesFenced": true
+  },
+  "limitations": [
+    "Stage proof changes only w5 Run.stage using approved standalone temporary DTO driver; task lane, existing plans, successful Result and runtime Done are deliberately retained, not an asserted lifecycle progression.",
+    "Guard proof renders independent review-result diagnostic and run-assignment-mismatch DTOs. Existing report was insufficient for native disabled semantics, so only those semantics were supplemented.",
+    "No override arming, grant confirmation, acceptance click or backend/native operation occurred."
+  ],
+  "cleanup": {
+    "ownTabClosed": true,
+    "ownServerStopped": true,
+    "temporarySourceAndConfigRetainedAsProof": true
+  }
+}

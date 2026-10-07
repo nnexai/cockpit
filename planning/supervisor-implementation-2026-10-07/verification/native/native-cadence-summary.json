@@ -1,0 +1,107 @@
+{
+  "outcome": "passed affected native Supervisor cadence scenario",
+  "quiet_ready": true,
+  "leftover_owned_running_processes": [],
+  "native_process": {
+    "pid": 29597,
+    "exe": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/frozen-bin/cockpit-tauri",
+    "sha256": "151ded8c3749be09a1712dd9a93e8a364344f645a34b032a2d6cbf9056a993e4",
+    "start_ticks": "26525184",
+    "cli_executable": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/frozen-bin/cockpit",
+    "extension": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/source/integrations/omp/cockpit-orchestration.ts"
+  },
+  "native_origin": {
+    "origin": "tauri://localhost",
+    "href": "tauri://localhost",
+    "protocol": "tauri:",
+    "hostname": "localhost"
+  },
+  "loaded_embedded_assets": {
+    "origin": "tauri://localhost",
+    "ok": true,
+    "assets": [
+      {
+        "path": "assets/index-BKVHZ90g.js",
+        "bytes": 2616370,
+        "url": "tauri://localhost/assets/index-BKVHZ90g.js",
+        "sha256": "44f40b3f00368f5aa68ef8c042f42ff8ff0e9e9499b2c7562f54862a8049cbac"
+      },
+      {
+        "path": "assets/index-CQkiGs6e.css",
+        "bytes": 234606,
+        "url": "tauri://localhost/assets/index-CQkiGs6e.css",
+        "sha256": "83cefe178197fed46d367c1e9e7e4604e6564b0903a9af6e71a5f372c80d94a0"
+      }
+    ]
+  },
+  "fixture": "/tmp/cpol-vi26eqaa",
+  "root_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+  "bound_omp_session": "01a11594-ce57-7479-aeb1-39979b8cd16b",
+  "runtime_only_status_transitions": [
+    {
+      "revision": 19,
+      "before": "working",
+      "after": "done",
+      "elapsed_ms": 5021
+    },
+    {
+      "revision": 23,
+      "before": "working",
+      "after": "done",
+      "elapsed_ms": 5010
+    }
+  ],
+  "same_revision_refresh_intervals_ms": [
+    5009,
+    5012,
+    5013
+  ],
+  "durable_immediate": {
+    "mutation_fulfilled_at_ms": 80326,
+    "snapshot_fulfilled_at_ms": 80434,
+    "delay_ms": 108,
+    "mutation_revision": 20,
+    "snapshot_revision": 20,
+    "source": "real native UI Answer + actual Tauri callbacks"
+  },
+  "actual_pending_ui_surface_count": 2,
+  "hide_reopen_logical_state_unchanged": true,
+  "auth_config_identity_unchanged": true,
+  "auth_reference_readonly_enforced": false,
+  "rendering": "default, no GDK_GL/WebKit disable flags exported; no software fallback",
+  "failed_native_action": "not intentionally forced; no rejected native mutation observed; synthetic browser guard tests are separate evidence",
+  "screenshot": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/actual-native-supervisor-graph-draft.png",
+  "cleanup": [
+    {
+      "name": "webdriver",
+      "pid": 29592,
+      "returncode": -15
+    },
+    {
+      "name": "compositor",
+      "pid": 29452,
+      "returncode": 0
+    },
+    {
+      "fixture_stop_returncode": 0,
+      "output": "Stopped matching fixture processes; evidence retained at /tmp/cpol-vi26eqaa\n"
+    }
+  ],
+  "model_cleanup": [
+    {
+      "pid": 39742,
+      "start_ticks": 26527779,
+      "pgid": 39742,
+      "exe": "/home/linuxbrew/.linuxbrew/Cellar/omp/18.7.0/bin/omp",
+      "session_id": "polish-vi26eqaa",
+      "root_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+      "already_exited": true
+    }
+  ],
+  "qualification": "Raw reopen equality differed only in transient React textarea DOM IDs; logical draft/selection/view/scroll state preserved from the already-observed run. No CPU measurement or final all-checks claim.",
+  "manifest_identity_matches": {
+    "host": true,
+    "native": true,
+    "extension": true
+  }
+}

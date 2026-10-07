@@ -1,0 +1,28 @@
+{
+  "old_space_returncode": 2,
+  "old_space_stdout": "{\"error\":{\"code\":\"notes_unbound\",\"message\":\"This Space has no Notes association; explicitly create or attach Notes\"}}\n",
+  "old_space_stderr": "error: notes_unbound: This Space has no Notes association; explicitly create or attach Notes\n",
+  "new_space": {
+    "notes_id": "963fae66-b644-44dc-b116-eff00eac3fae",
+    "changed": false,
+    "result": {
+      "kind": "target",
+      "info": {
+        "notes_id": "963fae66-b644-44dc-b116-eff00eac3fae",
+        "folder": "/tmp/cpol-g32vk7wo/data/cockpit/notes/963fae66-b644-44dc-b116-eff00eac3fae",
+        "space": {
+          "session_id": "polish-g32vk7wo",
+          "space_id": "w4",
+          "label": "Transfer target"
+        },
+        "change_tokens": {
+          "scratchpad": "sha256:5ad38304b535c2987dbd24657c1a11b884984ff600d9f389deb0d4e634fee792",
+          "todos": "sha256:56642e095672fd751981e2fbad9628f52d9d31e1ac93b148f823b219f32acc0e",
+          "decisions": "absent",
+          "comments": "absent"
+        }
+      }
+    }
+  },
+  "hashes_unchanged": true
+}

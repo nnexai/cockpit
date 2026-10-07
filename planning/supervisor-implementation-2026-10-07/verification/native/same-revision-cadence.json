@@ -1,0 +1,137 @@
+{
+  "provenance": {
+    "source": "/tmp/supervisor-native-cadence-smoke-21cd-evidence/same-revision-cadence.json",
+    "qualification": "seconds, all pairs and all bounded native_snapshots retained unchanged. High-volume actual_surface_changes instrumentation omitted; mounted-surface transitions are retained separately."
+  },
+  "seconds": 16,
+  "pairs": [
+    {
+      "from_at": 91637,
+      "to_at": 96646,
+      "elapsed_ms": 5009,
+      "revision": 23,
+      "same_revision": true,
+      "same_tasks_token": true,
+      "runtime_changed": true,
+      "observed_at_changed": true
+    },
+    {
+      "from_at": 96646,
+      "to_at": 101658,
+      "elapsed_ms": 5012,
+      "revision": 23,
+      "same_revision": true,
+      "same_tasks_token": true,
+      "runtime_changed": true,
+      "observed_at_changed": true
+    },
+    {
+      "from_at": 101658,
+      "to_at": 106671,
+      "elapsed_ms": 5013,
+      "revision": 23,
+      "same_revision": true,
+      "same_tasks_token": true,
+      "runtime_changed": true,
+      "observed_at_changed": true
+    }
+  ],
+  "native_snapshots": [
+    {
+      "at": 91637,
+      "revision": 23,
+      "tasks_token": "c5df5576e3a8e0901bf8401690a6724c60310f755b827aa0fc6e2723907fc929",
+      "runtime": {
+        "observed_at": "2026-10-07T08:58:21.814958485Z",
+        "runs": [
+          {
+            "workspace_label": "Polish sample",
+            "tab_id": "w1:t2",
+            "pane_id": "w1:p2",
+            "presence": "present",
+            "workspace_id": "w1",
+            "agent_status": "done",
+            "actual_omp": true,
+            "tab_label": "ck-0af6bcc9-1-1",
+            "run_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+            "state_changed_at": null
+          }
+        ],
+        "status": "fresh",
+        "endpoint_identity": "unix-socket:/tmp/cpol-vi26eqaa/config/herdr/sessions/polish-vi26eqaa/herdr.sock:pid=29360:uid=1000:gid=1000:start=26525135"
+      }
+    },
+    {
+      "at": 96646,
+      "revision": 23,
+      "tasks_token": "c5df5576e3a8e0901bf8401690a6724c60310f755b827aa0fc6e2723907fc929",
+      "runtime": {
+        "observed_at": "2026-10-07T08:58:26.82447888Z",
+        "runs": [
+          {
+            "workspace_label": "Polish sample",
+            "tab_id": "w1:t2",
+            "pane_id": "w1:p2",
+            "presence": "present",
+            "workspace_id": "w1",
+            "agent_status": "done",
+            "actual_omp": true,
+            "tab_label": "ck-0af6bcc9-1-1",
+            "run_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+            "state_changed_at": null
+          }
+        ],
+        "status": "fresh",
+        "endpoint_identity": "unix-socket:/tmp/cpol-vi26eqaa/config/herdr/sessions/polish-vi26eqaa/herdr.sock:pid=29360:uid=1000:gid=1000:start=26525135"
+      }
+    },
+    {
+      "at": 101658,
+      "revision": 23,
+      "tasks_token": "c5df5576e3a8e0901bf8401690a6724c60310f755b827aa0fc6e2723907fc929",
+      "runtime": {
+        "observed_at": "2026-10-07T08:58:31.83569753Z",
+        "runs": [
+          {
+            "workspace_label": "Polish sample",
+            "tab_id": "w1:t2",
+            "pane_id": "w1:p2",
+            "presence": "present",
+            "workspace_id": "w1",
+            "agent_status": "done",
+            "actual_omp": true,
+            "tab_label": "ck-0af6bcc9-1-1",
+            "run_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+            "state_changed_at": null
+          }
+        ],
+        "status": "fresh",
+        "endpoint_identity": "unix-socket:/tmp/cpol-vi26eqaa/config/herdr/sessions/polish-vi26eqaa/herdr.sock:pid=29360:uid=1000:gid=1000:start=26525135"
+      }
+    },
+    {
+      "at": 106671,
+      "revision": 23,
+      "tasks_token": "c5df5576e3a8e0901bf8401690a6724c60310f755b827aa0fc6e2723907fc929",
+      "runtime": {
+        "observed_at": "2026-10-07T08:58:36.84910808Z",
+        "runs": [
+          {
+            "workspace_label": "Polish sample",
+            "tab_id": "w1:t2",
+            "pane_id": "w1:p2",
+            "presence": "present",
+            "workspace_id": "w1",
+            "agent_status": "done",
+            "actual_omp": true,
+            "tab_label": "ck-0af6bcc9-1-1",
+            "run_id": "0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+            "state_changed_at": null
+          }
+        ],
+        "status": "fresh",
+        "endpoint_identity": "unix-socket:/tmp/cpol-vi26eqaa/config/herdr/sessions/polish-vi26eqaa/herdr.sock:pid=29360:uid=1000:gid=1000:start=26525135"
+      }
+    }
+  ]
+}

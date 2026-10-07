@@ -1,0 +1,232 @@
+{
+  "surfaces": [
+    {
+      "drafts": [
+        {
+          "id": "_r_8_",
+          "value": "Fixture-only native UI smoke. Create one canonical task titled Native cadence smoke marker 21cd and leave it unchecked. Do not delegate, touch providers, or access repositories. Report needs-input with summary exactly Confirm fixture-only smoke, then wait for my Answer.",
+          "readOnly": true
+        },
+        {
+          "id": "_r_a_",
+          "value": "",
+          "readOnly": false
+        }
+      ],
+      "view": "graph",
+      "at": 45905,
+      "graph": [
+        {
+          "text": "Supervisor\nworking\nHerdr \u00b7 Polish sample",
+          "id": "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+          "label": "Supervisor, Supervisor, working, Herdr \u00b7 Polish sample"
+        }
+      ],
+      "text": "Supervisor\nStart agent\nStart options\u2026\nSupervisor\nReady for a task\n1 agents observed \u00b7 10:57:31 AM\nOpen terminal\nTasks 0\nGraph 1\nAttention \u00b7 0\nSpace\nAgents \u00b7 1 connected \u00b7 0 subagents \u00b7 0 tasks\nSubagents\n\nNo worker agents yet\n\nSupervisor\nSupervisor\nworking\nHerdr \u00b7 Polish sample\nSupervisor\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSending\u2026\n\nWait for the current operation.\n\nDurable note\nSave note\n\nWait for the current operation.\n\nOperator intervention \u2014 normally handled by the supervisor\nGraph view \u00b7 1 agents \u00b7 0 tasks",
+      "hidden": false,
+      "buttons": [
+        {
+          "label": "",
+          "disabled": false
+        },
+        {
+          "label": "",
+          "disabled": false
+        },
+        {
+          "label": "Start agent",
+          "disabled": true
+        },
+        {
+          "label": "Start options\u2026",
+          "disabled": true
+        },
+        {
+          "label": "",
+          "disabled": false
+        },
+        {
+          "label": "Open terminal",
+          "disabled": true
+        },
+        {
+          "label": "Tasks 0",
+          "disabled": false
+        },
+        {
+          "label": "Graph 1",
+          "disabled": false
+        },
+        {
+          "label": "Attention \u00b7 0",
+          "disabled": false
+        },
+        {
+          "label": "Supervisor\nworking\nHerdr \u00b7 Polish sample",
+          "disabled": false
+        },
+        {
+          "label": "",
+          "disabled": false
+        },
+        {
+          "label": "Overview",
+          "disabled": false
+        },
+        {
+          "label": "Activity",
+          "disabled": false
+        },
+        {
+          "label": "Actions",
+          "disabled": false
+        },
+        {
+          "label": "Open terminal",
+          "disabled": true
+        },
+        {
+          "label": "Sending\u2026",
+          "disabled": true
+        },
+        {
+          "label": "Save note",
+          "disabled": true
+        },
+        {
+          "label": "",
+          "disabled": true
+        }
+      ],
+      "focus": "Sending\u2026"
+    },
+    {
+      "drafts": [
+        {
+          "id": "_r_d_",
+          "value": "Confirmed fixture-only smoke. Keep the canonical task unchecked. Do not use any tools, reports, delegates, providers or repository access. Reply only: fixture-only smoke confirmed.",
+          "readOnly": true
+        },
+        {
+          "id": "_r_8_",
+          "value": "",
+          "readOnly": false
+        },
+        {
+          "id": "_r_a_",
+          "value": "",
+          "readOnly": false
+        }
+      ],
+      "view": "graph",
+      "at": 80325,
+      "graph": [
+        {
+          "text": "Supervisor\n?\nDecide\ndone\nHerdr \u00b7 Polish sample",
+          "id": "run:0af6bcc9-5ea7-4cfc-aea5-c09f8df793d6",
+          "label": "Supervisor, Supervisor, done, Herdr \u00b7 Polish sample, Decide"
+        },
+        {
+          "text": "Native cadence smoke marker 21cd\nQueued\nnot assigned",
+          "id": "task:fd65f0f2-b920-46fd-951e-43ff819e2cd2",
+          "label": "Native cadence smoke marker 21cd, Task, Queued, not assigned"
+        }
+      ],
+      "text": "Supervisor\nStart agent\nStart options\u2026\nSupervisor\nManaging tasks\n1 agents observed \u00b7 10:58:09 AM\n1 needs you\nDecide\nNeeds your answer \u00b7 Supervisor\njust now\n\nConfirm fixture-only smoke\n\nAnswer\nSending\u2026\nShow in Graph\nTasks 1\nGraph 2\nAttention \u00b7 1\nSpace\nAgents \u00b7 1 connected \u00b7 0 subagents \u00b7 1 tasks\nSubagents\n\nNo worker agents yet\n\nSupervisorTasks\nSupervisor\n?\nDecide\ndone\nHerdr \u00b7 Polish sample\nNative cadence smoke marker 21cd\nQueued\nnot assigned\nSupervisor\nOverview\nActivity\nActions\nRoutine\nOpen terminal\nFollow-up to agent\nSend follow-up\nFollow-up sent. Waiting for the agent.\n\nWait for the current operation.\n\nDurable note\nSave note\n\nWait for the current operation.\n\nOperator intervention \u2014 normally handled by the supervisor\nGraph view \u00b7 1 agents \u00b7 0 tasks",
+      "hidden": false,
+      "buttons": [
+        {
+          "label": "",
+          "disabled": false
+        },
+        {
+          "label": "",
+          "disabled": false
+        },
+        {
+          "label": "Start agent",
+          "disabled": true
+        },
+        {
+          "label": "Start options\u2026",
+          "disabled": true
+        },
+        {
+          "label": "",
+          "disabled": false
+        },
+        {
+          "label": "1 needs you",
+          "disabled": false
+        },
+        {
+          "label": "Decide\nNeeds your answer \u00b7 Supervisor\njust now",
+          "disabled": false
+        },
+        {
+          "label": "Sending\u2026",
+          "disabled": true
+        },
+        {
+          "label": "Show in Graph",
+          "disabled": false
+        },
+        {
+          "label": "Tasks 1",
+          "disabled": false
+        },
+        {
+          "label": "Graph 2",
+          "disabled": false
+        },
+        {
+          "label": "Attention \u00b7 1",
+          "disabled": false
+        },
+        {
+          "label": "Supervisor\n?\nDecide\ndone\nHerdr \u00b7 Polish sample",
+          "disabled": false
+        },
+        {
+          "label": "Native cadence smoke marker 21cd\nQueued\nnot assigned",
+          "disabled": false
+        },
+        {
+          "label": "",
+          "disabled": false
+        },
+        {
+          "label": "Overview",
+          "disabled": false
+        },
+        {
+          "label": "Activity",
+          "disabled": false
+        },
+        {
+          "label": "Actions",
+          "disabled": false
+        },
+        {
+          "label": "Open terminal",
+          "disabled": true
+        },
+        {
+          "label": "Send follow-up",
+          "disabled": true
+        },
+        {
+          "label": "Save note",
+          "disabled": true
+        },
+        {
+          "label": "",
+          "disabled": true
+        }
+      ],
+      "focus": "Sending\u2026"
+    }
+  ],
+  "rejected_callbacks": [],
+  "qualification": "Actual pending UI observed; no deliberately forced native action failure."
+}

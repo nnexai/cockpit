@@ -1,0 +1,439 @@
+{
+  "evidenceClass": "Actual source Board under enabled Attention filter; computed text CSS colors composited over every ancestor background through browser canvas sRGB, all opacity1/no filters/no background images",
+  "observations": {
+    "viewport": [
+      1440,
+      1000
+    ],
+    "fixture": "topology-full",
+    "epoch": 0,
+    "dimmedCards": 7,
+    "records": [
+      {
+        "id": "t-new",
+        "kind": "title",
+        "text": "Draft release notes",
+        "foreground": "rgb(205, 214, 244)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 12.212173743790862,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-new",
+        "kind": "status",
+        "text": "Queued · not assigned",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-closed-worker",
+        "kind": "title",
+        "text": "Previous worker closed",
+        "foreground": "rgb(205, 214, 244)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 12.212173743790862,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-closed-worker",
+        "kind": "status",
+        "text": "Tracking closed",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-closed-worker",
+        "kind": "worker",
+        "text": "Earlier worker",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-search",
+        "kind": "title",
+        "text": "Improve file search",
+        "foreground": "rgb(205, 214, 244)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 12.212173743790862,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-search",
+        "kind": "status",
+        "text": "Preparing",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-search",
+        "kind": "worker",
+        "text": "Worker 3",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-search",
+        "kind": "reported",
+        "text": "reported none yet",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-search",
+        "kind": "observed",
+        "text": "observed  working",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-map",
+        "kind": "title",
+        "text": "Map sidebar",
+        "foreground": "rgb(205, 214, 244)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 12.212173743790862,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-map",
+        "kind": "worker",
+        "text": "Worker 2",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-map",
+        "kind": "subagents",
+        "text": "+4 subagents",
+        "foreground": "rgb(166, 173, 200)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 7.9331547129384985,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-map",
+        "kind": "reported",
+        "text": "reported none yet",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-map",
+        "kind": "observed",
+        "text": "observed  working",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-nested",
+        "kind": "title",
+        "text": "Nested work",
+        "foreground": "rgb(205, 214, 244)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 12.212173743790862,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-nested",
+        "kind": "worker",
+        "text": "Nested worker",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-nested",
+        "kind": "reported",
+        "text": "reported none yet",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-nested",
+        "kind": "observed",
+        "text": "observed  working",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-review",
+        "kind": "title",
+        "text": "Review migration",
+        "foreground": "rgb(205, 214, 244)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 12.212173743790862,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-review",
+        "kind": "status",
+        "text": "Reviewing result",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-review",
+        "kind": "worker",
+        "text": "Worker 5",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-review",
+        "kind": "reported",
+        "text": "reported just now",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-review",
+        "kind": "observed",
+        "text": "observed  done",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-done",
+        "kind": "title",
+        "text": "Earlier accepted work",
+        "foreground": "rgb(205, 214, 244)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 12.212173743790862,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      },
+      {
+        "id": "t-done",
+        "kind": "status",
+        "text": "Marked complete in task file",
+        "foreground": "rgb(186, 194, 222)",
+        "background": [
+          18,
+          25,
+          35,
+          1
+        ],
+        "ratio": 9.973846807647334,
+        "allAncestorOpacityOne": true,
+        "nontrivialFilters": [],
+        "backgroundImages": []
+      }
+    ],
+    "minimums": {
+      "title": 12.212173743790862,
+      "status": 9.973846807647334,
+      "worker": 9.973846807647334,
+      "subagents": 7.9331547129384985,
+      "reported": 9.973846807647334,
+      "observed": 9.973846807647334,
+      "location": null
+    }
+  }
+}

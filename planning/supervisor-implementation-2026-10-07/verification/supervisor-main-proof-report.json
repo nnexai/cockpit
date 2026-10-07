@@ -1,0 +1,567 @@
+{
+  "evidenceClass": "Actual source SupervisorView in isolated Vite Chromium; independent synthetic DTOs, not native retirement proof",
+  "checks": {
+    "answer": {
+      "actions": [
+        {
+          "request": {
+            "session_id": "session",
+            "expected_revision": null,
+            "action": {
+              "action": "message_send",
+              "message_id": "9d096d49-8b7a-45df-b602-e77db2762512",
+              "to_run_id": "root",
+              "kind": "answer",
+              "text": "Prioritize migration review; preserve exact revision"
+            }
+          },
+          "outcome": "confirmed",
+          "applied": "answer",
+          "at": 130809.79999998212
+        }
+      ],
+      "focus": {
+        "tag": "BUTTON",
+        "id": "",
+        "rowId": "t-audit",
+        "ariaLabel": "Audit shortcuts, Reviewing result, Worker 1, Recover",
+        "text": "Audit shortcutsRecoverReviewing resultWorker 1reported just nowobserved  missingCompiler rejected the migration. Existing files are unchanged.",
+        "role": null,
+        "classes": "supervisor-task-toggle supervisor-card-toggle",
+        "value": null
+      },
+      "decideRows": 0
+    },
+    "unknownAnswer": {
+      "epochBefore": 3,
+      "epochAfter": 3,
+      "actionsBefore": [
+        {
+          "request": {
+            "session_id": "session",
+            "expected_revision": null,
+            "action": {
+              "action": "message_send",
+              "message_id": "fd6847b2-78bb-45fb-89f3-ac37b62300b2",
+              "to_run_id": "root",
+              "kind": "answer",
+              "text": "Retained unknown answer"
+            }
+          },
+          "outcome": "unknown",
+          "applied": "none",
+          "at": 594687.5
+        }
+      ],
+      "actionsAfter": [
+        {
+          "request": {
+            "session_id": "session",
+            "expected_revision": null,
+            "action": {
+              "action": "message_send",
+              "message_id": "fd6847b2-78bb-45fb-89f3-ac37b62300b2",
+              "to_run_id": "root",
+              "kind": "answer",
+              "text": "Retained unknown answer"
+            }
+          },
+          "outcome": "unknown",
+          "applied": "none",
+          "at": 594687.5
+        }
+      ],
+      "draft": "Retained unknown answer"
+    },
+    "rootViewMemory": {
+      "otherFirst": "tasks",
+      "returnRoot": "graph"
+    },
+    "narrowTasks": {
+      "viewport": {
+        "width": 360,
+        "height": 640
+      },
+      "overflow": false,
+      "summaryVisible": true,
+      "lanes": [
+        {
+          "text": "Queued3",
+          "width": 346,
+          "left": 7,
+          "right": 353
+        },
+        {
+          "text": "Preparing1",
+          "width": 346,
+          "left": 7,
+          "right": 353
+        },
+        {
+          "text": "Ready1",
+          "width": 346,
+          "left": 7,
+          "right": 353
+        },
+        {
+          "text": "Working3",
+          "width": 346,
+          "left": 7,
+          "right": 353
+        },
+        {
+          "text": "Review1",
+          "width": 346,
+          "left": 7,
+          "right": 353
+        },
+        {
+          "text": "Done1",
+          "width": 346,
+          "left": 7,
+          "right": 353
+        }
+      ],
+      "initialView": "tasks",
+      "counterEscape": {
+        "focus": {
+          "tag": "BUTTON",
+          "id": "",
+          "rowId": null,
+          "ariaLabel": null,
+          "text": "1 needs you",
+          "role": null,
+          "classes": "supervisor-summary-counter is-decide",
+          "value": null
+        },
+        "queueOverlay": 0
+      }
+    },
+    "offline": {
+      "bannerCount": 1,
+      "banner": "Connection lost · showing saved tasks · agent may still be running",
+      "cardWords": [
+        {
+          "text": "Audit shortcutsWorker 1reported none yetobserved  unobserved",
+          "observed": "observed  unobserved"
+        },
+        {
+          "text": "Draft release notesQueued · not assigned"
+        },
+        {
+          "text": "Previous worker closedTracking closedEarlier worker"
+        },
+        {
+          "text": "Plan release checklistNoticeWorker 6reported none yetobserved  unobservedOther project",
+          "observed": "observed  unobserved"
+        },
+        {
+          "text": "Improve file searchPreparingWorker 3reported none yetobserved  unobserved",
+          "observed": "observed  unobserved"
+        },
+        {
+          "text": "Map sidebarWorker 2+4 subagentsreported none yetobserved  unobserved",
+          "observed": "observed  unobserved"
+        },
+        {
+          "text": "Document supervisorRecoverWorker 4+1 subagentsreported none yetobserved  unobserved",
+          "observed": "observed  unobserved"
+        },
+        {
+          "text": "Nested workNested workerreported none yetobserved  unobserved",
+          "observed": "observed  unobserved"
+        },
+        {
+          "text": "Review migrationReviewing resultWorker 5reported just nowobserved  unobserved",
+          "observed": "observed  unobserved"
+        },
+        {
+          "text": "Earlier accepted workMarked complete in task file"
+        }
+      ],
+      "savedReportsPerCard": 0,
+      "startDisabled": false,
+      "viewport": {
+        "width": 360,
+        "height": 640
+      }
+    },
+    "archive": {
+      "text": "Atlas supervisor\nUpdated 10/7/2026, 2:00:00 PM\n10 tasks\n10 descendants still open\nView Atlas supervisor tasks and history",
+      "snapshotRequests": [
+        {
+          "session_id": "session",
+          "root_id": "root"
+        },
+        {
+          "session_id": "session",
+          "root_id": null
+        },
+        {
+          "session_id": "session",
+          "root_id": "root"
+        }
+      ],
+      "actions": []
+    },
+    "initialLoadFailure": {
+      "startDisabled": true,
+      "body": "SupervisorStart agentStart options…Could not load SupervisorYour terminals are unchanged. The Supervisor connection could not be established.Retry load"
+    },
+    "transportOffline": {
+      "startDisabled": true,
+      "banners": 1,
+      "banner": "Connection lost · showing saved tasks · agent may still be running",
+      "unobserved": [
+        "observed  unobserved",
+        "observed  unobserved",
+        "observed  unobserved",
+        "observed  unobserved",
+        "observed  unobserved",
+        "observed  unobserved",
+        "observed  unobserved"
+      ],
+      "bodyOverflow": false,
+      "epochBefore": 9,
+      "epochAfter": 9
+    },
+    "naming": {
+      "activityButton": "Activity",
+      "region": "Activity",
+      "heading": "Activity",
+      "hide": "Hide Supervisor",
+      "text": "Activity\nActivity\nWednesday, Oct 7, 2026\nAtlas supervisor\nPreparation authorized · Atlas supervisor · Worker 5\nShow task\njust now\n\nAn exact preparation plan was authorized for Worker 5. Actor, actual OMP session and exact revision are retained in Diagnostics.\n\nAtlas supervisor\nExecution authorized · Atlas supervisor · Worker 5\nShow task\njust now\n\nAn exact work plan was authorized for Worker 5. Actor, actual OMP session and exact revision are retained in Diagnostics.",
+      "focus": "Close activity panel",
+      "overflow": false
+    },
+    "diagnostics": {
+      "text": "Diagnostics\nDiagnostics\n\nLaunch receipts and saved reports are not current process proof.\n\nTask source summary\nCanonical task source\t/synthetic-only/root/TASKS.md Copy task path\nBoard diagnostics\tNo board diagnostics\nUnidentified items\t0\nRun summary\nRun\tDispatch step\tObservation\tBinding\tLast delivery stage\nAtlas supervisor\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nWorker 1\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nWorker 2\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nWorker 3\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nWorker 4\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nWorker 5\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nWorker 6\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nNested worker\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nTaskless helper\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nCycle A\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nCycle B\tlaunched\tSaved · present · actual OMP yes · working\tBound session yes\tNo delivery record\nEarlier worker\tlaunched\tUnobserved\tBound session yes\tNo delivery record\n\nStored ≠ woken ≠ read ≠ acked.\n\nAtlas supervisor · exact records\nWorker 1 · exact records\nWorker 2 · exact records\nWorker 3 · exact records\nWorker 4 · exact records\nWorker 5 · exact records\nWorker 6 · exact records\nNested worker · exact records\nTaskless helper · exact records\nCycle A · exact records\nCycle B · exact records\nEarlier worker · exact records\nRuntime and transaction records",
+      "rawDisclosures": [
+        {
+          "label": "Atlas supervisor · exact records",
+          "open": false
+        },
+        {
+          "label": "Worker 1 · exact records",
+          "open": false
+        },
+        {
+          "label": "Worker 2 · exact records",
+          "open": false
+        },
+        {
+          "label": "Worker 3 · exact records",
+          "open": false
+        },
+        {
+          "label": "Worker 4 · exact records",
+          "open": false
+        },
+        {
+          "label": "Worker 5 · exact records",
+          "open": false
+        },
+        {
+          "label": "Worker 6 · exact records",
+          "open": false
+        },
+        {
+          "label": "Nested worker · exact records",
+          "open": false
+        },
+        {
+          "label": "Taskless helper · exact records",
+          "open": false
+        },
+        {
+          "label": "Cycle A · exact records",
+          "open": false
+        },
+        {
+          "label": "Cycle B · exact records",
+          "open": false
+        },
+        {
+          "label": "Earlier worker · exact records",
+          "open": false
+        },
+        {
+          "label": "Runtime and transaction records",
+          "open": false
+        }
+      ],
+      "bodyOverflow": false
+    },
+    "wideActivityFocus": {
+      "viewport": [
+        1440,
+        1000
+      ],
+      "focus": "Activity",
+      "region": "Activity",
+      "overflow": false
+    },
+    "taskFirst": {
+      "viewport": [
+        1440,
+        1000
+      ],
+      "tasksPressed": "true",
+      "graphVisible": true,
+      "graphCanvas": false,
+      "text": "Supervisor\nStart agent\nStart options…\nAtlas supervisor\nConnection lost\nAgents · unobserved\n1 recover\n1 notice\nConnection lost · showing saved tasks · agent may still be running\nRecover\nBlocked without a question · Document supervisor\nCheck connection\njust now\nNotice\nIdle without a Result · Plan release checklist\njust now\nTasks 9\nGraph 25\nAttention · 2\nSpace\nAll Spaces\nProject\nAgents · unobserved\nWorker 4\nWorker 6\nAtlas supervisor\nWorker 1\nWorker 2\nNested worker\n+5 more\n+5 subagents\nGraph\nQueued\n3\nAudit shortcuts\nWorker 1\nreported none yet\nobserved\nunobserved\nDraft release notes\nQueued · not assigned\nPrevious worker closed\nTracking closed\nEarlier worker\nPreparing\n1\nPlan release checklist\nNotice\nWorker 6\nreported none yet\nobserved\nunobserved\nReady\n1\nImprove file search\nPreparing\nWorker 3\nreported none yet\nobserved\nunobserved\nWorking\n3\nMap sidebar\nWorker 2\n+4 subagents\nreported none yet\nobs"
+    },
+    "tiering": {
+      "blocked": {
+        "id": "t-doc",
+        "text": "Document supervisor\nRecover\nWorker 4\n+1 subagents\nreported none yet\nobserved\nworking",
+        "classes": "supervisor-task-toggle supervisor-card-toggle",
+        "opacity": "1",
+        "dimmed": false
+      },
+      "review": {
+        "id": "t-review",
+        "text": "Review migration\nReviewing result\nWorker 5\nreported\njust now\nobserved\nworking",
+        "classes": "supervisor-task-toggle supervisor-card-toggle",
+        "opacity": "1"
+      },
+      "queue": [
+        {
+          "id": "recover:run:w4",
+          "text": "Recover\nBlocked without a question · Document supervisor\nOpen terminal\njust now"
+        },
+        {
+          "id": "notice:run:w6",
+          "text": "Notice\nIdle without a Result · Plan release checklist\njust now"
+        }
+      ],
+      "counters": [
+        "1 recover",
+        "1 notice"
+      ],
+      "filters": [
+        {
+          "text": "",
+          "pressed": "false"
+        },
+        {
+          "text": "",
+          "pressed": "false"
+        },
+        {
+          "text": "Tasks 9",
+          "pressed": "true"
+        },
+        {
+          "text": "Graph 25",
+          "pressed": "false"
+        },
+        {
+          "text": "Attention · 2",
+          "pressed": "true"
+        }
+      ]
+    },
+    "taskFirstHealthy": {
+      "viewport": [
+        1440,
+        1000
+      ],
+      "tasksPressed": "true",
+      "graphControl": true,
+      "graphCanvas": false,
+      "strip": {
+        "text": "Agents · 11 observed\nWorker 4\nWorker 6\nAtlas supervisor\nWorker 1\nWorker 2\nNested worker\nWorker 3\nWorker 5\nTaskless helper\n+2 more\n+5 subagents\nGraph",
+        "height": 38.59375,
+        "top": 224,
+        "subagents": "+5 subagents",
+        "graph": "Graph",
+        "visibleChipRects": [
+          {
+            "label": "Worker 4, working, Recover",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "Worker 6, working, Notice",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "Atlas supervisor, working",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "Worker 1, working",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "Worker 2, working",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "Nested worker, working",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "Worker 3, working",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "Worker 5, working",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "Taskless helper, working",
+            "top": 229.796875,
+            "height": 26
+          },
+          {
+            "label": "+2 more",
+            "top": 228,
+            "height": 29.59375
+          }
+        ]
+      }
+    },
+    "screenshots": [
+      {
+        "path": "/tmp/supervisor-main-proof-v2-tasks-final-1440.png",
+        "viewportBefore": {
+          "width": 1440,
+          "height": 1000,
+          "devicePixelRatio": 1.25
+        },
+        "viewportAfter": {
+          "width": 1440,
+          "height": 1000,
+          "devicePixelRatio": 1.25
+        },
+        "viewportPreserved": true
+      },
+      {
+        "path": "/tmp/supervisor-main-proof-v2-queue-after-1440.png",
+        "viewportBefore": {
+          "width": 1440,
+          "height": 900,
+          "devicePixelRatio": 1.25
+        },
+        "viewportAfter": {
+          "width": 1440,
+          "height": 900,
+          "devicePixelRatio": 1.25
+        },
+        "viewportPreserved": true
+      },
+      {
+        "path": "/tmp/supervisor-main-proof-v2-queue-after-760.png",
+        "viewportBefore": {
+          "width": 760,
+          "height": 900,
+          "devicePixelRatio": 1.25
+        },
+        "viewportAfter": {
+          "width": 760,
+          "height": 900,
+          "devicePixelRatio": 1.25
+        },
+        "viewportPreserved": true
+      }
+    ]
+  },
+  "queueGeometry": [
+    {
+      "viewport": [
+        1440,
+        900
+      ],
+      "board": 460.609375,
+      "workarea": 876,
+      "half": 438,
+      "queue": 230.796875,
+      "expanded": 191.796875,
+      "expandedFits": true,
+      "screenshot": {
+        "path": "/tmp/supervisor-main-proof-v2-queue-after-1440.png",
+        "viewportBefore": {
+          "width": 1440,
+          "height": 900,
+          "devicePixelRatio": 1.25
+        },
+        "viewportAfter": {
+          "width": 1440,
+          "height": 900,
+          "devicePixelRatio": 1.25
+        },
+        "viewportPreserved": true
+      }
+    },
+    {
+      "viewport": [
+        760,
+        900
+      ],
+      "board": 460.609375,
+      "workarea": 876,
+      "half": 438,
+      "queue": 230.796875,
+      "expanded": 191.796875,
+      "expandedFits": true,
+      "screenshot": {
+        "path": "/tmp/supervisor-main-proof-v2-queue-after-760.png",
+        "viewportBefore": {
+          "width": 760,
+          "height": 900,
+          "devicePixelRatio": 1.25
+        },
+        "viewportAfter": {
+          "width": 760,
+          "height": 900,
+          "devicePixelRatio": 1.25
+        },
+        "viewportPreserved": true
+      }
+    }
+  ],
+  "realDisposableFocus": {
+    "baselineReceipt": {
+      "session_id": "polish-ojup1a3v",
+      "kind": "pane",
+      "target_id": "w1:p1",
+      "accepted": true
+    },
+    "before": {
+      "space": "w1",
+      "tab": "w1:t1",
+      "pane": "w1:p1"
+    },
+    "afterGraphSelection": {
+      "space": "w1",
+      "tab": "w1:t1",
+      "pane": "w1:p1"
+    },
+    "afterExplicitOpenTerminal": {
+      "space": "w1",
+      "tab": "w1:t2",
+      "pane": "w1:p2"
+    }
+  },
+  "tests": {
+    "command": "bun run typecheck && bun run test src/app/supervisor src/client/orchestrationProtocol.test.ts integrations/omp/cockpit-orchestration.test.ts",
+    "typecheck": "PASS",
+    "files": 17,
+    "tests": 307,
+    "status": "PASS"
+  },
+  "limits": [
+    "Native source-built cadence proof pending exact integrated immutable artifact",
+    "Actual retirement process shutdown remains lifecycle worker proof",
+    "No real provider writes, no existing Notes widget tab touched"
+  ]
+}

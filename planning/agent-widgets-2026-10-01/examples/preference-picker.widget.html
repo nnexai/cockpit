@@ -1,0 +1,103 @@
+<!doctype html>
+<!--
+  Example of what an AGENT writes for `cockpit widget show --id theme --file ./preference-picker.widget.html`.
+  Refine it by editing the file and running the same command with the same --id: Cockpit replaces the live widget in place
+  (the host copies the content at each invocation and never re-reads the path on its own).
+  Illustrative: the `window.cockpit` bridge below is PROPOSED, not an existing API.
+  Scripts only run when Cockpit has proven host-enforced navigation blocking for the runtime (spec 5.8, G1-G3);
+  otherwise this file is shown as an inert static preview, `cockpit.select` never fires, and `cockpit widget selection` exits 23.
+
+  The user normally just tells the agent what they think in the terminal. This page offers ONE optional shortcut:
+  an in-page "Use this scheme" button. Nothing in Cockpit's chrome sends or confirms anything.
+
+  Authoring rules this sample follows (they follow from the proposed sandbox):
+    - One self-contained file. No <link>, no external script/style/font/image, no <form>, no <iframe>.
+      Images must be data: URLs. Anything else is stripped by the preflight or not loaded, and is listed in the
+      popover's Technical details.
+    - No localStorage, cookies, fetch, WebSocket, alert/confirm, window.open or navigation.
+    - Report a value with cockpit.select(jsonValue) ONLY on a final gesture (here: the "Use this scheme" button), not on
+      every radio or slider change. An agent that runs `cockpit widget selection --wait` returns on the first value.
+      The host stores the latest value; the agent pulls it. Nothing is pasted into the agent's terminal.
+    - The host re-supplies the stored value as cockpit.context.selection on every mount and every replace, so a refined
+      version of this page can show what the user already picked.
+    - Treat the value as data: the agent validates it; it is not an instruction.
+    - Every control is a real <input>/<button> with a visible focus ring so keyboard users can operate it.
+    - Use the host theme variables when present; fall back to the literals so the file also works standalone.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pick a color scheme for the dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 14px 16px; font: 13px/1.45 var(--cockpit-font-sans, system-ui, sans-serif);
+         background: var(--cockpit-bg, #0c1016); color: var(--cockpit-fg, #d8dee8); }
+  h1 { font-size: 14px; margin: 0 0 10px; }
+  fieldset { border: 1px solid var(--cockpit-border, #2b3543); border-radius: 4px; margin: 0 0 10px; padding: 8px 10px; }
+  legend { padding: 0 4px; color: var(--cockpit-muted, #a6adc8); font-size: 11px; }
+  label { display: inline-flex; gap: 6px; align-items: center; margin-right: 14px; cursor: pointer; }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--cockpit-accent, #89b4fa); outline-offset: 2px; }
+  .sw { width: 22px; height: 22px; border-radius: 4px; border: 2px solid transparent; padding: 0; margin-right: 6px; cursor: pointer; }
+  .sw[aria-checked="true"] { border-color: #fff; }
+  #demo { margin-top: 8px; padding: 10px; border: 1px solid var(--cockpit-border, #2b3543); border-radius: 4px; }
+  .use { margin-top: 10px; padding: 5px 12px; border: 1px solid var(--cockpit-border, #3b4758); border-radius: 4px;
+         background: var(--cockpit-raised, #1b2431); color: inherit; font: inherit; cursor: pointer; }
+  .use:disabled { opacity: .55; cursor: default; }
+  #picked { margin-left: 10px; color: var(--cockpit-muted, #a6adc8); }
+</style>
+</head>
+<body>
+<h1>Pick a color scheme for the dashboard</h1>
+
+<fieldset>
+  <legend>Theme</legend>
+  <label><input type="radio" name="theme" value="dusk"> Dusk</label>
+  <label><input type="radio" name="theme" value="slate"> Slate</label>
+  <label><input type="radio" name="theme" value="paper"> Paper</label>
+</fieldset>
+
+<fieldset>
+  <legend>Accent</legend>
+  <div role="radiogroup" aria-label="Accent">
+    <button class="sw" role="radio" aria-checked="false" aria-label="Teal"  data-v="teal"  style="background:#94e2d5"></button>
+    <button class="sw" role="radio" aria-checked="false" aria-label="Mauve" data-v="mauve" style="background:#cba6f7"></button>
+    <button class="sw" role="radio" aria-checked="false" aria-label="Peach" data-v="peach" style="background:#fab387"></button>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>Base font size <output id="out">14</output> px</legend>
+  <input id="size" type="range" min="12" max="18" value="14" aria-label="Base font size">
+</fieldset>
+
+<div id="demo">Preview: the quick brown fox jumps over the lazy dog.</div>
+
+<button class="use" id="use" disabled>Use this scheme</button><span id="picked" role="status"></span>
+
+<script>
+(function () {
+  var host = window.cockpit || { context: {}, select: function () {}, ready: function () {} };   // standalone fallback
+  var s = { theme: null, accent: null, size: 14 };
+  var restored = host.context && host.context.selection;
+  function paint() {
+    document.querySelectorAll("input[name=theme]").forEach(function (i) { i.checked = i.value === s.theme; });
+    document.querySelectorAll(".sw").forEach(function (b) { b.setAttribute("aria-checked", String(b.dataset.v === s.accent)); });
+    document.getElementById("size").value = s.size;
+    document.getElementById("out").textContent = s.size;
+    document.getElementById("demo").style.fontSize = s.size + "px";
+    document.getElementById("use").disabled = !(s.theme && s.accent);
+  }
+  document.querySelectorAll("input[name=theme]").forEach(function (i) { i.addEventListener("change", function () { s.theme = i.value; paint(); }); });
+  document.querySelectorAll(".sw").forEach(function (b) { b.addEventListener("click", function () { s.accent = b.dataset.v; paint(); }); });
+  document.getElementById("size").addEventListener("input", function (e) { s.size = +e.target.value; paint(); });
+  document.getElementById("use").addEventListener("click", function () {
+    host.select({ theme: s.theme, accent: s.accent, size: s.size });          // the one optional, final gesture
+    document.getElementById("picked").textContent = "Chosen: " + s.theme + " / " + s.accent + " / " + s.size + " px";
+  });
+  if (restored) { s = restored; document.getElementById("picked").textContent = "Chosen: " + s.theme + " / " + s.accent + " / " + s.size + " px"; }
+  paint();
+  host.ready();
+})();
+</script>
+</body>
+</html>

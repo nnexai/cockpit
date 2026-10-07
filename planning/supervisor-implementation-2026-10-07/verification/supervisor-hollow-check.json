@@ -1,0 +1,15 @@
+{
+  "path": "src/app/sidebar/StateGlyph.tsx",
+  "sha256": "85282d88f750f36089a84a78f96f7fc648a429bc2b60f522c1f7d9d8fde0af66",
+  "command": "bun run typecheck && bun run test src/app/sidebar src/app/supervisor",
+  "typecheck": "PASS",
+  "vitest": {
+    "files": 16,
+    "tests": 198,
+    "result": "PASS",
+    "localStart": "08:34:01",
+    "durationSeconds": 2.18
+  },
+  "commandWallSeconds": 3.77,
+  "limits": "Affected existing consumer tests after glyph correction; actual appearance is proved separately by mounted browser consumers, not source/copy tests."
+}

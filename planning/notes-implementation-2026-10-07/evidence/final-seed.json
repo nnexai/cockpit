@@ -1,0 +1,208 @@
+{
+  "uuid": "fe8bb635-e5ae-4709-9e35-cbbd96dcdaa4",
+  "root": "/tmp/cpol-g32vk7wo/data/cockpit/notes",
+  "ids": {
+    "T1": "cm85y7b49j",
+    "T2": "s75cx4p80l",
+    "T3": "lkrpwm6tcv",
+    "T4": "wa8j9p8ovc",
+    "T5": "lkoxd53fnk"
+  },
+  "decisions": [
+    {
+      "notes_id": "fe8bb635-e5ae-4709-9e35-cbbd96dcdaa4",
+      "changed": true,
+      "result": {
+        "kind": "decision",
+        "decision": {
+          "summary": {
+            "decision_id": "e43d4d7a-8548-486c-9522-2c9c32f3909c",
+            "title": "Keep Markdown files",
+            "recorded": "2026-10-07T04:27:56.560990123Z",
+            "decided": "2026-10-01",
+            "replaces": null,
+            "replaced_by": [],
+            "status": "current",
+            "revision": "sha256:df8e8cdc77f85d8f2138aab4dc0e8ff6342063972108fede7d70a9db7cbf373c",
+            "problems": []
+          },
+          "body": "Original decision body.\n",
+          "relative_path": "decisions/e43d4d7a-8548-486c-9522-2c9c32f3909c.md",
+          "path": "/tmp/cpol-g32vk7wo/data/cockpit/notes/fe8bb635-e5ae-4709-9e35-cbbd96dcdaa4/decisions/e43d4d7a-8548-486c-9522-2c9c32f3909c.md"
+        }
+      }
+    },
+    {
+      "notes_id": "fe8bb635-e5ae-4709-9e35-cbbd96dcdaa4",
+      "changed": true,
+      "result": {
+        "kind": "decision",
+        "decision": {
+          "summary": {
+            "decision_id": "3b6683a0-8b5f-4936-ab1f-d2a244638a96",
+            "title": "Keep Markdown files, revised",
+            "recorded": "2026-10-07T04:28:03.890697593Z",
+            "decided": null,
+            "replaces": "e43d4d7a-8548-486c-9522-2c9c32f3909c",
+            "replaced_by": [],
+            "status": "current",
+            "revision": "sha256:b3bb710910d3e6f3d3cbaf8641da304a0d33427a3104d03ac597a4694e02f7b1",
+            "problems": []
+          },
+          "body": "Revised body.\n",
+          "relative_path": "decisions/3b6683a0-8b5f-4936-ab1f-d2a244638a96.md",
+          "path": "/tmp/cpol-g32vk7wo/data/cockpit/notes/fe8bb635-e5ae-4709-9e35-cbbd96dcdaa4/decisions/3b6683a0-8b5f-4936-ab1f-d2a244638a96.md"
+        }
+      }
+    },
+    {
+      "notes_id": "fe8bb635-e5ae-4709-9e35-cbbd96dcdaa4",
+      "changed": true,
+      "result": {
+        "kind": "decision",
+        "decision": {
+          "summary": {
+            "decision_id": "38fa2d2e-451a-4e7d-b50b-60286089277f",
+            "title": "Short decision",
+            "recorded": "2026-10-07T04:28:03.902413042Z",
+            "decided": null,
+            "replaces": null,
+            "replaced_by": [],
+            "status": "current",
+            "revision": "sha256:7048ab5cd8b0e2893e3a47a5581683146530752a848c0d5dca0a06f47cfb7614",
+            "problems": []
+          },
+          "body": "One line.\n",
+          "relative_path": "decisions/38fa2d2e-451a-4e7d-b50b-60286089277f.md",
+          "path": "/tmp/cpol-g32vk7wo/data/cockpit/notes/fe8bb635-e5ae-4709-9e35-cbbd96dcdaa4/decisions/38fa2d2e-451a-4e7d-b50b-60286089277f.md"
+        }
+      }
+    }
+  ],
+  "todos": [
+    {
+      "id": "cm85y7b49j",
+      "ref": "L1@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "Adopted board task",
+      "done": false,
+      "lane": "backlog",
+      "revision": "sha256:13aa4fbca8b1988261c41902b6acf7784552e364da002df39d7fe15320cc5d72",
+      "line": 1,
+      "depth": 0,
+      "problems": []
+    },
+    {
+      "id": "s75cx4p80l",
+      "ref": "L2@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "Doing task",
+      "done": false,
+      "lane": "doing",
+      "revision": "sha256:6a321ab5c2c8bad69dc52ebfda5e59f218e762c81993eea338793c3132f5a026",
+      "line": 2,
+      "depth": 0,
+      "problems": []
+    },
+    {
+      "id": "lkrpwm6tcv",
+      "ref": "L3@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "Plain todo",
+      "done": false,
+      "lane": null,
+      "revision": "sha256:16f24fd61acab67e6deb4cb6b2a562a6ab1e6be013201c6ca223316ec709c6f8",
+      "line": 3,
+      "depth": 0,
+      "problems": []
+    },
+    {
+      "id": "wa8j9p8ovc",
+      "ref": "L4@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "Completed task",
+      "done": true,
+      "lane": null,
+      "revision": "sha256:b964c49155ad0f99faa9ead016f0103fdd0504c3e8d62374941300d99cba4cd0",
+      "line": 4,
+      "depth": 0,
+      "problems": []
+    },
+    {
+      "id": "lkoxd53fnk",
+      "ref": "L5@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "One-line no-comment board task",
+      "done": false,
+      "lane": "backlog",
+      "revision": "sha256:7b9f566eefbdbd430fa643fd61f5923da9e6932c7ab700d4a5a50cacef147539",
+      "line": 5,
+      "depth": 0,
+      "problems": []
+    },
+    {
+      "id": null,
+      "ref": "L6@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "Hand-written parent",
+      "done": false,
+      "lane": null,
+      "revision": "sha256:376bff31aa1a725635189f19e42bfc7cda1d260604d51a0bc61ee0ade0509999",
+      "line": 6,
+      "depth": 0,
+      "problems": []
+    },
+    {
+      "id": null,
+      "ref": "L7@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "Nested child one",
+      "done": false,
+      "lane": null,
+      "revision": "sha256:385fb580893819ed41b9c57c5d73a26e06bbeabdeedc5a6adeea6f70a7462358",
+      "line": 7,
+      "depth": 1,
+      "problems": []
+    },
+    {
+      "id": null,
+      "ref": "L8@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "Nested child two",
+      "done": false,
+      "lane": null,
+      "revision": "sha256:cb61137d734bbfd01a83bd8eceed55a0fd97528a2047e14bfcc1d6e81bf1b03a",
+      "line": 8,
+      "depth": 2,
+      "problems": []
+    },
+    {
+      "id": null,
+      "ref": "L9@sha256:2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+      "text": "Hand-written unadopted task with a deliberately long title that wraps across two lines in a narrow lane",
+      "done": false,
+      "lane": null,
+      "revision": "sha256:2fada4805324e173531db6270f8c4c41dc75849d7d8a0710168f8b281cd2ddc6",
+      "line": 9,
+      "depth": 0,
+      "problems": []
+    }
+  ],
+  "hashes": {
+    "todos.md": "2888fa7c17b69064a1705362150b247853d6304bb5226c7e290fcfea6b5fafe7",
+    "scratchpad.md": "681c2d2d722ba71c9ec1495f585ddcdf43201b877a712fcf285284b0ab3734e0",
+    "decisions/38fa2d2e-451a-4e7d-b50b-60286089277f.md": "7048ab5cd8b0e2893e3a47a5581683146530752a848c0d5dca0a06f47cfb7614",
+    "decisions/3b6683a0-8b5f-4936-ab1f-d2a244638a96.md": "b3bb710910d3e6f3d3cbaf8641da304a0d33427a3104d03ac597a4694e02f7b1",
+    "decisions/e43d4d7a-8548-486c-9522-2c9c32f3909c.md": "df8e8cdc77f85d8f2138aab4dc0e8ff6342063972108fede7d70a9db7cbf373c",
+    "comments/cm85y7b49j/4a4a1e5b-3289-44b1-9569-729da83cb471.md": "b1743a7f467bf92c9159400fed4f2f90a22d9779160250c585be50a62c6f5418",
+    "comments/cm85y7b49j/59fbdba0-240f-435c-a3d5-2120221dab8d.md": "c7cc7252d6899ee32e356364819c07815d4231ba129f838edd0f4806cb3508b2",
+    "comments/cm85y7b49j/48291bbb-d38e-4969-a8dd-3b666243d565.md": "f2778cf04c36b5fdd76e7761419c61d4d4defdf5d8c146cd290d8268fb07ec7c",
+    "comments/cm85y7b49j/0c303e3e-2fce-47b5-a5cf-00e50df99f44.md": "1dc4e546de86295995d45008230ed7698dd70c9e29eb6f429a35bf7cd16f0268",
+    "comments/cm85y7b49j/537edeb5-ec19-42c3-8279-33c7f15130d3.md": "2c8859c165514dd45aa9ca531827f44a255dabbf3ad9874ec921f45a7a17020a",
+    "comments/cm85y7b49j/e0e05a51-120f-4715-a447-915a14d35c6e.md": "17506d372c273dcb7f104ee21f8c73e0ca0d724a51d54b8d8d3892bf46fa68c0",
+    "comments/cm85y7b49j/a39c9c97-4050-451e-a379-66c464128e50.md": "43cc24be79263b520726364569d4dfa63d05a87cae23026ca904449dc3c02892",
+    "comments/cm85y7b49j/70387ee5-f358-4958-a527-49441d17acc2.md": "415cd8fa71d1050a24a987239cba9a628322dcf7f73fca3e2ecc033fc562fe5d",
+    "comments/cm85y7b49j/c6088639-91f9-4fee-9a26-a9a569f5d14d.md": "daba8879729e3fcf2b3435cfdfc73f7633ea1920ab657739ad015a68ee04d6a6",
+    "comments/cm85y7b49j/115b9809-bfea-4824-87c7-9b2958d42f92.md": "e5a1e708fd8edcecb7d034589bede14e5a1be0b1075cf6459f5ec6d66f8f43c8",
+    "comments/cm85y7b49j/c32c155e-38e8-4c51-9aaa-8502a66d3908.md": "fcc75cc7196b9f1ff37720a5a8a22ec1bb433344d311381635fb50eb926b680a",
+    "comments/cm85y7b49j/509db235-aa86-494a-949e-6e809d4bef78.md": "97e6f401e16c61ff2cb49848a49261ae47c3a1b2e3142a791ecd297a25be7bf1",
+    "comments/cm85y7b49j/de997586-4080-4b43-9ab0-3416685494f3.md": "e38686069967dd566ea67e3868fa03c7d38da7da5f28cbac1b9e2c5cf8b01bf8",
+    "comments/cm85y7b49j/13a8c145-6f5c-4fd7-83d1-657ed8477408.md": "01d5a7ef9f580f2fdd235ca2cc302cc4e3231748c970279e26b22a554ba5dbd5",
+    "comments/cm85y7b49j/5165927f-78bc-4770-9816-829344e68300.md": "9f4931af8a2b82cf5b19d79f9fc942ffd021690ae22a599916296d5df56c70f8",
+    "comments/cm85y7b49j/acd61a92-1932-410f-8ca0-4d79494b7473.md": "69b6399696e437ccfc9fdbc6f0278f974bbfa8a0e7444f2b494e01fa8fef5a37",
+    "comments/cm85y7b49j/2bfbb3fa-0e43-48f6-9e9f-c07ad9040d03.md": "51c9d752f6a3c1fef4c17d97f6d5942a97b278d4408b9f98a3dc0d9cb579831a",
+    "comments/cm85y7b49j/bf0626cc-bd66-41f9-9b88-5d9fb7a47df0.md": "c0bd1fddf12718708a6d9ee3eae860e0359b8bb5bd4006cca9e77ea42bcfc5b5"
+  }
+}

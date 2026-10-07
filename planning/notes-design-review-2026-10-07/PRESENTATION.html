@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="en" data-view="both">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notes UI/UX review — illustrative concepts</title>
+<style>
+:root{--app-bg:#0b0e12;--sidebar-bg:#11161e;--chrome-bg:#121923;--surface:#161d27;--surface-raised:#1b2431;--surface-hover:#222e3d;--surface-selected:#23354c;--border:#2b3543;--border-strong:#3b4758;--text-primary:#cdd6f4;--text-secondary:#bac2de;--text-muted:#a6adc8;--accent:#89b4fa;--blocked:#f38ba8;--warning:#f9e2af;--done:#94e2d5;--idle:#a6e3a1;--page:#06080b;--sans:system-ui,-apple-system,"Segoe UI","IBM Plex Sans",Roboto,sans-serif;--mono:ui-monospace,"IosevkaTerm Nerd Font Mono","IBM Plex Mono",Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--page);color:var(--text-primary);font:14px/1.55 var(--sans);-webkit-text-size-adjust:100%}
+[hidden]{display:none !important}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+code,.mono{font-family:var(--mono);font-size:.92em}
+.wrap{max-width:1360px;margin:0 auto;padding:0 20px}
+header.top{background:var(--chrome-bg);border-bottom:1px solid var(--border)}
+header.top .wrap{padding-top:18px;padding-bottom:16px}
+h1{font-size:22px;line-height:1.25;margin:0 0 6px;font-weight:600}
+h2{font-size:19px;line-height:1.3;margin:0 0 10px;font-weight:600}
+h3{font-size:15px;margin:0 0 6px;font-weight:600}
+p{margin:0 0 10px}
+.mut{color:var(--text-muted)}
+.sub{color:var(--text-secondary);max-width:100ch;margin:0}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0;padding:0;list-style:none}
+.legend li{border:1px solid var(--border-strong);border-radius:999px;padding:3px 11px;font-size:12.5px;background:var(--surface)}
+.legend b{color:var(--accent)}
+.banner{margin:14px 0 0;border-left:3px solid var(--warning);background:var(--surface);padding:10px 14px;font-size:13px;color:var(--text-secondary);max-width:120ch}
+nav.sticky{position:sticky;top:0;z-index:20;background:var(--app-bg);border-bottom:1px solid var(--border)}
+nav.sticky .wrap{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding-top:8px;padding-bottom:8px}
+nav.sticky ul{display:flex;flex-wrap:wrap;gap:2px 4px;margin:0;padding:0;list-style:none;flex:1 1 520px}
+nav.sticky a{display:block;padding:4px 9px;border-radius:4px;text-decoration:none;color:var(--text-secondary);font-size:13px}
+nav.sticky a:hover{background:var(--surface-hover);color:var(--text-primary)}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:5px;overflow:hidden}
+.seg button{font:inherit;font-size:12.5px;background:var(--surface);color:var(--text-secondary);border:0;border-right:1px solid var(--border);padding:5px 11px;cursor:pointer;min-height:30px}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed=true]{background:var(--surface-selected);color:var(--accent);box-shadow:inset 0 -2px var(--accent)}
+.seg button:hover{background:var(--surface-hover)}
+.ctlabel{font-size:12px;color:var(--text-muted);margin-right:4px}
+main{padding:22px 0 60px}
+section.blk{margin:0 0 44px;scroll-margin-top:160px}
+#reg tbody tr{scroll-margin-top:160px}
+section.blk>header{margin-bottom:12px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 0;padding:0;list-style:none}
+.chip{border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:12px;background:var(--surface);color:var(--text-secondary);font-family:var(--mono)}
+.chip.a{color:var(--accent)}
+.chip .pin{border:0;background:none;margin:0;padding:0;color:inherit}
+.chip .pin.b{color:var(--blocked)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 12px}
+.stat b{display:block;font-size:24px;line-height:1.1}
+.stat span{font-size:12.5px;color:var(--text-muted)}
+.sev1{color:var(--blocked)} .sev2{color:var(--warning)} .sev3{color:var(--text-secondary)}
+.top8{margin:0;padding-left:20px}
+.top8 li{margin:0 0 6px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:10px 0 14px}
+html[data-view=current] .pair,html[data-view=proposed] .pair{grid-template-columns:minmax(0,760px)}
+html[data-view=current] .m-proposed,html[data-view=proposed] .m-current{display:none}
+figure{margin:0;min-width:0}
+figcaption{font-size:12px;margin:0 0 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;color:var(--text-muted)}
+.tag{display:inline-block;border-radius:3px;padding:1px 7px;font-size:11.5px;font-weight:600;letter-spacing:.02em}
+.tag.cur{background:#2b3543;color:var(--text-primary)}
+.tag.pro{background:#23354c;color:var(--accent);border:1px dashed var(--accent)}
+.tag.src{background:#3a3320;color:var(--warning)}
+.mk{background:var(--app-bg);border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:12px;line-height:1.4;color:var(--text-primary);min-width:0}
+.m-proposed .mk{border:1px dashed var(--accent)}
+.mk-head{display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;background:var(--chrome-bg);border-bottom:1px solid var(--border)}
+.mk-head .sep{width:1px;height:14px;background:var(--border)}
+.mk-head .push{margin-left:auto}
+.mk-tabs{display:flex;background:var(--chrome-bg);border-bottom:1px solid var(--border);overflow:hidden}
+.mk-tab{display:flex;align-items:center;gap:6px;padding:0 11px;height:31px;color:var(--text-muted);font-size:11.5px;white-space:nowrap}
+.mk-tab.on{background:var(--surface-selected);box-shadow:inset 0 -2px var(--accent);color:var(--text-primary)}
+.mk-cnt{background:var(--surface);border-radius:3px;padding:0 4px;font-size:10.5px;color:var(--text-muted)}
+.mk-body{padding:12px;min-width:0}
+.mk-btn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);border-radius:4px;padding:3px 9px;font-size:11.5px;white-space:nowrap;min-height:24px}
+.mk-btn.pri{background:var(--surface-selected);border-color:var(--border-strong);color:var(--accent)}
+.mk-btn.foc{outline:2px solid var(--accent);outline-offset:1px}
+.mk-btn.warn{border-color:var(--warning)}
+.mk-btn.dim{opacity:.5}
+.mk-btn.ghost{background:transparent;border-color:transparent}
+.mk-btn.txt{background:transparent;border-color:transparent;text-decoration:underline;color:var(--text-muted)}
+.mk-btn.pill{border-radius:999px}
+.mk-btn.sq{width:24px;padding:0;justify-content:center}
+.mk-in{border:1px solid var(--border);background:var(--surface);color:var(--text-muted);padding:5px 8px;border-radius:4px;min-width:0}
+.mk-rule{border-left:2px solid var(--warning);background:var(--surface);padding:8px 10px;font-size:11.5px}
+.mk-rule.red{border-left-color:var(--blocked)}
+.mk-card{border:1px solid var(--border-strong);border-radius:4px;background:var(--surface);padding:8px 10px}
+.mk-small{font-size:10.5px;color:var(--text-muted)}
+.mk-12{font-size:12px;color:var(--text-muted)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row.nw{flex-wrap:nowrap}
+.grow{flex:1 1 0;min-width:0}
+.push{margin-left:auto}
+.ctr{text-align:center}
+.bad{outline:1px dashed var(--blocked);outline-offset:3px}
+.good{outline:1px dashed var(--done);outline-offset:3px}
+.pin{display:inline-block;border:1px solid var(--border-strong);background:#10161f;border-radius:3px;font-size:10px;font-family:var(--mono);padding:0 4px;margin-left:5px;color:var(--text-secondary);vertical-align:middle;text-decoration:none;white-space:nowrap}
+.pin.b{color:var(--blocked);border-color:var(--blocked)}
+.pin.g{color:var(--done);border-color:var(--done)}
+.ic{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.cb{width:13px;height:13px;border:1px solid var(--border-strong);border-radius:2px;background:#2a2f36;flex:none;display:inline-block}
+.cb.on{background:var(--accent);border-color:var(--accent)}
+.radio{width:12px;height:12px;border-radius:50%;border:3px solid var(--accent);background:#0b0e12;flex:none;margin-top:3px}
+.hr{height:1px;background:var(--border);margin:8px 0}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+.col2{display:grid;grid-template-columns:130px minmax(0,1fr);min-width:0}
+.col2>.l{background:var(--sidebar-bg);border-right:1px solid var(--border);padding:10px;min-width:0}
+.col2>.r{padding:12px;min-width:0}
+.todo{display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--border);min-height:34px}
+.todo .t{flex:1 1 0;min-width:0}
+.lane{background:var(--sidebar-bg);border-radius:6px;padding:8px;min-width:0;flex:1 1 140px}
+.lane h4{margin:0 0 8px;font-size:12px;display:flex;align-items:center;gap:6px;color:var(--text-secondary);font-weight:500}
+.kc{border:1px solid var(--border);background:var(--surface);border-radius:4px;padding:8px;margin-bottom:8px;position:relative}
+.kc.sel{background:var(--surface-selected);box-shadow:inset 2px 0 var(--accent)}
+.tt{position:relative;display:inline-block;background:var(--surface-raised);border:1px solid var(--border-strong);border-radius:4px;padding:3px 8px;font-size:11px;color:var(--text-primary)}
+.note{font-size:12.5px;color:var(--text-secondary);margin:6px 0 0}
+.note b{color:var(--text-primary)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:13px;margin:8px 0 0}
+.kv dt{color:var(--text-muted)} .kv dd{margin:0}
+.phone{max-width:300px}
+.twocol{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.cardbox{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px 14px}
+.filters{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin:8px 0 10px}
+.filters .grp{display:flex;align-items:center;gap:4px;flex-wrap:wrap;max-width:100%;min-width:0}
+.filters input[type=search]{font:inherit;font-size:13px;background:var(--surface);color:var(--text-primary);border:1px solid var(--border-strong);border-radius:4px;padding:5px 9px;min-width:210px;min-height:30px}
+.tw{overflow:auto;border:1px solid var(--border);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid var(--border)}
+th{position:sticky;top:0;background:var(--chrome-bg);font-weight:600;color:var(--text-secondary);white-space:nowrap}
+tbody tr:target{background:var(--surface-selected)}
+tbody tr:hover{background:var(--surface)}
+td.id{font-family:var(--mono);white-space:nowrap}
+td.sm{font-size:11.5px;color:var(--text-muted)}
+.p1{color:var(--blocked);font-weight:600}.p2{color:var(--warning);font-weight:600}.p3{color:var(--text-secondary);font-weight:600}
+.cls{font-family:var(--mono);font-weight:600}
+.cls.D{color:var(--blocked)} .cls.L{color:var(--warning)}
+details.more{border:1px solid var(--border);border-radius:6px;background:var(--surface);margin:8px 0}
+details.more>summary{cursor:pointer;padding:8px 12px;color:var(--text-secondary);font-size:13px}
+details.more>div{padding:2px 14px 12px}
+.grid45{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:6px}
+.grid45>div{border:1px solid var(--border);border-radius:4px;background:var(--surface);padding:5px 8px;font-size:12px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.grid45 b{font-family:var(--mono);font-size:11.5px;color:var(--accent)}
+.grid45 .keep{color:var(--text-muted)}
+footer.end{border-top:1px solid var(--border);background:var(--chrome-bg);color:var(--text-muted);font-size:12.5px}
+footer.end .wrap{padding-top:14px;padding-bottom:18px}
+@media (max-width:1100px){.pair{grid-template-columns:minmax(0,1fr)}.twocol{grid-template-columns:1fr}}
+@media (max-width:640px){
+ .wrap{padding:0 12px}
+ h1{font-size:19px}
+ nav.sticky{position:static}
+ section.blk,#reg tbody tr{scroll-margin-top:12px}
+ .seg{display:flex;flex-wrap:wrap;gap:4px;max-width:100%;border:0;border-radius:0;overflow:visible}
+ .seg button{border:1px solid var(--border-strong);border-radius:4px}
+ .seg button:last-child{border-right:1px solid var(--border-strong)}
+ .filters input[type=search]{min-width:0;width:100%}
+ .filters .grp:has(input[type=search]){flex:1 1 100%}
+ .col2{grid-template-columns:1fr}
+ .col2>.l{border-right:0;border-bottom:1px solid var(--border)}
+ #reg table,#reg thead,#reg tbody,#reg tr,#reg td{display:block}
+ #reg thead{position:absolute;left:-9999px}
+ #reg tr{border-bottom:2px solid var(--border-strong);padding:6px 0}
+ #reg td{border:0;padding:2px 10px}
+ #reg td::before{content:attr(data-l) ": ";color:var(--text-muted);font-size:11px}
+ #reg td.id::before{content:""}
+ .tw{border:0}
+ nav.sticky ul{flex-basis:100%}
+}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media (forced-colors:active){.mk,.mk-card,.mk-rule,.mk-btn{border:1px solid CanvasText}.tag{border:1px solid CanvasText}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<symbol id="i-more" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24"><path d="m16 3 5 5L8 21H3v-5ZM14 5l5 5"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8Zm0 0v5h5M8 12h8m-8 4h6"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><path d="M15 15l6 6M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0"/></symbol>
+<symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3Zm11 0h7v7h-7ZM3 14h7v7H3Zm11 0h7v7h-7Z"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5m7 7-7-7 7-7"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6m0-10v1M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></symbol>
+<symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Zm13 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+<symbol id="i-comment" viewBox="0 0 24 24"><path d="M21 15a3 3 0 0 1-3 3H8l-5 3V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3ZM7 8h10M7 12h7"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+<symbol id="i-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+<symbol id="i-lib" viewBox="0 0 24 24"><path d="M12 6c-2-1.5-5-2-8-2v14c3 0 6 .5 8 2 2-1.5 5-2 8-2V4c-3 0-6 .5-8 2ZM12 6v14"/></symbol>
+</defs>
+</svg>
+
+<header class="top"><div class="wrap">
+<h1>Notes UI/UX review — behavior-preserving polish</h1>
+<p class="sub">Prioritized, evidence-mapped polish for the existing Notes workbench: Scratchpad, Todos &amp; comments, Kanban, Decisions, shell and recovery. Functionality, persistence, identity, source order, adoption, drafts, CAS, unknown-outcome and decision-history rules stay exactly as they are. Full text: <code>DESIGN.md</code> (same folder). Atlas: <code>planning/notes-atlas-2026-10-07/ATLAS.md</code>.</p>
+<ul class="legend" aria-label="Evidence classes">
+<li><b>A##</b> actual disposable-app screenshot (existing bundle <code>index-CssAnWz1.js</code>)</li>
+<li><b>S</b> current source coordinate <code>path:line</code></li>
+<li><b>I</b> illustrative concept on this page</li>
+</ul>
+<p class="banner" role="note"><strong>Read this first.</strong> Every <em>Current</em> panel below is a <strong>schematic redraw</strong> of an actual capture (or, where marked <em>code-derived</em>, of source behavior never seen rendered) — it is <strong>not a screenshot</strong>. Every <em>Proposed</em> panel is <strong>illustrative</strong>: not the live app, not shipped UI, dimensions approximate. The screenshots A01–A19 come from an existing bundle whose identity with the current source is <strong>unproven</strong>; findings that rest only on source are labelled <em>S-only</em>. No selections or SDK calls are made by this page.</p>
+</div></header>
+
+<nav class="sticky" aria-label="Sections"><div class="wrap">
+<ul>
+<li><a href="#overview">Overview</a></li>
+<li><a href="#c1">C1 Attach</a></li>
+<li><a href="#c2">C2 Scratchpad</a></li>
+<li><a href="#c3">C3 Todos &amp; detail</a></li>
+<li><a href="#c4">C4 Kanban</a></li>
+<li><a href="#c5">C5 Decisions</a></li>
+<li><a href="#c6">C6 Recovery</a></li>
+<li><a href="#c7">C7 Shell &amp; nav</a></li>
+<li><a href="#type">Type &amp; density</a></li>
+<li><a href="#register">Register</a></li>
+<li><a href="#decisions">Decisions</a></li>
+<li><a href="#evidence">Evidence</a></li>
+</ul>
+<div role="group" aria-label="Concept view"><span class="ctlabel">Concept view</span><span class="seg">
+<button type="button" data-view="both" aria-pressed="true">Side by side</button>
+<button type="button" data-view="current" aria-pressed="false">Current</button>
+<button type="button" data-view="proposed" aria-pressed="false">Proposed</button></span></div>
+</div></nav>
+
+<main><div class="wrap">
+
+<section class="blk" id="overview" aria-labelledby="h-over">
+<header><h2 id="h-over">Overview</h2></header>
+<div class="stats">
+<div class="stat"><b>49</b><span>register entries (NR-01…NR-49)</span></div>
+<div class="stat"><b class="sev1">3</b><span>P1 — NR-01, NR-16, NR-43</span></div>
+<div class="stat"><b class="sev2">22</b><span>P2 clear usability / a11y / hierarchy</span></div>
+<div class="stat"><b class="sev3">24</b><span>P3 polish</span></div>
+<div class="stat"><b>12</b><span>separate decisions D-01…D-12 (not in polish set)</span></div>
+<div class="stat"><b>45 / 19</b><span>atlas IDs covered / actual screenshots cited</span></div>
+</div>
+<h3>Top recommendations</h3>
+<ol class="top8">
+<li><strong>NR-01 / 02 / 03 — Fix the attach picker layout</strong> (P1, CSS): content does not stack; the consequential transfer confirmation floats detached. <a href="#c1">Concept C1</a>.</li>
+<li><strong>NR-16 — Stop disguising adoption as “Comments”</strong> (P1, wording + icon label): an unadopted task’s comment button writes an <code>id</code> into <code>todos.md</code>. Same handler, honest label. <a href="#c3">C3</a>.</li>
+<li><strong>NR-43 — Make the shared problem slot in-flow</strong> (P1, layout only, S-only): the bottom overlay covers the bottom-anchored Save/Comment rows and, for unknown outcome, can hide the recovery controls it carries from view. No gate changes. <a href="#c6">C6</a>.</li>
+<li><strong>NR-12 / 13 — Conflict review hierarchy</strong> (P2, CSS): saved preview inherits the reading-column style; the overwrite button is the accent primary only on Scratchpad. <a href="#c2">C2</a>.</li>
+<li><strong>NR-22, 30, 31, 29 — Icon and affordance clarity</strong> (P2, CSS): Delete uses the same ✕ as Close; two identical “···” per card; plain-text jump chips; empty card action row. <a href="#c3">C3</a>, <a href="#c4">C4</a>.</li>
+<li><strong>NR-15, 17, 18, 06 — State visibility and names</strong> (P2): board membership, stable toggle name, zero-result text, count meaning. <a href="#c3">C3</a>, <a href="#c7">C7</a>.</li>
+<li><strong>NR-36 – 39 — Decisions hierarchy</strong> (P2): sort state announced, filter-outside context, decided vs recorded date, Replace discoverability. <a href="#c5">C5</a>.</li>
+<li><strong>NR-08 — Distinguish “close details” from “close Notes”</strong> (P2): same ✕ glyph stacked at narrow. <a href="#c7">C7</a>.</li>
+</ol>
+<p class="note"><b>Not in the polish set</b> (need a separate decision first): tab-count basis, pre-adoption confirmation, draft markers on tabs, field-local validation, any focus transfer, draft-read warnings, hiding Doing/Done “+”, retained-draft default-open, broader unknown-outcome review, disabled-prop alignment, merged chrome, lane tracking. See <a href="#decisions">Decisions</a>.</p>
+</section>
+
+<!-- ===================== C1 ===================== -->
+<section class="blk" id="c1" aria-labelledby="h-c1">
+<header><h2 id="h-c1">C1 · Unbound, attach, catalog, transfer</h2>
+<p class="mut">Atlas N-SHELL-02, N-SHELL-03, N-SHELL-06 · Evidence A01 (good), A02, A12 · Source <code>notes.css:239-249</code>, <code>NotesView.tsx:269-278</code></p>
+<ul class="chips"><li class="chip"><a class="pin b" href="#nr-01">NR-01</a></li><li class="chip"><a class="pin b" href="#nr-02">NR-02</a></li><li class="chip"><a class="pin b" href="#nr-03">NR-03</a></li><li class="chip"><a class="pin" href="#nr-04">NR-04</a></li><li class="chip"><a class="pin" href="#nr-05">NR-05</a></li></ul></header>
+<p class="note"><b>Keep:</b> the unbound state (A01) is clear — icon, headline, Create notes primary, Attach existing notes… secondary. <b>Change:</b> picker layout and the transfer confirmation placement only. Texts, focus targets (Keep current association focused; Keep returns focus to Attach), Escape order and “no focus trap” are unchanged.</p>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A12 · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Current attach picker, schematic: heading centered; helper text and catalog card on the same row; full-width transfer band below; lone centered Cancel button.">
+<div class="mk-head" aria-hidden="true"><svg class="ic"><use href="#i-file"/></svg><b>Notes</b><span class="sep"></span><span class="mut">Notes transfer fixture</span><span class="push"><svg class="ic"><use href="#i-close"/></svg></span></div>
+<div class="mk-body" aria-hidden="true">
+<div class="ctr" style="font-size:15px;margin-bottom:8px">Attach existing notes</div>
+<div class="row nw bad" style="align-items:flex-start;margin-bottom:8px"><span class="pin b">NR-01 not stacked</span><div class="mk-12" style="flex:0 0 38%">Choose the exact Notes ID. Files stay outside the repository.</div><div class="mk-card grow"><div class="row nw" style="align-items:flex-start"><span class="radio"></span><div>Last called Polish sample<br><span class="mono mk-small">694e8c52-6f21-473b-…</span><br><span class="mk-small">Attached elsewhere</span></div></div></div></div>
+<div class="mk-rule bad">Attach here? The other Space will become unbound. Files are not moved or deleted.<div class="row" style="margin-top:6px"><span class="mk-btn">Keep current association</span><span class="mk-btn">Attach here</span><span class="pin b">NR-02 detached, equal weight</span></div></div>
+<div class="ctr bad" style="margin-top:8px"><span class="mk-btn">Cancel</span><span class="pin b">NR-03</span></div>
+</div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · not shipped UI</figcaption>
+<div class="mk" role="img" aria-label="Proposed attach picker, illustrative: one centered column with heading, helper, catalog card, attached transfer confirmation at card width, and a right-aligned Cancel row.">
+<div class="mk-head" aria-hidden="true"><svg class="ic"><use href="#i-file"/></svg><b>Notes</b><span class="sep"></span><span class="mut">Notes transfer fixture</span><span class="push"><svg class="ic"><use href="#i-close"/></svg></span></div>
+<div class="mk-body" aria-hidden="true"><div style="max-width:340px;margin:0 auto">
+<div class="ctr" style="font-size:15px">Attach existing notes<a class="pin g" href="#nr-01">NR-01</a></div>
+<div class="ctr mk-12" style="margin:2px 0 8px">Choose the exact Notes ID. Files stay outside the repository.</div>
+<div class="mk-card"><div class="row nw" style="align-items:flex-start"><span class="radio"></span><div>Last called Polish sample<br><span class="mono mk-small">694e8c52-6f21-473b-…</span><br><span class="mk-small">Attached elsewhere</span></div></div></div>
+<div class="mk-rule good" style="margin-top:-1px">Attach here? The other Space will become unbound. Files are not moved or deleted.<div class="row" style="margin-top:6px"><span class="mk-btn foc">Keep current association</span><span class="mk-btn warn">Attach here</span><a class="pin g" href="#nr-02">NR-02</a></div></div>
+<div class="row" style="justify-content:flex-end;margin-top:8px"><a class="pin g" href="#nr-03">NR-03</a><span class="mk-btn">Cancel</span></div>
+</div></div></div>
+<p class="note">Wording unchanged. Confirmation sits under the selected entry at catalog width; <b>Keep current association</b> stays first and focused; <b>Attach here</b> gets a quiet warning border, not accent.</p></figure>
+</div>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A02 (catalog <em>error</em>, not an empty catalog)</figcaption>
+<div class="mk" role="img" aria-label="Current catalog error, schematic: message, error code, Retry, disabled Attach and Cancel on one line."><div class="mk-body" aria-hidden="true">
+<div class="ctr" style="font-size:15px;margin-bottom:8px">Attach existing notes</div>
+<div class="row bad"><span style="color:var(--warning)">Notes path does not exist <span class="mono mut">notes_not_found</span></span><span class="mk-btn">Retry reading catalog</span><span class="mk-btn dim">Attach</span><span class="mk-btn">Cancel</span><span class="pin b">NR-03/04</span></div>
+</div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative</figcaption>
+<div class="mk" role="img" aria-label="Proposed catalog error, illustrative: standard alert block with message, code and Retry; action row below."><div class="mk-body" aria-hidden="true"><div style="max-width:340px;margin:0 auto">
+<div class="ctr" style="font-size:15px;margin-bottom:8px">Attach existing notes</div>
+<div class="mk-rule good" style="border-left-color:var(--warning)"><span style="color:var(--warning)">Notes path does not exist</span> <span class="mono mk-small">notes_not_found</span><div style="margin-top:6px"><span class="mk-btn">Retry reading catalog</span><a class="pin g" href="#nr-04">NR-04</a></div></div>
+<div class="row" style="justify-content:flex-end;margin-top:8px"><span class="mk-btn">Cancel</span><span class="mk-btn dim">Attach</span></div>
+</div></div></div>
+<p class="note">Backend message text is not rewritten. Optional <a class="pin" href="#nr-05">NR-05</a> hint when a selected entry vanishes from a refreshed catalog is a derived display only.</p></figure>
+</div>
+</section>
+
+<!-- ===================== C2 ===================== -->
+<section class="blk" id="c2" aria-labelledby="h-c2">
+<header><h2 id="h-c2">C2 · Scratchpad source, preview, save, conflict</h2>
+<p class="mut">Atlas N-SCR-01/02/03, N-REC-03 · Evidence A03, A11, A19 · Source <code>notes.css:27-41,56-61,69-70</code>, <code>NotesView.tsx:138</code>, <code>MarkdownEditor.tsx:40-100</code></p>
+<ul class="chips"><li class="chip"><a class="pin b" href="#nr-09">NR-09</a></li><li class="chip"><a class="pin" href="#nr-10">NR-10</a></li><li class="chip"><a class="pin" href="#nr-11">NR-11</a></li><li class="chip"><a class="pin b" href="#nr-12">NR-12</a></li><li class="chip"><a class="pin b" href="#nr-13">NR-13</a></li><li class="chip"><a class="pin" href="#nr-14">NR-14</a></li></ul></header>
+<p class="note"><b>Keep:</b> Saved/Draft/Saving status dot, Mod-S, editor session cache, Keep mine / Reload semantics and labels, “Show saved Markdown” disclosure. <b>Change:</b> alignment of toolbar and status with the text column; scope of reading-column styling; emphasis of the two conflict actions. <b>Not changed:</b> focus handoff on Source↔Preview (decision <a href="#decisions">D-05</a>).</p>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A11 (conflict) · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Current Scratchpad conflict, schematic: toolbar label at far left and mode icons at far right while text is in a centered column; saved preview inside the alert is centered with large type; Keep mine is the accent primary.">
+<div class="mk-body" aria-hidden="true">
+<div class="row nw bad" style="margin-bottom:6px"><span class="mk-small">markdown</span><span class="push mk-btn sq"><svg class="ic"><use href="#i-code"/></svg></span><span class="mk-btn sq"><svg class="ic"><use href="#i-eye"/></svg></span><span class="pin b">NR-09</span></div>
+<div style="padding:6px 0 10px 32%;font-size:14px">Local unsaved recovery draft.</div>
+<div class="row mk-12"><span class="dot" style="background:var(--warning)"></span>Draft kept · not yet saved</div>
+<div class="mk-rule" style="margin-top:6px">Scratchpad changed elsewhere. Current saved version:
+<div class="mk-12" style="margin-top:4px">▾ Show saved Markdown</div>
+<div class="bad" style="padding:4px 0 6px 32%"><div style="font-size:17px;color:var(--text-secondary)">External fixture edit</div><div style="font-size:14px;color:var(--text-secondary)">Saved source changed independently.</div><span class="pin b">NR-12 inherits reading column</span></div>
+<div class="row"><span class="mk-btn pri bad">Keep mine and save</span><span class="mk-btn">Reload (discard my draft)</span><span class="pin b">NR-13</span></div></div>
+</div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · not shipped UI</figcaption>
+<div class="mk" role="img" aria-label="Proposed Scratchpad conflict, illustrative: toolbar and status share the text column; saved version is a small left-aligned read-only block; Keep mine and Reload have equal weight with a consequence line.">
+<div class="mk-body" aria-hidden="true"><div style="max-width:420px;margin:0 auto">
+<div class="row nw good" style="margin-bottom:6px"><span class="mk-btn sq" style="background:var(--surface-selected);color:var(--accent)"><svg class="ic"><use href="#i-code"/></svg></span><span class="mk-btn ghost">Source</span><span class="mk-btn ghost"><svg class="ic"><use href="#i-eye"/></svg>Preview</span><span class="push mk-small">markdown</span><a class="pin g" href="#nr-09">NR-09</a><a class="pin g" href="#nr-10">NR-10</a></div>
+<div style="padding:6px 0 10px;font-size:14px">Local unsaved recovery draft.</div>
+<div class="row mk-12"><span class="dot" style="background:var(--warning)"></span>Draft kept · not yet saved</div>
+<div class="mk-rule" style="margin-top:6px">Scratchpad changed elsewhere. Current saved version:
+<div class="mk-small" style="margin-top:6px">Saved version (read-only)</div>
+<div class="good" style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin:3px 0 8px;font-size:12px"><b>External fixture edit</b><br>Saved source changed independently.</div>
+<div class="row"><span class="mk-btn">Keep mine and save</span><span class="mk-btn">Reload (discard my draft)</span><a class="pin g" href="#nr-13">NR-13</a></div>
+<div class="mk-small" style="margin-top:6px">Keep mine overwrites the saved version. Reload discards your draft.<a class="pin g" href="#nr-12">NR-12</a></div></div>
+</div></div></div></figure>
+</div>
+<p class="note"><b>Also in this domain:</b> <a class="pin" href="#nr-11">NR-11</a> “Saving…” appears for any write on the Notes UUID (shared <code>busy</code>); say “Saving Notes…” without changing pending ownership. <a class="pin" href="#nr-14">NR-14</a> hide the line-number gutter in comment editors (A04/A16 show “1 Add a comment…”). Disabled primaries (<a class="pin" href="#nr-28">NR-28</a>) are very faint at opacity .5 (A19 Save scratchpad).</p>
+</section>
+
+<!-- ===================== C3 ===================== -->
+<section class="blk" id="c3" aria-labelledby="h-c3">
+<header><h2 id="h-c3">C3 · Todos, adoption, task detail, comments</h2>
+<p class="mut">Atlas N-TODO-01…06, N-COM-01…04, N-REC-04/05 · Evidence A04, A13, A14, A15, A16, A17, A18 · Source <code>NotesView.tsx:142-147</code>, <code>TaskDetail.tsx:180-220</code>, <code>notes.css:84-108,150-185</code></p>
+<ul class="chips"><li class="chip"><a class="pin" href="#nr-15">NR-15</a></li><li class="chip"><a class="pin b" href="#nr-16">NR-16</a></li><li class="chip"><a class="pin" href="#nr-17">NR-17</a></li><li class="chip"><a class="pin" href="#nr-18">NR-18</a></li><li class="chip"><a class="pin" href="#nr-22">NR-22</a></li><li class="chip"><a class="pin" href="#nr-23">NR-23</a></li><li class="chip"><a class="pin" href="#nr-24">NR-24</a></li><li class="chip"><a class="pin" href="#nr-25">NR-25</a></li><li class="chip"><a class="pin" href="#nr-26">NR-26</a></li><li class="chip"><a class="pin" href="#nr-27">NR-27</a></li></ul></header>
+<p class="note"><b>Adoption invariant:</b> adoption happens only on explicit activation, never on read/list/select. NR-16 changes how the control is <em>labelled</em>; the handler, the ref-based <code>todo_update</code> and the duplicate-ID repair are untouched. A confirmation step would be a behavior change (<a href="#decisions">D-02</a>).</p>
+<h3>List rows</h3>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A13 / A04 · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Current Todos list, schematic: three rows; comment icon only at the right; board membership not visible; the unadopted third row uses the same icon as an adopted row.">
+<div class="mk-body" aria-hidden="true">
+<div class="row nw" style="margin-bottom:8px"><span class="mk-in grow">Add a todo…</span><span class="mk-btn pri dim">Add</span></div>
+<div class="row" style="margin-bottom:6px"><span class="mk-btn pill" style="background:var(--surface-selected);color:var(--accent)"><svg class="ic"><use href="#i-check"/></svg>Hide completed</span><span class="pin b">NR-17 label flips + aria-pressed</span></div>
+<div class="todo"><span class="cb"></span><span class="t">Inspect task detail and durable comments</span><span class="mk-small bad">(on board — invisible)</span><span class="mk-btn ghost"><svg class="ic"><use href="#i-comment"/></svg>1</span><span class="pin b">NR-15</span></div>
+<div class="todo"><span class="cb"></span><span class="t">Review Decisions history and replacement</span></div>
+<div class="todo"><span class="cb"></span><span class="t">Hand-written fixture task awaiting explicit adoption</span><span class="mk-btn ghost bad"><svg class="ic"><use href="#i-comment"/></svg></span><span class="pin b">NR-16 writes an id</span></div>
+</div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · not shipped UI</figcaption>
+<div class="mk" role="img" aria-label="Proposed Todos list, illustrative: quiet persistent lane tags on board tasks; the unadopted task shows a labelled Adopt control with tooltip text; stable Hide completed label.">
+<div class="mk-body" aria-hidden="true">
+<div class="row nw" style="margin-bottom:8px"><span class="mk-in grow">Add a todo…</span><span class="mk-btn pri dim">Add</span></div>
+<div class="row" style="margin-bottom:6px"><span class="mk-btn pill" style="background:var(--surface-selected);color:var(--accent)"><svg class="ic"><use href="#i-check"/></svg>Hide completed</span><a class="pin g" href="#nr-17">NR-17 stable name</a></div>
+<div class="todo"><span class="cb"></span><span class="t">Inspect task detail and durable comments</span><span class="mk-btn good" style="border-radius:999px;opacity:.8;font-size:10.5px;padding:1px 8px">Backlog</span><span class="mk-btn ghost"><svg class="ic"><use href="#i-comment"/></svg>1</span><a class="pin g" href="#nr-15">NR-15</a></div>
+<div class="todo"><span class="cb"></span><span class="t">Review Decisions history and replacement</span><span class="mk-btn ghost" style="opacity:.6"><svg class="ic"><use href="#i-grid"/></svg></span></div>
+<div class="todo"><span class="cb"></span><span class="t">Hand-written fixture task awaiting explicit adoption</span><span class="mk-btn good warn" style="border-radius:999px;font-size:11px"><svg class="ic"><use href="#i-plus"/></svg>Adopt</span><a class="pin g" href="#nr-16">NR-16</a></div>
+<div style="text-align:right;margin-top:4px"><span class="tt">Adopt task &amp; comments — adds an id to this task in todos.md</span></div>
+<div class="hr"></div>
+<div class="mk-12 good" style="text-align:center;padding:8px">All tasks are completed and hidden.<a class="pin g" href="#nr-18">NR-18</a></div>
+</div></div></figure>
+</div>
+<h3>Detail panel and comments</h3>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A04 / A18 · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Current task detail, schematic: Remove from board button, reserved blank band above the first comment, 11px author line with the Record details disclosure above the body, pencil and X actions, line number in composer.">
+<div class="mk-head" aria-hidden="true"><b style="font-weight:500">Task details</b><span class="push"><svg class="ic"><use href="#i-close"/></svg></span></div>
+<div class="mk-body" aria-hidden="true">
+<div style="font-size:14px;margin-bottom:8px">Inspect task detail and durable comments</div>
+<div class="row"><span class="cb"></span><span class="mk-12">Completed</span><span class="mk-12">Move</span><span class="mk-btn pill">Backlog <svg class="ic"><use href="#i-down"/></svg></span></div>
+<div class="row" style="margin:6px 0"><span class="mk-btn bad">Remove from board</span><span class="mk-small">Keeps the task and its comments.</span><span class="pin b">NR-25</span></div>
+<div class="row" style="margin-top:8px"><svg class="ic"><use href="#i-comment"/></svg><b>Comments</b><span class="mk-cnt">1</span></div>
+<div class="bad" style="height:26px"><span class="pin b">NR-24 reserved band</span></div>
+<div class="row nw mk-small" style="margin:4px 0"><b style="color:var(--text-primary)">Local user</b><span>10/7/2026, 4:53:39 AM</span><span class="push mk-btn sq ghost"><svg class="ic"><use href="#i-edit"/></svg></span><span class="mk-btn sq bad" style="background:var(--surface-hover)"><svg class="ic"><use href="#i-close"/></svg></span></div>
+<div class="mk-small bad">▸ ⓘ Record details <span class="pin b">NR-23</span> <span class="pin b">NR-22 Delete = ✕</span></div>
+<div style="font-size:12px;margin:4px 0 8px">Observed in the disposable browser fixture. Preserve comments when unboarding.</div>
+<div class="mk-card" style="padding:6px 8px"><span class="mono mk-12 bad">1 Add a comment…</span> <span class="pin b">NR-14</span></div>
+<div class="row" style="margin-top:6px"><span class="mk-small">author</span><span class="mk-12">Local user</span><span class="push mk-btn pri dim">Comment</span></div>
+</div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · not shipped UI</figcaption>
+<div class="mk" role="img" aria-label="Proposed task detail, illustrative: grouped Board row with text-style Remove from board, no blank band, 12px comment header with unverified label and trash icon, disclosure below the body, composer without line number.">
+<div class="mk-head" aria-hidden="true"><b style="font-weight:500">Task details</b><span class="push"><svg class="ic"><use href="#i-close"/></svg></span></div>
+<div class="mk-body" aria-hidden="true">
+<div style="font-size:14px;margin-bottom:8px">Inspect task detail and durable comments</div>
+<div class="row"><span class="cb"></span><span class="mk-12">Completed</span></div>
+<div class="row good" style="margin:6px 0"><span class="mk-small">Board</span><span class="mk-btn pill">Backlog <svg class="ic"><use href="#i-down"/></svg></span><span class="mk-btn txt">Remove from board</span><span class="mk-small">Keeps the task and its comments.</span><a class="pin g" href="#nr-25">NR-25</a></div>
+<div class="row" style="margin-top:8px"><svg class="ic"><use href="#i-comment"/></svg><b>Comments</b><span class="mk-cnt">1</span><a class="pin g" href="#nr-24">NR-24 band collapsed</a></div>
+<div class="row nw mk-12" style="margin:6px 0 4px"><b style="color:var(--text-primary)">Local user</b><span class="mk-small good">· unverified label</span><span>10/7/2026, 4:53:39 AM</span><span class="push mk-btn sq ghost"><svg class="ic"><use href="#i-edit"/></svg></span><span class="mk-btn sq ghost good" style="color:var(--blocked)"><svg class="ic"><use href="#i-trash"/></svg></span><a class="pin g" href="#nr-22">NR-22</a></div>
+<div style="font-size:12px;margin:0 0 4px">Observed in the disposable browser fixture. Preserve comments when unboarding.</div>
+<div class="mk-12">▸ ⓘ Record details<a class="pin g" href="#nr-23">NR-23</a></div>
+<div class="mk-card" style="padding:6px 8px;margin-top:8px"><span class="mk-12">Add a comment…</span><a class="pin g" href="#nr-14">NR-14</a></div>
+<div class="row" style="margin-top:6px"><span class="mk-small">author · unverified</span><span class="mk-12">Local user</span><a class="pin g" href="#nr-26">NR-26</a><span class="push mk-btn pri" style="opacity:.65">Comment</span></div>
+</div></div></figure>
+</div>
+<p class="note">The delete confirmation (Keep autofocused, red rule, “changed elsewhere” re-review, CAS refusal) is unchanged — only the glyph that opens it changes, to the existing <code>trash</code> icon. <a class="pin" href="#nr-27">NR-27</a>: seven states (<code>.notes-new-comments</code>, <code>.notes-task-removed</code>, <code>.notes-thread-loading</code>, <code>.notes-item-problems</code>, <code>.notes-retained-comment</code>, <code>.notes-comment-discard</code>, <code>.is-unboarded</code>) have <strong>no stylesheet rule at all</strong> (source-only; never observed) — give each a minimal rule from existing tokens.</p>
+</section>
+
+<!-- ===================== C4 ===================== -->
+<section class="blk" id="c4" aria-labelledby="h-c4">
+<header><h2 id="h-c4">C4 · Kanban lanes, cards, keyboard move</h2>
+<p class="mut">Atlas N-KAN-01…09 · Evidence A05, A06, A07 · Source <code>Kanban.tsx:25-62,170-187</code>, <code>notes.css:110-150</code>, <code>UiIcon.tsx:2</code></p>
+<ul class="chips"><li class="chip"><a class="pin" href="#nr-29">NR-29</a></li><li class="chip"><a class="pin" href="#nr-30">NR-30</a></li><li class="chip"><a class="pin" href="#nr-31">NR-31</a></li><li class="chip"><a class="pin" href="#nr-32">NR-32</a></li><li class="chip"><a class="pin" href="#nr-33">NR-33</a></li><li class="chip"><a class="pin" href="#nr-34">NR-34</a></li><li class="chip"><a class="pin" href="#nr-35">NR-35</a></li></ul></header>
+<p class="note"><b>Keep:</b> empty lanes already show “No cards.” (<code>Kanban.tsx:185</code>); all three lane “+” buttons intentionally focus the single Backlog composer; keyboard pick-up/lane/drop/Escape contract, file-order marker and live status; narrow board scroll with next-lane peek. <b>Change:</b> card density, glyph clarity, chip affordance, one accessible name.</p>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A05 / A06 · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Current Kanban, schematic: plain-text jump chips; Backlog card with a blank bottom row holding three dots; Doing card with a focused vertical-dots handle and another three-dot menu at bottom right; lane plus named from the lane.">
+<div class="mk-body" aria-hidden="true">
+<div class="row mk-12 bad" style="margin-bottom:8px;gap:14px"><span>Backlog 1</span><span>Doing 1</span><span>Done 0</span><span class="pin b">NR-31 text, not buttons</span></div>
+<div class="row nw" style="align-items:flex-start">
+<div class="lane"><h4><span class="dot" style="background:var(--text-muted)"></span>Backlog <span class="mk-cnt">1</span><span class="push mk-btn sq ghost"><svg class="ic"><use href="#i-plus"/></svg></span></h4>
+<div class="kc"><div class="row nw" style="align-items:flex-start"><span class="cb"></span><span class="grow">Review Decisions history and replacement</span></div><div class="bad" style="height:30px;text-align:right;color:var(--text-muted)">···<span class="pin b">NR-29 empty row</span></div></div></div>
+<div class="lane"><h4><span class="dot" style="background:var(--warning)"></span>Doing <span class="mk-cnt">1</span><span class="push mk-btn sq ghost"><svg class="ic"><use href="#i-plus"/></svg></span></h4>
+<div class="kc sel"><div class="row nw" style="align-items:flex-start"><span class="cb"></span><span class="grow">Inspect task detail and durable comments</span><span class="mk-btn sq foc" style="transform:rotate(90deg)"><svg class="ic"><use href="#i-more"/></svg></span></div><div class="row nw" style="margin-top:8px"><span class="mk-small"><svg class="ic"><use href="#i-comment"/></svg> 1</span><span class="push bad" style="color:var(--text-muted)">···</span></div><span class="pin b">NR-30 same glyph ×2</span></div></div>
+</div></div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · not shipped UI</figcaption>
+<div class="mk" role="img" aria-label="Proposed Kanban, illustrative: jump chips with pill shape; compact card with a disclosure chevron for actions in the title row and a lower row only when comments exist; handle remains vertical dots.">
+<div class="mk-body" aria-hidden="true">
+<div class="row good" style="margin-bottom:8px"><span class="mk-btn pill">Backlog <span class="mk-cnt">1</span></span><span class="mk-btn pill">Doing <span class="mk-cnt">1</span></span><span class="mk-btn pill">Done <span class="mk-cnt">0</span></span><a class="pin g" href="#nr-31">NR-31</a></div>
+<div class="row nw" style="align-items:flex-start">
+<div class="lane"><h4><span class="dot" style="background:var(--text-muted)"></span>Backlog <span class="mk-cnt">1</span><span class="push mk-btn sq ghost" title=""><svg class="ic"><use href="#i-plus"/></svg></span></h4>
+<div class="kc good"><div class="row nw" style="align-items:flex-start"><span class="cb"></span><span class="grow">Review Decisions history and replacement</span><span class="mk-btn sq ghost" style="opacity:.7"><svg class="ic"><use href="#i-down"/></svg></span></div><a class="pin g" href="#nr-29">NR-29</a></div></div>
+<div class="lane"><h4><span class="dot" style="background:var(--warning)"></span>Doing <span class="mk-cnt">1</span><span class="push mk-btn sq ghost"><svg class="ic"><use href="#i-plus"/></svg></span></h4>
+<div class="kc sel"><div class="row nw" style="align-items:flex-start"><span class="cb"></span><span class="grow">Inspect task detail and durable comments</span><span class="mk-btn sq foc" style="transform:rotate(90deg)"><svg class="ic"><use href="#i-more"/></svg></span><span class="mk-btn sq ghost" style="opacity:.7"><svg class="ic"><use href="#i-down"/></svg></span></div><div class="row" style="margin-top:6px"><span class="mk-small"><svg class="ic"><use href="#i-comment"/></svg> 1</span></div><a class="pin g" href="#nr-30">NR-30 handle ≠ menu</a></div></div>
+</div></div></div>
+<p class="note">Handle keeps its vertical dots and <code>grab</code> cursor; the menu uses the <em>existing</em> chevron — no new icon asset (no grip glyph exists in <code>UiIcon.tsx</code>). DOM order stays handle → checkbox → title → comments → menu; the menu moves visually only.</p></figure>
+</div>
+<dl class="kv"><dt>Lane “+” names</dt><dd><a class="pin" href="#nr-32">NR-32</a> today <code>aria-label="Add a card from Doing"</code> vs <code>title="Add a card to Backlog"</code>; proposed all three <code>"Add a card to Backlog"</code>. Hiding Doing/Done “+” (<a href="#decisions">D-07</a>) and per-lane creation are <strong>not</strong> proposed.</dd>
+<dt>Whitespace / handle reveal</dt><dd><a class="pin" href="#nr-33">NR-33</a> cursor cue on the openable card area; keep <code>:focus-within</code> and coarse-pointer reveal.</dd>
+<dt>Medium width</dt><dd><a class="pin" href="#nr-34">NR-34</a> the third lane is clipped (A06 “No ca…”); add an edge fade, keep scroll-snap.</dd>
+<dt>Live status</dt><dd><a class="pin" href="#nr-35">NR-35</a> 11px muted status persists under the board (A05); raise to 12px only.</dd></dl>
+</section>
+
+<!-- ===================== C5 ===================== -->
+<section class="blk" id="c5" aria-labelledby="h-c5">
+<header><h2 id="h-c5">C5 · Decisions: Current/History, search, order, detail, replace</h2>
+<p class="mut">Atlas N-DEC-01…08, N-REC-06 · Evidence A08, A09, A10 · Source <code>Decisions.tsx:98-117</code>, <code>notes.css:186-221</code></p>
+<ul class="chips"><li class="chip"><a class="pin" href="#nr-36">NR-36</a></li><li class="chip"><a class="pin" href="#nr-37">NR-37</a></li><li class="chip"><a class="pin" href="#nr-38">NR-38</a></li><li class="chip"><a class="pin" href="#nr-39">NR-39</a></li><li class="chip"><a class="pin" href="#nr-40">NR-40</a></li><li class="chip"><a class="pin" href="#nr-41">NR-41</a></li><li class="chip"><a class="pin" href="#nr-42">NR-42</a></li></ul></header>
+<p class="note"><b>Keep:</b> additive Replace, recorded-instant ordering, immutable recorded time, optional decided date, predecessor bytes untouched, selected-ID persistence, narrow Back pattern. <b>Change:</b> label/aria of the sort control, context when the selection is outside the filter, date hierarchy, Details naming, void under the body.</p>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A08 / A09 · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Current Decisions, schematic: sort button labelled with its current state and accent-filled; History list with predecessor while the detail pane shows the Current successor; large void; Details collapsed with decided date hidden.">
+<div class="col2" aria-hidden="true">
+<div class="l"><div class="mk-in mk-12" style="margin-bottom:6px"><svg class="ic"><use href="#i-search"/></svg> Search title and body…</div><div class="row" style="margin-bottom:6px"><span class="mk-btn pri">+ New</span></div>
+<div class="row" style="margin-bottom:8px"><span class="mk-small">Status</span><span class="mk-btn">History ▾</span><span class="mk-btn pri bad">Oldest</span></div><span class="pin b">NR-36</span>
+<div style="border-top:1px solid var(--border);padding-top:8px"><b style="font-weight:500">Preserve canonical Markdown</b><div class="row" style="margin-top:4px"><span class="mk-small" style="background:var(--surface);padding:1px 5px;border-radius:3px">10/7/2026</span><span class="mk-small">Replaced</span><span class="pin b">NR-38 recorded?</span></div></div></div>
+<div class="r"><div class="row nw"><b style="font-size:15px;font-weight:500" class="grow">Preserve canonical Markdown and explicit recovery</b><span class="mk-btn"><svg class="ic"><use href="#i-edit"/></svg>Edit</span></div>
+<div class="bad" style="margin-top:6px;font-size:12px;color:var(--text-secondary)">Keep the earlier record unchanged. Make stale-source and uncertain-write recovery explicit.<br><span class="pin b">NR-37 not in list, unexplained</span></div>
+<div class="bad" style="height:70px;margin:8px 0;display:flex;align-items:center;justify-content:center"><span class="pin b">NR-39 void</span></div>
+<div class="mk-small" style="border-top:1px solid var(--border);padding-top:6px">Recorded 10/7/2026, 4:54:54 AM <span style="color:var(--done)">Current</span></div>
+<div class="mk-small" style="margin-top:4px">▸ ⓘ Details <span class="pin b">NR-38 decided date hidden</span> <span class="pin b">NR-39 Replace buried</span></div></div></div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · not shipped UI</figcaption>
+<div class="mk" role="img" aria-label="Proposed Decisions, illustrative: Sort: Oldest label with state in the accessible name; context line explains the out-of-filter record; footer shows decided and recorded dates; Details renamed Details and replacement.">
+<div class="col2" aria-hidden="true">
+<div class="l"><div class="mk-in mk-12" style="margin-bottom:6px"><svg class="ic"><use href="#i-search"/></svg> Search title and body…</div><div class="row" style="margin-bottom:6px"><span class="mk-btn pri">+ New</span></div>
+<div class="row" style="margin-bottom:8px"><span class="mk-small">Status</span><span class="mk-btn">History (replaced) ▾</span></div><div class="row" style="margin-bottom:8px"><span class="mk-btn good">Sort: Oldest</span><a class="pin g" href="#nr-36">NR-36</a><a class="pin g" href="#nr-40">NR-40</a></div>
+<div style="border-top:1px solid var(--border);padding-top:8px"><b style="font-weight:500">Preserve canonical Markdown</b><div class="row" style="margin-top:4px"><span class="mk-small" style="background:var(--surface);padding:1px 5px;border-radius:3px">Recorded 10/7/2026</span><span class="mk-small">Replaced</span></div></div></div>
+<div class="r"><div class="mk-small good" style="border-left:2px solid var(--border-strong);padding:2px 8px;margin-bottom:6px">This record isn’t in the current list filter.<a class="pin g" href="#nr-37">NR-37</a></div>
+<div class="row nw"><b style="font-size:15px;font-weight:500" class="grow">Preserve canonical Markdown and explicit recovery</b><span class="mk-btn"><svg class="ic"><use href="#i-edit"/></svg>Edit</span></div>
+<div style="margin-top:6px;font-size:12px;color:var(--text-secondary)">Keep the earlier record unchanged. Make stale-source and uncertain-write recovery explicit.</div>
+<div style="height:14px"></div>
+<div class="mk-small good" style="border-top:1px solid var(--border);padding-top:6px">Decided 2026-10-01 · Recorded 10/7/2026, 4:54:54 AM · <span style="color:var(--done)">Current</span><a class="pin g" href="#nr-38">NR-38</a></div>
+<div class="mk-small" style="margin-top:4px">▸ ⓘ Details &amp; replacement<a class="pin g" href="#nr-39">NR-39</a></div></div></div></div>
+<p class="note">Ordering stays recorded-instant then ID. The context line is derived display (selected ID ∉ list); it does not change selection or filter. Optional relocation of <b>Replace</b> beside <b>Edit</b> is an <b>L</b>-class option that needs a focus-order review; the recommended step is the summary rename.</p></figure>
+</div>
+<p class="note"><b>Forms (S-only, no actual capture):</b> <a class="pin" href="#nr-41">NR-41</a> — new/edit action cluster mixes Save / “Back / keep edit” / “Discard edits” at equal weight; make Save primary and give Discard a destructive-hover tint; labels and retention-vs-discard semantics unchanged. <a class="pin" href="#nr-42">NR-42</a> — narrow list view (420) was not captured; focus transfer on list→detail is decision <a href="#decisions">D-05</a>.</p>
+</section>
+
+<!-- ===================== C6 ===================== -->
+<section class="blk" id="c6" aria-labelledby="h-c6">
+<header><h2 id="h-c6">C6 · Shared problems, unknown outcome, retained drafts, Agent access</h2>
+<p class="mut">Atlas N-REC-02/04/06/07, N-KAN-09, N-DEC-07, N-SHELL-05 · Evidence: <strong>none actual</strong> — all source-derived (S-only) · Source <code>notes.css:62-73,229-255</code>, <code>NotesView.tsx:152-156</code>, <code>RetainedDrafts.tsx:12-19</code>, <code>AgentAccess.tsx:55-72</code></p>
+<ul class="chips"><li class="chip"><a class="pin b" href="#nr-43">NR-43</a></li><li class="chip"><a class="pin" href="#nr-44">NR-44</a></li><li class="chip"><a class="pin" href="#nr-45">NR-45</a></li><li class="chip"><a class="pin" href="#nr-46">NR-46</a></li></ul></header>
+<p class="banner" role="note"><span class="tag src">CODE-DERIVED</span> The “current” panel below is a layout inferred from CSS (<code>.notes-problem-slot{position:absolute;bottom:0}</code>), <strong>never observed rendered</strong>; no alert/unknown-outcome capture exists in A01–A19. Treat NR-43 as a hypothesis to confirm on rebuild before implementation.</p>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag src">CODE-DERIVED</span> inferred layout · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Code-derived current layout, schematic: an alert overlays the bottom of the panel and covers the Save scratchpad row.">
+<div class="mk-body" aria-hidden="true" style="position:relative;height:210px;overflow:hidden">
+<div style="font-size:14px;padding:8px 0 0 24%">Draft text in the editor…</div>
+<div class="row" style="position:absolute;left:12px;right:12px;bottom:12px"><span class="dot" style="background:var(--warning)"></span><span class="mk-12">Draft kept · not yet saved</span><span class="push mk-btn pri dim">Save scratchpad</span></div>
+<div class="bad" style="position:absolute;left:0;right:0;bottom:0;background:var(--chrome-bg);border-top:1px solid var(--border);padding:8px 12px;color:var(--warning);font-size:11.5px;max-height:75%;box-shadow:0 -6px 12px rgba(0,0,0,.4)">ⓘ Could not confirm whether the change was saved. Your drafts are kept. Check saved state before choosing any next write; posting again may duplicate. <span class="mono mut">notes_outcome_unknown</span> <span class="mk-btn" style="margin-left:6px">Check saved state</span> <span class="pin b">NR-43 covers Save row</span></div>
+</div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · not shipped UI</figcaption>
+<div class="mk" role="img" aria-label="Proposed layout, illustrative: the alert is an in-flow band below the panels; the Save row stays visible above and is shown disabled, as the existing unknown-outcome guard requires; the alert shows three ordered steps with the same strings and buttons.">
+<div class="mk-body" aria-hidden="true" style="display:flex;flex-direction:column;height:210px;padding:0">
+<div style="padding:12px 12px 0;flex:1 1 0;min-height:0"><div style="font-size:14px;padding:8px 0 0 24%">Draft text in the editor…</div></div>
+<div class="row" style="padding:6px 12px"><span class="dot" style="background:var(--warning)"></span><span class="mk-12">Draft kept · not yet saved</span><span class="push mk-btn pri dim">Save scratchpad</span><a class="pin g" href="#nr-43">NR-43</a></div>
+<div class="good" style="background:var(--chrome-bg);border-top:1px solid var(--border);padding:7px 12px;font-size:11.5px;color:var(--warning)">
+<div>① ⓘ Could not confirm whether the change was saved. Drafts are kept. <span class="mono mut">notes_outcome_unknown</span></div>
+<div class="row" style="margin-top:3px"><span style="color:var(--text-secondary)">② </span><span class="mk-btn">Check saved state</span><span class="mk-btn dim">③ I checked saved state; allow next write</span><a class="pin g" href="#nr-44">NR-44</a></div></div>
+</div></div>
+<p class="note">Same strings, buttons, <code>role="alert"</code> and gating. <strong>Save stays disabled</strong> (shown dimmed) because the existing model blocks every write until a saved-state read succeeds and the user explicitly acknowledges; the proposal changes only where the alert sits, so Save stays visible and Check saved state / the acknowledgement stay unobscured and clickable. “Check” is a read, never a retry; nothing is replayed; no write becomes actionable earlier.</p></figure>
+</div>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag src">CODE-DERIVED</span> retained-draft disclosure · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Current retained drafts summary: collapsed disclosure with '2 source draft(s) kept'."><div class="mk-body" aria-hidden="true"><div class="row bad" style="color:var(--warning)"><svg class="ic"><use href="#i-info"/></svg>2 source draft(s) kept<span class="push"><svg class="ic"><use href="#i-down"/></svg></span><span class="pin b">NR-45</span></div></div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative</figcaption>
+<div class="mk" role="img" aria-label="Proposed retained drafts summary: '2 unsaved edits kept — source no longer exists', warning tinted."><div class="mk-body" aria-hidden="true"><div class="row good" style="color:var(--warning)"><svg class="ic"><use href="#i-info"/></svg><b style="font-weight:600">2 unsaved edits kept</b> — source no longer exists<span class="push"><svg class="ic"><use href="#i-down"/></svg></span><a class="pin g" href="#nr-45">NR-45</a></div></div></div>
+<p class="note">Default-open and un-gating from Scratchpad load are decision <a href="#decisions">D-08</a>, not part of this polish.</p></figure>
+</div>
+<p class="note"><b>Agent access</b> (<a class="pin" href="#nr-46">NR-46</a>, S-only): the expanded overlay was not captured; 14+ readonly commands sit in one flat grid. Group under existing surface labels (Scratchpad, Todos, Board, Decisions, Comments) — keep copy buttons, pinned UUID and “never retry an unconfirmed write” text.</p>
+</section>
+
+<!-- ===================== C7 ===================== -->
+<section class="blk" id="c7" aria-labelledby="h-c7">
+<header><h2 id="h-c7">C7 · Shared header, tabs, counts, narrow navigation</h2>
+<p class="mut">Atlas N-SHELL-01/04, N-REC-09, N-TODO-06, N-KAN-05 · Evidence A04, A05, A07, A08, A09, A13, A16 · Source <code>NotesView.tsx:129-135</code>, <code>TaskDetail.tsx:180</code>, <code>notes.css:16-24,256-285</code></p>
+<ul class="chips"><li class="chip"><a class="pin" href="#nr-06">NR-06</a></li><li class="chip"><a class="pin" href="#nr-07">NR-07</a></li><li class="chip"><a class="pin" href="#nr-08">NR-08</a></li><li class="chip"><a class="pin" href="#nr-49">NR-49</a></li></ul></header>
+<h3>Tab counts</h3>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A13 · not a screenshot</figcaption>
+<div class="mk" role="img" aria-label="Current tab strip, schematic: Todos 3, Kanban 2, Decisions 2 with no explanation of what each count measures."><div class="mk-tabs" aria-hidden="true"><span class="mk-tab"><svg class="ic"><use href="#i-file"/></svg>Scratchpad</span><span class="mk-tab on"><svg class="ic"><use href="#i-check"/></svg>Todos <span class="mk-cnt">3</span></span><span class="mk-tab"><svg class="ic"><use href="#i-grid"/></svg>Kanban <span class="mk-cnt">2</span></span><span class="mk-tab"><svg class="ic"><use href="#i-lib"/></svg>Decisions <span class="mk-cnt">2</span></span></div>
+<div class="mk-body mk-12" aria-hidden="true">Todos = <b>open</b> tasks · Kanban = tasks <b>on board incl. Done</b> · Decisions = <b>all records incl. History</b>. The counts are <code>aria-hidden</code>. <span class="pin b">NR-06</span></div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · counts and their basis unchanged</figcaption>
+<div class="mk" role="img" aria-label="Proposed tab strip, illustrative: same counts; each tab gets a title and hidden suffix explaining the basis."><div class="mk-tabs" aria-hidden="true"><span class="mk-tab"><svg class="ic"><use href="#i-file"/></svg>Scratchpad</span><span class="mk-tab on"><svg class="ic"><use href="#i-check"/></svg>Todos <span class="mk-cnt">3</span></span><span class="mk-tab"><svg class="ic"><use href="#i-grid"/></svg>Kanban <span class="mk-cnt">2</span></span><span class="mk-tab"><svg class="ic"><use href="#i-lib"/></svg>Decisions <span class="mk-cnt">2</span></span></div>
+<div class="mk-body" aria-hidden="true"><span class="tt">Todos — 3 open</span> <span class="tt">Kanban — 2 on board</span> <span class="tt">Decisions — 2 records (Current and History)</span><a class="pin g" href="#nr-06">NR-06</a><div class="mk-small" style="margin-top:6px">Changing the basis of any count is decision D-01, not proposed.</div></div></div></figure>
+</div>
+<h3>Narrow detail close (≤719px container)</h3>
+<div class="pair">
+<figure class="m-current"><figcaption><span class="tag cur">CURRENT</span> schematic redraw of A16 (420px) · not a screenshot</figcaption>
+<div class="mk phone" role="img" aria-label="Current narrow layout, schematic: Close Notes X in the Notes header, and a second identical X in the Task details header directly below it."><div class="mk-head" aria-hidden="true"><svg class="ic"><use href="#i-file"/></svg><b>Notes</b><span class="sep"></span><span class="mut">Fixture</span><span class="push bad"><svg class="ic"><use href="#i-close"/></svg></span></div><div class="mk-tabs" aria-hidden="true"><span class="mk-tab">Scratchpad</span><span class="mk-tab on">Todos <span class="mk-cnt">2</span></span><span class="mk-tab">Kanban</span></div>
+<div class="mk-head" aria-hidden="true"><b style="font-weight:500">Task details</b><span class="push bad"><svg class="ic"><use href="#i-close"/></svg></span></div><div class="mk-body mk-small" aria-hidden="true">Two identical ✕, different scope. <span class="pin b">NR-08</span></div></div></figure>
+<figure class="m-proposed"><figcaption><span class="tag pro">PROPOSED</span> illustrative · same handler and focus return</figcaption>
+<div class="mk phone" role="img" aria-label="Proposed narrow layout, illustrative: the Task details header uses the existing Back pattern with a back arrow and the label Back to tasks."><div class="mk-head" aria-hidden="true"><svg class="ic"><use href="#i-file"/></svg><b>Notes</b><span class="sep"></span><span class="mut">Fixture</span><span class="push"><svg class="ic"><use href="#i-close"/></svg></span></div><div class="mk-tabs" aria-hidden="true"><span class="mk-tab">Scratchpad</span><span class="mk-tab on">Todos <span class="mk-cnt">2</span></span><span class="mk-tab">Kanban</span></div>
+<div class="mk-head" aria-hidden="true"><span class="mk-btn good"><svg class="ic"><use href="#i-back"/></svg>Back to tasks</span><b style="font-weight:500" class="push">Task details</b></div><div class="mk-body mk-small" aria-hidden="true">Reuses the Decisions “Back to decisions” pattern. Escape order unchanged. <a class="pin g" href="#nr-08">NR-08</a></div></div></figure>
+</div>
+<p class="note"><b>Chrome density</b> (<a class="pin" href="#nr-07">NR-07</a>): header band + tab band are two 41px rows (<code>styles.css:64</code>) before content. Merging them (D-11) changes landmarks and Close geometry — <strong>not recommended now</strong>. <b>Top-bar Notes trigger</b> (<a class="pin" href="#nr-49">NR-49</a>): carries <code>aria-pressed</code> (<code>App.tsx:239</code>) but A02–A19 show no filled state while Notes is open (A01 does); unresolved, verify on rebuild — outside the Notes stylesheet.</p>
+</section>
+
+<!-- ===================== Type ===================== -->
+<section class="blk" id="type" aria-labelledby="h-type">
+<header><h2 id="h-type">Typography, density, targets, contrast</h2>
+<p class="mut">NR-47, NR-48, NR-28, NR-15 · Source <code>styles.css:13-55,86</code>, <code>notes.css:4-14,128,286</code></p></header>
+<div class="tw" tabindex="0" role="region" aria-label="Type scale table">
+<table><thead><tr><th>Token</th><th>Size</th><th>Where Notes uses it (examples)</th><th>Proposal</th></tr></thead><tbody>
+<tr><td class="mono">--font-size-2xs</td><td>11px</td><td>counts, <code>small</code> (Draft kept), comment header, hints, Reference inputs, live status</td><td>Functional text (draft/status/provenance/hint) → 12px; decorative counts may stay</td></tr>
+<tr><td class="mono">--font-size-control</td><td>12px</td><td>buttons, errors, footers, summaries</td><td>New floor for persistent informational text</td></tr>
+<tr><td class="mono">--font-size-xs</td><td>13px</td><td>tabs, detail heading, comment body, empty states</td><td>unchanged</td></tr>
+<tr><td class="mono">--font-size-sm / md</td><td>14 / 15px</td><td>row text, Scratchpad body (md, 1.8 line-height)</td><td>unchanged</td></tr>
+<tr><td class="mono">--compact-control-size</td><td>28px</td><td>icon buttons, tab strip actions</td><td>unchanged; checkbox hit area ≥24px (NR-48, WCAG 2.2 SC 2.5.8; spacing exemption possible — inference)</td></tr>
+<tr><td class="mono">disabled</td><td>opacity .5</td><td>Add, Comment, Save scratchpad</td><td>~.6 with desaturated text (NR-28)</td></tr>
+<tr><td class="mono">--text-muted on --app-bg</td><td>#a6adc8 / #0b0e12</td><td>muted text</td><td>≈ 8.7:1 computed from token hexes — contrast is fine; size is the issue</td></tr>
+</tbody></table></div>
+</section>
+
+<!-- ===================== Register ===================== -->
+<section class="blk" id="register" aria-labelledby="h-reg">
+<header><h2 id="h-reg">Risk and UX issue register</h2>
+<p class="mut">Severity P1 defect/hazard in a recovery, safety or first-run flow · P2 clear usability/a11y/hierarchy · P3 polish. Confidence H/M/L. Class: <b>C</b> cosmetic · <b>W</b> wording/accessible-name · <b>L</b> layout, needs focus-order re-verification · <b>D</b> needs separate behavior decision. Evidence: <b>A</b> = at least one actual screenshot (existing bundle) plus source; <b>S</b> = source only, never seen rendered.</p></header>
+<div class="filters" role="group" aria-label="Register filters">
+<span class="grp"><span class="ctlabel">Severity</span><span class="seg"><button type="button" data-f="sev" data-v="all" aria-pressed="true">All</button><button type="button" data-f="sev" data-v="P1" aria-pressed="false">P1</button><button type="button" data-f="sev" data-v="P2" aria-pressed="false">P2</button><button type="button" data-f="sev" data-v="P3" aria-pressed="false">P3</button></span></span>
+<span class="grp"><span class="ctlabel">Class</span><span class="seg"><button type="button" data-f="cls" data-v="all" aria-pressed="true">All</button><button type="button" data-f="cls" data-v="C" aria-pressed="false">C</button><button type="button" data-f="cls" data-v="W" aria-pressed="false">W</button><button type="button" data-f="cls" data-v="L" aria-pressed="false">L</button><button type="button" data-f="cls" data-v="D" aria-pressed="false">D</button></span></span>
+<span class="grp"><span class="ctlabel">Domain</span><span class="seg"><button type="button" data-f="dom" data-v="all" aria-pressed="true">All</button><button type="button" data-f="dom" data-v="shell" aria-pressed="false">Shell</button><button type="button" data-f="dom" data-v="scratch" aria-pressed="false">Scratchpad</button><button type="button" data-f="dom" data-v="todos" aria-pressed="false">Todos</button><button type="button" data-f="dom" data-v="detail" aria-pressed="false">Detail</button><button type="button" data-f="dom" data-v="kanban" aria-pressed="false">Kanban</button><button type="button" data-f="dom" data-v="decisions" aria-pressed="false">Decisions</button><button type="button" data-f="dom" data-v="recovery" aria-pressed="false">Recovery</button></span></span>
+<span class="grp"><span class="ctlabel">Evidence</span><span class="seg"><button type="button" data-f="ev" data-v="all" aria-pressed="true">All</button><button type="button" data-f="ev" data-v="A" aria-pressed="false">A + S</button><button type="button" data-f="ev" data-v="S" aria-pressed="false">S only</button></span></span>
+<span class="grp"><label class="ctlabel" for="q">Search</label><input id="q" type="search" placeholder="id, atlas, word…"></span>
+<span class="grp"><span id="regcount" class="mut" role="status" aria-live="polite">49 of 49 shown</span></span>
+</div>
+<div class="tw" id="reg" tabindex="0" role="region" aria-label="Register table, scrollable">
+<table><thead><tr><th>ID</th><th>Atlas IDs</th><th>Finding</th><th>Evidence</th><th>Sev</th><th>Conf</th><th>Class</th><th>Conservative remedy / what stays</th></tr></thead><tbody>
+<tr id="nr-01" data-sev="P1" data-cls="C" data-dom="shell" data-ev="A"><td class="id">NR-01</td><td class="sm" data-l="Atlas">N-SHELL-03</td><td data-l="Finding">Picker content does not stack: helper text and catalog card share one flex row.</td><td class="sm" data-l="Evidence">A12 A02 · notes.css:239-249</td><td class="p1" data-l="Sev">P1</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">One centered column in picker mode. Focus targets, Escape order, exact-UUID selection unchanged.</td></tr>
+<tr id="nr-02" data-sev="P2" data-cls="C W" data-dom="shell" data-ev="A"><td class="id">NR-02</td><td class="sm" data-l="Atlas">N-SHELL-03 N-SHELL-06</td><td data-l="Finding">Transfer confirmation is full-width and detached; Attach here equals Keep in weight.</td><td class="sm" data-l="Evidence">A12 · NotesView.tsx:273</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C W</td><td data-l="Remedy">Place under the selected card at card width; quiet warning border on Attach here; text unchanged; Keep stays focused.</td></tr>
+<tr id="nr-03" data-sev="P2" data-cls="C" data-dom="shell" data-ev="A"><td class="id">NR-03</td><td class="sm" data-l="Atlas">N-SHELL-03</td><td data-l="Finding">Attach/Cancel stacked and centered (A12) or merged into the error line (A02).</td><td class="sm" data-l="Evidence">A12 A02</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">One right-aligned [Cancel][Attach] row; DOM order kept.</td></tr>
+<tr id="nr-04" data-sev="P3" data-cls="C" data-dom="shell" data-ev="A"><td class="id">NR-04</td><td class="sm" data-l="Atlas">N-SHELL-03</td><td data-l="Finding">Catalog error is a run-in sentence (message + code + Retry). Not a successful-empty capture.</td><td class="sm" data-l="Evidence">A02 · NotesView.tsx:272</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Standard alert block; backend message text untouched.</td></tr>
+<tr id="nr-05" data-sev="P3" data-cls="W" data-dom="shell" data-ev="S"><td class="id">NR-05</td><td class="sm" data-l="Atlas">N-SHELL-03</td><td data-l="Finding">Refreshed catalog without the selected UUID silently disables Attach.</td><td class="sm" data-l="Evidence">S NotesView.tsx:240-278</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">L</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">Derived hint only; no selection mutation, no auto-attach/create.</td></tr>
+<tr id="nr-06" data-sev="P2" data-cls="W" data-dom="shell" data-ev="A"><td class="id">NR-06</td><td class="sm" data-l="Atlas">N-SHELL-04 N-REC-09</td><td data-l="Finding">Tab counts have three bases (open / on board incl. Done / all records) and are aria-hidden.</td><td class="sm" data-l="Evidence">A08 A09 A13 · NotesView.tsx:135</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">title + hidden suffix per tab; basis unchanged (D-01).</td></tr>
+<tr id="nr-07" data-sev="P3" data-cls="L D" data-dom="shell" data-ev="A"><td class="id">NR-07</td><td class="sm" data-l="Atlas">N-SHELL-01 N-SHELL-04 N-REC-09</td><td data-l="Finding">Two stacked 41px chrome bands before content.</td><td class="sm" data-l="Evidence">A05 A07 · notes.css:16,21</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls D" data-l="Class">L D</td><td data-l="Remedy">Not recommended now (D-11); trim padding ≤520 only.</td></tr>
+<tr id="nr-08" data-sev="P2" data-cls="C W" data-dom="shell" data-ev="A"><td class="id">NR-08</td><td class="sm" data-l="Atlas">N-TODO-06 N-KAN-05 N-SHELL-01</td><td data-l="Finding">Two identical ✕ stacked: Close Notes above Close task details.</td><td class="sm" data-l="Evidence">A04 A16 · TaskDetail.tsx:180</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C W</td><td data-l="Remedy">≤719: Back pattern “Back to tasks”, same handler/focus return; Escape order unchanged.</td></tr>
+<tr id="nr-09" data-sev="P2" data-cls="C" data-dom="scratch" data-ev="A"><td class="id">NR-09</td><td class="sm" data-l="Atlas">N-SCR-02 N-SHELL-04</td><td data-l="Finding">Toolbar label/mode toggle at container edges, text in centered 76ch column.</td><td class="sm" data-l="Evidence">A19 A03 A11 · notes.css:36-37,41</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Align toolbar and save row to the same column; session/caret/Mod-S untouched.</td></tr>
+<tr id="nr-10" data-sev="P3" data-cls="W C" data-dom="scratch" data-ev="A"><td class="id">NR-10</td><td class="sm" data-l="Atlas">N-SCR-02</td><td data-l="Finding">Source/Preview are icon-only 30×25 buttons.</td><td class="sm" data-l="Evidence">A19 · MarkdownEditor.tsx:90</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">W C</td><td data-l="Remedy">Text labels ≥520; aria-pressed unchanged; no focus handoff change (D-05).</td></tr>
+<tr id="nr-11" data-sev="P3" data-cls="W" data-dom="scratch" data-ev="S"><td class="id">NR-11</td><td class="sm" data-l="Atlas">N-SCR-01 N-REC-02</td><td data-l="Finding">“Saving…” shows for any write on the UUID (shared busy).</td><td class="sm" data-l="Evidence">S NotesView.tsx:138; useNotes.ts:98-106</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">“Saving Notes…”; pending ownership unchanged.</td></tr>
+<tr id="nr-12" data-sev="P2" data-cls="C" data-dom="scratch" data-ev="A"><td class="id">NR-12</td><td class="sm" data-l="Atlas">N-SCR-03 N-REC-03</td><td data-l="Finding">Saved-version preview inherits the Scratchpad reading-column style inside the conflict alert.</td><td class="sm" data-l="Evidence">A11 · notes.css:41,70</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Scope reset in .notes-conflict; label “Saved version (read-only)”; keep disclosure.</td></tr>
+<tr id="nr-13" data-sev="P2" data-cls="C" data-dom="scratch" data-ev="A"><td class="id">NR-13</td><td class="sm" data-l="Atlas">N-SCR-03 N-TODO-03 N-COM-03 N-DEC-04 N-KAN-04</td><td data-l="Finding">Scratchpad “Keep mine and save” is the accent primary; the same control is neutral elsewhere.</td><td class="sm" data-l="Evidence">A11 · NotesView.tsx:138 vs TaskDetail.tsx:206, Decisions.tsx:112</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Equal-weight pair + consequence line; order, labels, handlers unchanged.</td></tr>
+<tr id="nr-14" data-sev="P3" data-cls="C" data-dom="scratch" data-ev="A"><td class="id">NR-14</td><td class="sm" data-l="Atlas">N-SCR-02 N-COM-02 N-COM-03</td><td data-l="Finding">Line-number gutter shows “1 Add a comment…”; hidden only inside Scratchpad.</td><td class="sm" data-l="Evidence">A04 A15 A16 · notes.css:38</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Hide gutter in comment composer/edit; keep it in decision body editor.</td></tr>
+<tr id="nr-15" data-sev="P2" data-cls="C" data-dom="todos" data-ev="A"><td class="id">NR-15</td><td class="sm" data-l="Atlas">N-TODO-01 N-TODO-04 N-KAN-03</td><td data-l="Finding">Board membership invisible at rest (chip opacity 0); hidden controls reserve width so counts float.</td><td class="sm" data-l="Evidence">A04 A13 A14 vs A05 · notes.css:103-108</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Quiet persistent lane tag; fixed trailing column; promote stays hover/focus; chip still navigates.</td></tr>
+<tr id="nr-16" data-sev="P1" data-cls="W C" data-dom="todos" data-ev="A"><td class="id">NR-16</td><td class="sm" data-l="Atlas">N-TODO-05 N-KAN-03 N-REC-04</td><td data-l="Finding">Adoption disguised as Comments: unadopted task shows the same icon; activation writes an id into todos.md.</td><td class="sm" data-l="Evidence">A13 · NotesView.tsx:145; Kanban.tsx:61</td><td class="p1" data-l="Sev">P1</td><td data-l="Conf">H</td><td class="cls" data-l="Class">W C</td><td data-l="Remedy">Visible “Adopt” label + title “adds an id…”; same handler. Confirmation = D-02, not included.</td></tr>
+<tr id="nr-17" data-sev="P2" data-cls="W" data-dom="todos" data-ev="A"><td class="id">NR-17</td><td class="sm" data-l="Atlas">N-TODO-01</td><td data-l="Finding">Hide completed flips its label and sets aria-pressed (name/state contradict).</td><td class="sm" data-l="Evidence">A04 · NotesView.tsx:142</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">Stable label “Hide completed” + aria-pressed; filter stays view-only.</td></tr>
+<tr id="nr-18" data-sev="P2" data-cls="W" data-dom="todos" data-ev="S"><td class="id">NR-18</td><td class="sm" data-l="Atlas">N-TODO-01</td><td data-l="Finding">All tasks completed + hidden → blank list; empty prompt keyed on total length.</td><td class="sm" data-l="Evidence">S NotesView.tsx:143,147</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">M</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">Derived text “All tasks are completed and hidden.”; no new control.</td></tr>
+<tr id="nr-19" data-sev="P3" data-cls="C" data-dom="todos" data-ev="A"><td class="id">NR-19</td><td class="sm" data-l="Atlas">N-TODO-03 N-KAN-04</td><td data-l="Finding">Editable titles look like static text until hover.</td><td class="sm" data-l="Evidence">A04 A13 · notes.css:99-100</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">cursor:text; no resting borders; Enter-save, no blur-save unchanged.</td></tr>
+<tr id="nr-20" data-sev="P3" data-cls="W" data-dom="todos" data-ev="A"><td class="id">NR-20</td><td class="sm" data-l="Atlas">N-TODO-01 N-REC-04</td><td data-l="Finding">Markdown-source popover trigger is icon-only at far right.</td><td class="sm" data-l="Evidence">A04 A13 · notes.css:84-92</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">L</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">Text label “todos.md” ≥720; popover stays read-only.</td></tr>
+<tr id="nr-21" data-sev="P3" data-cls="C" data-dom="todos" data-ev="S"><td class="id">NR-21</td><td class="sm" data-l="Atlas">N-TODO-01</td><td data-l="Finding">Nesting conveyed only by inline padding; no guide (no nested fixture captured).</td><td class="sm" data-l="Evidence">S NotesView.tsx:144</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">L</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">1px depth guide, CSS only; verify with nested fixture first.</td></tr>
+<tr id="nr-22" data-sev="P2" data-cls="C" data-dom="detail" data-ev="A"><td class="id">NR-22</td><td class="sm" data-l="Atlas">N-COM-04</td><td data-l="Finding">Comment Delete uses the same ✕ glyph as Close; <code>trash</code> exists in the icon inventory.</td><td class="sm" data-l="Evidence">A18 · TaskDetail.tsx:203; UiIcon.tsx:6</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Swap to trash; confirmation, Keep autofocus, CAS refusal unchanged.</td></tr>
+<tr id="nr-23" data-sev="P2" data-cls="C W" data-dom="detail" data-ev="A"><td class="id">NR-23</td><td class="sm" data-l="Atlas">N-COM-01</td><td data-l="Finding">Provenance at 11px; Record details sits between header and body; “unverified” only in a title.</td><td class="sm" data-l="Evidence">A04 A17 · TaskDetail.tsx:202,205</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C W</td><td data-l="Remedy">12px header, disclosure below body, visible “unverified label” qualifier.</td></tr>
+<tr id="nr-24" data-sev="P3" data-cls="C" data-dom="detail" data-ev="A"><td class="id">NR-24</td><td class="sm" data-l="Atlas">N-COM-01 N-TODO-06</td><td data-l="Finding">Reserved empty error row = dead band; empty-comments state left-aligned unlike other empties (A14).</td><td class="sm" data-l="Evidence">A04 A14 A15 A16 · notes.css:71,75,163</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Collapse when empty (pattern notes.css:206); centre the empty state.</td></tr>
+<tr id="nr-25" data-sev="P3" data-cls="C" data-dom="detail" data-ev="A"><td class="id">NR-25</td><td class="sm" data-l="Atlas">N-TODO-04 N-KAN-06</td><td data-l="Finding">Summary controls wrap into three rows; non-destructive Remove from board has button weight.</td><td class="sm" data-l="Evidence">A04 A16 · TaskDetail.tsx:181-186</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Group a Board row; text-style Remove from board. Do not remove Completed or Move.</td></tr>
+<tr id="nr-26" data-sev="P3" data-cls="W" data-dom="detail" data-ev="A"><td class="id">NR-26</td><td class="sm" data-l="Atlas">N-COM-02</td><td data-l="Finding">Author shows default “Local user”; “unverified” only as placeholder/title.</td><td class="sm" data-l="Evidence">A04 · TaskDetail.tsx:217</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">Visible muted “unverified” beside the author label.</td></tr>
+<tr id="nr-27" data-sev="P3" data-cls="C" data-dom="detail" data-ev="S"><td class="id">NR-27</td><td class="sm" data-l="Atlas">N-COM-01 N-COM-03 N-REC-05 N-TODO-03</td><td data-l="Finding">Seven state classes have no stylesheet rule (new-comments pill, removed-task, loading, item-problems, retained comment, Discard edit, is-unboarded).</td><td class="sm" data-l="Evidence">S TaskDetail.tsx:186,194,203,212,214; TodoTitle.tsx:57-73; no match in src/**/*.css</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">H absence / M impact</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Minimal rules from existing tokens; strings/handlers unchanged.</td></tr>
+<tr id="nr-28" data-sev="P3" data-cls="C" data-dom="detail" data-ev="A"><td class="id">NR-28</td><td class="sm" data-l="Atlas">N-SCR-01 N-TODO-02 N-COM-02</td><td data-l="Finding">Disabled primaries at opacity .5 are very faint.</td><td class="sm" data-l="Evidence">A04 A13 A19 · notes.css:6-7</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">~.6 opacity, desaturated text; disabled gates unchanged.</td></tr>
+<tr id="nr-29" data-sev="P2" data-cls="C" data-dom="kanban" data-ev="A"><td class="id">NR-29</td><td class="sm" data-l="Atlas">N-KAN-03 N-KAN-01</td><td data-l="Finding">One-line cards ~100px tall: actions row reserved while empty.</td><td class="sm" data-l="Evidence">A05 A06 · notes.css:122,133; Kanban.tsx:61</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Menu into title row visually (DOM order unchanged); lower row only with comments/draft.</td></tr>
+<tr id="nr-30" data-sev="P2" data-cls="C" data-dom="kanban" data-ev="A"><td class="id">NR-30</td><td class="sm" data-l="Atlas">N-KAN-03 N-KAN-08</td><td data-l="Finding">Drag handle and card-actions menu share the same three-dot icon.</td><td class="sm" data-l="Evidence">A05 · Kanban.tsx:60-61; UiIcon.tsx:2</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Menu → existing down chevron; no new asset; keyboard drag contract untouched.</td></tr>
+<tr id="nr-31" data-sev="P2" data-cls="C" data-dom="kanban" data-ev="A"><td class="id">NR-31</td><td class="sm" data-l="Atlas">N-KAN-01</td><td data-l="Finding">Lane jump chips look like plain text (transparent !important background/border).</td><td class="sm" data-l="Evidence">A06 A07 · notes.css:111</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Pill border/hover/count; no current-lane tracking (D-12); still drop zones.</td></tr>
+<tr id="nr-32" data-sev="P2" data-cls="W" data-dom="kanban" data-ev="A"><td class="id">NR-32</td><td class="sm" data-l="Atlas">N-KAN-02</td><td data-l="Finding">Lane “+” aria-label says “from {lane}”; title and focus target say Backlog.</td><td class="sm" data-l="Evidence">A05 · Kanban.tsx:185,133</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">All three: “Add a card to Backlog”. Do not hide Doing/Done + (D-07) or add per-lane creation.</td></tr>
+<tr id="nr-33" data-sev="P3" data-cls="C" data-dom="kanban" data-ev="A"><td class="id">NR-33</td><td class="sm" data-l="Atlas">N-KAN-03</td><td data-l="Finding">Whitespace-click-to-open has no cue; handle/comment opener hidden until hover/focus.</td><td class="sm" data-l="Evidence">A05 · Kanban.tsx:44-48; notes.css:128-143,286</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">cursor cue; keep focus-within and coarse-pointer reveal.</td></tr>
+<tr id="nr-34" data-sev="P3" data-cls="C" data-dom="kanban" data-ev="A"><td class="id">NR-34</td><td class="sm" data-l="Atlas">N-KAN-01 N-SHELL-04</td><td data-l="Finding">At medium width the third lane is clipped with no edge cue.</td><td class="sm" data-l="Evidence">A06 · notes.css:257</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Edge fade; scroll-snap and memory unchanged.</td></tr>
+<tr id="nr-35" data-sev="P3" data-cls="C" data-dom="kanban" data-ev="A"><td class="id">NR-35</td><td class="sm" data-l="Atlas">N-KAN-08</td><td data-l="Finding">Live status persists as 11px muted text under the board.</td><td class="sm" data-l="Evidence">A05 A07 · notes.css:150</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">L</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">12px; persistence and politeness unchanged.</td></tr>
+<tr id="nr-36" data-sev="P2" data-cls="W" data-dom="decisions" data-ev="A"><td class="id">NR-36</td><td class="sm" data-l="Atlas">N-DEC-01 N-DEC-08</td><td data-l="Finding">Sort button shows current state as its label; fixed aria-label hides the state from AT.</td><td class="sm" data-l="Evidence">A08 A09 · Decisions.tsx:105</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">Visible “Sort: Newest”; aria-label includes state and action.</td></tr>
+<tr id="nr-37" data-sev="P2" data-cls="W" data-dom="decisions" data-ev="A"><td class="id">NR-37</td><td class="sm" data-l="Atlas">N-DEC-01 N-DEC-02</td><td data-l="Finding">After switching to History the detail still shows the Current successor; no row selected, no explanation.</td><td class="sm" data-l="Evidence">A09 · Decisions.tsx:106-114</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">Derived context line; no selection/filter mutation.</td></tr>
+<tr id="nr-38" data-sev="P2" data-cls="W C" data-dom="decisions" data-ev="A"><td class="id">NR-38</td><td class="sm" data-l="Atlas">N-DEC-06</td><td data-l="Finding">List chip is the recorded date; decided date only inside collapsed Details; formats differ.</td><td class="sm" data-l="Evidence">A08 · Decisions.tsx:106,113</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls" data-l="Class">W C</td><td data-l="Remedy">Label “Recorded …”; show “Decided …” in footer when present; ordering unchanged.</td></tr>
+<tr id="nr-39" data-sev="P2" data-cls="C W L" data-dom="decisions" data-ev="A"><td class="id">NR-39</td><td class="sm" data-l="Atlas">N-DEC-02 N-DEC-05 N-DEC-08</td><td data-l="Finding">Void between body and pinned footer; Replace buried inside Details.</td><td class="sm" data-l="Evidence">A08 A10 · notes.css:213,215; Decisions.tsx:113</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">H</td><td class="cls L" data-l="Class">C W L</td><td data-l="Remedy">Rename summary “Details &amp; replacement”; tighten void. Option (L): Replace beside Edit, focus-order review.</td></tr>
+<tr id="nr-40" data-sev="P3" data-cls="W" data-dom="decisions" data-ev="A"><td class="id">NR-40</td><td class="sm" data-l="Atlas">N-DEC-01</td><td data-l="Finding">Filter says Current/History; rows say Current/Replaced.</td><td class="sm" data-l="Evidence">A09 · Decisions.tsx:105-106</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">W</td><td data-l="Remedy">Option text “History (replaced)”; values unchanged.</td></tr>
+<tr id="nr-41" data-sev="P3" data-cls="C" data-dom="decisions" data-ev="S"><td class="id">NR-41</td><td class="sm" data-l="Atlas">N-DEC-03 N-DEC-04 N-REC-06</td><td data-l="Finding">New/edit action cluster mixes Save, Back / keep edit, Discard at equal weight. No actual capture.</td><td class="sm" data-l="Evidence">S Decisions.tsx:110-112; notes.css:209-212</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Primary Save; destructive-hover Discard; labels and retention semantics unchanged.</td></tr>
+<tr id="nr-42" data-sev="P3" data-cls="D" data-dom="decisions" data-ev="A"><td class="id">NR-42</td><td class="sm" data-l="Atlas">N-DEC-02 N-DEC-08</td><td data-l="Finding">Narrow Back reads well (A10); list view at 420 not captured; no focus transfer.</td><td class="sm" data-l="Evidence">A10 · Decisions.tsx:108; notes.css:258-269</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">L</td><td class="cls D" data-l="Class">D</td><td data-l="Remedy">No visual change; focus transfer is D-05.</td></tr>
+<tr id="nr-43" data-sev="P1" data-cls="L" data-dom="recovery" data-ev="S"><td class="id">NR-43</td><td class="sm" data-l="Atlas">N-KAN-09 N-DEC-07 N-REC-02</td><td data-l="Finding">Problem slot is absolute at the bottom of the panels and covers bottom-anchored Save/Comment/live status while an alert shows; with unknown outcome it can also hide the recovery controls it carries.</td><td class="sm" data-l="Evidence">S notes.css:62-64; NotesView.tsx:152-156,138; TaskDetail.tsx:215-220</td><td class="p1" data-l="Sev">P1</td><td data-l="Conf">M</td><td class="cls L" data-l="Class">L</td><td data-l="Remedy">In-flow bar under the panels, same 160px/45% cap; layout only, no gate changes (writes stay refused during unknown outcome). Verify scroll anchoring. Confirm on rebuild first.</td></tr>
+<tr id="nr-44" data-sev="P2" data-cls="C W" data-dom="recovery" data-ev="S"><td class="id">NR-44</td><td class="sm" data-l="Atlas">N-REC-07 N-DEC-07</td><td data-l="Finding">Unknown-outcome alert is a run-in paragraph; the three-step flow is implicit.</td><td class="sm" data-l="Evidence">S NotesView.tsx:154; notes.css:65-68</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C W</td><td data-l="Remedy">Three ordered rows, same strings/buttons; ack only after successful read; no replay.</td></tr>
+<tr id="nr-45" data-sev="P2" data-cls="W C" data-dom="recovery" data-ev="S"><td class="id">NR-45</td><td class="sm" data-l="Atlas">N-REC-04 N-REC-06 N-REC-09</td><td data-l="Finding">Retained drafts sit in a collapsed disclosure “N source draft(s) kept”.</td><td class="sm" data-l="Evidence">S RetainedDrafts.tsx:12-19; notes.css:250-255</td><td class="p2" data-l="Sev">P2</td><td data-l="Conf">M</td><td class="cls" data-l="Class">W C</td><td data-l="Remedy">“N unsaved edits kept — source no longer exists”, warning tint; default-open is D-08.</td></tr>
+<tr id="nr-46" data-sev="P3" data-cls="C" data-dom="recovery" data-ev="S"><td class="id">NR-46</td><td class="sm" data-l="Atlas">N-SHELL-05</td><td data-l="Finding">Agent access overlay: 14+ commands in a flat grid; not captured expanded.</td><td class="sm" data-l="Evidence">S AgentAccess.tsx:55-72; notes.css:229-238</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">L</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Group under existing labels; copy buttons, pinned UUID and no-replay text unchanged.</td></tr>
+<tr id="nr-47" data-sev="P3" data-cls="C" data-dom="recovery" data-ev="A"><td class="id">NR-47</td><td class="sm" data-l="Atlas">cross-cutting</td><td data-l="Finding">Persistent informational text at 11px (counts, Draft kept, comment header, hints, Reference inputs).</td><td class="sm" data-l="Evidence">A04 A05 A08 · notes.css:14,24,150,166,173,220</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Functional text → 12px token; decorative counts may stay.</td></tr>
+<tr id="nr-48" data-sev="P3" data-cls="C" data-dom="recovery" data-ev="A"><td class="id">NR-48</td><td class="sm" data-l="Atlas">cross-cutting</td><td data-l="Finding">16px checkboxes and 24×28 handle vs 24px minimum target (spacing exemption possible — inference).</td><td class="sm" data-l="Evidence">A04 A05 · notes.css:11,128,286</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">M</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">≥24px hit area, no visual enlargement.</td></tr>
+<tr id="nr-49" data-sev="P3" data-cls="C" data-dom="shell" data-ev="A"><td class="id">NR-49</td><td class="sm" data-l="Atlas">N-SHELL-01 (App chrome)</td><td data-l="Finding">Observation: top-bar Notes trigger has aria-pressed but a filled state appears only in A01. May be hover residue.</td><td class="sm" data-l="Evidence">A01 vs A02–A19 · App.tsx:239; styles.css:1647</td><td class="p3" data-l="Sev">P3</td><td data-l="Conf">L</td><td class="cls" data-l="Class">C</td><td data-l="Remedy">Verify on rebuild; if real, share the selection language in App styles, not Notes CSS.</td></tr>
+</tbody></table></div>
+</section>
+
+<!-- ===================== Decisions ===================== -->
+<section class="blk" id="decisions" aria-labelledby="h-dec">
+<header><h2 id="h-dec">Separate decisions — not part of the polish set</h2>
+<p class="mut">Each changes focus, navigation, persistence, gates, counting basis or adds a control/indicator. Decide first; implement as its own task with its own behavior tests.</p></header>
+<div class="tw" tabindex="0" role="region" aria-label="Decisions table, scrollable"><table><thead><tr><th>ID</th><th>Question</th><th>Options</th><th>Recommended default</th><th>Atlas</th></tr></thead><tbody>
+<tr><td class="id">D-01</td><td>Tab-count basis consistent?</td><td>(a) keep, label only · (b) Todos=all, Kanban=non-done, Decisions=Current</td><td>(a)</td><td class="sm">N-SHELL-04</td></tr>
+<tr><td class="id">D-02</td><td>Confirm before explicit adoption?</td><td>(a) none, label only (NR-16) · (b) one-time inline disclosure</td><td>(a)</td><td class="sm">N-TODO-05</td></tr>
+<tr><td class="id">D-03</td><td>Draft marker on tabs/rows for drafts retained elsewhere?</td><td>(a) none · (b) dot on tab · (c) only where indicators exist</td><td>(b) after review; drafts are invisible off-tab today</td><td class="sm">N-REC-01 N-REC-05</td></tr>
+<tr><td class="id">D-04</td><td>Field-local validation (title bytes, date) vs global alert?</td><td>(a) keep · (b) inline mirroring backend errors</td><td>(b) later</td><td class="sm">N-DEC-03 N-DEC-07</td></tr>
+<tr><td class="id">D-05</td><td>Focus transfer: Source↔Preview, Decisions list→detail/Back, detail close?</td><td>(a) keep · (b) define explicit targets</td><td>(b) with real-editor tests (existing tests mock the editor)</td><td class="sm">N-SCR-02 N-DEC-02 N-DEC-08</td></tr>
+<tr><td class="id">D-06</td><td>Warn on draft-read failure / view-preference write failure (silent today)?</td><td>(a) keep · (b) read warning</td><td>(b), wording only</td><td class="sm">N-REC-01 N-REC-09</td></tr>
+<tr><td class="id">D-07</td><td>Doing/Done lane “+” buttons?</td><td>(a) keep (NR-32 wording) · (b) hide · (c) per-lane add (feature)</td><td>(a)</td><td class="sm">N-KAN-02</td></tr>
+<tr><td class="id">D-08</td><td>Retained-draft disclosure default-open; un-gate from Scratchpad load?</td><td>(a) keep · (b) open when count&gt;0</td><td>(b)</td><td class="sm">N-REC-04 N-REC-06</td></tr>
+<tr><td class="id">D-09</td><td>Broaden unknown-incident review to every thread?</td><td>(a) selected-task scope · (b) all threads</td><td>(a) until safety review</td><td class="sm">N-REC-07</td></tr>
+<tr><td class="id">D-10</td><td>Align disabled props during unknown outcome (handler already refuses)?</td><td>(a) keep · (b) align</td><td>(b) after focus-loss review (disabled buttons lose focus)</td><td class="sm">N-TODO-03 N-KAN-03</td></tr>
+<tr><td class="id">D-11</td><td>Merge header and tab rows?</td><td>(a) keep · (b) merge ≥900</td><td>(a)</td><td class="sm">N-SHELL-01 N-SHELL-04</td></tr>
+<tr><td class="id">D-12</td><td>Visible-lane indicator on jump chips?</td><td>(a) none · (b) scroll-tracking state</td><td>(a)</td><td class="sm">N-KAN-01</td></tr>
+</tbody></table></div>
+<details class="more" open><summary>Nonrecommendations — no feature expansion</summary><div>
+<p>No per-lane card creation · no task or decision delete control · no auto-save, auto-retry, auto-acknowledge or auto-adopt · no new shortcuts · no change to counts, sort, filter defaults or view-state persistence · no change to unknown-outcome incident scope · no new recovery UI · no merging Completed with Move · no modal conversion of the picker or confirmation · no rewrite of backend error messages · no change to Kanban drag thresholds, sensors or file-order semantics · no change to focus-return rules. Empty Kanban lanes already say “No cards.” and all lane “+” buttons intentionally focus the Backlog composer; this review does not claim otherwise.</p>
+<p><b>Invariants every remedy is checked against:</b> notes are ordinary local Markdown; UUID folder identity and Space association are separate; resolve once and pin UUID; canonical bytes ≠ drafts ≠ view state; CAS by byte revision, item revision or whole-document ref; adoption only on explicit mutation; source order is task/board order with no ranks; dirty text keeps its original revision until explicit review; unknown outcome is neither success nor failure and is never replayed; comments are durable and independent of board membership; decision history is additive with predecessor bytes untouched; bounded safe storage.</p></div></details>
+</section>
+
+<!-- ===================== Evidence ===================== -->
+<section class="blk" id="evidence" aria-labelledby="h-ev">
+<header><h2 id="h-ev">Evidence provenance and coverage</h2>
+<p class="mut">Actual screenshots are cited by identifier only (no external image loads). Files live in <code>planning/notes-atlas-2026-10-07/evidence/</code>; INDEX.md records fixture, transport and limits.</p></header>
+<p class="banner" role="note"><b>Provenance.</b> A01–A19 were captured from an owned disposable gateway serving the <em>existing</em> browser bundle <code>/assets/index-CssAnWz1.js</code> (timestamp 2026-10-07 04:13, later than the inspected Notes CSS/editor source 2026-10-06 21:49), 1440×1000 / 900×900 / 420×900 CSS px at DPR 1.25. Content is synthetic fixture data in the real application, not mock UI. That bundle was <strong>not rebuilt from the current source</strong>; where a finding cites both A and S they agree on observed geometry, but identity of the bundle with current source is unproven. Wide/medium/narrow captures are not direct proof of the Notes <em>container</em> breakpoints (900 / 719 / 520). Not exercised and therefore code-derived only: storage errors, unknown-outcome read/ack/remount, duplicate-ID repair, stale gestures, comment conflict and confirmed deletion, orphan-draft recovery, source-stale decision refusal, pointer/touch drops, native IPC, assistive technology.</p>
+<h3>Actual screenshots → findings that cite them</h3>
+<div class="tw" tabindex="0" role="region" aria-label="Screenshot index, scrollable"><table><thead><tr><th>ID</th><th>File</th><th>Viewport</th><th>Atlas</th><th>Shows</th><th>Cited by</th></tr></thead><tbody>
+<tr><td class="id">A01</td><td class="sm">01-unbound-wide</td><td>1440×1000</td><td class="sm">N-SHELL-01/02</td><td>Unbound: Create / Attach</td><td class="sm">keep · NR-49</td></tr>
+<tr><td class="id">A02</td><td class="sm">02-catalog-empty-wide (<em>legacy name; actual catalog error</em>)</td><td>1440×1000</td><td class="sm">N-SHELL-03</td><td>notes_not_found + Retry</td><td class="sm">NR-01 NR-03 NR-04</td></tr>
+<tr><td class="id">A03</td><td class="sm">03-scratchpad-preview-wide</td><td>1440×1000</td><td class="sm">N-SCR-02/03</td><td>Saved preview</td><td class="sm">NR-09</td></tr>
+<tr><td class="id">A04</td><td class="sm">04-todos-comments-wide</td><td>1440×1000</td><td class="sm">N-TODO-01/04/06 N-COM-01/02</td><td>Todos + detail + comment</td><td class="sm">NR-08 14 15 17 19 20 23 24 25 26 28 47 48</td></tr>
+<tr><td class="id">A05</td><td class="sm">05-kanban-wide</td><td>1440×1000</td><td class="sm">N-KAN-01/03/08</td><td>Board after keyboard move</td><td class="sm">NR-29 30 32 33 35 47 48</td></tr>
+<tr><td class="id">A06</td><td class="sm">06-kanban-medium</td><td>900×900</td><td class="sm">N-KAN-01</td><td>Chips + clipped lane</td><td class="sm">NR-29 31 34</td></tr>
+<tr><td class="id">A07</td><td class="sm">07-kanban-narrow</td><td>420×900</td><td class="sm">N-KAN-01/08</td><td>Chips, scroll peek</td><td class="sm">NR-07 31 35</td></tr>
+<tr><td class="id">A08</td><td class="sm">08-decision-detail-wide</td><td>1440×1000</td><td class="sm">N-DEC-02/04/05/06</td><td>Detail, Details open</td><td class="sm">NR-06 36 38 39 47</td></tr>
+<tr><td class="id">A09</td><td class="sm">09-decisions-history-wide</td><td>1440×1000</td><td class="sm">N-DEC-01/05</td><td>History + successor detail</td><td class="sm">NR-06 36 37 40</td></tr>
+<tr><td class="id">A10</td><td class="sm">10-decisions-narrow</td><td>420×900</td><td class="sm">N-DEC-01/02</td><td>Narrow detail + Back</td><td class="sm">NR-39 42</td></tr>
+<tr><td class="id">A11</td><td class="sm">11-scratchpad-conflict-wide</td><td>1440×1000</td><td class="sm">N-SCR-03 N-REC-01/03</td><td>Draft + conflict</td><td class="sm">NR-09 12 13</td></tr>
+<tr><td class="id">A12</td><td class="sm">12-attach-transfer-confirm-wide</td><td>1440×1000</td><td class="sm">N-SHELL-03</td><td>Transfer confirmation</td><td class="sm">NR-01 02 03</td></tr>
+<tr><td class="id">A13</td><td class="sm">13-todo-unadopted-wide</td><td>1440×1000</td><td class="sm">N-TODO-05</td><td>Hand-written task</td><td class="sm">NR-06 15 16 20 28</td></tr>
+<tr><td class="id">A14</td><td class="sm">14-todo-adopted-detail-wide</td><td>1440×1000</td><td class="sm">N-TODO-05/06</td><td>Adopted detail, empty comments</td><td class="sm">NR-15 24 25</td></tr>
+<tr><td class="id">A15</td><td class="sm">15-todos-comments-medium</td><td>900×900</td><td class="sm">N-TODO-06 N-COM</td><td>Medium detail</td><td class="sm">NR-14 24</td></tr>
+<tr><td class="id">A16</td><td class="sm">16-todos-comments-narrow</td><td>420×900</td><td class="sm">N-TODO-06 N-COM</td><td>Detail replaces list</td><td class="sm">NR-08 14 24 25</td></tr>
+<tr><td class="id">A17</td><td class="sm">17-unboarded-retained-comment-wide</td><td>1440×1000</td><td class="sm">N-TODO-04 N-COM-03</td><td>Unboarded thread</td><td class="sm">NR-23</td></tr>
+<tr><td class="id">A18</td><td class="sm">18-comment-delete-confirm-wide</td><td>1440×1000</td><td class="sm">N-COM-04</td><td>Delete confirmation (Keep exercised)</td><td class="sm">NR-22</td></tr>
+<tr><td class="id">A19</td><td class="sm">19-scratchpad-source-wide</td><td>1440×1000</td><td class="sm">N-SCR-02 N-SHELL-04</td><td>Source editor, tab focus ring</td><td class="sm">NR-09 10 28</td></tr>
+</tbody></table></div>
+<h3>Atlas coverage — all 45 stable IDs</h3>
+<p class="mut" style="margin-bottom:8px">“keep” = reviewed, no change recommended or contract preserved; linked NR entries otherwise. Decision links are separate (not polish).</p>
+<div class="grid45" role="list">
+<div role="listitem"><b>N-SHELL-01</b>NR-07 NR-08 NR-49</div>
+<div role="listitem"><b>N-SHELL-02</b><span class="keep">keep (A01)</span></div>
+<div role="listitem"><b>N-SHELL-03</b>NR-01…05</div>
+<div role="listitem"><b>N-SHELL-04</b>NR-06 NR-07 NR-34</div>
+<div role="listitem"><b>N-SHELL-05</b>NR-46</div>
+<div role="listitem"><b>N-SHELL-06</b>NR-02 (invariants)</div>
+<div role="listitem"><b>N-SCR-01</b>NR-11 NR-28</div>
+<div role="listitem"><b>N-SCR-02</b>NR-09 NR-10 NR-14 · D-05</div>
+<div role="listitem"><b>N-SCR-03</b>NR-12 NR-13</div>
+<div role="listitem"><b>N-TODO-01</b>NR-15 17 18 19 20 21</div>
+<div role="listitem"><b>N-TODO-02</b>NR-28 · otherwise keep</div>
+<div role="listitem"><b>N-TODO-03</b>NR-13 NR-19 · D-10</div>
+<div role="listitem"><b>N-TODO-04</b>NR-15 NR-25</div>
+<div role="listitem"><b>N-TODO-05</b>NR-16 · D-02</div>
+<div role="listitem"><b>N-TODO-06</b>NR-08 NR-24</div>
+<div role="listitem"><b>N-COM-01</b>NR-23 NR-24 NR-27</div>
+<div role="listitem"><b>N-COM-02</b>NR-14 NR-26 NR-28</div>
+<div role="listitem"><b>N-COM-03</b>NR-13 NR-14 NR-27</div>
+<div role="listitem"><b>N-COM-04</b>NR-22</div>
+<div role="listitem"><b>N-KAN-01</b>NR-29 NR-31 NR-34</div>
+<div role="listitem"><b>N-KAN-02</b>NR-32 · D-07</div>
+<div role="listitem"><b>N-KAN-03</b>NR-15 NR-16 NR-29 NR-30 NR-33</div>
+<div role="listitem"><b>N-KAN-04</b>NR-13 NR-19</div>
+<div role="listitem"><b>N-KAN-05</b>NR-08</div>
+<div role="listitem"><b>N-KAN-06</b>NR-25</div>
+<div role="listitem"><b>N-KAN-07</b><span class="keep">keep (drag mechanics untouched)</span></div>
+<div role="listitem"><b>N-KAN-08</b>NR-30 NR-35 · D-05</div>
+<div role="listitem"><b>N-KAN-09</b>NR-43</div>
+<div role="listitem"><b>N-DEC-01</b>NR-36 NR-37 NR-40</div>
+<div role="listitem"><b>N-DEC-02</b>NR-37 NR-39 NR-42</div>
+<div role="listitem"><b>N-DEC-03</b>NR-41 · D-04</div>
+<div role="listitem"><b>N-DEC-04</b>NR-13 NR-41</div>
+<div role="listitem"><b>N-DEC-05</b>NR-39</div>
+<div role="listitem"><b>N-DEC-06</b>NR-38</div>
+<div role="listitem"><b>N-DEC-07</b>NR-43 NR-44 · D-04</div>
+<div role="listitem"><b>N-DEC-08</b>NR-36 NR-39 NR-42</div>
+<div role="listitem"><b>N-REC-01</b>D-06 (policy only)</div>
+<div role="listitem"><b>N-REC-02</b>NR-11 NR-43</div>
+<div role="listitem"><b>N-REC-03</b>NR-12 NR-13</div>
+<div role="listitem"><b>N-REC-04</b>NR-16 NR-45 · D-08</div>
+<div role="listitem"><b>N-REC-05</b>NR-27 · D-03</div>
+<div role="listitem"><b>N-REC-06</b>NR-45 · D-08</div>
+<div role="listitem"><b>N-REC-07</b>NR-44 · D-09</div>
+<div role="listitem"><b>N-REC-08</b><span class="keep">keep (backend contract)</span></div>
+<div role="listitem"><b>N-REC-09</b>NR-06 NR-07 NR-45</div>
+</div>
+<details class="more"><summary>Source-only (never rendered) states and uncertainty</summary><div>
+<p><b>S-only findings:</b> NR-05, 11, 18, 21, 27, 41, 43, 44, 45, 46. <b>Unverified:</b> contrast figure is computed from token hexes, not measured in-app; no screen-reader, touch, forced-colors or native-renderer pass; concept dimensions are illustrative and must be derived from tokens at implementation. <b>Before sign-off:</b> rebuild current source, recapture A01–A19, and capture successful empty catalog, expanded Agent access, decision new/edit forms, decisions list at 420, an actual alert-over-composer state, nested todos and long-title/many-card cases.</p></div></details>
+</section>
+
+</div></main>
+
+<footer class="end"><div class="wrap">Illustrative review artifact. Current panels are schematic redraws, proposed panels are not shipped UI; neither is live-app proof. Evidence classes: A = actual disposable-app screenshot (existing bundle), S = current source coordinate, I = illustrative.</div></footer>
+
+<script>
+(function(){
+var root=document.documentElement;
+var q=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));};
+/* Pins inside illustrative mocks are decoration inside aria-hidden content: never leave focusable links there. */
+q('.mk a.pin').forEach(function(a){var s=document.createElement('span');s.className=a.className;s.textContent=a.textContent;a.parentNode.replaceChild(s,a);});
+q('button[data-view]').forEach(function(b){b.addEventListener('click',function(){
+ q('button[data-view]').forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
+ root.setAttribute('data-view',b.getAttribute('data-view'));
+});});
+var st={sev:'all',cls:'all',dom:'all',ev:'all',q:''};
+var rows=q('#reg tbody tr');
+var count=document.getElementById('regcount');
+function apply(){
+ var n=0;
+ rows.forEach(function(tr){
+  var ok=(st.sev==='all'||tr.getAttribute('data-sev')===st.sev)
+   &&(st.cls==='all'||tr.getAttribute('data-cls').split(' ').indexOf(st.cls)>-1)
+   &&(st.dom==='all'||tr.getAttribute('data-dom')===st.dom)
+   &&(st.ev==='all'||tr.getAttribute('data-ev')===st.ev)
+   &&(!st.q||tr.textContent.toLowerCase().indexOf(st.q)>-1);
+  tr.hidden=!ok; if(ok)n++;
+ });
+ count.textContent=n+' of '+rows.length+' shown';
+}
+function reset(){
+ st={sev:'all',cls:'all',dom:'all',ev:'all',q:''};
+ q('[data-f]').forEach(function(b){b.setAttribute('aria-pressed',b.getAttribute('data-v')==='all'?'true':'false');});
+ var i=document.getElementById('q'); if(i)i.value='';
+ apply();
+}
+q('[data-f]').forEach(function(b){b.addEventListener('click',function(){
+ var f=b.getAttribute('data-f');
+ st[f]=b.getAttribute('data-v');
+ q('[data-f="'+f+'"]').forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
+ apply();
+});});
+var qi=document.getElementById('q');
+if(qi)qi.addEventListener('input',function(){st.q=qi.value.trim().toLowerCase();apply();});
+q('a.pin[href^="#nr-"]').forEach(function(a){a.addEventListener('click',function(){reset();});});
+apply();
+})();
+</script>
+</body>
+</html>

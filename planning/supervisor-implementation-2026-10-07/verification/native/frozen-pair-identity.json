@@ -1,0 +1,41 @@
+{
+  "created_at": "2026-10-07T07:45:21.056Z",
+  "source": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/source",
+  "compilation_source_manifest_sha256": "285754e6e4c78ee09fa8b79a0aff715ebc8fd66d0f3692be82f959af7eb577cd",
+  "host": {
+    "path": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/frozen-bin/cockpit",
+    "sha256": "f01745dcb48c105a355e778a73e338a80ad873285bd81065566380bc99273d06",
+    "bytes": 382525200,
+    "build_command": "cargo build -p cockpit-host --bin cockpit --locked",
+    "observed": "bg39 productionbuild succeeded before core test failures"
+  },
+  "native": {
+    "path": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/frozen-bin/cockpit-tauri",
+    "sha256": "151ded8c3749be09a1712dd9a93e8a364344f645a34b032a2d6cbf9056a993e4",
+    "bytes": 507155096,
+    "build_command": "cargo build -p cockpit-tauri --bin cockpit-tauri --features tauri/custom-protocol --locked",
+    "observed": "bg41 exited0 wall43.22sec; rawartifact182"
+  },
+  "frontend": {
+    "dist": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/source/dist",
+    "asset_manifest": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/frontend-assets-manifest.json",
+    "asset_manifest_sha256": "bd3db5a5f1150a19607e0a7ae235427921d2361942f6d7f31cf0f3c1aaac6dad",
+    "index_js": "assets/index-BKVHZ90g.js",
+    "index_css": "assets/index-CQkiGs6e.css"
+  },
+  "extension": {
+    "path": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/source/integrations/omp/cockpit-orchestration.ts",
+    "sha256": "fd59faa990ef0968d9215b2474d8a6170f05f531b6e14bc54859ccc1274cc3ee"
+  },
+  "generated_source_outputs": [],
+  "native_environment": {
+    "COCKPIT_CLI_EXECUTABLE": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/frozen-bin/cockpit",
+    "COCKPIT_OMP_EXTENSION": "/home/nnex/.cache/cockpit-verification/cpu-a7aabe83-c5fe52c3df/source/integrations/omp/cockpit-orchestration.ts"
+  },
+  "limits": [
+    "Build and byteidentity only; no native origin/loadedassets/actualmountedcadence/shutdown proof yet",
+    "Core tests46PASS3FAIL require ownerfix; hosttests notstarted; no finalallchecks claim",
+    "Any test-only overlay later must be labeled separate verification manifest, never silently rewrite compilation identity"
+  ],
+  "frozen_reason": "Actual drivers retain byteidentical compiled V3 pair outside target so test outputs never alter future launched executable bytes"
+}
