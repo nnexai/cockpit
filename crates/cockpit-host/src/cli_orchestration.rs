@@ -267,7 +267,7 @@ impl Context {
                     actual_agent_kind: pane
                         .agent_kind
                         .as_ref()
-                        .filter(|kind| kind.as_str() == "omp" && !pane.launch_pending)
+                        .filter(|kind| kind.as_str() != "omp" || !pane.launch_pending)
                         .cloned(),
                     env_run: args.env_run()?,
                     omp_session_id: args.omp_session.clone(),
@@ -317,12 +317,64 @@ impl Context {
             if let Some(Actor::Agent(caller)) = &self.actor {
                 if runtime.endpoint_identity != caller.endpoint_identity
                     || runtime.boot_id != caller.boot_id
-                    || pane.native_session_id != caller.native_session_id
+                    || (caller.actual_agent_kind.is_none()
+                        && pane.agent_kind.as_deref().is_some_and(|kind| kind != "omp"))
                     || caller.actual_agent_kind.as_ref().is_some_and(|kind| {
                         pane.agent_kind.as_ref() != Some(kind) || pane.launch_pending
                     })
                     || pane.terminal_id.as_ref() != caller.terminal_id.as_ref()
                 {
+                    return Err(CliError::new(
+                        "caller_mismatch",
+                        "caller native runtime identity changed during orchestration operation",
+                    ));
+                }
+                let session_changed = pane.native_session_id != caller.native_session_id;
+                let newly_attested = caller.actual_agent_kind.is_none()
+                    && pane.agent_kind.as_deref() == Some("omp")
+                    && !pane.launch_pending;
+                if session_changed || newly_attested {
+                    let expected = if caller.agent_kind == Some(AgentKind::Subagent) {
+                        caller.main_omp_session_id.as_deref()
+                    } else {
+                        caller.omp_session_id.as_deref()
+                    };
+                    if (!session_changed || caller.native_session_id.is_none())
+                        && expected.is_some_and(|session| !session.is_empty())
+                        && pane
+                            .native_session_id
+                            .as_deref()
+                            .is_none_or(|native| Some(native) == expected)
+                    {
+                        if let Some((id, attempt)) = &caller.env_run {
+                            let run = self.service.run_for_review(&self.session, id)?;
+                            if run.attempt == *attempt
+                                && run.session_id == caller.session_id
+                                && settling_launch_matches(&run, caller)
+                                && run.location.as_ref().is_some_and(|location| {
+                                    caller_location_matches(
+                                        location,
+                                        run.bound_omp_session.as_deref(),
+                                        caller,
+                                    ) && location.pane_id == caller.pane_id
+                                        && location.workspace_id == caller.workspace_id
+                                        && location.tab_id == caller.tab_id
+                                })
+                                && run
+                                    .bound_omp_session
+                                    .as_deref()
+                                    .is_none_or(|bound| Some(bound) == expected)
+                                && caller.process.as_ref().is_some_and(|process| {
+                                    run.bound_omp_process
+                                        .as_ref()
+                                        .is_none_or(|bound| bound == process)
+                                })
+                            {
+                                self.check_retirement_process()?;
+                                return Err(caller_not_ready());
+                            }
+                        }
+                    }
                     return Err(CliError::new(
                         "caller_mismatch",
                         "caller native runtime identity changed during orchestration operation",
@@ -539,11 +591,76 @@ fn native_process_evidence(pid: u32) -> Result<NativeProcessIdentity, CliError> 
     Ok(NativeProcessIdentity { pid, start_ticks: before, kernel_boot_id: boot })
 }
 
+fn caller_not_ready() -> CliError {
+    CliError::new(
+        "caller_not_ready",
+        "Herdr has not yet attested this pane's native OMP; retry",
+    )
+}
+
+fn startup_launch_matches(run: &Run, caller: &AgentCaller) -> bool {
+    run.stage == RunStage::Preparing
+        && matches!(run.kind, RunKind::Supervisor | RunKind::Worker)
+        && run.close_reason.is_none()
+        && run.retirement.is_none()
+        && run.dispatch.as_ref().is_some_and(|dispatch| {
+            matches!(
+                dispatch.step,
+                DispatchStep::LaunchIntent
+                    | DispatchStep::LaunchPending
+                    | DispatchStep::LaunchUnknown
+            ) && !dispatch.agent_started
+                && dispatch.launch_attempt > 0
+                && dispatch.endpoint_identity.as_deref() == Some(caller.endpoint_identity.as_str())
+                && caller
+                    .native_session_id
+                    .as_deref()
+                    .is_none_or(|native| caller.omp_session_id.as_deref() == Some(native))
+                && run.location.as_ref().is_some_and(|location| {
+                    dispatch.launch_tag.as_deref() == Some(location.launch_tag.as_str())
+                        && !location.launch_tag.is_empty()
+                        && location
+                            .native_session_id
+                            .as_deref()
+                            .is_none_or(|native| caller.omp_session_id.as_deref() == Some(native))
+                })
+        })
+}
+
+fn settling_launch_matches(run: &Run, caller: &AgentCaller) -> bool {
+    if startup_launch_matches(run, caller) {
+        return true;
+    }
+    // Launch proof can commit between this command's opening runtime and its
+    // fresh postcheck. Retry with newly attested evidence, never accept a stale
+    // caller snapshot or revive an observer on a mature/retired run.
+    matches!(
+        (run.kind, run.stage),
+        (RunKind::Supervisor, RunStage::Active) | (RunKind::Worker, RunStage::Initializing)
+    ) && run.retirement.is_none()
+        && run.close_reason.is_none()
+        && run.bound_omp_session == caller.omp_session_id
+        && run.bound_omp_process == caller.process
+        && run.dispatch.as_ref().is_some_and(|dispatch| {
+            dispatch.step == DispatchStep::Launched
+                && dispatch.agent_started
+                && dispatch.launch_attempt > 0
+                && dispatch.endpoint_identity.as_deref() == Some(caller.endpoint_identity.as_str())
+                && run.location.as_ref().is_some_and(|location| {
+                    dispatch.launch_tag.as_deref() == Some(location.launch_tag.as_str())
+                        && !location.launch_tag.is_empty()
+                        && location
+                            .native_session_id
+                            .as_deref()
+                            .is_none_or(|native| caller.omp_session_id.as_deref() == Some(native))
+                })
+        })
+}
+
 fn retirement_read_scope(run: &Run, caller: &AgentCaller) -> Result<(), CliError> {
     let mismatch = || CliError::new("caller_mismatch", "retirement is scoped to the exact worker main incarnation");
     if caller.agent_kind != Some(AgentKind::Main)
         || caller.subagent_id.is_some()
-        || caller.actual_agent_kind.as_deref() != Some("omp")
         || caller.env_run.as_ref().is_none_or(|(id, _)| id != &run.run_id)
         || run.session_id != caller.session_id
     {
@@ -572,6 +689,15 @@ fn retirement_read_scope(run: &Run, caller: &AgentCaller) -> Result<(), CliError
         || location.workspace_id != caller.workspace_id
         || location.tab_id != caller.tab_id
     {
+        return Err(mismatch());
+    }
+    if run.stage != RunStage::Closed && run.retirement.is_some() {
+        return Err(mismatch());
+    }
+    if caller.actual_agent_kind.as_deref() != Some("omp") {
+        if caller.actual_agent_kind.is_none() && startup_launch_matches(run, caller) {
+            return Err(caller_not_ready());
+        }
         return Err(mismatch());
     }
     if run.stage == RunStage::Closed {
@@ -2678,6 +2804,114 @@ mod tests {
     }
 
     #[test]
+    fn retirement_scope_retries_only_exact_unattested_startup() {
+        let (mut run, mut caller) = retirement_fixture();
+        run.stage = RunStage::Preparing;
+        run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending;
+        run.dispatch.as_mut().unwrap().agent_started = false;
+        caller.actual_agent_kind = None;
+        for kind in [RunKind::Supervisor, RunKind::Worker] {
+            run.kind = kind;
+            for step in [
+                DispatchStep::LaunchIntent,
+                DispatchStep::LaunchPending,
+                DispatchStep::LaunchUnknown,
+            ] {
+                run.dispatch.as_mut().unwrap().step = step;
+                assert_eq!(
+                    retirement_read_scope(&run, &caller).unwrap_err().code,
+                    "caller_not_ready"
+                );
+            }
+        }
+        let changed_callers: &[(&str, fn(&mut AgentCaller))] = &[
+            ("caller_mismatch", |c| {
+                c.env_run = Some(("replacement".into(), 2))
+            }),
+            ("attempt_stale", |c| c.env_run.as_mut().unwrap().1 += 1),
+            ("caller_mismatch", |c| {
+                c.endpoint_identity = "replacement".into()
+            }),
+            ("caller_mismatch", |c| c.pane_id = "replacement".into()),
+            ("caller_mismatch", |c| {
+                c.terminal_id = Some("replacement".into())
+            }),
+            ("caller_mismatch", |c| {
+                c.native_session_id = Some("replacement".into())
+            }),
+            ("caller_mismatch", |c| c.process.as_mut().unwrap().pid += 1),
+            ("caller_mismatch", |c| {
+                c.process.as_mut().unwrap().start_ticks += 1
+            }),
+            ("caller_mismatch", |c| {
+                c.process.as_mut().unwrap().kernel_boot_id = Some("replacement".into())
+            }),
+            ("session_mismatch", |c| {
+                c.omp_session_id = Some("replacement".into())
+            }),
+            ("caller_mismatch", |c| {
+                c.actual_agent_kind = Some("other".into())
+            }),
+        ];
+        for (code, change) in changed_callers {
+            let mut changed = caller.clone();
+            change(&mut changed);
+            assert_eq!(
+                retirement_read_scope(&run, &changed).unwrap_err().code,
+                *code,
+                "{changed:?}"
+            );
+        }
+        let changed_runs: &[(&str, fn(&mut Run))] = &[
+            ("session_mismatch", |r| r.bound_omp_session = None),
+            ("caller_mismatch", |r| {
+                r.bound_omp_process.as_mut().unwrap().start_ticks += 1
+            }),
+            ("caller_mismatch", |r| {
+                r.dispatch.as_mut().unwrap().endpoint_identity = Some("replacement".into())
+            }),
+            ("caller_mismatch", |r| {
+                r.dispatch.as_mut().unwrap().launch_tag = Some("replacement".into())
+            }),
+            ("caller_mismatch", |r| {
+                r.dispatch.as_mut().unwrap().agent_started = true
+            }),
+            ("caller_mismatch", |r| {
+                r.dispatch.as_mut().unwrap().step = DispatchStep::Launched
+            }),
+            ("caller_mismatch", |r| r.dispatch = None),
+            ("caller_mismatch", |r| r.kind = RunKind::Adopted),
+            ("caller_mismatch", |r| r.stage = RunStage::Initializing),
+            ("caller_mismatch", |r| r.stage = RunStage::Active),
+            ("caller_mismatch", |r| r.stage = RunStage::Working),
+            ("caller_mismatch", |r| r.stage = RunStage::Reported),
+        ];
+        for (code, change) in changed_runs {
+            let mut changed = run.clone();
+            change(&mut changed);
+            assert_eq!(
+                retirement_read_scope(&changed, &caller).unwrap_err().code,
+                *code,
+                "{changed:?}"
+            );
+        }
+        caller.actual_agent_kind = Some("omp".into());
+        retirement_read_scope(&run, &caller).unwrap();
+        let mut accepted = run.clone();
+        accept_retirement(&mut accepted, &caller);
+        caller.actual_agent_kind = None;
+        assert_eq!(
+            retirement_read_scope(&accepted, &caller).unwrap_err().code,
+            "caller_mismatch"
+        );
+        run.retirement = accepted.retirement;
+        assert_eq!(
+            retirement_read_scope(&run, &caller).unwrap_err().code,
+            "caller_mismatch"
+        );
+    }
+
+    #[test]
     fn retirement_scope_rejects_foreign_or_replaced_native_authority() {
         let (mut run, caller) = retirement_fixture();
         let live = run.clone();
@@ -3900,6 +4134,238 @@ mod tests {
             assert_eq!(completed_main_wait(&replaced_context, &snapshot, 0).err().unwrap().code,
                 "caller_mismatch", "{name}: completed live process fence");
             assert_eq!(fixture.bytes().unwrap(), committed, "{name}: rejected incarnation cannot write");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn main_wait_startup_not_ready_then_attested_observes_late_brief_without_writes() {
+        let fixture = SocketFixture::new().await;
+        let (baseline, mut run, mut caller) = main_wait_socket_context(&fixture).await;
+        run.stage = RunStage::Preparing;
+        run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending;
+        run.dispatch.as_mut().unwrap().agent_started = false;
+        publish_main_wait_run(&fixture, &run);
+        fixture.payload.lock()["snapshot"]["agents"][0]["launch_pending"] = serde_json::json!(true);
+        caller.actual_agent_kind = None;
+        let context = Context {
+            service: OrchestrationService::open(&fixture.configuration).unwrap(),
+            adapter: baseline.adapter.clone(),
+            session: baseline.session.clone(),
+            actor: Some(Actor::Agent(caller.clone())),
+            evidence: baseline.evidence.clone(),
+        };
+        let committed = fixture.bytes().unwrap();
+        let snapshot = context.snapshot(None).await.unwrap();
+        assert_eq!(
+            completed_main_wait(&context, &snapshot, 0)
+                .err()
+                .unwrap()
+                .code,
+            "caller_not_ready"
+        );
+        assert_eq!(
+            main_wait_deadline_run(&context).unwrap_err().code,
+            "caller_not_ready"
+        );
+        assert_eq!(fixture.bytes().unwrap(), committed);
+        let replacements: &[(&str, &str, fn(&mut Run))] = &[
+            ("session_mismatch", "main session", |r| {
+                r.bound_omp_session = Some("replacement".into())
+            }),
+            ("caller_mismatch", "process incarnation", |r| {
+                r.bound_omp_process.as_mut().unwrap().start_ticks += 1
+            }),
+            ("caller_mismatch", "endpoint", |r| {
+                r.location.as_mut().unwrap().endpoint_identity = "replacement".into()
+            }),
+            ("caller_mismatch", "pane", |r| {
+                r.location.as_mut().unwrap().pane_id = "replacement".into()
+            }),
+            ("caller_mismatch", "dispatch tag", |r| {
+                r.dispatch.as_mut().unwrap().launch_tag = Some("replacement".into())
+            }),
+            ("attempt_stale", "run attempt", |r| r.attempt += 1),
+        ];
+        for (code, name, replace) in replacements {
+            let mut replaced = run.clone();
+            replace(&mut replaced);
+            publish_main_wait_run(&fixture, &replaced);
+            let committed = fixture.bytes().unwrap();
+            let snapshot = context.snapshot(None).await.unwrap();
+            assert_eq!(
+                completed_main_wait(&context, &snapshot, 0)
+                    .err()
+                    .unwrap()
+                    .code,
+                *code,
+                "{name}"
+            );
+            assert_eq!(
+                main_wait_deadline_run(&context).unwrap_err().code,
+                *code,
+                "{name}: deadline"
+            );
+            assert_eq!(fixture.bytes().unwrap(), committed);
+        }
+        publish_main_wait_run(&fixture, &run);
+
+        // Launch proof and the durable brief come later. The old opening
+        // snapshot must ask for fresh evidence, not permanently revoke itself.
+        fixture.payload.lock()["snapshot"]["agents"][0]["launch_pending"] =
+            serde_json::json!(false);
+        run.stage = RunStage::Initializing;
+        run.dispatch.as_mut().unwrap().step = DispatchStep::Launched;
+        run.dispatch.as_mut().unwrap().agent_started = true;
+        publish_main_wait_run(&fixture, &run);
+        fixture.send(&run.run_id, "late startup brief");
+        let committed = fixture.bytes().unwrap();
+        assert_eq!(
+            context.check_caller().await.unwrap_err().code,
+            "caller_not_ready"
+        );
+        assert_eq!(fixture.bytes().unwrap(), committed);
+
+        caller.actual_agent_kind = Some("omp".into());
+        let fresh = Context {
+            service: OrchestrationService::open(&fixture.configuration).unwrap(),
+            adapter: baseline.adapter.clone(),
+            session: baseline.session.clone(),
+            actor: Some(Actor::Agent(caller.clone())),
+            evidence: baseline.evidence.clone(),
+        };
+        let snapshot = fresh.snapshot(None).await.unwrap();
+        let read = completed_main_wait(&fresh, &snapshot, 0).unwrap();
+        let output = serde_json::to_value(&read).unwrap();
+        assert_eq!(output["mode"], "open");
+        assert_eq!(output["inbox"]["pending"], true);
+        assert_eq!(output["inbox"]["counts"][0]["count"], 1);
+        assert!(output["retirement"].is_null());
+        assert!(
+            !serde_json::to_string(&output)
+                .unwrap()
+                .contains("late startup brief")
+        );
+        assert!(main_wait_deadline_run(&fresh).is_ok());
+        assert_eq!(
+            fixture.bytes().unwrap(),
+            committed,
+            "observation never ACKs or pulls mail"
+        );
+
+        // Missing attestation on the now-mature run is not another startup.
+        fixture.payload.lock()["snapshot"]["agents"][0]["launch_pending"] = serde_json::json!(true);
+        assert_eq!(
+            context.retiring_run_for_review().unwrap_err().code,
+            "caller_mismatch"
+        );
+        assert_eq!(
+            fresh.check_caller().await.unwrap_err().code,
+            "caller_mismatch"
+        );
+        assert_eq!(fixture.bytes().unwrap(), committed);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn main_wait_startup_settling_fences_current_and_deadline_observation() {
+        let fixture = SocketFixture::new().await;
+        let (baseline, mut run, mut caller) = main_wait_socket_context(&fixture).await;
+        run.stage = RunStage::Preparing;
+        run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending;
+        run.dispatch.as_mut().unwrap().agent_started = false;
+        caller.actual_agent_kind = None;
+        caller.native_session_id = None;
+        let context = Arc::new(Context {
+            service: OrchestrationService::open(&fixture.configuration).unwrap(),
+            adapter: baseline.adapter.clone(),
+            session: baseline.session.clone(),
+            actor: Some(Actor::Agent(caller.clone())),
+            evidence: baseline.evidence.clone(),
+        });
+        let attested = fixture.payload.lock().clone();
+        let mut pending = attested.clone();
+        pending["snapshot"]["agents"][0]["launch_pending"] = serde_json::json!(true);
+        pending["snapshot"]["agents"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("agent_session");
+        let replacements: &[(&str, &str, fn(&mut serde_json::Value), fn(&mut Run))] = &[
+            ("expected native session", "caller_not_ready", |_| {}, |_| {}),
+            (
+                "foreign native session",
+                "caller_mismatch",
+                |v| {
+                    v["snapshot"]["agents"][0]["agent_session"]["value"] =
+                        serde_json::json!("replacement")
+                },
+                |_| {},
+            ),
+            (
+                "foreign boot",
+                "caller_mismatch",
+                |v| v["snapshot"]["boot_id"] = serde_json::json!("replacement"),
+                |_| {},
+            ),
+            (
+                "foreign terminal",
+                "caller_mismatch",
+                |v| v["snapshot"]["panes"][0]["terminal_id"] = serde_json::json!("replacement"),
+                |_| {},
+            ),
+            (
+                "foreign process incarnation",
+                "caller_mismatch",
+                |_| {},
+                |r| r.bound_omp_process.as_mut().unwrap().start_ticks += 1,
+            ),
+            (
+                "foreign dispatch tag",
+                "caller_mismatch",
+                |_| {},
+                |r| r.dispatch.as_mut().unwrap().launch_tag = Some("replacement".into()),
+            ),
+            ("foreign attempt", "caller_mismatch", |_| {}, |r| r.attempt += 1),
+        ];
+        for (name, code, replace_runtime, replace_run) in replacements {
+            *fixture.payload.lock() = pending.clone();
+            publish_main_wait_run(&fixture, &run);
+            let initial = context.snapshot(None).await.unwrap();
+            assert_eq!(
+                completed_main_wait(&context, &initial, 0)
+                    .err()
+                    .unwrap()
+                    .code,
+                "caller_not_ready"
+            );
+            let (waiting, response) =
+                main_wait_timeout_fence(&fixture, context.clone(), initial, &run, name).await;
+            let mut replaced_run = run.clone();
+            replace_run(&mut replaced_run);
+            publish_main_wait_run(&fixture, &replaced_run);
+            let committed = fixture.bytes().unwrap();
+            let mut changed = attested.clone();
+            replace_runtime(&mut changed);
+            response.send(Some(changed.clone())).unwrap();
+            assert_eq!(
+                main_wait_test_step(name, &fixture, waiting)
+                    .await
+                    .unwrap()
+                    .unwrap_err()
+                    .code,
+                *code
+            );
+            *fixture.payload.lock() = changed;
+            assert_eq!(
+                context.check_caller().await.unwrap_err().code,
+                *code,
+                "{name}: current fence"
+            );
+            assert_eq!(
+                fixture.bytes().unwrap(),
+                committed,
+                "{name}: no observation writes"
+            );
         }
     }
 

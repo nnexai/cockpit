@@ -468,7 +468,8 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
   const wakeLoop = async (ctx: ExtensionContext, signal: AbortSignal, handler?: RetirementHandler) => {
     const session = ctx.sessionManager.getSessionId();
     let retirementToken: string | undefined;
-    while (!signal.aborted) {
+    while (!signal.aborted && ctx.sessionManager.getSessionId() === session &&
+           (ctx.agent.kind !== "main" || mainSessions.get(runId) === session)) {
       try {
         const args = ["inbox", "wait", "--after", String(state.seen), "--timeout", "30"];
         if (ctx.agent.kind === "main") {
@@ -502,10 +503,11 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
         await enqueueWake(ctx);
         errorNotified = false;
       } catch (error) {
-        if (signal.aborted) return;
+        if (signal.aborted || ctx.sessionManager.getSessionId() !== session ||
+            (ctx.agent.kind === "main" && mainSessions.get(runId) !== session)) return;
         handler?.observationUnavailable();
-        notifyError(ctx, error);
-        if (error instanceof CockpitCliError && error.code === "caller_mismatch") return;
+        if (!(error instanceof CockpitCliError && error.code === "caller_not_ready")) notifyError(ctx, error);
+        if (error instanceof CockpitCliError && ["caller_mismatch", "session_mismatch", "attempt_stale"].includes(error.code)) return;
         await delay(ctx, 2_000, signal);
       }
     }
@@ -784,17 +786,32 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
     retirementHandler = undefined;
     retirementOnly = false;
     context = ctx;
-    activeSession = ctx.sessionManager.getSessionId();
-    mainSessions.set(runId, activeSession);
+    const session = ctx.sessionManager.getSessionId();
+    activeSession = session;
+    mainSessions.set(runId, session);
     state = recoverWake(ctx.sessionManager.getEntries());
     shutdown = new AbortController();
     const signal = shutdown.signal;
-    try {
-      await call(ctx, ["run", "bind-session", "--omp-pid", String(process.pid)]);
-      if (signal.aborted || ctx.sessionManager.getSessionId() !== activeSession) return;
-      retirementHandler = bindRetirementHandler(ctx, signal);
-      void wakeLoop(ctx, signal, retirementHandler);
-    } catch (error) { notifyError(ctx, error); }
+    while (!signal.aborted && ctx.sessionManager.getSessionId() === session && mainSessions.get(runId) === session) {
+      try {
+        // Binding is idempotent for this exact session/PID. Each CLI attempt is
+        // bounded; reload/shutdown cancels both the attempt and its backoff.
+        await call(ctx, ["run", "bind-session", "--omp-pid", String(process.pid)], signal);
+        if (signal.aborted || ctx.sessionManager.getSessionId() !== session || mainSessions.get(runId) !== session) return;
+        retirementHandler = bindRetirementHandler(ctx, signal);
+        void wakeLoop(ctx, signal, retirementHandler);
+        return;
+      } catch (error) {
+        if (signal.aborted || ctx.sessionManager.getSessionId() !== session || mainSessions.get(runId) !== session) return;
+        // Missing startup evidence and unstructured transport failures may
+        // settle. Any other typed error is a definitive authorization failure.
+        if (error instanceof CockpitCliError && error.code !== "caller_not_ready") {
+          notifyError(ctx, error);
+          return;
+        }
+        await delay(ctx, 2_000, signal);
+      }
+    }
   });
   pi.on("session_shutdown", (_event, ctx) => {
     controlLoopAbort?.abort();

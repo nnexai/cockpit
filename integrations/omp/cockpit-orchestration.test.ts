@@ -366,6 +366,8 @@ describe("OMP18.7 native observation boundary", () => {
 });
 
 describe("native main-only lifecycle hooks", () => {
+  interface CliResponse { code: number; killed: boolean; stdout: string; stderr: string }
+
   function extensionHost() {
     const hooks = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
     const schema = { optional() { return schema; }, describe() { return schema; } };
@@ -440,17 +442,222 @@ describe("native main-only lifecycle hooks", () => {
     }
   });
 
-  it("does not start any watcher or shutdown when native PID binding fails", async () => {
+  it.each(["caller_mismatch", "session_mismatch", "attempt_stale"])("does not start any watcher or shutdown when native PID binding fails with %s", async code => {
     vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
     const h = extensionHost();
     try {
-      h.exec.mockResolvedValueOnce({ code: 1, killed: false, stdout: "", stderr: "caller_mismatch" });
+      h.exec.mockResolvedValueOnce({ code: 1, killed: false, stdout: "", stderr: JSON.stringify({ code, message: "This native binding is no longer authorized." }) });
       await h.hooks.get("session_start")!({}, h.ctx);
       expect(h.exec).toHaveBeenCalledTimes(1);
       expect(h.shutdown).not.toHaveBeenCalled();
     } finally {
       await h.hooks.get("session_shutdown")!({}, h.ctx);
       vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["caller_not_ready", "transport"])("recovers native binding after a transient %s failure with bounded silent backoff", async failure => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    vi.useFakeTimers();
+    const h = extensionHost();
+    try {
+      Object.assign(h.ctx, { setTimeout: vi.fn(setTimeout), clearTimer: vi.fn(clearTimeout) });
+      h.observations.mockReset().mockImplementation(h.holdObservation);
+      h.exec.mockResolvedValueOnce({
+        code: 1, killed: false, stdout: "",
+        stderr: failure === "transport" ? "connection closed before a response" : JSON.stringify({ code: failure, message: "Native startup evidence is pending." }),
+      });
+      const started = h.hooks.get("session_start")!({}, h.ctx);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(h.exec).toHaveBeenCalledTimes(1);
+      expect(h.observations).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await started;
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "bind-session")).toHaveLength(2);
+      expect(h.observations).toHaveBeenCalledTimes(1);
+      expect(h.exec.mock.calls.every(([, args]) => args.includes("--omp-session") && args[args.indexOf("--omp-session") + 1] === "native-main")).toBe(true);
+      expect(h.exec.mock.calls[0][2]).toMatchObject({ timeout: 35_000, signal: expect.any(AbortSignal) });
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.shutdown).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an empty startup inbox observed across pending attestation and wakes delayed mail without reading or acknowledging it", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    vi.useFakeTimers();
+    const h = extensionHost();
+    try {
+      Object.assign(h.ctx, { setTimeout: vi.fn(setTimeout), clearTimer: vi.fn(clearTimeout) });
+      const delayed = Promise.withResolvers<MainWaitRead>();
+      const waitingForMail = Promise.withResolvers<void>();
+      const continued = Promise.withResolvers<void>();
+      h.observations.mockReset()
+        .mockResolvedValueOnce({
+          mode: "open", inbox: { run_id: "retirement-test-run", pending: false, through_seq: 0, counts: [] },
+          retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN,
+        })
+        .mockImplementationOnce(() => { waitingForMail.resolve(); return delayed.promise; })
+        .mockImplementation(signal => { continued.resolve(); return h.holdObservation(signal); });
+      const original = h.exec.getMockImplementation()!;
+      let waits = 0;
+      h.exec.mockImplementation(async (cli, args, options) => {
+        if (args[0] === "inbox" && args[1] === "wait" && ++waits <= 2) {
+          return { code: 1, killed: false, stdout: "", stderr: JSON.stringify({ code: "caller_not_ready", message: "Herdr has not yet attested this native." }) };
+        }
+        return original(cli, args, options);
+      });
+      await h.hooks.get("session_start")!({}, h.ctx);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(waits).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(waits).toBe(2);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitingForMail.promise;
+      expect(waits).toBe(4);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+      delayed.resolve({
+        mode: "open", inbox: { run_id: "retirement-test-run", pending: true, through_seq: 7, counts: [{ kind: "instruction", count: 1 }] },
+        retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN,
+      });
+      await continued.promise;
+      expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(h.pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("through sequence 7"), { deliverAs: "aside" });
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "woken")).toHaveLength(1);
+      expect(h.exec.mock.calls.some(([, args]) => args[0] === "inbox" && ["list", "ack"].includes(args[1]))).toBe(false);
+      expect(h.pi.appendEntry).toHaveBeenLastCalledWith("cockpit-orchestration-wake-v1", expect.objectContaining({ seen: 7, readThrough: 0, ackedThrough: 0, queued: true }));
+      expect(h.shutdown).not.toHaveBeenCalled();
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(waits).toBe(5);
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels pending native binding on shutdown without starting an observer from its late completion", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const binding = Promise.withResolvers<CliResponse>();
+      h.exec.mockReturnValueOnce(binding.promise);
+      const started = h.hooks.get("session_start")!({}, h.ctx);
+      const signal = h.exec.mock.calls[0][2].signal!;
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      expect(signal.aborted).toBe(true);
+      binding.resolve({ code: 0, killed: false, stdout: "{}", stderr: "" });
+      await started;
+      expect(h.observations).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("cancels startup backoff on shutdown instead of retrying its exact native binding", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    vi.useFakeTimers();
+    const h = extensionHost();
+    try {
+      Object.assign(h.ctx, { setTimeout: vi.fn(setTimeout), clearTimer: vi.fn(clearTimeout) });
+      h.exec.mockResolvedValueOnce({ code: 1, killed: false, stdout: "", stderr: JSON.stringify({ code: "caller_not_ready", message: "Startup pending." }) });
+      const started = h.hooks.get("session_start")!({}, h.ctx);
+      await vi.advanceTimersByTimeAsync(0);
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      await started;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.exec).toHaveBeenCalledTimes(1);
+      expect(h.ctx.clearTimer).toHaveBeenCalledTimes(1);
+      expect(h.observations).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reloads the exact native session once and rejects the superseded startup completion", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const binding = Promise.withResolvers<CliResponse>();
+      h.exec.mockReturnValueOnce(binding.promise);
+      h.observations.mockReset().mockImplementation(h.holdObservation);
+      const oldStart = h.hooks.get("session_start")!({}, h.ctx);
+      const oldSignal = h.exec.mock.calls[0][2].signal!;
+      await h.hooks.get("session_start")!({}, h.ctx);
+      expect(oldSignal.aborted).toBe(true);
+      binding.resolve({ code: 0, killed: false, stdout: "{}", stderr: "" });
+      await oldStart;
+      expect(h.observations).toHaveBeenCalledTimes(1);
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "bind-session")).toHaveLength(2);
+      const observedSignal = h.exec.mock.calls.find(([, args]) => args[0] === "inbox" && args[1] === "wait")![2].signal!;
+      await h.hooks.get("session_start")!({}, h.ctx);
+      expect(observedSignal.aborted).toBe(true);
+      expect(h.observations).toHaveBeenCalledTimes(2);
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "bind-session")).toHaveLength(3);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.shutdown).not.toHaveBeenCalled();
+    } finally {
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not transfer a delayed startup binding into a replacement native session", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    const h = extensionHost();
+    try {
+      const binding = Promise.withResolvers<CliResponse>();
+      h.exec.mockReturnValueOnce(binding.promise);
+      const started = h.hooks.get("session_start")!({}, h.ctx);
+      h.sessionManager.getSessionId = () => "replacement-native";
+      binding.resolve({ code: 0, killed: false, stdout: "{}", stderr: "" });
+      await started;
+      expect(h.observations).not.toHaveBeenCalled();
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+    } finally {
+      h.sessionManager.getSessionId = () => "native-main";
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("discards delayed inbox mail after the actual native session changes without waking or autoACKing the replacement", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
+    vi.useFakeTimers();
+    const h = extensionHost();
+    try {
+      const delayed = Promise.withResolvers<MainWaitRead>();
+      h.observations.mockReset().mockReturnValueOnce(delayed.promise).mockImplementation(h.holdObservation);
+      await h.hooks.get("session_start")!({}, h.ctx);
+      h.sessionManager.getSessionId = () => "replacement-native";
+      delayed.resolve({
+        mode: "open", inbox: { run_id: "retirement-test-run", pending: true, through_seq: 7, counts: [{ kind: "instruction", count: 1 }] },
+        retirement: null, retirement_token: EMPTY_RETIREMENT_TOKEN,
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.observations).toHaveBeenCalledTimes(1);
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.pi.appendEntry).not.toHaveBeenCalled();
+      expect(h.exec.mock.calls.some(([, args]) => args[0] === "inbox" && ["woken", "list", "ack"].includes(args[1]))).toBe(false);
+      expect(h.shutdown).not.toHaveBeenCalled();
+    } finally {
+      h.sessionManager.getSessionId = () => "native-main";
+      await h.hooks.get("session_shutdown")!({}, h.ctx);
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
     }
   });
 
@@ -726,7 +933,7 @@ describe("native main-only lifecycle hooks", () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
-  it("disposes a revoked observer without shutting down the native or trusting its cached offer", async () => {
+  it.each(["caller_mismatch", "session_mismatch", "attempt_stale"])("disposes an observer revoked with %s without shutting down the native or trusting its cached offer", async code => {
     vi.stubEnv("COCKPIT_RUN_ID", "retirement-test-run");
     vi.useFakeTimers();
     const h = extensionHost();
@@ -734,7 +941,7 @@ describe("native main-only lifecycle hooks", () => {
       Object.assign(h.ctx, { setTimeout: vi.fn(setTimeout), clearTimer: vi.fn(clearTimeout) });
       h.ctx.ui.getEditorText = () => "unsent draft";
       const original = h.exec.getMockImplementation()!;
-      const revoked = JSON.stringify({ code: "caller_mismatch", message: "This native is no longer authorized to observe its run." });
+      const revoked = JSON.stringify({ code, message: "This native is no longer authorized to observe its run." });
       let waits = 0;
       h.exec.mockImplementation(async (cli, args, options) => {
         if (args[0] === "inbox" && args[1] === "wait" && ++waits > 1) {
