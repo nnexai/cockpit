@@ -242,9 +242,9 @@ overlap_minutes = 30
 inventory_hours = 24
 audit_days = 7
 related_hours = 24
-background_requests_per_second = 1
-background_in_flight = 2
-hourly_request_cap = 1200
+background_min_interval_seconds = 10
+background_in_flight = 1
+hourly_request_cap = 300
 ```
 
 The coordinator wakes once a minute after a one-minute startup delay; nominal source schedules coalesce overdue work. It uses Jira epoch-millisecond `[lower, upper)` JQL and fixed Confluence `lastmodified` CQL windows. Because Confluence does not reliably expose the authenticated user's CQL timezone, its candidate envelope is rounded outward to minutes and widened by UTC ±14 hours; it is a safe discovery superset, not an exact timestamp filter. Equal page revisions/hierarchy skip body reads, with daily inventories as the membership/hierarchy backstop.

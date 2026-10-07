@@ -13,6 +13,9 @@ use url::Url;
 
 const HOUR: Duration = Duration::from_secs(3600);
 pub(super) const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
+/// Manual work shares one origin clock: at most this many requests in flight and this spacing.
+const INTERACTIVE_IN_FLIGHT: u32 = 2;
+const INTERACTIVE_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(super) fn origin(url: &Url) -> Arc<Pacer> {
     static ORIGINS: LazyLock<Mutex<HashMap<String, Arc<Pacer>>>> = LazyLock::new(Mutex::default);
@@ -41,6 +44,7 @@ struct State {
     interactive_waiting: u32,
     background: u32,
     next_background: Option<Instant>,
+    next_interactive: Option<Instant>,
     background_requests: VecDeque<Instant>,
     cooldown: Option<Instant>,
     cooldown_ms: Option<i64>,
@@ -112,9 +116,16 @@ impl State {
         }
         match lane {
             RequestLane::Interactive => {
-                if self.interactive >= 8 {
+                if self.interactive >= INTERACTIVE_IN_FLIGHT {
                     return Decision::Wait(None);
                 }
+                if let Some(next) = self.next_interactive.filter(|next| *next > now) {
+                    return Decision::Wait(Some(next));
+                }
+                let interval = self
+                    .server_interval
+                    .map_or(INTERACTIVE_INTERVAL, |server| INTERACTIVE_INTERVAL.max(server));
+                self.next_interactive = Some(now + interval);
                 self.interactive += 1;
             }
             RequestLane::Background => {
@@ -135,8 +146,7 @@ impl State {
                 if let Some(next) = self.next_background.filter(|next| *next > now) {
                     return Decision::Wait(Some(next));
                 }
-                let configured =
-                    Duration::from_secs_f64(1.0 / f64::from(policy.requests_per_second.max(1)));
+                let configured = Duration::from_secs(u64::from(policy.min_interval_seconds.max(1)));
                 let interval = self
                     .server_interval
                     .map_or(configured, |server| configured.max(server));

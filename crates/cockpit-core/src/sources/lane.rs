@@ -11,7 +11,7 @@ pub enum RequestLane {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackgroundPolicy {
-    pub requests_per_second: u32,
+    pub min_interval_seconds: u32,
     pub in_flight: u32,
     pub hourly_request_cap: u32,
 }
@@ -19,9 +19,9 @@ pub struct BackgroundPolicy {
 impl Default for BackgroundPolicy {
     fn default() -> Self {
         Self {
-            requests_per_second: 1,
-            in_flight: 2,
-            hourly_request_cap: 1200,
+            min_interval_seconds: 10,
+            in_flight: 1,
+            hourly_request_cap: 300,
         }
     }
 }
@@ -85,7 +85,7 @@ mod tests {
     #[tokio::test]
     async fn spawned_work_inherits_priority_and_policy_without_leaking_to_caller() {
         let policy = BackgroundPolicy {
-            requests_per_second: 3,
+            min_interval_seconds: 5,
             in_flight: 4,
             hourly_request_cap: 100,
         };

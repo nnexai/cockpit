@@ -44,7 +44,7 @@ pub struct LibrarySyncConfiguration {
     pub inventory_hours: u32,
     pub audit_days: u32,
     pub related_hours: u32,
-    pub background_requests_per_second: u32,
+    pub background_min_interval_seconds: u32,
     pub background_in_flight: u32,
     pub hourly_request_cap: u32,
 }
@@ -59,9 +59,9 @@ impl Default for LibrarySyncConfiguration {
             inventory_hours: 24,
             audit_days: 7,
             related_hours: 24,
-            background_requests_per_second: 1,
-            background_in_flight: 2,
-            hourly_request_cap: 1200,
+            background_min_interval_seconds: 10,
+            background_in_flight: 1,
+            hourly_request_cap: 300,
         }
     }
 }
@@ -76,7 +76,7 @@ impl LibrarySyncConfiguration {
             ("inventory_hours", self.inventory_hours, 1, 8760),
             ("audit_days", self.audit_days, 1, 365),
             ("related_hours", self.related_hours, 1, 8760),
-            ("background_requests_per_second", self.background_requests_per_second, 1, 60),
+            ("background_min_interval_seconds", self.background_min_interval_seconds, 1, 3600),
             ("background_in_flight", self.background_in_flight, 1, 32),
             ("hourly_request_cap", self.hourly_request_cap, 1, 100_000),
         ] {
@@ -1072,9 +1072,9 @@ mod tests {
             inventory_hours: 24,
             audit_days: 7,
             related_hours: 24,
-            background_requests_per_second: 1,
-            background_in_flight: 2,
-            hourly_request_cap: 1200,
+            background_min_interval_seconds: 10,
+            background_in_flight: 1,
+            hourly_request_cap: 300,
         };
         assert_eq!(LibrarySyncConfiguration::default(), expected);
         assert_eq!(load_library_sync_configuration(Some(&path)).expect("sync defaults"), expected);
@@ -1096,7 +1096,7 @@ mod tests {
             "[library_sync]\nenabled = true\ndelta_minutes = 1\n",
             "lag_allowance_minutes = 0\noverlap_minutes = 30\n",
             "inventory_hours = 48\naudit_days = 14\nrelated_hours = 72\n",
-            "background_requests_per_second = 3\nbackground_in_flight = 4\n",
+            "background_min_interval_seconds = 5\nbackground_in_flight = 4\n",
             "hourly_request_cap = 600\n",
         )).expect("write overridden configuration");
         assert_eq!(
@@ -1109,7 +1109,7 @@ mod tests {
                 inventory_hours: 48,
                 audit_days: 14,
                 related_hours: 72,
-                background_requests_per_second: 3,
+                background_min_interval_seconds: 5,
                 background_in_flight: 4,
                 hourly_request_cap: 600,
             },
@@ -1130,7 +1130,7 @@ mod tests {
             ("inventory_hours", 1, 8760),
             ("audit_days", 1, 365),
             ("related_hours", 1, 8760),
-            ("background_requests_per_second", 1, 60),
+            ("background_min_interval_seconds", 1, 3600),
             ("background_in_flight", 1, 32),
             ("hourly_request_cap", 1, 100_000),
         ] {

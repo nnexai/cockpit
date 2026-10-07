@@ -147,7 +147,7 @@ fn wall_ms() -> i64 {
 }
 fn policy(config: &LibrarySyncConfiguration) -> BackgroundPolicy {
     BackgroundPolicy {
-        requests_per_second: config.background_requests_per_second,
+        min_interval_seconds: config.background_min_interval_seconds,
         in_flight: config.background_in_flight,
         hourly_request_cap: config.hourly_request_cap,
     }
