@@ -214,12 +214,16 @@ async fn interactive_bypasses_background_backlog_and_cancellation_releases_waite
     assert_eq!(pacer.state.lock().background, 0);
 
     let mut manual_permits = Vec::new();
-    for _ in 0..8 {
+    // Fill the lane without waiting for capacity held by this test itself.
+    for _ in 0..INTERACTIVE_IN_FLIGHT {
         manual_permits.push(
-            pacer
-                .acquire(RequestLane::Interactive, BackgroundPolicy::default())
-                .await
-                .unwrap(),
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                pacer.acquire(RequestLane::Interactive, BackgroundPolicy::default()),
+            )
+            .await
+            .expect("interactive capacity should be available")
+            .unwrap(),
         );
     }
     let queued = pacer.clone();
