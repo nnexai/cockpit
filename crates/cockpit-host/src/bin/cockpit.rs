@@ -2,6 +2,8 @@
 mod endpoint;
 #[path = "cockpit/notes.rs"]
 mod notes_cli;
+#[path = "cockpit/skills.rs"]
+mod skills_cli;
 
 use std::{fs::OpenOptions, io::{IsTerminal, Read}, net::SocketAddr, os::unix::fs::OpenOptionsExt, path::{Path, PathBuf}, process::ExitCode, sync::Arc, time::Duration};
 
@@ -34,11 +36,27 @@ use cockpit_host::{
 #[path = "../cli_orchestration.rs"]
 mod cli_orchestration;
 
+const ROOT_HELP: &str = "Agent workflows:
+  cockpit-cli notes --help       Durable Notes, todos, Kanban and decisions
+  cockpit-cli task --help        Canonical supervisor tasks and revision fences
+  cockpit-cli run --help         Worker lifecycle, plans, reports and questions
+  cockpit-cli inbox --help       Read messages, then acknowledge processed mail
+  cockpit-cli subagent --help    Actual OMP child lifecycle and control
+  cockpit-cli route --help       Read configured project-routing evidence
+  cockpit-cli skills --help      Read or explicitly install portable CLI skills
+
+Use <command> <subcommand> --help for payloads, selectors and examples.
+Prefer COCKPIT_CLI_PATH when supplied by a Cockpit-launched agent.
+Help and skills commands do not connect to Herdr or modify Notes.
+Notes UUID-pinned content works without Herdr; orchestration mutations need
+fresh bound caller authority, not UI focus or invented identity flags.";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "cockpit",
     version,
-    about = "Local Cockpit gateway and status client"
+    about = "Local Cockpit gateway and status client",
+    after_long_help = ROOT_HELP
 )]
 struct Cli {
     #[command(subcommand)]
@@ -74,17 +92,26 @@ pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     /// Print the live Library context selected by a Herdr Space.
     Context(ContextArgs),
     /// Read and edit canonical supervisor tasks.
+    #[command(after_long_help = cli_orchestration::TASK_HELP)]
     Task(cli_orchestration::TaskArgs),
     /// Propose workers and report or message within the run forest.
+    #[command(after_long_help = cli_orchestration::RUN_HELP)]
     Run(cli_orchestration::RunArgs),
     /// Pull durable inbox messages; acknowledge only after processing.
+    #[command(after_long_help = cli_orchestration::INBOX_HELP)]
     Inbox(cli_orchestration::InboxArgs),
     /// Publish and control OMP subagents.
+    #[command(after_long_help = cli_orchestration::SUBAGENT_HELP)]
     Subagent(cli_orchestration::SubagentArgs),
     /// Resolve configured artifact-to-project routing without guessing focus.
+    #[command(after_long_help = cli_orchestration::ROUTE_HELP)]
     Route(cli_orchestration::RouteArgs),
     /// Read and edit durable Space Notes outside repositories and the Library.
+    #[command(after_long_help = notes_cli::NOTES_HELP)]
     Notes(notes_cli::NotesArgs),
+    /// Read or explicitly install bundled portable skills for this CLI.
+    #[command(after_long_help = skills_cli::SKILLS_HELP)]
+    Skills(skills_cli::SkillsArgs),
 }
 #[derive(Debug, Clone, Args)]
 struct HerdrArgs {
@@ -491,6 +518,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Browser(args) => run_browser(args).await,
         Command::Widget(_) => unreachable!("widget commands use their own exit-status contract"),
         Command::Notes(_) => unreachable!("Notes commands use their own exit-status contract"),
+        Command::Skills(_) => unreachable!("skills commands use their own exit-status contract"),
         Command::Context(args) => run_context(args).await,
         Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Subagent(_) | Command::Route(_) =>
             unreachable!("orchestration commands preserve their structured error contract"),
@@ -997,11 +1025,15 @@ async fn run_widget(args: WidgetArgs) -> Result<u8, CliError> {
 async fn main() -> ExitCode {
     let widget = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("widget"));
     let notes = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("notes"));
+    let skills = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("skills"));
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
             if notes && !matches!(error.kind(), clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion) {
                 return ExitCode::from(notes_cli::print_error(cockpit_core::InspectionError::new("notes_usage", error.to_string())));
+            }
+            if skills && !matches!(error.kind(), clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion) {
+                return ExitCode::from(skills_cli::print_error(cockpit_core::InspectionError::new("skills_usage", error.to_string())));
             }
             if widget && !matches!(error.kind(), clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion) {
                 eprintln!("{}", CliError::widget("widget_usage", error).text);
@@ -1020,6 +1052,7 @@ async fn main() -> ExitCode {
         Command::Subagent(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Route(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Notes(args) => return ExitCode::from(notes_cli::run(args).await),
+        Command::Skills(args) => return ExitCode::from(skills_cli::run(args).await),
         command => run_legacy(Cli { command }).await.map(|()| 0).map_err(CliError::from),
     };
     match result {
