@@ -81,7 +81,7 @@ fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool
         "effect": effect, "next": next, "operator_reason": operator_reason,
     }).to_string();
     let root = run.root_id.clone();
-    messages::append(state, ActorRef::Dispatcher, &root, &key, MessageKind::Observation, &text, None, false, None, None)?;
+    messages::append(state, ActorRef::Dispatcher, &root, &key, MessageKind::Observation, &text, None, None, false, None, None)?;
     Ok(true)
 }
 
@@ -124,7 +124,7 @@ pub(super) fn recovered(state: &mut OrchestrationState, index: usize) -> Result<
     let text = serde_json::json!({"event": "dispatch_recovered", "run_id": run.run_id,
         "run_attempt": run.attempt, "launch_attempt": dispatch.launch_attempt, "step": dispatch.step}).to_string();
     let root = run.root_id.clone();
-    messages::append(state, ActorRef::Dispatcher, &root, &key, MessageKind::Observation, &text, None, false, None, None)?;
+    messages::append(state, ActorRef::Dispatcher, &root, &key, MessageKind::Observation, &text, None, None, false, None, None)?;
     Ok(true)
 }
 

@@ -338,6 +338,7 @@ mod tests {
             from: ActorRef::Operator,
             kind: MessageKind::Instruction,
             text,
+            in_reply_to: None,
             report: None,
             stale: false,
             escalated_from: None,

@@ -201,10 +201,26 @@ const run: Validator = value => shape({
 })(value) && record(value) && Array.isArray(value.grants)
   && value.grants.every(grant => record(grant) && (grant.origin !== "supervisor" || grant.supervisor_run_id === value.root_id));
 const message = shape({
-  message_id: id, to_run_id: id, seq: u64, from: actor, kind: messageKind, text, report: nullable(report), stale: bool,
+  message_id: id, to_run_id: id, seq: u64, from: actor, kind: messageKind, text, in_reply_to: nullable(id), report: nullable(report), stale: bool,
   escalated_from: nullable(id), from_subagent_id: nullable(id), stage: oneOf("stored", "woken", "read", "acked"),
   woken_omp_session: nullable(id), created_at: timestamp, acked_at: nullable(timestamp),
 });
+const answerReceipt = shape({
+  sender: actor, message_id: id, seq: u64, stage: oneOf("stored", "woken", "read", "acked"),
+  created_at: timestamp, acked_at: nullable(timestamp),
+}, true);
+const questionReceipt: Validator = value => record(value) && (
+  (value.status === "unresolved" && shape({ status: oneOf("unresolved") }, true)(value))
+  || (value.status === "answer_delivered" && shape({
+    status: oneOf("answer_delivered"), answer: answerReceipt,
+  }, true)(value) && record(value.answer) && value.answer.stage !== "acked")
+  || (value.status === "answer_acknowledged" && shape({
+    status: oneOf("answer_acknowledged"), answer: answerReceipt,
+  }, true)(value) && record(value.answer) && value.answer.stage === "acked")
+);
+const question = shape({
+  run_id: id, question_message_id: id, asked_at: timestamp, receipt: questionReceipt,
+}, true);
 const subagent = shape({
   run_id: id, subagent_id: id, parent_subagent_id: nullable(id), bound_omp_session: nullable(id), role: nullable(label), label,
   status: subagentStatus, summary: nullable(text), updated_at: timestamp,
@@ -262,7 +278,7 @@ const actions: Readonly<Record<OrchestrationAction["action"], Fields>> = {
   reconcile_run: { run_id: id, recovery: nullable(recovery) },
   intent_resolve: { intent_id: id, apply: bool },
   report: { message_id: id, kind: reportKind, outcome: reportOutcome, summary: text, plan: nullable(text), to_run_id: nullable(id) },
-  message_send: { message_id: id, to_run_id: id, kind: messageKind, text },
+  message_send: { message_id: id, to_run_id: id, kind: messageKind, text, in_reply_to: nullable(id) },
   annotate: { run_id: id, text },
   inbox_pull: { after_seq: u64, limit: value => u32(value) && (value as number) <= 100 },
   inbox_woken: { through_seq: u64, omp_session_id: id },
@@ -276,6 +292,8 @@ export function parseOrchestrationAction(value: unknown): OrchestrationAction {
   const fields = actions[value.action as OrchestrationAction["action"]];
   if (!shape({ action: oneOf(value.action), ...fields }, true)(value)) malformed("action");
   if (value.action === "task_assignment_resolve" && value.assign && value.expected_task_revision === null) malformed("assignment revision");
+  if (value.action === "message_send" && (value.kind === "answer"
+    ? !id(value.in_reply_to) : value.in_reply_to !== null)) malformed("answer correlation");
   return value as unknown as OrchestrationAction;
 }
 export function parseOrchestrationSnapshotRequest(value: unknown): OrchestrationSnapshotRequest {
@@ -295,7 +313,7 @@ export function parseOrchestrationSnapshot(value: unknown): OrchestrationSnapsho
     session_id: session, revision: u64, tasks_token: hash,
     roots: list(shape({ root_id: id, label, kind: runKind, open_runs: u32, needs_you: u32 })),
     board: nullable(board), runs: list(run), messages: list(message), subagents: list(subagent), intents: list(intent), runtime, attention: list(attention),
-    assignment_intents: list(assignmentIntent),
+    assignment_intents: list(assignmentIntent), questions: list(question),
     unmanaged_agents: list(shape({
       workspace_id: id, workspace_label: externalText, tab_id: id, tab_label: externalText, pane_id: id,
       agent_name: externalText, agent_status: nullable(externalText), state_changed_at: nullable(timestamp),

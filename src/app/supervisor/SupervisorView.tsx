@@ -5,7 +5,7 @@ import { useRovingList } from "../sidebar/useRovingList";
 import { UiIcon } from "../UiIcon";
 import { SupervisorGraph } from "./SupervisorGraph";
 import { taskLanes, taskNeighbor, visibleTaskIds } from "./boardNavigation";
-import { agentState, recoveryActions, SupervisorActions, taskStatus, TextAction, type PathRowView } from "./SupervisorActions";
+import { agentState, questionForRun, questionLabel, recoveryActions, SupervisorActions, taskStatus, TextAction, type PathRowView } from "./SupervisorActions";
 import { SupervisorDialogs, TaskSourceDialog, type StartDraft, type SupervisorDialogState } from "./SupervisorDialogs";
 import { messageDraft, stepDraft, useSupervisorDrafts } from "./useSupervisorDrafts";
 import { useSupervisor } from "./useSupervisor";
@@ -315,7 +315,12 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   }
   const attention = snapshot ? deriveAttention({ snapshot, rootId: root?.run_id ?? null, local }) : null;
   const decide = attention?.items.some(item => item.tier === "decide" && item.runId === root?.run_id) ?? false;
-  const question = decide && root?.last_report?.kind === "needs_input" ? root.last_report : null;
+  const rootQuestion = root && snapshot ? questionForRun(snapshot, root) : null;
+  const rootReceiptLabel = root && rootQuestion && rootQuestion.receipt.status !== "unresolved"
+    && rootState?.kind === "ready" && !rootState.blocked && attention?.tierForRun(root.run_id) !== "recover"
+    ? questionLabel(rootQuestion) : null;
+  const question = decide && rootQuestion?.receipt.status === "unresolved"
+    && root?.last_report?.kind === "needs_input" && root.last_report.message_id === rootQuestion.question_message_id ? root.last_report : null;
   const answer = question && root ? messageDraft(scope, `answer:${root.run_id}:${question.message_id}`) : null;
   useEffect(() => {
     if (!active || !questionHadFocus.current || decide) return;
@@ -441,7 +446,7 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
       if (source.origin === "core") {
         const problem = source.kind === "retirement_unconfirmed" ? retirement?.label ?? ATTENTION_PROBLEM[source.kind] : ATTENTION_PROBLEM[source.kind];
         if (source === item.sources[0]) title = `${problem} · ${title}`;
-        if (source.kind === "needs_input" && question && answer && root) bodies.push(<section key="question" className="supervisor-needs-you" aria-label="Needs you"><p id={`supervisor-question-${question.message_id}`} className="supervisor-exact-text">{question.summary}</p><TextAction label="Answer" submitLabel="Send answer" describedBy={`supervisor-question-${question.message_id}`} draft={answer} changed={changed} busy={busy || !live || !rootState?.verified} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: root.run_id, kind: "answer", text })} success="Answer sent. Waiting for the agent." /></section>);
+        if (source.kind === "needs_input" && question && answer && root) bodies.push(<section key="question" className="supervisor-needs-you" aria-label="Needs you"><p id={`supervisor-question-${question.message_id}`} className="supervisor-exact-text">{question.summary}</p><TextAction label="Answer" submitLabel="Send answer" describedBy={`supervisor-question-${question.message_id}`} draft={answer} changed={changed} busy={busy || !live || !rootState?.verified} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: root.run_id, kind: "answer", text, in_reply_to: question.message_id })} success="Answer sent. Waiting for the agent." /></section>);
         if (source.kind === "retirement_unconfirmed" && retirement) bodies.push(<p key="retirement" className="supervisor-exact-text">{retirement.detail}</p>);
         if (source.kind === "intent_conflict") for (const intent of snapshot!.intents.filter(intent => intent.root_id === root?.run_id && intent.state === "conflict" && (intent.run_id === item.runId || intent.task_id === item.taskId))) {
           actions.push({ key: `apply:${intent.intent_id}`, label: "Apply acceptance to current task", primary: true, disabled: busy || !live, onActivate: () => void mutateResult({ action: "intent_resolve", intent_id: intent.intent_id, apply: true }) }, { key: `keep:${intent.intent_id}`, label: "Keep current task unchanged", disabled: busy || !connected, onActivate: () => void mutateResult({ action: "intent_resolve", intent_id: intent.intent_id, apply: false }) });
@@ -521,7 +526,12 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   }) : [];
   const tier = selectedTask ? attention?.tierForTask(selectedTask) : detailRun ? attention?.tierForRun(detailRun.run_id) : null;
   const owned = detailRun ? attention?.ownedForRun(detailRun.run_id) : null;
-  const stateSentence = owned ? owned.kind === "to_accept" ? "Supervisor is reviewing this result" : "Waiting for supervisor" : detailRun && snapshot ? agentState(snapshot, detailRun, connected, runtimeLive).label : detailTask ? taskStatus(detailTask, undefined, snapshot!) : "No current worker";
+  const detailState = detailRun && snapshot ? agentState(snapshot, detailRun, connected, runtimeLive) : null;
+  const detailQuestion = detailRun && !detailSubagent && snapshot ? questionForRun(snapshot, detailRun) : null;
+  const stateSentence = detailQuestion
+    ? detailState && (detailState.kind !== "ready" || detailState.blocked || tier === "recover") ? detailState.label : questionLabel(detailQuestion)
+    : owned ? owned.kind === "to_accept" ? "Supervisor is reviewing this result" : "Waiting for supervisor"
+    : detailState?.label ?? (detailTask ? taskStatus(detailTask, undefined, snapshot!) : "No current worker");
   const chips: StripChip[] = model && snapshot ? model.nodes.filter(node => node.run && !node.subagent && node.run.stage !== "closed").map(node => { const facts = nodeFacts(node, { model, snapshot, live: !!live, connected, runtimeLive }); return { runId: node.run!.run_id, label: facts.title, glyph: facts.glyph === "document" ? "unknown" : facts.glyph, status: facts.status, tier: attention?.tierForRun(node.run!.run_id) ?? null, selected: scope.selectedRun === node.run!.run_id }; }).sort((a, b) => (a.tier ? TIER_ORDER[a.tier] : 3) - (b.tier ? TIER_ORDER[b.tier] : 3)) : [];
   const observedCount = rootRuns.filter(run => run.stage !== "closed" && live && observe(run.run_id)?.presence === "present" && observe(run.run_id)?.actual_omp).length;
   const rootSpace = observe(root?.run_id)?.workspace_id ?? (root?.target?.target === "existing_space" ? root.target.workspace_id : null);
@@ -585,7 +595,7 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
     <div ref={workareaRef} className="supervisor-workarea" style={{ "--detail-size": `${bounds?.value ?? 340}px`, "--sheet-size": `${bottomInset}px` } as CSSProperties}><div className="supervisor-content">
       {!snapshot ? <div className="supervisor-empty"><UiIcon name="branch" /><h2>{error ? "Could not load Supervisor" : "Loading Supervisor…"}</h2>{error ? <><p>Your terminals are unchanged. The Supervisor connection could not be established.</p><button type="button" onClick={refresh}>Retry load</button></> : <p role="status">Reading saved tasks and fresh agent observations.</p>}</div> : <>
         <SupervisorSummary
-          rootLabel={root?.label ?? "No supervisor selected"} stateLabel={rootState?.label ?? "Start an agent"}
+          rootLabel={root?.label ?? "No supervisor selected"} stateLabel={rootReceiptLabel ?? rootState?.label ?? "Start an agent"}
           stateGlyph={rootState?.blocked ? "blocked" : rootState?.verified ? "live" : "unknown"}
           observedLine={live ? `${observedCount} agents observed · ${snapshot.runtime.status === "fresh" ? new Date(snapshot.runtime.observed_at).toLocaleTimeString() : ""}` : "Agents · unobserved"}
           banner={banner} counts={attention?.counts ?? { decide: 0, recover: 0, notice: 0 }} queueMode={layout.queueMode}

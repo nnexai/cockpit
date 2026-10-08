@@ -170,6 +170,7 @@ fn finalize(
         MessageKind::Instruction,
         &text,
         None,
+        None,
         false,
         None,
         None,

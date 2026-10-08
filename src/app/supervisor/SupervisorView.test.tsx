@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
+import { CockpitClientError } from "../../client/CockpitClient";
 import type { OrchestrationSnapshot, OrchestrationWaitResponse, Run, RunObservation, SessionSnapshotResponse, TaskBoard, TaskView } from "../../protocol/generated/v1";
 import { agentState, taskStatus } from "./SupervisorActions";
 import { SupervisorView } from "./SupervisorView";
@@ -31,7 +32,7 @@ function board(rootId = "root", tasks: TaskView[] = []): TaskBoard {
   return { root_id: rootId, path: `/state/${rootId}.md`, doc_revision: "document-revision", unidentified_items: 0, diagnostics: [], tasks };
 }
 function snapshot(runs: Run[] = [run()], tasks: TaskView[] = []): OrchestrationSnapshot {
-  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => !run.parent_run_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: board("root", tasks), runs, messages: [], subagents: [], intents: [], assignment_intents: [], attention: runs.filter(run => run.run_id === run.root_id && run.last_report?.kind === "needs_input").map(run => ({ kind: "needs_input", run_id: run.run_id, task_id: null, message_seq: 1, since: at })), unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => observed(run.run_id)) } };
+  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => !run.parent_run_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: board("root", tasks), runs, messages: [], questions: runs.filter(run => run.stage !== "closed" && run.last_report?.kind === "needs_input").map(run => ({ run_id: run.run_id, question_message_id: run.last_report!.message_id, asked_at: run.last_report!.at, receipt: { status: "unresolved" } })), subagents: [], intents: [], assignment_intents: [], attention: runs.filter(run => run.run_id === run.root_id && run.last_report?.kind === "needs_input").map(run => ({ kind: "needs_input", run_id: run.run_id, task_id: null, message_seq: 1, since: at })), unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => observed(run.run_id)) } };
 }
 const session: SessionSnapshotResponse = { session_id: "session", server_instance: "server", version: "fixture", protocol: 20, focused_space_id: "space", focused_tab_id: "tab", focused_pane_id: "pane", spaces: [{ id: "space", label: "Project", number: 1, tab_count: 1, pane_count: 1, focused: true, agent_status: "working", git: null }], tabs: [], panes: [], agents: [] };
 let host: HTMLDivElement;
@@ -220,13 +221,104 @@ describe("Supervisor authority and retained operations", () => {
     fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
     act(() => button("Send answer").click()); await settle();
     const sent = fixture.mutation.mock.calls[0][0].action;
-    expect(sent).toMatchObject({ action: "message_send", kind: "answer", to_run_id: "root", text: "Use the existing checkout" });
+    expect(sent).toMatchObject({ action: "message_send", kind: "answer", to_run_id: "root", text: "Use the existing checkout", in_reply_to: "question" });
     expect(field.value).toBe("Use the existing checkout");
     act(() => button("Retry same message").click()); await settle();
     expect(fixture.mutation.mock.calls[1][0].action).toEqual(sent);
     expect(field.value).toBe("");
     expect(fixture.onClose).not.toHaveBeenCalled();
   });
+  it("keeps a rejected old-question answer separate from the next displayed question", async () => {
+    const supervisor = run({ last_report: { message_id: "q1", kind: "needs_input", outcome: null, summary: "First question", plan: null, at } });
+    const fixture = await mount(snapshot([supervisor]));
+    const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    enter(field, "Answer to the first question");
+    fixture.mutation.mockRejectedValueOnce(new CockpitClientError("http_error", "The question changed", { operationCode: "question_not_current" }));
+    act(() => button("Send answer").click()); await settle();
+    expect(field.value).toBe("Answer to the first question");
+    expect(fixture.mutation.mock.calls[0][0].action).toMatchObject({ in_reply_to: "q1" });
+    const next = run({ last_report: { ...supervisor.last_report!, message_id: "q2", summary: "Second question" } });
+    await fixture.push({ ...snapshot([next]), revision: 2 });
+    const nextField = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    expect(nextField.value).toBe("");
+    enter(nextField, "Answer to the second question");
+    act(() => button("Send answer").click()); await settle();
+    expect(fixture.mutation.mock.calls[1][0].action).toMatchObject({ in_reply_to: "q2", text: "Answer to the second question" });
+    expect(fixture.mutation.mock.calls[1][0].action).not.toEqual(fixture.mutation.mock.calls[0][0].action);
+  });
+
+  it("uses the same receipt status in prerequisite links and Dependencies nodes without changing dependency facts", async () => {
+    workarea(1100, 900);
+    const worker = run({ run_id: "worker", kind: "worker", parent_run_id: "root", task_id: "task-a", stage: "working", last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which fixture?", plan: null, at } });
+    const prerequisite = task();
+    const dependent = task({ task: { ...task().task, task_id: "task-b", title: "Follow-on work", depends_on: ["task-a"] }, lane: "queued", current_run_id: null, dependencies: { state: "blocked", unmet: [{ task_id: "task-a", reason: "unchecked" }], problems: [] } });
+    const state = snapshot([run(), worker], [prerequisite, dependent]);
+    state.questions[0]!.receipt = { status: "answer_delivered", answer: { sender: { type: "run", run_id: "root" }, message_id: "answer", seq: 1, stage: "read", created_at: at, acked_at: null } };
+    const fixture = await mount(state);
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-b"]')!.click()); await settle();
+    const status = taskStatus(prerequisite, worker, state);
+    expect(host.querySelector(".supervisor-dependencies .supervisor-path-row")?.getAttribute("aria-label")).toContain(status);
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="dependencies"]')!.click()); await settle();
+    expect(host.querySelector('[data-row-id="task:task-a"]')?.getAttribute("aria-label")).toContain(status);
+    expect(dependent.dependencies).toEqual({ state: "blocked", unmet: [{ task_id: "task-a", reason: "unchecked" }], problems: [] });
+    expect(fixture.mutation).not.toHaveBeenCalled();
+  });
+
+  it("clears root Decide on linked delivery, keeps receipt/history, and returns to Decide for a new question", async () => {
+    workarea(1100, 900);
+    const supervisor = run({ last_report: { message_id: "q1", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const fixture = await mount(snapshot([supervisor]));
+    const state = snapshot([supervisor]);
+    const answer = { sender: { type: "operator" as const }, message_id: "answer", seq: 1, stage: "stored" as const, created_at: "2026-10-06T12:01:00Z", acked_at: null };
+    state.questions[0]!.receipt = { status: "answer_delivered", answer };
+    state.attention = [];
+    await fixture.push({ ...state, revision: 2 });
+    expect(host.querySelector('[aria-label="Needs you"]')).toBeNull();
+    expect(host.querySelector(".supervisor-summary-counter.is-decide")).toBeNull();
+    const summary = host.querySelector(".supervisor-summary")!.textContent;
+    expect(summary).toContain(taskStatus(task(), supervisor, state));
+    const chip = host.querySelector<HTMLButtonElement>(".supervisor-strip-chips .supervisor-strip-chip")!;
+    const observedFacts = chip.getAttribute("aria-label");
+    act(() => chip.click());
+    await settle();
+    expect(host.querySelector(".supervisor-state-block .supervisor-report-summary")?.textContent).toBe(supervisor.last_report!.summary);
+    expect(host.querySelector(".supervisor-state-block time[datetime='2026-10-06T12:01:00Z']")).not.toBeNull();
+    state.questions[0]!.receipt = { status: "answer_acknowledged", answer: { ...answer, stage: "acked", acked_at: "2026-10-06T12:02:00Z" } };
+    await fixture.push({ ...state, revision: 3 });
+    expect(host.querySelector(".supervisor-summary")!.textContent).toContain(taskStatus(task(), supervisor, state));
+    expect(host.querySelector(".supervisor-state-block time[datetime='2026-10-06T12:02:00Z']")).not.toBeNull();
+    expect(chip.getAttribute("aria-label")).toBe(observedFacts);
+    state.questions[0]!.receipt = { status: "answer_delivered", answer: { ...answer, seq: 2 } };
+    await fixture.push({ ...state, revision: 4 });
+    expect(host.querySelector(".supervisor-summary")!.textContent).toContain(taskStatus(task(), supervisor, state));
+    expect(host.querySelector(".supervisor-state-block time[datetime='2026-10-06T12:02:00Z']")).toBeNull();
+    const next = run({ last_report: { ...supervisor.last_report!, message_id: "q2" } });
+    await fixture.push({ ...snapshot([next]), revision: 5 });
+    expect(host.querySelector('[aria-label="Needs you"]')).not.toBeNull();
+    const progressed = run({ last_report: { ...supervisor.last_report!, message_id: "progress", kind: "progress", summary: "Working on the chosen checkout" } });
+    await fixture.push({ ...snapshot([progressed]), revision: 6 });
+    expect(host.querySelector('[aria-label="Needs you"]')).toBeNull();
+    expect(host.querySelector(".supervisor-state-block time[datetime='2026-10-06T12:01:00Z']")).toBeNull();
+  });
+
+  it.each(["blocked", "missing", "offline", "recover"] as const)("never masks root runtime/recovery state with an answer receipt (%s)", async condition => {
+    workarea(1100, 900);
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const state = snapshot([supervisor]);
+    state.questions[0]!.receipt = { status: "answer_delivered", answer: { sender: { type: "operator" }, message_id: "answer", seq: 1, stage: "stored", created_at: at, acked_at: null } };
+    state.attention = condition === "recover" ? [{ kind: "runtime_blocked", run_id: "root", task_id: null, message_seq: null, since: at }] : [];
+    if (state.runtime.status === "fresh") state.runtime.runs[0] = observed("root", condition === "missing" ? { presence: "missing", actual_omp: false } : condition === "blocked" ? { agent_status: "blocked" } : {});
+    await mount(state);
+    if (condition === "offline") await rerender(true, false);
+    expect(host.querySelector(".supervisor-summary")!.textContent).not.toContain(taskStatus(task(), supervisor, state));
+    const chip = host.querySelector<HTMLButtonElement>(".supervisor-strip-chips .supervisor-strip-chip")!;
+    act(() => chip.click()); await settle();
+    const block = host.querySelector(".supervisor-state-block")!;
+    expect(block.querySelector("p")?.textContent).not.toBe(taskStatus(task(), supervisor, state));
+    expect(block.querySelector(`time[datetime="${at}"]`)).not.toBeNull();
+    expect(block.querySelector(".supervisor-report-summary")?.textContent).toBe(supervisor.last_report!.summary);
+  });
+
   it.each([true, false])("returns focus when core clears the root question (task exists: %s)", async hasTask => {
     const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
     const tasks = hasTask ? [task({ lane: "queued", current_run_id: null })] : [];

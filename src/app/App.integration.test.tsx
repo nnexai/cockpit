@@ -1232,7 +1232,7 @@ describe("merged local workarea lifecycle", () => {
     const fixture = new AppFixture();
     vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "fresh", endpoint_identity: "fixture-endpoint", observed_at: "2026-10-06T12:00:00Z", runs: [] },
     });
     vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
@@ -1267,7 +1267,7 @@ describe("merged local workarea lifecycle", () => {
     vi.mocked(fixture.client.notes).mockRejectedValue(new CockpitClientError("http_error", "No notes are bound", { operationCode: "notes_unbound" }));
     vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "No runtime observation" } },
     });
     vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
@@ -1331,7 +1331,7 @@ describe("merged local workarea lifecycle", () => {
 
     observation.resolve({
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "Late observation" } },
     });
     await settle();

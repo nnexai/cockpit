@@ -14,7 +14,12 @@ function task(id = "task", currentRunId: string | null = "worker"): TaskView {
   return { task: { task_id: id, title: "Improve search", body: "Keep behavior", description: "Keep behavior", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "revision", diagnostic: null }, lane: "working", current_run_id: currentRunId, dependencies: { state: "none", unmet: [], problems: [] } };
 }
 function snapshot(attention: Attention[], runs = [run("root"), run("worker", "root", "task")]): OrchestrationSnapshot {
-  return { session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs, messages: [], subagents: [],
+  const currentRuns = runs.map(run => {
+    const question = attention.find(item => item.kind === "needs_input" && item.run_id === run.run_id);
+    return question ? { ...run, last_report: { message_id: `question-${run.run_id}`, kind: "needs_input" as const, outcome: null, summary: "Which checkout?", plan: null, at: question.since } } : run;
+  });
+  return { session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs: currentRuns, messages: [], subagents: [],
+    questions: currentRuns.filter(run => run.stage !== "closed" && run.last_report?.kind === "needs_input").map(run => ({ run_id: run.run_id, question_message_id: run.last_report!.message_id, asked_at: run.last_report!.at, receipt: { status: "unresolved" } })),
     intents: [], assignment_intents: [], attention, unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [] } };
 }
 const entry = (kind: Attention["kind"], runId = "worker", since = at, taskId: string | null = null): Attention => ({ kind, run_id: runId, task_id: taskId, message_seq: null, since });

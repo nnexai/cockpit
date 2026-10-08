@@ -1742,7 +1742,7 @@ mod tests {
                 cockpit_protocol::orchestration::ActorRef::Operator,
                 &self.run.run_id, "preserved-message",
                 cockpit_protocol::orchestration::MessageKind::Observation,
-                "Existing operator message", None, false, None, None).unwrap();
+                "Existing operator message", None, None, false, None, None).unwrap();
             locked.save(&mut state).unwrap();
         }
         fn worker_task(&mut self, prerequisite: Option<(&str, bool)>) {

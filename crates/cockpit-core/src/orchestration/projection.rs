@@ -28,6 +28,51 @@ pub(crate) fn current_task_run<'a>(
         .max_by(|left, right| attempt_order(left).cmp(&attempt_order(right)))
 }
 
+/// Projects the current main request and its latest explicit recipient-inbox answer.
+/// Delivery receipts never change the run or imply that work has resumed.
+pub(crate) fn question_status(run: &Run, inbox: &[&Message]) -> Option<QuestionStatus> {
+    if run.stage == RunStage::Closed {
+        return None;
+    }
+    let report = run
+        .last_report
+        .as_ref()
+        .filter(|report| report.kind == ReportKind::NeedsInput)?;
+    let answer = inbox
+        .iter()
+        .copied()
+        .filter(|message| {
+            message.to_run_id == run.run_id
+                && message.kind == MessageKind::Answer
+                && !message.stale
+                && message.from_subagent_id.is_none()
+                && message.in_reply_to.as_deref() == Some(report.message_id.as_str())
+        })
+        .max_by_key(|message| message.seq);
+    let receipt = answer.map_or(QuestionReceipt::Unresolved, |message| {
+        let answer = AnswerReceipt {
+            sender: message.from.clone(),
+            message_id: message.message_id.clone(),
+            seq: message.seq,
+            stage: message.stage,
+            created_at: message.created_at.clone(),
+            acked_at: message.acked_at.clone(),
+        };
+        match message.stage {
+            DeliveryStage::Stored | DeliveryStage::Woken | DeliveryStage::Read => {
+                QuestionReceipt::AnswerDelivered { answer }
+            }
+            DeliveryStage::Acked => QuestionReceipt::AnswerAcknowledged { answer },
+        }
+    });
+    Some(QuestionStatus {
+        run_id: run.run_id.clone(),
+        question_message_id: report.message_id.clone(),
+        asked_at: report.at.clone(),
+        receipt,
+    })
+}
+
 /// Joins durable intent and canonical Markdown with one fresh runtime observation.
 /// No runtime evidence is written back, and no observation can complete a task.
 pub(crate) fn snapshot(
@@ -97,15 +142,22 @@ pub(crate) fn snapshot(
         RuntimeObservation::Unavailable { .. } => HashMap::new(),
     };
     let mut attention = Vec::new();
+    let mut questions = Vec::new();
     for run in &runs {
+        let inbox: &[&Message] = inboxes.get(run.run_id.as_str()).map_or(&[], Vec::as_slice);
+        let question = question_status(run, inbox);
         derive_attention(
             run,
-            inboxes.get(run.run_id.as_str()).map_or(&[], Vec::as_slice),
+            inbox,
+            question.as_ref(),
             observations.get(run.run_id.as_str()).copied(),
             clock,
             now,
             &mut attention,
         );
+        if let Some(question) = question {
+            questions.push(question);
+        }
         if let Some(RunRetirement { state: RetirementState::Unknown { at, .. }, .. }) = &run.retirement {
             attention.push(Attention {
                 kind: AttentionKind::RetirementUnconfirmed,
@@ -219,6 +271,7 @@ pub(crate) fn snapshot(
         board,
         runs: runs.into_iter().cloned().collect(),
         messages: messages.into_iter().cloned().collect(),
+        questions,
         subagents: state
             .subagents
             .iter()
@@ -417,6 +470,7 @@ fn optional_evidence_matches(expected: Option<&str>, actual: Option<&str>) -> bo
 fn derive_attention(
     run: &Run,
     inbox: &[&Message],
+    question: Option<&QuestionStatus>,
     observation: Option<&RunObservation>,
     clock: OffsetDateTime,
     now: &str,
@@ -461,19 +515,10 @@ fn derive_attention(
             add(AttentionKind::PlanChanged, &dispatch.updated_at, None);
         }
     }
-    let needs_input = run
-        .last_report
-        .as_ref()
-        .filter(|report| report.kind == ReportKind::NeedsInput)
-        .filter(|report| {
-            !inbox.iter().any(|message| {
-                message.kind == MessageKind::Answer
-                    && !message.stale
-                    && later_or_equal(&message.created_at, &report.at)
-            })
-        });
-    if let Some(report) = needs_input {
-        add(AttentionKind::NeedsInput, &report.at, None);
+    let needs_input = question
+        .filter(|question| matches!(&question.receipt, QuestionReceipt::Unresolved));
+    if let Some(question) = needs_input {
+        add(AttentionKind::NeedsInput, &question.asked_at, None);
     }
     let latest = |kind| {
         inbox
@@ -720,6 +765,7 @@ mod tests {
             from: ActorRef::Operator,
             kind,
             text: "brief".into(),
+            in_reply_to: None,
             report: None,
             stale: false,
             escalated_from: None,
@@ -729,6 +775,28 @@ mod tests {
             created_at: START.into(),
             acked_at: None,
         }
+    }
+
+    fn asking() -> Run {
+        let mut run = worker(RunStage::Working);
+        run.last_report = Some(Report {
+            message_id: "ask".into(),
+            kind: ReportKind::NeedsInput,
+            outcome: None,
+            summary: "Need a decision".into(),
+            plan: None,
+            at: START.into(),
+        });
+        run
+    }
+
+    fn answer(stage: DeliveryStage) -> Message {
+        let mut message = brief(MessageKind::Answer, stage);
+        message.in_reply_to = Some("ask".into());
+        if stage == DeliveryStage::Acked {
+            message.acked_at = Some(NOW.into());
+        }
+        message
     }
 
     fn project(
@@ -749,11 +817,210 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn questions_are_recipient_scoped_for_all_open_runs_in_the_requested_session() {
+        let mut durable = state(asking());
+        durable.runs[0].last_report = durable.runs[1].last_report.clone();
+        let mut foreign_root = asking();
+        foreign_root.session_id = "foreign-session".into();
+        foreign_root.run_id = "foreign-root".into();
+        foreign_root.root_id = "foreign-root".into();
+        foreign_root.parent_run_id = None;
+        foreign_root.kind = RunKind::Supervisor;
+        durable.runs.push(foreign_root);
+        let mut root_answer = answer(DeliveryStage::Acked);
+        root_answer.to_run_id = ROOT.into();
+        // A legacy ACK without its timestamp is still an ACK, not a fabricated time.
+        root_answer.acked_at = None;
+        durable.messages.push(root_answer);
+        let projected = project(&durable, Ok(runtime("working")));
+        assert_eq!(projected.questions.len(), 2);
+        let root = projected.questions.iter().find(|question| question.run_id == ROOT).unwrap();
+        let QuestionReceipt::AnswerAcknowledged { answer } = &root.receipt else {
+            panic!("root answer is acknowledged")
+        };
+        assert!(answer.acked_at.is_none());
+        let worker = projected.questions.iter().find(|question| question.run_id == WORKER).unwrap();
+        assert!(matches!(&worker.receipt, QuestionReceipt::Unresolved));
+        assert!(!projected.attention.iter().any(|item| {
+            item.kind == AttentionKind::NeedsInput && item.run_id.as_deref() == Some(ROOT)
+        }));
+        assert!(projected.attention.iter().any(|item| {
+            item.kind == AttentionKind::NeedsInput && item.run_id.as_deref() == Some(WORKER)
+        }));
+        assert!(projected.questions.iter().all(|question| question.run_id != "foreign-root"));
+    }
+
     fn has(snapshot: &OrchestrationSnapshot, kind: AttentionKind) -> bool {
         snapshot
             .attention
             .iter()
             .any(|attention| attention.kind == kind)
+    }
+
+    #[test]
+    fn unanswered_current_main_question_is_projected_without_changing_durable_facts() {
+        let durable = state(asking());
+        let before = serde_json::to_value(&durable).unwrap();
+        let projected = project(&durable, Ok(runtime("working")));
+        assert_eq!(projected.questions.len(), 1);
+        let question = &projected.questions[0];
+        assert_eq!(question.run_id, WORKER);
+        assert_eq!(question.question_message_id, "ask");
+        assert_eq!(question.asked_at, START);
+        assert!(matches!(&question.receipt, QuestionReceipt::Unresolved));
+        assert!(has(&projected, AttentionKind::NeedsInput));
+        assert_eq!(projected.runs[1].stage, RunStage::Working);
+        assert_eq!(serde_json::to_value(&durable).unwrap(), before);
+    }
+
+    #[test]
+    fn linked_answer_projects_each_actual_delivery_stage_and_receipt() {
+        for stage in [
+            DeliveryStage::Stored,
+            DeliveryStage::Woken,
+            DeliveryStage::Read,
+            DeliveryStage::Acked,
+        ] {
+            let mut durable = state(asking());
+            let mut message = answer(stage);
+            message.from = ActorRef::Run { run_id: ROOT.into() };
+            message.seq = 8;
+            // Identity, not wall-clock ordering, establishes the answer link.
+            message.created_at = "2026-10-05T11:59:00Z".into();
+            durable.messages.push(message.clone());
+            let projected = project(&durable, Ok(runtime("working")));
+            assert_eq!(projected.questions.len(), 1);
+            let receipt = match &projected.questions[0].receipt {
+                QuestionReceipt::AnswerDelivered { answer } => {
+                    assert_ne!(stage, DeliveryStage::Acked);
+                    answer
+                }
+                QuestionReceipt::AnswerAcknowledged { answer } => {
+                    assert_eq!(stage, DeliveryStage::Acked);
+                    answer
+                }
+                QuestionReceipt::Unresolved => panic!("linked answer is a receipt"),
+            };
+            assert!(matches!(&receipt.sender, ActorRef::Run { run_id } if run_id == ROOT));
+            assert_eq!(receipt.message_id, message.message_id);
+            assert_eq!(receipt.seq, 8);
+            assert_eq!(receipt.stage, stage);
+            assert_eq!(receipt.created_at, message.created_at);
+            assert_eq!(receipt.acked_at, message.acked_at);
+            assert!(!has(&projected, AttentionKind::NeedsInput));
+            assert_eq!(projected.runs[1].last_report.as_ref().unwrap().message_id, "ask");
+            assert_eq!(projected.runs[1].stage, RunStage::Working);
+            assert!(projected.runs[1].result.is_none());
+        }
+    }
+
+    #[test]
+    fn newest_stored_correction_supersedes_older_acknowledged_answer_by_inbox_sequence() {
+        let mut durable = state(asking());
+        let mut acknowledged = answer(DeliveryStage::Acked);
+        acknowledged.seq = 2;
+        let mut correction = answer(DeliveryStage::Stored);
+        correction.message_id = "correction".into();
+        correction.seq = 3;
+        correction.created_at = START.into();
+        // Vector and timestamp ordering are not the recipient sequence ordering.
+        durable.messages.extend([correction, acknowledged]);
+        let projected = project(&durable, Ok(runtime("idle")));
+        let QuestionReceipt::AnswerDelivered { answer } = &projected.questions[0].receipt else {
+            panic!("correction has not been acknowledged")
+        };
+        assert_eq!(answer.message_id, "correction");
+        assert_eq!(answer.seq, 3);
+        assert_eq!(answer.stage, DeliveryStage::Stored);
+        assert!(answer.acked_at.is_none());
+        assert!(!has(&projected, AttentionKind::NeedsInput));
+    }
+
+    #[test]
+    fn unrelated_legacy_stale_subagent_and_other_inbox_messages_do_not_resolve_question() {
+        let baseline = answer(DeliveryStage::Acked);
+        let mut legacy = baseline.clone();
+        legacy.in_reply_to = None;
+        let mut old_question = baseline.clone();
+        old_question.in_reply_to = Some("old-ask".into());
+        let mut stale = baseline.clone();
+        stale.stale = true;
+        let mut subagent = baseline.clone();
+        subagent.from_subagent_id = Some("internal-child".into());
+        let mut instruction = baseline.clone();
+        instruction.kind = MessageKind::Instruction;
+        let mut other_inbox = baseline;
+        other_inbox.to_run_id = ROOT.into();
+        for mut message in [legacy, old_question, stale, subagent, instruction, other_inbox] {
+            message.created_at = NOW.into();
+            let mut durable = state(asking());
+            durable.messages.push(message);
+            let projected = project(&durable, Ok(runtime("working")));
+            assert_eq!(projected.questions.len(), 1);
+            assert!(matches!(&projected.questions[0].receipt, QuestionReceipt::Unresolved));
+            assert!(has(&projected, AttentionKind::NeedsInput));
+        }
+    }
+
+    #[test]
+    fn new_question_does_not_inherit_old_answer_and_nonquestion_report_clears_receipt() {
+        let mut durable = state(asking());
+        durable.messages.push(answer(DeliveryStage::Acked));
+        let report = durable.runs[1].last_report.as_mut().unwrap();
+        report.message_id = "next-ask".into();
+        // Same timestamp and wording still describe a distinct question.
+        let next = project(&durable, Ok(runtime("working")));
+        assert_eq!(next.questions.len(), 1);
+        assert_eq!(next.questions[0].question_message_id, "next-ask");
+        assert!(matches!(&next.questions[0].receipt, QuestionReceipt::Unresolved));
+        assert!(has(&next, AttentionKind::NeedsInput));
+        for kind in [ReportKind::Progress, ReportKind::Ready, ReportKind::Result] {
+            durable.runs[1].last_report.as_mut().unwrap().kind = kind;
+            let replaced = project(&durable, Ok(runtime("working")));
+            assert!(replaced.questions.is_empty());
+            assert!(!has(&replaced, AttentionKind::NeedsInput));
+        }
+    }
+
+    #[test]
+    fn closed_run_keeps_history_but_has_no_current_question() {
+        let mut run = asking();
+        run.stage = RunStage::Closed;
+        run.close_reason = Some(CloseReason::Accepted);
+        let mut durable = state(run);
+        durable.messages.push(answer(DeliveryStage::Acked));
+        let projected = project(&durable, Ok(runtime("working")));
+        assert!(projected.questions.is_empty());
+        assert!(!has(&projected, AttentionKind::NeedsInput));
+        assert_eq!(projected.runs[1].last_report.as_ref().unwrap().message_id, "ask");
+        assert_eq!(projected.messages.len(), 1);
+    }
+
+    #[test]
+    fn report_messages_do_not_replace_the_current_main_question_receipt() {
+        let mut durable = state(asking());
+        durable.messages.push(answer(DeliveryStage::Acked));
+        let mut subagent_report = brief(MessageKind::Report, DeliveryStage::Stored);
+        subagent_report.message_id = "child-ask".into();
+        subagent_report.from = ActorRef::Run { run_id: WORKER.into() };
+        subagent_report.to_run_id = ROOT.into();
+        subagent_report.from_subagent_id = Some("child".into());
+        subagent_report.report = Some(Report {
+            message_id: "child-ask".into(),
+            kind: ReportKind::NeedsInput,
+            outcome: None,
+            summary: "A separate subagent question".into(),
+            plan: None,
+            at: NOW.into(),
+        });
+        durable.messages.push(subagent_report);
+        let projected = project(&durable, Ok(runtime("working")));
+        assert_eq!(projected.questions.len(), 1);
+        assert_eq!(projected.questions[0].question_message_id, "ask");
+        assert!(matches!(&projected.questions[0].receipt, QuestionReceipt::AnswerAcknowledged { .. }));
+        durable.runs[1].last_report = None;
+        assert!(project(&durable, Ok(runtime("working"))).questions.is_empty());
     }
 
     #[test]
@@ -961,22 +1228,13 @@ mod tests {
 
     #[test]
     fn open_explicit_ask_supersedes_runtime_blocked_overlay() {
-        let mut run = worker(RunStage::Working);
-        run.last_report = Some(Report {
-            message_id: "ask".into(),
-            kind: ReportKind::NeedsInput,
-            outcome: None,
-            summary: "Need a decision".into(),
-            plan: None,
-            at: START.into(),
-        });
-        let mut durable = state(run);
+        let mut durable = state(asking());
         let blocked = project(&durable, Ok(runtime("blocked")));
         assert!(has(&blocked, AttentionKind::NeedsInput));
         assert!(!has(&blocked, AttentionKind::RuntimeBlocked));
         durable
             .messages
-            .push(brief(MessageKind::Answer, DeliveryStage::Stored));
+            .push(answer(DeliveryStage::Stored));
         let answered = project(&durable, Ok(runtime("blocked")));
         assert!(!has(&answered, AttentionKind::NeedsInput));
         assert!(has(&answered, AttentionKind::RuntimeBlocked));

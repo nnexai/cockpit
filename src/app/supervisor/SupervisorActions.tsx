@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, PlanRecord, Report, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
+import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, PlanRecord, QuestionStatus, Report, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
 import { StateGlyph, type GlyphShape } from "../sidebar/StateGlyph";
 import { UiIcon } from "../UiIcon";
 import { messageDraft, type ScopeDrafts, type TextDraft } from "./useSupervisorDrafts";
@@ -42,12 +42,23 @@ export function agentState(snapshot: OrchestrationSnapshot, run: Run, connected:
   if (run.stage === "preparing" || run.stage === "initializing" || step === "launch_pending" || step === "launch_intent") return state("starting", "Starting agent…", "Waiting for OMP to start and connect.");
   return state("unknown", "Cannot confirm the agent", "No fresh, bound OMP process is confirmed. Saved reports are not live process evidence.");
 }
+export function questionForRun(snapshot: OrchestrationSnapshot, run: Run): QuestionStatus | null {
+  return run.stage === "closed" ? null : snapshot.questions.find(question => question.run_id === run.run_id) ?? null;
+}
+export function questionLabel(question: QuestionStatus): string {
+  switch (question.receipt.status) {
+    case "unresolved": return "Waiting for supervisor";
+    case "answer_delivered": return "Answer sent · not yet processed";
+    case "answer_acknowledged": return "Answer acknowledged · awaiting report";
+  }
+}
 export function taskStatus(task: TaskView, run: Run | undefined, snapshot: OrchestrationSnapshot): string {
   const assignment = snapshot.assignment_intents.find(intent => intent.root_id === snapshot.board?.root_id && intent.task_id === task.task.task_id);
   if (assignment) return assignment.state === "conflict" ? "Not assigned · task changed elsewhere" : "Assignment pending";
   if (task.task.checked) return run?.result?.outcome === "succeeded" && run.close_reason === "accepted" && task.lane === "accepted" ? "Completed" : "Marked complete in task file";
   if (run?.stage === "closed") return run.close_reason === "failed" ? "Failed · tracking closed" : "Tracking closed";
-  if (run?.last_report?.kind === "needs_input") return "Waiting for supervisor";
+  const question = run ? questionForRun(snapshot, run) : null;
+  if (question) return questionLabel(question);
   if (run?.stage === "reported" || task.lane === "review") return "Reviewing result";
   if (task.lane === "working") return "Working";
   if (task.lane === "setup" || task.lane === "ready") return "Preparing";
@@ -139,6 +150,17 @@ export function ObservedEvidence({ run, observed, snapshot, live }: { run: Run; 
   if (run.stage === "closed") return null;
   const status = observedStatus(run, observed, snapshot, live);
   return <p className="supervisor-evidence supervisor-observed"><span>Observed · Herdr</span><StateGlyph shape={status.glyph} /><span>{status.word}</span>{live && snapshot.runtime.status === "fresh" ? <time dateTime={snapshot.runtime.observed_at} title={new Date(snapshot.runtime.observed_at).toLocaleString()}>{new Date(snapshot.runtime.observed_at).toLocaleTimeString()}</time> : null}</p>;
+}
+function AnswerEvidence({ question, snapshot }: { question: QuestionStatus; snapshot: OrchestrationSnapshot }) {
+  if (question.receipt.status === "unresolved") return null;
+  const answer = question.receipt.answer;
+  const sender = answer.sender.type === "operator" ? "You" : answer.sender.type === "dispatcher" ? "Dispatcher"
+    : snapshot.runs.find(run => answer.sender.type === "run" && run.run_id === answer.sender.run_id)?.label ?? "Agent";
+  const stage = { stored: "stored", woken: "agent notified", read: "read by agent, not yet acknowledged", acked: "acknowledged" }[answer.stage];
+  return <>
+    <p className="supervisor-evidence"><span>Answered · {sender}</span><time dateTime={answer.created_at} title={new Date(answer.created_at).toLocaleString()}>{reportAge({ at: answer.created_at })}</time><span>· {stage}</span>{answer.stage === "acked" && answer.acked_at ? <time dateTime={answer.acked_at} title={new Date(answer.acked_at).toLocaleString()}>{reportAge({ at: answer.acked_at })}</time> : null}</p>
+    {question.receipt.status === "answer_acknowledged" ? <p className="supervisor-muted">A receipt, not proof that work resumed.</p> : null}
+  </>;
 }
 export function TextAction({ label, submitLabel, draft, changed, busy, submit, success, doneResult = false, retryable = true, describedBy }: {
   label: string; submitLabel: string; draft: TextDraft; changed(): void; busy: boolean;
@@ -245,7 +267,7 @@ function RequestStop({ task, supervisor, scope, changed, busy, mutateResult, des
     draft.operation ??= { id: crypto.randomUUID(), text: `Please stop work on canonical task ${task.task.task_id}. Inspect its current task and descendant runs, cancel scoped work where appropriate, and report outstanding effects. Existing files and Spaces must stay.` };
     inFlight.current = true;
     try {
-      const result = await mutateResult({ action: "message_send", message_id: draft.operation.id, to_run_id: supervisor.run_id, kind: "instruction", text: draft.operation.text });
+      const result = await mutateResult({ action: "message_send", message_id: draft.operation.id, to_run_id: supervisor.run_id, kind: "instruction", text: draft.operation.text, in_reply_to: null });
       if (result?.result === "message" && result.to_run_id === supervisor.run_id) { draft.operation = null; draft.notice = "Stop requested. Waiting for the supervisor; this is not proof the process stopped."; draft.error = null; setConfirm(false); }
       else draft.error = "The stop request was not confirmed. Retry keeps the same message identity.";
     } finally { inFlight.current = false; changed(); }
@@ -282,6 +304,7 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
   const forcedOperatorOpen = overrideArmed || acceptanceConflict;
   const retirement = run && !subagent ? retirementView(run) : null;
   const detailTier = retirement ? retirement.tier === "notice" ? "Notice" : retirement.tier === "recover" ? "Recover" : null : stateBlock.tierLabel;
+  const question = run && !subagent ? questionForRun(snapshot, run) : null;
   return <div className="supervisor-task-detail">
     <div className="supervisor-detail-section" hidden={section !== "overview"}>
       {subagent && run ? <p>{subagent.role ?? "OMP subagent"} · In {run.label} · no terminal of its own</p> : null}
@@ -291,6 +314,7 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
         {retirement ? <p>{retirement.detail}</p> : null}
         {task && run && !subagent && (task.dependencies.state === "blocked" || task.dependencies.state === "invalid") ? <p className="supervisor-muted">A prerequisite is still open or needs repair. This does not stop the running agent.</p> : null}
         {!retirement && stateBlock.waitingSince ? <p className="supervisor-muted">Since <time dateTime={stateBlock.waitingSince} title={new Date(stateBlock.waitingSince).toLocaleString()}>{reportAge({ at: stateBlock.waitingSince })}</time></p> : null}
+        {question ? <AnswerEvidence question={question} snapshot={snapshot} /> : null}
         {run ? subagent ? <>
           <p>OMP events · {subagent.status} · <time dateTime={subagent.updated_at}>{new Date(subagent.updated_at).toLocaleString()}</time></p>
           <p className="supervisor-exact-text">{subagent.summary ?? "No summary reported."}</p>
@@ -337,7 +361,7 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
           {childReason ? <p className="supervisor-disabled-reason" id={`${id}-child`}>{childReason}</p> : null}
         </> : <>
           {run ? <>
-            <TextAction key={`followup:${run.run_id}`} label="Follow-up to agent" submitLabel="Send follow-up" draft={messageDraft(scope, `followup:${run.run_id}`)} changed={changed} busy={busy || !controls} describedBy={followupReason ? `${id}-followup` : undefined} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: run.run_id, kind: "instruction", text })} success="Follow-up sent. Waiting for the agent." />
+            <TextAction key={`followup:${run.run_id}`} label="Follow-up to agent" submitLabel="Send follow-up" draft={messageDraft(scope, `followup:${run.run_id}`)} changed={changed} busy={busy || !controls} describedBy={followupReason ? `${id}-followup` : undefined} submit={(text, message_id) => mutateResult({ action: "message_send", message_id, to_run_id: run.run_id, kind: "instruction", text, in_reply_to: null })} success="Follow-up sent. Waiting for the agent." />
             {followupReason ? <p className="supervisor-disabled-reason" id={`${id}-followup`}>{followupReason}</p> : null}
           </> : null}
           {task ? <>

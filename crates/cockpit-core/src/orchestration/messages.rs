@@ -71,6 +71,7 @@ pub(crate) fn append(
     message_id: &str,
     kind: MessageKind,
     text: &str,
+    in_reply_to: Option<String>,
     report: Option<Report>,
     stale: bool,
     from_subagent_id: Option<String>,
@@ -102,6 +103,7 @@ pub(crate) fn append(
         if existing.to_run_id != to_run_id
             || existing.kind != kind
             || existing.text != text
+            || existing.in_reply_to != in_reply_to
             || !same_report(existing.report.as_ref(), report.as_ref())
             || existing.from_subagent_id != from_subagent_id
             || existing.escalated_from != escalated_from
@@ -135,6 +137,7 @@ pub(crate) fn append(
         from,
         kind,
         text: text.to_owned(),
+        in_reply_to,
         report,
         stale,
         escalated_from,
@@ -385,6 +388,7 @@ pub(crate) fn apply(
                 if existing.kind != MessageKind::Report
                     || existing.text != *summary
                     || !same_report(existing.report.as_ref(), Some(&report))
+                    || existing.in_reply_to.is_some()
                     || existing.from_subagent_id != from_subagent_id
                     || existing
                         .escalated_from
@@ -454,6 +458,7 @@ pub(crate) fn apply(
                 message_id,
                 MessageKind::Report,
                 summary,
+                None,
                 Some(report.clone()),
                 stale,
                 from_subagent_id.clone(),
@@ -521,6 +526,7 @@ pub(crate) fn apply(
                         MessageKind::Observation,
                         &text,
                         None,
+                        None,
                         false,
                         None,
                         None,
@@ -534,6 +540,7 @@ pub(crate) fn apply(
             to_run_id,
             kind,
             text,
+            in_reply_to,
         } => {
             let target = run_index(state, to_run_id)?;
             let (recipient, escalated) = match actor {
@@ -598,6 +605,7 @@ pub(crate) fn apply(
             if let Some(existing) = duplicate(state, &from, message_id) {
                 if existing.kind != *kind
                     || existing.text != *text
+                    || existing.in_reply_to != *in_reply_to
                     || existing.report.is_some()
                     || existing
                         .escalated_from
@@ -613,17 +621,45 @@ pub(crate) fn apply(
                 }
                 return Ok(Some(message_result(existing, true)));
             }
-            let result = append(
-                state, from, &recipient, message_id, *kind, text, None, false, None, escalated,
-            )?;
-            if *kind == MessageKind::Answer {
-                let (_, provenance) = super::management_target(
+            let answer_provenance = if *kind == MessageKind::Answer {
+                if in_reply_to.as_deref().is_none_or(|id| id.trim().is_empty()) {
+                    return Err(error(
+                        "invalid_message",
+                        "Answers require an explicit nonempty question message id",
+                    ));
+                }
+                let run = &state.runs[target];
+                if run.stage == RunStage::Closed
+                    || run.last_report.as_ref().is_none_or(|report| {
+                        report.kind != ReportKind::NeedsInput
+                            || Some(report.message_id.as_str()) != in_reply_to.as_deref()
+                    })
+                {
+                    return Err(error(
+                        "question_not_current",
+                        "The answer must link to the open run's current main NeedsInput report",
+                    ));
+                }
+                Some(super::management_target(
                     state,
                     actor,
                     caller,
                     &state.runs[target].session_id,
                     to_run_id,
-                )?;
+                )?.1)
+            } else {
+                if in_reply_to.is_some() {
+                    return Err(error(
+                        "invalid_message",
+                        "Only Answers may link to a question message id",
+                    ));
+                }
+                None
+            };
+            let result = append(
+                state, from, &recipient, message_id, *kind, text, in_reply_to.clone(), None, false, None, escalated,
+            )?;
+            if let Some(provenance) = answer_provenance {
                 let annotation = super::decision_annotation(
                     actor_ref(actor, caller, state),
                     &provenance,
@@ -893,6 +929,7 @@ pub(crate) fn apply(
                 MessageKind::SubagentControl,
                 &text,
                 None,
+                None,
                 false,
                 None,
                 None,
@@ -1110,6 +1147,30 @@ mod tests {
         }
     }
 
+    fn send(id: &str, kind: MessageKind, question: Option<&str>) -> OrchestrationAction {
+        OrchestrationAction::MessageSend {
+            message_id: id.into(),
+            to_run_id: "worker".into(),
+            kind,
+            text: "Proceed with the approved choice".into(),
+            in_reply_to: question.map(str::to_owned),
+        }
+    }
+
+    fn assert_rejected_without_mutation(
+        state: &mut OrchestrationState,
+        action: &OrchestrationAction,
+        code: &str,
+    ) {
+        let before = serde_json::to_value(&*state).unwrap();
+        let operator = Actor::Operator(OperatorOrigin::Browser);
+        assert_eq!(
+            apply(state, &operator, None, false, action).unwrap_err().code,
+            code
+        );
+        assert_eq!(serde_json::to_value(&*state).unwrap(), before);
+    }
+
     fn mutation(
         state: &mut OrchestrationState,
         actor: &Actor,
@@ -1145,6 +1206,132 @@ mod tests {
             status: SubagentStatus::Running,
             summary: None,
         }
+    }
+
+    #[test]
+    fn answers_require_explicit_links_and_other_messages_forbid_links() {
+        let mut state = state();
+        mutation(
+            &mut state,
+            &main_actor("worker"),
+            1,
+            &report("question", ReportKind::NeedsInput, None),
+        );
+        for question in [None, Some(""), Some(" \t")] {
+            assert_rejected_without_mutation(
+                &mut state,
+                &send("unlinked", MessageKind::Answer, question),
+                "invalid_message",
+            );
+        }
+        for kind in [MessageKind::Instruction, MessageKind::CancelRequest] {
+            for question in [Some("question"), Some("")] {
+                assert_rejected_without_mutation(
+                    &mut state,
+                    &send("not-answer", kind, question),
+                    "invalid_message",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn answers_reject_old_questions_but_committed_retries_survive_new_questions() {
+        let mut state = state();
+        let worker = main_actor("worker");
+        let operator = Actor::Operator(OperatorOrigin::Browser);
+        mutation(&mut state, &worker, 1, &report("q1", ReportKind::NeedsInput, None));
+        let answer = send("a1", MessageKind::Answer, Some("q1"));
+        let first = apply(&mut state, &operator, None, false, &answer).unwrap().unwrap();
+        assert!(matches!(first, OrchestrationActionResult::Message { duplicate: false, seq: 1, .. }));
+        assert_eq!(state.messages.last().unwrap().in_reply_to.as_deref(), Some("q1"));
+        mutation(&mut state, &worker, 1, &report("q2", ReportKind::NeedsInput, None));
+        assert_rejected_without_mutation(
+            &mut state,
+            &send("late", MessageKind::Answer, Some("q1")),
+            "question_not_current",
+        );
+        let before = serde_json::to_value(&state).unwrap();
+        let retry = apply(&mut state, &operator, None, false, &answer).unwrap().unwrap();
+        assert!(matches!(retry, OrchestrationActionResult::Message { duplicate: true, seq: 1, .. }));
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        for question in [Some("q2"), None, Some("")] {
+            assert_rejected_without_mutation(
+                &mut state,
+                &send("a1", MessageKind::Answer, question),
+                "message_id_conflict",
+            );
+        }
+        let mut changed_text = answer;
+        if let OrchestrationAction::MessageSend { text, .. } = &mut changed_text {
+            *text = "A different choice".into();
+        }
+        assert_rejected_without_mutation(&mut state, &changed_text, "message_id_conflict");
+        apply(
+            &mut state,
+            &operator,
+            None,
+            false,
+            &send("a2", MessageKind::Answer, Some("q2")),
+        ).unwrap();
+        assert_eq!(state.messages.last().unwrap().in_reply_to.as_deref(), Some("q2"));
+        assert_eq!(state.runs[1].last_report.as_ref().unwrap().message_id, "q2");
+    }
+
+    #[test]
+    fn answers_require_an_open_current_main_needs_input_report() {
+        let mut state = state();
+        let worker = main_actor("worker");
+        let answer = send("answer", MessageKind::Answer, Some("question"));
+        assert_rejected_without_mutation(&mut state, &answer, "question_not_current");
+        mutation(&mut state, &worker, 1, &report("question", ReportKind::Progress, None));
+        assert_rejected_without_mutation(&mut state, &answer, "question_not_current");
+        mutation(&mut state, &worker, 1, &report("question-ni", ReportKind::NeedsInput, None));
+        state.runs[1].stage = RunStage::Closed;
+        assert_rejected_without_mutation(
+            &mut state,
+            &send("answer", MessageKind::Answer, Some("question-ni")),
+            "question_not_current",
+        );
+    }
+
+    #[test]
+    fn subagent_and_stale_questions_cannot_replace_the_main_question() {
+        let mut state = state();
+        mutation(
+            &mut state,
+            &main_actor("worker"),
+            1,
+            &report("main-question", ReportKind::NeedsInput, None),
+        );
+        mutation(
+            &mut state,
+            &subagent_actor("worker", "child"),
+            1,
+            &report("child-question", ReportKind::NeedsInput, Some("worker")),
+        );
+        apply(
+            &mut state,
+            &main_actor("worker"),
+            Some(1),
+            true,
+            &report("stale-question", ReportKind::NeedsInput, None),
+        ).unwrap();
+        for question in ["child-question", "stale-question"] {
+            assert_rejected_without_mutation(
+                &mut state,
+                &send("answer", MessageKind::Answer, Some(question)),
+                "question_not_current",
+            );
+        }
+        apply(
+            &mut state,
+            &Actor::Operator(OperatorOrigin::Browser),
+            None,
+            false,
+            &send("answer", MessageKind::Answer, Some("main-question")),
+        ).unwrap();
+        assert_eq!(state.runs[1].last_report.as_ref().unwrap().message_id, "main-question");
     }
 
     #[test]
@@ -1208,6 +1395,7 @@ mod tests {
             MessageKind::Instruction,
             "hello",
             None,
+            None,
             false,
             None,
             None,
@@ -1228,6 +1416,7 @@ mod tests {
             "same",
             MessageKind::Instruction,
             "hello",
+            None,
             None,
             false,
             None,
@@ -1252,6 +1441,7 @@ mod tests {
             MessageKind::Instruction,
             "hello",
             None,
+            None,
             false,
             None,
             None,
@@ -1264,6 +1454,7 @@ mod tests {
             "other",
             MessageKind::Instruction,
             "hello",
+            None,
             None,
             false,
             None,
@@ -1287,6 +1478,7 @@ mod tests {
                 MessageKind::Instruction,
                 "hello",
                 None,
+                None,
                 false,
                 None,
                 None
@@ -1303,6 +1495,7 @@ mod tests {
                 "same",
                 MessageKind::CancelRequest,
                 "hello",
+                None,
                 None,
                 false,
                 None,
@@ -1327,6 +1520,7 @@ mod tests {
                 MessageKind::Instruction,
                 &oversized,
                 None,
+                None,
                 false,
                 None,
                 None
@@ -1343,6 +1537,7 @@ mod tests {
             MessageKind::Instruction,
             "hello",
             None,
+            None,
             false,
             None,
             None,
@@ -1357,6 +1552,7 @@ mod tests {
                 "second",
                 MessageKind::Instruction,
                 "hello",
+                None,
                 None,
                 false,
                 None,
@@ -1689,6 +1885,7 @@ mod tests {
                     to_run_id: "worker".into(),
                     kind: MessageKind::Instruction,
                     text: id.into(),
+                    in_reply_to: None,
                 },
             )
             .unwrap();
@@ -1788,6 +1985,7 @@ mod tests {
                 MessageKind::Instruction,
                 "read",
                 None,
+                None,
                 false,
                 None,
                 None,
@@ -1858,6 +2056,7 @@ mod tests {
                 to_run_id: target.into(),
                 kind,
                 text: "payload".into(),
+                in_reply_to: None,
             };
             if let Some(code) = expected {
                 assert_error(&mut state, &actor, 1, &action, code);
@@ -1901,6 +2100,7 @@ mod tests {
                     to_run_id: "root".into(),
                     kind: MessageKind::Observation,
                     text: "bad".into(),
+                    in_reply_to: None,
                 }
             )
             .unwrap_err()
@@ -2083,6 +2283,7 @@ mod tests {
             MessageKind::Instruction,
             "read first",
             None,
+            None,
             false,
             None,
             None,
@@ -2185,6 +2386,7 @@ mod tests {
             "ordinary",
             MessageKind::Instruction,
             "Handle this ordinary message",
+            None,
             None,
             false,
             None,

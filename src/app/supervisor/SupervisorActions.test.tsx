@@ -19,7 +19,7 @@ function observation(runId: string, overrides: Partial<RunObservation> = {}): Ru
 }
 function snapshot(worker = run()): OrchestrationSnapshot {
   const root = run({ run_id: "root", kind: "supervisor", label: "Supervisor", parent_run_id: null, task_id: null, stage: "active" });
-  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 2, needs_you: 0 }], board: { root_id: "root", path: "/state/root.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs: [root, worker], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("root"), observation(worker.run_id)] } };
+  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 2, needs_you: 0 }], board: { root_id: "root", path: "/state/root.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs: [root, worker], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("root"), observation(worker.run_id)] } };
 }
 const result: Report = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Exact result\nwith a second line.", plan: null, at };
 function retiredWorker(state: RetirementState): Run {
@@ -58,6 +58,48 @@ async function openOperator() {
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = null; host?.remove(); vi.restoreAllMocks(); });
 
 describe("Supervisor detail authority and retained operations", () => {
+  it("uses core question receipts for task status, retaining assignment, completion and closure precedence", () => {
+    const worker = run({ last_report: { ...result, kind: "needs_input" } });
+    const state = snapshot(worker);
+    const current = task();
+    const question = { run_id: worker.run_id, question_message_id: result.message_id, asked_at: at };
+    state.questions = [{ ...question, receipt: { status: "unresolved" } }];
+    const unresolved = taskStatus(current, worker, state);
+    const answer = { sender: { type: "operator" as const }, message_id: "answer", seq: 1, stage: "stored" as const, created_at: at, acked_at: null };
+    state.questions = [{ ...question, receipt: { status: "answer_delivered", answer } }];
+    const delivered = taskStatus(current, worker, state);
+    state.questions = [{ ...question, receipt: { status: "answer_acknowledged", answer: { ...answer, stage: "acked", acked_at: at } } }];
+    const acknowledged = taskStatus(current, worker, state);
+    expect(new Set([unresolved, delivered, acknowledged]).size).toBe(3);
+    state.questions = [{ ...question, receipt: { status: "answer_delivered", answer: { ...answer, seq: 2 } } }];
+    expect(taskStatus(current, worker, state)).toBe(delivered);
+    state.assignment_intents = [{ root_id: "root", task_id: current.task.task_id, state: "pending" }];
+    expect(taskStatus(current, worker, state)).not.toBe(delivered);
+    state.assignment_intents = [];
+    expect(taskStatus({ ...current, task: { ...current.task, checked: true } }, worker, state)).not.toBe(delivered);
+    expect(taskStatus(current, { ...worker, stage: "closed", close_reason: "cancelled" }, state)).not.toBe(delivered);
+    state.questions = [];
+    expect(taskStatus(current, worker, state)).toBe("Working");
+  });
+
+  it.each(["stored", "woken", "read", "acked"] as const)("shows only recorded sent/ack times and preserves the actual question in detail (%s)", async stage => {
+    const sentAt = "2026-10-06T12:01:00Z";
+    const ackedAt = "2026-10-06T12:02:00Z";
+    const worker = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which fixture should I use?", plan: null, at } });
+    const state = snapshot(worker);
+    const answer = { sender: { type: "operator" as const }, message_id: "answer", seq: 1, stage, created_at: sentAt, acked_at: stage === "acked" ? ackedAt : null };
+    state.questions = [{ run_id: worker.run_id, question_message_id: "question", asked_at: at, receipt: stage === "acked" ? { status: "answer_acknowledged", answer } : { status: "answer_delivered", answer } }];
+    const mutation = vi.fn<Mutation>();
+    await render(<SupervisorActions {...props({ run: worker, snapshot: state, section: "overview", mutateResult: mutation })} />);
+    const block = host.querySelector(".supervisor-state-block")!;
+    const times = [...block.querySelectorAll("time")].map(time => time.dateTime);
+    expect(times).toContain(sentAt);
+    expect(times.filter(time => time === ackedAt)).toHaveLength(stage === "acked" ? 1 : 0);
+    expect(block.querySelector(".supervisor-report-summary")?.textContent).toBe(worker.last_report!.summary);
+    expect(block.querySelector("button")).toBeNull();
+    expect(mutation).not.toHaveBeenCalled();
+  });
+
   it("exposes explicit Result before description without making navigation a control action", async () => {
     const worker = run({ stage: "reported", result });
     const activate = vi.fn();

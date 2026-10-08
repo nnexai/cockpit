@@ -77,7 +77,7 @@ const dependencies: TaskDependencies = {
 const report = { message_id: "report", kind: "ready" as const, outcome: "succeeded" as const, summary: "Ready", plan: "Work plan", at };
 const message = {
   message_id: "message", to_run_id: "run", seq: 1, from: { type: "run" as const, run_id: "root" },
-  kind: "report" as const, text: "Ready", report, stale: false, escalated_from: null, from_subagent_id: null,
+  kind: "report" as const, text: "Ready", in_reply_to: null, report, stale: false, escalated_from: null, from_subagent_id: null,
   stage: "read" as const, woken_omp_session: "omp", created_at: at, acked_at: null,
 };
 const snapshot: OrchestrationSnapshot = {
@@ -109,6 +109,7 @@ const snapshot: OrchestrationSnapshot = {
   intents: [{ intent_id: "intent", root_id: "root", task_id: "task", run_id: "run", expected_task_revision: hash, state: "pending",
     origin: null, supervisor_run_id: null, omp_session_id: null, result_message_id: null }],
   assignment_intents: [{ root_id: "root", task_id: assignmentTaskId, state: "conflict" }],
+  questions: [{ run_id: "run", question_message_id: "question", asked_at: at, receipt: { status: "unresolved" } }],
   runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at,
     runs: [{ run_id: "run", presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Worker", pane_id: "moved-pane", agent_status: "idle", state_changed_at: at }] },
   unmanaged_agents: [{ workspace_id: "space", workspace_label: "Space", tab_id: "other-tab", tab_label: "Unmanaged", pane_id: "other-pane",
@@ -146,7 +147,7 @@ const actions: OrchestrationAction[] = [
   { action: "reconcile_run", run_id: "run", recovery: "accept_existing_worktree" },
   { action: "intent_resolve", intent_id: "intent", apply: false },
   { action: "report", message_id: "message", kind: "result", outcome: "succeeded", summary: "Done", plan: null, to_run_id: null },
-  { action: "message_send", message_id: "message", to_run_id: "run", kind: "instruction", text: "Work" },
+  { action: "message_send", message_id: "message", to_run_id: "run", kind: "instruction", text: "Work", in_reply_to: null },
   { action: "annotate", run_id: "run", text: "Note" },
   { action: "inbox_pull", after_seq: 0, limit: 100 },
   { action: "inbox_woken", through_seq: 1, omp_session_id: "omp" },
@@ -173,6 +174,44 @@ function replaceField(value: unknown, path: (string | number)[], replacement: un
 }
 
 describe("orchestration protocol boundary", () => {
+  it("requires explicit Answer correlation and forbids it on non-Answer sends", () => {
+    const answer = { action: "message_send", message_id: "answer", to_run_id: "run", kind: "answer", text: "Use this checkout", in_reply_to: "question" };
+    expect(parseOrchestrationAction(answer)).toEqual(answer);
+    for (const link of [null, "", undefined, 1]) {
+      expect(() => parseOrchestrationAction({ ...answer, in_reply_to: link })).toThrow(CockpitClientError);
+    }
+    for (const kind of ["instruction", "cancel_request", "report"]) {
+      expect(() => parseOrchestrationAction({ ...answer, kind })).toThrow(CockpitClientError);
+      expect(parseOrchestrationAction({ ...answer, kind, in_reply_to: null })).toMatchObject({ kind, in_reply_to: null });
+    }
+  });
+
+  it("decodes strict question receipts and rejects contradictory or missing delivery facts", () => {
+    const answer = { sender: { type: "operator" }, message_id: "answer", seq: 3, stage: "stored", created_at: at, acked_at: null };
+    const question = { run_id: "run", question_message_id: "question", asked_at: at, receipt: { status: "unresolved" } };
+    const receipts = [
+      { status: "unresolved" },
+      ...(["stored", "woken", "read"] as const).map(stage => ({ status: "answer_delivered", answer: { ...answer, stage } })),
+      { status: "answer_acknowledged", answer: { ...answer, stage: "acked", acked_at: at } },
+      { status: "answer_acknowledged", answer: { ...answer, stage: "acked" } },
+    ];
+    for (const receipt of receipts) {
+      const dto = { ...snapshot, questions: [{ ...question, receipt }] };
+      expect(parseOrchestrationSnapshot(dto).questions[0]!.receipt).toEqual(receipt);
+      for (const path of fieldPaths(dto.questions[0])) {
+        expect(() => parseOrchestrationSnapshot(replaceField(dto, ["questions", 0, ...path], undefined, true))).toThrow(CockpitClientError);
+      }
+    }
+    for (const receipt of [
+      { status: "unresolved", answer },
+      { status: "answer_delivered", answer: { ...answer, stage: "acked" } },
+      { status: "answer_acknowledged", answer },
+      { status: "answer_delivered", answer: { ...answer, extra: true } },
+      { status: "processed", answer },
+    ]) expect(() => parseOrchestrationSnapshot({ ...snapshot, questions: [{ ...question, receipt }] })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationSnapshot({ ...snapshot, questions: [{ ...question, extra: true }] })).toThrow(CockpitClientError);
+  });
+
   it("accepts all populated DTOs and rejects every missing nested field", () => {
     expect(parseOrchestrationSnapshot(snapshot)).toEqual(snapshot);
     for (const path of fieldPaths(snapshot)) {
@@ -603,6 +642,21 @@ describe("orchestration protocol boundary", () => {
 });
 
 describe("browser/native orchestration parity", () => {
+  it.each(["browser", "native"] as const)("preserves question_not_current refusal identity and never retries an Answer on %s", async transport => {
+    const envelope = { code: "question_not_current", message: "The displayed question is no longer current" };
+    const call = vi.fn(async () => {
+      if (transport === "browser") return new Response(JSON.stringify(envelope), { status: 409 });
+      throw envelope;
+    });
+    const client = transport === "browser" ? createBrowserClient(call) : createNativeClient(call);
+    const request = { session_id: "session", expected_revision: null, action: { action: "message_send" as const, message_id: "answer-q1", to_run_id: "run", kind: "answer" as const, text: "Use the existing checkout", in_reply_to: "q1" } };
+    await expect(client.orchestrationMutate(request)).rejects.toMatchObject({
+      code: transport === "browser" ? "http_error" : "native_error",
+      operationCode: "question_not_current", message: envelope.message,
+    });
+    expect(call).toHaveBeenCalledOnce();
+  });
+
   const snapshotRequest = { session_id: "session", root_id: "root" };
   const mutationRequest = { session_id: "session", expected_revision: 2, action: { action: "cancel_run" as const, run_id: "run" } };
   const waitRequest = { after_revision: 2, after_tasks_token: hash, timeout_ms: 30_000 };

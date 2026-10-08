@@ -586,6 +586,46 @@ describe("native main-only lifecycle hooks", () => {
     return { hooks, exec, observations, holdObservation, ctx, pi, shutdown, sessionManager, main };
   }
 
+  it("rejects missing or inapplicable answer links before calling the CLI", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "message-root");
+    try {
+      const h = extensionHost();
+      type MessageParams = { operation: "message" | "annotate" | "show"; run_id: string; kind?: "answer" | "instruction" | "cancel-request" | "report"; text?: string; in_reply_to?: string };
+      type MessageTool = { name: string; execute: (id: string, params: MessageParams, signal: undefined, update: undefined, ctx: ExtensionContext) => Promise<unknown> };
+      const tool = vi.mocked(h.pi.registerTool).mock.calls.map(([tool]) => tool as unknown as MessageTool)
+        .find(tool => tool.name === "cockpit_message")!;
+      const invalid: MessageParams[] = [
+        { operation: "message", run_id: "worker", kind: "answer", text: "Answer" },
+        ...["", " \t "].map(in_reply_to => ({ operation: "message" as const, run_id: "worker", kind: "answer" as const, text: "Answer", in_reply_to })),
+        ...([undefined, "instruction", "cancel-request", "report"] as const).map(kind => ({ operation: "message" as const, run_id: "worker", kind, text: "Feedback", in_reply_to: "question-1" })),
+        { operation: "annotate", run_id: "worker", text: "Feedback", in_reply_to: "question-1" },
+        { operation: "show", run_id: "worker", in_reply_to: "question-1" },
+      ];
+      for (const params of invalid) {
+        await expect(tool.execute("invalid", params, undefined, undefined, h.ctx)).rejects.toBeInstanceOf(Error);
+      }
+      expect(h.exec).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("does not send a linked answer from a stale native supervisor binding", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "message-root");
+    try {
+      const h = extensionHost();
+      const root = { run_id: "message-root", root_id: "message-root", parent_run_id: null,
+        kind: "supervisor", stage: "active", bound_omp_session: "replaced-native-main" };
+      h.exec.mockResolvedValue({ code: 0, killed: false, stderr: "", stdout: JSON.stringify(root) });
+      type MessageTool = { name: string; execute: (id: string, params: { operation: "message"; run_id: string; kind: "answer"; text: string; in_reply_to: string; message_id: string }, signal: undefined, update: undefined, ctx: ExtensionContext) => Promise<unknown> };
+      const tool = vi.mocked(h.pi.registerTool).mock.calls.map(([tool]) => tool as unknown as MessageTool)
+        .find(tool => tool.name === "cockpit_message")!;
+      await expect(tool.execute("stale", {
+        operation: "message", run_id: "worker", kind: "answer", text: "Answer",
+        in_reply_to: "question-1", message_id: "answer-1",
+      }, undefined, undefined, h.ctx)).rejects.toBeInstanceOf(Error);
+      expect(h.exec.mock.calls.some(([, args]) => args[0] === "run" && args[1] === "message")).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("rechecks the canonical attempt and prerequisites for every mutation while keeping recovery reports/reads callable", async () => {
     vi.stubEnv("COCKPIT_RUN_ID", "worker-gate");
     try {

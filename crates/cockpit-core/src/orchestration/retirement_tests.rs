@@ -459,7 +459,7 @@ fn closed_receipt_carve_out_does_not_admit_any_ordinary_action() {
         OrchestrationAction::RetryLaunch { run_id: "worker".into() },
         OrchestrationAction::ReconcileRun { run_id: "worker".into(), recovery: None },
         OrchestrationAction::IntentResolve { intent_id: "x".into(), apply: true },
-        OrchestrationAction::MessageSend { message_id: id(), to_run_id: ROOT.into(), kind: MessageKind::Instruction, text: "x".into() },
+        OrchestrationAction::MessageSend { message_id: id(), to_run_id: ROOT.into(), kind: MessageKind::Instruction, text: "x".into(), in_reply_to: None },
         OrchestrationAction::Annotate { run_id: "worker".into(), text: "x".into() },
         OrchestrationAction::InboxPull { after_seq: 0, limit: 10 },
         OrchestrationAction::InboxWoken { through_seq: 0, omp_session_id: "native".into() },

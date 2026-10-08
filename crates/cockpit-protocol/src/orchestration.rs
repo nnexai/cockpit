@@ -51,6 +51,8 @@ pub struct OrchestrationSnapshot {
     pub board: Option<TaskBoard>, // for request.root_id, else the only root, else None
     pub runs: Vec<Run>,      // every run under roots of this session
     pub messages: Vec<Message>, // for those runs; bodies included (≤16 KiB each)
+    #[serde(default)]
+    pub questions: Vec<QuestionStatus>,
     pub subagents: Vec<Subagent>,
     pub intents: Vec<TaskIntent>,
     #[serde(default)]
@@ -584,13 +586,40 @@ pub struct Message {
     pub seq: u64, // seq is per recipient, monotonic
     pub from: ActorRef,
     pub kind: MessageKind,
-    pub text: String,           // ≤ 16 KiB UTF-8
+    pub text: String, // ≤ 16 KiB UTF-8
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
     pub report: Option<Report>, // kind == Report
     pub stale: bool,            // sender attempt superseded / caller mismatch evidence
     pub escalated_from: Option<String>,
     pub from_subagent_id: Option<String>, // report sent from an OMP subagent context of the sending run
     pub stage: DeliveryStage,
     pub woken_omp_session: Option<String>,
+    pub created_at: String,
+    pub acked_at: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct QuestionStatus {
+    pub run_id: String,
+    pub question_message_id: String,
+    pub asked_at: String,
+    pub receipt: QuestionReceipt,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "status", rename_all = "snake_case")]
+#[ts(tag = "status", rename_all = "snake_case")]
+pub enum QuestionReceipt {
+    Unresolved,
+    AnswerDelivered { answer: AnswerReceipt },
+    AnswerAcknowledged { answer: AnswerReceipt },
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct AnswerReceipt {
+    pub sender: ActorRef,
+    pub message_id: String,
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub stage: DeliveryStage,
     pub created_at: String,
     pub acked_at: Option<String>,
 }
@@ -894,6 +923,8 @@ pub enum OrchestrationAction {
         to_run_id: String,
         kind: MessageKind,
         text: String,
+        #[serde(default)]
+        in_reply_to: Option<String>,
     },
     Annotate {
         run_id: String,
@@ -1155,7 +1186,71 @@ mod tests {
     }
 
     #[test]
-    fn legacy_snapshot_defaults_assignment_intents_to_empty() {
+    fn legacy_message_does_not_infer_a_question_link() {
+        let legacy = json!({
+            "message_id": "answer", "to_run_id": "worker", "seq": 7,
+            "from": { "type": "operator" }, "kind": "answer", "text": "Proceed",
+            "report": null, "stale": false, "escalated_from": null,
+            "from_subagent_id": null, "stage": "acked", "woken_omp_session": null,
+            "created_at": "2026-10-08T12:00:00Z", "acked_at": "2026-10-08T12:01:00Z",
+        });
+        let message: Message = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(message.in_reply_to, None);
+        let mut expected = legacy;
+        expected["in_reply_to"] = Value::Null;
+        assert_eq!(serde_json::to_value(message).unwrap(), expected);
+
+        expected["in_reply_to"] = json!("question");
+        let linked: Message = serde_json::from_value(expected.clone()).unwrap();
+        assert_eq!(linked.in_reply_to.as_deref(), Some("question"));
+        assert_eq!(serde_json::to_value(linked).unwrap(), expected);
+    }
+
+    #[test]
+    fn message_send_preserves_explicit_link_and_defaults_legacy_requests() {
+        let legacy = json!({
+            "action": "message_send", "message_id": "answer", "to_run_id": "worker",
+            "kind": "answer", "text": "Proceed",
+        });
+        let action: OrchestrationAction = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(matches!(action, OrchestrationAction::MessageSend { in_reply_to: None, .. }));
+        let mut linked = legacy;
+        linked["in_reply_to"] = json!("question");
+        let action: OrchestrationAction = serde_json::from_value(linked.clone()).unwrap();
+        assert!(matches!(
+            &action,
+            OrchestrationAction::MessageSend { in_reply_to: Some(question), .. }
+                if question == "question"
+        ));
+        assert_eq!(serde_json::to_value(action).unwrap(), linked);
+    }
+
+    #[test]
+    fn question_receipts_round_trip_without_inventing_acknowledgment() {
+        for (status, answer) in [
+            ("unresolved", None),
+            ("answer_delivered", Some(("stored", Value::Null))),
+            ("answer_acknowledged", Some(("acked", json!("2026-10-08T12:01:00Z")))),
+        ] {
+            let mut receipt = json!({ "status": status });
+            if let Some((stage, acked_at)) = answer {
+                receipt["answer"] = json!({
+                    "sender": { "type": "run", "run_id": "root" },
+                    "message_id": "answer", "seq": 7, "stage": stage,
+                    "created_at": "2026-10-08T12:00:00Z", "acked_at": acked_at,
+                });
+            }
+            let value = json!({
+                "run_id": "worker", "question_message_id": "question",
+                "asked_at": "2026-10-08T11:00:00Z", "receipt": receipt,
+            });
+            let question: QuestionStatus = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(question).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn legacy_snapshot_defaults_assignment_intents_and_questions_to_empty() {
         let legacy = json!({
             "session_id": "session", "revision": 1, "tasks_token": "c".repeat(64),
             "roots": [], "board": null, "runs": [], "messages": [], "subagents": [],
@@ -1166,10 +1261,10 @@ mod tests {
         });
         let snapshot: OrchestrationSnapshot = serde_json::from_value(legacy).unwrap();
         assert!(snapshot.assignment_intents.is_empty());
-        assert_eq!(
-            serde_json::to_value(snapshot).unwrap()["assignment_intents"],
-            json!([])
-        );
+        assert!(snapshot.questions.is_empty());
+        let serialized = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(serialized["assignment_intents"], json!([]));
+        assert_eq!(serialized["questions"], json!([]));
     }
 
     #[test]

@@ -10,7 +10,7 @@ import type { StepScope, StepSubmission, StepUnknownResolution, StepResolutionOu
 const snapshot: OrchestrationSnapshot = {
   session_id: "session-a", revision: 12, tasks_token: "external-edit-a",
   roots: [], board: { root_id: "root-a", path: "/state/tasks/root-a.md", doc_revision: "doc-a", unidentified_items: 0, diagnostics: [], tasks: [] },
-  runs: [], messages: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+  runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
   runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "offline" } },
 };
 
@@ -164,6 +164,7 @@ describe("mounted Supervisor observation", () => {
     await flush(() => api.snapshot().resolve(initial));
     const next = observedState({
       revision: 13, tasks_token: "external-edit-b", runs: [reportedRun(kind)],
+      questions: kind === "needs_input" ? [{ run_id: "worker", question_message_id: "needs_input-receipt", asked_at: at, receipt: { status: "unresolved" } }] : [],
       attention: [{ kind: kind === "needs_input" ? "needs_input" : "to_accept", run_id: "worker", task_id: "task-a", message_seq: 1, since: at }],
       board: { ...snapshot.board!, doc_revision: "doc-b", tasks: [{
         task: { task_id: "task-a", title: "Deliver work", body: "Canonical task", description: "Canonical task", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "task-b", diagnostic: null },

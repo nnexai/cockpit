@@ -9,7 +9,7 @@ function task(id: string, line: number, worker: string | null = null, lane: Task
   return { task: { task_id: id, title: id, body: "", description: "", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: lane === "accepted", line, task_revision: "revision", diagnostic: null }, lane, current_run_id: worker, dependencies: { state: "none", unmet: [], problems: [] } };
 }
 function snapshot(runs: Run[], subagents: Subagent[] = []): OrchestrationSnapshot {
-  return { session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs, subagents, messages: [], intents: [], assignment_intents: [], unmanaged_agents: [], attention: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: "2026-10-07T00:00:00Z", runs: [] } };
+  return { session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs, subagents, messages: [], questions: [], intents: [], assignment_intents: [], unmanaged_agents: [], attention: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: "2026-10-07T00:00:00Z", runs: [] } };
 }
 function subagent(id: string, parent: string | null = null): Subagent {
   return { run_id: "worker", subagent_id: id, parent_subagent_id: parent, label: id, role: "scout", status: "running", summary: null, last_control: null, bound_omp_session: null, updated_at: "2026-10-07T00:00:00Z" };

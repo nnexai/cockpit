@@ -1539,6 +1539,9 @@ pub(crate) enum RunCommand {
         message_id: String,
         #[arg(long)]
         text: String,
+        /// Exact current needs-input report message ID; required only for answers.
+        #[arg(long, required_if_eq("kind", "answer"))]
+        in_reply_to: Option<String>,
     },
     /// Append an annotation without changing reported results.
     Annotate {
@@ -1554,6 +1557,18 @@ pub(crate) enum RunCommand {
 }
 impl RunArgs {
     pub async fn run(self) -> Result<(), CliError> {
+        if let RunCommand::Message { kind, in_reply_to, .. } = &self.command {
+            match (kind, in_reply_to.as_deref()) {
+                (MessageKindArg::Answer, Some(question)) if !question.trim().is_empty() => {}
+                (MessageKindArg::Answer, _) => {
+                    return Err(CliError::usage("Answers require a nonempty --in-reply-to question message ID."));
+                }
+                (_, Some(_)) => {
+                    return Err(CliError::usage("--in-reply-to is only valid for answers; use instruction for nonquestion feedback."));
+                }
+                (_, None) => {}
+            }
+        }
         if matches!(&self.command, RunCommand::Retirement { .. } | RunCommand::RetirementReceipt(_)) {
             require_retirement_caller(&self.common)?;
         }
@@ -1705,6 +1720,7 @@ impl RunArgs {
                 kind,
                 message_id,
                 text,
+                in_reply_to,
             } => OrchestrationAction::MessageSend {
                 message_id,
                 to_run_id: run,
@@ -1714,6 +1730,7 @@ impl RunArgs {
                     MessageKindArg::Answer => MessageKind::Answer,
                 },
                 text: bounded(text)?,
+                in_reply_to,
             },
             RunCommand::Annotate { run, text } => OrchestrationAction::Annotate {
                 run_id: run,
@@ -2595,10 +2612,31 @@ mod tests {
                 "--text",
                 "Use the documented checkout.",
                 "--message-id",
-                "answer-1"
+                "answer-1",
+                "--in-reply-to",
+                "question-1",
             ])
             .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn message_reply_pairing_is_rejected_before_endpoint_access() {
+        assert!(TestCli::try_parse_from([
+            "test", "run", "message", "worker", "--kind", "answer",
+            "--text", "Use the documented checkout.", "--message-id", "answer-1",
+        ]).is_err());
+        for (kind, question) in [
+            ("answer", ""), ("answer", " \t "),
+            ("instruction", "question-1"), ("cancel-request", "question-1"),
+        ] {
+            let parsed = TestCli::try_parse_from([
+                "test", "run", "message", "worker", "--kind", kind,
+                "--text", "Feedback", "--message-id", "message-1", "--in-reply-to", question,
+            ]).unwrap();
+            let TestCommand::Run(args) = parsed.command else { panic!("expected run") };
+            assert_eq!(args.run().await.unwrap_err().code, "orchestration_usage");
+        }
     }
 
     #[test]
@@ -2834,6 +2872,7 @@ mod tests {
             from: ActorRef::Dispatcher,
             kind,
             text: text.into(),
+            in_reply_to: None,
             report: None,
             stale: false,
             escalated_from: None,
@@ -3723,6 +3762,7 @@ mod tests {
             self.operator(OrchestrationAction::MessageSend {
                 message_id: id.into(), to_run_id: run_id.into(),
                 kind: MessageKind::Instruction, text: id.into(),
+                in_reply_to: None,
             });
         }
     }
@@ -4052,6 +4092,7 @@ mod tests {
             action: OrchestrationAction::MessageSend {
                 message_id: "external-arrival".into(), to_run_id: run.clone(),
                 kind: MessageKind::Instruction, text: "External arrival".into(),
+                in_reply_to: None,
             },
         }).unwrap();
         tokio::time::pause();

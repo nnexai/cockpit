@@ -1650,6 +1650,7 @@ fn launched_reconcile_preserves_lifecycle_receipts_grants_setup_identity_and_inb
                 to_run_id: run_id.clone(),
                 kind: MessageKind::Instruction,
                 text: "Retained unread instruction".into(),
+                in_reply_to: None,
             });
             let before = fixture.run(&run_id);
             let messages = serde_json::to_value(fixture.state().messages).unwrap();
@@ -1997,6 +1998,7 @@ fn busy_inbox_and_unrelated_revisions_do_not_starve_launch_review() {
             to_run_id: run_id.clone(),
             kind: MessageKind::Instruction,
             text: format!("Inbox traffic while reviewing {index}"),
+            in_reply_to: None,
         });
         fixture.operator(OrchestrationAction::Annotate {
             run_id: other.clone(),
@@ -2043,6 +2045,7 @@ fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_an
             to_run_id: run_id.clone(),
             kind: MessageKind::Instruction,
             text: "Replay this original unread instruction after explicit retry".into(),
+            in_reply_to: None,
         });
         for queued in [false, true] {
             if queued {
@@ -2663,6 +2666,55 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
 }
 
 #[test]
+fn linked_answer_retries_preserve_committed_receipts_after_new_question_and_recheck_authority() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let (_, run_id, worker) = fixture.working(&root);
+    fixture.apply(&worker, report(ReportKind::NeedsInput, None, None)).unwrap();
+    let q1 = fixture.run(&run_id).last_report.unwrap().message_id;
+    let answer = OrchestrationAction::MessageSend {
+        message_id: id(),
+        to_run_id: run_id.clone(),
+        kind: MessageKind::Answer,
+        text: "Use the approved choice".into(),
+        in_reply_to: Some(q1.clone()),
+    };
+    let first = fixture.apply(&supervisor, answer.clone()).unwrap();
+    let OrchestrationActionResult::Message { seq: first_seq, duplicate: false, .. } = first.result else {
+        panic!("expected newly committed answer");
+    };
+    fixture.apply(&worker, report(ReportKind::NeedsInput, None, None)).unwrap();
+    let q2 = fixture.run(&run_id).last_report.unwrap().message_id;
+    let mut late = answer.clone();
+    if let OrchestrationAction::MessageSend { message_id, .. } = &mut late {
+        *message_id = id();
+    }
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&supervisor, late), "question_not_current");
+    assert_eq!(fixture.state_bytes(), bytes);
+    let inbox_before = serde_json::to_value(fixture.state().messages).unwrap();
+    let retry = fixture.apply(&supervisor, answer.clone()).unwrap();
+    assert!(matches!(retry.result, OrchestrationActionResult::Message { seq, duplicate: true, .. } if seq == first_seq));
+    assert_eq!(serde_json::to_value(fixture.state().messages).unwrap(), inbox_before);
+    assert_eq!(fixture.run(&run_id).last_report.unwrap().message_id, q2);
+    for link in [Some(q2), None, Some(String::new())] {
+        let mut changed = answer.clone();
+        if let OrchestrationAction::MessageSend { in_reply_to, .. } = &mut changed {
+            *in_reply_to = link;
+        }
+        let bytes = fixture.state_bytes();
+        assert_code(fixture.apply(&supervisor, changed), "message_id_conflict");
+        assert_eq!(fixture.state_bytes(), bytes);
+    }
+    let mut obsolete = supervisor.clone();
+    caller_mut(&mut obsolete).omp_session_id = Some("obsolete-main".into());
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&obsolete, answer), "session_mismatch");
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
 fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cancel() {
     let fixture = Fixture::new();
     let root = fixture.root();
@@ -2737,6 +2789,7 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
     fixture
         .apply(&worker, report(ReportKind::NeedsInput, None, None))
         .unwrap();
+    let question_id = fixture.run(&run_id).last_report.unwrap().message_id;
     let answer_id = id();
     fixture
         .apply(
@@ -2746,6 +2799,7 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
                 to_run_id: run_id.clone(),
                 kind: MessageKind::Answer,
                 text: "Use the established task scope; no additional decision is missing".into(),
+                in_reply_to: Some(question_id.clone()),
             },
         )
         .unwrap();
@@ -2756,6 +2810,7 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
         .find(|message| message.message_id == answer_id)
         .unwrap();
     assert_agent_decision(&answer, &root);
+    assert_eq!(answer.in_reply_to.as_deref(), Some(question_id.as_str()));
     assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
     fixture
         .apply(
@@ -2764,6 +2819,10 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
         )
         .unwrap();
     assert!(!fixture.task(&root, &task.task_id).checked);
+    fixture
+        .apply(&worker, report(ReportKind::NeedsInput, None, None))
+        .unwrap();
+    let sendback_question = fixture.run(&run_id).last_report.unwrap().message_id;
     fixture
         .apply(
             &supervisor,
@@ -2786,6 +2845,13 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
         })
         .unwrap();
     assert_agent_decision(&sendback, &root);
+    assert!(sendback.in_reply_to.is_none());
+    let state = fixture.state();
+    let run = state.runs.iter().find(|run| run.run_id == run_id).unwrap();
+    let inbox = state.messages.iter().filter(|message| message.to_run_id == run_id).collect::<Vec<_>>();
+    let question = projection::question_status(run, &inbox).unwrap();
+    assert_eq!(question.question_message_id, sendback_question);
+    assert!(matches!(question.receipt, QuestionReceipt::Unresolved));
     fixture
         .apply(
             &worker,
@@ -2944,6 +3010,7 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
                 to_run_id: run_id.clone(),
                 kind: MessageKind::Answer,
                 text: "Answer".into(),
+                in_reply_to: None,
             },
             6 => OrchestrationAction::ReconcileRun {
                 run_id: run_id.clone(),
@@ -3149,6 +3216,7 @@ fn supervisor_recovers_only_strict_descendants_with_review() {
                 to_run_id: nested,
                 kind: MessageKind::Answer,
                 text: "Too late".into(),
+                in_reply_to: None,
             },
         ),
         "actor_forbidden",
