@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use super::{
     error, messages,
     store::{AssignmentIntent, LockedStore, OrchestrationState},
-    tasks_md::{validate_creation, validate_uuid},
+    tasks_md::{validate_authoring_creation, validate_uuid},
 };
 use crate::InspectionError;
 
@@ -75,19 +75,19 @@ pub(super) fn assign(
     root_id: &str,
     task_id: &str,
     title: &str,
-    body: &str,
+    description: &str,
 ) -> Result<OrchestrationActionResult, InspectionError> {
     let root_id = validate_uuid(root_id)?.to_string();
     let task_id = validate_uuid(task_id)?.to_string();
     validate_root(state, session_id, &root_id, false)?;
-    validate_creation(title, body)?;
+    validate_authoring_creation(title, description)?;
     if title.len() > 256 {
         return Err(error(
             "invalid_task",
             "Assignment title must not exceed 256 bytes",
         ));
     }
-    let hash = request_hash(&root_id, title, body);
+    let hash = request_hash(&root_id, title, description);
     let message_id = format!("assign-{task_id}");
     if let Some(message) = state.messages.iter().find(|message| {
         message.message_id == message_id && matches!(message.from, ActorRef::Operator)
@@ -132,7 +132,7 @@ pub(super) fn assign(
                 task_id,
                 request_hash: hash,
                 title: title.to_owned(),
-                body: body.to_owned(),
+                body: description.to_owned(),
                 origin,
                 state: IntentState::Pending,
             });
@@ -478,6 +478,59 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn new_assignment_refuses_managed_source_injection_before_journaling() {
+        for description in [
+            "- [ ] An unmanaged step",
+            "<!-- cockpit-relations: depends_on=11111111-1111-4111-8111-111111111111 -->",
+            "<!-- cockpit-checklist: begin -->",
+        ] {
+            let fixture = Fixture::new();
+            fixture.write(b"Existing introduction\n");
+            let locked = fixture.store.lock().unwrap();
+            let mut state = locked.read().unwrap();
+            let before = fixture.bytes();
+            let revision = state.revision;
+            assert_eq!(
+                assign(
+                    &locked,
+                    &mut state,
+                    SESSION,
+                    OperatorOrigin::Native,
+                    &fixture.root_id,
+                    &fixture.task_id,
+                    TITLE,
+                    description,
+                ).unwrap_err().code,
+                "invalid_task"
+            );
+            assert_eq!(fixture.bytes(), before);
+            assert_eq!(state.revision, revision);
+            assert!(state.assignment_intents.is_empty());
+            assert!(state.messages.is_empty());
+        }
+    }
+
+    #[test]
+    fn legacy_assignment_recovery_preserves_original_nested_checklist_bytes() {
+        let fixture = Fixture::new();
+        let locked = fixture.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        fixture.journal(&locked, &mut state);
+        let legacy = "Legacy prose\n- [x] Existing nested step";
+        state.assignment_intents[0].body = legacy.into();
+        state.assignment_intents[0].request_hash = request_hash(&fixture.root_id, TITLE, legacy);
+        locked.save(&mut state).unwrap();
+        recover(&locked, &mut state).unwrap();
+        assert_eq!(
+            locked.tasks(&fixture.root_id).unwrap().task(&fixture.task_id).unwrap().body,
+            legacy
+        );
+        assert!(fixture.bytes().ends_with(b"  Legacy prose\n  - [x] Existing nested step\n"));
+        assert!(state.assignment_intents.is_empty());
+        assert_eq!(state.messages[0].message_id, format!("assign-{}", fixture.task_id));
     }
 
     #[test]

@@ -5,6 +5,7 @@ import { UiIcon } from "../UiIcon";
 import { ProvenancePair, reportAge } from "./SupervisorActions";
 import { TIER_LABEL, type AttentionTier } from "./attention";
 import { taskLanes } from "./boardNavigation";
+import { dependencySummary, uniqueTask } from "./dependencies";
 
 export type TaskCardView = {
   task: TaskView; worker: Run | undefined; observed: RunObservation | undefined; snapshot: OrchestrationSnapshot;
@@ -16,7 +17,12 @@ export function TaskCard({ view: v, rowId, tabIndex, onFocus, onSelect, onHover 
 }) {
   const laneLabel = taskLanes.find(lane => lane.lane === v.task.lane)?.label ?? v.task.lane;
   const status = v.status.toLowerCase() === laneLabel.toLowerCase() ? null : v.status;
-  const label = [v.task.task.title, v.status, v.worker?.label, v.subagentCount && `+${v.subagentCount} subagents`, v.tier && TIER_LABEL[v.tier], v.dimReason && `dimmed by ${v.dimReason}`].filter(Boolean).join(", ");
+  const dependencyLine = dependencySummary(v.task, v.snapshot.board?.tasks ?? []);
+  const source = v.task.task.follow_up_of ? uniqueTask(v.snapshot.board?.tasks ?? [], v.task.task.follow_up_of) : null;
+  const followUpLine = v.task.task.follow_up_of ? `Follow-up of ${source ? `“${source.task.title}”` : "a removed task"}` : null;
+  const progress = v.task.task.step_progress;
+  const stepLine = !progress ? "Steps unavailable" : progress.total ? `Steps ${progress.done}/${progress.total}` : v.task.task.steps.some(step => !step.step_id) ? "Checklist not tracked" : null;
+  const label = [v.task.task.title, v.status, v.worker?.label, v.subagentCount && `+${v.subagentCount} subagents`, dependencyLine, followUpLine, stepLine && progress?.total ? `${progress.done} of ${progress.total} steps complete` : stepLine, v.tier && TIER_LABEL[v.tier], v.dimReason && `dimmed by ${v.dimReason}`].filter(Boolean).join(", ");
   return <li className={`supervisor-task supervisor-card${v.selected ? " is-selected" : ""}${v.dimReason ? " is-dimmed" : ""}${v.linked ? " is-linked" : ""}`} onMouseEnter={() => onHover(true)} onMouseLeave={() => onHover(false)}>
     <button type="button" className="supervisor-task-toggle supervisor-card-toggle" data-row-id={rowId} tabIndex={tabIndex} aria-label={label} aria-expanded={v.selected} aria-controls="supervisor-detail" onFocus={onFocus} onClick={onSelect}>
       <span className="supervisor-card-heading"><span className="supervisor-task-title">{v.task.task.title}</span>{v.tier ? <span className={`supervisor-attention-badge is-${v.tier}`}><StateGlyph shape={v.tier === "decide" ? "blocked" : v.tier === "recover" ? "unknown" : "idle"} />{TIER_LABEL[v.tier]}</span> : null}</span>
@@ -24,6 +30,9 @@ export function TaskCard({ view: v, rowId, tabIndex, onFocus, onSelect, onHover 
         {status ? <span className="supervisor-task-stage">{status}</span> : null}
         {v.worker ? <span className="supervisor-worker-chip">{v.worker.label}</span> : null}
         {v.subagentCount ? <span className="supervisor-card-subagents">+{v.subagentCount} subagents</span> : null}
+      {dependencyLine ? <span className={`supervisor-card-dependencies${v.task.dependencies.state === "invalid" ? " is-diagnosed" : ""}`} aria-hidden="true">{dependencyLine}</span> : null}
+      {followUpLine ? <span className="supervisor-card-followup" aria-hidden="true">↳ {followUpLine}</span> : null}
+      {stepLine ? <span className="supervisor-card-steps" aria-hidden="true">{stepLine}{progress && progress.total > 0 ? <span className="supervisor-step-meter"><span style={{ width: `${Math.min(100, progress.done / progress.total * 100)}%` }} /></span> : null}</span> : null}
       <div className="supervisor-task-evidence">
         {v.worker?.stage === "closed" && v.worker.last_report ? <span
           className="supervisor-pair-reported" title={new Date(v.worker.last_report.at).toLocaleString()}

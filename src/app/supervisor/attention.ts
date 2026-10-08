@@ -14,6 +14,8 @@ export type LocalCondition =
   | { kind: "agent_status"; runId: string; taskId: string | null }
   | { kind: "root_failed_report"; runId: string }
   | { kind: "assignment"; taskId: string; state: "pending" | "conflict" }
+  | { kind: "relation_diagnostic"; taskId: string; cause: string }
+  | { kind: "dependency_regression"; taskId: string }
   | { kind: "unidentified_items"; count: number };
 
 export type AttentionSource =
@@ -54,12 +56,14 @@ export function coreTier(kind: AttentionKind, run: Run | undefined): AttentionTi
 const LOCAL_TIER: Record<LocalCondition["kind"], AttentionTier> = {
   start_unknown: "recover", terminal_error: "recover", navigation_error: "recover", change_unconfirmed: "recover",
   orphaned_worker: "recover", agent_status: "recover", assignment: "notice", unidentified_items: "notice", notice: "notice", root_failed_report: "notice",
+  relation_diagnostic: "notice", dependency_regression: "notice",
 };
 const PRECEDENCE: Record<AttentionKind | LocalCondition["kind"], number> = {
   needs_input: 0, awaits_prepare: 0, awaits_execute: 0, to_accept: 0,
   retirement_unconfirmed: 0, exited_without_report: 1, dispatch_unknown: 2, runtime_blocked: 3, orphaned_worker: 4, agent_status: 5,
   start_unknown: 6, terminal_error: 7, navigation_error: 8, change_unconfirmed: 9,
   intent_conflict: 0, assignment: 1, idle_without_report: 2, brief_unread: 3, plan_changed: 4,
+  relation_diagnostic: 1, dependency_regression: 2,
   root_failed_report: 5, unidentified_items: 6, notice: 7,
 };
 const emptyCounts = (): Record<AttentionTier, number> => ({ decide: 0, recover: 0, notice: 0 });

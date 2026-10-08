@@ -8,6 +8,26 @@ use super::herdr::RuntimeView;
 use super::store::OrchestrationState;
 use crate::InspectionError;
 
+fn current_attempt_candidate(run: &Run, old: Option<&Run>) -> bool {
+    run.close_reason != Some(CloseReason::Superseded)
+        && !(matches!(run.stage, RunStage::Proposed | RunStage::AwaitingPrepare)
+            && old.is_some_and(|old| old.stage != RunStage::Closed))
+}
+
+/// The same canonical-attempt selection used by the board, including the
+/// pre-Prepare replacement exception. Historical superseded attempts never own content.
+pub(crate) fn current_task_run<'a>(
+    state: &'a OrchestrationState,
+    root_id: &str,
+    task_id: &str,
+) -> Option<&'a Run> {
+    state.runs.iter()
+        .filter(|run| run.root_id == root_id && run.task_id.as_deref() == Some(task_id)
+            && current_attempt_candidate(run, run.supersedes_run_id.as_deref()
+                .and_then(|id| state.runs.iter().find(|old| old.run_id == id))))
+        .max_by(|left, right| attempt_order(left).cmp(&attempt_order(right)))
+}
+
 /// Joins durable intent and canonical Markdown with one fresh runtime observation.
 /// No runtime evidence is written back, and no observation can complete a task.
 pub(crate) fn snapshot(
@@ -115,17 +135,8 @@ pub(crate) fn snapshot(
         let Some(task_id) = run.task_id.as_deref() else {
             continue;
         };
-        if run.close_reason == Some(CloseReason::Superseded) {
-            continue;
-        }
-        // A proposed replacement does not displace the live attempt until prepare is granted.
-        if matches!(run.stage, RunStage::Proposed | RunStage::AwaitingPrepare)
-            && run
-                .supersedes_run_id
-                .as_deref()
-                .and_then(|id| run_by_id.get(id))
-                .is_some_and(|old| old.stage != RunStage::Closed)
-        {
+        if !current_attempt_candidate(run, run.supersedes_run_id.as_deref()
+            .and_then(|id| run_by_id.get(id).copied())) {
             continue;
         }
         let key = (run.root_id.as_str(), task_id);
@@ -657,6 +668,15 @@ mod tests {
                     task_id: TASK.into(),
                     title: "Canonical title".into(),
                     body: "Canonical body".into(),
+                    description: "Canonical body".into(),
+                    description_editable: true,
+                    description_diagnostic: None,
+                    steps: Vec::new(),
+                    step_progress: Some(TaskStepProgress { done: 0, total: 0 }),
+                    steps_diagnostic: None,
+                    depends_on: Vec::new(),
+                    follow_up_of: None,
+                    relations_diagnostic: None,
                     checked: false,
                     line: 3,
                     task_revision: "item-revision".into(),
@@ -664,6 +684,7 @@ mod tests {
                 },
                 lane: TaskLane::Accepted,
                 current_run_id: None,
+                dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
             }],
         }
     }

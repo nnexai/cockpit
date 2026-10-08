@@ -6,13 +6,13 @@ function run(id: string, overrides: Partial<Run> = {}): Run {
   return { session_id: "session", prepare_brief: "", run_id: id, kind: id === "root" ? "supervisor" : "worker", label: id, root_id: "root", parent_run_id: id === "root" ? null : "root", task_id: null, attempt: 1, task_revision_at_propose: null, stage: "working", close_reason: null, dispatch: null, target: null, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null, annotations: [], location: null, bound_omp_session: null, bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: "2026-10-07T00:00:00Z", updated_at: "2026-10-07T00:00:00Z", ...overrides };
 }
 function task(id: string, line: number, worker: string | null = null, lane: TaskView["lane"] = "queued"): TaskView {
-  return { task: { task_id: id, title: id, body: "", checked: lane === "accepted", line, task_revision: "revision", diagnostic: null }, lane, current_run_id: worker };
+  return { task: { task_id: id, title: id, body: "", description: "", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: lane === "accepted", line, task_revision: "revision", diagnostic: null }, lane, current_run_id: worker, dependencies: { state: "none", unmet: [], problems: [] } };
 }
 function snapshot(runs: Run[], subagents: Subagent[] = []): OrchestrationSnapshot {
   return { session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs, subagents, messages: [], intents: [], assignment_intents: [], unmanaged_agents: [], attention: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: "2026-10-07T00:00:00Z", runs: [] } };
 }
 function subagent(id: string, parent: string | null = null): Subagent {
-  return { run_id: "worker", subagent_id: id, parent_subagent_id: parent, label: id, role: "scout", status: "running", summary: null, last_control: null, updated_at: "2026-10-07T00:00:00Z" };
+  return { run_id: "worker", subagent_id: id, parent_subagent_id: parent, label: id, role: "scout", status: "running", summary: null, last_control: null, bound_omp_session: null, updated_at: "2026-10-07T00:00:00Z" };
 }
 
 describe("Supervisor topology", () => {

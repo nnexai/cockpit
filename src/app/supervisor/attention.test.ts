@@ -11,7 +11,7 @@ function run(runId: string, rootId = "root", taskId: string | null = null): Run 
     annotations: [], location: null, bound_omp_session: null, bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at };
 }
 function task(id = "task", currentRunId: string | null = "worker"): TaskView {
-  return { task: { task_id: id, title: "Improve search", body: "Keep behavior", checked: false, line: 1, task_revision: "revision", diagnostic: null }, lane: "working", current_run_id: currentRunId };
+  return { task: { task_id: id, title: "Improve search", body: "Keep behavior", description: "Keep behavior", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "revision", diagnostic: null }, lane: "working", current_run_id: currentRunId, dependencies: { state: "none", unmet: [], problems: [] } };
 }
 function snapshot(attention: Attention[], runs = [run("root"), run("worker", "root", "task")]): OrchestrationSnapshot {
   return { session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs, messages: [], subagents: [],

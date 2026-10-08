@@ -3,7 +3,7 @@ import type { TaskLane, TaskView } from "../../protocol/generated/v1";
 import { taskNeighbor, visibleTaskIds, type BoardNavOptions } from "./boardNavigation";
 
 function task(id: string, lane: TaskLane): TaskView {
-  return { task: { task_id: id, title: id, body: id, checked: lane === "accepted", line: 1, task_revision: `revision-${id}`, diagnostic: null }, lane, current_run_id: `worker-${id}` };
+  return { task: { task_id: id, title: id, body: id, description: id, description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: lane === "accepted", line: 1, task_revision: `revision-${id}`, diagnostic: null }, lane, current_run_id: `worker-${id}`, dependencies: { state: "none", unmet: [], problems: [] } };
 }
 const tasks = [task("queued-a", "queued"), task("ready-a", "ready"), task("queued-b", "queued"), task("working-a", "working"), task("ready-b", "ready"), task("done-a", "accepted")];
 const lanes: BoardNavOptions = { arrangement: "lanes", completedOpen: false, collapsedLanes: [] };

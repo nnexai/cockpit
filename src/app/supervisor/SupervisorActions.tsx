@@ -4,6 +4,10 @@ import { StateGlyph, type GlyphShape } from "../sidebar/StateGlyph";
 import { UiIcon } from "../UiIcon";
 import { messageDraft, type ScopeDrafts, type TextDraft } from "./useSupervisorDrafts";
 import { retirementView } from "./retirementView";
+import { DependenciesSection } from "./SupervisorDependencies";
+import { StepsSection } from "./SupervisorSteps";
+import type { SupervisorStepsProps } from "./stepInteractions";
+import { taskContentReason } from "./dependencies";
 
 export type Mutation = (action: OrchestrationAction) => Promise<OrchestrationActionResult | null>;
 export type AgentState = { kind: "ready" | "starting" | "failure" | "missing" | "unknown" | "offline" | "closed"; label: string; detail: string; verified: boolean; blocked: boolean; terminal: boolean; restartable: boolean };
@@ -47,11 +51,13 @@ export function taskStatus(task: TaskView, run: Run | undefined, snapshot: Orche
   if (run?.stage === "reported" || task.lane === "review") return "Reviewing result";
   if (task.lane === "working") return "Working";
   if (task.lane === "setup" || task.lane === "ready") return "Preparing";
+  if (!run && task.dependencies.state === "invalid") return "Queued · prerequisites need fixing";
+  if (!run && task.dependencies.state === "blocked") return `Queued · waiting on ${task.dependencies.unmet.length} prerequisites`;
   return run ? "Queued" : snapshot.messages.some(message => message.message_id === `assign-${task.task.task_id}` && message.to_run_id === snapshot.board?.root_id) ? "Assigned · waiting for agent" : "Queued · not assigned";
 }
 export type StateBlockView = { sentence: string; tierLabel: "Decide" | "Recover" | "Notice" | null; waitingSince: string | null };
 export type PathRowView = { key: string; role: string; label: string; facts: string[]; current: boolean; depth: number; subagent: boolean; onActivate(): void };
-export type CrossView = { label: "Show in Graph" | "Show in Tasks"; onActivate(): void } | null;
+export type CrossView = { label: "Show in Graph" | "Show in Tasks" | "Show in Dependencies"; onActivate(): void } | null;
 export function reportAge(report: Pick<Report, "at">): string {
   const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(report.at)) / 60_000));
   return minutes < 1 ? "just now" : minutes < 60 ? `${minutes}m ago` : minutes < 1440 ? `${Math.floor(minutes / 60)}h ago` : `${Math.floor(minutes / 1440)}d ago`;
@@ -246,11 +252,14 @@ function RequestStop({ task, supervisor, scope, changed, busy, mutateResult, des
   };
   return <section>{confirm ? <><p>Ask the supervisor to stop this task? Existing files and Spaces stay.</p><button type="button" disabled={busy} aria-describedby={describedBy} onClick={() => void request()}>{draft.operation ? "Retry same stop request" : "Request stop"}</button><button type="button" disabled={busy} onClick={() => setConfirm(false)}>Keep working</button></> : <button type="button" disabled={busy} aria-describedby={describedBy} onClick={() => setConfirm(true)}>Request stop…</button>}{draft.notice ? <p role="status">{draft.notice}</p> : null}{draft.error ? <p className="supervisor-error" role="alert">{draft.error}</p> : null}</section>;
 }
-export function SupervisorActions({ snapshot, run, task, subagent, section = "overview", stateBlock, path, crossView, acceptanceConflict, scope, changed, busy, live, mutateResult, onTerminal, onEditTask, onCancelSubagent, onCloseTracking }: {
+export function SupervisorActions({ snapshot, run, task, subagent, section = "overview", stateBlock, path, crossView, crossViews = [], acceptanceConflict, scope, changed, busy, live, mutateResult, steps, taskWriteUnconfirmed = false, onNavigateTask, onEditPrerequisites, onCreateFollowUp, onResumeSourceDraft, onTerminal, onEditTask, onCancelSubagent, onCloseTracking }: {
   snapshot: OrchestrationSnapshot; run: Run | null; task: TaskView | null; subagent?: Subagent | null; section?: "overview" | "activity" | "actions";
   stateBlock: StateBlockView; path: readonly PathRowView[]; crossView: CrossView; acceptanceConflict: boolean;
   scope: ScopeDrafts; changed(): void; busy: boolean; live: boolean; mutateResult: Mutation;
   onTerminal(run: Run): void; onEditTask(task: TaskView): void; onCancelSubagent(run: Run, subagent: Subagent): void; onCloseTracking(run: Run): void;
+  steps?: SupervisorStepsProps; taskWriteUnconfirmed?: boolean; crossViews?: Exclude<CrossView, null>[];
+  onNavigateTask?(taskId: string): void; onEditPrerequisites?(task: TaskView): void; onCreateFollowUp?(task: TaskView): void;
+  onResumeSourceDraft?(taskId: string, kind: "edit" | "relations" | "follow_up"): void;
 }) {
   const id = useId();
   const [operatorOpen, setOperatorOpen] = useState(false);
@@ -262,10 +271,13 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
   const canRequestStop = supervisor && agentState(snapshot, supervisor, live, live).verified && task && !task.task.checked && (!run || run.stage !== "closed");
   const childDraft = run && subagent ? messageDraft(scope, `subagent:${run.run_id}:${subagent.subagent_id}`) : null;
   const unavailableReason = busy ? "Wait for the current operation." : !live ? "Check connection and current agent status first." : null;
-  const editReason = unavailableReason ?? (task?.task.diagnostic ? "Resolve the canonical task diagnostic before editing." : null);
+  const contentReason = taskContentReason(snapshot, task, live);
+  const editReason = unavailableReason ?? (taskWriteUnconfirmed ? "A task change is unconfirmed. Read and resolve the original operation first." : contentReason ?? (!task?.task.description_editable ? task?.task.description_diagnostic ?? "The description cannot be safely edited." : null));
+  const relationReason = unavailableReason ?? (taskWriteUnconfirmed ? "A task change is unconfirmed. Resolve it before changing prerequisites." : snapshot.runs.find(root => root.run_id === snapshot.board?.root_id)?.stage === "closed" ? "Tracking is closed; tasks cannot be changed." : task?.task.checked ? "Task is complete; prerequisites are read-only." : task?.task.diagnostic ? "Resolve the canonical task diagnostic before editing." : acceptanceConflict ? "Resolve the pending acceptance decision before changing prerequisites." : null);
+  const createReason = unavailableReason ?? (snapshot.runs.find(root => root.run_id === snapshot.board?.root_id)?.stage === "closed" ? "Tracking is closed; tasks cannot be created." : null);
   const followupReason = unavailableReason ?? (run?.stage === "closed" ? "Tracking is closed; follow-up is unavailable." : null);
   const stopReason = unavailableReason ?? (!canRequestStop ? "A verified active supervisor is required to request stop." : null);
-  const acceptReason = unavailableReason ?? (!task ? "The canonical task is unavailable." : task.task.diagnostic ? "Resolve the canonical task diagnostic before acceptance." : task.current_run_id !== run?.run_id ? "This is not the task's current run." : run?.result?.kind !== "result" || run.result.outcome !== "succeeded" ? "Acceptance requires an explicit successful Result, not runtime Done." : null);
+  const acceptReason = unavailableReason ?? (!task ? "The canonical task is unavailable." : taskWriteUnconfirmed ? "Resolve the unconfirmed task change before acceptance." : task.dependencies.state === "blocked" || task.dependencies.state === "invalid" ? "Acceptance waits until every prerequisite is uniquely identified and checked in this task file. A Result alone does not satisfy it." : task.task.diagnostic ? "Resolve the canonical task diagnostic before acceptance." : task.current_run_id !== run?.run_id ? "This is not the task's current run." : run?.result?.kind !== "result" || run.result.outcome !== "succeeded" ? "Acceptance requires an explicit successful Result, not runtime Done." : null);
   const childReason = unavailableReason ?? (!controls ? "Tracking is closed; subagent controls are unavailable." : subagent?.status !== "running" ? "Only a running subagent can receive controls." : null);
   const forcedOperatorOpen = overrideArmed || acceptanceConflict;
   const retirement = run && !subagent ? retirementView(run) : null;
@@ -277,6 +289,7 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
         <h3>State {detailTier ? <span className="supervisor-attention-badge">{detailTier}</span> : null}</h3>
         <p>{retirement?.label ?? stateBlock.sentence}</p>
         {retirement ? <p>{retirement.detail}</p> : null}
+        {task && run && !subagent && (task.dependencies.state === "blocked" || task.dependencies.state === "invalid") ? <p className="supervisor-muted">A prerequisite is still open or needs repair. This does not stop the running agent.</p> : null}
         {!retirement && stateBlock.waitingSince ? <p className="supervisor-muted">Since <time dateTime={stateBlock.waitingSince} title={new Date(stateBlock.waitingSince).toLocaleString()}>{reportAge({ at: stateBlock.waitingSince })}</time></p> : null}
         {run ? subagent ? <>
           <p>OMP events · {subagent.status} · <time dateTime={subagent.updated_at}>{new Date(subagent.updated_at).toLocaleString()}</time></p>
@@ -286,12 +299,15 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
           {run.stage === "closed" ? <ReportedEvidence report={run.last_report} source={run.label} showBody /> : null}
         </> : <p>No worker progress reported yet.</p>}
       </section>
+      {task && !subagent && !run && (task.dependencies.state === "blocked" || task.dependencies.state === "invalid") && onNavigateTask && onEditPrerequisites ? <DependenciesSection view={task} tasks={snapshot.board?.tasks ?? []} snapshot={snapshot} onNavigate={onNavigateTask} onEdit={onEditPrerequisites} writable={!relationReason} /> : null}
+      {!subagent && steps ? <StepsSection {...steps} /> : null}
       {run && !subagent && run.result ? <section className="supervisor-detail-group">
         <h3>Result · {run.result.outcome ?? "reported"}</h3>
         <p className="supervisor-exact-text">{run.result.summary}</p>
         <p>Explicit report from {run.label} · <time dateTime={run.result.at}>{new Date(run.result.at).toLocaleString()}</time>{run.close_reason === "accepted" ? " · Accepted" : " · Awaiting review"}</p>
       </section> : null}
       {run && !subagent ? <ProgressTrail run={run} task={task} snapshot={snapshot} /> : null}
+      {task && !subagent && (run || task.dependencies.state !== "blocked" && task.dependencies.state !== "invalid") && onNavigateTask && onEditPrerequisites ? <DependenciesSection view={task} tasks={snapshot.board?.tasks ?? []} snapshot={snapshot} onNavigate={onNavigateTask} onEdit={onEditPrerequisites} writable={!relationReason} /> : null}
       {path.length ? <section className="supervisor-detail-group supervisor-path" aria-label="Relationship path">
         <h3>Relationship path</h3>
         <ol>{path.map(row => <li key={row.key} style={{ paddingInlineStart: `${row.depth * 16}px` }}><button type="button" className={`supervisor-path-row${row.subagent ? " is-subagent" : ""}`} aria-current={row.current ? "true" : undefined} onClick={row.onActivate}>
@@ -299,7 +315,9 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
         </button></li>)}</ol>
       </section> : null}
       {crossView ? <button type="button" className="supervisor-cross-view" onClick={crossView.onActivate}>{crossView.label}</button> : null}
-      {task ? <section className="supervisor-detail-group"><h3>Task description</h3><p className="supervisor-exact-text">{task.task.body}</p>{task.task.diagnostic ? <p className="supervisor-error">{task.task.diagnostic}</p> : null}</section> : null}
+      {crossViews.map(link => <button type="button" className="supervisor-cross-view" key={link.label} onClick={link.onActivate}>{link.label}</button>)}
+      {task?.task.checked ? <p className="supervisor-muted">Completed tasks are not drawn in Graph. Use Tasks or Dependencies for accepted prerequisite context.</p> : null}
+      {task ? <section className="supervisor-detail-group"><h3>Task description</h3><p className="supervisor-exact-text">{task.task.description}</p>{task.task.description_diagnostic ? <p className="supervisor-warning">{task.task.description_diagnostic}</p> : null}{task.task.diagnostic ? <p className="supervisor-error">{task.task.diagnostic}</p> : null}</section> : null}
     </div>
     <div className="supervisor-detail-section" hidden={section !== "activity"}>
       {run ? subagent ? <section className="supervisor-detail-group">
@@ -323,8 +341,17 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
             {followupReason ? <p className="supervisor-disabled-reason" id={`${id}-followup`}>{followupReason}</p> : null}
           </> : null}
           {task ? <>
-            <button type="button" disabled={busy || !live || !!task.task.diagnostic} aria-describedby={editReason ? `${id}-edit` : undefined} onClick={() => onEditTask(task)}>Edit task…</button>
+            <button type="button" disabled={busy || !!editReason && !scope.edits.get(task.task.task_id)?.submitted} aria-describedby={editReason ? `${id}-edit` : undefined} onClick={() => onEditTask(task)}>Edit task…{scope.edits.has(task.task.task_id) ? " · draft kept" : ""}</button>
             {editReason ? <p className="supervisor-disabled-reason" id={`${id}-edit`}>{editReason}</p> : null}
+            {onEditPrerequisites ? <button type="button" disabled={busy || !!relationReason && !scope.relations.get(task.task.task_id)?.submitted} aria-describedby={relationReason ? `${id}-relations` : undefined} onClick={() => onEditPrerequisites(task)}>Edit prerequisites…{scope.relations.has(task.task.task_id) ? " · draft kept" : ""}</button> : null}
+            {relationReason ? <p className="supervisor-disabled-reason" id={`${id}-relations`}>{relationReason}</p> : null}
+            {onCreateFollowUp ? <button type="button" disabled={busy || !!createReason && !scope.followUps.get(task.task.task_id)?.submitted} aria-describedby={createReason ? `${id}-create` : undefined} onClick={() => onCreateFollowUp(task)}>Create follow-up…{scope.followUps.has(task.task.task_id) ? " · draft kept" : ""}</button> : null}
+            {createReason ? <p className="supervisor-disabled-reason" id={`${id}-create`}>{createReason}</p> : null}
+          </> : null}
+          {!task && steps && onResumeSourceDraft ? <>
+            {scope.edits.has(steps.scope.taskId) ? <button type="button" disabled={busy} onClick={() => onResumeSourceDraft(steps.scope.taskId, "edit")}>Review kept description draft…</button> : null}
+            {scope.relations.has(steps.scope.taskId) ? <button type="button" disabled={busy} onClick={() => onResumeSourceDraft(steps.scope.taskId, "relations")}>Review kept prerequisite draft…</button> : null}
+            {scope.followUps.has(steps.scope.taskId) ? <button type="button" disabled={busy} onClick={() => onResumeSourceDraft(steps.scope.taskId, "follow_up")}>Review kept follow-up draft…</button> : null}
           </> : null}
           {task && !task.task.checked && (!run || run.stage !== "closed") ? <>
             {supervisor ? <RequestStop key={JSON.stringify([supervisor.run_id, task.task.task_id])} task={task} supervisor={supervisor} scope={scope} changed={changed} busy={busy || !live || !canRequestStop} mutateResult={mutateResult} describedBy={stopReason ? `${id}-stop` : undefined} /> : <button type="button" disabled aria-describedby={`${id}-stop`}>Request stop…</button>}

@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { NativeDeferReason, NativeRefuseReason, NativeStopReceipt, RunRetirement } from "../../src/protocol/generated/v1";
+import type { NativeDeferReason, NativeRefuseReason, NativeStopReceipt, OrchestrationAction, Run, RunRetirement, TaskView } from "../../src/protocol/generated/v1";
 
 // Loaded explicitly with `omp -e`, never installed into the user's OMP config.
 // The run environment is only a binding hint. Native ctx.agent/session evidence
@@ -54,10 +54,13 @@ export function mayAcknowledge(state: WakeState, through: number): boolean {
 }
 
 export function prepareToolAllowed(toolName: string, operation?: unknown): boolean {
-  if (toolName === "cockpit_message") return operation === "show";
-  if (toolName === "cockpit_task") return operation === "list" || operation === "show";
-  if (READ_ONLY_TOOLS[toolName] !== true) return false;
-  return toolName !== "cockpit_inbox" || operation === "list" || operation === "ack";
+  // The same native tools may be surfaced through the functions namespace.
+  // Unknown namespaces and wrapper/eval tools remain fail-closed.
+  const name = toolName.startsWith("functions.") ? toolName.slice("functions.".length) : toolName;
+  if (name === "cockpit_message") return operation === "show";
+  if (name === "cockpit_task") return operation === "list" || operation === "show";
+  if (READ_ONLY_TOOLS[name] !== true) return false;
+  return name !== "cockpit_inbox" || operation === "list" || operation === "ack";
 }
 
 export function reportIdentity(agent: { kind: string; id: string }, kind: string): string[] {
@@ -67,19 +70,116 @@ export function reportIdentity(agent: { kind: string; id: string }, kind: string
   return agent.kind === "main" ? ["--agent-kind", "main"] : ["--agent-kind", "subagent", "--subagent-id", agent.id];
 }
 
-interface Run {
-  session_id: string; run_id: string; root_id: string; parent_run_id: string | null;
-  kind: string; stage: string; bound_omp_session: string | null;
-  setup: { project_workspace_id: string | null } | null;
-  location: { workspace_id: string; session_id: string } | null;
-}
 
-export function requireSupervisorManagement(run: Pick<Run, "run_id" | "root_id" | "parent_run_id" | "kind" | "stage" | "bound_omp_session">, agent: { kind: string }, nativeSession: string): void {
+export function requireSupervisorManagement(run: Omit<Pick<Run, "run_id" | "root_id" | "parent_run_id" | "kind" | "stage" | "bound_omp_session">, "kind" | "stage"> & { kind: string; stage: string }, agent: { kind: string }, nativeSession: string): void {
   if (agent.kind !== "main" || run.parent_run_id !== null || run.run_id !== run.root_id ||
       (run.kind !== "supervisor" && run.kind !== "adopted") || run.stage !== "active" ||
       !nativeSession || run.bound_omp_session !== nativeSession) {
     throw new Error("Only the active bound native main supervisor may manage workers in its own subtree. Worker and internal subagent sessions cannot grant themselves authority.");
   }
+}
+
+export function requireWorkerExecution(run: Run, view: TaskView): void {
+  if (run.kind !== "worker" || run.stage !== "working" || run.close_reason !== null ||
+      !run.task_id || !run.init_receipt || run.init_receipt.kind !== "ready" ||
+      !run.work_plan?.plan_revision || !Array.isArray(run.grants) ||
+      !run.grants.some(grant => grant.scope === "execute" && grant.plan_revision === run.work_plan!.plan_revision) ||
+      view.current_run_id !== run.run_id || view.task.task_id !== run.task_id ||
+      view.task.checked !== false || view.task.diagnostic !== null ||
+      !view.dependencies || !["none", "satisfied"].includes(view.dependencies.state) ||
+      !Array.isArray(view.dependencies.unmet) || view.dependencies.unmet.length !== 0 ||
+      !Array.isArray(view.dependencies.problems)) {
+    throw new Error("Worker execution is not authorized by the current canonical attempt, exact-plan Execute grant and satisfied prerequisites. Reads, questions and reports remain available.");
+  }
+}
+
+export function requireNativeChild(pi: ExtensionAPI, ctx: ExtensionContext, boundMain: string): void {
+  if (ctx.agent.kind === "main") return;
+  if (ctx.agent.kind !== "sub" || !boundMain || typeof pi.pi.AgentRegistry?.global !== "function") {
+    throw new Error("Native child registry evidence is unavailable.");
+  }
+  const registry = pi.pi.AgentRegistry.global();
+  const child = registry.get(ctx.agent.id);
+  const main = registry.get(pi.pi.MAIN_AGENT_ID);
+  if (!child || child.id !== ctx.agent.id || child.kind !== "sub" || !child.session ||
+      child.session.isDisposed || child.status === "aborted" ||
+      child.session.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId() ||
+      !main || main.kind !== "main" || !main.session || main.session.isDisposed ||
+      main.session.sessionManager.getSessionId() !== boundMain) {
+    throw new Error("Native child/main session ownership changed; refusing inherited identity.");
+  }
+}
+
+const taskOperations = ["list", "show", "create", "update", "dependencies_set", "step_add", "step_rename", "step_set_checked", "step_move", "step_remove", "steps_adopt"] as const;
+type TaskPayload<K extends OrchestrationAction["action"]> = Omit<Extract<OrchestrationAction, { action: K }>, "action" | "root_id">;
+type TaskFields = Partial<
+  TaskPayload<"task_create"> & TaskPayload<"task_update"> & Omit<TaskPayload<"task_dependencies_set">, "expected_doc_revision"> &
+  TaskPayload<"task_step_add"> & TaskPayload<"task_step_set_checked"> & TaskPayload<"task_steps_adopt">
+>;
+export type TaskToolParams = TaskFields & { operation: typeof taskOperations[number] };
+
+export function taskArgs(params: TaskToolParams): string[] {
+  const fields: Record<TaskToolParams["operation"], string[]> = {
+    list: [], show: ["task_id"],
+    create: ["task_id", "title", "description", "depends_on", "follow_up_of", "expected_doc_revision", "source_revision"],
+    update: ["task_id", "expected_task_revision", "title", "description"],
+    dependencies_set: ["task_id", "expected_task_revision", "expected_doc_revision", "depends_on"],
+    step_add: ["task_id", "expected_task_revision", "step_id", "parent_step_id", "before_step_id", "title"],
+    step_rename: ["task_id", "expected_task_revision", "step_id", "title"],
+    step_set_checked: ["task_id", "expected_task_revision", "step_id", "checked", "scope"],
+    step_move: ["task_id", "expected_task_revision", "step_id", "parent_step_id", "before_step_id"],
+    step_remove: ["task_id", "expected_task_revision", "step_id"],
+    steps_adopt: ["task_id", "expected_task_revision", "mapping"],
+  };
+  const allowed = fields[params.operation];
+  if (!allowed || Object.keys(params).some(key => key !== "operation" && !allowed.includes(key))) {
+    throw new Error("Unsupported task fields. Raw body is read-only; use description and the explicit relationship/checklist operations.");
+  }
+  const required = (field: keyof TaskToolParams): string => {
+    const value = params[field];
+    if (typeof value !== "string" || !value.trim()) throw new Error(`${params.operation} requires ${field}.`);
+    return value;
+  };
+  const args = ["task", params.operation.replaceAll("_", "-")];
+  if (params.operation === "list") return args;
+  const taskId = required("task_id");
+  if (params.operation === "create") {
+    args.push("--task-id", taskId, "--title", required("title"));
+    if (typeof params.description !== "string") throw new Error("create requires description (which may be empty).");
+  } else args.push(taskId);
+  if (params.operation !== "create" && params.operation !== "show") {
+    args.push("--revision", required("expected_task_revision"));
+  }
+  if (params.operation === "dependencies_set" ||
+      (params.operation === "create" && ((params.depends_on?.length ?? 0) > 0 || params.follow_up_of != null))) {
+    required("expected_doc_revision");
+  }
+  if (params.operation === "create" && params.follow_up_of != null) required("source_revision");
+  if (params.operation.startsWith("step_")) args.push("--step-id", required("step_id"));
+  if (params.operation === "step_add" || params.operation === "step_rename") required("title");
+  if (params.operation === "dependencies_set" && !Array.isArray(params.depends_on)) throw new Error("dependencies_set requires the full depends_on array; [] clears it.");
+  if (params.operation === "step_set_checked") {
+    if (typeof params.checked !== "boolean" || (params.scope !== "leaf" && params.scope !== "subtree")) throw new Error("step_set_checked requires checked and explicit leaf/subtree scope.");
+    args.push("--checked", String(params.checked), "--scope", params.scope);
+  }
+  if (params.operation === "steps_adopt") {
+    if (!Array.isArray(params.mapping) || params.mapping.length === 0 ||
+        !params.mapping.every(item => hasFields(item, ["source_offset", "step_id"]) &&
+          Number.isInteger(item.source_offset) && item.source_offset >= 0 && item.source_offset <= 0xffff_ffff &&
+          typeof item.step_id === "string" && item.step_id.trim().length > 0)) {
+      throw new Error("steps_adopt requires exact source_offset/step_id mappings.");
+    }
+    args.push("--mapping", JSON.stringify(params.mapping));
+  }
+  for (const [field, flag] of [
+    ["title", "--title"], ["description", "--description"], ["expected_doc_revision", "--doc-revision"],
+    ["source_revision", "--source-revision"], ["follow_up_of", "--follow-up-of"],
+    ["parent_step_id", "--parent-step-id"], ["before_step_id", "--before-step-id"],
+  ] as const) {
+    if (params[field] != null && !(params.operation === "create" && field === "title")) args.push(flag, params[field]!);
+  }
+  for (const dependency of params.depends_on ?? []) args.push("--depends-on", dependency);
+  return args;
 }
 
 export function delegateArgs(params: {
@@ -126,7 +226,10 @@ export function managementArgs(params: {
   return args;
 }
 
-export function contextSource(run: Pick<Run, "session_id" | "setup" | "location">): { session_id: string; space_id: string } {
+export function contextSource(run: Pick<Run, "session_id"> & {
+  setup: Pick<NonNullable<Run["setup"]>, "project_workspace_id"> | null;
+  location: Pick<NonNullable<Run["location"]>, "session_id" | "workspace_id"> | null;
+}): { session_id: string; space_id: string } {
   const space = run.setup?.project_workspace_id ?? run.location?.workspace_id;
   if (typeof run.session_id !== "string" || !run.session_id.trim() ||
       typeof space !== "string" || !space.trim() || !run.location ||
@@ -486,7 +589,9 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
     const nativeSession = ctx.sessionManager.getSessionId();
     const mainSession = ctx.agent.kind === "main" ? nativeSession : mainSessions.get(runId);
     if (!mainSession) throw new Error("The native main OMP session is not bound; refusing inherited subagent identity.");
-    return ["--omp-session", nativeSession, "--omp-main-session", mainSession, ...reportIdentity(ctx.agent, "progress")];
+    requireNativeChild(pi, ctx, mainSession);
+    return ["--omp-session", nativeSession, "--omp-main-session", mainSession,
+      "--omp-pid", String(process.pid), ...reportIdentity(ctx.agent, "progress")];
   };
   const call = async <T>(ctx: ExtensionContext, args: string[], signal?: AbortSignal, timeout = 35_000): Promise<T> => {
     const routing: string[] = [];
@@ -515,7 +620,7 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
       readiness: retirement => readRetirementReadiness(pi, ctx, mainSessions.get(runId) ?? "", retirement),
       active: () => !signal.aborted && ctx.sessionManager.getSessionId() === session && mainSessions.get(runId) === session,
       receipt: async (retirement, outcome) => {
-        const args = ["run", "retirement-receipt", "--retirement", retirement.retirement_id, "--omp-pid", String(process.pid)];
+        const args = ["run", "retirement-receipt", "--retirement", retirement.retirement_id];
         if (outcome.outcome === "shutdown_requested") args.push("--shutdown-requested");
         else if (outcome.outcome === "deferred") args.push("--deferred", outcome.reason);
         else args.push("--refused", outcome.text, "--refuse-reason", outcome.reason);
@@ -524,11 +629,16 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
       shutdown: () => ctx.shutdown(),
     });
   };
-  const workAllowed = async (ctx: ExtensionContext, signal?: AbortSignal) => {
+  const workerAllowed = async (ctx: ExtensionContext, fresh: Run, signal?: AbortSignal) => {
+    if (!fresh.task_id) throw new Error("Worker has no canonical task.");
+    const view = await call<TaskView>(ctx, ["task", "show", fresh.task_id], signal);
+    requireWorkerExecution(fresh, view);
+  };
+  const workAllowed = async (ctx: ExtensionContext, signal?: AbortSignal): Promise<Run> => {
     const fresh = await refresh(ctx, signal);
-    if (fresh.kind === "worker" && fresh.stage !== "working") throw new Error("Execution is not authorized. Prepare permits bounded read-only initialization and a ready receipt; wait for the supervisor's exact work-plan execute grant.");
-    if (fresh.stage === "closed" || fresh.stage === "reported") throw new Error(`This run is ${fresh.stage}; no task mutations are authorized.`);
-    if (fresh.kind !== "worker" && fresh.stage !== "active") throw new Error("The supervisor is not active yet. Pull the inbox without waiting; its current brief arrives after verified startup.");
+    if (fresh.kind === "worker") await workerAllowed(ctx, fresh, signal);
+    else if (fresh.stage !== "active") throw new Error("The supervisor is not active; no task mutations are authorized.");
+    return fresh;
   };
   const enqueueWake = async (ctx: ExtensionContext) => {
     if (retirementOnly || state.queued || state.pendingThrough === 0 || ctx.agent.kind !== "main") return;
@@ -555,7 +665,7 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
       try {
         const args = ["inbox", "wait", "--after", String(state.seen), "--timeout", "30"];
         if (ctx.agent.kind === "main") {
-          args.push("--with-retirement", "--omp-pid", String(process.pid));
+          args.push("--with-retirement");
           if (retirementToken !== undefined) args.push("--after-retirement", retirementToken);
         }
         const response = await call<unknown>(ctx, args, signal);
@@ -726,23 +836,33 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "cockpit_task", label: "Cockpit task", loadMode: "essential", approval: "write",
-    description: "Inspect, create or update canonical Markdown tasks in this run's own root; never a copied board/card. Show includes the actual body and current task_revision. Updates require the current revision. Successful worker results remain unchecked until the supervisor reviews and accepts them with that exact task revision.",
-    parameters: z.object({ operation: z.enum(["list", "show", "create", "update"]), task_id: z.string().optional(), title: z.string().optional(), body: z.string().optional(), revision: z.string().optional() }),
+    description: "Read or mutate canonical tasks in this run's own root. Raw body is read-only; update description without replacing checklist/relationship metadata. Create requires your stable task_id UUID; step_add and steps_adopt require stable step UUIDs. Retain IDs and inspect after unknown outcomes; never automatically recreate/retry. Mutations require full expected_task_revision; dependencies_set also requires expected_doc_revision and the complete depends_on array. Relationship creation requires expected_doc_revision; follow-ups also require source_revision. Only the active native main root may create relationships or edit prerequisites. Checklist checking requires explicit leaf/subtree scope; acceptance remains the supervisor's separate review.",
+    parameters: z.object({
+      operation: z.enum(taskOperations), task_id: z.string().optional(),
+      title: z.string().optional(), description: z.string().optional(),
+      expected_task_revision: z.string().optional(), expected_doc_revision: z.string().nullable().optional(),
+      source_revision: z.string().nullable().optional(), depends_on: z.array(z.string()).optional(),
+      follow_up_of: z.string().nullable().optional(), step_id: z.string().optional(),
+      parent_step_id: z.string().nullable().optional(), before_step_id: z.string().nullable().optional(),
+      checked: z.boolean().optional(), scope: z.enum(["leaf", "subtree"]).optional(),
+      mapping: z.array(z.object({ source_offset: z.number().int().min(0).max(0xffff_ffff), step_id: z.string() }).strict()).optional(),
+    }).strict(),
     async execute(_id, params, signal, _update, ctx) {
-      if (params.operation === "list") return resultText(await call(ctx, ["task", "list"], signal));
-      if (params.operation === "show") {
-        if (!params.task_id) throw new Error("Task show requires task_id.");
-        return resultText(await call(ctx, ["task", "show", params.task_id], signal));
+      const args = taskArgs(params);
+      if (params.operation !== "list" && params.operation !== "show") {
+        const fresh = await workAllowed(ctx, signal);
+        if (params.operation === "dependencies_set" ||
+            (params.operation === "create" && ((params.depends_on?.length ?? 0) > 0 || params.follow_up_of != null))) {
+          requireSupervisorManagement(fresh, ctx.agent, ctx.sessionManager.getSessionId());
+        }
       }
-      await workAllowed(ctx, signal);
-      const args = ["task", params.operation];
-      if (params.operation === "update") {
-        if (!params.task_id || !params.revision) throw new Error("Task update requires task_id and revision.");
-        args.push(params.task_id, "--revision", params.revision);
-      } else if (!params.title?.trim()) throw new Error("Task create requires a title.");
-      if (params.title !== undefined) args.push("--title", params.title);
-      if (params.body !== undefined) args.push("--body", params.body);
-      return resultText(await call(ctx, args, signal));
+      try { return resultText(await call(ctx, args, signal)); }
+      catch (error) {
+        if (params.operation === "create" || params.operation === "step_add" || params.operation === "steps_adopt") {
+          throw new Error(`${errorText(error)} Retain task_id=${params.task_id}, step_id=${params.step_id ?? "n/a"}, mapping=${JSON.stringify(params.mapping ?? [])}. Inspect the canonical task before deciding whether to retry; do not generate replacement IDs.`);
+        }
+        throw error;
+      }
     },
   });
 
@@ -865,11 +985,10 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
       // Fresh per tool, not a cached before-turn stage: revocation, send-back and
       // supervisor grants must be observed even during a long provider turn.
       const fresh = await refresh(ctx);
-      if (fresh.stage === "closed") return { block: true, reason: "Cockpit run is closed." };
-      if (fresh.kind === "worker" && fresh.stage !== "working") {
-        const input = event.input as { operation?: unknown };
-        if (!prepareToolAllowed(event.toolName, input?.operation)) return { block: true, reason: "Cockpit prepare policy: read-only tools and inbox/report only until the supervisor's separate exact-plan execution grant. Shell/eval, edits, writes, delegation and external mutations are blocked. This is accident prevention, not an OS sandbox." };
-      }
+      const input = event.input as { operation?: unknown };
+      const readOnly = prepareToolAllowed(event.toolName, input?.operation);
+      if (fresh.kind === "worker" && !readOnly) await workerAllowed(ctx, fresh);
+      else if (fresh.stage === "closed" && !readOnly) return { block: true, reason: "Cockpit run is closed; only reads and reports remain available." };
     } catch (error) {
       return { block: true, reason: `Cannot verify Cockpit authorization: ${errorText(error)}` };
     }
@@ -892,7 +1011,7 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
         // Binding is idempotent for this exact session/PID. A completed native
         // switch uses the same path; Cockpit verifies any owned-process rollover.
         // Each CLI attempt is bounded; supersession cancels it and its backoff.
-        await call(ctx, ["run", "bind-session", "--omp-pid", String(process.pid)], signal);
+        await call(ctx, ["run", "bind-session"], signal);
         if (signal.aborted || ctx.sessionManager.getSessionId() !== session || mainSessions.get(runId) !== session) return;
         retirementHandler = bindRetirementHandler(ctx, signal);
         void wakeLoop(ctx, signal, retirementHandler);

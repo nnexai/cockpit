@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { NativeStopReceipt, RunRetirement } from "../../src/protocol/generated/v1";
-import cockpitOrchestration, { contextPage, contextSource, createRetirementHandler, decodeControl, delegateArgs, managementArgs, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseMainWaitRead, parseWakeSummary, prepareToolAllowed, readRetirementReadiness, recoverWake, reportIdentity, requireSupervisorManagement, retirementReadiness, type RetirementReadinessInput, type MainWaitRead } from "./cockpit-orchestration";
+import type { NativeStopReceipt, Run, RunRetirement, TaskView } from "../../src/protocol/generated/v1";
+import cockpitOrchestration, { contextPage, contextSource, createRetirementHandler, decodeControl, delegateArgs, managementArgs, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseMainWaitRead, parseWakeSummary, prepareToolAllowed, readRetirementReadiness, recoverWake, reportIdentity, requireNativeChild, requireSupervisorManagement, requireWorkerExecution, retirementReadiness, taskArgs, type TaskToolParams, type RetirementReadinessInput, type MainWaitRead } from "./cockpit-orchestration";
 
 describe("durable inbox wake bookkeeping", () => {
   it("coalesces arrivals without implying a read or acknowledgement", () => {
@@ -69,6 +69,113 @@ describe("native identity and bounded preparation", () => {
     for (const operation of ["prepare", "execute", "accept", "send_back", "cancel", "reconcile", "retry_launch"]) expect(prepareToolAllowed("cockpit_manage", operation)).toBe(false);
     for (const operation of ["message", "annotate", "list", undefined]) expect(prepareToolAllowed("cockpit_message", operation)).toBe(false);
     for (const operation of ["create", "update", undefined]) expect(prepareToolAllowed("cockpit_task", operation)).toBe(false);
+  });
+});
+
+describe("canonical task mutation serialization", () => {
+  const task_id = "11111111-1111-4111-8111-111111111111";
+  const step_id = "22222222-2222-4222-8222-222222222222";
+  const expected_task_revision = "full-item";
+
+  it("retains caller UUID and exact create fences and sends description without a writable body", () => {
+    const params: TaskToolParams = { operation: "create", task_id, title: "Follow-up", description: "Prose\nonly",
+      depends_on: ["prerequisite"], follow_up_of: "source", expected_doc_revision: "document", source_revision: "source-item" };
+    expect(taskArgs(params)).toEqual(["task", "create", "--task-id", task_id, "--title", "Follow-up",
+      "--description", "Prose\nonly", "--doc-revision", "document", "--source-revision", "source-item",
+      "--follow-up-of", "source", "--depends-on", "prerequisite"]);
+    expect(taskArgs(params)).toEqual(taskArgs(params));
+    expect(() => taskArgs({ ...params, task_id: undefined })).toThrow("task_id");
+    expect(() => taskArgs({ ...params, expected_doc_revision: undefined })).toThrow("expected_doc_revision");
+    expect(() => taskArgs({ ...params, source_revision: undefined })).toThrow("source_revision");
+    expect(() => taskArgs({ ...params, body: "overwrite" } as TaskToolParams)).toThrow("body is read-only");
+  });
+
+  it("requires whole-item and document fences, preserving empty descriptions and dependency clearing", () => {
+    expect(taskArgs({ operation: "update", task_id, expected_task_revision, description: "" }))
+      .toEqual(["task", "update", task_id, "--revision", expected_task_revision, "--description", ""]);
+    expect(taskArgs({ operation: "dependencies_set", task_id, expected_task_revision, expected_doc_revision: "doc", depends_on: [] }))
+      .toEqual(["task", "dependencies-set", task_id, "--revision", expected_task_revision, "--doc-revision", "doc"]);
+    expect(() => taskArgs({ operation: "update", task_id, description: "new" })).toThrow("expected_task_revision");
+    expect(() => taskArgs({ operation: "update", task_id, expected_task_revision, revision: "old" } as TaskToolParams)).toThrow("Unsupported task fields");
+    expect(() => taskArgs({ operation: "dependencies_set", task_id, expected_task_revision, expected_doc_revision: "doc" })).toThrow("full depends_on");
+  });
+
+  it("exposes all six checklist operations with stable IDs, explicit scope and exact adoption offsets", () => {
+    const base = { task_id, expected_task_revision, step_id };
+    expect(taskArgs({ ...base, operation: "step_add", parent_step_id: "parent", before_step_id: "next", title: "Step" }))
+      .toEqual(["task", "step-add", task_id, "--revision", expected_task_revision, "--step-id", step_id, "--title", "Step", "--parent-step-id", "parent", "--before-step-id", "next"]);
+    expect(taskArgs({ ...base, operation: "step_rename", title: "Renamed" }))
+      .toContain("step-rename");
+    for (const scope of ["leaf", "subtree"] as const) expect(taskArgs({ ...base, operation: "step_set_checked", checked: false, scope }))
+      .toEqual(["task", "step-set-checked", task_id, "--revision", expected_task_revision, "--step-id", step_id, "--checked", "false", "--scope", scope]);
+    expect(() => taskArgs({ ...base, operation: "step_set_checked", checked: true })).toThrow("explicit");
+    expect(taskArgs({ ...base, operation: "step_move", parent_step_id: null, before_step_id: "next" }))
+      .toEqual(["task", "step-move", task_id, "--revision", expected_task_revision, "--step-id", step_id, "--before-step-id", "next"]);
+    expect(taskArgs({ ...base, operation: "step_remove" }))
+      .toEqual(["task", "step-remove", task_id, "--revision", expected_task_revision, "--step-id", step_id]);
+    const mapping = [{ source_offset: 57, step_id }];
+    expect(taskArgs({ operation: "steps_adopt", task_id, expected_task_revision, mapping }))
+      .toEqual(["task", "steps-adopt", task_id, "--revision", expected_task_revision, "--mapping", JSON.stringify(mapping)]);
+    for (const source_offset of [-1, 0.5, 0x1_0000_0000]) expect(() => taskArgs({
+      operation: "steps_adopt", task_id, expected_task_revision, mapping: [{ source_offset, step_id }],
+    })).toThrow("source_offset");
+  });
+});
+
+describe("fresh canonical worker execution eligibility", () => {
+  const run = { run_id: "worker", task_id: "task", kind: "worker", stage: "working", close_reason: null,
+    init_receipt: { kind: "ready" }, work_plan: { plan_revision: "exact-plan" },
+    grants: [{ scope: "execute", plan_revision: "exact-plan" }] } as unknown as Run;
+  const view = { current_run_id: "worker", task: { task_id: "task", checked: false, diagnostic: null },
+    dependencies: { state: "none", unmet: [], problems: [] } } as unknown as TaskView;
+
+  it("allows healthy independent work and accepted canonical prerequisites, not a Result shortcut", () => {
+    expect(() => requireWorkerExecution(run, view)).not.toThrow();
+    expect(() => requireWorkerExecution(run, { ...view, dependencies: { state: "satisfied", unmet: [], problems: [] } })).not.toThrow();
+    for (const state of ["blocked", "invalid"] as const) expect(() => requireWorkerExecution({
+      ...run, result: { kind: "result", outcome: "succeeded" } as Run["result"],
+    }, { ...view, dependencies: { state, unmet: [], problems: [] } })).toThrow("prerequisites");
+  });
+
+  it("refuses revoked/superseded attempts, missing initialization, stale Execute and accepted or diagnosed tasks", () => {
+    for (const change of [
+      { stage: "ready" }, { stage: "reported" }, { stage: "closed" }, { task_id: null },
+      { init_receipt: null }, { work_plan: null }, { grants: [] },
+      { grants: [{ scope: "execute", plan_revision: "old-plan" }] },
+    ]) expect(() => requireWorkerExecution({ ...run, ...change } as Run, view)).toThrow("not authorized");
+    for (const change of [
+      { current_run_id: "new-attempt" }, { current_run_id: null },
+      { task: { ...view.task, checked: true } }, { task: { ...view.task, diagnostic: "duplicate UUID" } },
+    ]) expect(() => requireWorkerExecution(run, { ...view, ...change })).toThrow("not authorized");
+    expect(prepareToolAllowed("functions.cockpit_task", "show")).toBe(true);
+    expect(prepareToolAllowed("functions.cockpit_task", "step_add")).toBe(false);
+    for (const tool of ["functions.eval", "functions.write", "tools.eval", "multi_tool_use.parallel"]) expect(prepareToolAllowed(tool)).toBe(false);
+    expect(prepareToolAllowed("functions.cockpit_report", "result")).toBe(true);
+  });
+});
+
+describe("authenticated native child registry evidence", () => {
+  it("uses the actual live child session and private main binding rather than supplied labels/status", () => {
+    const child = { id: "Child", kind: "sub", status: "running", session: {
+      isDisposed: false, sessionManager: { getSessionId: () => "child-native" },
+    } };
+    const main = { id: "Main", kind: "main", session: {
+      isDisposed: false, sessionManager: { getSessionId: () => "main-native" },
+    } };
+    const registry = { get: (id: string) => id === "Child" ? child : id === "Main" ? main : undefined };
+    const pi = { pi: { MAIN_AGENT_ID: "Main", AgentRegistry: { global: () => registry } } } as unknown as ExtensionAPI;
+    const ctx = { agent: { id: "Child", kind: "sub" }, sessionManager: { getSessionId: () => "child-native" } } as unknown as ExtensionContext;
+    expect(() => requireNativeChild(pi, ctx, "main-native")).not.toThrow();
+    expect(() => requireNativeChild(pi, ctx, "parent-supplied")).toThrow("ownership changed");
+    expect(() => requireNativeChild(pi, { ...ctx, agent: { ...ctx.agent, id: "Sibling" } }, "main-native")).toThrow("ownership changed");
+    child.session.isDisposed = true;
+    expect(() => requireNativeChild(pi, ctx, "main-native")).toThrow("ownership changed");
+    child.session.isDisposed = false;
+    child.session.sessionManager.getSessionId = () => "replacement-child";
+    expect(() => requireNativeChild(pi, ctx, "main-native")).toThrow("ownership changed");
+    child.session.sessionManager.getSessionId = () => "child-native";
+    main.session.isDisposed = true;
+    expect(() => requireNativeChild(pi, ctx, "main-native")).toThrow("ownership changed");
   });
 });
 
@@ -437,7 +544,10 @@ describe("native main-only lifecycle hooks", () => {
 
   function extensionHost() {
     const hooks = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
-    const schema = { optional() { return schema; }, describe() { return schema; } };
+    const schema = {
+      optional() { return schema; }, nullable() { return schema; }, describe() { return schema; },
+      strict() { return schema; }, int() { return schema; }, min() { return schema; }, max() { return schema; },
+    };
     const holdObservation = (signal?: AbortSignal) => {
       const pending = Promise.withResolvers<MainWaitRead>();
       signal?.addEventListener("abort", () => pending.resolve({
@@ -460,10 +570,10 @@ describe("native main-only lifecycle hooks", () => {
     const mainSession = { sessionManager, isDisposed: false, hasAdmittedSubmission: false, queuedMessageCount: 0, hasPendingAsyncWork: () => false };
     const main = { id: "Main", kind: "main", status: "idle", session: mainSession };
     const pi = {
-      zod: { object: () => schema, enum: () => schema, number: () => schema, string: () => schema },
+      zod: { object: () => schema, enum: () => schema, number: () => schema, string: () => schema, boolean: () => schema, array: () => schema },
       registerTool: vi.fn(), appendEntry: vi.fn(), sendUserMessage: vi.fn(), exec,
       on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { hooks.set(event, handler); },
-      pi: { AgentRegistry: { global: () => ({ get: () => main, list: () => [main] }) } },
+      pi: { MAIN_AGENT_ID: "Main", AgentRegistry: { global: () => ({ get: (id: string) => id === "Main" ? main : undefined, list: () => [main] }) } },
     } as unknown as ExtensionAPI;
     const shutdown = vi.fn();
     const ctx = {
@@ -473,8 +583,76 @@ describe("native main-only lifecycle hooks", () => {
       setTimeout: vi.fn(() => 0), clearTimer: vi.fn(),
     } as unknown as ExtensionContext;
     cockpitOrchestration(pi);
-    return { hooks, exec, observations, holdObservation, ctx, pi, shutdown, sessionManager };
+    return { hooks, exec, observations, holdObservation, ctx, pi, shutdown, sessionManager, main };
   }
+
+  it("rechecks the canonical attempt and prerequisites for every mutation while keeping recovery reports/reads callable", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "worker-gate");
+    try {
+      const h = extensionHost();
+      const run = { run_id: "worker-gate", task_id: "task", root_id: "root", kind: "worker", stage: "working", close_reason: null,
+        init_receipt: { kind: "ready" }, work_plan: { plan_revision: "plan" }, grants: [{ scope: "execute", plan_revision: "plan" }] };
+      let view = { current_run_id: "worker-gate", task: { task_id: "task", checked: false, diagnostic: null },
+        dependencies: { state: "none", unmet: [], problems: [] as TaskView["dependencies"]["problems"] } };
+      h.exec.mockImplementation(async (_cli, args) => ({ code: 0, killed: false, stderr: "",
+        stdout: JSON.stringify(args[0] === "run" ? run : view) }));
+      const gate = h.hooks.get("tool_call")!;
+      expect(await gate({ toolName: "edit", input: {} }, h.ctx)).toBeUndefined();
+      view = { ...view, dependencies: { state: "none", unmet: [], problems: [
+        { code: "task_follow_up_source_unavailable", message: "The follow-up source is no longer available." },
+      ] } };
+      expect(await gate({ toolName: "edit", input: {} }, h.ctx)).toBeUndefined();
+      view = { ...view, current_run_id: "replacement-attempt" };
+      for (const toolName of ["edit", "functions.edit", "bash", "functions.eval", "task", "cockpit_delegate", "multi_tool_use.parallel"]) {
+        expect(await gate({ toolName, input: {} }, h.ctx)).toMatchObject({ block: true });
+      }
+      view = { ...view, current_run_id: "worker-gate", dependencies: { state: "blocked", unmet: [], problems: [] } };
+      expect(await gate({ toolName: "cockpit_task", input: { operation: "step_set_checked" } }, h.ctx)).toMatchObject({ block: true });
+      run.stage = "reported";
+      for (const [toolName, operation] of [
+        ["read", undefined], ["functions.read", undefined], ["cockpit_report", "result"],
+        ["cockpit_report", "needs-input"], ["cockpit_task", "show"], ["cockpit_message", "show"],
+      ]) expect(await gate({ toolName, input: { operation } }, h.ctx)).toBeUndefined();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("registers task mutations and retains caller UUIDs after an unknown create outcome without automatic retry", async () => {
+    vi.stubEnv("COCKPIT_RUN_ID", "task-root");
+    try {
+      const h = extensionHost();
+      type TaskTool = { name: string; execute: (id: string, params: TaskToolParams, signal: undefined, update: undefined, ctx: ExtensionContext) => Promise<unknown> };
+      const tool = vi.mocked(h.pi.registerTool).mock.calls.map(([tool]) => tool as unknown as TaskTool)
+        .find(tool => tool.name === "cockpit_task")!;
+      const root = { run_id: "task-root", root_id: "task-root", parent_run_id: null, kind: "supervisor", stage: "active", bound_omp_session: "native-main" };
+      h.exec.mockImplementation(async (_cli, args) => {
+        if (args[0] === "run") return { code: 0, killed: false, stderr: "", stdout: JSON.stringify(root) };
+        throw new Error("transport disconnected after submit");
+      });
+      const params: TaskToolParams = { operation: "create", task_id: "11111111-1111-4111-8111-111111111111", title: "Task", description: "" };
+      await expect(tool.execute("first", params, undefined, undefined, h.ctx)).rejects.toThrow(`Retain task_id=${params.task_id}`);
+      expect(h.exec.mock.calls.filter(([, args]) => args[0] === "task" && args[1] === "create")).toHaveLength(1);
+      await expect(tool.execute("explicit-retry", params, undefined, undefined, h.ctx)).rejects.toThrow(params.task_id!);
+      for (const [, args] of h.exec.mock.calls.filter(([, args]) => args[0] === "task")) {
+        expect(args).toEqual(expect.arrayContaining(["--task-id", params.task_id, "--description", ""]));
+        expect(args).not.toContain("--body");
+      }
+      const before = h.exec.mock.calls.length;
+      await expect(tool.execute("old-body", { ...params, body: "replacement" } as TaskToolParams, undefined, undefined, h.ctx))
+        .rejects.toThrow("body is read-only");
+      expect(h.exec.mock.calls).toHaveLength(before);
+      h.exec.mockResolvedValueOnce({ code: 0, killed: false, stderr: "", stdout: JSON.stringify({ ...root, kind: "worker",
+        stage: "working", task_id: "task", close_reason: null, init_receipt: { kind: "ready" },
+        work_plan: { plan_revision: "plan" }, grants: [{ scope: "execute", plan_revision: "plan" }] }) })
+        .mockResolvedValueOnce({ code: 0, killed: false, stderr: "", stdout: JSON.stringify({
+          current_run_id: "task-root", task: { task_id: "task", checked: false, diagnostic: null },
+          dependencies: { state: "none", unmet: [], problems: [] },
+        }) });
+      await expect(tool.execute("worker-relations", { operation: "dependencies_set", task_id: "task",
+        expected_task_revision: "item", expected_doc_revision: "doc", depends_on: [] }, undefined, undefined, h.ctx))
+        .rejects.toThrow("native main supervisor");
+      expect(h.exec.mock.calls.filter(([, args]) => args[1] === "dependencies-set")).toHaveLength(0);
+    } finally { vi.unstubAllEnvs(); }
+  });
 
   it("permits read-only context during initialization but fails closed after a context binding change", async () => {
     vi.stubEnv("COCKPIT_RUN_ID", "context-worker");
@@ -863,6 +1041,10 @@ describe("native main-only lifecycle hooks", () => {
       const childHost = extensionHost();
       childHost.sessionManager.getSessionId = () => "switched-child";
       const child = { ...childHost.ctx, agent: { kind: "sub" as const, id: "native-child", parentId: "Main" } };
+      const childRef = { id: "native-child", kind: "sub", status: "running", session: { sessionManager: childHost.sessionManager, isDisposed: false } };
+      Object.assign(childHost.pi.pi.AgentRegistry, { global: () => ({
+        get: (id: string) => id === "Main" ? h.main : id === "native-child" ? childRef : undefined,
+      }) });
       await childHost.hooks.get("session_start")!({}, child);
       await childHost.hooks.get("session_switch")!({ reason: "fork" }, child);
       expect(childHost.exec).not.toHaveBeenCalled();

@@ -802,22 +802,22 @@ fn caller_location_matches(
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct BodyArgs {
-    /// Literal UTF-8 body (at most 16 KiB).
-    #[arg(long, conflicts_with_all = ["body_file", "stdin"])]
-    body: Option<String>,
-    /// Read UTF-8 body from a file (at most 16 KiB).
+pub(crate) struct DescriptionArgs {
+    /// Literal UTF-8 prose (at most 16 KiB); reserved metadata/checklists are not writable.
+    #[arg(long, conflicts_with_all = ["description_file", "stdin"])]
+    description: Option<String>,
+    /// Read UTF-8 prose from a file (at most 16 KiB).
     #[arg(long, conflicts_with = "stdin")]
-    body_file: Option<PathBuf>,
-    /// Read UTF-8 body from stdin (at most 16 KiB).
+    description_file: Option<PathBuf>,
+    /// Read UTF-8 prose from stdin (at most 16 KiB).
     #[arg(long)]
     stdin: bool,
 }
-impl BodyArgs {
+impl DescriptionArgs {
     fn read(self) -> Result<Option<String>, CliError> {
-        match self.body {
-            Some(body) => bounded(body).map(Some),
-            None => read_input(self.body_file, self.stdin),
+        match self.description {
+            Some(description) => bounded(description).map(Some),
+            None => read_input(self.description_file, self.stdin),
         }
     }
 }
@@ -880,20 +880,57 @@ pub(crate) struct TaskArgs {
     #[command(subcommand)]
     command: TaskCommand,
 }
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum StepScopeArg {
+    Leaf,
+    Subtree,
+}
+impl From<StepScopeArg> for TaskStepScope {
+    fn from(value: StepScopeArg) -> Self {
+        match value {
+            StepScopeArg::Leaf => Self::Leaf,
+            StepScopeArg::Subtree => Self::Subtree,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct StepTaskArgs {
+    task: String,
+    /// Exact task_revision from task show, including prose, metadata and all steps.
+    #[arg(long)]
+    revision: String,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum TaskCommand {
-    /// List canonical tasks and their derived board lanes.
+    /// List canonical tasks, dependency state, step progress and exact document revision.
     List,
-    /// Show a canonical task including its body and revision.
+    /// Read description, read-only body, diagnostics, step IDs/offsets, relationships and revision.
     Show { task: String },
-    /// Create a task in the caller run's root; does not start a worker.
+    /// Create without starting a worker; retain the task ID and inspect before any retry.
     Create {
+        /// Stable caller UUID; generated once when omitted and reported before submission.
+        #[arg(long)]
+        task_id: Option<String>,
         #[arg(long)]
         title: String,
         #[command(flatten)]
-        body: BodyArgs,
+        description: DescriptionArgs,
+        /// Prerequisite UUID; repeat for each prerequisite (requires exact document revision).
+        #[arg(long, requires = "doc_revision")]
+        depends_on: Vec<String>,
+        /// Follow-up source UUID; provenance only, not an implicit prerequisite.
+        #[arg(long, requires_all = ["doc_revision", "source_revision"])]
+        follow_up_of: Option<String>,
+        /// Exact root document revision from task list --json.
+        #[arg(long)]
+        doc_revision: Option<String>,
+        /// Exact follow-up source task revision from task show.
+        #[arg(long, requires = "follow_up_of")]
+        source_revision: Option<String>,
     },
-    /// Update canonical Markdown with an exact task revision fence.
+    /// Update title/prose only with an exact task fence; preserves metadata and steps.
     Update {
         task: String,
         #[arg(long)]
@@ -901,20 +938,172 @@ pub(crate) enum TaskCommand {
         #[arg(long)]
         title: Option<String>,
         #[command(flatten)]
-        body: BodyArgs,
+        description: DescriptionArgs,
     },
-    /// Assign stable IDs to unmarked checklist items with a document revision fence.
+    /// Replace ALL prerequisites; omit --depends-on to clear. Live work permits removal only.
+    DependenciesSet {
+        #[command(flatten)]
+        task: StepTaskArgs,
+        #[arg(long)]
+        doc_revision: String,
+        #[arg(long)]
+        depends_on: Vec<String>,
+    },
+    /// Add a stable-ID step; omitted parent means top level, omitted before means append.
+    StepAdd {
+        #[command(flatten)]
+        task: StepTaskArgs,
+        #[arg(long)]
+        step_id: String,
+        #[arg(long)]
+        parent_step_id: Option<String>,
+        #[arg(long)]
+        before_step_id: Option<String>,
+        #[arg(long)]
+        title: String,
+    },
+    /// Rename a step by its stable UUID.
+    StepRename {
+        #[command(flatten)]
+        task: StepTaskArgs,
+        #[arg(long)]
+        step_id: String,
+        #[arg(long)]
+        title: String,
+    },
+    /// Set checked state explicitly; subtree scope updates every descendant atomically.
+    StepSetChecked {
+        #[command(flatten)]
+        task: StepTaskArgs,
+        #[arg(long)]
+        step_id: String,
+        #[arg(long, action = clap::ArgAction::Set, required = true)]
+        checked: bool,
+        #[arg(long, value_enum)]
+        scope: StepScopeArg,
+    },
+    /// Move a step with its subtree; omitted parent means top level, before means sibling.
+    StepMove {
+        #[command(flatten)]
+        task: StepTaskArgs,
+        #[arg(long)]
+        step_id: String,
+        #[arg(long)]
+        parent_step_id: Option<String>,
+        #[arg(long)]
+        before_step_id: Option<String>,
+    },
+    /// Remove a stable-ID step and its subtree atomically.
+    StepRemove {
+        #[command(flatten)]
+        task: StepTaskArgs,
+        #[arg(long)]
+        step_id: String,
+    },
+    /// Adopt unmarked steps atomically with offsets from the same fenced task show.
+    StepsAdopt {
+        #[command(flatten)]
+        task: StepTaskArgs,
+        /// JSON array of {"source_offset":123,"step_id":"UUID"}; at most 64 entries.
+        #[arg(long)]
+        mapping: String,
+    },
+    /// Assign stable task IDs to unmarked root items with a document revision fence.
     AssignIds {
         #[arg(long)]
         doc_revision: String,
     },
 }
+
+impl TaskCommand {
+    fn action(self, root_id: String) -> Result<OrchestrationAction, CliError> {
+        Ok(match self {
+            Self::Create {
+                task_id, title, description, depends_on, follow_up_of, doc_revision, source_revision,
+            } => OrchestrationAction::TaskCreate {
+                root_id,
+                task_id: task_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                title,
+                description: description.read()?.unwrap_or_default(),
+                depends_on,
+                follow_up_of,
+                expected_doc_revision: doc_revision,
+                source_revision,
+            },
+            Self::Update { task, revision, title, description } => {
+                let description = description.read()?;
+                if title.is_none() && description.is_none() {
+                    return Err(CliError::usage(
+                        "task update requires --title, --description, --description-file or --stdin",
+                    ));
+                }
+                OrchestrationAction::TaskUpdate {
+                    root_id, task_id: task, expected_task_revision: revision, title, description,
+                }
+            }
+            Self::DependenciesSet { task, doc_revision, depends_on } => {
+                OrchestrationAction::TaskDependenciesSet {
+                    root_id, task_id: task.task, expected_task_revision: task.revision,
+                    expected_doc_revision: doc_revision, depends_on,
+                }
+            }
+            Self::StepAdd { task, step_id, parent_step_id, before_step_id, title } => {
+                OrchestrationAction::TaskStepAdd {
+                    root_id, task_id: task.task, expected_task_revision: task.revision,
+                    step_id, parent_step_id, before_step_id, title,
+                }
+            }
+            Self::StepRename { task, step_id, title } => OrchestrationAction::TaskStepRename {
+                root_id, task_id: task.task, expected_task_revision: task.revision, step_id, title,
+            },
+            Self::StepSetChecked { task, step_id, checked, scope } => {
+                OrchestrationAction::TaskStepSetChecked {
+                    root_id, task_id: task.task, expected_task_revision: task.revision,
+                    step_id, checked, scope: scope.into(),
+                }
+            }
+            Self::StepMove { task, step_id, parent_step_id, before_step_id } => {
+                OrchestrationAction::TaskStepMove {
+                    root_id, task_id: task.task, expected_task_revision: task.revision,
+                    step_id, parent_step_id, before_step_id,
+                }
+            }
+            Self::StepRemove { task, step_id } => OrchestrationAction::TaskStepRemove {
+                root_id, task_id: task.task, expected_task_revision: task.revision, step_id,
+            },
+            Self::StepsAdopt { task, mapping } => {
+                let mapping = bounded(mapping)?;
+                let mapping: Vec<TaskStepAdoption> = serde_json::from_str(&mapping)
+                    .map_err(|error| CliError::usage(format!("invalid adoption mapping: {error}")))?;
+                if mapping.is_empty() || mapping.len() > 64 {
+                    return Err(CliError::usage("adoption mapping requires 1–64 offset/UUID entries"));
+                }
+                OrchestrationAction::TaskStepsAdopt {
+                    root_id, task_id: task.task, expected_task_revision: task.revision, mapping,
+                }
+            }
+            Self::AssignIds { doc_revision } => OrchestrationAction::TasksAssignIds {
+                root_id, expected_doc_revision: doc_revision,
+            },
+            Self::List | Self::Show { .. } => {
+                return Err(CliError::usage("read-only task command has no mutation action"));
+            }
+        })
+    }
+}
+
+fn task_submission_error(error: CliError, task_id: &str) -> CliError {
+    CliError::new(
+        &error.code,
+        format!(
+            "{}; task ID {task_id}. If the outcome is unknown, inspect `task show {task_id}` in the same root before any retry; do not append with a new ID",
+            error.message,
+        ),
+    )
+}
 impl TaskArgs {
     pub async fn run(self) -> Result<(), CliError> {
-        let writing = matches!(
-            &self.command,
-            TaskCommand::Create { .. } | TaskCommand::Update { .. } | TaskCommand::AssignIds { .. }
-        );
+        let writing = !matches!(&self.command, TaskCommand::List | TaskCommand::Show { .. });
         let context = Context::open(&self.common, writing).await?;
         let root = context.task_root(&self.common, writing).await?;
         let action = match self.command {
@@ -929,12 +1118,16 @@ impl TaskArgs {
                 println!("{} (revision {})", board.path, board.doc_revision);
                 for view in board.tasks {
                     println!(
-                        "{}\t[{}] {}\t{:?}\t{}",
+                        "{}\t[{}] {}\t{:?}\t{}\tdependencies={:?}\tsteps={}",
                         view.task.task_id,
                         if view.task.checked { 'x' } else { ' ' },
                         view.task.title,
                         view.lane,
-                        view.task.task_revision
+                        view.task.task_revision,
+                        view.dependencies.state,
+                        view.task.step_progress.as_ref()
+                            .map(|progress| format!("{}/{}", progress.done, progress.total))
+                            .unwrap_or_else(|| "unavailable".into()),
                     );
                 }
                 return Ok(());
@@ -954,37 +1147,19 @@ impl TaskArgs {
                     })?;
                 return emit(&view, self.common.json);
             }
-            TaskCommand::Create { title, body } => OrchestrationAction::TaskCreate {
-                root_id: root,
-                title,
-                body: body.read()?.unwrap_or_default(),
-            },
-            TaskCommand::Update {
-                task,
-                revision,
-                title,
-                body,
-            } => {
-                let body = body.read()?;
-                if title.is_none() && body.is_none() {
-                    return Err(CliError::usage(
-                        "task update requires --title, --body-file or --stdin",
-                    ));
-                }
-                OrchestrationAction::TaskUpdate {
-                    root_id: root,
-                    task_id: task,
-                    expected_task_revision: revision,
-                    title,
-                    body,
-                }
-            }
-            TaskCommand::AssignIds { doc_revision } => OrchestrationAction::TasksAssignIds {
-                root_id: root,
-                expected_doc_revision: doc_revision,
-            },
+            command => command.action(root)?,
         };
-        emit(&context.mutate(action).await?, self.common.json)
+        if let OrchestrationAction::TaskCreate { task_id, .. } = &action {
+            // Emit before submission so even a lost response leaves an inspectable identity.
+            eprintln!("Task ID: {task_id}");
+            let task_id = task_id.clone();
+            let result = context.mutate(action).await
+                .map_err(|error| task_submission_error(error, &task_id))?;
+            emit(&result, self.common.json)
+                .map_err(|error| task_submission_error(error, &task_id))
+        } else {
+            emit(&context.mutate(action).await?, self.common.json)
+        }
     }
 }
 
@@ -2110,6 +2285,185 @@ mod tests {
         Route(RouteArgs),
     }
 
+    fn parsed_task_action(args: &[&str]) -> Result<OrchestrationAction, CliError> {
+        let parsed = TestCli::try_parse_from(
+            ["test", "task"].into_iter().chain(args.iter().copied()),
+        ).map_err(|error| CliError::usage(error.to_string()))?;
+        let TestCommand::Task(args) = parsed.command else { panic!("expected task") };
+        args.command.action("root".into())
+    }
+
+    #[test]
+    fn task_creation_preserves_identity_prose_and_exact_relationship_fences() {
+        let id = "08776d1f-6352-4aad-9c6b-48b2094c49b7";
+        let action = parsed_task_action(&[
+            "create", "--task-id", id, "--title", "Follow up",
+            "--description", "Prose\nwith Unicode λ",
+            "--depends-on", "first", "--depends-on", "second",
+            "--follow-up-of", "source", "--doc-revision", "doc",
+            "--source-revision", "source-rev",
+        ]).unwrap();
+        let encoded = serde_json::to_value(&action).unwrap();
+        assert_eq!(encoded["task_id"], id);
+        assert_eq!(encoded["description"], "Prose\nwith Unicode λ");
+        assert_eq!(encoded["depends_on"], serde_json::json!(["first", "second"]));
+        assert_eq!(encoded["follow_up_of"], "source");
+        assert_eq!(encoded["expected_doc_revision"], "doc");
+        assert_eq!(encoded["source_revision"], "source-rev");
+        assert!(encoded.get("body").is_none());
+
+        let generated = parsed_task_action(&["create", "--title", "Independent"]).unwrap();
+        let encoded = serde_json::to_value(generated).unwrap();
+        let generated_id = encoded["task_id"].as_str().unwrap();
+        assert_eq!(uuid::Uuid::parse_str(generated_id).unwrap().get_version_num(), 4);
+        assert_eq!(encoded["depends_on"], serde_json::json!([]));
+        assert!(encoded["follow_up_of"].is_null());
+        let error = task_submission_error(
+            CliError::new("caller_mismatch", "durable mutation may already be committed"),
+            generated_id,
+        );
+        assert_eq!(error.code, "caller_mismatch");
+        assert!(error.message.contains(&format!("task show {generated_id}")));
+        let supplied_error = task_submission_error(CliError::new("unknown", "lost"), id);
+        assert!(supplied_error.message.contains(&format!("task show {id}")));
+
+        for args in [
+            vec!["create", "--title", "x", "--depends-on", "other"],
+            vec!["create", "--title", "x", "--follow-up-of", "source", "--doc-revision", "doc"],
+            vec!["create", "--title", "x", "--source-revision", "source-rev"],
+        ] {
+            assert!(parsed_task_action(&args).is_err());
+        }
+    }
+
+    #[test]
+    fn task_update_distinguishes_omitted_prose_from_explicit_clear_and_rejects_body() {
+        let cleared = parsed_task_action(&[
+            "update", "task-id", "--revision", "full-rev", "--description", "",
+        ]).unwrap();
+        assert!(matches!(cleared, OrchestrationAction::TaskUpdate {
+            task_id, expected_task_revision, title: None, description: Some(description), ..
+        } if task_id == "task-id" && expected_task_revision == "full-rev" && description.is_empty()));
+        let title_only = parsed_task_action(&[
+            "update", "task-id", "--revision", "rev", "--title", "New",
+        ]).unwrap();
+        assert!(matches!(title_only, OrchestrationAction::TaskUpdate {
+            description: None, title: Some(title), ..
+        } if title == "New"));
+        assert!(parsed_task_action(&["update", "task-id", "--revision", "rev"]).is_err());
+        for command in ["create", "update"] {
+            for legacy in ["--body", "--body-file"] {
+                let mut args = vec![command];
+                if command == "update" {
+                    args.extend(["task-id", "--revision", "rev"]);
+                }
+                args.extend(["--title", "x", legacy, "legacy"]);
+                assert!(parsed_task_action(&args).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn prerequisites_replacement_can_clear_and_requires_both_exact_fences() {
+        let prefix = ["dependencies-set", "task-id", "--revision", "task-rev"];
+        assert!(parsed_task_action(&prefix).is_err());
+        let mut args = prefix.to_vec();
+        args.extend(["--doc-revision", "doc-rev"]);
+        let clear = parsed_task_action(&args).unwrap();
+        assert!(matches!(clear, OrchestrationAction::TaskDependenciesSet {
+            task_id, expected_task_revision, expected_doc_revision, depends_on, ..
+        } if task_id == "task-id" && expected_task_revision == "task-rev"
+            && expected_doc_revision == "doc-rev" && depends_on.is_empty()));
+        args.extend(["--depends-on", "a", "--depends-on", "b"]);
+        let set = parsed_task_action(&args).unwrap();
+        assert!(matches!(set, OrchestrationAction::TaskDependenciesSet {
+            depends_on, ..
+        } if depends_on == ["a", "b"]));
+    }
+
+    #[test]
+    fn checklist_scope_and_destination_are_explicit_without_document_fences() {
+        let check = [
+            "step-set-checked", "task-id", "--revision", "task-rev",
+            "--step-id", "step-id", "--checked", "false",
+        ];
+        assert!(parsed_task_action(&check).is_err());
+        let mut args = check.to_vec();
+        args.extend(["--scope", "subtree"]);
+        let encoded = serde_json::to_value(parsed_task_action(&args).unwrap()).unwrap();
+        assert_eq!(encoded["checked"], false);
+        assert_eq!(encoded["scope"], "subtree");
+        assert_eq!(encoded["expected_task_revision"], "task-rev");
+        assert!(encoded.get("expected_doc_revision").is_none());
+        assert!(parsed_task_action(&[
+            "step-set-checked", "task-id", "--revision", "rev",
+            "--step-id", "step-id", "--scope", "leaf",
+        ]).is_err());
+        let leaf = parsed_task_action(&[
+            "step-set-checked", "task-id", "--revision", "rev",
+            "--step-id", "step-id", "--scope", "leaf", "--checked", "true",
+        ]).unwrap();
+        assert!(matches!(leaf, OrchestrationAction::TaskStepSetChecked {
+            scope: TaskStepScope::Leaf, checked: true, ..
+        }));
+
+        let add = parsed_task_action(&[
+            "step-add", "task-id", "--revision", "rev", "--step-id", "new-id",
+            "--parent-step-id", "parent", "--before-step-id", "sibling", "--title", "New",
+        ]).unwrap();
+        assert!(matches!(add, OrchestrationAction::TaskStepAdd {
+            step_id, parent_step_id: Some(parent), before_step_id: Some(before), title, ..
+        } if step_id == "new-id" && parent == "parent" && before == "sibling" && title == "New"));
+        let move_to_top = parsed_task_action(&[
+            "step-move", "task-id", "--revision", "rev", "--step-id", "existing",
+        ]).unwrap();
+        assert!(matches!(move_to_top, OrchestrationAction::TaskStepMove {
+            parent_step_id: None, before_step_id: None, step_id, ..
+        } if step_id == "existing"));
+        let rename = parsed_task_action(&[
+            "step-rename", "task-id", "--revision", "rev", "--step-id", "existing", "--title", "Renamed",
+        ]).unwrap();
+        assert!(matches!(rename, OrchestrationAction::TaskStepRename {
+            step_id, title, ..
+        } if step_id == "existing" && title == "Renamed"));
+        let remove = parsed_task_action(&[
+            "step-remove", "task-id", "--revision", "rev", "--step-id", "existing",
+        ]).unwrap();
+        assert!(matches!(remove, OrchestrationAction::TaskStepRemove {
+            step_id, expected_task_revision, ..
+        } if step_id == "existing" && expected_task_revision == "rev"));
+    }
+
+    #[test]
+    fn step_adoption_preserves_original_offsets_and_ids_and_rejects_invalid_mapping() {
+        let mapping = r#"[{"source_offset":0,"step_id":"first"},{"source_offset":4096,"step_id":"second"}]"#;
+        let action = parsed_task_action(&[
+            "steps-adopt", "task-id", "--revision", "original-rev", "--mapping", mapping,
+        ]).unwrap();
+        let OrchestrationAction::TaskStepsAdopt {
+            expected_task_revision, mapping, ..
+        } = action else { panic!("expected adoption") };
+        assert_eq!(expected_task_revision, "original-rev");
+        assert_eq!(mapping.len(), 2);
+        assert_eq!((mapping[0].source_offset, mapping[0].step_id.as_str()), (0, "first"));
+        assert_eq!((mapping[1].source_offset, mapping[1].step_id.as_str()), (4096, "second"));
+        for invalid in [
+            "[]", "{}", "not JSON",
+            r#"[{"source_offset":-1,"step_id":"id"}]"#,
+            r#"[{"source_offset":0,"step_id":"id","body":"forbidden"}]"#,
+        ] {
+            assert!(parsed_task_action(&[
+                "steps-adopt", "task-id", "--revision", "rev", "--mapping", invalid,
+            ]).is_err());
+        }
+        let oversized = serde_json::to_string(&vec![
+            serde_json::json!({"source_offset":0,"step_id":"id"}); 65
+        ]).unwrap();
+        assert!(parsed_task_action(&[
+            "steps-adopt", "task-id", "--revision", "rev", "--mapping", &oversized,
+        ]).is_err());
+    }
+
     #[test]
     fn global_evidence_is_available_after_nested_commands() {
         let parsed = TestCli::try_parse_from([
@@ -2446,8 +2800,8 @@ mod tests {
                 "--title",
                 "x",
                 "--stdin",
-                "--body-file",
-                "body"
+                "--description-file",
+                "description"
             ])
             .is_err()
         );
@@ -2720,8 +3074,8 @@ mod tests {
                 "create",
                 "--title",
                 "Task",
-                "--body",
-                "Literal body"
+                "--description",
+                "Literal description"
             ])
             .is_ok()
         );

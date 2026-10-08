@@ -36,10 +36,10 @@ export function useSupervisorLayout(ref: RefObject<HTMLElement | null>): Supervi
   return { measured, width: size.width, height: size.height, narrow, short, compact: measured && size.width < 480, queueMode: narrow || short ? "overlay" : "inline" };
 }
 
-export function panelPlacement(layout: SupervisorLayout, view: "tasks" | "graph", panel: PanelKind): PanelPlacement {
+export function panelPlacement(layout: SupervisorLayout, view: "tasks" | "graph" | "dependencies", panel: PanelKind): PanelPlacement {
   if (panel === "attention") return "overlay";
   if (!layout.narrow) return "side";
-  return panel === "details" && view === "graph" && layout.height >= 560 ? "sheet" : "overlay";
+  return panel === "details" && view !== "tasks" && layout.height >= 560 ? "sheet" : "overlay";
 }
 
 export function panelBounds(layout: SupervisorLayout, placement: PanelPlacement, saved: { detailWidth: number | null; sheetHeight: number | null }, sheetMax?: number | null): PanelBounds | null {
@@ -58,4 +58,4 @@ export function panelBounds(layout: SupervisorLayout, placement: PanelPlacement,
   return null;
 }
 
-export const queueCap = (layout: SupervisorLayout, view: "tasks" | "graph") => Math.floor(layout.height * (view === "graph" ? 0.3 : 0.4));
+export const queueCap = (layout: SupervisorLayout, view: "tasks" | "graph" | "dependencies") => Math.floor(layout.height * (view !== "tasks" ? 0.3 : 0.4));

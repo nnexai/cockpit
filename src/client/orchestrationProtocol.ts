@@ -35,6 +35,17 @@ const list = (validate: Validator): Validator => value => {
   for (const item of value) if (!validate(item)) return false;
   return true;
 };
+const boundedList = (validate: Validator, max: number): Validator => value =>
+  Array.isArray(value) && value.length <= max && list(validate)(value);
+const stepTitle: Validator = value => {
+  if (typeof value !== "string" || value.trim().length === 0 || /[\r\n\0]/.test(value)) return false;
+  let scalars = 0;
+  for (const scalar of value) {
+    const code = scalar.codePointAt(0)!;
+    if (++scalars > 200 || (code >= 0xd800 && code <= 0xdfff)) return false;
+  }
+  return true;
+};
 const oneOf = (...values: readonly string[]): Validator => value => typeof value === "string" && values.includes(value);
 const shape = (fields: Fields, strict = false): Validator => value => record(value)
   && Object.entries(fields).every(([key, validate]) => Object.hasOwn(value, key) && validate(value[key]))
@@ -77,10 +88,31 @@ const target: Validator = value => record(value) && (
   || (value.target === "existing_space" && shape({ target: oneOf("existing_space"), workspace_id: id }, true)(value))
   || (value.target === "space_worktree" && shape({ target: oneOf("space_worktree"), workspace_id: id, branch: nullable(path), base_ref: nullable(path) }, true)(value))
 );
-const task = shape({ task_id: id, title: externalText, body: externalText, checked: bool, line: u32, task_revision: hash, diagnostic: nullable(id) });
+const taskStep = shape({
+  step_id: nullable(id), parent_step_id: nullable(id), depth: u32, title: externalText,
+  checked: bool, status: oneOf("open", "partial", "done"), line: u32, source_offset: u32,
+  diagnostic: nullable(externalText),
+});
+const stepProgress: Validator = value => shape({ done: u32, total: u32 })(value)
+  && record(value) && (value.done as number) <= (value.total as number);
+const task = shape({
+  task_id: id, title: externalText, body: externalText, description: externalText,
+  description_editable: bool, description_diagnostic: nullable(externalText),
+  steps: list(taskStep), step_progress: nullable(stepProgress), steps_diagnostic: nullable(externalText),
+  depends_on: list(id), follow_up_of: nullable(id), relations_diagnostic: nullable(externalText),
+  checked: bool, line: u32, task_revision: hash, diagnostic: nullable(id),
+});
+const dependencies = shape({
+  state: oneOf("none", "satisfied", "blocked", "invalid"),
+  unmet: list(shape({ task_id: id, reason: oneOf("unchecked", "missing", "ambiguous") })),
+  problems: list(error),
+});
 const board = shape({
   root_id: id, path, doc_revision: hash, unidentified_items: u32, diagnostics: list(error),
-  tasks: list(shape({ task, lane: oneOf("queued", "setup", "ready", "working", "review", "accepted"), current_run_id: nullable(id) })),
+  tasks: list(shape({
+    task, lane: oneOf("queued", "setup", "ready", "working", "review", "accepted"),
+    current_run_id: nullable(id), dependencies,
+  })),
 });
 const plan = shape({ plan_revision: hash, text, created_at: timestamp });
 const setup = shape({
@@ -174,7 +206,7 @@ const message = shape({
   woken_omp_session: nullable(id), created_at: timestamp, acked_at: nullable(timestamp),
 });
 const subagent = shape({
-  run_id: id, subagent_id: id, parent_subagent_id: nullable(id), role: nullable(label), label,
+  run_id: id, subagent_id: id, parent_subagent_id: nullable(id), bound_omp_session: nullable(id), role: nullable(label), label,
   status: subagentStatus, summary: nullable(text), updated_at: timestamp,
   last_control: nullable(shape({ seq: u64, op: subagentOp, stage: oneOf("stored", "applied", "failed"), error: nullable(text), at: timestamp })),
 });
@@ -201,10 +233,20 @@ const attention = shape({
 // The action schemas mirror the tagged, deny_unknown_fields Rust enum. In particular,
 // actor/origin can never be supplied by a caller through this transport boundary.
 const actions: Readonly<Record<OrchestrationAction["action"], Fields>> = {
-  task_create: { root_id: id, title: label, body: text },
-  task_assign: { root_id: id, task_id: uuid, title: label, body: text },
+  task_create: {
+    root_id: id, task_id: uuid, title: label, description: text, depends_on: boundedList(uuid, 32),
+    follow_up_of: nullable(uuid), expected_doc_revision: nullable(hash), source_revision: nullable(hash),
+  },
+  task_assign: { root_id: id, task_id: uuid, title: label, description: text },
   task_assignment_resolve: { root_id: id, task_id: uuid, expected_task_revision: nullable(hash), assign: bool },
-  task_update: { root_id: id, task_id: id, expected_task_revision: hash, title: nullable(label), body: nullable(text) },
+  task_update: { root_id: id, task_id: id, expected_task_revision: hash, title: nullable(label), description: nullable(text) },
+  task_dependencies_set: { root_id: id, task_id: id, expected_task_revision: hash, expected_doc_revision: hash, depends_on: boundedList(uuid, 32) },
+  task_step_add: { root_id: id, task_id: id, expected_task_revision: hash, step_id: uuid, parent_step_id: nullable(uuid), before_step_id: nullable(uuid), title: stepTitle },
+  task_step_rename: { root_id: id, task_id: id, expected_task_revision: hash, step_id: uuid, title: stepTitle },
+  task_step_set_checked: { root_id: id, task_id: id, expected_task_revision: hash, step_id: uuid, checked: bool, scope: oneOf("leaf", "subtree") },
+  task_step_move: { root_id: id, task_id: id, expected_task_revision: hash, step_id: uuid, parent_step_id: nullable(uuid), before_step_id: nullable(uuid) },
+  task_step_remove: { root_id: id, task_id: id, expected_task_revision: hash, step_id: uuid },
+  task_steps_adopt: { root_id: id, task_id: id, expected_task_revision: hash, mapping: boundedList(shape({ source_offset: u32, step_id: uuid }, true), 64) },
   tasks_assign_ids: { root_id: id, expected_doc_revision: hash },
   supervisor_start: { target: nullable(target), label: nullable(label) },
   run_bind_session: { omp_session_id: id },

@@ -427,7 +427,7 @@ async fn running_subagent_telemetry_blocks_offer_without_external_observation() 
     let locked = f.service.store.lock().unwrap();
     let mut state = locked.read().unwrap();
     state.subagents.push(Subagent { run_id: f.run.run_id.clone(), subagent_id: "child".into(),
-        parent_subagent_id: None, role: None, label: "Child".into(), status: SubagentStatus::Running,
+        parent_subagent_id: None, bound_omp_session: None, role: None, label: "Child".into(), status: SubagentStatus::Running,
         summary: None, last_control: None, updated_at: now() });
     locked.save(&mut state).unwrap(); drop(locked);
     let h = FakeHerdr::new(&f, vec![]);

@@ -12,7 +12,7 @@ function run(overrides: Partial<Run> = {}): Run {
   return { session_id: "session", prepare_brief: "Guidance", run_id: "worker", kind: "worker", label: "Search agent", root_id: "root", parent_run_id: "root", task_id: "task-a", attempt: 1, task_revision_at_propose: "proposed-revision", stage: "working", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null, annotations: [], location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, bound_omp_session: "native", bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at, ...overrides };
 }
 function task(overrides: Partial<TaskView> = {}): TaskView {
-  return { task: { task_id: "task-a", title: "Improve search", body: "Improve search\nKeep existing behavior.", checked: false, line: 1, task_revision: "exact-current-revision", diagnostic: null }, lane: "working", current_run_id: "worker", ...overrides };
+  return { task: { task_id: "task-a", title: "Improve search", body: "Improve search\nKeep existing behavior.", description: "Improve search\nKeep existing behavior.", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "exact-current-revision", diagnostic: null }, lane: "working", current_run_id: "worker", dependencies: { state: "none", unmet: [], problems: [] }, ...overrides };
 }
 function observation(runId: string, overrides: Partial<RunObservation> = {}): RunObservation {
   return { run_id: runId, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at, ...overrides };
@@ -30,7 +30,7 @@ function retiredWorker(state: RetirementState): Run {
   return worker;
 }
 function subagent(overrides: Partial<Subagent> = {}): Subagent {
-  return { run_id: "worker", subagent_id: "scout", parent_subagent_id: null, role: "Read-only scout", label: "Scout", status: "running", summary: "Inspected search", last_control: null, updated_at: at, ...overrides };
+  return { run_id: "worker", subagent_id: "scout", parent_subagent_id: null, role: "Read-only scout", label: "Scout", status: "running", summary: "Inspected search", last_control: null, bound_omp_session: null, updated_at: at, ...overrides };
 }
 let host: HTMLDivElement;
 let root: Root | null = null;

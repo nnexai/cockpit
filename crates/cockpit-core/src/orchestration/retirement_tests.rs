@@ -20,7 +20,10 @@ impl Fixture {
         root.stage = RunStage::Active;
         state.runs.push(root);
         locked.save(&mut state).unwrap();
-        let task = locked.tasks(ROOT).unwrap().create("Retire exact worker", "Preserve files").unwrap();
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let task = locked.tasks(ROOT).unwrap().create_authoring_with_id(
+            &task_id, "Retire exact worker", "Preserve files", &[], None, None, None,
+        ).unwrap();
         let mut worker = worker();
         worker.task_id = Some(task.task_id.clone());
         state.runs.push(worker);
@@ -311,7 +314,7 @@ fn descendants_and_telemetry_block_offer_and_shutdown_even_after_preflight() {
         let grandchild = new_run("grandchild", SESSION, RunKind::Worker, "grandchild".into(), ROOT, Some("child".into()), None, 1);
         s.runs.push(grandchild);
         s.subagents.push(Subagent { run_id: "worker".into(), subagent_id: "child-native".into(), parent_subagent_id: None,
-            role: None, label: "child".into(), status: SubagentStatus::Running, summary: None, last_control: None, updated_at: AT.into() });
+            bound_omp_session: None, role: None, label: "child".into(), status: SubagentStatus::Running, summary: None, last_control: None, updated_at: AT.into() });
     });
     assert_eq!(fixture.service.retirement_blockers("worker").unwrap(), vec![RetirementBlocker::OpenDescendantRuns, RetirementBlocker::RunningSubagents]);
     let retirement_id = fixture.run().retirement.unwrap().retirement_id;
@@ -408,6 +411,7 @@ fn unknown_attention_is_visible_for_closed_runs_and_retention_is_not_recovery() 
                     task,
                     lane: TaskLane::Queued,
                     current_run_id: None,
+                    dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
                 }).collect(),
             }
         };
@@ -435,10 +439,12 @@ fn closed_receipt_carve_out_does_not_admit_any_ordinary_action() {
     let fixture = Fixture::new();
     fixture.offer();
     let actions = vec![
-        OrchestrationAction::TaskCreate { root_id: ROOT.into(), title: "x".into(), body: "x".into() },
-        OrchestrationAction::TaskAssign { root_id: ROOT.into(), task_id: fixture.task.task_id.clone(), title: "x".into(), body: "x".into() },
+        OrchestrationAction::TaskCreate { root_id: ROOT.into(), task_id: uuid::Uuid::new_v4().to_string(),
+            title: "x".into(), description: "x".into(), depends_on: Vec::new(), follow_up_of: None,
+            expected_doc_revision: None, source_revision: None },
+        OrchestrationAction::TaskAssign { root_id: ROOT.into(), task_id: fixture.task.task_id.clone(), title: "x".into(), description: "x".into() },
         OrchestrationAction::TaskAssignmentResolve { root_id: ROOT.into(), task_id: fixture.task.task_id.clone(), expected_task_revision: None, assign: true },
-        OrchestrationAction::TaskUpdate { root_id: ROOT.into(), task_id: fixture.task.task_id.clone(), expected_task_revision: fixture.task.task_revision.clone(), title: None, body: None },
+        OrchestrationAction::TaskUpdate { root_id: ROOT.into(), task_id: fixture.task.task_id.clone(), expected_task_revision: fixture.task.task_revision.clone(), title: None, description: None },
         OrchestrationAction::TasksAssignIds { root_id: ROOT.into(), expected_doc_revision: "revision".into() },
         OrchestrationAction::SupervisorStart { target: None, label: None },
         OrchestrationAction::RunBindSession { omp_session_id: "native".into() },

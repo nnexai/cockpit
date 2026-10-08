@@ -1,4 +1,6 @@
 mod assignments;
+mod dependencies;
+mod steps;
 pub mod dispatch;
 pub mod herdr;
 mod escalation;
@@ -120,16 +122,28 @@ impl OrchestrationService {
                 .filter(|r| r.parent_run_id.is_none() && r.session_id == request.session_id)
             {
                 let document = locked.tasks(&root.root_id)?;
-                let diagnostics = document
-                    .tasks
-                    .iter()
-                    .filter_map(|t| {
-                        t.diagnostic.as_ref().map(|code| ErrorResponse {
-                            code: code.clone(),
-                            message: format!("Task {} is ambiguous", t.task_id),
-                        })
-                    })
-                    .collect();
+                let graph = dependencies::DependencyGraph::new(&document.tasks);
+                let mut diagnostics = Vec::new();
+                let facts: Vec<TaskDependencies> = document.tasks.iter().map(|task| {
+                    if let Some(code) = &task.diagnostic {
+                        diagnostics.push(ErrorResponse {
+                            code: code.clone(), message: format!("Task {} is ambiguous", task.task_id),
+                        });
+                    }
+                    graph.evaluate(task)
+                }).collect();
+                drop(graph);
+                {
+                    let mut seen = std::collections::HashSet::new();
+                    for problem in facts.iter().flat_map(|facts| &facts.problems) {
+                        if seen.insert((problem.code.as_str(), problem.message.as_str())) {
+                            diagnostics.push(problem.clone());
+                        }
+                    }
+                }
+                let tasks = document.tasks.into_iter().zip(facts).map(|(task, dependencies)| TaskView {
+                    task, dependencies, lane: TaskLane::Queued, current_run_id: None,
+                }).collect();
                 boards.push(TaskBoard {
                     root_id: root.root_id.clone(),
                     path: self
@@ -139,19 +153,10 @@ impl OrchestrationService {
                         .join(format!("{}.md", root.root_id))
                         .to_string_lossy()
                         .into_owned(),
-                    doc_revision: document.doc_revision.clone(),
+                    doc_revision: document.doc_revision,
                     unidentified_items: document.unidentified_items,
                     diagnostics,
-                    tasks: document
-                        .tasks
-                        .iter()
-                        .cloned()
-                        .map(|task| TaskView {
-                            task,
-                            lane: TaskLane::Queued,
-                            current_run_id: None,
-                        })
-                        .collect(),
+                    tasks,
                 });
             }
             (state, boards)
@@ -358,7 +363,7 @@ impl OrchestrationService {
                 root_id,
                 task_id,
                 title,
-                body,
+                description,
             } => {
                 let origin = operator(actor)?;
                 let result = assignments::assign(
@@ -369,7 +374,7 @@ impl OrchestrationService {
                     &root_id,
                     &task_id,
                     &title,
-                    &body,
+                    &description,
                 );
                 self.revision.send_replace(state.revision);
                 return Ok(OrchestrationMutationResponse {
@@ -400,41 +405,139 @@ impl OrchestrationService {
                 });
             }
             OrchestrationAction::TaskCreate {
-                root_id,
-                title,
-                body,
+                root_id, task_id, title, description, depends_on, follow_up_of,
+                expected_doc_revision, source_revision,
             } => {
                 task_scope(&state, actor, caller, &request.session_id, &root_id)?;
+                active_task_root(&state, &request.session_id, &root_id)?;
                 bounded(&title, 256)?;
-                bounded(&body, 16 * 1024)?;
+                bounded(&description, 16 * 1024)?;
+                tasks_md::validate_authoring_creation(&title, &description)?;
+                let task_id = tasks_md::validate_uuid(&task_id)?.to_string();
+                let edges = normalize_task_edges(&depends_on)?;
+                let follow = follow_up_of.as_deref().map(tasks_md::validate_uuid)
+                    .transpose()?.map(|id| id.to_string());
+                if !edges.is_empty() || follow.is_some() {
+                    task_root_authority(&state, actor, caller, &request.session_id, &root_id)?;
+                    if expected_doc_revision.is_none() || (follow.is_some() && source_revision.is_none()) {
+                        return Err(error("invalid_task", "Relationships require document and follow-up source fences"));
+                    }
+                }
+                if follow.is_none() && source_revision.is_some() {
+                    return Err(error("invalid_task", "Source revision requires follow_up_of"));
+                }
+                let document = locked.tasks(&root_id)?;
+                // Only exact intended identity replay may bypass now-stale graph/source fences.
+                // Shape and fresh caller authority have already been checked.
+                let replay = document.tasks.iter().any(|task| task.task_id == task_id);
+                if !replay {
+                    if expected_doc_revision.as_deref().is_some_and(|revision| revision != document.doc_revision) {
+                        return Err(error("task_revision_conflict", "Task document changed"));
+                    }
+                    dependencies::validate_dependencies(&document.tasks, &task_id, &edges)?;
+                    if let Some(source) = &follow {
+                        if source == &task_id {
+                            return Err(error("task_relations_invalid", "A task cannot follow itself"));
+                        }
+                        let source_task = document.task(source)?;
+                        if source_revision.as_deref() != Some(source_task.task_revision.as_str()) {
+                            return Err(error("task_revision_conflict", "Follow-up source changed"));
+                        }
+                    }
+                }
                 machine_changed = false;
                 OrchestrationActionResult::Task {
-                    task: locked.tasks(&root_id)?.create(&title, &body)?,
+                    task: document.create_authoring_with_id(&task_id, &title, &description,
+                        &edges, follow.as_deref(), expected_doc_revision.as_deref(), source_revision.as_deref())?,
                 }
             }
             OrchestrationAction::TaskUpdate {
-                root_id,
-                task_id,
-                expected_task_revision,
-                title,
-                body,
+                root_id, task_id, expected_task_revision, title, description,
             } => {
-                task_scope(&state, actor, caller, &request.session_id, &root_id)?;
-                if let Some(t) = &title {
-                    bounded(t, 256)?;
+                let document = locked.tasks(&root_id)?;
+                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
+                if let Some(t) = &title { bounded(t, 256)?; }
+                if let Some(d) = &description { bounded(d, 16 * 1024)?; }
+                machine_changed = false;
+                OrchestrationActionResult::Task {
+                    task: document.update(&task_id, &expected_task_revision, title.as_deref(), description.as_deref())?,
                 }
-                if let Some(b) = &body {
-                    bounded(b, 16 * 1024)?;
+            }
+            OrchestrationAction::TaskDependenciesSet {
+                root_id, task_id, expected_task_revision, expected_doc_revision, depends_on,
+            } => {
+                task_root_authority(&state, actor, caller, &request.session_id, &root_id)?;
+                let document = locked.tasks(&root_id)?;
+                let task = mutable_task(&state, &root_id, &task_id, &document)?;
+                if task.task_revision != expected_task_revision || document.doc_revision != expected_doc_revision {
+                    return Err(error("task_revision_conflict", "Task or document changed"));
+                }
+                let edges = normalize_task_edges(&depends_on)?;
+                let live = state.runs.iter().any(|run| run.root_id == root_id
+                    && run.task_id.as_deref() == Some(task.task_id.as_str()) && run.stage != RunStage::Closed);
+                if live {
+                    if task.relations_diagnostic.is_some() || edges.len() >= task.depends_on.len()
+                        || edges.iter().any(|edge| !task.depends_on.contains(edge)) {
+                        return Err(error("task_relationships_live", "Open attempts allow only strictly removing positively parsed prerequisites"));
+                    }
+                } else {
+                    dependencies::validate_dependencies(&document.tasks, &task.task_id, &edges)?;
                 }
                 machine_changed = false;
                 OrchestrationActionResult::Task {
-                    task: locked.tasks(&root_id)?.update(
-                        &task_id,
-                        &expected_task_revision,
-                        title.as_deref(),
-                        body.as_deref(),
-                    )?,
+                    task: document.set_dependencies(&task_id, &expected_task_revision, &expected_doc_revision, &edges)?,
                 }
+            }
+            OrchestrationAction::TaskStepAdd {
+                root_id, task_id, expected_task_revision, step_id, parent_step_id, before_step_id, title,
+            } => {
+                let document = locked.tasks(&root_id)?;
+                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
+                machine_changed = false;
+                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
+                    steps::StepIntent::Add { step_id: tasks_md::validate_uuid(&step_id)?,
+                        parent_step_id: parent_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?,
+                        before_step_id: before_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?, title: &title })? }
+            }
+            OrchestrationAction::TaskStepRename { root_id, task_id, expected_task_revision, step_id, title } => {
+                let document = locked.tasks(&root_id)?;
+                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
+                machine_changed = false;
+                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
+                    steps::StepIntent::Rename { step_id: tasks_md::validate_uuid(&step_id)?, title: &title })? }
+            }
+            OrchestrationAction::TaskStepSetChecked { root_id, task_id, expected_task_revision, step_id, checked, scope } => {
+                let document = locked.tasks(&root_id)?;
+                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
+                machine_changed = false;
+                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
+                    steps::StepIntent::SetChecked { step_id: tasks_md::validate_uuid(&step_id)?, checked, scope })? }
+            }
+            OrchestrationAction::TaskStepMove { root_id, task_id, expected_task_revision, step_id, parent_step_id, before_step_id } => {
+                let document = locked.tasks(&root_id)?;
+                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
+                machine_changed = false;
+                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
+                    steps::StepIntent::Move { step_id: tasks_md::validate_uuid(&step_id)?,
+                        parent_step_id: parent_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?,
+                        before_step_id: before_step_id.as_deref().map(tasks_md::validate_uuid).transpose()? })? }
+            }
+            OrchestrationAction::TaskStepRemove { root_id, task_id, expected_task_revision, step_id } => {
+                let document = locked.tasks(&root_id)?;
+                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
+                machine_changed = false;
+                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
+                    steps::StepIntent::Remove { step_id: tasks_md::validate_uuid(&step_id)? })? }
+            }
+            OrchestrationAction::TaskStepsAdopt { root_id, task_id, expected_task_revision, mapping } => {
+                let document = locked.tasks(&root_id)?;
+                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
+                let mapping = mapping.iter().map(|entry| Ok(steps::StepAdoption {
+                    source_offset: entry.source_offset, step_id: tasks_md::validate_uuid(&entry.step_id)?,
+                })).collect::<Result<Vec<_>, InspectionError>>()?;
+                machine_changed = false;
+                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
+                    steps::StepIntent::Adopt { mapping: &mapping })? }
             }
             OrchestrationAction::TasksAssignIds {
                 root_id,
@@ -522,6 +625,7 @@ impl OrchestrationService {
                 );
                 run.stage = RunStage::Active;
                 run.bound_omp_session = agent.omp_session_id.clone();
+                run.bound_omp_process = agent.process.clone();
                 run.location = Some(RunLocation {
                     boot_id: agent.boot_id.clone(),
                     terminal_id: agent.terminal_id.clone(),
@@ -641,7 +745,13 @@ impl OrchestrationService {
                     }
                 }
                 let root = state.runs[parent].root_id.clone();
-                let task = locked.tasks(&root)?.task(&task_id)?.clone();
+                active_task_root(&state, &request.session_id, &root)?;
+                let document = locked.tasks(&root)?;
+                let task = mutable_task(&state, &root, &task_id, &document)?.clone();
+                if dependencies::DependencyGraph::new(&document.tasks).evaluate(&task).state == TaskDependencyState::Invalid {
+                    return Err(error("task_dependencies_invalid", "Task relationships are structurally invalid"));
+                }
+                let task_id = task.task_id.clone();
                 let open: Vec<_> = state
                     .runs
                     .iter()
@@ -715,6 +825,8 @@ impl OrchestrationService {
                     management_target(&state, actor, caller, &request.session_id, &run_id)?;
                 require_stage(&state.runs[index], RunStage::AwaitingPrepare)?;
                 match_plan(state.runs[index].prepare_plan.as_ref(), &plan_revision)?;
+                let document = locked.tasks(&state.runs[index].root_id)?;
+                task_transition_target(&state, &state.runs[index], &document, true)?;
                 if let Some(old) = state.runs[index].supersedes_run_id.clone() {
                     let old_index = run_index(&state, &old)?;
                     if state.runs[old_index].stage == RunStage::Closed {
@@ -752,9 +864,14 @@ impl OrchestrationService {
                     management_target(&state, actor, caller, &request.session_id, &run_id)?;
                 require_stage(&state.runs[index], RunStage::Ready)?;
                 match_plan(state.runs[index].work_plan.as_ref(), &plan_revision)?;
-                if state.runs[index].init_receipt.is_none() {
-                    return Err(error("invalid_stage", "Initialization receipt is missing"));
+                if state.runs[index].init_receipt.as_ref().is_none_or(|receipt| {
+                    receipt.kind != ReportKind::Ready || receipt.plan.as_deref()
+                        != state.runs[index].work_plan.as_ref().map(|plan| plan.text.as_str())
+                }) {
+                    return Err(error("invalid_stage", "Matching initialization receipt is missing"));
                 }
+                let document = locked.tasks(&state.runs[index].root_id)?;
+                task_transition_target(&state, &state.runs[index], &document, false)?;
                 let mut text = state.runs[index]
                     .work_plan
                     .as_ref()
@@ -820,6 +937,7 @@ impl OrchestrationService {
                         "Task changed before acceptance",
                     ));
                 }
+                task_transition_target(&state, &state.runs[index], &document, false)?;
                 let intent_id = id();
                 state.task_intents.push(TaskIntent {
                     intent_id: intent_id.clone(),
@@ -888,6 +1006,8 @@ impl OrchestrationService {
                     management_target(&state, actor, caller, &request.session_id, &run_id)?;
                 bounded(&text, 16 * 1024)?;
                 require_stage(&state.runs[index], RunStage::Reported)?;
+                let document = locked.tasks(&state.runs[index].root_id)?;
+                task_transition_target(&state, &state.runs[index], &document, false)?;
                 let result_message_id = &state.runs[index]
                     .result
                     .as_ref()
@@ -959,6 +1079,10 @@ impl OrchestrationService {
                         "retry_preflight_required",
                         "Supervisor retry requires the fresh absence preflight",
                     ));
+                }
+                if state.runs[index].kind == RunKind::Worker {
+                    let document = locked.tasks(&state.runs[index].root_id)?;
+                    task_transition_target(&state, &state.runs[index], &document, false)?;
                 }
                 let by = actor_ref(actor, caller, &state);
                 let run = &mut state.runs[index];
@@ -1103,6 +1227,14 @@ impl OrchestrationService {
                         ));
                     }
                     let document = locked.tasks(&intent.root_id)?;
+                    active_task_root(&state, &request.session_id, &intent.root_id)?;
+                    if state.runs[index].root_id != intent.root_id
+                        || state.runs[index].task_id.as_deref() != Some(intent.task_id.as_str())
+                        || projection::current_task_run(&state, &intent.root_id, &intent.task_id)
+                            .is_none_or(|run| run.run_id != intent.run_id) {
+                        return Err(error("intent_conflict", "Acceptance intent no longer owns this canonical task"));
+                    }
+                    dependencies::DependencyGraph::new(&document.tasks).require(document.task(&intent.task_id)?)?;
                     let revision = document.task(&intent.task_id)?.task_revision.clone();
                     document.check(&intent.task_id, &revision, true)?;
                     retirement::close_accepted_with_evidence(&mut state, index, RetirementTrigger::OperatorConflictResolution, &revision, intent.result_message_id.is_some());
@@ -1147,6 +1279,93 @@ impl OrchestrationService {
     ) -> Result<Option<ExecutionLease>, InspectionError> {
         self.store.try_acquire_execution_lease(run_id)
     }
+    /// Re-read the queue hint and canonical source together, releasing the
+    /// filesystem lock before the dispatcher performs any adapter await.
+    pub(crate) fn dispatch_task_eligible(&self, expected: &Run) -> Result<bool, InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read()?;
+        let Some(current) = state.runs.iter().find(|run| run.run_id == expected.run_id) else {
+            return Ok(false);
+        };
+        // An explicitly adopted active root has no dispatcher launch record.
+        // It remains a valid taskless root, fenced by its actual native binding.
+        if current.kind == RunKind::Adopted && current.dispatch.is_none() && expected.dispatch.is_none() {
+            return Ok(current.stage == RunStage::Active && current.stage == expected.stage
+                && current.kind == expected.kind && current.parent_run_id.is_none()
+                && current.run_id == current.root_id && current.task_id.is_none()
+                && current.run_id == expected.run_id && current.root_id == expected.root_id
+                && current.session_id == expected.session_id && current.attempt == expected.attempt
+                && current.bound_omp_session == expected.bound_omp_session
+                && current.bound_omp_process == expected.bound_omp_process
+                && same_launch_location(current.location.as_ref(), expected.location.as_ref()));
+        }
+        if !same_launch_incarnation(current, expected)
+            || current.bound_omp_process != expected.bound_omp_process || current.stage != expected.stage {
+            return Ok(false);
+        }
+        if matches!(current.kind, RunKind::Supervisor | RunKind::Adopted) {
+            return Ok(current.parent_run_id.is_none() && current.root_id == current.run_id
+                && current.task_id.is_none() && matches!(current.stage, RunStage::Preparing | RunStage::Active));
+        }
+        if !matches!(current.stage, RunStage::Preparing | RunStage::Initializing | RunStage::Ready | RunStage::Working) {
+            return Ok(false);
+        }
+        let Some(task_id) = &current.task_id else { return Ok(false) };
+        if active_task_root(&state, &current.session_id, &current.root_id).is_err()
+            || projection::current_task_run(&state, &current.root_id, task_id)
+                .is_none_or(|run| run.run_id != current.run_id) {
+            return Ok(false);
+        }
+        let document = locked.tasks(&current.root_id)?;
+        let task = match mutable_task(&state, &current.root_id, task_id, &document) {
+            Ok(task) => task,
+            Err(failure) if matches!(failure.code.as_str(),
+                "task_not_found" | "task_id_duplicate" | "task_checked" | "intent_conflict") => return Ok(false),
+            Err(failure) => return Err(failure),
+        };
+        Ok(matches!(dependencies::DependencyGraph::new(&document.tasks).evaluate(task).state,
+            TaskDependencyState::None | TaskDependencyState::Satisfied))
+    }
+
+    /// Only a caller that knows no launch RPC was issued may record this wait;
+    /// uncertain launch intents continue through existing no-replay reconciliation.
+    pub(crate) fn dispatch_unstarted_step(
+        &self, expected: &Run, step: DispatchStep,
+    ) -> Result<Option<Run>, InspectionError> {
+        if !matches!(step, DispatchStep::SetupPending | DispatchStep::LaunchIntent) {
+            return Err(error("invalid_stage", "Only a known-unsent launch may wait or resume"));
+        }
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        let Some(index) = state.runs.iter().position(|run| run.run_id == expected.run_id) else {
+            return Ok(None);
+        };
+        let run = &state.runs[index];
+        if !same_launch_incarnation(run, expected) || run.stage != RunStage::Preparing
+            || expected.stage != RunStage::Preparing
+            || run.bound_omp_process != expected.bound_omp_process
+            || run.launch_shell_identity != expected.launch_shell_identity
+            || run.bound_omp_session.is_some() || run.bound_omp_process.is_some()
+            || (step == DispatchStep::LaunchIntent && !launch_receipt_coherent(run))
+            || run.dispatch.as_ref().zip(expected.dispatch.as_ref()).is_none_or(|(actual, reviewed)| {
+                actual.step != reviewed.step || actual.agent_started || reviewed.agent_started
+                    || actual.updated_at != reviewed.updated_at
+                    || !matches!(actual.step, DispatchStep::SetupPending | DispatchStep::LaunchIntent)
+            }) {
+            return Ok(None);
+        }
+        let run = &mut state.runs[index];
+        let dispatch = run.dispatch.as_mut().expect("matched dispatch");
+        dispatch.step = step;
+        dispatch.error = None;
+        dispatch.updated_at = now();
+        run.updated_at = now();
+        let result = run.clone();
+        let revision = locked.save(&mut state)?;
+        self.revision.send_replace(revision);
+        Ok(Some(result))
+    }
+
     pub(crate) fn dispatch_queue(&self) -> Result<Vec<Run>, InspectionError> {
         Ok(self
             .store
@@ -1655,6 +1874,7 @@ impl OrchestrationService {
                 changed = true;
                 continue;
             }
+            let mut dependency_conflict = None;
             let outcome = match locked.tasks(&intent.root_id) {
                 Ok(document) => match document.task(&intent.task_id) {
                     Ok(task) if task.checked => {
@@ -1665,11 +1885,16 @@ impl OrchestrationService {
                             )?
                     }
                     Ok(task) if task.task_revision == intent.expected_task_revision => {
-                        match document.check(&intent.task_id, &intent.expected_task_revision, true)
-                        {
-                            Ok(_) => true,
-                            Err(failure) if failure.code == "task_revision_conflict" => false,
-                            Err(failure) => return Err(failure),
+                        match dependencies::DependencyGraph::new(&document.tasks).require(task) {
+                            Err(failure) => {
+                                dependency_conflict = Some(format!("{}: {}", failure.code, failure.message));
+                                false
+                            }
+                            Ok(()) => match document.check(&intent.task_id, &intent.expected_task_revision, true) {
+                                Ok(_) => true,
+                                Err(failure) if failure.code == "task_revision_conflict" => false,
+                                Err(failure) => return Err(failure),
+                            },
                         }
                     }
                     Ok(_) => false,
@@ -1704,6 +1929,17 @@ impl OrchestrationService {
                     .find(|i| i.intent_id == intent.intent_id)
                     .expect("intent exists")
                     .state = IntentState::Conflict;
+                if let Some(mut reason) = dependency_conflict {
+                    if reason.len() > 2048 {
+                        let mut end = 2048;
+                        while !reason.is_char_boundary(end) { end -= 1; }
+                        reason.truncate(end);
+                    }
+                    state.runs[index].annotations.push(Annotation {
+                        at: now(), by: ActorRef::Operator,
+                        text: format!("Acceptance recovery retained conflict: {reason}"),
+                    });
+                }
             }
             changed = true;
         }
@@ -2142,6 +2378,136 @@ fn scoped_index(
     scope_run(state, session, index)?;
     Ok(index)
 }
+fn normalize_task_edges(edges: &[String]) -> Result<Vec<String>, InspectionError> {
+    if edges.len() > 32 {
+        return Err(error("task_relations_invalid", "At most 32 prerequisites are allowed"));
+    }
+    let mut normalized = edges.iter().map(|edge| tasks_md::validate_uuid(edge).map(|id| id.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    normalized.sort_unstable();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn active_task_root<'a>(
+    state: &'a OrchestrationState, session: &str, root_id: &str,
+) -> Result<&'a Run, InspectionError> {
+    let root = &state.runs[scoped_index(state, session, root_id)?];
+    if root.parent_run_id.is_some() || root.root_id != root.run_id
+        || !matches!(root.kind, RunKind::Supervisor | RunKind::Adopted) {
+        return Err(error("root_not_found", "Expected a supervisor root"));
+    }
+    require_stage(root, RunStage::Active)?;
+    Ok(root)
+}
+
+/// The host CLI supplies fresh native process evidence, never action JSON.
+fn native_task_caller(run: &Run, agent: &AgentCaller) -> bool {
+    agent.actual_agent_kind.as_deref() == Some("omp")
+        && caller_matches(run, agent) && session_matches(run, agent)
+        && run.bound_omp_session.as_deref().is_some_and(|session| !session.is_empty())
+        && run.bound_omp_process.as_ref().is_some_and(|process| {
+            process.kernel_boot_id.as_deref().is_some_and(|boot| !boot.is_empty())
+                && agent.process.as_ref() == Some(process)
+        })
+        && (run.kind == RunKind::Adopted && run.dispatch.is_none()
+            || run.dispatch.as_ref().is_some_and(|dispatch| dispatch.agent_started))
+        && !dispatch::recovery_incarnation_revoked(run)
+}
+
+fn task_root_authority(
+    state: &OrchestrationState, actor: &Actor, caller: Option<usize>, session: &str, root_id: &str,
+) -> Result<(), InspectionError> {
+    let root = active_task_root(state, session, root_id)?;
+    if matches!(actor, Actor::Operator(_)) { return Ok(()) }
+    let Actor::Agent(agent) = actor else { unreachable!() };
+    if state.runs[required_caller(caller)?].run_id != root.run_id
+        || agent.agent_kind != Some(AgentKind::Main) || agent.subagent_id.is_some()
+        || !native_task_caller(root, agent) {
+        return Err(error("actor_forbidden", "Only the bound main root or operator may author relationships"));
+    }
+    Ok(())
+}
+
+fn mutable_task<'a>(
+    state: &OrchestrationState, root_id: &str, task_id: &str, document: &'a tasks_md::TaskDocument<'_>,
+) -> Result<&'a Task, InspectionError> {
+    let task = document.task(task_id)?;
+    if task.checked { return Err(error("task_checked", "Accepted canonical tasks are read-only")) }
+    if state.task_intents.iter().any(|intent| intent.root_id == root_id && intent.task_id == task.task_id) {
+        return Err(error("intent_conflict", "Resolve the existing acceptance intent first"));
+    }
+    Ok(task)
+}
+
+fn task_content_target(
+    state: &OrchestrationState, actor: &Actor, caller: Option<usize>, session: &str,
+    root_id: &str, task_id: &str, document: &tasks_md::TaskDocument<'_>,
+) -> Result<(), InspectionError> {
+    active_task_root(state, session, root_id)?;
+    let task = mutable_task(state, root_id, task_id, document)?;
+    let current = projection::current_task_run(state, root_id, &task.task_id);
+    if matches!(actor, Actor::Operator(_))
+        || caller.is_some_and(|index| state.runs[index].run_id == root_id) {
+        task_root_authority(state, actor, caller, session, root_id)?;
+        if current.is_some_and(|run| run.stage == RunStage::Working) {
+            return Err(error("actor_forbidden", "Only the current executed worker may edit its own canonical task"));
+        }
+        return Ok(());
+    }
+    let Actor::Agent(agent) = actor else { unreachable!() };
+    let run = &state.runs[required_caller(caller)?];
+    if run.root_id != root_id {
+        return Err(error("actor_forbidden", "Caller does not own this canonical root"));
+    }
+    if run.kind != RunKind::Worker || run.stage != RunStage::Working
+        || run.task_id.as_deref() != Some(task.task_id.as_str())
+        || current.is_none_or(|current| current.run_id != run.run_id)
+        || run.init_receipt.as_ref().is_none_or(|receipt| receipt.kind != ReportKind::Ready)
+        || run.work_plan.as_ref().is_none_or(|plan| {
+            run.init_receipt.as_ref().and_then(|receipt| receipt.plan.as_deref()) != Some(plan.text.as_str())
+                || !run.grants.iter().any(|grant| {
+                    grant.scope == GrantScope::Execute && grant.plan_revision == plan.plan_revision
+                })
+        })
+        || !native_task_caller(run, agent) {
+        return Err(error("actor_forbidden", "Only the current executed worker may edit its own canonical task"));
+    }
+    match agent.agent_kind {
+        Some(AgentKind::Main) if agent.subagent_id.is_none() => {}
+        Some(AgentKind::Subagent) => {
+            let session = messages::authenticated_child_session(agent, run)?;
+            if !state.subagents.iter().any(|child| {
+                child.run_id == run.run_id && Some(child.subagent_id.as_str()) == agent.subagent_id.as_deref()
+                    && child.status == SubagentStatus::Running
+                    && child.bound_omp_session.as_deref() == Some(session)
+            }) {
+                return Err(error("actor_forbidden", "An authenticated live native child binding is required"));
+            }
+        }
+        _ => return Err(error("actor_forbidden", "An authenticated live native child binding is required")),
+    }
+    dependencies::DependencyGraph::new(&document.tasks).require(task)
+}
+
+fn task_transition_target(
+    state: &OrchestrationState, run: &Run, document: &tasks_md::TaskDocument<'_>, allow_replacement: bool,
+) -> Result<(), InspectionError> {
+    active_task_root(state, &run.session_id, &run.root_id)?;
+    let task_id = run.task_id.as_deref().ok_or_else(|| error("task_not_found", "Worker task is missing"))?;
+    let task = mutable_task(state, &run.root_id, task_id, document)?;
+    let current = projection::current_task_run(state, &run.root_id, &task.task_id);
+    let selected = current.is_some_and(|current| current.run_id == run.run_id);
+    let pending = allow_replacement && matches!(run.stage, RunStage::Proposed | RunStage::AwaitingPrepare)
+        && current.is_some_and(|current| run.supersedes_run_id.as_deref() == Some(current.run_id.as_str()))
+        && !state.runs.iter().any(|other| other.root_id == run.root_id
+            && other.task_id == run.task_id && other.stage != RunStage::Closed && other.attempt > run.attempt);
+    if !selected && !pending {
+        return Err(error("attempt_stale", "Worker no longer owns the current canonical task attempt"));
+    }
+    dependencies::DependencyGraph::new(&document.tasks).require(task)
+}
+
 fn task_scope(
     state: &OrchestrationState,
     actor: &Actor,

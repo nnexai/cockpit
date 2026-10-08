@@ -163,7 +163,7 @@ export function nodeFacts(node: TopologyNode, ctx: {
   if (node.task) {
     const worker = node.assignedRunId ? ctx.model.byId.get(nodeId.run(node.assignedRunId))?.run : null;
     const closed = node.task.current_run_id ? ctx.snapshot.runs.find(run => run.run_id === node.task!.current_run_id && run.stage === "closed") : null;
-    return { glyph: "document", title: node.task.task.title, role: "Task", status: taskLanes.find(lane => lane.lane === node.task!.lane)!.label,
+    return { glyph: "document", title: node.task.task.title, role: "Task", status: node.task.dependencies.state === "invalid" ? "Prerequisites need fixing" : node.task.dependencies.state === "blocked" ? `${taskLanes.find(lane => lane.lane === node.task!.lane)!.label} · Waiting on ${node.task.dependencies.unmet.length}` : taskLanes.find(lane => lane.lane === node.task!.lane)!.label,
       provenance: worker ? labelFor(worker) : closed ? "worker closed" : "not assigned", relation: worker ? `Assigned to ${labelFor(worker)}` : null };
   }
   const run = node.run!;

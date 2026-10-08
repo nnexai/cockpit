@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   NativeProcessIdentity, NativeShellIdentity, OrchestrationAction, OrchestrationSnapshot, RetirementIdentity,
-  RetirementState, RunRetirement,
+  RetirementState, RunRetirement, Task, TaskDependencies,
 } from "../protocol/generated/v1";
 import { CockpitClientError } from "./CockpitClient";
 import { createBrowserClient } from "./browser";
@@ -15,6 +15,9 @@ import {
 const hash = "a".repeat(64);
 const at = "2026-10-05T12:00:00Z";
 const assignmentTaskId = "7b613f19-4a52-41fa-8864-a880cd69ef50";
+const prerequisiteId = "06c97d2c-8ed7-4231-b0e7-8fd6fd89c649";
+const parentStepId = "d6bdcdd4-7f90-4d02-8b8a-9dcda7157018";
+const childStepId = "78ff0733-7730-438c-b793-f866d562db95";
 const processIdentity: NativeProcessIdentity = { pid: 42, start_ticks: 1234, kernel_boot_id: "kernel-boot" };
 const shellIdentity: NativeShellIdentity = {
   process: { ...processIdentity, pid: 7, start_ticks: 100 },
@@ -54,7 +57,23 @@ function retirementRecord(state: RetirementState, identity: RetirementIdentity |
   };
 }
 const target = { target: "setup" as const, request: { operation: "open" as const, path: "/repo", label: null, task_name: null, focus: false } };
-const task = { task_id: "task", title: "Title", body: "Body", checked: false, line: 3, task_revision: hash, diagnostic: null };
+const task: Task = {
+  task_id: "task", title: "Title",
+  body: "Body\n<!-- cockpit-depends-on: 06c97d2c-8ed7-4231-b0e7-8fd6fd89c649 -->\n- [x] Parent\n  - [ ] Child",
+  description: "Body", description_editable: true, description_diagnostic: null,
+  steps: [
+    { step_id: parentStepId, parent_step_id: null, depth: 0, title: "Parent", checked: true,
+      status: "partial", line: 5, source_offset: 94, diagnostic: null },
+    { step_id: childStepId, parent_step_id: parentStepId, depth: 1, title: "Child", checked: false,
+      status: "open", line: 6, source_offset: 108, diagnostic: null },
+  ],
+  step_progress: { done: 0, total: 1 }, steps_diagnostic: null,
+  depends_on: [prerequisiteId], follow_up_of: assignmentTaskId, relations_diagnostic: null,
+  checked: false, line: 3, task_revision: hash, diagnostic: null,
+};
+const dependencies: TaskDependencies = {
+  state: "blocked", unmet: [{ task_id: prerequisiteId, reason: "unchecked" }], problems: [],
+};
 const report = { message_id: "report", kind: "ready" as const, outcome: "succeeded" as const, summary: "Ready", plan: "Work plan", at };
 const message = {
   message_id: "message", to_run_id: "run", seq: 1, from: { type: "run" as const, run_id: "root" },
@@ -65,7 +84,7 @@ const snapshot: OrchestrationSnapshot = {
   session_id: "session", revision: 2, tasks_token: hash,
   roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 1, needs_you: 1 }],
   board: { root_id: "root", path: "/tasks/root.md", doc_revision: hash, unidentified_items: 0,
-    diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, lane: "ready", current_run_id: "run" }] },
+    diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, lane: "ready", current_run_id: "run", dependencies }] },
   runs: [{
     session_id: "session", prepare_brief: "Prepare", run_id: "run", kind: "worker", label: "Worker", root_id: "root",
     parent_run_id: "root", task_id: "task", attempt: 1, task_revision_at_propose: hash, stage: "ready", close_reason: null,
@@ -77,7 +96,7 @@ const snapshot: OrchestrationSnapshot = {
     work_plan: { plan_revision: hash, text: "Work", created_at: at },
     grants: [{ grant_id: "grant", scope: "prepare", plan_revision: hash, origin: "browser",
       supervisor_run_id: null, omp_session_id: null, granted_at: at }],
-    last_report: report, result: report, annotations: [{ by: { type: "operator" }, text: "Note", at }],
+    last_report: report, result: { ...report, kind: "result" }, annotations: [{ by: { type: "operator" }, text: "Note", at }],
     location: { endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane",
       launch_tag: "launch", boot_id: "boot", terminal_id: "terminal", native_session_id: null },
     bound_omp_session: "omp", bound_omp_process: processIdentity, retirement: null,
@@ -85,7 +104,7 @@ const snapshot: OrchestrationSnapshot = {
     supersedes_run_id: null, created_at: at, updated_at: at,
   }],
   messages: [message],
-  subagents: [{ run_id: "run", subagent_id: "child", parent_subagent_id: null, role: "coder", label: "Child", status: "running", summary: "Working",
+  subagents: [{ run_id: "run", subagent_id: "child", parent_subagent_id: null, bound_omp_session: "omp", role: "coder", label: "Child", status: "running", summary: "Working",
     last_control: { seq: 1, op: { op: "send", text: "Report" }, stage: "applied", error: null, at }, updated_at: at }],
   intents: [{ intent_id: "intent", root_id: "root", task_id: "task", run_id: "run", expected_task_revision: hash, state: "pending",
     origin: null, supervisor_run_id: null, omp_session_id: null, result_message_id: null }],
@@ -97,10 +116,18 @@ const snapshot: OrchestrationSnapshot = {
   attention: [{ kind: "awaits_execute", run_id: "run", task_id: "task", message_seq: 1, since: at }],
 };
 const actions: OrchestrationAction[] = [
-  { action: "task_create", root_id: "root", title: "Title", body: "Body" },
-  { action: "task_assign", root_id: "root", task_id: assignmentTaskId, title: "Title", body: "Body" },
+  { action: "task_create", root_id: "root", task_id: assignmentTaskId, title: "Title", description: "Body",
+    depends_on: [prerequisiteId], follow_up_of: prerequisiteId, expected_doc_revision: hash, source_revision: hash },
+  { action: "task_assign", root_id: "root", task_id: assignmentTaskId, title: "Title", description: "Body" },
   { action: "task_assignment_resolve", root_id: "root", task_id: assignmentTaskId, expected_task_revision: hash, assign: true },
-  { action: "task_update", root_id: "root", task_id: "task", expected_task_revision: hash, title: null, body: "Body" },
+  { action: "task_update", root_id: "root", task_id: "task", expected_task_revision: hash, title: null, description: "Body" },
+  { action: "task_dependencies_set", root_id: "root", task_id: "task", expected_task_revision: hash, expected_doc_revision: hash, depends_on: [prerequisiteId] },
+  { action: "task_step_add", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId, parent_step_id: parentStepId, before_step_id: null, title: "Child" },
+  { action: "task_step_rename", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId, title: "Renamed" },
+  { action: "task_step_set_checked", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId, checked: true, scope: "leaf" },
+  { action: "task_step_move", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId, parent_step_id: null, before_step_id: parentStepId },
+  { action: "task_step_remove", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId },
+  { action: "task_steps_adopt", root_id: "root", task_id: "task", expected_task_revision: hash, mapping: [{ source_offset: 108, step_id: childStepId }] },
   { action: "tasks_assign_ids", root_id: "root", expected_doc_revision: hash },
   { action: "supervisor_start", target: null, label: null },
   { action: "run_bind_session", omp_session_id: "omp" },
@@ -155,6 +182,138 @@ describe("orchestration protocol boundary", () => {
     expect(parseOrchestrationSnapshot({ ...snapshot, runtime: { status: "unavailable", error: { code: "offline", message: "Offline" } } }).runtime.status).toBe("unavailable");
     expect(() => parseOrchestrationSnapshot({ ...snapshot, runtime: { status: "unavailable", error: { code: "offline", message: 4 } } })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationSnapshot({ ...snapshot, messages: Array(1) })).toThrow(CockpitClientError);
+  });
+
+  it("preserves canonical body, editable prose, raw checks and effective checklist/dependency facts", () => {
+    const view = parseOrchestrationSnapshot(snapshot).board!.tasks[0]!;
+    expect(view.task.body).toBe(task.body);
+    expect(view.task.description).toBe("Body");
+    expect(view.task.steps[0]).toMatchObject({ checked: true, status: "partial" });
+    expect(view.task.steps[1]).toMatchObject({ parent_step_id: parentStepId, source_offset: 108, status: "open" });
+    expect(view.task.step_progress).toEqual({ done: 0, total: 1 });
+    expect(view.task.follow_up_of).toBe(assignmentTaskId);
+    // A successful Result is not acceptance and cannot replace the native dependency projection.
+    expect(view.dependencies).toEqual(dependencies);
+    const response = parseOrchestrationMutationResponse({ revision: 3, result: { result: "task", task } });
+    expect(response.result).toEqual({ result: "task", task });
+  });
+
+  it("keeps diagnosed legacy checklists visible without applying authoring limits to source reads", () => {
+    const legacy: Task = {
+      ...task, description_editable: false, description_diagnostic: "description_unsafe",
+      steps: [{ ...task.steps[0]!, step_id: null, parent_step_id: null, depth: 5,
+        title: "é".repeat(201), diagnostic: "step_depth" }],
+      step_progress: null, steps_diagnostic: "steps_invalid", relations_diagnostic: "relations_invalid",
+    };
+    const dto = replaceField(snapshot, ["board", "tasks", 0, "task"], legacy);
+    expect(parseOrchestrationSnapshot(dto).board!.tasks[0]!.task).toEqual(legacy);
+    expect(parseOrchestrationSnapshot(replaceField(snapshot, ["board", "tasks", 0, "task", "steps"], []))
+      .board!.tasks[0]!.task.steps).toEqual([]);
+    for (const status of ["open", "partial", "done"]) {
+      expect(parseOrchestrationSnapshot(replaceField(snapshot, ["board", "tasks", 0, "task", "steps", 0, "status"], status))
+        .board!.tasks[0]!.task.steps[0]!.status).toBe(status);
+    }
+  });
+
+  it("decodes each dependency state and blocker reason without deriving it from lane or Result", () => {
+    for (const state of ["none", "satisfied", "blocked", "invalid"] as const) {
+      const facts: TaskDependencies = state === "none" || state === "satisfied"
+        ? { state, unmet: [], problems: [] }
+        : { state, unmet: [
+          { task_id: prerequisiteId, reason: "unchecked" },
+          { task_id: "deleted", reason: "missing" },
+          { task_id: "duplicate", reason: "ambiguous" },
+        ], problems: state === "invalid" ? [{ code: "dependency_cycle", message: "Cycle" }] : [] };
+      const dto = replaceField(snapshot, ["board", "tasks", 0, "dependencies"], facts);
+      expect(parseOrchestrationSnapshot(dto).board!.tasks[0]!.dependencies).toEqual(facts);
+    }
+  });
+
+  it("rejects malformed checklist, progress, relation and binding facts", () => {
+    const taskPath = ["board", "tasks", 0, "task"] as const;
+    for (const [path, bad] of [
+      [["description"], null], [["description_editable"], "true"], [["description_diagnostic"], false],
+      [["steps"], Array(1)], [["steps", 0, "step_id"], ""], [["steps", 0, "parent_step_id"], 4],
+      [["steps", 0, "depth"], -1], [["steps", 0, "depth"], 0x100000000],
+      [["steps", 0, "title"], null], [["steps", 0, "checked"], 1], [["steps", 0, "status"], "complete"],
+      [["steps", 0, "line"], 1.5], [["steps", 0, "source_offset"], "108"],
+      [["steps", 0, "source_offset"], 0x100000000], [["steps", 0, "diagnostic"], {}],
+      [["step_progress"], { done: 2, total: 1 }], [["step_progress"], { done: -1, total: 1 }],
+      [["step_progress"], { done: 0, total: 0x100000000 }], [["steps_diagnostic"], []],
+      [["depends_on"], null], [["depends_on"], [""]], [["follow_up_of"], 1], [["relations_diagnostic"], {}],
+    ] as const) {
+      expect(() => parseOrchestrationSnapshot(replaceField(snapshot, [...taskPath, ...path], bad)), path.join("."))
+        .toThrow(CockpitClientError);
+      expect(() => parseOrchestrationMutationResponse({
+        revision: 3, result: { result: "task", task: replaceField(task, [...path], bad) },
+      }), path.join(".")).toThrow(CockpitClientError);
+    }
+    for (const facts of [
+      { ...dependencies, state: "ready" }, { ...dependencies, unmet: [{ task_id: prerequisiteId, reason: "done" }] },
+      { ...dependencies, unmet: [{ task_id: "", reason: "missing" }] },
+      { ...dependencies, problems: [{ code: "dependency_cycle", message: 4 }] },
+    ]) expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["board", "tasks", 0, "dependencies"], facts)))
+      .toThrow(CockpitClientError);
+    const bindingPath = ["subagents", 0, "bound_omp_session"];
+    expect(parseOrchestrationSnapshot(replaceField(snapshot, bindingPath, null)).subagents[0]!.bound_omp_session).toBeNull();
+    for (const invalid of ["", 1, {}]) expect(() => parseOrchestrationSnapshot(replaceField(snapshot, bindingPath, invalid)))
+      .toThrow(CockpitClientError);
+    expect(() => parseOrchestrationSnapshot(replaceField(snapshot, bindingPath, undefined, true))).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ action: "subagent_update", subagent_id: "child",
+      parent_subagent_id: null, bound_omp_session: "spoofed", role: null, label: "Child", status: "running", summary: null }))
+      .toThrow(CockpitClientError);
+  });
+
+  it("requires stable creation identity and revision fences and rejects writable canonical body aliases", () => {
+    const create = { action: "task_create", root_id: "root", task_id: assignmentTaskId, title: "Title",
+      description: "Prose", depends_on: [], follow_up_of: null, expected_doc_revision: null, source_revision: null };
+    expect(parseOrchestrationAction(create)).toEqual(create);
+    for (const task_id of ["", "task", "not-a-uuid"]) expect(() => parseOrchestrationAction({ ...create, task_id }))
+      .toThrow(CockpitClientError);
+    for (const invalid of [
+      { ...create, depends_on: ["invalid"] }, { ...create, follow_up_of: "invalid" },
+      { ...create, expected_doc_revision: "bad" }, { ...create, source_revision: "bad" },
+      { ...create, depends_on: Array(33).fill(prerequisiteId) },
+    ]) expect(() => parseOrchestrationAction(invalid)).toThrow(CockpitClientError);
+    expect(parseOrchestrationAction({ ...create, depends_on: Array(32).fill(prerequisiteId) })).toBeDefined();
+    for (const action of actions.filter(action => ["task_create", "task_assign", "task_update"].includes(action.action))) {
+      expect(() => parseOrchestrationAction({ ...action, body: "Raw canonical replacement" })).toThrow(CockpitClientError);
+      expect(() => parseOrchestrationAction(replaceField(action, ["description"], undefined, true))).toThrow(CockpitClientError);
+    }
+    const set = { action: "task_dependencies_set", root_id: "root", task_id: "task",
+      expected_task_revision: hash, expected_doc_revision: hash, depends_on: [] };
+    expect(parseOrchestrationAction(set)).toEqual(set);
+    expect(() => parseOrchestrationAction({ ...set, depends_on: Array(33).fill(prerequisiteId) })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ ...set, expected_doc_revision: null })).toThrow(CockpitClientError);
+  });
+
+  it("validates Unicode-scalar step titles, stable identities, bounded adoption and explicit check scope", () => {
+    const add = { action: "task_step_add", root_id: "root", task_id: "task", expected_task_revision: hash,
+      step_id: childStepId, parent_step_id: null, before_step_id: null, title: "😀".repeat(200) };
+    expect(parseOrchestrationAction(add)).toEqual(add);
+    expect(parseOrchestrationAction({ ...add, title: "é".repeat(200) })).toBeDefined();
+    for (const title of ["😀".repeat(201), "é".repeat(201), "", " \t ", "line\nbreak", "bad\0title", "\ud800"]) {
+      expect(() => parseOrchestrationAction({ ...add, title })).toThrow(CockpitClientError);
+      expect(() => parseOrchestrationAction({ action: "task_step_rename", root_id: "root", task_id: "task",
+        expected_task_revision: hash, step_id: childStepId, title })).toThrow(CockpitClientError);
+    }
+    for (const field of ["step_id", "parent_step_id", "before_step_id"]) {
+      expect(() => parseOrchestrationAction({ ...add, [field]: "invalid" })).toThrow(CockpitClientError);
+    }
+    const checked = { action: "task_step_set_checked", root_id: "root", task_id: "task",
+      expected_task_revision: hash, step_id: parentStepId, checked: true, scope: "subtree" };
+    expect(parseOrchestrationAction(checked)).toEqual(checked);
+    expect(parseOrchestrationAction({ ...checked, scope: "leaf" })).toBeDefined();
+    for (const scope of [null, "all", "children"]) expect(() => parseOrchestrationAction({ ...checked, scope })).toThrow(CockpitClientError);
+    const adopt = { action: "task_steps_adopt", root_id: "root", task_id: "task", expected_task_revision: hash,
+      mapping: [{ source_offset: 108, step_id: childStepId }] };
+    expect(parseOrchestrationAction({ ...adopt, mapping: Array(64).fill(adopt.mapping[0]) })).toBeDefined();
+    for (const mapping of [
+      Array(65).fill(adopt.mapping[0]), [{ source_offset: -1, step_id: childStepId }],
+      [{ source_offset: 0x100000000, step_id: childStepId }], [{ source_offset: 108, step_id: "invalid" }],
+      [{ source_offset: 108, step_id: childStepId, body: "unexpected" }],
+    ]) expect(() => parseOrchestrationAction({ ...adopt, mapping })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ ...adopt, expected_doc_revision: hash })).toThrow(CockpitClientError);
   });
 
   it("decodes explicit project-bound worktree targets and rejects malformed or unknown targets", () => {
@@ -349,7 +508,7 @@ describe("orchestration protocol boundary", () => {
   });
 
   it("requires stable assignment UUIDs, exact resolve revisions and pointer-only intents", () => {
-    const assign = { action: "task_assign", root_id: "root", task_id: assignmentTaskId, title: "Title", body: "Body" };
+    const assign = { action: "task_assign", root_id: "root", task_id: assignmentTaskId, title: "Title", description: "Body" };
     const resolve = { action: "task_assignment_resolve", root_id: "root", task_id: assignmentTaskId, expected_task_revision: null, assign: false };
     expect(parseOrchestrationAction(resolve)).toEqual(resolve);
     expect(() => parseOrchestrationAction({ ...resolve, assign: true })).toThrow(CockpitClientError);
@@ -364,7 +523,7 @@ describe("orchestration protocol boundary", () => {
     }
     expect(() => parseOrchestrationAction({ ...assign, origin: "supervisor" })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationAction({ ...assign, title: "é".repeat(129) })).toThrow(CockpitClientError);
-    expect(() => parseOrchestrationAction({ ...assign, body: "é".repeat(8193) })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ ...assign, description: "é".repeat(8193) })).toThrow(CockpitClientError);
   });
 
   it("rejects unsafe counters, malformed digests, timestamps, booleans and foreign sessions", () => {

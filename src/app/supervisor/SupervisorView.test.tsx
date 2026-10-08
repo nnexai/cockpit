@@ -25,7 +25,7 @@ function observed(runId = "root", overrides: Partial<RunObservation> = {}): RunO
   return { run_id: runId, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at, ...overrides };
 }
 function task(overrides: Partial<TaskView> = {}): TaskView {
-  return { task: { task_id: "task-a", title: "Improve search", body: "Improve search\nKeep existing behavior.", checked: false, line: 1, task_revision: "task-revision", diagnostic: null }, lane: "working", current_run_id: "worker", ...overrides };
+  return { task: { task_id: "task-a", title: "Improve search", body: "Improve search\nKeep existing behavior.", description: "Improve search\nKeep existing behavior.", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "task-revision", diagnostic: null }, lane: "working", current_run_id: "worker", dependencies: { state: "none", unmet: [], problems: [] }, ...overrides };
 }
 function board(rootId = "root", tasks: TaskView[] = []): TaskBoard {
   return { root_id: rootId, path: `/state/${rootId}.md`, doc_revision: "document-revision", unidentified_items: 0, diagnostics: [], tasks };
@@ -280,14 +280,14 @@ describe("Supervisor authority and retained operations", () => {
     expect(fixture.mutation.mock.calls.some(([request]) => request.action.action === "supervisor_start")).toBe(false);
   });
   it("retains cancelled edit drafts and disables editing when disconnected", async () => {
-    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "reported" });
     const fixture = await mount(snapshot([run(), worker], [task()]));
     act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.click()); await settle();
     act(() => button("Actions").click()); await settle();
     act(() => button("Edit task…").click()); await settle();
     enter(document.querySelector<HTMLInputElement>('[role="dialog"] input')!, "Retained edit");
     act(() => button("Cancel").click()); await settle();
-    act(() => button("Edit task…").click()); await settle();
+    act(() => [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.startsWith("Edit task…"))!.click()); await settle();
     expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("Retained edit");
     await rerender(false); fixture.snapshotCall.mockRejectedValue(new Error("transport offline")); await rerender(true);
     expect(button("Save task").disabled).toBe(true);
@@ -359,7 +359,7 @@ describe("Supervisor selection, scroll and panel transitions", () => {
   it("keeps a visible-node click at the same graph offsets, and subagent-off selects its worker", async () => {
     const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
     const state = snapshot([run(), worker], [task()]);
-    state.subagents = [{ run_id: "worker", subagent_id: "child", parent_subagent_id: null, role: "Researcher", label: "Research child", status: "running", summary: null, last_control: null, updated_at: at }];
+    state.subagents = [{ run_id: "worker", subagent_id: "child", parent_subagent_id: null, role: "Researcher", label: "Research child", status: "running", summary: null, last_control: null, bound_omp_session: null, updated_at: at }];
     const fixture = await mount(state);
     act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
     const graph = host.querySelector<HTMLDivElement>(".supervisor-graph-scroll")!; graph.scrollLeft = 150; graph.scrollTop = 60;

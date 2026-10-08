@@ -203,6 +203,30 @@ fn bound_context(agent: &AgentCaller, run: &Run) -> Result<(), InspectionError> 
     }
 }
 
+/// Native caller evidence comes from the trusted CLI process probe and the SDK's
+/// live registry, not the parent-writable telemetry payload.
+pub(super) fn authenticated_child_session<'a>(
+    agent: &'a AgentCaller,
+    run: &Run,
+) -> Result<&'a str, InspectionError> {
+    if agent.agent_kind != Some(AgentKind::Subagent)
+        || agent.actual_agent_kind.as_deref() != Some("omp")
+    {
+        return Err(error("actor_forbidden", "An actual native child context is required"));
+    }
+    bound_context(agent, run)?;
+    if agent.process.is_none()
+        || run.bound_omp_process.is_none()
+        || agent.process != run.bound_omp_process
+    {
+        return Err(error(
+            "session_mismatch",
+            "Child process evidence must match the run's authenticated main process",
+        ));
+    }
+    Ok(agent.omp_session_id.as_deref().expect("validated child session"))
+}
+
 fn subagent_context(agent: &AgentCaller) -> Result<Option<String>, InspectionError> {
     if agent.agent_kind == Some(AgentKind::Subagent) {
         let id = agent
@@ -731,16 +755,21 @@ pub(crate) fn apply(
             if let Some(summary) = summary {
                 text_bound(summary)?;
             }
-            match agent.agent_kind {
-                Some(AgentKind::Main) => main_session(agent, &state.runs[index])?,
-                Some(AgentKind::Subagent) if agent.subagent_id.as_deref() == Some(subagent_id) => {}
+            let child_binding = match agent.agent_kind {
+                Some(AgentKind::Main) => {
+                    main_session(agent, &state.runs[index])?;
+                    None
+                }
+                Some(AgentKind::Subagent) if agent.subagent_id.as_deref() == Some(subagent_id) => {
+                    Some(authenticated_child_session(agent, &state.runs[index])?)
+                }
                 _ => {
                     return Err(error(
                         "actor_forbidden",
                         "A subagent may update only its own telemetry",
                     ));
                 }
-            }
+            };
             let own = &state.runs[index].run_id;
             let mut parent = parent_subagent_id.as_deref();
             let mut depth = 0;
@@ -787,6 +816,9 @@ pub(crate) fn apply(
             let at = now();
             if let Some(index) = existing {
                 let entry = &mut state.subagents[index];
+                if let Some(session) = child_binding {
+                    entry.bound_omp_session = Some(session.to_owned());
+                }
                 entry.parent_subagent_id = parent_subagent_id.clone();
                 entry.role = role.clone();
                 entry.label = label.clone();
@@ -802,6 +834,7 @@ pub(crate) fn apply(
                     run_id: own.clone(),
                     subagent_id: subagent_id.clone(),
                     parent_subagent_id: parent_subagent_id.clone(),
+                    bound_omp_session: child_binding.map(str::to_owned),
                     role: role.clone(),
                     label: label.clone(),
                     status: *status,
@@ -972,6 +1005,14 @@ pub(crate) fn apply(
 mod tests {
     use super::*;
 
+    fn native_process() -> NativeProcessIdentity {
+        NativeProcessIdentity {
+            pid: 41,
+            start_ticks: 73,
+            kernel_boot_id: Some("test-boot".into()),
+        }
+    }
+
     fn run(id: &str, parent: Option<&str>, stage: RunStage) -> Run {
         Run {
             session_id: "herdr-session".into(),
@@ -1002,7 +1043,7 @@ mod tests {
             annotations: Vec::new(),
             location: None,
             bound_omp_session: Some(format!("omp-{id}")),
-            bound_omp_process: None,
+            bound_omp_process: Some(native_process()),
             launch_shell_identity: None,
             retirement: None,
             supersedes_run_id: None,
@@ -1044,7 +1085,7 @@ mod tests {
             agent_kind: Some(AgentKind::Main),
             actual_agent_kind: Some("omp".into()),
             subagent_id: None,
-            process: None,
+            process: Some(native_process()),
         })
     }
 
@@ -1928,6 +1969,60 @@ mod tests {
             "actor_forbidden",
         );
         assert_eq!(state.subagents[0].parent_subagent_id, None);
+    }
+
+    #[test]
+    fn only_authenticated_self_updates_bind_native_children() {
+        let mut state = state();
+        let main = main_actor("worker");
+        mutation(&mut state, &main, 1, &update("child", None));
+        assert_eq!(state.subagents[0].bound_omp_session, None);
+
+        let child = subagent_actor("worker", "child");
+        mutation(&mut state, &child, 1, &update("child", None));
+        assert_eq!(
+            state.subagents[0].bound_omp_session.as_deref(),
+            Some("sub-session-child")
+        );
+        mutation(&mut state, &main, 1, &update("child", None));
+        assert_eq!(
+            state.subagents[0].bound_omp_session.as_deref(),
+            Some("sub-session-child")
+        );
+
+        let Actor::Agent(mut unproven) = child else { unreachable!() };
+        unproven.process = None;
+        assert_error(
+            &mut state,
+            &Actor::Agent(unproven.clone()),
+            1,
+            &update("child", None),
+            "session_mismatch",
+        );
+        unproven.process = Some(NativeProcessIdentity {
+            start_ticks: 74,
+            ..native_process()
+        });
+        assert_error(
+            &mut state,
+            &Actor::Agent(unproven.clone()),
+            1,
+            &update("child", None),
+            "session_mismatch",
+        );
+        unproven.process = Some(native_process());
+        unproven.actual_agent_kind = Some("shell".into());
+        assert_error(
+            &mut state,
+            &Actor::Agent(unproven),
+            1,
+            &update("child", None),
+            "actor_forbidden",
+        );
+        assert_eq!(
+            state.subagents[0].bound_omp_session.as_deref(),
+            Some("sub-session-child")
+        );
     }
 
     #[test]

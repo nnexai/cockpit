@@ -92,16 +92,88 @@ pub struct Task {
     pub task_id: String,
     pub title: String,
     pub body: String,
+    pub description: String,
+    pub description_editable: bool,
+    pub description_diagnostic: Option<String>,
+    pub steps: Vec<TaskStep>,
+    pub step_progress: Option<TaskStepProgress>,
+    pub steps_diagnostic: Option<String>,
+    pub depends_on: Vec<String>,
+    pub follow_up_of: Option<String>,
+    pub relations_diagnostic: Option<String>,
     pub checked: bool,
     pub line: u32,
     pub task_revision: String,
     pub diagnostic: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskStep {
+    pub step_id: Option<String>,
+    pub parent_step_id: Option<String>,
+    pub depth: u32,
+    pub title: String,
+    pub checked: bool,
+    pub status: TaskStepStatus,
+    pub line: u32,
+    pub source_offset: u32,
+    pub diagnostic: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskStepProgress {
+    pub done: u32,
+    pub total: u32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStepStatus {
+    Open,
+    Partial,
+    Done,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStepScope {
+    Leaf,
+    Subtree,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TaskStepAdoption {
+    pub source_offset: u32,
+    pub step_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskDependencies {
+    pub state: TaskDependencyState,
+    pub unmet: Vec<TaskDependencyBlocker>,
+    pub problems: Vec<ErrorResponse>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDependencyState {
+    None,
+    Satisfied,
+    Blocked,
+    Invalid,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskDependencyBlocker {
+    pub task_id: String,
+    pub reason: TaskDependencyBlockerReason,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDependencyBlockerReason {
+    Unchecked,
+    Missing,
+    Ambiguous,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct TaskView {
     pub task: Task,
     pub lane: TaskLane,
     pub current_run_id: Option<String>,
+    pub dependencies: TaskDependencies,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -535,6 +607,8 @@ pub struct Subagent {
     pub run_id: String,
     pub subagent_id: String,                // subagent_id = OMP ctx.agent.id
     pub parent_subagent_id: Option<String>, // OMP ctx.agent.parentId; None = child of the run's main session
+    #[serde(default)]
+    pub bound_omp_session: Option<String>,
     pub role: Option<String>,
     pub label: String,
     pub status: SubagentStatus,
@@ -666,14 +740,19 @@ pub enum OrchestrationAction {
     // tasks: operator or agent
     TaskCreate {
         root_id: String,
+        task_id: String,
         title: String,
-        body: String,
-    }, // operator: any root; agent: only its bound run's root_id
+        description: String,
+        depends_on: Vec<String>,
+        follow_up_of: Option<String>,
+        expected_doc_revision: Option<String>,
+        source_revision: Option<String>,
+    }, // ordinary independent creation: own-root agent; relationships: root main or operator
     TaskAssign {
         root_id: String,
         task_id: String,
         title: String,
-        body: String,
+        description: String,
     }, // operator; creates the canonical task and assigns it to the selected root atomically
     TaskAssignmentResolve {
         root_id: String,
@@ -686,8 +765,59 @@ pub enum OrchestrationAction {
         task_id: String,
         expected_task_revision: String,
         title: Option<String>,
-        body: Option<String>,
-    }, // same rule
+        description: Option<String>,
+    }, // task content authority; raw canonical body is read-only
+    TaskDependenciesSet {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        expected_doc_revision: String,
+        depends_on: Vec<String>,
+    }, // root main or operator; live attempts permit remove-only dependency edits
+    TaskStepAdd {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        step_id: String,
+        parent_step_id: Option<String>,
+        before_step_id: Option<String>,
+        title: String,
+    },
+    TaskStepRename {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        step_id: String,
+        title: String,
+    },
+    TaskStepSetChecked {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        step_id: String,
+        checked: bool,
+        scope: TaskStepScope,
+    },
+    TaskStepMove {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        step_id: String,
+        parent_step_id: Option<String>,
+        before_step_id: Option<String>,
+    },
+    TaskStepRemove {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        step_id: String,
+    },
+    TaskStepsAdopt {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        mapping: Vec<TaskStepAdoption>,
+    },
     TasksAssignIds {
         root_id: String,
         expected_doc_revision: String,
@@ -853,6 +983,26 @@ pub enum OrchestrationActionResult {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn legacy_subagent_does_not_infer_native_session_binding() {
+        let legacy = json!({
+            "run_id": "worker", "subagent_id": "child",
+            "parent_subagent_id": null, "role": null, "label": "Child",
+            "status": "running", "summary": null, "last_control": null,
+            "updated_at": "2026-10-08T00:00:00Z",
+        });
+        let subagent: Subagent = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(subagent.bound_omp_session, None);
+        let mut expected = legacy;
+        expected["bound_omp_session"] = Value::Null;
+        assert_eq!(serde_json::to_value(subagent).unwrap(), expected);
+
+        expected["bound_omp_session"] = json!("actual-child-session");
+        let bound: Subagent = serde_json::from_value(expected.clone()).unwrap();
+        assert_eq!(bound.bound_omp_session.as_deref(), Some("actual-child-session"));
+        assert_eq!(serde_json::to_value(bound).unwrap(), expected);
+    }
 
     #[test]
     fn legacy_setup_summary_has_no_inferred_project_space() {

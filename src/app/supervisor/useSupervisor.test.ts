@@ -2,9 +2,10 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CockpitClient } from "../../client/CockpitClient";
-import type { OrchestrationAction, OrchestrationActionResult, OrchestrationMutationResponse, OrchestrationSnapshot, OrchestrationWaitResponse, Run } from "../../protocol/generated/v1";
-import { acceptsSupervisorSnapshot, useSupervisor } from "./useSupervisor";
+import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
+import type { OrchestrationAction, OrchestrationActionResult, OrchestrationMutationResponse, OrchestrationSnapshot, OrchestrationWaitResponse, Run, Task } from "../../protocol/generated/v1";
+import { acceptsSupervisorSnapshot, useSupervisor, type SourceSubmission, type SourceResolution, type SourceResolutionOutcome, type TaskMutationOutcome } from "./useSupervisor";
+import type { StepScope, StepSubmission, StepUnknownResolution, StepResolutionOutcome, StepReadOutcome } from "./stepInteractions";
 
 const snapshot: OrchestrationSnapshot = {
   session_id: "session-a", revision: 12, tasks_token: "external-edit-a",
@@ -87,6 +88,12 @@ interface VisibleState {
 }
 interface HookState extends VisibleState {
   mutateResult: (action: OrchestrationAction) => Promise<OrchestrationActionResult | null>;
+  submitStep: (submitted: StepSubmission) => Promise<TaskMutationOutcome<StepSubmission>>;
+  submitTask: (submitted: SourceSubmission) => Promise<TaskMutationOutcome<SourceSubmission>>;
+  readSaved: (scope: StepScope) => Promise<StepReadOutcome>;
+  resolveUnknown: (request: StepUnknownResolution) => Promise<StepResolutionOutcome>;
+  resolveSourceUnknown: (request: SourceResolution) => Promise<SourceResolutionOutcome>;
+  taskWriteUnconfirmed: (scope: StepScope) => boolean;
 }
 const mounted: { root: Root; host: HTMLDivElement; unmounted: boolean }[] = [];
 async function flush(change: () => void = () => {}) {
@@ -117,6 +124,7 @@ async function mount(client: CockpitClient) {
     render,
     state: () => JSON.parse(host.querySelector("output")!.textContent!) as VisibleState,
     lastVisible: () => lastVisible,
+    hookState: () => accepted,
     mutate: (action: OrchestrationAction) => accepted.mutateResult(action),
     unmount: async () => { await flush(() => entry.root.unmount()); entry.unmounted = true; },
   };
@@ -158,8 +166,8 @@ describe("mounted Supervisor observation", () => {
       revision: 13, tasks_token: "external-edit-b", runs: [reportedRun(kind)],
       attention: [{ kind: kind === "needs_input" ? "needs_input" : "to_accept", run_id: "worker", task_id: "task-a", message_seq: 1, since: at }],
       board: { ...snapshot.board!, doc_revision: "doc-b", tasks: [{
-        task: { task_id: "task-a", title: "Deliver work", body: "Canonical task", checked: false, line: 1, task_revision: "task-b", diagnostic: null },
-        lane: kind === "needs_input" ? "working" : "review", current_run_id: "worker",
+        task: { task_id: "task-a", title: "Deliver work", body: "Canonical task", description: "Canonical task", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "task-b", diagnostic: null },
+        lane: kind === "needs_input" ? "working" : "review", current_run_id: "worker", dependencies: { state: "none", unmet: [], problems: [] },
       }] },
     });
     await flush(() => api.wait().resolve({ revision: next.revision, tasks_token: next.tasks_token, changed: true }));
@@ -342,5 +350,342 @@ describe("mounted Supervisor mutations", () => {
     const current = observedState({ revision: 14 });
     await flush(() => api.snapshot().resolve(current));
     expect(consumer.state().snapshot).toEqual(current);
+  });
+});
+
+const taskScope: StepScope = { sessionId: "session-a", rootId: "root-a", taskId: "task-a" };
+function savedTask(taskId = "task-a", revision = "task-original"): Task {
+  return {
+    task_id: taskId, title: `Task ${taskId}`, body: "Canonical source", description: "Original description",
+    description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 },
+    steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null,
+    checked: false, line: 1, task_revision: revision, diagnostic: null,
+  };
+}
+function taskSnapshot(tasks: Task[] = [savedTask(), savedTask("task-b")], rootId = "root-a"): OrchestrationSnapshot {
+  return observedState({ board: {
+    ...snapshot.board!, root_id: rootId, path: `/state/tasks/${rootId}.md`,
+    tasks: tasks.map(task => ({ task, lane: "queued", current_run_id: null, dependencies: { state: "none", unmet: [], problems: [] } })),
+  } });
+}
+function stepSubmission(scope: StepScope = taskScope, submissionId = "step-original", revision = "task-original"): StepSubmission {
+  return { submissionId, scope, expectedTaskRevision: revision, intent: { kind: "rename", stepId: "step-a", title: "Retained step title" } };
+}
+function sourceSubmission(scope: StepScope = taskScope, submissionId = "source-original", revision = "task-original", description = "Retained description"): SourceSubmission {
+  return { submissionId, scope, action: { action: "task_update", root_id: scope.rootId, task_id: scope.taskId,
+    expected_task_revision: revision, title: null, description } };
+}
+function resolution(original: StepSubmission, revision = "task-reviewed"): StepUnknownResolution {
+  return { originalScope: original.scope, originalSubmissionId: original.submissionId, originalSubmitted: original,
+    reviewedTaskRevision: revision, decision: { kind: "use_saved" } };
+}
+async function mountedTasks() {
+  vi.useFakeTimers();
+  const api = transport(), consumer = await mount(api.client);
+  await flush(() => api.snapshot().resolve(taskSnapshot()));
+  return { api, consumer };
+}
+interface TaskFixture {
+  api: { client: CockpitClient; snapshot: () => Deferred<OrchestrationSnapshot>; mutation: () => Deferred<OrchestrationMutationResponse> };
+  consumer: { hookState: () => HookState };
+}
+async function makeUnknown({ api, consumer }: TaskFixture, submitted: StepSubmission | SourceSubmission) {
+  let result!: Promise<TaskMutationOutcome<StepSubmission | SourceSubmission>>;
+  await flush(() => {
+    result = "action" in submitted ? consumer.hookState().submitTask(submitted) : consumer.hookState().submitStep(submitted);
+  });
+  await flush(() => api.mutation().reject(new Error("Connection lost after submission")));
+  expect(await result).toEqual({ kind: "unknown", submitted, message: "Connection lost after submission" });
+  expect(consumer.hookState().taskWriteUnconfirmed(submitted.scope)).toBe(true);
+}
+async function readOriginal({ api, consumer }: TaskFixture, scope = taskScope, revision = "task-reviewed") {
+  let result!: Promise<StepReadOutcome>;
+  await flush(() => { result = consumer.hookState().readSaved(scope); });
+  expect(api.client.orchestrationSnapshot).toHaveBeenLastCalledWith({ session_id: scope.sessionId, root_id: scope.rootId });
+  const task = savedTask(scope.taskId, revision);
+  await flush(() => api.snapshot().resolve({ ...taskSnapshot([task], scope.rootId), session_id: scope.sessionId }));
+  expect(await result).toEqual({ kind: "found", task });
+  return task;
+}
+
+describe("mounted Supervisor task uncertainty", () => {
+  it("returns not_sent while busy before invoking transport for either task writer", async () => {
+    const { api, consumer } = await mountedTasks();
+    let pending!: Promise<OrchestrationActionResult | null>;
+    await flush(() => { pending = consumer.mutate({ action: "cancel_run", run_id: "worker" }); });
+    expect(consumer.state().busy).toBe(true);
+    expect(await consumer.hookState().submitStep(stepSubmission())).toEqual({ kind: "not_sent", reason: "Wait for the current operation." });
+    expect(await consumer.hookState().submitTask(sourceSubmission())).toEqual({ kind: "not_sent", reason: "Wait for the current operation." });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(1);
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
+    await flush(() => api.mutation().resolve({ revision: 13, result: { result: "done" } }));
+    expect(await pending).toEqual({ result: "done" });
+  });
+
+  it.each([
+    "actor_forbidden", "invalid_stage", "attempt_stale", "session_mismatch", "caller_mismatch", "caller_unbound",
+    "task_not_found", "task_id_duplicate", "task_checked", "intent_conflict", "task_revision_conflict",
+    "task_dependencies_invalid", "task_blocked", "invalid_task", "task_description_ambiguous", "task_relations_invalid",
+    "tasks_full", "task_id_conflict",
+  ])("classifies whitelisted %s as refused without installing an uncertainty gate", async operationCode => {
+    const { api, consumer } = await mountedTasks();
+    let result!: Promise<TaskMutationOutcome<StepSubmission>>;
+    await flush(() => { result = consumer.hookState().submitStep(stepSubmission()); });
+    await flush(() => api.mutation().reject(new CockpitClientError("http_error", "Rejected before publication", { operationCode })));
+    expect(await result).toEqual({ kind: "refused", operationCode, message: "Rejected before publication" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
+    expect(consumer.state().busy).toBe(false);
+  });
+
+  it.each([
+    new CockpitClientError("http_error", "Publication could have occurred", { operationCode: "io_error" }),
+    new CockpitClientError("http_error", "New code is not a refusal guarantee", { operationCode: "task_invalid" }),
+    new Error("task_revision_conflict"),
+  ])("retains unknown for untrusted or non-whitelisted failure $message", async failure => {
+    const { api, consumer } = await mountedTasks(), submitted = stepSubmission();
+    let result!: Promise<TaskMutationOutcome<StepSubmission>>;
+    await flush(() => { result = consumer.hookState().submitStep(submitted); });
+    await flush(() => api.mutation().reject(failure));
+    expect(await result).toEqual({ kind: "unknown", submitted, message: failure.message });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(consumer.state().busy).toBe(false);
+  });
+
+  it.each(["steps", "description"] as const)("gates both writers for an unknown %s operation but permits an unrelated task", async writer => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture;
+    await makeUnknown(fixture, writer === "steps" ? stepSubmission() : sourceSubmission());
+    expect(await consumer.hookState().submitStep(stepSubmission(taskScope, "another-step"))).toMatchObject({ kind: "not_sent" });
+    expect(await consumer.hookState().submitTask(sourceSubmission(taskScope, "another-description"))).toMatchObject({ kind: "not_sent" });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(1);
+    const otherScope = { ...taskScope, taskId: "task-b" }, other = sourceSubmission(otherScope), saved = savedTask("task-b", "other-confirmed");
+    let result!: Promise<TaskMutationOutcome<SourceSubmission>>;
+    await flush(() => { result = consumer.hookState().submitTask(other); });
+    expect(api.client.orchestrationMutate).toHaveBeenLastCalledWith({ session_id: "session-a", expected_revision: null, action: other.action });
+    await flush(() => api.mutation().resolve({ revision: 13, result: { result: "task", task: saved } }));
+    expect(await result).toEqual({ kind: "confirmed", task: saved });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(consumer.hookState().taskWriteUnconfirmed(otherScope)).toBe(false);
+  });
+
+  it("does not treat successful polling or a saved-task read as explicit resolution", async () => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, original = stepSubmission();
+    await makeUnknown(fixture, original);
+    const polled = taskSnapshot([savedTask("task-a", "task-reviewed")]);
+    await flush(() => api.wait().resolve({ revision: 12, tasks_token: "external-edit-b", changed: true }));
+    await flush(() => api.snapshot().resolve(polled));
+    expect(consumer.state().snapshot).toEqual(polled);
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(await consumer.hookState().resolveUnknown(resolution(original))).toMatchObject({ kind: "not_resolved", code: "read_required" });
+    await readOriginal(fixture);
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(await consumer.hookState().submitTask(sourceSubmission())).toMatchObject({ kind: "not_sent" });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["scope", "id", "payload"] as const)("refuses a mismatched original %s without clearing the retained gate", async mismatch => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, original = stepSubmission();
+    await makeUnknown(fixture, original);
+    await readOriginal(fixture);
+    const request = resolution(original);
+    const invalid: StepUnknownResolution = mismatch === "scope"
+      ? { ...request, originalScope: { ...taskScope, taskId: "task-b" } }
+      : mismatch === "id" ? { ...request, originalSubmissionId: "another-submission" }
+      : { ...request, originalSubmitted: { ...original, intent: { kind: "rename", stepId: "step-a", title: "Different payload" } } };
+    expect(await consumer.hookState().resolveUnknown(invalid)).toMatchObject({ kind: "not_resolved", code: "different_source_operation" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses step resolution of a different SOURCE unknown even with matching scope and submission id", async () => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, source = sourceSubmission();
+    await makeUnknown(fixture, source);
+    await readOriginal(fixture);
+    expect(await consumer.hookState().resolveUnknown(resolution(stepSubmission(taskScope, source.submissionId))))
+      .toMatchObject({ kind: "not_resolved", code: "different_source_operation" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires the original read revision and explicit use_saved, clearing only that exact operation", async () => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, original = stepSubmission();
+    const otherScope = { ...taskScope, taskId: "task-b" }, other = stepSubmission(otherScope, "other-original");
+    await makeUnknown(fixture, original);
+    await makeUnknown(fixture, other);
+    // Reading a different task cannot provide evidence for the original operation.
+    await readOriginal(fixture, otherScope, "other-reviewed");
+    expect(await consumer.hookState().resolveUnknown(resolution(original))).toMatchObject({ kind: "not_resolved", code: "read_required" });
+    const saved = await readOriginal(fixture);
+    expect(await consumer.hookState().resolveUnknown(resolution(original, "task-original"))).toMatchObject({ kind: "not_resolved", code: "resolution_stale" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    let resolved!: Promise<StepResolutionOutcome>;
+    await flush(() => { resolved = consumer.hookState().resolveUnknown(resolution(original)); });
+    expect(await resolved).toEqual({ kind: "resolved", originalScope: taskScope, originalSubmissionId: original.submissionId, task: saved });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
+    expect(consumer.hookState().taskWriteUnconfirmed(otherScope)).toBe(true);
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the original gate intact when ApplyReviewed is busy", async () => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, original = stepSubmission();
+    await makeUnknown(fixture, original);
+    await readOriginal(fixture);
+    const reviewed = stepSubmission(taskScope, "reviewed-submission", "task-reviewed");
+    let pending!: Promise<OrchestrationActionResult | null>;
+    await flush(() => { pending = consumer.mutate({ action: "cancel_run", run_id: "worker" }); });
+    expect(await consumer.hookState().resolveUnknown({ ...resolution(original), decision: { kind: "apply_reviewed", submitted: reviewed } }))
+      .toMatchObject({ kind: "not_resolved", code: "busy" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(2);
+    await flush(() => api.mutation().resolve({ revision: 13, result: { result: "done" } }));
+    await pending;
+    let resolved!: Promise<StepResolutionOutcome>;
+    await flush(() => { resolved = consumer.hookState().resolveUnknown(resolution(original)); });
+    expect(await resolved).toMatchObject({ kind: "resolved", originalSubmissionId: original.submissionId });
+  });
+
+  it("records a late submitted outcome as unknown on its original root, not the newly selected task", async () => {
+    const { api, consumer } = await mountedTasks(), original = stepSubmission();
+    let result!: Promise<TaskMutationOutcome<StepSubmission>>;
+    await flush(() => { result = consumer.hookState().submitStep(original); });
+    const mutation = api.mutation();
+    await consumer.render({ rootId: "root-b" });
+    const newScope = { ...taskScope, rootId: "root-b", taskId: "task-b" }, next = taskSnapshot([savedTask("task-b")], "root-b");
+    await flush(() => api.snapshot().resolve(next));
+    await flush(() => mutation.resolve({ revision: 99, result: { result: "task", task: savedTask("task-a", "late-confirmed") } }));
+    expect(await result).toMatchObject({ kind: "unknown", submitted: original });
+    expect(consumer.state().snapshot).toEqual(next);
+    expect(consumer.state().error).toBeNull();
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(consumer.hookState().taskWriteUnconfirmed(newScope)).toBe(false);
+    const other = sourceSubmission(newScope), saved = savedTask("task-b", "new-root-confirmed");
+    let otherResult!: Promise<TaskMutationOutcome<SourceSubmission>>;
+    await flush(() => { otherResult = consumer.hookState().submitTask(other); });
+    await flush(() => api.mutation().resolve({ revision: 13, result: { result: "task", task: saved } }));
+    expect(await otherResult).toEqual({ kind: "confirmed", task: saved });
+    // Drain the new root's post-mutation observation before the independent original-task read.
+    await flush(() => api.snapshot().resolve({ ...next, revision: 13 }));
+    await readOriginal({ api, consumer });
+    let resolved!: Promise<StepResolutionOutcome>;
+    await flush(() => { resolved = consumer.hookState().resolveUnknown(resolution(original)); });
+    expect(await resolved).toMatchObject({ kind: "resolved" });
+    expect(consumer.state().snapshot).toEqual({ ...next, revision: 13 });
+  });
+
+  it("applies reviewed steps only to the original read revision and retains a new unknown replacement payload", async () => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, original = stepSubmission();
+    await makeUnknown(fixture, original);
+    await readOriginal(fixture);
+    const reviewed: StepSubmission = { ...stepSubmission(taskScope, "reviewed-submission", "task-reviewed"),
+      intent: { kind: "rename", stepId: "step-a", title: "Explicitly reviewed replacement" } };
+    const request = { ...resolution(original), decision: { kind: "apply_reviewed" as const, submitted: reviewed } };
+    expect(await consumer.hookState().resolveUnknown({ ...request, decision: { kind: "apply_reviewed", submitted: { ...reviewed, expectedTaskRevision: "task-original" } } }))
+      .toMatchObject({ kind: "not_resolved", code: "resolution_stale" });
+    expect(await consumer.hookState().resolveUnknown({ ...request, decision: { kind: "apply_reviewed", submitted: { ...reviewed, scope: { ...taskScope, rootId: "root-b" } } } }))
+      .toMatchObject({ kind: "not_resolved", code: "resolution_stale" });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(1);
+    let result!: Promise<StepResolutionOutcome>;
+    await flush(() => { result = consumer.hookState().resolveUnknown(request); });
+    expect(api.client.orchestrationMutate).toHaveBeenLastCalledWith({ session_id: "session-a", expected_revision: null,
+      action: { action: "task_step_rename", root_id: "root-a", task_id: "task-a", expected_task_revision: "task-reviewed",
+        step_id: "step-a", title: "Explicitly reviewed replacement" } });
+    await flush(() => api.mutation().reject(new Error("Replacement confirmation lost")));
+    expect(await result).toEqual({ kind: "applied", originalScope: taskScope, originalSubmissionId: original.submissionId,
+      submitted: reviewed, outcome: { kind: "unknown", submitted: reviewed, message: "Replacement confirmation lost" } });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(await consumer.hookState().resolveUnknown(resolution(original))).toMatchObject({ kind: "not_resolved", code: "different_source_operation" });
+    expect(await consumer.hookState().resolveUnknown(resolution(reviewed))).toMatchObject({ kind: "not_resolved", code: "read_required" });
+    await readOriginal(fixture, taskScope, "replacement-reviewed");
+    let resolved!: Promise<StepResolutionOutcome>;
+    await flush(() => { resolved = consumer.hookState().resolveUnknown(resolution(reviewed, "replacement-reviewed")); });
+    expect(await resolved).toMatchObject({ kind: "resolved", originalSubmissionId: reviewed.submissionId });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
+  });
+
+  it("requires exact SOURCE identity and read evidence, and resolves only the reviewed original", async () => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, original = sourceSubmission();
+    await makeUnknown(fixture, original);
+    const otherScope = { ...taskScope, taskId: "task-b" }, other = stepSubmission(otherScope, "other-step");
+    await makeUnknown(fixture, other);
+    const request: SourceResolution = { originalSubmitted: original, reviewedTaskRevision: "task-reviewed", decision: { kind: "use_saved" } };
+    expect(await consumer.hookState().resolveSourceUnknown(request)).toMatchObject({ kind: "not_resolved" });
+    const saved = await readOriginal(fixture);
+    const changed = sourceSubmission(taskScope, original.submissionId, "task-original", "Different description");
+    expect(await consumer.hookState().resolveSourceUnknown({ ...request, originalSubmitted: changed })).toMatchObject({ kind: "not_resolved" });
+    expect(await consumer.hookState().resolveSourceUnknown({ ...request, reviewedTaskRevision: "task-original" })).toMatchObject({ kind: "not_resolved" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    let result!: Promise<SourceResolutionOutcome>;
+    await flush(() => { result = consumer.hookState().resolveSourceUnknown(request); });
+    expect(await result).toEqual({ kind: "resolved", task: saved });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
+    expect(consumer.hookState().taskWriteUnconfirmed(otherScope)).toBe(true);
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains the original SOURCE gate when busy and the replacement payload when reviewed application becomes unknown", async () => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, original = sourceSubmission();
+    await makeUnknown(fixture, original);
+    await readOriginal(fixture);
+    const reviewed = sourceSubmission(taskScope, "source-reviewed", "task-reviewed", "Reviewed replacement description");
+    const request: SourceResolution = { originalSubmitted: original, reviewedTaskRevision: "task-reviewed",
+      decision: { kind: "apply_reviewed", submitted: reviewed } };
+    let pending!: Promise<OrchestrationActionResult | null>;
+    await flush(() => { pending = consumer.mutate({ action: "cancel_run", run_id: "worker" }); });
+    expect(await consumer.hookState().resolveSourceUnknown(request)).toMatchObject({ kind: "not_resolved" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(2);
+    await flush(() => api.mutation().resolve({ revision: 13, result: { result: "done" } }));
+    await pending;
+    await flush(() => api.snapshot().resolve({ ...taskSnapshot(), revision: 13 }));
+    expect(await consumer.hookState().resolveSourceUnknown({ ...request,
+      decision: { kind: "apply_reviewed", submitted: sourceSubmission(taskScope, "stale-review", "task-original") } }))
+      .toMatchObject({ kind: "not_resolved" });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledTimes(2);
+    let result!: Promise<SourceResolutionOutcome>;
+    await flush(() => { result = consumer.hookState().resolveSourceUnknown(request); });
+    expect(api.client.orchestrationMutate).toHaveBeenLastCalledWith({ session_id: "session-a", expected_revision: null, action: reviewed.action });
+    await flush(() => api.mutation().reject(new CockpitClientError("http_error", "Source publication unconfirmed", { operationCode: "io_error" })));
+    expect(await result).toEqual({ kind: "applied", outcome: { kind: "unknown", submitted: reviewed, message: "Source publication unconfirmed" } });
+    expect(await consumer.hookState().resolveSourceUnknown({ ...request, decision: { kind: "use_saved" } })).toMatchObject({ kind: "not_resolved" });
+    expect(await consumer.hookState().resolveSourceUnknown({ ...request, originalSubmitted: reviewed, decision: { kind: "use_saved" } }))
+      .toMatchObject({ kind: "not_resolved" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    const saved = await readOriginal(fixture, taskScope, "source-replacement-reviewed");
+    let resolved!: Promise<SourceResolutionOutcome>;
+    await flush(() => { resolved = consumer.hookState().resolveSourceUnknown({ originalSubmitted: reviewed,
+      reviewedTaskRevision: "source-replacement-reviewed", decision: { kind: "use_saved" } }); });
+    expect(await resolved).toEqual({ kind: "resolved", task: saved });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
+  });
+  it("retains uncertainty when a reviewed saved checklist is globally unsafe despite visible rows", async () => {
+    const fixture = await mountedTasks(), original = stepSubmission();
+    await makeUnknown(fixture, original);
+    const unsafe = { ...savedTask("task-a", "task-reviewed"), step_progress: null, steps_diagnostic: "Unsafe saved structure",
+      steps: [{ step_id: "step-a", parent_step_id: null, depth: 0, title: "Visible row", checked: false, status: "open" as const, line: 2, source_offset: 16, diagnostic: null }] };
+    let read!: Promise<StepReadOutcome>;
+    await flush(() => { read = fixture.consumer.hookState().readSaved(taskScope); });
+    await flush(() => fixture.api.snapshot().resolve(taskSnapshot([unsafe])));
+    expect(await read).toEqual({ kind: "found", task: unsafe });
+    const reviewed = stepSubmission(taskScope, "reviewed", "task-reviewed");
+    expect(await fixture.consumer.hookState().resolveUnknown({ ...resolution(original), decision: { kind: "apply_reviewed", submitted: reviewed } }))
+      .toMatchObject({ kind: "not_resolved", code: "resolution_stale" });
+    expect(fixture.api.client.orchestrationMutate).toHaveBeenCalledTimes(1);
+    expect(fixture.consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+  });
+  it("allows an explicitly reviewed safe oversized forest without interpreting its diagnostic text", async () => {
+    const fixture = await mountedTasks(), original = stepSubmission();
+    await makeUnknown(fixture, original);
+    const steps = Array.from({ length: 65 }, (_, index) => ({ step_id: `00000000-0000-4000-8000-${index.toString().padStart(12, "0")}`, parent_step_id: null, depth: 0, title: `Row ${index}`, checked: false, status: "open" as const, line: index + 2, source_offset: index * 80, diagnostic: null }));
+    const oversized = { ...savedTask("task-a", "task-reviewed"), steps, step_progress: { done: 0, total: 65 }, steps_diagnostic: "Any diagnostic wording" };
+    let read!: Promise<StepReadOutcome>;
+    await flush(() => { read = fixture.consumer.hookState().readSaved(taskScope); });
+    await flush(() => fixture.api.snapshot().resolve(taskSnapshot([oversized])));
+    expect(await read).toEqual({ kind: "found", task: oversized });
+    const reviewed: StepSubmission = { ...stepSubmission(taskScope, "reviewed", "task-reviewed"), intent: { kind: "rename", stepId: steps[0].step_id, title: "Reviewed title" } };
+    let applied!: Promise<StepResolutionOutcome>;
+    await flush(() => { applied = fixture.consumer.hookState().resolveUnknown({ ...resolution(original), decision: { kind: "apply_reviewed", submitted: reviewed } }); });
+    expect(fixture.api.client.orchestrationMutate).toHaveBeenCalledTimes(2);
+    await flush(() => fixture.api.mutation().resolve({ revision: 2, result: { result: "task", task: { ...oversized, task_revision: "renamed" } } }));
+    expect(await applied).toMatchObject({ kind: "applied", outcome: { kind: "confirmed" } });
+    expect(fixture.consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
   });
 });
