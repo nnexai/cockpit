@@ -102,7 +102,7 @@
 .todo-row>.notes-check { margin-top:4px; }
 .todo-row:has(>.notes-check>input:checked) .notes-todo-title textarea { color:var(--text-muted); text-decoration:line-through; }
 .notes-todo-title { min-width:0; flex:1; }
-.notes-todo-title textarea { width:100%; resize:none; line-height:1.5; min-height:31px; background:transparent; border-color:transparent; padding:4px 5px; }
+.notes-todo-title textarea { width:100%; resize:none; overflow:hidden; line-height:1.5; min-height:31px; background:transparent; border-color:transparent; padding:4px 5px; }
 .notes-todo-title textarea:hover { border-color:var(--border); }
 .notes-todo-title small { display:block; padding-top:3px; }
 .notes-todo-title textarea:not(:disabled) { cursor:text; }

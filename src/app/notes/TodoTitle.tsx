@@ -8,7 +8,7 @@ const titleSelections = new Map<string, { start: number; end: number }>();
 function resizeTitle(textarea: HTMLTextAreaElement) {
   textarea.style.height = "auto";
   const border = textarea.offsetHeight - textarea.clientHeight;
-  textarea.style.height = `${Math.min(120, Math.max(31, textarea.scrollHeight + border))}px`;
+  textarea.style.height = `${Math.max(31, textarea.scrollHeight + border)}px`;
 }
 export function TodoTitle({ model, todo, className = "" }: { model: NotesModel; todo: NotesTodo; className?: string }) {
   const key = todoIdentity(todo);
