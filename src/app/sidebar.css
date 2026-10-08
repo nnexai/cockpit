@@ -139,21 +139,22 @@
 .sb-glyph.tone-muted { color: var(--text-muted); }
 
 /* ---- sections and headings ---- */
+.sidebar-sections {
+  display: grid;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .sidebar-section {
   display: flex;
   min-height: 0;
   flex-direction: column;
 }
 
-/* Spaces are content-sized; Agents take the rest. Each list scrolls itself. */
-.spaces-section {
-  flex: 0 1 auto;
-  min-height: calc(var(--sb-heading) + 3 * var(--sb-row) + 2 * var(--sb-row-gap));
-}
-
+/* Each section reserves one third; entry counts share the remaining third.
+ * Zero-minimum grid tracks let both lists scroll even in a short sidebar. */
 .agents-section {
-  flex: 1 1 0;
-  min-height: calc(8px + var(--sb-heading) + 2 * var(--sb-row-2) + 1px);
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }

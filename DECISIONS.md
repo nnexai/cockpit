@@ -156,6 +156,7 @@ This file records current product and engineering rules, not the implementation 
 
 - **E1.** The sidebar keeps Herdr's hierarchy, order, urgent-state rollup, lowercase section labels, two-line agent rows, branch line and trailing repository chevron. It intentionally differs in these ways only: (a) worktree children show a shortened name (Herdr label or branch without a leading `worktree/`, `worktree-` or repository segment) with the full name and checkout path in the tooltip; (b) the second line of an agent row is `State · agent` instead of the agent name alone; (c) status marks are drawn as SVG badges, a state-tinted disc with one of five distinct shapes, instead of text glyphs.
 - **E2.** Sidebar keyboard navigation (arrows, Home/End, ←/→, Menu key) moves DOM focus only. A Herdr focus request is sent only by Enter/Space or a click, and selection chrome follows Herdr's acknowledgement. A pending target shows a neutral marker, not the selection accent. Rows use `aria-disabled` while a mutation is in flight so keyboard focus is kept.
+- **Sidebar height.** Below the session header, Spaces and Agents each reserve one-third of the section area; their entry counts proportionally share the remaining third. Both lists scroll independently. With no entries, split the area equally.
 
 ## Deferred scope
 

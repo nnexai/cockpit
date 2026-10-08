@@ -25,9 +25,17 @@ export function Sidebar({ session, sync, narrow, onSession, onClose, closeRef, s
   const agentsFocus = useRef<(() => void) | null>(null);
   useEffect(() => registerSidebarFocus({ spaces: () => spacesFocus.current?.(), agents: () => agentsFocus.current?.() }), []);
   const loading = hasSession && !hasSnapshot;
+  const spaceCount = spaces.spaces.length;
+  const agentCount = agents.agents.length;
+  const total = spaceCount + agentCount;
+  const sectionRows = total === 0
+    ? "minmax(0, 1fr) minmax(0, 1fr)"
+    : `minmax(0, ${total + spaceCount}fr) minmax(0, ${total + agentCount}fr)`;
   return <>
     <SidebarHeader session={session} sync={sync} hasSnapshot={hasSnapshot} narrow={narrow} onSession={onSession} onClose={onClose} closeRef={closeRef} />
-    <Spaces {...spaces} loading={loading} hasSession={hasSession} focusRef={spacesFocus} />
-    <Agents {...agents} loading={loading} hasSession={hasSession} focusRef={agentsFocus} />
+    <div className="sidebar-sections" style={{ gridTemplateRows: sectionRows }}>
+      <Spaces {...spaces} loading={loading} hasSession={hasSession} focusRef={spacesFocus} />
+      <Agents {...agents} loading={loading} hasSession={hasSession} focusRef={agentsFocus} />
+    </div>
   </>;
 }
