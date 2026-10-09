@@ -1,28 +1,163 @@
 //! Reference-depth follow-up: saving the items a traversal reached, recording why
 //! each is included, and reconciling inclusions when a complete pass no longer
 //! reaches an item. Traversal itself lives in `SourceService::collect_related`.
-use super::{LibraryService, SaveOptions, item_id, operations, refs, store::Store};
+use super::{
+    LibraryService, SaveOptions,
+    follow::plan,
+    item_id, operations, refs,
+    store::{LibraryIndexEntry, Store},
+};
 use crate::{
     InspectionError,
     sources::{
-        ReferenceSeed, RelatedAsset, RelatedFailure, RelatedResult, TraversalBudget, TraversalStop,
-        asset_label,
+        ReferenceSeed, RelatedAsset, RelatedFailure, RelatedResult, SourceRef, TraversalBudget,
+        TraversalStop, asset_label,
     },
 };
 use cockpit_protocol::library::{
-    LibraryInclusion, LibraryInclusionHolder, LibraryItemRef, LibraryReportOutcome,
+    LibraryFollowSummary, LibraryInclusion, LibraryInclusionHolder, LibraryItemRef,
+    LibraryItemState, LibraryItemSummary, LibraryReportOutcome,
 };
 use std::{
     collections::BTreeSet,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
+    sync::{Arc, atomic::AtomicBool},
 };
 
 /// The most failures spelled out in one report row.
 const NOTE_DETAILS: usize = 5;
+
+/// Membership metadata and the caller's exact exclusion rule.
+pub(super) enum Holder<'a> {
+    Item {
+        item_id: &'a str,
+    },
+    Follow(&'a LibraryFollowSummary),
+    /// Manual Jira refresh uses its snapshot exclusions and only issue keys.
+    FollowIssues {
+        follow: &'a LibraryFollowSummary,
+        excluded: &'a BTreeSet<String>,
+    },
+}
+
+impl Holder<'_> {
+    pub(super) fn inclusion(&self) -> LibraryInclusionHolder {
+        match self {
+            Self::Item { item_id } => LibraryInclusionHolder::Item {
+                item_id: (*item_id).to_owned(),
+            },
+            Self::Follow(follow) | Self::FollowIssues { follow, .. } => {
+                LibraryInclusionHolder::Follow {
+                    follow_id: follow.follow_id.clone(),
+                }
+            }
+        }
+    }
+
+    pub(super) fn reference(&self) -> LibraryItemRef {
+        match self {
+            Self::Item { .. } => LibraryItemRef::Manual,
+            Self::Follow(follow) | Self::FollowIssues { follow, .. } => LibraryItemRef::Follow {
+                follow_id: follow.follow_id.clone(),
+            },
+        }
+    }
+
+    pub(super) fn budget(&self) -> TraversalBudget {
+        match self {
+            Self::Item { .. } => TraversalBudget::Single,
+            Self::Follow(_) | Self::FollowIssues { .. } => TraversalBudget::Query,
+        }
+    }
+
+    pub(super) fn skips(&self, related: &RelatedAsset) -> bool {
+        let (follow, issues_only) = match self {
+            Self::Item { .. } => return false,
+            Self::Follow(follow) => (*follow, false),
+            Self::FollowIssues { follow, .. } => (*follow, true),
+        };
+        let excluded = |id: &String| match self {
+            Self::Item { .. } => false,
+            Self::Follow(follow) => follow.excluded_ids.contains(id),
+            Self::FollowIssues { excluded, .. } => excluded.contains(id),
+        };
+        let source = &related.asset.source;
+        excluded(&item_id(source))
+            || (source.provider_id == follow.provider_id
+                && source.provider_instance == follow.provider_instance
+                && (!issues_only || source.resource_type == "issue")
+                && excluded(&source.canonical_id))
+    }
+
+    pub(super) fn holds(&self, summary: &LibraryItemSummary) -> bool {
+        summary
+            .included_by
+            .iter()
+            .flatten()
+            .any(|inclusion| match (self, &inclusion.holder) {
+                (Self::Item { item_id }, LibraryInclusionHolder::Item { item_id: id }) => {
+                    *item_id == id
+                }
+                (
+                    Self::Follow(follow) | Self::FollowIssues { follow, .. },
+                    LibraryInclusionHolder::Follow { follow_id },
+                ) => &follow.follow_id == follow_id,
+                _ => false,
+            })
+    }
+}
+
+/// Known outgoing references may grow membership even when a seed is stale.
+#[derive(Default)]
+pub(super) struct Seeds {
+    pub seeds: Vec<ReferenceSeed>,
+    pub unknown: u32,
+}
+
+impl Seeds {
+    pub(super) fn one(seed: ReferenceSeed) -> Self {
+        Self {
+            seeds: vec![seed],
+            unknown: 0,
+        }
+    }
+
+    pub(super) fn push_stored(&mut self, entry: &LibraryIndexEntry, label: String, stale: bool) {
+        if stale {
+            self.unknown += 1;
+        }
+        if let (Some(provider), Some(instance), Some(kind), Some(id), Some(references)) = (
+            &entry.summary.provider_id,
+            &entry.summary.provider_instance,
+            &entry.summary.resource_type,
+            &entry.summary.canonical_id,
+            &entry.references,
+        ) {
+            self.seeds.push(ReferenceSeed {
+                source: SourceRef {
+                    provider_id: provider.clone(),
+                    provider_instance: instance.clone(),
+                    resource_type: kind.clone(),
+                    canonical_id: id.clone(),
+                },
+                label,
+                references: references.clone(),
+            });
+        } else {
+            self.unknown += 1;
+        }
+    }
+
+    pub(super) fn has_outgoing(&self) -> bool {
+        self.seeds.iter().any(|seed| !seed.references.is_empty())
+    }
+}
+
+pub(super) fn stale_state(state: LibraryItemState) -> bool {
+    matches!(
+        state,
+        LibraryItemState::Failed | LibraryItemState::Conflict | LibraryItemState::RemovedAtSource
+    )
+}
 
 /// What one traversal reached and whether absence may be inferred from it.
 pub(super) struct RelatedPass {
@@ -103,6 +238,32 @@ fn note(
 }
 
 impl LibraryService {
+    /// All holder modes use the same bounded traversal and save engine.
+    pub(super) async fn traverse(
+        &self,
+        store: &Arc<Store>,
+        operation: &str,
+        holder: &Holder<'_>,
+        depth: u32,
+        seeds: Seeds,
+    ) -> Result<RelatedPass, InspectionError> {
+        if depth == 0 {
+            return Ok(RelatedPass::none());
+        }
+        self.run_related(
+            store,
+            operation,
+            seeds.seeds,
+            seeds.unknown,
+            depth,
+            holder.budget(),
+            &holder.inclusion(),
+            &holder.reference(),
+            &|related| holder.skips(related),
+        )
+        .await
+    }
+
     /// Traverses from `seeds`, saves what it reaches under `reference` and
     /// `holder`, and reports what could not be done. `skip` names reached items
     /// the user removed from the holder; they are not brought back.
@@ -122,23 +283,16 @@ impl LibraryService {
         skip: &(dyn Fn(&RelatedAsset) -> bool + Sync),
     ) -> Result<RelatedPass, InspectionError> {
         let cancel = AtomicBool::new(false);
-        let result = {
-            let traversal = self.sources.collect_related(seeds, depth, budget, &cancel);
-            tokio::pin!(traversal);
-            loop {
-                tokio::select! {
-                    result = &mut traversal => break result,
-                    _ = tokio::time::sleep(Duration::from_millis(200)) => {
-                        if operations::cancelled(store, operation)? {
-                            cancel.store(true, Ordering::SeqCst);
-                        }
-                    }
-                }
-            }
-        };
-        if cancel.load(Ordering::SeqCst) || operations::cancelled(store, operation)? {
+        let Some(result) = plan::until_cancelled(
+            store,
+            operation,
+            &cancel,
+            self.sources.collect_related(seeds, depth, budget, &cancel),
+        )
+        .await?
+        else {
             return Ok(RelatedPass::cancelled());
-        }
+        };
         let RelatedResult {
             assets,
             failures,
@@ -212,7 +366,9 @@ impl LibraryService {
                 relation: related.relation.clone(),
                 depth: related.depth,
             };
-            let acquired = if crate::sources::lane::current() == crate::sources::lane::RequestLane::Background {
+            let acquired = if crate::sources::lane::current()
+                == crate::sources::lane::RequestLane::Background
+            {
                 store.lease(&id)
             } else {
                 super::sync::manual_lease(store, &id).await
@@ -230,7 +386,11 @@ impl LibraryService {
             // removal can commit while fetch is awaiting, before this item lease.
             let allowed = {
                 let _lock = store.shared()?;
-                Store::reference_allowed(&store.index()?, &super::asset_entry(&related.asset, old.as_ref()).summary, reference)
+                Store::reference_allowed(
+                    &store.index()?,
+                    &super::asset_entry(&related.asset, old.as_ref()).summary,
+                    reference,
+                )
             };
             if !allowed {
                 out.reached.remove(&id);
@@ -256,22 +416,32 @@ impl LibraryService {
                         continue;
                     }
                     let partial_manifest = failure.code == "source_attachments_partial";
-                    out.not_saved.push(format!("{label}: {}", clip(&failure.message)));
+                    out.not_saved
+                        .push(format!("{label}: {}", clip(&failure.message)));
                     if partial_manifest {
                         continue;
                     }
                 }
             }
             let changed = store.mutate_index_if(|index| {
-                if index.items.iter().find(|e| e.summary.item_id == id)
+                if index
+                    .items
+                    .iter()
+                    .find(|e| e.summary.item_id == id)
                     .is_none_or(|entry| !Store::reference_allowed(index, &entry.summary, reference))
                 {
                     return Ok((false, false));
                 }
                 let mut changed = false;
                 if let Some(entry) = index.items.iter_mut().find(|e| e.summary.item_id == id) {
-                    changed = !entry.summary.refs.contains(reference) || entry.summary.purge_after.is_some()
-                        || !entry.summary.included_by.iter().flatten().any(|old| old == &inclusion);
+                    changed = !entry.summary.refs.contains(reference)
+                        || entry.summary.purge_after.is_some()
+                        || !entry
+                            .summary
+                            .included_by
+                            .iter()
+                            .flatten()
+                            .any(|old| old == &inclusion);
                     if changed {
                         refs::insert_ref(&mut entry.summary, reference.clone());
                         refs::set_inclusion(&mut entry.summary, inclusion.clone());
@@ -279,12 +449,23 @@ impl LibraryService {
                 }
                 Ok((changed, changed))
             })?;
-            if changed && crate::sources::lane::current() == crate::sources::lane::RequestLane::Background {
+            if changed
+                && crate::sources::lane::current() == crate::sources::lane::RequestLane::Background
+            {
                 let receipt = operations::get(store, operation)?;
-                if receipt.report.as_ref().is_some_and(|report| report.new + report.updated == 0) {
+                if receipt
+                    .report
+                    .as_ref()
+                    .is_some_and(|report| report.new + report.updated == 0)
+                {
                     operations::add_total(store, operation, 1)?;
-                    operations::row(store, operation, None, LibraryReportOutcome::Updated,
-                        Some("Related inclusion reconciled".into()))?;
+                    operations::row(
+                        store,
+                        operation,
+                        None,
+                        LibraryReportOutcome::Updated,
+                        Some("Related inclusion reconciled".into()),
+                    )?;
                 }
             }
             drop(lease);
@@ -328,21 +509,14 @@ impl LibraryService {
         seed: Option<ReferenceSeed>,
         depth: u32,
     ) -> Result<(), InspectionError> {
-        let holder = LibraryInclusionHolder::Item {
-            item_id: seed_id.to_owned(),
-        };
+        let holder = Holder::Item { item_id: seed_id };
         if depth == 0 {
             // Nothing was ever followed from this item: no index write.
             let followed = {
                 let _lock = store.shared()?;
                 store.index()?.items.iter().any(|entry| {
                     (entry.summary.item_id == seed_id && entry.summary.reference_depth.is_some())
-                        || entry
-                            .summary
-                            .included_by
-                            .iter()
-                            .flatten()
-                            .any(|i| i.holder == holder)
+                        || holder.holds(&entry.summary)
                 })
             };
             if !followed {
@@ -362,18 +536,8 @@ impl LibraryService {
         let pass = if depth == 0 {
             RelatedPass::none()
         } else if let Some(seed) = seed {
-            self.run_related(
-                store,
-                operation,
-                vec![seed],
-                0,
-                depth,
-                TraversalBudget::Single,
-                &holder,
-                &LibraryItemRef::Manual,
-                &|_: &RelatedAsset| false,
-            )
-            .await?
+            self.traverse(store, operation, &holder, depth, Seeds::one(seed))
+                .await?
         } else {
             operations::row(
                 store,
@@ -386,7 +550,11 @@ impl LibraryService {
         };
         self.related_row(store, operation, &pass)?;
         if pass.complete && !pass.cancelled {
-            strip_unreached(store, &holder, &pass.reached)?;
+            let missing = {
+                let _lock = store.shared()?;
+                unreached(store.index()?.items.iter(), &holder, &pass)
+            };
+            strip_inclusions(store, &holder.inclusion(), &missing)?;
         }
         Ok(())
     }
@@ -412,38 +580,48 @@ impl LibraryService {
     }
 }
 
-/// Removes `holder`'s inclusion from every item a complete pass did not reach.
-/// Skips the index write when there is nothing to remove.
-pub(super) fn strip_unreached(
+/// Only a complete, uncancelled pass supplies absence evidence.
+pub(super) fn unreached<'e>(
+    items: impl IntoIterator<Item = &'e LibraryIndexEntry>,
+    holder: &Holder<'_>,
+    pass: &RelatedPass,
+) -> BTreeSet<String> {
+    if !pass.complete || pass.cancelled {
+        return BTreeSet::new();
+    }
+    items
+        .into_iter()
+        .filter(|entry| {
+            holder.holds(&entry.summary) && !pass.reached.contains(&entry.summary.item_id)
+        })
+        .map(|entry| entry.summary.item_id.clone())
+        .collect()
+}
+
+/// Strip only this holder's inclusion, preserving all keeping references.
+pub(super) fn strip_inclusions(
     store: &Store,
     holder: &LibraryInclusionHolder,
-    reached: &BTreeSet<String>,
-) -> Result<(), InspectionError> {
-    let stale = |summary: &cockpit_protocol::library::LibraryItemSummary| {
-        !reached.contains(&summary.item_id)
-            && summary
-                .included_by
-                .iter()
-                .flatten()
-                .any(|i| &i.holder == holder)
-    };
-    let any = {
-        let _lock = store.shared()?;
-        store
-            .index()?
-            .items
-            .iter()
-            .any(|entry| stale(&entry.summary))
-    };
-    if !any {
-        return Ok(());
+    ids: &BTreeSet<String>,
+) -> Result<bool, InspectionError> {
+    if ids.is_empty() {
+        return Ok(false);
     }
-    store.mutate_index(|index| {
+    store.mutate_index_if(|index| {
+        let mut changed = false;
         for entry in &mut index.items {
-            if stale(&entry.summary) {
+            if ids.contains(&entry.summary.item_id)
+                && entry
+                    .summary
+                    .included_by
+                    .iter()
+                    .flatten()
+                    .any(|i| &i.holder == holder)
+            {
                 refs::strip_inclusion(&mut entry.summary, holder);
+                changed = true;
             }
         }
-        Ok(())
+        Ok((changed, changed))
     })
 }

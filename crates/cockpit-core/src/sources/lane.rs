@@ -18,10 +18,11 @@ pub struct BackgroundPolicy {
 
 impl Default for BackgroundPolicy {
     fn default() -> Self {
+        let defaults = crate::config::LibrarySyncConfiguration::default();
         Self {
-            min_interval_seconds: 10,
-            in_flight: 1,
-            hourly_request_cap: 300,
+            min_interval_seconds: defaults.background_min_interval_seconds,
+            in_flight: defaults.background_in_flight,
+            hourly_request_cap: defaults.hourly_request_cap,
         }
     }
 }

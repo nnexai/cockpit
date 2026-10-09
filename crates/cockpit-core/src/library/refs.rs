@@ -61,12 +61,27 @@ pub(crate) fn remove_ref(summary: &mut LibraryItemSummary, reference: &LibraryIt
             if let LibraryItemRef::Follow { follow_id } = reference {
                 strip_inclusion(
                     summary,
-                    &LibraryInclusionHolder::Follow { follow_id: follow_id.clone() },
+                    &LibraryInclusionHolder::Follow {
+                        follow_id: follow_id.clone(),
+                    },
                 );
             }
             true
         }
         Err(_) => false,
+    }
+}
+
+/// Release a follow membership and its inclusion, tombstoning only the last ref.
+pub(crate) fn release_follow(summary: &mut LibraryItemSummary, follow_id: &str, now_ms: u128) {
+    remove_ref(
+        summary,
+        &LibraryItemRef::Follow {
+            follow_id: follow_id.to_owned(),
+        },
+    );
+    if summary.refs.is_empty() {
+        summary.purge_after = Some((now_ms + TOMBSTONE_GRACE_MS).to_string());
     }
 }
 
@@ -81,7 +96,10 @@ pub(crate) fn related_of(summary: &LibraryItemSummary, follow_id: &str) -> bool 
 /// a fresh traversal replaces it so a stale route is never kept.
 pub(crate) fn set_inclusion(summary: &mut LibraryItemSummary, inclusion: LibraryInclusion) {
     let list = summary.included_by.get_or_insert_with(Vec::new);
-    match list.iter_mut().find(|existing| existing.holder == inclusion.holder) {
+    match list
+        .iter_mut()
+        .find(|existing| existing.holder == inclusion.holder)
+    {
         Some(existing) => *existing = inclusion,
         None => list.push(inclusion),
     }
@@ -108,7 +126,10 @@ pub(crate) fn space_key(follow: &LibraryFollowSummary) -> Option<&str> {
 /// Like `space_key`, but a Jira query is a capability error for Confluence-only paths.
 pub(crate) fn require_space_key(follow: &LibraryFollowSummary) -> Result<&str, InspectionError> {
     space_key(follow).ok_or_else(|| {
-        error("source_capability_unavailable", "Jira follows can't be added to a Space yet")
+        error(
+            "source_capability_unavailable",
+            "Jira follows can't be added to a Space yet",
+        )
     })
 }
 
@@ -118,18 +139,20 @@ pub(crate) fn set_space_name(follow: &mut LibraryFollowSummary, name: &str) {
     }
 }
 
-
 /// `KEY · Name` for a space follow, the JQL for a query follow.
 pub(crate) fn follow_title(follow: &LibraryFollowSummary) -> String {
     match &follow.source {
-        LibraryFollowSource::ConfluenceSpace { space_key, space_name } => {
+        LibraryFollowSource::ConfluenceSpace {
+            space_key,
+            space_name,
+        } => {
             format!("{space_key} · {space_name}")
         }
         LibraryFollowSource::JiraQuery { jql, .. } => jql.clone(),
     }
 }
 
-/// D7 step 7: removes every item that has been unreferenced for the grace
+/// Removes every item that has been unreferenced for the grace
 /// period. An item edited in the Library is kept and reported; a busy item, or
 /// one that gained a reference since it was listed, is skipped without a row.
 /// Does nothing once `operation` was cancelled.
@@ -171,13 +194,17 @@ pub(crate) fn purge_expired(store: &Store, operation: &str) -> Result<(), Inspec
             continue;
         }
         let observed = entry.summary.purge_after.clone();
-        let removed = store.remove_where(&entry.summary.item_id, &entry.summary.revision, |current| {
-            if current.summary.refs.is_empty() && current.summary.purge_after == observed {
-                Ok(())
-            } else {
-                Err(error("library_item_referenced", "Library item gained a reference"))
-            }
-        });
+        let removed =
+            store.remove_where(&entry.summary.item_id, &entry.summary.revision, |current| {
+                if current.summary.refs.is_empty() && current.summary.purge_after == observed {
+                    Ok(())
+                } else {
+                    Err(error(
+                        "library_item_referenced",
+                        "Library item gained a reference",
+                    ))
+                }
+            });
         match removed {
             Ok(()) => operations::row(
                 store,
