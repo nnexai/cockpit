@@ -114,7 +114,7 @@ mod tests {
         let fixture = Fixture(std::env::temp_dir().join(format!("cockpit-ephemeral-{}", Uuid::new_v4())));
         fs::create_dir(&fixture.0).unwrap();
         let service = service(&fixture.0);
-        for name in ["browser/legacy-archive/old.json", "browser/profiles/old/cookies", "comments/batch.json", "review/snapshot-old.json"] {
+        for name in ["browser/scratch-extra/work.json", "browser/profiles/old/cookies", "comments/batch.json", "review/snapshot-old.json"] {
             let path = fixture.0.join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, b"old work").unwrap();
@@ -132,7 +132,7 @@ mod tests {
         for name in STATE_DIRS {
             assert_eq!(fs::read_dir(fixture.0.join("browser").join(name)).unwrap().count(), 0);
         }
-        assert!(!fixture.0.join("browser/legacy-archive").exists());
+        assert!(!fixture.0.join("browser/scratch-extra").exists());
         for name in ["comments", "review"] { assert_eq!(fs::read_dir(fixture.0.join(name)).unwrap().count(), 0); }
     }
 

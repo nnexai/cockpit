@@ -47,7 +47,6 @@ pub struct StatusResponse {
     pub protocol_version: String,
     pub cockpit_version: String,
     pub mode: CockpitMode,
-    #[serde(default)]
     pub capabilities: CockpitCapabilities,
     pub herdr: HerdrCompatibility,
 }

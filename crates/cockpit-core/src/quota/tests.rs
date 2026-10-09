@@ -222,25 +222,6 @@ async fn hostile_or_malformed_cache_has_no_authority() {
 }
 
 #[tokio::test]
-async fn obsolete_split_source_cache_cannot_supply_copilot_values_or_a_lease() {
-    let fixture = Fixture::new();
-    settled(&fixture.service(NOW)).await;
-    let mut stored: Value = serde_json::from_slice(&fs::read(fixture.cache()).unwrap()).unwrap();
-    stored["schema"] = json!(1);
-    let copilot = stored["omp"]["providers"]
-        .as_array_mut()
-        .unwrap()
-        .pop()
-        .unwrap();
-    stored["gh"] = json!({"attempted_at_ms":NOW,"next_attempt_at_ms":NOW+CADENCE,"failures":0,"providers":[copilot]});
-    stored["gh"]["providers"][0]["accounts"][0]["limits"][0]["used"] = json!(7000);
-    fs::write(fixture.cache(), serde_json::to_vec(&stored).unwrap()).unwrap();
-    let value = settled(&fixture.service(NOW)).await;
-    assert_eq!(value.providers[2].accounts[0].limits[0].used, Some(4.0));
-    assert_eq!(fixture.count(), 2);
-}
-
-#[tokio::test]
 async fn symlinked_root_lock_or_snapshot_never_runs_source() {
     for target in ["root", "collect.lock", "snapshot.json"] {
         let fixture = Fixture::new();
@@ -429,28 +410,6 @@ async fn persisted_crash_lease_blocks_working_demand_for_five_minutes() {
     settled_with(&service, WORKING).await;
     assert_eq!(fixture.count(), 1);
     service.now.store(leased_at + CADENCE, Ordering::Relaxed);
-    settled_with(&service, WORKING).await;
-    assert_eq!(fixture.count(), 2);
-}
-
-#[tokio::test]
-async fn old_snapshot_without_success_evidence_uses_idle_deadline() {
-    let fixture = Fixture::new();
-    let initial = settled(&fixture.service(NOW)).await;
-    let mut stored: Value = serde_json::from_slice(&fs::read(fixture.cache()).unwrap()).unwrap();
-    stored["omp"]
-        .as_object_mut()
-        .unwrap()
-        .remove("succeeded_at_ms");
-    fs::write(fixture.cache(), serde_json::to_vec(&stored).unwrap()).unwrap();
-    let service = fixture.service(NOW + WORKING_CADENCE);
-    let value = settled_with(&service, WORKING).await;
-    assert_eq!(value.providers, initial.providers);
-    assert_eq!(fixture.count(), 1);
-    service.now.store(NOW + CADENCE - 1, Ordering::Relaxed);
-    settled_with(&service, WORKING).await;
-    assert_eq!(fixture.count(), 1);
-    service.now.store(NOW + CADENCE, Ordering::Relaxed);
     settled_with(&service, WORKING).await;
     assert_eq!(fixture.count(), 2);
 }

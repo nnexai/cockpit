@@ -20,21 +20,12 @@ pub enum CommentOwner {
         source_kind: ViewerSourceKind,
         source_id: String,
     },
-    LegacyPane {
-        session_id: String,
-        pane_id: String,
-        terminal_id: String,
-        source_kind: ViewerSourceKind,
-        source_id: String,
-    },
 }
 
 impl CommentOwner {
     pub fn source_identity(&self) -> (ViewerSourceKind, &str) {
-        match self {
-            Self::Viewer { source_kind, source_id, .. }
-            | Self::LegacyPane { source_kind, source_id, .. } => (*source_kind, source_id),
-        }
+        let Self::Viewer { source_kind, source_id, .. } = self;
+        (*source_kind, source_id)
     }
 }
 

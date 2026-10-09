@@ -35,26 +35,20 @@ fn remove_temporary_directory(directory: PathBuf) {
 }
 
 #[test]
-fn browser_work_rejects_retired_scopes_and_retention_fields() {
-    for kind in ["saved_tab", "legacy_archive"] {
-        let scope = json!({
-            "kind": kind,
-            "association_key": "0123456789abcdef01234567"
-        });
-        assert!(serde_json::from_value::<BrowserWorkScope>(scope).is_err());
-    }
+fn browser_work_rejects_unknown_fields() {
     assert!(serde_json::from_value::<BrowserCleanupScope>(json!({
-        "kind": "legacy_space", "space_id": "space-1"
+        "kind": "tab", "session_id": "session-1", "tab_id": "tab-1", "unexpected": true
     })).is_err());
-    for field in ["saved_tabs", "cutover"] {
-        let mut status = json!({ "failures": [] });
-        status[field] = if field == "saved_tabs" { json!([]) } else { json!("done") };
-        assert!(serde_json::from_value::<BrowserCleanupStatus>(status).is_err());
-    }
+    assert!(serde_json::from_value::<BrowserCleanupStatus>(json!({
+        "failures": [], "unexpected": true
+    })).is_err());
     let scope = json!({
         "kind": "tab",
         "target": { "session_id": "session-1", "tab_id": "tab-1", "pane_id": null, "endpoint_path": null }
     });
+    let mut unknown_scope = scope.clone();
+    unknown_scope["unexpected"] = json!(true);
+    assert!(serde_json::from_value::<BrowserWorkScope>(unknown_scope).is_err());
     let mut send = json!({
         "scope": scope, "ids": ["capture"], "operation_id": "operation", "acknowledge_duplicate_risk": false
     });
@@ -116,23 +110,6 @@ fn space_git_closed_unions_and_action_expectations_use_exact_wire_tags() {
     for result in ["success", "not_sent", "failed"] {
         assert!(serde_json::from_value::<SpaceGitActionOutcome>(json!({ "result": result, "detail": "unproven" })).is_err());
     }
-}
-
-#[test]
-fn legacy_status_defaults_capabilities() {
-    let response: StatusResponse = serde_json::from_value(json!({
-        "protocol_version": "1",
-        "cockpit_version": "0.1.0",
-        "mode": "normal",
-        "herdr": {
-            "status": "unavailable",
-            "code": "test",
-            "message": "test"
-        }
-    }))
-    .expect("legacy status parses");
-
-    assert!(!response.capabilities.terminal_mouse_input);
 }
 
 #[test]

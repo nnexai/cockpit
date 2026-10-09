@@ -15,7 +15,7 @@ use cockpit_protocol::{
         BrowserTarget, BrowserWorkScope,
     },
     browser_feedback::{
-        BrowserAnnotation, BrowserCaptureContext, BrowserCaptureSaved, BrowserCaptureSubmission,
+        BrowserCaptureContext, BrowserCaptureSaved, BrowserCaptureSubmission,
         BrowserFeedbackAck, BrowserInlineCaptureProvenance,
     },
     browser_view::{
@@ -96,7 +96,6 @@ struct StoredPendingCapture {
     draft_id: String,
     draft_revision: u64,
     annotation_ids: Vec<String>,
-    #[serde(default)]
     original_annotation_digests: Vec<String>,
     context: BrowserCaptureContext,
     submission: BrowserCaptureSubmission,
@@ -113,7 +112,6 @@ struct StoredCapturePreparation {
     draft_id: String,
     draft_revision: u64,
     annotation_ids: Vec<String>,
-    #[serde(default)]
     original_annotation_digests: Vec<String>,
     context: BrowserCaptureContext,
 }
@@ -970,16 +968,10 @@ impl BrowserDraftStore {
             // The captured marks are projected into PNG pixel coordinates.
             // Compare the original document-space mark frozen at preparation,
             // not its transformed public submission, before consuming it.
-            let unchanged = if let Some(original) = pending.original_annotation_digests.get(index) {
-                annotation_digest(current)? == *original
-            } else if pending.original_annotation_digests.is_empty() {
-                // Older pending captures lack frozen hashes. A matching store
-                // revision proves no edit; otherwise preserve uncertain work.
-                draft.revision == pending.draft_revision
-                    || draft_annotation_matches_capture(current, frozen)
-            } else {
-                false
+            let Some(original) = pending.original_annotation_digests.get(index) else {
+                continue;
             };
+            let unchanged = annotation_digest(current)? == *original;
             if unchanged && !note_changed {
                 consumed.push(id.clone());
             }
@@ -1066,8 +1058,7 @@ impl BrowserDraftStore {
                     "Draft record is not a regular file",
                 ));
             }
-            let mut draft: StoredDraft = read_json_bounded(&dir, name, MAX_DRAFT_BYTES)?;
-            normalize_legacy_editor(&mut draft);
+            let draft: StoredDraft = read_json_bounded(&dir, name, MAX_DRAFT_BYTES)?;
             validate_stored_draft(id, &draft)?;
             drafts.push(draft);
         }
@@ -1087,8 +1078,7 @@ impl BrowserDraftStore {
                 InspectionError::new("unsafe_path", "Draft record is not a regular file"),
             ),
             Ok(_) => {
-                let mut draft: StoredDraft = read_json_bounded(&dir, &name, MAX_DRAFT_BYTES)?;
-                normalize_legacy_editor(&mut draft);
+                let draft: StoredDraft = read_json_bounded(&dir, &name, MAX_DRAFT_BYTES)?;
                 validate_stored_draft(draft_id, &draft)?;
                 Ok(Some(draft))
             }
@@ -1247,24 +1237,10 @@ fn annotation_digest(annotation: &BrowserViewDraftAnnotation) -> Result<String, 
 }
 
 fn valid_annotation_digests(ids: &[String], digests: &[String]) -> bool {
-    digests.is_empty()
-        || (digests.len() == ids.len()
-            && digests.iter().all(|digest| {
-                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-            }))
-}
-
-fn draft_annotation_matches_capture(
-    draft: &BrowserViewDraftAnnotation,
-    capture: &BrowserAnnotation,
-) -> bool {
-    draft.id == capture.id
-        && draft.kind == capture.kind
-        && draft.color == capture.color
-        && draft.points == capture.points
-        && draft.bounds == capture.bounds
-        && draft.evidence == capture.element
-        && draft.comment.as_deref().unwrap_or_default() == capture.comment
+    digests.len() == ids.len()
+        && digests.iter().all(|digest| {
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
 }
 
 fn validate_capture_context(
@@ -1296,22 +1272,6 @@ fn validate_capture_context(
     }
     validate_id(&provenance.frame_id, "frame")?;
     Ok(())
-}
-
-fn normalize_legacy_editor(draft: &mut StoredDraft) {
-    if draft
-        .editor
-        .selected_annotation_id
-        .as_ref()
-        .is_some_and(|id| {
-            !draft
-                .annotations
-                .iter()
-                .any(|annotation| &annotation.id == id)
-        })
-    {
-        draft.editor.selected_annotation_id = None;
-    }
 }
 
 fn validate_stored_draft(id: &str, draft: &StoredDraft) -> Result<(), InspectionError> {
@@ -1912,6 +1872,18 @@ mod tests {
             consumed_annotation_ids: Vec::new(),
             tombstoned: false,
         }
+    }
+
+    #[test]
+    fn annotation_digests_require_matching_counts_and_sha256_shape() {
+        let ids = vec![Uuid::new_v4().to_string()];
+        let digests = vec!["a".repeat(64)];
+        assert!(valid_annotation_digests(&[], &[]));
+        assert!(valid_annotation_digests(&ids, &digests));
+        assert!(!valid_annotation_digests(&ids, &[]));
+        assert!(!valid_annotation_digests(&[], &digests));
+        assert!(!valid_annotation_digests(&ids, &["a".repeat(63)]));
+        assert!(!valid_annotation_digests(&ids, &["g".repeat(64)]));
     }
 
     #[test]

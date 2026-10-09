@@ -54,11 +54,10 @@ describe("viewer comment ownership boundaries", () => {
   const scope = { binding_id: "binding", client_id: "client" };
   const attachment = { owner: batch.owner, location: batch.last_known_location, ...scope };
 
-  it("keeps legacy batches detached and rejects untagged or legacy live owners", () => {
-    const legacyOwner = { kind: "legacy_pane", session_id: "session", pane_id: "pane", terminal_id: "terminal", source_kind: "context", source_id: "source" };
-    expect(parseCommentBatch({ ...batch, owner: legacyOwner }).owner).toEqual(legacyOwner);
-    expect(() => parseCommentBatch({ ...batch, owner: { ...legacyOwner, kind: undefined } })).toThrow(CockpitClientError);
-    expect(() => parseCommentBatch({ ...batch, live_attachment: { ...attachment, owner: legacyOwner } })).toThrow(CockpitClientError);
+  it("rejects invalid viewer owners and mismatched attachment locations", () => {
+    expect(() => parseCommentBatch({ ...batch, owner: { ...batch.owner, unexpected: true } })).toThrow(CockpitClientError);
+    expect(() => parseCommentBatch({ ...batch, owner: { ...batch.owner, kind: "invalid" } })).toThrow(CockpitClientError);
+    expect(() => parseCommentBatch({ ...batch, owner: { ...batch.owner, server_instance: "invalid" } })).toThrow(CockpitClientError);
     expect(() => parseCommentBatchList({ attachment: { ...attachment, location: { ...attachment.location, tab_id: "other" } }, batches: [], truncated: false })).toThrow(CockpitClientError);
   });
 

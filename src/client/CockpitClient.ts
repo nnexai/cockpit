@@ -547,8 +547,7 @@ function isPaneSummary(value: unknown): value is PaneSummary {
     (value.cwd === undefined || isString(value.cwd))
   );
 }
-type AgentSummaryWire = Omit<AgentSummary, "state_change_seq"> & { state_change_seq?: number };
-function isAgentSummary(value: unknown): value is AgentSummaryWire {
+function isAgentSummary(value: unknown): value is AgentSummary {
   return (
     isRecord(value) &&
     isString(value.pane_id) &&
@@ -558,7 +557,7 @@ function isAgentSummary(value: unknown): value is AgentSummaryWire {
     isString(value.status) &&
     isNullableString(value.title) &&
     isBoolean(value.focused) &&
-    (value.state_change_seq === undefined || isU64(value.state_change_seq))
+    isU64(value.state_change_seq)
   );
 }
 function parseHerdrCompatibility(value: unknown): StatusResponse["herdr"] {
@@ -585,12 +584,9 @@ export function parseStatusResponse(value: unknown): StatusResponse {
   if (!isRecord(value) || !isString(value.protocol_version) || !isString(value.cockpit_version)) {
     return malformed("Status response is missing required fields");
   }
-  const hasCapabilities = Object.prototype.hasOwnProperty.call(value, "capabilities");
-  const capabilities: CockpitCapabilities = !hasCapabilities
-    ? { terminal_mouse_input: false }
-    : isRecord(value.capabilities) && isBoolean(value.capabilities.terminal_mouse_input)
-      ? { terminal_mouse_input: value.capabilities.terminal_mouse_input }
-      : malformed("Status response capabilities are invalid");
+  const capabilities: CockpitCapabilities = isRecord(value.capabilities) && isBoolean(value.capabilities.terminal_mouse_input)
+    ? { terminal_mouse_input: value.capabilities.terminal_mouse_input }
+    : malformed("Status response capabilities are invalid");
   const herdr = parseHerdrCompatibility(value.herdr);
   if (value.mode !== "normal" && value.mode !== "test") return malformed("Status response is missing required fields");
   return {
@@ -1576,7 +1572,7 @@ export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotRes
     session_id: value.session_id, server_instance: value.server_instance, version: value.version, protocol: value.protocol,
     focused_space_id: value.focused_space_id, focused_tab_id: value.focused_tab_id, focused_pane_id: value.focused_pane_id,
     spaces: value.spaces, tabs: value.tabs, panes: value.panes,
-    agents: value.agents.map((agent) => ({ ...agent, state_change_seq: agent.state_change_seq ?? 0 })),
+    agents: value.agents,
     ...(value.herdr_shell === undefined ? {} : { herdr_shell: value.herdr_shell === null ? null : parseHerdrShell(value.herdr_shell) }),
   };
 }

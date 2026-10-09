@@ -2720,15 +2720,6 @@ fn prune_snapshots(state: &ProjectStore) -> Result<(), InspectionError> {
         let Some(name_text) = name.to_str() else {
             continue;
         };
-        // These are obsolete ephemeral cache identities, not payloads to
-        // migrate: their pane bindings cannot authorize a virtual viewer.
-        if snapshot_cache_id(name_text, "snapshot-").is_some()
-            || file_cache_review_id(name_text, "file-").is_some()
-        {
-            state.state_dir().remove_file(&name)
-                .map_err(|error| InspectionError::new("review_write", error.to_string()))?;
-            continue;
-        }
         if let Some(id) = file_cache_review_id(name_text, FILE_CACHE_PREFIX) {
             file_caches.push((name.to_owned(), id.to_owned()));
             continue;
@@ -3247,66 +3238,6 @@ mod tests {
                 .await
                 .expect("review file diff")
         }
-    }
-
-    #[tokio::test]
-    async fn legacy_pane_cache_does_not_break_a_new_git_viewer_review() {
-        let fixture = service_fixture("legacy-pane-cache").await;
-        std::fs::write(fixture.checkout.join("tracked.txt"), "base\nfirst change\n")
-            .expect("modify tracked file");
-        let first = fixture.snapshot(ReviewComparison::Unstaged).await;
-        let file_id = first.files.iter()
-            .find(|file| file.new_path.as_deref() == Some("tracked.txt"))
-            .expect("tracked change").file_id.clone();
-        let first_diff = fixture.file(&first, &file_id).await;
-        let stored = fixture.service.load_snapshot(&first.review_id).await
-            .expect("read current snapshot").expect("retained snapshot");
-        let mut legacy_snapshot = serde_json::to_value(stored).expect("snapshot payload");
-        let snapshot_object = legacy_snapshot["snapshot"].as_object_mut().expect("snapshot object");
-        let viewer = snapshot_object.remove("viewer_id").expect("current viewer identity");
-        snapshot_object.insert("pane_id".to_owned(), viewer);
-        let mut legacy_diff = serde_json::to_value(&first_diff).expect("diff payload");
-        let diff_object = legacy_diff.as_object_mut().expect("diff object");
-        let viewer = diff_object.remove("viewer_id").expect("current viewer identity");
-        diff_object.insert("pane_id".to_owned(), viewer);
-        let legacy_snapshot_name = format!("snapshot-{}.json", first.review_id);
-        let legacy_diff_name = format!("file-{}-{:x}.json", first.review_id, Sha256::digest(file_id.as_bytes()));
-        atomic_write_json(fixture.service.store.state_dir(), &legacy_snapshot_name, &legacy_snapshot)
-            .expect("seed pre-viewer snapshot");
-        atomic_write_json(fixture.service.store.state_dir(), &legacy_diff_name, &legacy_diff)
-            .expect("seed pre-viewer file cache");
-
-        // A second service sharing the root must not clear an active owner's
-        // current snapshots merely because it was constructed.
-        let observer = ReviewService::new(
-            fixture.service.configuration.clone(), fixture.service.context.clone(),
-        ).expect("observer service");
-        std::fs::write(fixture.checkout.join("tracked.txt"), "base\nsecond change\n")
-            .expect("change Git source");
-        let current = fixture.snapshot(ReviewComparison::Unstaged).await;
-        assert_ne!(current.review_id, first.review_id);
-        assert_eq!(current.viewer_id, fixture.viewer_id);
-        assert_eq!(current.binding_id, fixture.binding_id);
-        let diff = fixture.file(&current, &file_id).await;
-        assert_eq!(diff.viewer_id, fixture.viewer_id);
-        assert_eq!(diff.binding_id, fixture.binding_id);
-        assert_eq!(diff.old_source.as_deref(), Some("base\n"));
-        assert_eq!(diff.new_source.as_deref(), Some("base\nsecond change\n"));
-        assert_eq!(fixture.service.store.state_dir().symlink_metadata(&legacy_snapshot_name)
-            .expect_err("obsolete snapshot removed").kind(), ErrorKind::NotFound);
-        assert_eq!(fixture.service.store.state_dir().symlink_metadata(&legacy_diff_name)
-            .expect_err("obsolete file cache removed").kind(), ErrorKind::NotFound);
-        let retained = observer.file(FIXTURE_SESSION, &fixture.viewer_id, &ReviewFileRequest {
-            binding_id: fixture.binding_id.clone(),
-            review_id: first.review_id.clone(),
-            generation: first.generation,
-            file_id,
-            source_side: None,
-            source_offset: 0,
-            source_revision: None,
-        }).await.expect("active current-schema cache survives another service");
-        assert_eq!(retained.new_source.as_deref(), Some("base\nfirst change\n"));
-        std::fs::remove_dir_all(fixture.workspace).expect("cleanup");
     }
 
     #[tokio::test]

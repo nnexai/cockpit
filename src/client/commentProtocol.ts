@@ -42,11 +42,6 @@ function parseOwner(value: unknown): CommentOwner {
     return { kind: "viewer", session_id: value.session_id, server_instance: value.server_instance,
       tab_id: value.tab_id, source_kind: value.source_kind, source_id: value.source_id };
   }
-  if (value.kind === "legacy_pane" && keys(value, ["kind", "session_id", "pane_id", "terminal_id", "source_kind", "source_id"])
-    && identity(value.pane_id) && identity(value.terminal_id)) {
-    return { kind: "legacy_pane", session_id: value.session_id, pane_id: value.pane_id,
-      terminal_id: value.terminal_id, source_kind: value.source_kind, source_id: value.source_id };
-  }
   return invalid("owner");
 }
 
@@ -216,7 +211,6 @@ export function parseCommentBatch(value: unknown): CommentBatch {
   validateBatchSize(value);
   const owner = parseOwner(value.owner);
   const liveAttachment = value.live_attachment === null ? null : parseAttachment(value.live_attachment);
-  if (owner.kind === "legacy_pane" && liveAttachment !== null) return invalid("legacy batch attachment");
   return {
     batch_id: value.batch_id,
     generation: value.generation,

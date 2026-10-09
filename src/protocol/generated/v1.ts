@@ -575,7 +575,7 @@ export type ContextMedia = { binding_id: string, root_id: string, path: string, 
 
 export type CommentRequestScope = { binding_id: string, client_id: string, };
 
-export type CommentOwner = { "kind": "viewer", session_id: string, server_instance: string, tab_id: string, source_kind: ViewerSourceKind, source_id: string, } | { "kind": "legacy_pane", session_id: string, pane_id: string, terminal_id: string, source_kind: ViewerSourceKind, source_id: string, };
+export type CommentOwner = { "kind": "viewer", session_id: string, server_instance: string, tab_id: string, source_kind: ViewerSourceKind, source_id: string, };
 
 export type CommentLocation = { workspace_id: string, tab_id: string, };
 
