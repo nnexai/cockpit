@@ -23,7 +23,6 @@ function intentText(intent: StepIntent): string {
     case "set_checked": return `Mark ${intent.scope === "subtree" ? "subtree" : "step"} ${intent.stepId} ${intent.checked ? "done" : "open"}.`;
     case "move": return `Move ${intent.stepId} under ${intent.parentStepId ?? "task root"}, before ${intent.beforeStepId ?? "end"}.`;
     case "remove": return `Remove the complete subtree ${intent.stepId}.`;
-    case "adopt": return `Track all ${intent.mapping.length} checklist lines with the retained proposed identities.`;
   }
 }
 
@@ -32,7 +31,7 @@ function reviewedTargetProblem(task: Task, intent: StepIntent): string | null {
   if (task.step_progress === null || task.steps.some((step) => step.diagnostic !== null) || (task.steps.length === 0 && task.steps_diagnostic !== null)) {
     return "The saved step source is unsafe. Keep the saved state and inspect its diagnostic.";
   }
-  if (intent.kind !== "add" && intent.kind !== "adopt" && !task.steps.some((step) => step.step_id === intent.stepId)) {
+  if (intent.kind !== "add" && !task.steps.some((step) => step.step_id === intent.stepId)) {
     return "The original step was removed. Your draft is kept; it cannot be saved to another target.";
   }
   if ((intent.kind === "add" || intent.kind === "move") && intent.parentStepId !== null &&
@@ -114,7 +113,7 @@ export function StepsSection(props: SupervisorStepsProps): ReactElement {
     } else if (intent.kind === "remove") {
       requestFocus(removalFocus(before ? visibleSteps(before, expanded) : previousRows.current,
         visibleSteps(after, draft.expanded ?? expanded), intent.stepId));
-    } else if (intent.kind !== "adopt") {
+    } else {
       if (intent.kind === "move") {
         if (mountedDraft.current !== draft || !origin || !moveFocusAllowed(origin)) return;
         const revealed = new Set(draft.expanded ?? expanded);
@@ -375,7 +374,7 @@ export function StepsSection(props: SupervisorStepsProps): ReactElement {
     if (textDraft?.retainedSubmission?.submissionId === original.submissionId) textDraft.retainedSubmission = submitted;
   }
   function requiresPreview(intent: StepIntent, baseTask: Task): boolean {
-    if (intent.kind === "remove" || intent.kind === "adopt") return true;
+    if (intent.kind === "remove") return true;
     if (intent.kind === "set_checked") return !intent.checked && leafProgress(stepSubtree(baseTask, intent.stepId)).done > 1;
     if (intent.kind === "move") {
       const moving = baseTask.steps.find((step) => step.step_id === intent.stepId);
@@ -392,7 +391,7 @@ export function StepsSection(props: SupervisorStepsProps): ReactElement {
     const intent = draft.confirmation?.submitted.intent;
     draft.confirmation = null;
     if (intent?.kind === "add") requestFocus({ kind: "add", parentStepId: intent.parentStepId });
-    else if (intent && intent.kind !== "adopt") requestFocus({ kind: "row", stepId: intent.stepId });
+    else if (intent) requestFocus({ kind: "row", stepId: intent.stepId });
     else requestFocus({ kind: "toolbar_add" });
   }
   function confirm() {
@@ -499,9 +498,7 @@ export function StepsSection(props: SupervisorStepsProps): ReactElement {
         ancestry.unshift(parent.title); parentId = parent.parent_step_id;
       }
       const operation = draft.operation;
-      const unconfirmed = uncertain && operation.kind !== "idle" && (operation.submitted.intent.kind === "adopt"
-        ? operation.submitted.intent.mapping.some((mapping) => mapping.stepId === stepId || mapping.sourceOffset === step.source_offset)
-        : operation.submitted.intent.stepId === stepId);
+      const unconfirmed = uncertain && operation.kind !== "idle" && operation.submitted.intent.stepId === stepId;
       return <li key={stepId !== null && step.diagnostic === null ? stepId : `source-${step.source_offset}`} className="supervisor-step-item" data-depth={step.depth}>
         <div className={`supervisor-step-row${unconfirmed ? " is-unconfirmed" : ""}`} onContextMenu={(event) => {
           if (stepId === null) return;
@@ -548,17 +545,15 @@ export function StepsSection(props: SupervisorStepsProps): ReactElement {
     const count = leafProgress(subtree).done;
     const heading = intent.kind === "remove" ? `Remove “${selected?.title ?? intent.stepId}”${subtree.length > 1 ? ` and its ${subtree.length - 1} sub-steps` : ""}?`
       : intent.kind === "set_checked" ? `Mark ${count} completed steps open in “${selected?.title ?? intent.stepId}”?`
-      : intent.kind === "adopt" ? `Track all ${intent.mapping.length} checklist lines?`
       : intent.kind === "move" ? `Move “${selected?.title ?? intent.stepId}” and its complete subtree?`
       : `Make “${newParent?.title ?? "the destination"}” a branch?`;
-    const action = intent.kind === "remove" ? `Remove ${subtree.length} steps` : intent.kind === "set_checked" ? `Mark ${count} steps open` : intent.kind === "adopt" ? "Track checklist" : "Apply change";
+    const action = intent.kind === "remove" ? `Remove ${subtree.length} steps` : intent.kind === "set_checked" ? `Mark ${count} steps open` : "Apply change";
     return <div className="supervisor-step-confirmation" onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelConfirmation(); } }}>
       <h4>{heading}</h4>
       <p>{intent.kind === "remove" ? "This removes their checklist text from this task. It does not stop the worker or remove files."
-        : intent.kind === "adopt" ? "Identity markers are inserted in place. Review every line; state, order and unrelated prose are preserved." : "This changes steps only; the task and Result remain unchanged."}</p>
+        : "This changes steps only; the task and Result remain unchanged."}</p>
       {(intent.kind === "remove" || (intent.kind === "move" && intent.parentStepId !== selected?.parent_step_id)) && parent && siblings.length === 1 ? <p>“{parent.title}” becomes a leaf, {parent.status === "done" ? "complete" : "open"}.</p> : null}
       {newParent && stepSubtree(baseTask, newParent.step_id!).length === 1 ? <p>“{newParent.title}” becomes a branch. {intent.kind === "add" ? "Its new child starts open, even when the parent was complete." : "Completion is derived from its new descendant leaves."}</p> : null}
-      {intent.kind === "adopt" ? <ul className="supervisor-step-adoption-preview">{baseTask.steps.filter((step) => step.step_id === null).map((step) => <li key={step.source_offset} data-depth={step.depth}>{step.title} · {step.status} · line {step.line}<code>{intent.mapping.find((mapping) => mapping.sourceOffset === step.source_offset)?.stepId}</code></li>)}</ul> : null}
       {stale ? <p className="supervisor-step-warning">Task changed since this preview. Review a new preview before confirming.</p> : null}
       {intent.kind === "remove" ? <><button type="button" onClick={() => void copy(baseTask.body)}>Copy step Markdown</button><p className="supervisor-step-context">Copies the complete saved task continuation so original step source is available for recovery.</p></> : null}
       <div className="supervisor-step-actions"><button type="button" ref={safeButton} onClick={cancelConfirmation}>{intent.kind === "set_checked" ? "Keep completed" : "Keep steps"}</button>
@@ -615,20 +610,16 @@ export function StepsSection(props: SupervisorStepsProps): ReactElement {
     }} onKeyUp={(event) => { if ((event.target as HTMLElement).dataset.rowId && event.key === " ") { event.preventDefault(); event.stopPropagation(); } }}>
       {renderRows(roots)}
     </div>
-    {untracked.length ? <div className="supervisor-step-untracked-summary"><p>{untracked.length} checklist lines are not tracked.</p><button type="button" aria-disabled={Boolean(blockedReason || task?.steps_diagnostic || (task?.steps.length ?? 0) > 64)} onClick={() => {
-      if (!task || !guard()) return;
-      if (task.steps_diagnostic || task.steps.length > 64) { notice(task.steps_diagnostic ?? "Tracking would exceed the 64-step limit.", "warning"); return; }
-      preview(submission({ kind: "adopt", mapping: untracked.map((step) => ({ sourceOffset: step.source_offset, stepId: crypto.randomUUID() })) }, task.task_revision), task);
-    }}>Track checklist…</button></div> : null}
+    {untracked.length ? <div className="supervisor-step-untracked-summary"><p>{untracked.length} checklist lines are not tracked.</p></div> : null}
     <div className={`supervisor-step-status${draft.status ? ` is-${draft.status.tone}` : ""}`} role={draft.status?.tone === "error" ? "alert" : "status"} aria-live="polite">{draft.status?.text ?? ""}</div>
     {operation.kind === "unknown" || operation.kind === "refused" ? <div className="supervisor-step-recovery"><p>{operation.message}</p>{operation.kind === "refused" ? <code>{operation.operationCode}</code> : null}<button type="button" aria-disabled={reading} onClick={() => void readForReview()}>{reading ? "Reading saved steps…" : operation.kind === "unknown" ? "Check saved steps" : "Review current steps"}</button>
       {operation.kind === "refused" ? <button type="button" onClick={() => { draft.operation = { kind: "idle" }; draft.confirmation = null; notice("Saved steps kept. Your drafts remain available."); }}>Keep saved steps</button> : null}</div> : null}
     {operation.kind === "review" ? <div className="supervisor-step-review"><h4>{operation.reason === "unknown" ? "Compare saved steps" : "Review your change against saved steps"}</h4>
       <div className="supervisor-step-compare"><div><strong>Submitted intent</strong><p>{intentText(operation.submitted.intent)}</p><code>{operation.submitted.expectedTaskRevision}</code></div>
-        <div><strong>Saved state after read</strong><p>{intentMatchesSaved(operation.currentTask, operation.submitted.intent, draft.confirmation?.baseTask) ? "The exact intended saved state is present. This does not establish who wrote it." : "Saved steps differ from the submitted intent."}</p>
+        <div><strong>Saved state after read</strong><p>{intentMatchesSaved(operation.currentTask, operation.submitted.intent) ? "The exact intended saved state is present. This does not establish who wrote it." : "Saved steps differ from the submitted intent."}</p>
           <ul>{operation.currentTask.steps.map((step) => <li key={step.step_id !== null && step.diagnostic === null ? step.step_id : `source-${step.source_offset}`} data-depth={step.depth}>{step.title} · {step.status} · under {step.parent_step_id ?? "task root"}</li>)}</ul><code>{operation.currentTask.task_revision}</code></div></div>
       {reviewProblem ? <p className="supervisor-step-warning">{reviewProblem}</p> : null}
-      <div className="supervisor-step-actions"><button type="button" aria-disabled={resolving} onClick={() => void resolve(operation.reason === "unknown" && intentMatchesSaved(operation.currentTask, operation.submitted.intent, draft.confirmation?.baseTask) ? "use_saved" : "keep_saved")}>{operation.reason === "conflict" ? "Use current" : intentMatchesSaved(operation.currentTask, operation.submitted.intent, draft.confirmation?.baseTask) ? "Use saved state" : "Keep saved state"}</button>
+      <div className="supervisor-step-actions"><button type="button" aria-disabled={resolving} onClick={() => void resolve(operation.reason === "unknown" && intentMatchesSaved(operation.currentTask, operation.submitted.intent) ? "use_saved" : "keep_saved")}>{operation.reason === "conflict" ? "Use current" : intentMatchesSaved(operation.currentTask, operation.submitted.intent) ? "Use saved state" : "Keep saved state"}</button>
         <button type="button" aria-disabled={pending || !props.writable || !identityValid || reviewProblem !== null} onClick={() => void resolve("apply_reviewed")}>Apply reviewed change</button><button type="button" aria-disabled={reading} onClick={() => void readForReview()}>Read saved steps again</button></div>
     </div> : null}
     {confirmationView()}

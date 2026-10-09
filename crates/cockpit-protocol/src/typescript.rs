@@ -547,7 +547,6 @@ pub fn render_v1() -> String {
         TaskStepProgress::decl(&config),
         TaskStepStatus::decl(&config),
         TaskStepScope::decl(&config),
-        TaskStepAdoption::decl(&config),
         TaskDependencies::decl(&config),
         TaskDependencyState::decl(&config),
         TaskDependencyBlocker::decl(&config),

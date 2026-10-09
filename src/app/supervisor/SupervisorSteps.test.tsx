@@ -8,7 +8,7 @@ import { leafProgress, newStepDraft, type StepReadOutcome, type StepSubmission, 
 import type { TaskMutationOutcome } from "./useSupervisor";
 
 function step(stepId: string | null, depth = 0, parent: string | null = null, status: Task["steps"][number]["status"] = "open", sourceOffset = 0): Task["steps"][number] {
-  return { step_id: stepId, parent_step_id: parent, depth, title: stepId ?? `Legacy ${sourceOffset}`, checked: status === "done",
+  return { step_id: stepId, parent_step_id: parent, depth, title: stepId ?? `Untracked ${sourceOffset}`, checked: status === "done",
     status, line: sourceOffset + 1, source_offset: sourceOffset, diagnostic: null };
 }
 function task(steps: Task["steps"] = [], overrides: Partial<Task> = {}): Task {
@@ -431,16 +431,19 @@ describe("unknown original-identity reconciliation and definite refusals", () =>
 });
 
 describe("untracked, diagnostic and saved overflow states", () => {
-  it("tracks every untracked row atomically with proposed-once UUIDs, original revision and safe preview", async () => {
+  it("keeps untracked rows visible and read-only", async () => {
     await mount(task([step(null, 0, null, "done", 10), step(null, 1, null, "open", 20)]));
+    const checks = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    expect(checks).toHaveLength(2);
+    expect(checks.map((check) => check.checked)).toEqual([true, false]);
     expect(host.querySelectorAll("[data-row-id]")).toHaveLength(0);
-    await click(button("Track checklist…"));
-    const submitted = state.draft.confirmation!.submitted;
-    expect(document.activeElement).toBe(button("Keep steps")); expect(state.submit).not.toHaveBeenCalled();
-    if (submitted.intent.kind !== "adopt") throw new Error("Expected adoption");
-    expect(submitted.intent.mapping.map((entry) => entry.sourceOffset)).toEqual([10, 20]);
-    expect(new Set(submitted.intent.mapping.map((entry) => entry.stepId)).size).toBe(2);
-    await click(button("Track checklist")); expect(state.submit).toHaveBeenCalledWith(submitted);
+    expect(checks.every((check) => check.getAttribute("aria-disabled") === "true" && check.tabIndex === -1)).toBe(true);
+    expect(host.querySelectorAll(".supervisor-step-more")).toHaveLength(0);
+    expect(host.querySelectorAll(".supervisor-step-untracked-summary button")).toHaveLength(0);
+    for (const check of checks) await click(check);
+    expect(state.submit).not.toHaveBeenCalled();
+    expect(checks.map((check) => check.checked)).toEqual([true, false]);
+    expect(state.draft.confirmation).toBeNull();
   });
   it("keeps all oversized/deep saved rows readable while safe checks remain available", async () => {
     await mount(task(Array.from({ length: 70 }, (_, index) => step(`leaf-${index}`)), { steps_diagnostic: "Tracked count exceeds limit.", step_progress: { done: 0, total: 70 } }));

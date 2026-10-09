@@ -100,7 +100,7 @@ describe("canonical task mutation serialization", () => {
     expect(() => taskArgs({ operation: "dependencies_set", task_id, expected_task_revision, expected_doc_revision: "doc" })).toThrow("full depends_on");
   });
 
-  it("exposes all six checklist operations with stable IDs, explicit scope and exact adoption offsets", () => {
+  it("exposes all five checklist operations with stable IDs and explicit scope", () => {
     const base = { task_id, expected_task_revision, step_id };
     expect(taskArgs({ ...base, operation: "step_add", parent_step_id: "parent", before_step_id: "next", title: "Step" }))
       .toEqual(["task", "step-add", task_id, "--revision", expected_task_revision, "--step-id", step_id, "--title", "Step", "--parent-step-id", "parent", "--before-step-id", "next"]);
@@ -113,12 +113,6 @@ describe("canonical task mutation serialization", () => {
       .toEqual(["task", "step-move", task_id, "--revision", expected_task_revision, "--step-id", step_id, "--before-step-id", "next"]);
     expect(taskArgs({ ...base, operation: "step_remove" }))
       .toEqual(["task", "step-remove", task_id, "--revision", expected_task_revision, "--step-id", step_id]);
-    const mapping = [{ source_offset: 57, step_id }];
-    expect(taskArgs({ operation: "steps_adopt", task_id, expected_task_revision, mapping }))
-      .toEqual(["task", "steps-adopt", task_id, "--revision", expected_task_revision, "--mapping", JSON.stringify(mapping)]);
-    for (const source_offset of [-1, 0.5, 0x1_0000_0000]) expect(() => taskArgs({
-      operation: "steps_adopt", task_id, expected_task_revision, mapping: [{ source_offset, step_id }],
-    })).toThrow("source_offset");
   });
 });
 

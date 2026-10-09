@@ -76,10 +76,9 @@ struct StepNode {
     status: TaskStepStatus,
     diagnostic: Option<String>,
     parser_range: Range<usize>,
-    content_end: usize,
     physical_line: usize,
     title_scalars: usize,
-    // Tabs remain readable/adoptable, but never become guessed reindent columns.
+    // Tabs remain readable, but never become guessed reindent columns.
     indent: Option<usize>,
     child_indent: Option<usize>,
 }
@@ -88,12 +87,6 @@ pub(crate) struct StepProjection {
     pub steps: Vec<TaskStep>,
     pub progress: Option<TaskStepProgress>,
     pub diagnostic: Option<String>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct StepAdoption {
-    pub source_offset: u32,
-    pub step_id: Uuid,
 }
 
 pub(crate) enum StepIntent<'a> {
@@ -119,9 +112,6 @@ pub(crate) enum StepIntent<'a> {
     },
     Remove {
         step_id: Uuid,
-    },
-    Adopt {
-        mapping: &'a [StepAdoption],
     },
 }
 
@@ -395,7 +385,6 @@ pub(crate) fn parse(
                     title_scalars: 0,
                     diagnostic: None,
                     parser_range: frame.range.clone(),
-                    content_end: line.content_end,
                     indent: simple_indent,
                     child_indent,
                 };
@@ -634,7 +623,7 @@ pub(crate) fn parse(
     if unsafe_bounds {
         diagnose(
             &mut layout,
-            "some checkbox subtrees cannot be safely moved, removed, or adopted",
+            "some checkbox subtrees cannot be safely moved or removed",
         );
     }
     let limits = violations(context, &model, context.continuation_range.len());
@@ -1243,7 +1232,7 @@ pub(crate) fn plan<'a>(
             {
                 return Err(error(
                     "task_step_destination_invalid",
-                    "new root steps belong in the managed tail; cannot add before an adopted legacy root",
+                    "new root steps belong in the managed tail; cannot add before a tracked root outside it",
                 ));
             }
             if let Some(&index) = layout.by_id.get(&step_id) {
@@ -1415,56 +1404,6 @@ pub(crate) fn plan<'a>(
             let after = leaf_conversions(&mut nodes, &before)?;
             normalize(layout, &nodes, &after, &affected, &mut patches);
         }
-        StepIntent::Adopt { mapping } => {
-            let candidate_count = layout
-                .nodes
-                .iter()
-                .filter(|node| node.step_id.is_none())
-                .count();
-            if mapping.len() != candidate_count {
-                return Err(error(
-                    "task_steps_adoption_invalid",
-                    "adoption must map every untracked candidate exactly once",
-                ));
-            }
-            let mut offsets = HashMap::with_capacity(mapping.len());
-            let mut ids: HashSet<_> = layout.by_id.keys().copied().collect();
-            for adoption in mapping {
-                if offsets
-                    .insert(adoption.source_offset, adoption.step_id)
-                    .is_some()
-                    || !ids.insert(adoption.step_id)
-                {
-                    return Err(error(
-                        "task_steps_adoption_invalid",
-                        "adoption contains duplicate offsets or an existing/duplicate UUID",
-                    ));
-                }
-            }
-            // All eligible rows are formalized in place. Unsafe tracked ancestry
-            // also makes a complete formalization unsafe, not a partial success.
-            for (index, node) in layout.nodes.iter().enumerate() {
-                owned_subtree(layout, index)?;
-                if node.step_id.is_none() {
-                    let offset = u32::try_from(node.header_range.start - context.item_range.start)
-                        .map_err(|_| invalid_patch())?;
-                    let id = offsets.remove(&offset).ok_or_else(|| error("task_steps_adoption_invalid", "adoption source offsets no longer match the complete candidate inventory"))?;
-                    nodes[index].tracked = true;
-                    patches.push(BytePatch {
-                        range: node.content_end..node.content_end,
-                        replacement: Cow::Owned(
-                            format!(" <!-- cockpit-step: {id} -->").into_bytes(),
-                        ),
-                    });
-                }
-            }
-            if !offsets.is_empty() {
-                return Err(error(
-                    "task_steps_adoption_invalid",
-                    "adoption names an unknown candidate offset",
-                ));
-            }
-        }
     }
     patches.sort_unstable_by_key(|patch| (patch.range.start, patch.range.end));
     validate_patches(source, context, layout, &patches)?;
@@ -1540,10 +1479,6 @@ pub(crate) fn validate_patches(
             node.subtree_range
                 .as_ref()
                 .is_some_and(|subtree| subtree.start == gap || subtree.end == gap)
-                || node.step_id.is_none()
-                    && node.marker_range.is_none()
-                    && node.subtree_range.is_some()
-                    && node.content_end == gap
         };
         let owned = !layout.identity_invalid
             && !layout.hierarchy_invalid
@@ -1597,7 +1532,7 @@ mod tests {
             id(1002)
         )
     }
-    fn legacy(rows: &str) -> String {
+    fn external(rows: &str) -> String {
         format!(
             "# Tasks\n\n- [ ] Task <!-- cockpit-task: {} -->\n  Before prose.\n\n{rows}\n  After prose.\n- [ ] Other <!-- cockpit-task: {} -->\n",
             id(1000),
@@ -1982,62 +1917,19 @@ mod tests {
     }
 
     #[test]
-    fn adoption_inserts_only_ids_and_retains_legacy_bullets_case_spaces_and_crlf() {
+    fn untracked_mixed_bullets_case_spaces_and_crlf_remain_readable() {
         let source =
-            legacy("  * [X] Parent  \n    + [ ] Child\n  * [ ] Sibling\n").replace('\n', "\r\n");
+            external("  * [X] Parent  \n    + [ ] Child\n  * [ ] Sibling\n").replace('\n', "\r\n");
         let result = projection(&source);
         assert_eq!(result.steps.len(), 3);
         assert_eq!(result.steps[1].depth, 1);
-        let mapping: Vec<_> = result
-            .steps
-            .iter()
-            .enumerate()
-            .map(|(index, step)| StepAdoption {
-                source_offset: step.source_offset,
-                step_id: id(index as u128 + 1),
-            })
-            .collect();
-        let changed = edit(&source, StepIntent::Adopt { mapping: &mapping });
-        let expected = source
-            .replace(
-                "Parent  \r\n",
-                &format!("Parent   <!-- cockpit-step: {} -->\r\n", id(1)),
-            )
-            .replace(
-                "Child\r\n",
-                &format!("Child <!-- cockpit-step: {} -->\r\n", id(2)),
-            )
-            .replace(
-                "Sibling\r\n",
-                &format!("Sibling <!-- cockpit-step: {} -->\r\n", id(3)),
-            );
-        assert_eq!(changed, expected);
-        let saved = projection(&changed);
-        assert_eq!(saved.steps[1].parent_step_id, Some(id(1).to_string()));
-        assert_eq!(saved.steps[1].step_id, Some(id(2).to_string()));
-        assert!(saved.diagnostic.is_none());
-        refusal(
-            &source,
-            StepIntent::Adopt {
-                mapping: &mapping[..2],
-            },
-        );
-        let mut duplicate = mapping.clone();
-        duplicate[1].step_id = duplicate[0].step_id;
-        refusal(
-            &source,
-            StepIntent::Adopt {
-                mapping: &duplicate,
-            },
-        );
-        let mut stale = mapping;
-        stale[0].source_offset += 1;
-        refusal(&source, StepIntent::Adopt { mapping: &stale });
+        assert!(result.steps[0].checked);
+        assert!(result.steps.iter().all(|step| step.step_id.is_none()));
     }
 
     #[test]
-    fn adopted_child_insertion_and_cross_region_move_preserve_prose_in_place() {
-        let source = legacy(&(row(0, 1, true, "Legacy parent") + &row(1, 2, true, "Legacy child")));
+    fn tracked_child_insertion_and_cross_region_move_preserve_prose_in_place() {
+        let source = external(&(row(0, 1, true, "Tracked parent") + &row(1, 2, true, "Tracked child")));
         let with_child = edit(
             &source,
             StepIntent::Add {
@@ -2051,12 +1943,12 @@ mod tests {
             with_child,
             source
                 .replace(
-                    &row(0, 1, true, "Legacy parent"),
-                    &row(0, 1, false, "Legacy parent")
+                    &row(0, 1, true, "Tracked parent"),
+                    &row(0, 1, false, "Tracked parent")
                 )
                 .replace(
-                    &row(1, 2, true, "Legacy child"),
-                    &(row(1, 2, true, "Legacy child") + &row(1, 3, false, "Added in place"))
+                    &row(1, 2, true, "Tracked child"),
+                    &(row(1, 2, true, "Tracked child") + &row(1, 3, false, "Added in place"))
                 )
         );
         let with_tail = edit(
@@ -2092,7 +1984,7 @@ mod tests {
                 step_id: id(7),
                 parent_step_id: None,
                 before_step_id: Some(id(1)),
-                title: "Not a legacy root insertion",
+                title: "Not an out-of-tail root insertion",
             },
         );
     }
@@ -2103,7 +1995,7 @@ mod tests {
             "  ```md\n  {BEGIN}\n  - [x] Fenced <!-- cockpit-step: {} -->\n  {END}\n  ```\n\n  > - [ ] Quoted\n\n  <div>\n  {BEGIN}\n  - [ ] HTML example\n  {END}\n  </div>\n\n  - [ ] Actual `<!-- cockpit-step: not-a-uuid -->`\n",
             id(9)
         );
-        let source = legacy(&body);
+        let source = external(&body);
         let result = projection(&source);
         assert_eq!(result.steps.len(), 1);
         assert!(result.steps[0].step_id.is_none());
@@ -2120,31 +2012,16 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_list_ancestor_or_interleaved_continuation_denies_adoption() {
-        let source = legacy("  - Ordinary parent\n    - [ ] Child\n");
+    fn ordinary_list_ancestor_or_interleaved_continuation_is_diagnosed() {
+        let source = external("  - Ordinary parent\n    - [ ] Child\n");
         let result = projection(&source);
         assert_eq!(result.steps.len(), 1);
         assert!(result.progress.is_none());
         assert!(result.steps[0].diagnostic.is_some());
-        let mapping = [StepAdoption {
-            source_offset: result.steps[0].source_offset,
-            step_id: id(1),
-        }];
-        refusal(&source, StepIntent::Adopt { mapping: &mapping });
         let source =
-            legacy("  - [ ] Parent\n    Non-checkbox continuation prose\n    - [ ] Child\n");
+            external("  - [ ] Parent\n    Non-checkbox continuation prose\n    - [ ] Child\n");
         let result = projection(&source);
-        let mapping: Vec<_> = result
-            .steps
-            .iter()
-            .enumerate()
-            .map(|(i, s)| StepAdoption {
-                source_offset: s.source_offset,
-                step_id: id(i as u128 + 1),
-            })
-            .collect();
         assert!(result.steps[0].diagnostic.is_some());
-        refusal(&source, StepIntent::Adopt { mapping: &mapping });
     }
 
     #[test]
@@ -2645,8 +2522,8 @@ mod tests {
     }
 
     #[test]
-    fn ordered_legacy_content_columns_are_used_without_canonicalizing_its_headers() {
-        let source = legacy(&format!(
+    fn ordered_tracked_content_columns_are_used_without_canonicalizing_its_headers() {
+        let source = external(&format!(
             "  1. [x] Parent <!-- cockpit-step: {} -->\n     - [x] Child <!-- cockpit-step: {} -->\n",
             id(1),
             id(2)
@@ -2662,31 +2539,36 @@ mod tests {
         );
         assert_eq!(added, source.replace("  1. [x] Parent", "  1. [ ] Parent").replace(&format!("     - [x] Child <!-- cockpit-step: {} -->\n", id(2)), &format!("     - [x] Child <!-- cockpit-step: {} -->\n     - [ ] Child at column five <!-- cockpit-step: {} -->\n", id(2), id(3))));
         let removed = edit(&added, StepIntent::Remove { step_id: id(1) });
-        assert_eq!(removed, legacy(""));
+        assert_eq!(removed, external(""));
     }
 
     #[test]
-    fn tabbed_legacy_headers_can_be_adopted_and_checked_but_not_guessed_for_reindent() {
-        let source = legacy("  -\t[X] Tabbed legacy\n");
+    fn tabbed_untracked_headers_remain_readable() {
+        let source = external("  -\t[X] Tabbed external\n");
         let result = projection(&source);
         assert_eq!(result.steps.len(), 1);
         assert!(result.steps[0].diagnostic.is_none());
-        let mapping = [StepAdoption {
-            source_offset: result.steps[0].source_offset,
-            step_id: id(1),
-        }];
-        let adopted = edit(&source, StepIntent::Adopt { mapping: &mapping });
+        assert!(result.steps[0].checked);
+        assert!(result.steps[0].step_id.is_none());
+    }
+
+    #[test]
+    fn tabbed_tracked_headers_can_be_checked_but_not_guessed_for_reindent() {
+        let source = external(&format!("  -\t[X] Tabbed tracked <!-- cockpit-step: {} -->\n", id(1)));
+        let result = projection(&source);
+        assert_eq!(result.steps.len(), 1);
+        assert!(result.steps[0].diagnostic.is_none());
         let checked = edit(
-            &adopted,
+            &source,
             StepIntent::SetChecked {
                 step_id: id(1),
                 checked: false,
                 scope: TaskStepScope::Leaf,
             },
         );
-        assert_eq!(checked, adopted.replace("-\t[X]", "-\t[ ]"));
+        assert_eq!(checked, source.replace("-\t[X]", "-\t[ ]"));
         refusal(
-            &adopted,
+            &source,
             StepIntent::Add {
                 step_id: id(2),
                 parent_step_id: Some(id(1)),
@@ -2725,8 +2607,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_insertion_gaps_and_terminal_creation_are_proved_not_inferred_from_protected_union() {
-        let source = legacy(&row(0, 1, false, "Safe legacy"));
+    fn external_insertion_gaps_and_terminal_creation_are_proved_not_inferred_from_protected_union() {
+        let source = external(&row(0, 1, false, "Safe tracked"));
         let context = context(&source);
         let layout = parse(&source, &context).unwrap();
         let child_gap = layout.nodes[0].subtree_range.as_ref().unwrap().end;

@@ -128,7 +128,6 @@ const actions: OrchestrationAction[] = [
   { action: "task_step_set_checked", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId, checked: true, scope: "leaf" },
   { action: "task_step_move", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId, parent_step_id: null, before_step_id: parentStepId },
   { action: "task_step_remove", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId },
-  { action: "task_steps_adopt", root_id: "root", task_id: "task", expected_task_revision: hash, mapping: [{ source_offset: 108, step_id: childStepId }] },
   { action: "tasks_assign_ids", root_id: "root", expected_doc_revision: hash },
   { action: "supervisor_start", target: null, label: null },
   { action: "run_bind_session", omp_session_id: "omp" },
@@ -237,15 +236,15 @@ describe("orchestration protocol boundary", () => {
     expect(response.result).toEqual({ result: "task", task });
   });
 
-  it("keeps diagnosed legacy checklists visible without applying authoring limits to source reads", () => {
-    const legacy: Task = {
+  it("keeps diagnosed external checklists visible without applying authoring limits to source reads", () => {
+    const external: Task = {
       ...task, description_editable: false, description_diagnostic: "description_unsafe",
       steps: [{ ...task.steps[0]!, step_id: null, parent_step_id: null, depth: 5,
         title: "é".repeat(201), diagnostic: "step_depth" }],
       step_progress: null, steps_diagnostic: "steps_invalid", relations_diagnostic: "relations_invalid",
     };
-    const dto = replaceField(snapshot, ["board", "tasks", 0, "task"], legacy);
-    expect(parseOrchestrationSnapshot(dto).board!.tasks[0]!.task).toEqual(legacy);
+    const dto = replaceField(snapshot, ["board", "tasks", 0, "task"], external);
+    expect(parseOrchestrationSnapshot(dto).board!.tasks[0]!.task).toEqual(external);
     expect(parseOrchestrationSnapshot(replaceField(snapshot, ["board", "tasks", 0, "task", "steps"], []))
       .board!.tasks[0]!.task.steps).toEqual([]);
     for (const status of ["open", "partial", "done"]) {
@@ -326,7 +325,7 @@ describe("orchestration protocol boundary", () => {
     expect(() => parseOrchestrationAction({ ...set, expected_doc_revision: null })).toThrow(CockpitClientError);
   });
 
-  it("validates Unicode-scalar step titles, stable identities, bounded adoption and explicit check scope", () => {
+  it("validates Unicode-scalar step titles, stable identities and explicit check scope", () => {
     const add = { action: "task_step_add", root_id: "root", task_id: "task", expected_task_revision: hash,
       step_id: childStepId, parent_step_id: null, before_step_id: null, title: "😀".repeat(200) };
     expect(parseOrchestrationAction(add)).toEqual(add);
@@ -344,15 +343,6 @@ describe("orchestration protocol boundary", () => {
     expect(parseOrchestrationAction(checked)).toEqual(checked);
     expect(parseOrchestrationAction({ ...checked, scope: "leaf" })).toBeDefined();
     for (const scope of [null, "all", "children"]) expect(() => parseOrchestrationAction({ ...checked, scope })).toThrow(CockpitClientError);
-    const adopt = { action: "task_steps_adopt", root_id: "root", task_id: "task", expected_task_revision: hash,
-      mapping: [{ source_offset: 108, step_id: childStepId }] };
-    expect(parseOrchestrationAction({ ...adopt, mapping: Array(64).fill(adopt.mapping[0]) })).toBeDefined();
-    for (const mapping of [
-      Array(65).fill(adopt.mapping[0]), [{ source_offset: -1, step_id: childStepId }],
-      [{ source_offset: 0x100000000, step_id: childStepId }], [{ source_offset: 108, step_id: "invalid" }],
-      [{ source_offset: 108, step_id: childStepId, body: "unexpected" }],
-    ]) expect(() => parseOrchestrationAction({ ...adopt, mapping })).toThrow(CockpitClientError);
-    expect(() => parseOrchestrationAction({ ...adopt, expected_doc_revision: hash })).toThrow(CockpitClientError);
   });
 
   it("decodes explicit project-bound worktree targets and rejects malformed or unknown targets", () => {
@@ -498,7 +488,7 @@ describe("orchestration protocol boundary", () => {
     expect(() => parseOrchestrationSnapshot(replaceField(snapshot, path, "unknown"))).toThrow(CockpitClientError);
   });
 
-  it("decodes truthful operator, supervisor and legacy decision provenance", () => {
+  it("decodes truthful operator and supervisor decision provenance", () => {
     for (const origin of ["browser", "native", "supervisor"] as const) {
       const provenance = {
         origin, supervisor_run_id: origin === "supervisor" ? "root" : null,

@@ -19,7 +19,7 @@ export type SourceResolutionOutcome = { kind: "resolved"; task: Task } | { kind:
 const LOCAL_FENCES: Partial<Record<OrchestrationAction["action"], true>> = {
   task_create: true, task_update: true, task_dependencies_set: true,
   task_step_add: true, task_step_rename: true, task_step_set_checked: true,
-  task_step_move: true, task_step_remove: true, task_steps_adopt: true,
+  task_step_move: true, task_step_remove: true,
   task_assign: true, task_assignment_resolve: true, tasks_assign_ids: true,
   grant_prepare: true, grant_execute: true, accept: true, message_send: true, annotate: true,
 };
@@ -34,7 +34,7 @@ const PREPUBLICATION_REFUSALS: Partial<Record<string, true>> = {
   task_patch_invalid: true, task_step_patch_invalid: true, tasks_full: true, task_steps_invalid: true,
   task_step_cycle: true, task_step_not_found: true, task_step_unsafe: true,
   task_step_title_invalid: true, task_step_destination_invalid: true, task_step_id_conflict: true,
-  task_step_scope_invalid: true, task_steps_adoption_invalid: true, task_step_limit: true,
+  task_step_scope_invalid: true, task_step_limit: true,
 };
 export const taskScopeKey = (scope: StepScope) => JSON.stringify([scope.sessionId, scope.rootId, scope.taskId]);
 export function stepAction(submitted: StepSubmission): OrchestrationAction {
@@ -46,7 +46,6 @@ export function stepAction(submitted: StepSubmission): OrchestrationAction {
     case "set_checked": return { action: "task_step_set_checked", ...base, step_id: intent.stepId, checked: intent.checked, scope: intent.scope };
     case "move": return { action: "task_step_move", ...base, step_id: intent.stepId, parent_step_id: intent.parentStepId, before_step_id: intent.beforeStepId };
     case "remove": return { action: "task_step_remove", ...base, step_id: intent.stepId };
-    case "adopt": return { action: "task_steps_adopt", ...base, mapping: intent.mapping.map(item => ({ source_offset: item.sourceOffset, step_id: item.stepId })) };
   }
 }
 export function acceptsSupervisorSnapshot(next: OrchestrationSnapshot, sessionId: string, rootId: string | null, revisionFloor: number): boolean {

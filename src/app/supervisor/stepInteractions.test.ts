@@ -3,7 +3,7 @@ import type { Task } from "../../protocol/generated/v1";
 import { defaultExpansion, intentMatchesSaved, leafProgress, moveIntent, newStepDraft, removalFocus, stepSubtree, titleProblem, visibleSteps } from "./stepInteractions";
 
 function step(stepId: string | null, depth = 0, parent: string | null = null, status: Task["steps"][number]["status"] = "open", sourceOffset = 0): Task["steps"][number] {
-  return { step_id: stepId, parent_step_id: parent, depth, title: stepId ?? "Legacy", status,
+  return { step_id: stepId, parent_step_id: parent, depth, title: stepId ?? "Untracked", status,
     checked: status === "done", line: sourceOffset + 1, source_offset: sourceOffset, diagnostic: null };
 }
 function task(steps: Task["steps"]): Task {
@@ -94,18 +94,6 @@ describe("exact intent comparison and title limits", () => {
     for (const node of saved.steps.slice(0, 3)) node.status = "done";
     expect(intentMatchesSaved(saved, { kind: "set_checked", stepId: "a", checked: true, scope: "subtree" })).toBe(true);
     expect(intentMatchesSaved(saved, { kind: "remove", stepId: "absent" })).toBe(true);
-  });
-  it("compares every adopted UUID against the original projected hierarchy, not shifted byte offsets", () => {
-    const before = task([step(null, 0, null, "partial", 10), step(null, 1, null, "done", 20), step(null, 1, null, "open", 30)]);
-    const after = task([step("parent", 0, null, "partial", 10), step("done", 1, "parent", "done", 80), step("open", 1, "parent", "open", 150)]);
-    const intent = { kind: "adopt", mapping: [{ sourceOffset: 10, stepId: "parent" }, { sourceOffset: 20, stepId: "done" }, { sourceOffset: 30, stepId: "open" }] } as const;
-    for (const node of after.steps) node.title = "Legacy";
-    expect(intentMatchesSaved(after, intent, before)).toBe(true);
-    expect(intentMatchesSaved(after, intent)).toBe(false);
-    after.steps[2].parent_step_id = null;
-    expect(intentMatchesSaved(after, intent, before)).toBe(false);
-    after.steps[2].step_id = "different";
-    expect(intentMatchesSaved(after, intent, before)).toBe(false);
   });
   it("counts Unicode scalar values and permits safe shortening of oversized saved titles", () => {
     expect(titleProblem("😀".repeat(200))).toBeNull();
