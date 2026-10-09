@@ -114,7 +114,7 @@ impl ProjectService {
             });
         };
         let branch = match artifact.kind.as_str() {
-            "issue" => super::expand_template(
+            "issue" => super::plan::expand_template(
                 &self.configuration.branch_template,
                 &repository,
                 Some(&metadata.title),
