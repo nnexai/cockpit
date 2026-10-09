@@ -273,6 +273,8 @@ impl Fixture {
         let locked = self.service.store.lock().unwrap();
         let mut state = locked.read().unwrap();
         let intent_id = id();
+        let result_message_id = state.runs[run_index(&state, run_id).unwrap()]
+            .result.as_ref().expect("reviewed successful Result").message_id.clone();
         state.task_intents.push(TaskIntent {
             intent_id: intent_id.clone(),
             root_id: root_id.into(),
@@ -280,10 +282,10 @@ impl Fixture {
             run_id: run_id.into(),
             expected_task_revision: task.task_revision.clone(),
             state: IntentState::Pending,
-            origin: None,
+            origin: Some(GrantOrigin::Browser),
             supervisor_run_id: None,
             omp_session_id: None,
-            result_message_id: None,
+            result_message_id: Some(result_message_id),
         });
         locked.save(&mut state).unwrap();
         intent_id
@@ -3292,109 +3294,6 @@ fn explicitly_adopted_actual_main_root_has_management_authority() {
 }
 
 #[test]
-fn legacy_schema_one_grants_and_acceptance_intents_keep_truthful_default_provenance() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let (task, run_id, actor) = fixture.working(&root);
-    fixture
-        .apply(
-            &actor,
-            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-        )
-        .unwrap();
-    fixture.pending_intent(&root, &task, &run_id);
-    let mut legacy = serde_json::to_value(fixture.state()).unwrap();
-    legacy.as_object_mut().unwrap().remove("assignment_intents");
-    let run = legacy["runs"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|run| run["run_id"] == run_id)
-        .unwrap();
-    for (index, origin) in ["browser", "native"].into_iter().enumerate() {
-        let grant = run["grants"][index].as_object_mut().unwrap();
-        grant.insert("origin".into(), serde_json::json!(origin));
-        grant.remove("supervisor_run_id");
-        grant.remove("omp_session_id");
-    }
-    for intent in legacy["task_intents"].as_array_mut().unwrap() {
-        let intent = intent.as_object_mut().unwrap();
-        for key in [
-            "origin",
-            "supervisor_run_id",
-            "omp_session_id",
-            "result_message_id",
-        ] {
-            intent.remove(key);
-        }
-    }
-    std::fs::write(
-        fixture.service.base().join("state.json"),
-        serde_json::to_vec(&legacy).unwrap(),
-    )
-    .unwrap();
-    let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
-    let locked = reopened.store.lock().unwrap();
-    let mut state = locked.read().unwrap();
-    assert_eq!(state.schema, 1);
-    assert!(state.assignment_intents.is_empty());
-    let current = &state.runs[run_index(&state, &run_id).unwrap()];
-    assert_eq!(current.grants[0].origin, GrantOrigin::Browser);
-    assert_eq!(current.grants[1].origin, GrantOrigin::Native);
-    for grant in &current.grants {
-        assert!(grant.supervisor_run_id.is_none());
-        assert!(grant.omp_session_id.is_none());
-    }
-    let intent = &state.task_intents[0];
-    assert!(intent.origin.is_none());
-    assert!(intent.supervisor_run_id.is_none());
-    assert!(intent.omp_session_id.is_none());
-    assert!(intent.result_message_id.is_none());
-    locked.save(&mut state).unwrap();
-    let mut saved = serde_json::to_value(locked.read().unwrap()).unwrap();
-    assert_eq!(saved["schema"], legacy["schema"]);
-    saved["revision"] = legacy["revision"].clone();
-    saved.as_object_mut().unwrap().remove("assignment_intents");
-    let run = saved["runs"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|run| run["run_id"] == run_id)
-        .unwrap();
-    for grant in run["grants"].as_array_mut().unwrap() {
-        let grant = grant.as_object_mut().unwrap();
-        assert_eq!(
-            grant.remove("supervisor_run_id"),
-            Some(serde_json::Value::Null)
-        );
-        assert_eq!(
-            grant.remove("omp_session_id"),
-            Some(serde_json::Value::Null)
-        );
-    }
-    for intent in saved["task_intents"].as_array_mut().unwrap() {
-        for key in [
-            "origin",
-            "supervisor_run_id",
-            "omp_session_id",
-            "result_message_id",
-        ] {
-            assert_eq!(
-                intent.as_object_mut().unwrap().remove(key),
-                Some(serde_json::Value::Null)
-            );
-        }
-    }
-    assert_eq!(
-        saved, legacy,
-        "Resaving schema 1 must not rewrite history or invent provenance"
-    );
-    drop(locked);
-    assert!(!fixture.task(&root, &task.task_id).checked);
-    assert_eq!(fixture.run(&run_id).stage, RunStage::Reported);
-}
-
-#[test]
 fn acceptance_recovery_cannot_substitute_a_new_result_for_the_reviewed_receipt() {
     let fixture = Fixture::new();
     let root = fixture.root();
@@ -4578,9 +4477,6 @@ fn content_actions(root: &str, task: &Task) -> Vec<OrchestrationAction> {
         OrchestrationAction::TaskStepRemove {
             root_id: root.into(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(), step_id,
         },
-        OrchestrationAction::TaskStepsAdopt {
-            root_id: root.into(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(), mapping: Vec::new(),
-        },
     ]
 }
 
@@ -4920,7 +4816,7 @@ fn relationship_doc_cas_fences_other_task_bytes_and_create_replay_bypasses_only_
 }
 
 #[test]
-fn step_actions_execute_on_owned_task_and_prose_edits_preserve_checklist_then_adopt_in_place() {
+fn step_actions_execute_on_owned_task_and_prose_edits_preserve_checklist() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let (mut task, _, actor) = fixture.working(&root);
@@ -4959,25 +4855,6 @@ fn step_actions_execute_on_owned_task_and_prose_edits_preserve_checklist_then_ad
     }).unwrap());
     assert_eq!(task.steps.len(), 1);
     assert!(!task.checked);
-    let legacy = {
-        let locked = fixture.service.store.lock().unwrap();
-        locked.tasks(&root).unwrap().create_with_id(&id(), "Legacy task",
-            "Introduction\n- [ ] First\n- [x] Second").unwrap()
-    };
-    let (_, actor) = execute_task(&fixture, &root, &legacy);
-    assert_eq!(legacy.steps.len(), 2);
-    let mapping = legacy.steps.iter().map(|step| TaskStepAdoption {
-        source_offset: step.source_offset, step_id: id(),
-    }).collect::<Vec<_>>();
-    let adopted = task_result(fixture.apply(&actor, OrchestrationAction::TaskStepsAdopt {
-        root_id: root.clone(), task_id: legacy.task_id.clone(), expected_task_revision: legacy.task_revision,
-        mapping: mapping.clone(),
-    }).unwrap());
-    assert_eq!(adopted.steps.iter().map(|step| step.step_id.as_ref().unwrap()).collect::<Vec<_>>(),
-        mapping.iter().map(|entry| &entry.step_id).collect::<Vec<_>>());
-    assert_eq!(adopted.steps[0].checked, false);
-    assert_eq!(adopted.steps[1].checked, true);
-    assert!(!adopted.checked);
 }
 
 #[test]

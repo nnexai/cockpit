@@ -830,8 +830,6 @@ mod tests {
         durable.runs.push(foreign_root);
         let mut root_answer = answer(DeliveryStage::Acked);
         root_answer.to_run_id = ROOT.into();
-        // A legacy ACK without its timestamp is still an ACK, not a fabricated time.
-        root_answer.acked_at = None;
         durable.messages.push(root_answer);
         let projected = project(&durable, Ok(runtime("working")));
         assert_eq!(projected.questions.len(), 2);
@@ -839,7 +837,7 @@ mod tests {
         let QuestionReceipt::AnswerAcknowledged { answer } = &root.receipt else {
             panic!("root answer is acknowledged")
         };
-        assert!(answer.acked_at.is_none());
+        assert_eq!(answer.acked_at.as_deref(), Some(NOW));
         let worker = projected.questions.iter().find(|question| question.run_id == WORKER).unwrap();
         assert!(matches!(&worker.receipt, QuestionReceipt::Unresolved));
         assert!(!projected.attention.iter().any(|item| {
@@ -938,10 +936,8 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_legacy_stale_subagent_and_other_inbox_messages_do_not_resolve_question() {
+    fn unrelated_stale_subagent_and_other_inbox_messages_do_not_resolve_question() {
         let baseline = answer(DeliveryStage::Acked);
-        let mut legacy = baseline.clone();
-        legacy.in_reply_to = None;
         let mut old_question = baseline.clone();
         old_question.in_reply_to = Some("old-ask".into());
         let mut stale = baseline.clone();
@@ -952,7 +948,7 @@ mod tests {
         instruction.kind = MessageKind::Instruction;
         let mut other_inbox = baseline;
         other_inbox.to_run_id = ROOT.into();
-        for mut message in [legacy, old_question, stale, subagent, instruction, other_inbox] {
+        for mut message in [old_question, stale, subagent, instruction, other_inbox] {
             message.created_at = NOW.into();
             let mut durable = state(asking());
             durable.messages.push(message);

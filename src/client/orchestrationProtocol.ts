@@ -172,9 +172,8 @@ const nativeStopReceipt: Validator = value => record(value) && (
   }, true)(value))
 );
 const grantOrigin = oneOf("browser", "native", "supervisor");
-// Persisted legacy grants/intents acquire explicit nulls when serialized by Rust.
-// A supervisor decision always identifies its verified root and actual SDK session;
-// operator and legacy decisions must not claim either identity.
+// A supervisor decision identifies its verified root and actual SDK session;
+// operator decisions must not claim either identity.
 const provenance: Validator = value => record(value) && (value.origin === "supervisor"
   ? id(value.supervisor_run_id) && id(value.omp_session_id)
   : value.supervisor_run_id === null && value.omp_session_id === null);
@@ -262,7 +261,6 @@ const actions: Readonly<Record<OrchestrationAction["action"], Fields>> = {
   task_step_set_checked: { root_id: id, task_id: id, expected_task_revision: hash, step_id: uuid, checked: bool, scope: oneOf("leaf", "subtree") },
   task_step_move: { root_id: id, task_id: id, expected_task_revision: hash, step_id: uuid, parent_step_id: nullable(uuid), before_step_id: nullable(uuid) },
   task_step_remove: { root_id: id, task_id: id, expected_task_revision: hash, step_id: uuid },
-  task_steps_adopt: { root_id: id, task_id: id, expected_task_revision: hash, mapping: boundedList(shape({ source_offset: u32, step_id: uuid }, true), 64) },
   tasks_assign_ids: { root_id: id, expected_doc_revision: hash },
   supervisor_start: { target: nullable(target), label: nullable(label) },
   run_bind_session: { omp_session_id: id },

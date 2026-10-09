@@ -35,7 +35,6 @@ pub(crate) struct OrchestrationState {
     pub messages: Vec<Message>,
     pub subagents: Vec<Subagent>,
     pub task_intents: Vec<TaskIntent>,
-    #[serde(default)]
     pub assignment_intents: Vec<AssignmentIntent>,
 }
 
@@ -381,45 +380,6 @@ mod tests {
         assert_eq!(state.messages.len(), 1);
         assert_eq!(state.task_intents.len(), 1);
         assert_eq!(state.messages[0].text, "never prune this receipt");
-    }
-
-    #[test]
-    fn schema_one_without_assignment_journal_keeps_legacy_acceptance() {
-        let fixture = Fixture::new();
-        let store = fixture.open();
-        let root_id = Uuid::new_v4().to_string();
-        let task_id = Uuid::new_v4().to_string();
-        let run_id = Uuid::new_v4().to_string();
-        let legacy = serde_json::json!({
-            "schema": 1, "revision": 3, "runs": [], "messages": [], "subagents": [],
-            "task_intents": [{
-                "intent_id": "legacy-intent", "root_id": root_id, "task_id": task_id,
-                "run_id": run_id, "expected_task_revision": "legacy-revision", "state": "pending"
-            }]
-        });
-        store
-            .store
-            .state_dir()
-            .write("state.json", serde_json::to_vec(&legacy).unwrap())
-            .unwrap();
-        let locked = store.lock().unwrap();
-        let mut state = locked.read().unwrap();
-        assert!(state.assignment_intents.is_empty());
-        assert!(state.task_intents[0].origin.is_none());
-        assert!(state.task_intents[0].supervisor_run_id.is_none());
-        assert!(state.task_intents[0].omp_session_id.is_none());
-        assert!(state.task_intents[0].result_message_id.is_none());
-        locked.save(&mut state).unwrap();
-        let saved = locked.read().unwrap();
-        assert_eq!(saved.schema, 1);
-        assert_eq!(saved.task_intents[0].intent_id, "legacy-intent");
-        assert_eq!(saved.task_intents[0].root_id, root_id);
-        assert_eq!(saved.task_intents[0].task_id, task_id);
-        assert_eq!(saved.task_intents[0].run_id, run_id);
-        assert_eq!(
-            saved.task_intents[0].expected_task_revision,
-            "legacy-revision"
-        );
     }
 
     #[test]

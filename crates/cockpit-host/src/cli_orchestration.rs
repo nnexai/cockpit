@@ -34,9 +34,9 @@ pub(crate) const TASK_HELP: &str = r#"Canonical tasks live in the root's Markdow
 3. create does not start a worker. Choose a stable --task-id UUID; the CLI
    prints the ID to stderr before submitting (and generates one if omitted).
    After an unknown outcome, task show that ID; never create with a new ID.
-4. Choose stable UUIDs for new steps. For existing steps use IDs from show;
-   steps-adopt uses source offsets from that same fenced read. Dependencies
-   are a full replacement and also require the board's exact doc_revision.
+4. Choose stable UUIDs for new steps. For existing steps use IDs from show.
+   Dependencies are a full replacement and also require the board's exact
+   doc_revision.
    Checking steps is not task acceptance. Accepted tasks are read-only;
    a Working task's content belongs to its executing worker.
 
@@ -1283,14 +1283,6 @@ descendant atomically. Checking a checklist is not supervisor acceptance.")]
         #[arg(long)]
         step_id: String,
     },
-    /// Adopt unmarked steps atomically with offsets from the same fenced task show.
-    StepsAdopt {
-        #[command(flatten)]
-        task: StepTaskArgs,
-        /// JSON array of {"source_offset":123,"step_id":"UUID"}; at most 64 entries.
-        #[arg(long)]
-        mapping: String,
-    },
     /// Assign stable task IDs to unmarked root items with a document revision fence.
     AssignIds {
         /// Exact doc_revision from task list --json.
@@ -1355,17 +1347,6 @@ impl TaskCommand {
             Self::StepRemove { task, step_id } => OrchestrationAction::TaskStepRemove {
                 root_id, task_id: task.task, expected_task_revision: task.revision, step_id,
             },
-            Self::StepsAdopt { task, mapping } => {
-                let mapping = bounded(mapping)?;
-                let mapping: Vec<TaskStepAdoption> = serde_json::from_str(&mapping)
-                    .map_err(|error| CliError::usage(format!("invalid adoption mapping: {error}")))?;
-                if mapping.is_empty() || mapping.len() > 64 {
-                    return Err(CliError::usage("adoption mapping requires 1–64 offset/UUID entries"));
-                }
-                OrchestrationAction::TaskStepsAdopt {
-                    root_id, task_id: task.task, expected_task_revision: task.revision, mapping,
-                }
-            }
             Self::AssignIds { doc_revision } => OrchestrationAction::TasksAssignIds {
                 root_id, expected_doc_revision: doc_revision,
             },
@@ -2753,7 +2734,7 @@ mod tests {
     }
 
     #[test]
-    fn task_update_distinguishes_omitted_prose_from_explicit_clear_and_rejects_body() {
+    fn task_update_distinguishes_omitted_prose_from_explicit_clear() {
         let cleared = parsed_task_action(&[
             "update", "task-id", "--revision", "full-rev", "--description", "",
         ]).unwrap();
@@ -2767,16 +2748,6 @@ mod tests {
             description: None, title: Some(title), ..
         } if title == "New"));
         assert!(parsed_task_action(&["update", "task-id", "--revision", "rev"]).is_err());
-        for command in ["create", "update"] {
-            for legacy in ["--body", "--body-file"] {
-                let mut args = vec![command];
-                if command == "update" {
-                    args.extend(["task-id", "--revision", "rev"]);
-                }
-                args.extend(["--title", "x", legacy, "legacy"]);
-                assert!(parsed_task_action(&args).is_err());
-            }
-        }
     }
 
     #[test]
@@ -2848,36 +2819,6 @@ mod tests {
         assert!(matches!(remove, OrchestrationAction::TaskStepRemove {
             step_id, expected_task_revision, ..
         } if step_id == "existing" && expected_task_revision == "rev"));
-    }
-
-    #[test]
-    fn step_adoption_preserves_original_offsets_and_ids_and_rejects_invalid_mapping() {
-        let mapping = r#"[{"source_offset":0,"step_id":"first"},{"source_offset":4096,"step_id":"second"}]"#;
-        let action = parsed_task_action(&[
-            "steps-adopt", "task-id", "--revision", "original-rev", "--mapping", mapping,
-        ]).unwrap();
-        let OrchestrationAction::TaskStepsAdopt {
-            expected_task_revision, mapping, ..
-        } = action else { panic!("expected adoption") };
-        assert_eq!(expected_task_revision, "original-rev");
-        assert_eq!(mapping.len(), 2);
-        assert_eq!((mapping[0].source_offset, mapping[0].step_id.as_str()), (0, "first"));
-        assert_eq!((mapping[1].source_offset, mapping[1].step_id.as_str()), (4096, "second"));
-        for invalid in [
-            "[]", "{}", "not JSON",
-            r#"[{"source_offset":-1,"step_id":"id"}]"#,
-            r#"[{"source_offset":0,"step_id":"id","body":"forbidden"}]"#,
-        ] {
-            assert!(parsed_task_action(&[
-                "steps-adopt", "task-id", "--revision", "rev", "--mapping", invalid,
-            ]).is_err());
-        }
-        let oversized = serde_json::to_string(&vec![
-            serde_json::json!({"source_offset":0,"step_id":"id"}); 65
-        ]).unwrap();
-        assert!(parsed_task_action(&[
-            "steps-adopt", "task-id", "--revision", "rev", "--mapping", &oversized,
-        ]).is_err());
     }
 
     #[test]

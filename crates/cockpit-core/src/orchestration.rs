@@ -529,16 +529,6 @@ impl OrchestrationService {
                 OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
                     steps::StepIntent::Remove { step_id: tasks_md::validate_uuid(&step_id)? })? }
             }
-            OrchestrationAction::TaskStepsAdopt { root_id, task_id, expected_task_revision, mapping } => {
-                let document = locked.tasks(&root_id)?;
-                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
-                let mapping = mapping.iter().map(|entry| Ok(steps::StepAdoption {
-                    source_offset: entry.source_offset, step_id: tasks_md::validate_uuid(&entry.step_id)?,
-                })).collect::<Result<Vec<_>, InspectionError>>()?;
-                machine_changed = false;
-                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
-                    steps::StepIntent::Adopt { mapping: &mapping })? }
-            }
             OrchestrationAction::TasksAssignIds {
                 root_id,
                 expected_doc_revision,
@@ -1216,7 +1206,7 @@ impl OrchestrationService {
                         .as_ref()
                         .and_then(|report| report.outcome)
                         != Some(ReportOutcome::Succeeded)
-                        || intent.result_message_id.as_ref().is_some_and(|message_id| {
+                        || intent.result_message_id.as_ref().is_none_or(|message_id| {
                             state.runs[index]
                                 .result
                                 .as_ref()
@@ -1239,7 +1229,7 @@ impl OrchestrationService {
                     dependencies::DependencyGraph::new(&document.tasks).require(document.task(&intent.task_id)?)?;
                     let revision = document.task(&intent.task_id)?.task_revision.clone();
                     document.check(&intent.task_id, &revision, true)?;
-                    retirement::close_accepted_with_evidence(&mut state, index, RetirementTrigger::OperatorConflictResolution, &revision, intent.result_message_id.is_some());
+                    retirement::close_accepted(&mut state, index, RetirementTrigger::OperatorConflictResolution, &revision);
                     state.runs[index].annotations.push(Annotation {
                         at: now(), by: ActorRef::Operator,
                         text: format!("Operator resolved acceptance conflict using current canonical task revision {revision}; prior requested Result {:?}.", intent.result_message_id),
@@ -1861,7 +1851,7 @@ impl OrchestrationService {
                     || (run.stage == RunStage::Closed
                         && run.close_reason == Some(CloseReason::Accepted)));
             if !valid_receipt
-                || intent.result_message_id.as_ref().is_some_and(|message_id| {
+                || intent.result_message_id.as_ref().is_none_or(|message_id| {
                     state.runs[index]
                         .result
                         .as_ref()
@@ -1915,7 +1905,7 @@ impl OrchestrationService {
             };
             if outcome {
                 let index = run_index(&state, &intent.run_id)?;
-                retirement::close_accepted_with_evidence(&mut state, index, RetirementTrigger::AcceptRecovery, &intent.expected_task_revision, intent.result_message_id.is_some());
+                retirement::close_accepted(&mut state, index, RetirementTrigger::AcceptRecovery, &intent.expected_task_revision);
                 state
                     .task_intents
                     .retain(|i| i.intent_id != intent.intent_id);

@@ -7,8 +7,7 @@ export type StepIntent =
   | { kind: "rename"; stepId: string; title: string }
   | { kind: "set_checked"; stepId: string; checked: boolean; scope: "leaf" | "subtree" }
   | { kind: "move"; stepId: string; parentStepId: string | null; beforeStepId: string | null }
-  | { kind: "remove"; stepId: string }
-  | { kind: "adopt"; mapping: readonly { sourceOffset: number; stepId: string }[] };
+  | { kind: "remove"; stepId: string };
 export type StepSubmission = Readonly<{
   submissionId: string; scope: StepScope; expectedTaskRevision: string; intent: StepIntent;
 }>;
@@ -163,22 +162,7 @@ export function moveIntent(task: Task, stepId: string, direction: "up" | "down" 
 }
 
 /** Compare durable identity and absolute intent, not a matching label or actor. */
-export function intentMatchesSaved(task: Task, intent: StepIntent, baseTask?: Task): boolean {
-  if (intent.kind === "adopt") {
-    if (!baseTask || task.steps.length !== baseTask.steps.length) return false;
-    const identities = new Map(intent.mapping.map(({ sourceOffset, stepId }) => [sourceOffset, stepId]));
-    const ancestors: { depth: number; id: string }[] = [];
-    return baseTask.steps.every((original, index) => {
-      const expectedId = original.step_id ?? identities.get(original.source_offset);
-      if (!expectedId) return false;
-      while (ancestors.length && ancestors[ancestors.length - 1].depth >= original.depth) ancestors.pop();
-      const expectedParent = ancestors[ancestors.length - 1]?.id ?? null;
-      ancestors.push({ depth: original.depth, id: expectedId });
-      const saved = task.steps[index];
-      return saved.step_id === expectedId && saved.parent_step_id === expectedParent &&
-        saved.depth === original.depth && saved.title === original.title && saved.status === original.status;
-    }) && intent.mapping.every(({ stepId }) => task.steps.some((step) => step.step_id === stepId));
-  }
+export function intentMatchesSaved(task: Task, intent: StepIntent): boolean {
   const step = task.steps.find((candidate) => candidate.step_id === intent.stepId);
   if (intent.kind === "remove") return !step;
   if (!step) return false;

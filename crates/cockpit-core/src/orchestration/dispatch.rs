@@ -367,7 +367,7 @@ impl Dispatcher {
                 let mut effects = vec![
                     format!("Create an owned linked checkout {} for project Space {} ({workspace_id}), whose current checkout is {}", plan.checkout_path, workspace.label, workspace.cwd),
                     format!("Verified Herdr repository key {} matches Git common directory; create from configured primary checkout {} with the same repository provenance", repository.common_dir, repository.checkout_path),
-                    format!("During preparation use cockpit_context: the stored project_workspace_id resolves source project Space {workspace_id}, not the new worktree Space. Read its selected existing Library and repository paths in place; do not copy selections, files, or companion folders"),
+                    format!("During preparation use cockpit_context: the stored project_workspace_id resolves source project Space {workspace_id}, not the new worktree Space. Read its selected existing Library and repository paths in place; do not copy selections or files"),
                 ];
                 effects.extend(plan.effects);
                 SetupSummary {

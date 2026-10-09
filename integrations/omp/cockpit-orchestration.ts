@@ -110,11 +110,11 @@ export function requireNativeChild(pi: ExtensionAPI, ctx: ExtensionContext, boun
   }
 }
 
-const taskOperations = ["list", "show", "create", "update", "dependencies_set", "step_add", "step_rename", "step_set_checked", "step_move", "step_remove", "steps_adopt"] as const;
+const taskOperations = ["list", "show", "create", "update", "dependencies_set", "step_add", "step_rename", "step_set_checked", "step_move", "step_remove"] as const;
 type TaskPayload<K extends OrchestrationAction["action"]> = Omit<Extract<OrchestrationAction, { action: K }>, "action" | "root_id">;
 type TaskFields = Partial<
   TaskPayload<"task_create"> & TaskPayload<"task_update"> & Omit<TaskPayload<"task_dependencies_set">, "expected_doc_revision"> &
-  TaskPayload<"task_step_add"> & TaskPayload<"task_step_set_checked"> & TaskPayload<"task_steps_adopt">
+  TaskPayload<"task_step_add"> & TaskPayload<"task_step_set_checked">
 >;
 export type TaskToolParams = TaskFields & { operation: typeof taskOperations[number] };
 
@@ -129,7 +129,6 @@ export function taskArgs(params: TaskToolParams): string[] {
     step_set_checked: ["task_id", "expected_task_revision", "step_id", "checked", "scope"],
     step_move: ["task_id", "expected_task_revision", "step_id", "parent_step_id", "before_step_id"],
     step_remove: ["task_id", "expected_task_revision", "step_id"],
-    steps_adopt: ["task_id", "expected_task_revision", "mapping"],
   };
   const allowed = fields[params.operation];
   if (!allowed || Object.keys(params).some(key => key !== "operation" && !allowed.includes(key))) {
@@ -161,15 +160,6 @@ export function taskArgs(params: TaskToolParams): string[] {
   if (params.operation === "step_set_checked") {
     if (typeof params.checked !== "boolean" || (params.scope !== "leaf" && params.scope !== "subtree")) throw new Error("step_set_checked requires checked and explicit leaf/subtree scope.");
     args.push("--checked", String(params.checked), "--scope", params.scope);
-  }
-  if (params.operation === "steps_adopt") {
-    if (!Array.isArray(params.mapping) || params.mapping.length === 0 ||
-        !params.mapping.every(item => hasFields(item, ["source_offset", "step_id"]) &&
-          Number.isInteger(item.source_offset) && item.source_offset >= 0 && item.source_offset <= 0xffff_ffff &&
-          typeof item.step_id === "string" && item.step_id.trim().length > 0)) {
-      throw new Error("steps_adopt requires exact source_offset/step_id mappings.");
-    }
-    args.push("--mapping", JSON.stringify(params.mapping));
   }
   for (const [field, flag] of [
     ["title", "--title"], ["description", "--description"], ["expected_doc_revision", "--doc-revision"],
@@ -836,7 +826,7 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "cockpit_task", label: "Cockpit task", loadMode: "essential", approval: "write",
-    description: "Read or mutate canonical tasks in this run's own root. Raw body is read-only; update description without replacing checklist/relationship metadata. Create requires your stable task_id UUID; step_add and steps_adopt require stable step UUIDs. Retain IDs and inspect after unknown outcomes; never automatically recreate/retry. Mutations require full expected_task_revision; dependencies_set also requires expected_doc_revision and the complete depends_on array. Relationship creation requires expected_doc_revision; follow-ups also require source_revision. Only the active native main root may create relationships or edit prerequisites. Checklist checking requires explicit leaf/subtree scope; acceptance remains the supervisor's separate review.",
+    description: "Read or mutate canonical tasks in this run's own root. Raw body is read-only; update description without replacing checklist/relationship metadata. Create requires your stable task_id UUID; step_add requires a stable step UUID. Retain IDs and inspect after unknown outcomes; never automatically recreate/retry. Mutations require full expected_task_revision; dependencies_set also requires expected_doc_revision and the complete depends_on array. Relationship creation requires expected_doc_revision; follow-ups also require source_revision. Only the active native main root may create relationships or edit prerequisites. Checklist checking requires explicit leaf/subtree scope; acceptance remains the supervisor's separate review.",
     parameters: z.object({
       operation: z.enum(taskOperations), task_id: z.string().optional(),
       title: z.string().optional(), description: z.string().optional(),
@@ -845,7 +835,6 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
       follow_up_of: z.string().nullable().optional(), step_id: z.string().optional(),
       parent_step_id: z.string().nullable().optional(), before_step_id: z.string().nullable().optional(),
       checked: z.boolean().optional(), scope: z.enum(["leaf", "subtree"]).optional(),
-      mapping: z.array(z.object({ source_offset: z.number().int().min(0).max(0xffff_ffff), step_id: z.string() }).strict()).optional(),
     }).strict(),
     async execute(_id, params, signal, _update, ctx) {
       const args = taskArgs(params);
@@ -858,8 +847,8 @@ export default function cockpitOrchestration(pi: ExtensionAPI): void {
       }
       try { return resultText(await call(ctx, args, signal)); }
       catch (error) {
-        if (params.operation === "create" || params.operation === "step_add" || params.operation === "steps_adopt") {
-          throw new Error(`${errorText(error)} Retain task_id=${params.task_id}, step_id=${params.step_id ?? "n/a"}, mapping=${JSON.stringify(params.mapping ?? [])}. Inspect the canonical task before deciding whether to retry; do not generate replacement IDs.`);
+        if (params.operation === "create" || params.operation === "step_add") {
+          throw new Error(`${errorText(error)} Retain task_id=${params.task_id}, step_id=${params.step_id ?? "n/a"}. Inspect the canonical task before deciding whether to retry; do not generate replacement IDs.`);
         }
         throw error;
       }

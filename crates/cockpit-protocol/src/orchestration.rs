@@ -51,11 +51,9 @@ pub struct OrchestrationSnapshot {
     pub board: Option<TaskBoard>, // for request.root_id, else the only root, else None
     pub runs: Vec<Run>,      // every run under roots of this session
     pub messages: Vec<Message>, // for those runs; bodies included (≤16 KiB each)
-    #[serde(default)]
     pub questions: Vec<QuestionStatus>,
     pub subagents: Vec<Subagent>,
     pub intents: Vec<TaskIntent>,
-    #[serde(default)]
     pub assignment_intents: Vec<TaskAssignmentIntent>,
     pub runtime: RuntimeObservation,
     pub unmanaged_agents: Vec<UnmanagedAgent>,
@@ -137,12 +135,6 @@ pub enum TaskStepStatus {
 pub enum TaskStepScope {
     Leaf,
     Subtree,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
-pub struct TaskStepAdoption {
-    pub source_offset: u32,
-    pub step_id: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct TaskDependencies {
@@ -259,7 +251,6 @@ pub struct SetupSummary {
     pub effects: Vec<String>,
     pub warnings: Vec<String>,
     /// Source project Space for SpaceWorktree; absent for other targets.
-    #[serde(default)]
     pub project_workspace_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -274,9 +265,7 @@ pub struct Grant {
     pub scope: GrantScope,
     pub plan_revision: String,
     pub origin: GrantOrigin,
-    #[serde(default)]
     pub supervisor_run_id: Option<String>,
-    #[serde(default)]
     pub omp_session_id: Option<String>,
     pub granted_at: String,
 }
@@ -497,11 +486,8 @@ pub struct Run {
     pub annotations: Vec<Annotation>,
     pub location: Option<RunLocation>,
     pub bound_omp_session: Option<String>, // set by RunBindSession; cleared by RetryLaunch
-    #[serde(default)]
     pub bound_omp_process: Option<NativeProcessIdentity>, // trusted bind evidence; cleared by RetryLaunch
-    #[serde(default)]
     pub launch_shell_identity: Option<NativeShellIdentity>, // captured before launch; cleared by RetryLaunch
-    #[serde(default)]
     pub retirement: Option<RunRetirement>, // created with accepted closure; never backfilled
     pub supersedes_run_id: Option<String>, // from RunPropose; applied on GrantPrepare
     pub created_at: String,
@@ -587,7 +573,6 @@ pub struct Message {
     pub from: ActorRef,
     pub kind: MessageKind,
     pub text: String, // ≤ 16 KiB UTF-8
-    #[serde(default)]
     pub in_reply_to: Option<String>,
     pub report: Option<Report>, // kind == Report
     pub stale: bool,            // sender attempt superseded / caller mismatch evidence
@@ -636,7 +621,6 @@ pub struct Subagent {
     pub run_id: String,
     pub subagent_id: String,                // subagent_id = OMP ctx.agent.id
     pub parent_subagent_id: Option<String>, // OMP ctx.agent.parentId; None = child of the run's main session
-    #[serde(default)]
     pub bound_omp_session: Option<String>,
     pub role: Option<String>,
     pub label: String,
@@ -682,13 +666,9 @@ pub struct TaskIntent {
     pub run_id: String,
     pub expected_task_revision: String,
     pub state: IntentState,
-    #[serde(default)]
     pub origin: Option<GrantOrigin>,
-    #[serde(default)]
     pub supervisor_run_id: Option<String>,
-    #[serde(default)]
     pub omp_session_id: Option<String>,
-    #[serde(default)]
     pub result_message_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -840,12 +820,6 @@ pub enum OrchestrationAction {
         task_id: String,
         expected_task_revision: String,
         step_id: String,
-    },
-    TaskStepsAdopt {
-        root_id: String,
-        task_id: String,
-        expected_task_revision: String,
-        mapping: Vec<TaskStepAdoption>,
     },
     TasksAssignIds {
         root_id: String,
@@ -1016,40 +990,6 @@ mod tests {
     use serde_json::{Value, json};
 
     #[test]
-    fn legacy_subagent_does_not_infer_native_session_binding() {
-        let legacy = json!({
-            "run_id": "worker", "subagent_id": "child",
-            "parent_subagent_id": null, "role": null, "label": "Child",
-            "status": "running", "summary": null, "last_control": null,
-            "updated_at": "2026-10-08T00:00:00Z",
-        });
-        let subagent: Subagent = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(subagent.bound_omp_session, None);
-        let mut expected = legacy;
-        expected["bound_omp_session"] = Value::Null;
-        assert_eq!(serde_json::to_value(subagent).unwrap(), expected);
-
-        expected["bound_omp_session"] = json!("actual-child-session");
-        let bound: Subagent = serde_json::from_value(expected.clone()).unwrap();
-        assert_eq!(bound.bound_omp_session.as_deref(), Some("actual-child-session"));
-        assert_eq!(serde_json::to_value(bound).unwrap(), expected);
-    }
-
-    #[test]
-    fn legacy_setup_summary_has_no_inferred_project_space() {
-        let legacy = json!({
-            "operation_id": null, "generation": null, "workspace_id": "space",
-            "checkout_path": "/repo", "repository_id": null, "branch": null, "base": null,
-            "ownership": null, "effects": [], "warnings": [],
-        });
-        let summary: SetupSummary = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(summary.project_workspace_id, None);
-        let mut expected = legacy;
-        expected["project_workspace_id"] = Value::Null;
-        assert_eq!(serde_json::to_value(summary).unwrap(), expected);
-    }
-
-    #[test]
     fn project_space_worktree_target_preserves_explicit_source_and_branch() {
         let value = json!({
             "target": "space_worktree", "workspace_id": "project",
@@ -1060,30 +1000,6 @@ mod tests {
             workspace_id, branch: Some(branch), base_ref: Some(base),
         } if workspace_id == "project" && branch == "feature" && base == "main"));
         assert_eq!(serde_json::to_value(target).unwrap(), value);
-    }
-
-    #[test]
-    fn legacy_run_does_not_backfill_native_identity_or_retirement() {
-        let legacy = json!({
-            "session_id": "session", "prepare_brief": "Prepare", "run_id": "worker",
-            "kind": "worker", "label": "Worker", "root_id": "root",
-            "parent_run_id": "root", "task_id": "task", "attempt": 1,
-            "task_revision_at_propose": null, "stage": "closed", "close_reason": "accepted",
-            "dispatch": null, "target": null, "setup": null, "prepare_plan": null,
-            "init_receipt": null, "work_plan": null, "grants": [], "last_report": null,
-            "result": null, "annotations": [], "location": null, "bound_omp_session": "omp",
-            "supersedes_run_id": null, "created_at": "2026-10-05T12:00:00Z",
-            "updated_at": "2026-10-05T12:00:00Z",
-        });
-        let run: Run = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(run.bound_omp_process, None);
-        assert_eq!(run.launch_shell_identity, None);
-        assert!(run.retirement.is_none());
-        let mut expected = legacy;
-        expected["bound_omp_process"] = Value::Null;
-        expected["launch_shell_identity"] = Value::Null;
-        expected["retirement"] = Value::Null;
-        assert_eq!(serde_json::to_value(run).unwrap(), expected);
     }
 
     #[test]
@@ -1135,86 +1051,16 @@ mod tests {
     }
 
     #[test]
-    fn legacy_grants_preserve_operator_origin_and_identity() {
-        for (name, origin) in [
-            ("browser", GrantOrigin::Browser),
-            ("native", GrantOrigin::Native),
-        ] {
-            let legacy = json!({
-                "grant_id": "legacy-grant",
-                "scope": "execute",
-                "plan_revision": "a".repeat(64),
-                "origin": name,
-                "granted_at": "2026-10-05T12:00:00Z",
-            });
-            let grant: Grant = serde_json::from_value(legacy.clone()).unwrap();
-            assert_eq!(grant.origin, origin);
-            assert_eq!(grant.supervisor_run_id, None);
-            assert_eq!(grant.omp_session_id, None);
-            let mut expected = legacy;
-            expected["supervisor_run_id"] = Value::Null;
-            expected["omp_session_id"] = Value::Null;
-            assert_eq!(serde_json::to_value(grant).unwrap(), expected);
-        }
-    }
-
-    #[test]
-    fn legacy_acceptance_intent_does_not_invent_provenance() {
-        let legacy = json!({
-            "intent_id": "legacy-intent",
-            "root_id": "root",
-            "task_id": "task",
-            "run_id": "worker",
-            "expected_task_revision": "b".repeat(64),
-            "state": "pending",
+    fn message_send_preserves_optional_instruction_link_and_explicit_answer_link() {
+        let instruction = json!({
+            "action": "message_send", "message_id": "instruction", "to_run_id": "worker",
+            "kind": "instruction", "text": "Proceed",
         });
-        let intent: TaskIntent = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(intent.origin, None);
-        assert_eq!(intent.supervisor_run_id, None);
-        assert_eq!(intent.omp_session_id, None);
-        assert_eq!(intent.result_message_id, None);
-        let mut expected = legacy;
-        for key in [
-            "origin",
-            "supervisor_run_id",
-            "omp_session_id",
-            "result_message_id",
-        ] {
-            expected[key] = Value::Null;
-        }
-        assert_eq!(serde_json::to_value(intent).unwrap(), expected);
-    }
-
-    #[test]
-    fn legacy_message_does_not_infer_a_question_link() {
-        let legacy = json!({
-            "message_id": "answer", "to_run_id": "worker", "seq": 7,
-            "from": { "type": "operator" }, "kind": "answer", "text": "Proceed",
-            "report": null, "stale": false, "escalated_from": null,
-            "from_subagent_id": null, "stage": "acked", "woken_omp_session": null,
-            "created_at": "2026-10-08T12:00:00Z", "acked_at": "2026-10-08T12:01:00Z",
-        });
-        let message: Message = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(message.in_reply_to, None);
-        let mut expected = legacy;
-        expected["in_reply_to"] = Value::Null;
-        assert_eq!(serde_json::to_value(message).unwrap(), expected);
-
-        expected["in_reply_to"] = json!("question");
-        let linked: Message = serde_json::from_value(expected.clone()).unwrap();
-        assert_eq!(linked.in_reply_to.as_deref(), Some("question"));
-        assert_eq!(serde_json::to_value(linked).unwrap(), expected);
-    }
-
-    #[test]
-    fn message_send_preserves_explicit_link_and_defaults_legacy_requests() {
-        let legacy = json!({
-            "action": "message_send", "message_id": "answer", "to_run_id": "worker",
-            "kind": "answer", "text": "Proceed",
-        });
-        let action: OrchestrationAction = serde_json::from_value(legacy.clone()).unwrap();
+        let action: OrchestrationAction = serde_json::from_value(instruction.clone()).unwrap();
         assert!(matches!(action, OrchestrationAction::MessageSend { in_reply_to: None, .. }));
-        let mut linked = legacy;
+        let mut linked = instruction;
+        linked["message_id"] = json!("answer");
+        linked["kind"] = json!("answer");
         linked["in_reply_to"] = json!("question");
         let action: OrchestrationAction = serde_json::from_value(linked.clone()).unwrap();
         assert!(matches!(
@@ -1247,24 +1093,6 @@ mod tests {
             let question: QuestionStatus = serde_json::from_value(value.clone()).unwrap();
             assert_eq!(serde_json::to_value(question).unwrap(), value);
         }
-    }
-
-    #[test]
-    fn legacy_snapshot_defaults_assignment_intents_and_questions_to_empty() {
-        let legacy = json!({
-            "session_id": "session", "revision": 1, "tasks_token": "c".repeat(64),
-            "roots": [], "board": null, "runs": [], "messages": [], "subagents": [],
-            "intents": [], "runtime": {
-                "status": "unavailable", "error": { "code": "offline", "message": "Offline" },
-            },
-            "unmanaged_agents": [], "attention": [],
-        });
-        let snapshot: OrchestrationSnapshot = serde_json::from_value(legacy).unwrap();
-        assert!(snapshot.assignment_intents.is_empty());
-        assert!(snapshot.questions.is_empty());
-        let serialized = serde_json::to_value(snapshot).unwrap();
-        assert_eq!(serialized["assignment_intents"], json!([]));
-        assert_eq!(serialized["questions"], json!([]));
     }
 
     #[test]

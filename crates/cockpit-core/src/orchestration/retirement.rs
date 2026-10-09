@@ -65,14 +65,10 @@ fn identity_for(run: &Run) -> Option<RetirementIdentity> {
 }
 
 pub(crate) fn retirement_for_accepted(run: &Run, trigger: RetirementTrigger, task_revision: &str, at: &str) -> Option<RunRetirement> {
-    retirement_with_evidence(run, trigger, task_revision, at, true)
-}
-
-fn retirement_with_evidence(run: &Run, trigger: RetirementTrigger, task_revision: &str, at: &str, exact_result: bool) -> Option<RunRetirement> {
     if run.kind != RunKind::Worker || run.dispatch.is_none() { return None; }
     let result = run.result.as_ref()?;
     if result.outcome != Some(ReportOutcome::Succeeded) { return None; }
-    let identity = if exact_result { identity_for(run) } else { None };
+    let identity = identity_for(run);
     let state = if identity.is_some() { RetirementState::Waiting { blockers: Vec::new() } }
         else { RetirementState::Retained { at: at.into(), reason: RetainReason::IdentityIncomplete, native_stopped: false } };
     Some(RunRetirement {
@@ -82,25 +78,15 @@ fn retirement_with_evidence(run: &Run, trigger: RetirementTrigger, task_revision
 }
 
 pub(crate) fn close_accepted(state: &mut OrchestrationState, index: usize, trigger: RetirementTrigger, task_revision: &str) {
-    close_accepted_with_evidence(state, index, trigger, task_revision, true);
-}
-
-pub(crate) fn close_accepted_with_evidence(state: &mut OrchestrationState, index: usize, trigger: RetirementTrigger, task_revision: &str, exact_result: bool) {
     let at = now();
     let run = &mut state.runs[index];
-    // Recovery must not backfill an acceptance already committed before retirement existed.
+    // Recovery must not backfill retirement for an acceptance already committed.
     let already_closed = run.stage == RunStage::Closed;
     run.stage = RunStage::Closed;
     run.close_reason = Some(CloseReason::Accepted);
     run.updated_at = at.clone();
     if !already_closed && run.retirement.is_none() {
-        run.retirement = if exact_result {
-            retirement_for_accepted(run, trigger, task_revision, &at)
-        } else {
-            // Legacy acceptance remains valid, but absent reviewed Result identity
-            // can never authorize native stop or terminal closure.
-            retirement_with_evidence(run, trigger, task_revision, &at, false)
-        };
+        run.retirement = retirement_for_accepted(run, trigger, task_revision, &at);
         if let Some(retirement) = &run.retirement {
             run.annotations.push(Annotation { at, by: ActorRef::Dispatcher,
                 text: format!("Accepted-worker retirement {} created for Result {} at task revision {}: {:?}.",

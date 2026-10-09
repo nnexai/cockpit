@@ -199,14 +199,17 @@ fn recovery_is_idempotent_and_preserves_exact_result_and_revision() {
         assert_eq!(fixture.state().revision, revision);
         assert_eq!(fixture.run().retirement.unwrap().retirement_id, r.retirement_id);
     }
-    for conflict in [false, true] {
+    for conflict in 0..3 {
         let fixture = Fixture::new(); fixture.intent();
-        if conflict {
-            fixture.service.store.lock().unwrap().tasks(ROOT).unwrap().update(&fixture.task.task_id, &fixture.task.task_revision, None, Some("Changed body")).unwrap();
-        } else { fixture.edit(|s| s.runs[1].result.as_mut().unwrap().message_id = "replacement-result".into()); }
+        match conflict {
+            0 => { fixture.service.store.lock().unwrap().tasks(ROOT).unwrap().update(&fixture.task.task_id, &fixture.task.task_revision, None, Some("Changed body")).unwrap(); },
+            1 => fixture.edit(|s| s.runs[1].result.as_mut().unwrap().message_id = "replacement-result".into()),
+            _ => fixture.edit(|s| s.task_intents[0].result_message_id = None),
+        }
         fixture.service.recover_intents().unwrap();
         assert!(fixture.run().retirement.is_none());
         assert_eq!(fixture.state().task_intents[0].state, IntentState::Conflict);
+        assert!(!fixture.service.store.lock().unwrap().tasks(ROOT).unwrap().task(&fixture.task.task_id).unwrap().checked);
     }
 }
 
@@ -218,10 +221,17 @@ fn operator_resolution_uses_current_revision_but_not_a_different_result() {
     let r = fixture.run().retirement.unwrap();
     assert_eq!(r.trigger, RetirementTrigger::OperatorConflictResolution);
     assert_eq!(r.task_revision, current.task_revision);
-    let fixture = Fixture::new(); let intent = fixture.intent();
-    fixture.edit(|s| s.runs[1].result.as_mut().unwrap().message_id = "replacement".into());
-    assert!(fixture.mutate(&Actor::Operator(OperatorOrigin::Browser), OrchestrationAction::IntentResolve { intent_id: intent.intent_id, apply: true }).is_err());
-    assert!(fixture.run().retirement.is_none());
+    for missing_result in [false, true] {
+        let fixture = Fixture::new(); let intent = fixture.intent();
+        if missing_result {
+            fixture.edit(|s| s.task_intents[0].result_message_id = None);
+        } else {
+            fixture.edit(|s| s.runs[1].result.as_mut().unwrap().message_id = "replacement".into());
+        }
+        assert!(fixture.mutate(&Actor::Operator(OperatorOrigin::Browser), OrchestrationAction::IntentResolve { intent_id: intent.intent_id, apply: true }).is_err());
+        assert!(fixture.run().retirement.is_none());
+        assert!(!fixture.service.store.lock().unwrap().tasks(ROOT).unwrap().task(&fixture.task.task_id).unwrap().checked);
+    }
 }
 
 #[test]
@@ -549,34 +559,6 @@ fn terminal_preflight_fails_closed_on_every_identity_and_shell_mismatch() {
     moved.panes.clear();
     assert_eq!(classify_terminal(&identity, &moved, &shell()), Err(TerminalDecision::Absent));
     assert!(OBSERVATION_RETRY_SECS >= 30);
-}
-
-#[test]
-fn legacy_intents_accept_but_missing_reviewed_result_identity_retains_worker() {
-    for operator_resolution in [false, true] {
-        let fixture = Fixture::new();
-        let intent = fixture.intent();
-        fixture.edit(|s| s.task_intents[0].result_message_id = None);
-        if operator_resolution {
-            fixture.mutate(&Actor::Operator(OperatorOrigin::Browser),
-                OrchestrationAction::IntentResolve { intent_id: intent.intent_id, apply: true }).unwrap();
-        } else {
-            fixture.service.recover_intents().unwrap();
-        }
-        let run = fixture.run();
-        assert_eq!(run.stage, RunStage::Closed);
-        assert_eq!(run.close_reason, Some(CloseReason::Accepted));
-        let retirement = run.retirement.unwrap();
-        assert_eq!(retirement.result_message_id, "reviewed-result");
-        assert!(retirement.identity.is_none());
-        assert!(matches!(retirement.state, RetirementState::Retained {
-            reason: RetainReason::IdentityIncomplete, native_stopped: false, ..
-        }));
-        assert!(fixture.service.retirement_queue().unwrap().is_empty());
-        assert!(fixture.mutate(&Actor::Agent(caller()),
-            receipt(&retirement.retirement_id, NativeStopReceipt::ShutdownRequested)).is_err());
-        assert!(fixture.service.store.lock().unwrap().tasks(ROOT).unwrap().task(&fixture.task.task_id).unwrap().checked);
-    }
 }
 
 #[test]
