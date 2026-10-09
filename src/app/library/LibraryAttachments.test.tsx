@@ -95,7 +95,6 @@ it.each(["loading", "needs_token", "stored"] as const)("gates a Jira issue's att
     // Until token state is known, the head claims nothing: no "not downloaded" line that a stored token would contradict.
     if (access === "loading") expect(host.querySelector(".library-attachments-head")?.textContent).toBe("");
     if (access === "needs_token") {
-      expect(host.querySelector(".library-attachments-head")?.textContent).toContain("Downloading Jira attachments needs a token stored in Cockpit");
       await act(async () => button("Provider token…")!.click());
       expect(credentials.open).toHaveBeenCalledWith("jira");
     } else {
@@ -105,11 +104,11 @@ it.each(["loading", "needs_token", "stored"] as const)("gates a Jira issue's att
 });
 
 it.each([
-  { access: "needs_token" as const, provider: "jira" as const, cue: true, menu: true },
-  { access: "stored" as const, provider: "jira" as const, cue: false, menu: true },
-  { access: null, provider: "confluence" as const, cue: false, menu: true },
-  { access: null, provider: "gitlab" as const, cue: false, menu: false },
-])("offers Provider tokens… for $provider (token $access): cue $cue, menu entry $menu", async ({ access, provider, cue, menu }) => {
+  { access: "needs_token" as const, provider: "jira" as const, cue: true },
+  { access: "stored" as const, provider: "jira" as const, cue: false },
+  { access: null, provider: "confluence" as const, cue: false },
+  { access: null, provider: "gitlab" as const, cue: false },
+])("opens credentials only from blocked attachment prompts for $provider (token $access)", async ({ access, provider, cue }) => {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   const credentials = { statuses: null, ensure: vi.fn(), open: vi.fn(), attachmentAccess: vi.fn(() => access) };
@@ -121,9 +120,14 @@ it.each([
     expect(cueButton !== null).toBe(cue);
     if (cueButton) { await act(async () => cueButton.click()); expect(credentials.open).toHaveBeenCalledWith(provider); }
     await act(async () => host.querySelector<HTMLButtonElement>("button.library-more")!.click());
-    const entry = [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((node) => node.textContent === "Provider tokens…");
-    expect(entry !== undefined).toBe(menu);
-    if (entry) { credentials.open.mockClear(); await act(async () => entry.click()); expect(credentials.open).toHaveBeenCalledWith(provider); }
+    const entries = [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].filter((node) => node.textContent === "Provider token…");
+    expect(entries).toHaveLength(cue ? 1 : 0);
+    if (cue) {
+      credentials.open.mockClear();
+      await act(async () => entries[0]!.click());
+      expect(credentials.open).toHaveBeenCalledWith(provider);
+      expect(actions.attachments.start).not.toHaveBeenCalled();
+    }
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
