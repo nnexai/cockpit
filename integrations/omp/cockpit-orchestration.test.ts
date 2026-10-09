@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { NativeStopReceipt, Run, RunRetirement, TaskView } from "../../src/protocol/generated/v1";
-import cockpitOrchestration, { contextPage, contextSource, createRetirementHandler, decodeControl, delegateArgs, managementArgs, emptyWakeState, lifecycleStatus, mayAcknowledge, observeWake, parseMainWaitRead, parseWakeSummary, prepareToolAllowed, readRetirementReadiness, recoverWake, reportIdentity, requireNativeChild, requireSupervisorManagement, requireWorkerExecution, retirementReadiness, taskArgs, type TaskToolParams, type RetirementReadinessInput, type MainWaitRead } from "./cockpit-orchestration";
+import cockpitOrchestration from "./cockpit-orchestration";
+import { emptyWakeState, observeWake, recoverWake, mayAcknowledge, parseWakeSummary, parseMainWaitRead, type MainWaitRead } from "./wake";
+import { prepareToolAllowed, reportIdentity, requireNativeChild, requireSupervisorManagement, requireWorkerExecution } from "./identity";
+import { taskArgs, delegateArgs, managementArgs, contextSource, contextPage, type TaskToolParams } from "./tools";
+import { decodeControl, lifecycleStatus } from "./controlLoop";
+import { retirementReadiness, readRetirementReadiness, createRetirementHandler, type RetirementReadinessInput } from "./retirement";
 
 describe("durable inbox wake bookkeeping", () => {
   it("coalesces arrivals without implying a read or acknowledgement", () => {
