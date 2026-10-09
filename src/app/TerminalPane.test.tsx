@@ -5,7 +5,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalCommand, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
-import { copyTerminalSelection, createCockpitTerminal, readTerminalClipboard, TerminalPane } from "./TerminalPane";
+import { TerminalPane } from "./TerminalPane";
+import { copyTerminalSelection, readTerminalClipboard } from "./terminal/terminalClipboard";
+import { createCockpitTerminal } from "./terminal/cockpitTerminal";
 const mocks = vi.hoisted(() => {
   const terminals: MockTerminal[] = [];
   const fits: MockFitAddon[] = [];

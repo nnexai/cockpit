@@ -14,7 +14,9 @@ import { tabDropInsertionIndex } from "./layout/layoutProjection";
 import { initialMutationCoordinatorState, mutationCoordinatorReducer } from "./session/mutationCoordinator";
 import { initialSessionState, sessionReducer } from "./session/sessionStore";
 import { scheduleFocusFallback } from "./session/focusCoordinator";
-import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
+import { appendPendingControlCommand, MAX_PENDING_CONTROL_COMMANDS, terminalModifiedEnterInput } from "./terminal/terminalInput";
+import { createCockpitTerminal } from "./terminal/cockpitTerminal";
+import { forwardTerminalMouse, terminalCellPosition, terminalMouseButton, terminalMouseCommand } from "./terminal/terminalMouse";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
   return {

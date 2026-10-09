@@ -1,0 +1,50 @@
+import { useRef } from "react";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { Terminal } from "@xterm/xterm";
+import type { TerminalStream } from "../../client/CockpitClient";
+import type { TerminalOpenRequest, TerminalOwnershipState } from "../../protocol/generated/v1";
+import type { CellGeometry } from "./cockpitTerminal";
+
+export type PaneError = { code: string; message: string };
+export type PaneIntent = { epoch: number; paneId: string; token: number };
+export type TerminalPaneRequest = Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows" | "cell_width_px" | "cell_height_px">;
+type TerminalLiveProps = {
+  selected: boolean; presented: boolean; focusOnAttach: boolean; controlAllowed: boolean;
+  controlPending: boolean; focusEpoch: number; focusToken: number;
+  onCellGeometry?: (geometry: CellGeometry) => void; onReady?: () => void;
+  onRequestControl?: () => void; onSelect?: () => void;
+  registerStream?: (stream: TerminalStream, active: boolean) => void;
+};
+export function useTerminalRefs({ selected, presented, focusOnAttach, controlAllowed, controlPending, focusEpoch, focusToken, onCellGeometry, onReady, onRequestControl, onSelect, registerStream }: TerminalLiveProps, ownership: TerminalOwnershipState) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const streamRef = useRef<TerminalStream | null>(null);
+  const onCellGeometryRef = useRef(onCellGeometry);
+  onCellGeometryRef.current = onCellGeometry;
+  const ownershipRef = useRef(ownership);
+  const controlAllowedRef = useRef(controlAllowed);
+  controlAllowedRef.current = controlAllowed;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const presentedRef = useRef(presented);
+  presentedRef.current = presented;
+  const focusOnAttachRef = useRef(focusOnAttach);
+  focusOnAttachRef.current = focusOnAttach;
+  const onRequestControlRef = useRef(onRequestControl);
+  onRequestControlRef.current = onRequestControl;
+  const onSelectRef = useRef(onSelect);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
+  onSelectRef.current = onSelect;
+  const registerStreamRef = useRef(registerStream);
+  registerStreamRef.current = registerStream;
+  const controlPendingRef = useRef(controlPending);
+  controlPendingRef.current = controlPending;
+  const focusEpochRef = useRef(focusEpoch);
+  focusEpochRef.current = focusEpoch;
+  const focusTokenRef = useRef(focusToken);
+  focusTokenRef.current = focusToken;
+  return { hostRef, fitRef, terminalRef, streamRef, ownershipRef, onCellGeometryRef, controlAllowedRef, selectedRef, presentedRef, focusOnAttachRef, onRequestControlRef, onSelectRef, onReadyRef, registerStreamRef, controlPendingRef, focusEpochRef, focusTokenRef };
+}
+export type TerminalRefs = ReturnType<typeof useTerminalRefs>;
