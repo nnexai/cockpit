@@ -1,8 +1,12 @@
 // Stateless browser chrome and saved-feedback receipt controls.
-import type { BrowserPoint, BrowserRect, BrowserViewDraftAnnotation, BrowserViewSnapshot } from "../../protocol/generated/v1";
+import type { CSSProperties, ReactNode, RefObject } from "react";
+import type { BrowserPoint, BrowserRect, BrowserViewCommand, BrowserViewDraftAnnotation, BrowserViewSnapshot } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket } from "../../client/CockpitClient";
 import { UiIcon } from "../UiIcon";
 import { imagePointFor, kindFor, statusText, type PaneStatus, type SavedDelivery, type Tool } from "./browserPaneModel";
+import { AnnotationIcon, AnnotationToolButtons, BrowserColorPicker } from "./AnnotationControls";
+import type { BrowserPointerHandlers } from "./useBrowserPointerInput";
+import type { BrowserPageHandlers } from "./useBrowserPageInput";
 
 type BrowserTargetTab = BrowserViewSnapshot["targets"][number];
 
@@ -140,5 +144,49 @@ export function BrowserNavigationBar({ navigationState, available, url, onNaviga
     <form onSubmit={(event) => { event.preventDefault(); onNavigate("navigate", url); }}>
       <input value={url} onFocus={onUrlFocus} onBlur={onUrlBlur} onChange={(event) => onUrlChange(event.target.value)} aria-label="Page URL" placeholder="Enter URL" />
     </form>
+  </div>;
+}
+
+export function BrowserAnnotationToolbar({ tool, color, hasDraft, hasSelection, annotationCount, retainedMutationCount, pendingCapture, canCapture, onToolChange, onColorChange, onRemove, onEditNote, onRetryMutations, onDiscardMutations, onCapture }: {
+  tool: Tool; color: string; hasDraft: boolean; hasSelection: boolean; annotationCount: number;
+  retainedMutationCount: number; pendingCapture: boolean; canCapture: boolean;
+  onToolChange(tool: Tool): void; onColorChange(color: string): void; onRemove(ctrlKey: boolean): void;
+  onEditNote(): void; onRetryMutations(): void; onDiscardMutations(): void; onCapture(): void;
+}) {
+  return <div className="browser-annotation-toolbar" role="toolbar" aria-label="Annotation tools">
+    <AnnotationToolButtons tool={tool} onChange={onToolChange} />
+    <BrowserColorPicker color={color} onChange={onColorChange} />
+    <button type="button" disabled={!hasDraft} aria-label="Remove selected annotation or Control-click to discard draft" title="Remove selected annotation · Control-click to discard draft" onClick={(event) => onRemove(event.ctrlKey)}><AnnotationIcon name="remove" /></button>
+    <button type="button" disabled={!hasSelection} aria-label="Edit selected annotation note" title="Edit selected annotation note" onClick={onEditNote}><AnnotationIcon name="notes" /></button>
+    <span className="browser-annotation-notes" aria-label={`Notes ${annotationCount}`} title={`Notes ${annotationCount}`}>{annotationCount}</span>
+    {retainedMutationCount > 0
+      ? <>
+        <span className="browser-capture-pending" role="status">Retained annotation changes need review; unknown delivery is not replayed automatically.</span>
+        <button type="button" aria-label="Retry retained annotation changes" title="Retry retained annotation changes" onClick={onRetryMutations}>Retry saves</button>
+        <button type="button" aria-label="Discard retained annotation changes" title="Discard retained annotation changes" onClick={onDiscardMutations}>Discard retry intent</button>
+      </>
+      : null}
+    {!pendingCapture ? <button type="button" className="browser-send-annotations" disabled={!canCapture} aria-label="Send annotations" title="Send annotations" onClick={onCapture}><AnnotationIcon name="feedback" /></button> : null}
+  </div>;
+}
+
+export function BrowserBlockerPanel({ blocker, onCommand }: { blocker: NonNullable<BrowserViewSnapshot["blocker"]>; onCommand(value: BrowserViewCommand): void }) {
+  return <div className="browser-blocker" role="alert"><strong>{blocker.message}</strong>{blocker.kind === "dialog" ? <div><button type="button" onClick={() => onCommand({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "accept", text: blocker.default_prompt } })}>Accept</button>{blocker.cancellable ? <button type="button" onClick={() => onCommand({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "dismiss" } })}>Dismiss</button> : null}</div> : blocker.kind === "download" ? <div><button type="button" onClick={() => onCommand({ type: "download", blocker_id: blocker.blocker_id, command: { type: "accept" } })}>Save download</button><button type="button" onClick={() => onCommand({ type: "download", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel</button></div> : blocker.kind === "permission" ? <div><button type="button" onClick={() => onCommand({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "allow" } })}>Allow</button><button type="button" onClick={() => onCommand({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "deny" } })}>Deny</button></div> : blocker.kind === "file_chooser" ? <button type="button" onClick={() => onCommand({ type: "file", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel file chooser</button> : null}</div>;
+}
+
+export function BrowserNoteEditor({ editorRef, style, value, onChange, onSave, onDismiss }: {
+  editorRef: RefObject<HTMLDivElement | null>; style: CSSProperties | undefined; value: string;
+  onChange(value: string): void; onSave(): void; onDismiss(): void;
+}) {
+  return <div ref={editorRef} className="browser-note-editor" style={style}><textarea autoFocus value={value} onChange={(event) => onChange(event.target.value)} maxLength={4000} aria-label="Annotation note" onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); onSave(); } if (event.key === "Escape") { event.preventDefault(); onDismiss(); } }} /><div><button type="button" onClick={onSave}>Save</button><button type="button" onClick={onDismiss}>Close</button></div></div>;
+}
+
+export function BrowserFrameSurface({ surfaceRef, canvasRef, cursor, handlers, children }: {
+  surfaceRef: RefObject<HTMLDivElement | null>; canvasRef: RefObject<HTMLCanvasElement | null>;
+  cursor: CSSProperties["cursor"]; handlers: BrowserPointerHandlers & BrowserPageHandlers; children: ReactNode;
+}) {
+  return <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor }} {...handlers}>
+    <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />
+    {children}
   </div>;
 }

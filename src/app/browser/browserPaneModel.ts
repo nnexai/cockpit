@@ -1,6 +1,6 @@
 // Pure types and helpers for the browser pane: input intents, draft identity,
 // status text and geometry. Nothing here touches React state.
-import type { BrowserFeedbackDeliveryStatus, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewLocation, BrowserViewSnapshot } from "../../protocol/generated/v1";
+import type { BrowserFeedbackDeliveryStatus, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewLocation, BrowserViewSnapshot, BrowserViewViewportRequest, BrowserViewViewportState } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket } from "../../client/CockpitClient";
 
 export type PaneStatus = "hidden" | "loading" | "ready" | "stale" | "error" | "unsupported" | "empty";
@@ -206,4 +206,30 @@ export function imagePointFor(descriptor: BrowserViewFramePacket["descriptor"], 
   const x = (point.x - descriptor.scroll_x - descriptor.viewport_offset_x) / descriptor.viewport_css_width * descriptor.image_width;
   const y = (point.y - descriptor.scroll_y - descriptor.viewport_offset_y) / descriptor.viewport_css_height * descriptor.image_height;
   return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+// Chromium rounds its measured DPR; requesting the same fit again flickers.
+export const viewportFits = (current: BrowserViewViewportState, requested: BrowserViewViewportRequest): boolean =>
+  current.css_width === requested.css_width
+  && current.css_height === requested.css_height
+  && Math.abs(current.device_pixel_ratio - requested.device_pixel_ratio) <= 0.01;
+
+export function cloneDraftAnnotation(annotation: BrowserViewDraftAnnotation): BrowserViewDraftAnnotation {
+  return { ...annotation, points: annotation.points.map((point) => ({ ...point })), bounds: annotation.bounds ? { ...annotation.bounds } : null };
+}
+
+export function noteEditorPlacement(annotation: BrowserViewDraftAnnotation, shown: BrowserViewFramePacket["descriptor"], width: number, height: number, editorHeight: number): { left: number; top: number } | null {
+  const anchor = annotation.bounds ? { x: annotation.bounds.x, y: annotation.bounds.y } : annotation.points[0];
+  if (!anchor || !width || !height) return null;
+  const x = (anchor.x - shown.scroll_x - shown.viewport_offset_x) / shown.viewport_css_width * width;
+  const y = (anchor.y - shown.scroll_y - shown.viewport_offset_y) / shown.viewport_css_height * height;
+  const editorWidth = Math.min(320, Math.max(1, width - 16));
+  let left = x + 14;
+  if (left + editorWidth > width - 8) left = x - editorWidth - 14;
+  let top = y + 14;
+  if (top + editorHeight > height - 8) top = y - editorHeight - 14;
+  return {
+    left: Math.max(8, Math.min(Math.max(8, width - editorWidth - 8), left)),
+    top: Math.max(8, Math.min(Math.max(8, height - editorHeight - 8), top)),
+  };
 }
