@@ -38,6 +38,7 @@ sha2.workspace = true
 time = { version = "=0.3.55", features = ["formatting"] }
 
 [dev-dependencies]
+cockpit-protocol = { path = "../cockpit-protocol", features = ["test-support"] }
 async-trait.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 parking_lot.workspace = true

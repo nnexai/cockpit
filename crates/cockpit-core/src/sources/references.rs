@@ -849,13 +849,8 @@ mod tests {
     use crate::sources::FrontmatterField;
 
     fn configuration(providers: &[(&str, &str, ProviderKind)]) -> ProjectConfiguration {
-        ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![],
-        worktree_root: "worktrees".into(),
-        companion_root: "companions".into(),
-        state_root: "state".into(),
-        cache_root: "cache".into(),
-        library_root: "library".into(),
-        notes_root: "notes".into(),
+        ProjectConfiguration {
+        repository_roots: vec![],
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
         providers: providers
@@ -888,7 +883,8 @@ mod tests {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: BTreeMap::new(), }
+        ..ProjectConfiguration::for_tests(std::path::Path::new(""))
+        }
     }
 
     fn asset(

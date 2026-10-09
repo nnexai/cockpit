@@ -767,13 +767,8 @@ mod tests {
     }
 
     fn config(base_url: &str) -> ProjectConfiguration {
-        ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: Vec::new(),
-        worktree_root: "worktrees".into(),
-        companion_root: "companions".into(),
-        state_root: "state".into(),
-        cache_root: "cache".into(),
-        library_root: "library".into(),
-        notes_root: "notes".into(),
+        ProjectConfiguration {
+        repository_roots: Vec::new(),
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
@@ -802,7 +797,8 @@ mod tests {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: Default::default(), }
+        ..ProjectConfiguration::for_tests(std::path::Path::new(""))
+        }
     }
 
     #[test]

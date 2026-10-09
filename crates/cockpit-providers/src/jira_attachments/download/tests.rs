@@ -62,15 +62,12 @@ impl Drop for Dest {
 
 fn configuration(base_url: &str) -> ProjectConfiguration {
     ProjectConfiguration {
-        version: 1,
-        orchestration: Default::default(),
         repository_roots: vec![],
         worktree_root: "/tmp/w".into(),
         companion_root: "/tmp/c".into(),
         state_root: "/tmp/s".into(),
         cache_root: "/tmp/k".into(),
         library_root: "/tmp/l".into(),
-        notes_root: "/tmp/notes".into(),
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
@@ -99,7 +96,7 @@ fn configuration(base_url: &str) -> ProjectConfiguration {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: Default::default(),
+        ..ProjectConfiguration::for_tests(Path::new("/tmp"))
     }
 }
 

@@ -105,6 +105,46 @@ pub struct ProjectConfiguration {
     pub origins: BTreeMap<String, String>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl ProjectConfiguration {
+    /// Builds an isolated configuration for tests rooted in one fixture directory.
+    pub fn for_tests(root: &std::path::Path) -> Self {
+        Self {
+            version: 1,
+            repository_roots: vec![root.to_string_lossy().into_owned()],
+            worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
+            companion_root: root.join("companions").to_string_lossy().into_owned(),
+            state_root: root.join("state").to_string_lossy().into_owned(),
+            cache_root: root.join("cache").to_string_lossy().into_owned(),
+            library_root: root.join("library").to_string_lossy().into_owned(),
+            notes_root: root.join("notes").to_string_lossy().into_owned(),
+            branch_template: "{task_id}".to_owned(),
+            checkout_template: "{task_id}".to_owned(),
+            providers: Vec::new(),
+            limits: ProjectLimits {
+                catalog_depth: 4,
+                catalog_entries: 256,
+                git_timeout_ms: 2_000,
+                git_output_bytes: 2 * 1024 * 1024,
+                operation_timeout_ms: 2_000,
+                context_preview_bytes: 1024 * 1024,
+                context_preview_lines: 2_000,
+                context_directory_entries: 64,
+                context_tree_depth: 8,
+                library_folder_files: 512,
+                library_folder_bytes: 32 * 1024 * 1024,
+                library_file_bytes: 4 * 1024 * 1024,
+                library_space_pages: 200,
+                library_attachment_bytes: 25 * 1024 * 1024,
+                library_item_attachment_bytes: 100 * 1024 * 1024,
+                library_max_items: 20_000,
+            },
+            orchestration: OrchestrationConfiguration::default(),
+            origins: BTreeMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct RepositoryCandidate {
     pub repository_id: String,

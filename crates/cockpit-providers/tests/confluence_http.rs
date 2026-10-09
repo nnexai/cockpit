@@ -25,15 +25,11 @@ use url::Url;
 
 fn configuration(server: &FakeConfluence) -> ProjectConfiguration {
     ProjectConfiguration {
-        version: 1,
-        orchestration: Default::default(),
         repository_roots: Vec::new(),
         worktree_root: "/w".into(),
         companion_root: "/c".into(),
         state_root: "/s".into(),
-        cache_root: "/cache".into(),
         library_root: "/l".into(),
-        notes_root: "/notes".into(),
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
@@ -65,7 +61,7 @@ fn configuration(server: &FakeConfluence) -> ProjectConfiguration {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: Default::default(),
+        ..ProjectConfiguration::for_tests(std::path::Path::new("/"))
     }
 }
 async fn provider(

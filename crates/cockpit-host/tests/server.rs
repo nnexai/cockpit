@@ -272,16 +272,10 @@ async fn request(addr: std::net::SocketAddr, path: &str) -> (u16, String) {
 
 
 fn project_configuration(root: &std::path::Path) -> ProjectConfiguration {
-    ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![],
-    worktree_root: root.join("worktrees").display().to_string(),
-    companion_root: root.join("companions").display().to_string(),
-    state_root: root.join("state").display().to_string(),
-    cache_root: root.join("cache").display().to_string(),
-    library_root: root.join("library").display().to_string(),
-    notes_root: root.join("notes").display().to_string(),
+    ProjectConfiguration {
+    repository_roots: vec![],
     branch_template: "{name}".to_owned(),
     checkout_template: "{name}".to_owned(),
-    providers: vec![],
     limits: ProjectLimits {
         catalog_depth: 3,
         catalog_entries: 100,
@@ -300,7 +294,8 @@ fn project_configuration(root: &std::path::Path) -> ProjectConfiguration {
         library_item_attachment_bytes: 100 * 1024 * 1024,
         library_max_items: 1000,
     },
-    origins: Default::default(), }
+    ..ProjectConfiguration::for_tests(root)
+    }
 }
 
 fn service_with_library(root: &std::path::Path) -> CockpitService {

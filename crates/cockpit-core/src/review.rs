@@ -2921,12 +2921,7 @@ mod tests {
     }
 
     fn configuration(root: &Path) -> ProjectConfiguration {
-        ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![root.to_string_lossy().into_owned()],
-        worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
-        companion_root: root.join("companions").to_string_lossy().into_owned(),
-        state_root: root.join("state").to_string_lossy().into_owned(),
-        cache_root: root.join("cache").to_string_lossy().into_owned(),
-        library_root: root.join("library").to_string_lossy().into_owned(),
+        ProjectConfiguration {
         notes_root: root.with_extension("notes").to_string_lossy().into_owned(),
         branch_template: "{repo}/{task_id}".to_owned(),
         checkout_template: "{repo}-{task_id}".to_owned(),
@@ -2956,7 +2951,8 @@ mod tests {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: BTreeMap::new(), }
+        ..ProjectConfiguration::for_tests(root)
+        }
     }
 
     fn service(root: &Path) -> ReviewService {

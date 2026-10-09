@@ -7,17 +7,30 @@ struct Fixture { root: PathBuf, service: Arc<OrchestrationService>, run: Run }
 impl Fixture {
     fn new(state: RetirementState) -> Self {
         let root = std::env::temp_dir().join(format!("cockpit-retire-{}", uuid::Uuid::new_v4()));
-        let config = serde_json::from_value(serde_json::json!({
-            "version":1,"repository_roots":[],"worktree_root":root.join("worktrees"),
-            "companion_root":root.join("companions"),"state_root":root.join("state"),
-            "cache_root":root.join("cache"),"library_root":root.join("library"),"notes_root":root.join("notes"),
-            "branch_template":"test/{task}","checkout_template":"{task}","providers":[],"origins":{},
-            "limits":{"catalog_depth":1,"catalog_entries":1,"git_timeout_ms":1000,"git_output_bytes":1024,
-                "operation_timeout_ms":1000,"context_preview_bytes":1024,"context_preview_lines":10,
-                "context_directory_entries":10,"context_tree_depth":1,"library_folder_files":10,"library_folder_bytes":1024,
-                "library_file_bytes":1024,"library_space_pages":10,"library_attachment_bytes":1024,
-                "library_item_attachment_bytes":1024,"library_max_items":10}
-        })).unwrap();
+        let config = ProjectConfiguration {
+            repository_roots: vec![],
+            branch_template: "test/{task}".into(),
+            checkout_template: "{task}".into(),
+            limits: cockpit_protocol::projects::ProjectLimits {
+                catalog_depth: 1,
+                catalog_entries: 1,
+                git_timeout_ms: 1000,
+                git_output_bytes: 1024,
+                operation_timeout_ms: 1000,
+                context_preview_bytes: 1024,
+                context_preview_lines: 10,
+                context_directory_entries: 10,
+                context_tree_depth: 1,
+                library_folder_files: 10,
+                library_folder_bytes: 1024,
+                library_file_bytes: 1024,
+                library_space_pages: 10,
+                library_attachment_bytes: 1024,
+                library_item_attachment_bytes: 1024,
+                library_max_items: 10,
+            },
+            ..ProjectConfiguration::for_tests(&root)
+        };
         let service = Arc::new(OrchestrationService::open(&config).unwrap());
         let id = uuid::Uuid::new_v4().to_string();
         let mut run = new_run(&id, "fixture", RunKind::Worker, "Worker".into(), &id, None, None, 1);

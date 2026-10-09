@@ -33,6 +33,7 @@ time = { version = "=0.3.55", features = ["formatting", "parsing"] }
 libproc = "0.14.11"
 
 [dev-dependencies]
+cockpit-protocol = { path = "../cockpit-protocol", features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
