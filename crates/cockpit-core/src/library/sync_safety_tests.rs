@@ -353,8 +353,7 @@ impl Fixture {
     }
     fn only_follow_inventory_due(&self, follow: &str) {
         let later = NOW + 100 * MINUTE;
-        let mut state =
-            json!({"schema":1,"sources":{},"queue":{},"audits":{},"origins":{},"active_operation":null});
+        let mut state = json!({"schema":1,"sources":{},"queue":{},"audits":{},"origins":{},"active_operation":null});
         for current in self.index().follows {
             state["sources"][&current.follow_id] = json!({
                 "next_delta_ms": later, "next_inventory_ms": if current.follow_id == follow { 0 } else { later },
@@ -371,7 +370,8 @@ impl Fixture {
                 "inventory": null
             });
         }
-        state["audits"][format!("confluence:{SITE}")] = json!({"cursor":null,"next_due_ms":later,"failures":{}});
+        state["audits"][format!("confluence:{SITE}")] =
+            json!({"cursor":null,"next_due_ms":later,"failures":{}});
         let path = self.base.root.join("library/.cockpit/sync/state.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();

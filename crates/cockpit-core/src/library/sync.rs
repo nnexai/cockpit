@@ -812,9 +812,7 @@ impl LibraryService {
                         .items
                         .iter()
                         .find(|entry| entry.summary.item_id == id);
-                    if old.is_none_or(|entry| {
-                        jira_follow::change_reason(entry, row).is_some()
-                    }) {
+                    if old.is_none_or(|entry| jira_follow::change_reason(entry, row).is_some()) {
                         let mut work = candidate(
                             source(follow, &row.key, "issue"),
                             if listed.contains(&row.key) {

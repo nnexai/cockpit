@@ -597,7 +597,8 @@ impl Fixture {
     fn quiet_audits(&self) {
         self.edit_state(|s| {
             for group in [format!("jira:{JIRA}"), format!("confluence:{WIKI}")] {
-                s["audits"][group] = json!({"cursor":null,"next_due_ms":now()+100*DAY,"failures":{}});
+                s["audits"][group] =
+                    json!({"cursor":null,"next_due_ms":now()+100*DAY,"failures":{}});
             }
         });
     }

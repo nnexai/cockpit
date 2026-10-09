@@ -1929,7 +1929,8 @@ mod tests {
 
     #[test]
     fn tracked_child_insertion_and_cross_region_move_preserve_prose_in_place() {
-        let source = external(&(row(0, 1, true, "Tracked parent") + &row(1, 2, true, "Tracked child")));
+        let source =
+            external(&(row(0, 1, true, "Tracked parent") + &row(1, 2, true, "Tracked child")));
         let with_child = edit(
             &source,
             StepIntent::Add {
@@ -2554,7 +2555,10 @@ mod tests {
 
     #[test]
     fn tabbed_tracked_headers_can_be_checked_but_not_guessed_for_reindent() {
-        let source = external(&format!("  -\t[X] Tabbed tracked <!-- cockpit-step: {} -->\n", id(1)));
+        let source = external(&format!(
+            "  -\t[X] Tabbed tracked <!-- cockpit-step: {} -->\n",
+            id(1)
+        ));
         let result = projection(&source);
         assert_eq!(result.steps.len(), 1);
         assert!(result.steps[0].diagnostic.is_none());
@@ -2607,7 +2611,8 @@ mod tests {
     }
 
     #[test]
-    fn external_insertion_gaps_and_terminal_creation_are_proved_not_inferred_from_protected_union() {
+    fn external_insertion_gaps_and_terminal_creation_are_proved_not_inferred_from_protected_union()
+    {
         let source = external(&row(0, 1, false, "Safe tracked"));
         let context = context(&source);
         let layout = parse(&source, &context).unwrap();
