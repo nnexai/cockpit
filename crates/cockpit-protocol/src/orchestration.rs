@@ -348,10 +348,32 @@ pub struct RunRetirement {
     pub created_at: String,
     pub updated_at: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "state", rename_all = "snake_case")]
-#[ts(tag = "state", rename_all = "snake_case")]
-pub enum RetirementState {
+// Keep the payload-bearing wire state and its Rust-only kind in one definition.
+macro_rules! retirement_states {
+    ($($variant:ident { $($field:ident: $field_type:ty),* $(,)? }),* $(,)?) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+        #[serde(tag = "state", rename_all = "snake_case")]
+        #[ts(tag = "state", rename_all = "snake_case")]
+        pub enum RetirementState {
+            $($variant { $($field: $field_type),* }),*
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum RetirementStateKind {
+            $($variant),*
+        }
+
+        impl RetirementState {
+            pub const fn kind(&self) -> RetirementStateKind {
+                match self {
+                    $(Self::$variant { .. } => RetirementStateKind::$variant),*
+                }
+            }
+        }
+    };
+}
+
+retirement_states! {
     Waiting {
         blockers: Vec<RetirementBlocker>,
     },

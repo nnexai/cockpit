@@ -1,10 +1,12 @@
 use cockpit_protocol::orchestration::*;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::store::OrchestrationState;
-use super::{Actor, AgentCaller, actor_ref, error, is_ancestor, now, run_index};
+use super::{Actor, AgentCaller, NativeAgentKind, actor_ref, error, is_ancestor, now, run_index};
 use crate::InspectionError;
+
+mod inbox;
+mod report;
+mod subagent_control;
 
 const MAX_TEXT: usize = 16 * 1024;
 
@@ -62,21 +64,28 @@ fn message_result(message: &Message, duplicate: bool) -> OrchestrationActionResu
     }
 }
 
+pub(crate) struct AppendMessage<'a> {
+    pub from: ActorRef,
+    pub to_run_id: &'a str,
+    pub message_id: &'a str,
+    pub kind: MessageKind,
+    pub text: &'a str,
+    pub in_reply_to: Option<String>,
+    pub report: Option<Report>,
+    pub stale: bool,
+    pub from_subagent_id: Option<String>,
+    pub escalated_from: Option<String>,
+}
+
 /// Append under the state lock. The sender's key covers the entire payload, not just text.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn append(
     state: &mut OrchestrationState,
-    from: ActorRef,
-    to_run_id: &str,
-    message_id: &str,
-    kind: MessageKind,
-    text: &str,
-    in_reply_to: Option<String>,
-    report: Option<Report>,
-    stale: bool,
-    from_subagent_id: Option<String>,
-    escalated_from: Option<String>,
+    message: AppendMessage<'_>,
 ) -> Result<OrchestrationActionResult, InspectionError> {
+    let AppendMessage {
+        from, to_run_id, message_id, kind, text, in_reply_to, report, stale,
+        from_subagent_id, escalated_from,
+    } = message;
     if message_id.is_empty() {
         return Err(error("invalid_message_id", "A message id is required"));
     }
@@ -213,7 +222,7 @@ pub(super) fn authenticated_child_session<'a>(
     run: &Run,
 ) -> Result<&'a str, InspectionError> {
     if agent.agent_kind != Some(AgentKind::Subagent)
-        || agent.actual_agent_kind.as_deref() != Some("omp")
+        || agent.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp)
     {
         return Err(error("actor_forbidden", "An actual native child context is required"));
     }
@@ -284,13 +293,6 @@ fn upward(
     Ok((recipient_id, escalated))
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ControlEnvelope {
-    subagent_id: String,
-    op: SubagentOp,
-}
-
 pub(crate) fn apply(
     state: &mut OrchestrationState,
     actor: &Actor,
@@ -335,712 +337,30 @@ pub(crate) fn apply(
         }
         bound_context(agent, &state.runs[index])?;
     }
-    let result = match action {
-        OrchestrationAction::Report {
-            message_id,
-            kind,
-            outcome,
-            summary,
-            plan,
-            to_run_id,
-        } => {
-            let (agent, index) = agent(actor, caller)?;
-            text_bound(summary)?;
-            if let Some(plan) = plan {
-                text_bound(plan)?;
-            }
-            if matches!(kind, ReportKind::Ready | ReportKind::Result) {
-                if agent.agent_kind != Some(AgentKind::Main) {
-                    return Err(error(
-                        "report_requires_main",
-                        "Ready and Result require the main OMP context",
-                    ));
-                }
-                if !stale {
-                    main_session(agent, &state.runs[index])?;
-                }
-            }
-            let from_subagent_id = subagent_context(agent)?;
-            let from = actor_ref(actor, caller, state);
-            let report = Report {
-                message_id: message_id.clone(),
-                kind: *kind,
-                outcome: *outcome,
-                summary: summary.clone(),
-                plan: plan.clone(),
-                at: now(),
-            };
-            // Resolve the logical address before dedupe, but retain the original escalation receipt on retry.
-            let logical_target = to_run_id
-                .as_deref()
-                .or(state.runs[index].parent_run_id.as_deref())
-                .unwrap_or(&state.runs[index].run_id);
-            let own_main_report = from_subagent_id.is_some()
-                && to_run_id.as_deref() == Some(state.runs[index].run_id.as_str());
-            if own_main_report {
-                // The owning main session is an ancestor of its internal OMP subagents.
-                // This route is append-only evidence, never the main run's receipt or control.
-                bound_context(agent, &state.runs[index])?;
-            }
-            let (recipient, escalated) =
-                upward(state, index, to_run_id.as_deref(), own_main_report)?;
-            if let Some(existing) = duplicate(state, &from, message_id) {
-                if existing.kind != MessageKind::Report
-                    || existing.text != *summary
-                    || !same_report(existing.report.as_ref(), Some(&report))
-                    || existing.in_reply_to.is_some()
-                    || existing.from_subagent_id != from_subagent_id
-                    || existing
-                        .escalated_from
-                        .as_deref()
-                        .unwrap_or(&existing.to_run_id)
-                        != logical_target
-                {
-                    return Err(error(
-                        "message_id_conflict",
-                        "The sender already used this message id for a different report",
-                    ));
-                }
-                return Ok(Some(message_result(existing, true)));
-            }
-            if !stale {
-                match kind {
-                    ReportKind::Ready => {
-                        if !matches!(
-                            state.runs[index].stage,
-                            RunStage::Initializing | RunStage::Ready
-                        ) {
-                            return Err(error(
-                                "invalid_stage",
-                                "Ready requires an initializing or ready run",
-                            ));
-                        }
-                        if plan.as_deref().is_none_or(|plan| plan.trim().is_empty()) {
-                            return Err(error(
-                                "invalid_plan",
-                                "Ready requires a nonempty work plan",
-                            ));
-                        }
-                    }
-                    ReportKind::Result => {
-                        let run = &state.runs[index];
-                        if run.stage != RunStage::Working
-                            && !(run.parent_run_id.is_none() && run.stage == RunStage::Active)
-                        {
-                            return Err(error(
-                                "invalid_stage",
-                                "Result requires a working run or active root",
-                            ));
-                        }
-                        if outcome.is_none() {
-                            return Err(error("invalid_report", "Result requires an outcome"));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            let work_plan = if !stale && *kind == ReportKind::Ready {
-                let text = plan.as_ref().expect("validated work plan");
-                let canonical = serde_json::to_vec(text)
-                    .map_err(|failure| error("invalid_plan", failure.to_string()))?;
-                Some(PlanRecord {
-                    plan_revision: format!("{:x}", Sha256::digest(canonical)),
-                    text: text.clone(),
-                    created_at: report.at.clone(),
-                })
-            } else {
-                None
-            };
-            let result = append(
-                state,
-                from,
-                &recipient,
-                message_id,
-                MessageKind::Report,
-                summary,
-                None,
-                Some(report.clone()),
-                stale,
-                from_subagent_id.clone(),
-                escalated,
-            )?;
-            if !stale {
-                if let Some(subagent_id) = &from_subagent_id {
-                    let own = &state.runs[index].run_id;
-                    if let Some(entry) = state
-                        .subagents
-                        .iter_mut()
-                        .find(|entry| entry.run_id == *own && entry.subagent_id == *subagent_id)
-                    {
-                        if entry.summary.as_deref() != Some(report.summary.as_str()) {
-                            entry.summary = Some(report.summary.clone());
-                        }
-                        entry.updated_at = report.at.clone();
-                    }
-                }
-                let run = &mut state.runs[index];
-                // Subagent reports are evidence, not the main run's outcome or progress receipt.
-                if from_subagent_id.is_none() {
-                    run.last_report = Some(report.clone());
-                    match kind {
-                        ReportKind::Ready => {
-                            run.init_receipt = Some(report);
-                            run.work_plan = work_plan;
-                            run.stage = RunStage::Ready;
-                        }
-                        ReportKind::Result => {
-                            run.result = Some(report);
-                            if run.parent_run_id.is_some() {
-                                run.stage = RunStage::Reported;
-                            }
-                        }
-                        _ => {}
-                    }
-                    run.updated_at = now();
-                }
-                if from_subagent_id.is_none()
-                    && matches!(
-                        kind,
-                        ReportKind::Ready | ReportKind::Result | ReportKind::NeedsInput
-                    )
-                    && recipient != state.runs[index].root_id
-                    && state.runs[index].parent_run_id.is_some()
-                {
-                    let root_id = state.runs[index].root_id.clone();
-                    let run_id = state.runs[index].run_id.clone();
-                    let event = match kind {
-                        ReportKind::Ready => "ready",
-                        ReportKind::Result => "result",
-                        _ => "needs_input",
-                    };
-                    let plan_revision = state.runs[index]
-                        .work_plan
-                        .as_ref()
-                        .map(|p| p.plan_revision.as_str());
-                    let text = serde_json::json!({"event":event,"run_id":run_id,"receipt_message_id":message_id,"plan_revision":plan_revision}).to_string();
-                    append(
-                        state,
-                        ActorRef::Dispatcher,
-                        &root_id,
-                        &format!("manage-{run_id}-{message_id}"),
-                        MessageKind::Observation,
-                        &text,
-                        None,
-                        None,
-                        false,
-                        None,
-                        None,
-                    )?;
-                }
-            }
-            result
+    match action {
+        OrchestrationAction::Report { .. } => {
+            report::apply(state, actor, caller, stale, action)
         }
-        OrchestrationAction::MessageSend {
-            message_id,
-            to_run_id,
-            kind,
-            text,
-            in_reply_to,
-        } => {
-            let target = run_index(state, to_run_id)?;
-            let (recipient, escalated) = match actor {
-                Actor::Operator(_) => {
-                    if !matches!(
-                        kind,
-                        MessageKind::Instruction | MessageKind::Answer | MessageKind::CancelRequest
-                    ) {
-                        return Err(error(
-                            "actor_forbidden",
-                            "Operators may send Instruction, Answer, or CancelRequest",
-                        ));
-                    }
-                    (to_run_id.clone(), None)
-                }
-                Actor::Agent(_) => {
-                    let (_, index) = agent(actor, caller)?;
-                    let own = &state.runs[index].run_id;
-                    match kind {
-                        MessageKind::Answer => {
-                            super::management_target(
-                                state,
-                                actor,
-                                caller,
-                                &state.runs[index].session_id,
-                                to_run_id,
-                            )?;
-                            (to_run_id.clone(), None)
-                        }
-                        MessageKind::Instruction | MessageKind::CancelRequest => {
-                            if !is_ancestor(state, own, to_run_id) {
-                                return Err(error(
-                                    "not_in_subtree",
-                                    "Agent instructions and cancellation requests require a strict descendant",
-                                ));
-                            }
-                            if state.runs[target].stage == RunStage::Closed {
-                                return Err(error("invalid_stage", "Cannot instruct a closed run"));
-                            }
-                            (to_run_id.clone(), None)
-                        }
-                        MessageKind::Observation => {
-                            if !is_ancestor(state, to_run_id, own) {
-                                return Err(error(
-                                    "not_ancestor",
-                                    "Observations require a strict ancestor",
-                                ));
-                            }
-                            upward(state, index, Some(to_run_id), false)?
-                        }
-                        _ => {
-                            return Err(error(
-                                "actor_forbidden",
-                                "Agent messages are downward instructions/cancellation or upward observations",
-                            ));
-                        }
-                    }
-                }
-            };
-            let from = actor_ref(actor, caller, state);
-            // An observation retry does not change its original delivery location if ancestors later close.
-            if let Some(existing) = duplicate(state, &from, message_id) {
-                if existing.kind != *kind
-                    || existing.text != *text
-                    || existing.in_reply_to != *in_reply_to
-                    || existing.report.is_some()
-                    || existing
-                        .escalated_from
-                        .as_deref()
-                        .unwrap_or(&existing.to_run_id)
-                        != to_run_id
-                    || existing.from_subagent_id.is_some()
-                {
-                    return Err(error(
-                        "message_id_conflict",
-                        "The sender already used this message id for a different message",
-                    ));
-                }
-                return Ok(Some(message_result(existing, true)));
-            }
-            let answer_provenance = if *kind == MessageKind::Answer {
-                if in_reply_to.as_deref().is_none_or(|id| id.trim().is_empty()) {
-                    return Err(error(
-                        "invalid_message",
-                        "Answers require an explicit nonempty question message id",
-                    ));
-                }
-                let run = &state.runs[target];
-                if run.stage == RunStage::Closed
-                    || run.last_report.as_ref().is_none_or(|report| {
-                        report.kind != ReportKind::NeedsInput
-                            || Some(report.message_id.as_str()) != in_reply_to.as_deref()
-                    })
-                {
-                    return Err(error(
-                        "question_not_current",
-                        "The answer must link to the open run's current main NeedsInput report",
-                    ));
-                }
-                Some(super::management_target(
-                    state,
-                    actor,
-                    caller,
-                    &state.runs[target].session_id,
-                    to_run_id,
-                )?.1)
-            } else {
-                if in_reply_to.is_some() {
-                    return Err(error(
-                        "invalid_message",
-                        "Only Answers may link to a question message id",
-                    ));
-                }
-                None
-            };
-            let result = append(
-                state, from, &recipient, message_id, *kind, text, in_reply_to.clone(), None, false, None, escalated,
-            )?;
-            if let Some(provenance) = answer_provenance {
-                let annotation = super::decision_annotation(
-                    actor_ref(actor, caller, state),
-                    &provenance,
-                    &format!("Answer delivered as message {message_id}"),
-                );
-                state.runs[target].annotations.push(annotation);
-            }
-            result
+        OrchestrationAction::MessageSend { .. }
+        | OrchestrationAction::Annotate { .. }
+        | OrchestrationAction::InboxPull { .. }
+        | OrchestrationAction::InboxWoken { .. }
+        | OrchestrationAction::InboxAck { .. } => {
+            inbox::apply(state, actor, caller, action)
         }
-        OrchestrationAction::Annotate { run_id, text } => {
-            text_bound(text)?;
-            let target = run_index(state, run_id)?;
-            if let Actor::Agent(_) = actor {
-                let (_, index) = agent(actor, caller)?;
-                let own = &state.runs[index].run_id;
-                if own != run_id && !is_ancestor(state, own, run_id) {
-                    return Err(error(
-                        "not_in_subtree",
-                        "Annotations require the caller's run or descendant",
-                    ));
-                }
-            }
-            let annotation = Annotation {
-                by: actor_ref(actor, caller, state),
-                text: text.clone(),
-                at: now(),
-            };
-            state.runs[target].updated_at = annotation.at.clone();
-            state.runs[target].annotations.push(annotation);
-            OrchestrationActionResult::Done
+        OrchestrationAction::SubagentUpdate { .. }
+        | OrchestrationAction::SubagentControl { .. }
+        | OrchestrationAction::SubagentControlDone { .. } => {
+            subagent_control::apply(state, actor, caller, action)
         }
-        OrchestrationAction::InboxPull { after_seq, limit } => {
-            let (agent, index) = agent(actor, caller)?;
-            main_session(agent, &state.runs[index])?;
-            let own = &state.runs[index].run_id;
-            // Append order is per-recipient sequence order; stop before touching the next page.
-            let mut messages = Vec::new();
-            let mut read_through_seq = *after_seq;
-            for message in state
-                .messages
-                .iter_mut()
-                .filter(|message| {
-                    message.to_run_id == *own
-                        && message.seq > *after_seq
-                        && message.kind != MessageKind::SubagentControl
-                })
-                .take((*limit).min(100) as usize)
-            {
-                if matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken) {
-                    message.stage = DeliveryStage::Read;
-                }
-                read_through_seq = message.seq;
-                messages.push(message.clone());
-            }
-            OrchestrationActionResult::Inbox {
-                messages,
-                read_through_seq,
-            }
-        }
-        OrchestrationAction::InboxWoken {
-            through_seq,
-            omp_session_id,
-        } => {
-            let (agent, index) = agent(actor, caller)?;
-            main_session(agent, &state.runs[index])?;
-            if agent.omp_session_id.as_deref() != Some(omp_session_id) {
-                return Err(error(
-                    "session_mismatch",
-                    "Wake receipt must name the caller's bound session",
-                ));
-            }
-            let own = &state.runs[index].run_id;
-            for message in state.messages.iter_mut().filter(|message| {
-                message.to_run_id == *own
-                    && message.seq <= *through_seq
-                    && message.kind != MessageKind::SubagentControl
-            }) {
-                if matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken) {
-                    message.stage = DeliveryStage::Woken;
-                    message.woken_omp_session = Some(omp_session_id.clone());
-                }
-            }
-            OrchestrationActionResult::Done
-        }
-        OrchestrationAction::InboxAck { through_seq } => {
-            let (agent, index) = agent(actor, caller)?;
-            main_session(agent, &state.runs[index])?;
-            let own = &state.runs[index].run_id;
-            if state.messages.iter().any(|message| {
-                message.to_run_id == *own
-                    && message.seq <= *through_seq
-                    && message.kind != MessageKind::SubagentControl
-                    && matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken)
-            }) {
-                return Err(error(
-                    "ack_before_read",
-                    "Every message through the acknowledged sequence must first be read",
-                ));
-            }
-            let at = now();
-            for message in state.messages.iter_mut().filter(|message| {
-                message.to_run_id == *own
-                    && message.seq <= *through_seq
-                    && message.kind != MessageKind::SubagentControl
-            }) {
-                if message.stage != DeliveryStage::Acked {
-                    message.stage = DeliveryStage::Acked;
-                    message.acked_at = Some(at.clone());
-                }
-            }
-            OrchestrationActionResult::Done
-        }
-        OrchestrationAction::SubagentUpdate {
-            subagent_id,
-            parent_subagent_id,
-            role,
-            label,
-            status,
-            summary,
-        } => {
-            let (agent, index) = agent(actor, caller)?;
-            if subagent_id.is_empty() {
-                return Err(error("invalid_subagent", "Subagent id is required"));
-            }
-            text_bound(label)?;
-            if let Some(role) = role {
-                text_bound(role)?;
-            }
-            if let Some(summary) = summary {
-                text_bound(summary)?;
-            }
-            let child_binding = match agent.agent_kind {
-                Some(AgentKind::Main) => {
-                    main_session(agent, &state.runs[index])?;
-                    None
-                }
-                Some(AgentKind::Subagent) if agent.subagent_id.as_deref() == Some(subagent_id) => {
-                    Some(authenticated_child_session(agent, &state.runs[index])?)
-                }
-                _ => {
-                    return Err(error(
-                        "actor_forbidden",
-                        "A subagent may update only its own telemetry",
-                    ));
-                }
-            };
-            let own = &state.runs[index].run_id;
-            let mut parent = parent_subagent_id.as_deref();
-            let mut depth = 0;
-            while let Some(parent_id) = parent {
-                if parent_id == subagent_id || depth >= state.subagents.len() {
-                    return Err(error(
-                        "invalid_subagent_parent",
-                        "Subagent nesting must not contain a self-edge or cycle",
-                    ));
-                }
-                let ancestor = state
-                    .subagents
-                    .iter()
-                    .find(|entry| entry.run_id == *own && entry.subagent_id == parent_id)
-                    .ok_or_else(|| {
-                        error(
-                            "invalid_subagent_parent",
-                            "Parent subagent must exist in the same run",
-                        )
-                    })?;
-                parent = ancestor.parent_subagent_id.as_deref();
-                depth += 1;
-            }
-            let existing = state
-                .subagents
-                .iter()
-                .position(|entry| entry.run_id == *own && entry.subagent_id == *subagent_id);
-            // Explicit child progress takes precedence over an assignment/reminder
-            // carried by lifecycle telemetry, including when telemetry arrives later.
-            let effective_summary =
-                if summary.is_some() || existing.is_none() {
-                    state.messages.iter().rev().find_map(|message| {
-                    if message.stale || message.from_subagent_id.as_deref() != Some(subagent_id)
-                        || !matches!(&message.from, ActorRef::Run { run_id } if run_id == own) {
-                        return None;
-                    }
-                    message.report.as_ref().filter(|report|
-                        matches!(report.kind, ReportKind::Progress | ReportKind::NeedsInput))
-                        .map(|report| report.summary.as_str())
-                }).or(summary.as_deref())
-                } else {
-                    None
-                };
-            let at = now();
-            if let Some(index) = existing {
-                let entry = &mut state.subagents[index];
-                if let Some(session) = child_binding {
-                    entry.bound_omp_session = Some(session.to_owned());
-                }
-                entry.parent_subagent_id = parent_subagent_id.clone();
-                entry.role = role.clone();
-                entry.label = label.clone();
-                entry.status = *status;
-                if let Some(summary) = effective_summary {
-                    if entry.summary.as_deref() != Some(summary) {
-                        entry.summary = Some(summary.to_owned());
-                    }
-                }
-                entry.updated_at = at;
-            } else {
-                state.subagents.push(Subagent {
-                    run_id: own.clone(),
-                    subagent_id: subagent_id.clone(),
-                    parent_subagent_id: parent_subagent_id.clone(),
-                    bound_omp_session: child_binding.map(str::to_owned),
-                    role: role.clone(),
-                    label: label.clone(),
-                    status: *status,
-                    summary: effective_summary.map(str::to_owned),
-                    last_control: None,
-                    updated_at: at,
-                });
-            }
-            OrchestrationActionResult::Done
-        }
-        OrchestrationAction::SubagentControl {
-            run_id,
-            subagent_id,
-            op,
-        } => {
-            run_index(state, run_id)?;
-            if let Actor::Agent(_) = actor {
-                let (_, index) = agent(actor, caller)?;
-                if !is_ancestor(state, &state.runs[index].run_id, run_id) {
-                    return Err(error(
-                        "not_ancestor",
-                        "Subagent controls require an ancestor of the owning run",
-                    ));
-                }
-            }
-            if let SubagentOp::Send { text } = op {
-                text_bound(text)?;
-            }
-            let subagent = state
-                .subagents
-                .iter()
-                .position(|entry| entry.run_id == *run_id && entry.subagent_id == *subagent_id)
-                .ok_or_else(|| {
-                    error(
-                        "subagent_not_found",
-                        "Subagent does not exist in the specified run",
-                    )
-                })?;
-            if state.subagents[subagent].status != SubagentStatus::Running {
-                return Err(error(
-                    "invalid_stage",
-                    "Only running subagents can receive controls",
-                ));
-            }
-            let text = serde_json::to_string(&ControlEnvelope {
-                subagent_id: subagent_id.clone(),
-                op: op.clone(),
-            })
-            .map_err(|failure| error("invalid_subagent_control", failure.to_string()))?;
-            let from = actor_ref(actor, caller, state);
-            let result = append(
-                state,
-                from,
-                run_id,
-                &uuid::Uuid::new_v4().to_string(),
-                MessageKind::SubagentControl,
-                &text,
-                None,
-                None,
-                false,
-                None,
-                None,
-            )?;
-            if let OrchestrationActionResult::Message { seq, .. } = &result {
-                state.subagents[subagent].last_control = Some(SubagentControlState {
-                    seq: *seq,
-                    op: op.clone(),
-                    stage: ControlStage::Stored,
-                    error: None,
-                    at: now(),
-                });
-            }
-            result
-        }
-        OrchestrationAction::SubagentControlDone {
-            seq,
-            applied,
-            error: control_error,
-        } => {
-            let (agent, index) = agent(actor, caller)?;
-            if let Some(failure) = control_error {
-                text_bound(failure)?;
-            }
-            let own = &state.runs[index].run_id;
-            let message_index = state
-                .messages
-                .iter()
-                .position(|message| {
-                    message.to_run_id == *own
-                        && message.seq == *seq
-                        && message.kind == MessageKind::SubagentControl
-                })
-                .ok_or_else(|| {
-                    error(
-                        "subagent_control_not_found",
-                        "Sequence is not a control in this run's inbox",
-                    )
-                })?;
-            let envelope: ControlEnvelope =
-                serde_json::from_str(&state.messages[message_index].text)
-                    .map_err(|failure| error("invalid_subagent_control", failure.to_string()))?;
-            match agent.agent_kind {
-                Some(AgentKind::Main) => main_session(agent, &state.runs[index])?,
-                Some(AgentKind::Subagent)
-                    if agent.subagent_id.as_deref() == Some(&envelope.subagent_id) => {}
-                _ => {
-                    return Err(error(
-                        "actor_forbidden",
-                        "Only the owning main context or targeted subagent can complete a control",
-                    ));
-                }
-            }
-            let subagent_index = state
-                .subagents
-                .iter()
-                .position(|entry| entry.run_id == *own && entry.subagent_id == envelope.subagent_id)
-                .ok_or_else(|| {
-                    error(
-                        "subagent_not_found",
-                        "The targeted subagent no longer exists",
-                    )
-                })?;
-            let stage = if *applied {
-                ControlStage::Applied
-            } else {
-                ControlStage::Failed
-            };
-            if let Some(last) = &state.subagents[subagent_index].last_control {
-                if last.seq == *seq && last.stage != ControlStage::Stored {
-                    if last.stage != stage || last.error != *control_error {
-                        return Err(error(
-                            "subagent_control_conflict",
-                            "Control completion already has a different receipt",
-                        ));
-                    }
-                    return Ok(Some(OrchestrationActionResult::Done));
-                }
-            }
-            let at = now();
-            let message = &mut state.messages[message_index];
-            message.stage = DeliveryStage::Acked;
-            if message.acked_at.is_none() {
-                message.acked_at = Some(at.clone());
-            }
-            let entry = &mut state.subagents[subagent_index];
-            // Older completions must not overwrite the receipt for a newer control.
-            if entry
-                .last_control
-                .as_ref()
-                .is_none_or(|last| last.seq <= *seq)
-            {
-                entry.last_control = Some(SubagentControlState {
-                    seq: *seq,
-                    op: envelope.op,
-                    stage,
-                    error: control_error.clone(),
-                    at: at.clone(),
-                });
-            }
-            entry.updated_at = at;
-            OrchestrationActionResult::Done
-        }
-        _ => return Ok(None),
-    };
-    Ok(Some(result))
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     fn native_process() -> NativeProcessIdentity {
         NativeProcessIdentity {
@@ -1387,19 +707,7 @@ mod tests {
     #[test]
     fn append_keys_by_sender_and_sequences_by_recipient() {
         let mut state = state();
-        let first = append(
-            &mut state,
-            ActorRef::Operator,
-            "worker",
-            "same",
-            MessageKind::Instruction,
-            "hello",
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let first = append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
         .unwrap();
         assert!(matches!(
             first,
@@ -1409,19 +717,7 @@ mod tests {
                 ..
             }
         ));
-        let duplicate = append(
-            &mut state,
-            ActorRef::Operator,
-            "worker",
-            "same",
-            MessageKind::Instruction,
-            "hello",
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let duplicate = append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
         .unwrap();
         assert!(matches!(
             duplicate,
@@ -1431,35 +727,11 @@ mod tests {
                 ..
             }
         ));
-        append(
-            &mut state,
-            ActorRef::Run {
-                run_id: "root".into(),
-            },
-            "worker",
-            "same",
-            MessageKind::Instruction,
-            "hello",
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        append(&mut state, AppendMessage { from: ActorRef::Run {
+            run_id: "root".into(),
+        }, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
         .unwrap();
-        append(
-            &mut state,
-            ActorRef::Operator,
-            "sibling",
-            "other",
-            MessageKind::Instruction,
-            "hello",
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "sibling", message_id: "other", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
         .unwrap();
         assert_eq!(
             state
@@ -1470,37 +742,35 @@ mod tests {
             vec![1, 2, 1]
         );
         assert_eq!(
-            append(
-                &mut state,
-                ActorRef::Operator,
-                "sibling",
-                "same",
-                MessageKind::Instruction,
-                "hello",
-                None,
-                None,
-                false,
-                None,
-                None
-            )
+            append(&mut state, AppendMessage {
+                from: ActorRef::Operator,
+                to_run_id: "sibling",
+                message_id: "same",
+                kind: MessageKind::Instruction,
+                text: "hello",
+                in_reply_to: None,
+                report: None,
+                stale: false,
+                from_subagent_id: None,
+                escalated_from: None,
+            })
             .unwrap_err()
             .code,
             "message_id_conflict"
         );
         assert_eq!(
-            append(
-                &mut state,
-                ActorRef::Operator,
-                "worker",
-                "same",
-                MessageKind::CancelRequest,
-                "hello",
-                None,
-                None,
-                false,
-                None,
-                None
-            )
+            append(&mut state, AppendMessage {
+                from: ActorRef::Operator,
+                to_run_id: "worker",
+                message_id: "same",
+                kind: MessageKind::CancelRequest,
+                text: "hello",
+                in_reply_to: None,
+                report: None,
+                stale: false,
+                from_subagent_id: None,
+                escalated_from: None,
+            })
             .unwrap_err()
             .code,
             "message_id_conflict"
@@ -1512,52 +782,38 @@ mod tests {
         let mut state = state();
         let oversized = "é".repeat(MAX_TEXT / 2 + 1);
         assert_eq!(
-            append(
-                &mut state,
-                ActorRef::Operator,
-                "worker",
-                "large",
-                MessageKind::Instruction,
-                &oversized,
-                None,
-                None,
-                false,
-                None,
-                None
-            )
+            append(&mut state, AppendMessage {
+                from: ActorRef::Operator,
+                to_run_id: "worker",
+                message_id: "large",
+                kind: MessageKind::Instruction,
+                text: &oversized,
+                in_reply_to: None,
+                report: None,
+                stale: false,
+                from_subagent_id: None,
+                escalated_from: None,
+            })
             .unwrap_err()
             .code,
             "message_too_large"
         );
-        append(
-            &mut state,
-            ActorRef::Operator,
-            "worker",
-            "first",
-            MessageKind::Instruction,
-            "hello",
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "first", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
         .unwrap();
         state.messages[0].seq = u64::MAX;
         assert_eq!(
-            append(
-                &mut state,
-                ActorRef::Operator,
-                "worker",
-                "second",
-                MessageKind::Instruction,
-                "hello",
-                None,
-                None,
-                false,
-                None,
-                None
-            )
+            append(&mut state, AppendMessage {
+                from: ActorRef::Operator,
+                to_run_id: "worker",
+                message_id: "second",
+                kind: MessageKind::Instruction,
+                text: "hello",
+                in_reply_to: None,
+                report: None,
+                stale: false,
+                from_subagent_id: None,
+                escalated_from: None,
+            })
             .unwrap_err()
             .code,
             "message_sequence_exhausted"
@@ -1977,19 +1233,7 @@ mod tests {
     fn pull_caps_at_one_hundred_and_is_scoped_to_main_inbox() {
         let mut state = state();
         for seq in 0..105 {
-            append(
-                &mut state,
-                ActorRef::Operator,
-                "worker",
-                &format!("message-{seq}"),
-                MessageKind::Instruction,
-                "read",
-                None,
-                None,
-                false,
-                None,
-                None,
-            )
+            append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: &format!("message-{seq}"), kind: MessageKind::Instruction, text: "read", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
             .unwrap();
         }
         let result = mutation(
@@ -2275,19 +1519,7 @@ mod tests {
         let mut state = state();
         let main = main_actor("worker");
         mutation(&mut state, &main, 1, &update("child", None));
-        append(
-            &mut state,
-            ActorRef::Operator,
-            "worker",
-            "brief",
-            MessageKind::Instruction,
-            "read first",
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "brief", kind: MessageKind::Instruction, text: "read first", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
         .unwrap();
         let control = OrchestrationAction::SubagentControl {
             run_id: "worker".into(),
@@ -2379,19 +1611,7 @@ mod tests {
             )
             .unwrap();
         }
-        append(
-            &mut state,
-            ActorRef::Operator,
-            "worker",
-            "ordinary",
-            MessageKind::Instruction,
-            "Handle this ordinary message",
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "ordinary", kind: MessageKind::Instruction, text: "Handle this ordinary message", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
         .unwrap();
         mutation(
             &mut state,

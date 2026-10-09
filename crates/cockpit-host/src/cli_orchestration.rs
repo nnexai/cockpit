@@ -5,7 +5,7 @@ use cockpit_core::{
     InspectionError,
     config::ConfigurationFile,
     extension_adapter::SourcePaneEvidence,
-    orchestration::{Actor, AgentCaller, OrchestrationService, herdr::OrchestrationHerdr},
+    orchestration::{Actor, AgentCaller, NativeAgentKind, OrchestrationService, herdr::OrchestrationHerdr},
     process_identity::{is_ancestor_of_self, kernel_boot_id, start_identity},
     projects::ProjectService,
 };
@@ -488,7 +488,7 @@ impl Context {
                 let runtime = adapter.runtime(&session).await?;
                 let pane = runtime
                     .panes
-                    .iter()
+                    .into_iter()
                     .find(|pane| pane.pane_id == source.pane_id)
                     .ok_or_else(|| {
                         CliError::new(
@@ -520,9 +520,8 @@ impl Context {
                     native_session_id: pane.native_session_id.clone(),
                     actual_agent_kind: pane
                         .agent_kind
-                        .as_ref()
-                        .filter(|kind| kind.as_str() != "omp" || !pane.launch_pending)
-                        .cloned(),
+                        .map(NativeAgentKind::from)
+                        .filter(|kind| kind != &NativeAgentKind::Omp || !pane.launch_pending),
                     env_run: args.env_run()?,
                     omp_session_id: args.omp_session.clone(),
                     main_omp_session_id: args.omp_main_session.clone(),
@@ -550,7 +549,7 @@ impl Context {
             let runtime = self.adapter.runtime(&self.session).await?;
             let pane = runtime
                 .panes
-                .iter()
+                .into_iter()
                 .find(|pane| pane.pane_id == before.pane_id)
                 .ok_or_else(|| {
                     CliError::new(
@@ -569,12 +568,13 @@ impl Context {
                 ));
             }
             if let Some(Actor::Agent(caller)) = &self.actor {
+                let actual_agent_kind = pane.agent_kind.map(NativeAgentKind::from);
                 if runtime.endpoint_identity != caller.endpoint_identity
                     || runtime.boot_id != caller.boot_id
                     || (caller.actual_agent_kind.is_none()
-                        && pane.agent_kind.as_deref().is_some_and(|kind| kind != "omp"))
+                        && actual_agent_kind.as_ref().is_some_and(|kind| kind != &NativeAgentKind::Omp))
                     || caller.actual_agent_kind.as_ref().is_some_and(|kind| {
-                        pane.agent_kind.as_ref() != Some(kind) || pane.launch_pending
+                        actual_agent_kind.as_ref() != Some(kind) || pane.launch_pending
                     })
                     || pane.terminal_id.as_ref() != caller.terminal_id.as_ref()
                 {
@@ -585,7 +585,7 @@ impl Context {
                 }
                 let session_changed = pane.native_session_id != caller.native_session_id;
                 let newly_attested = caller.actual_agent_kind.is_none()
-                    && pane.agent_kind.as_deref() == Some("omp")
+                    && actual_agent_kind.as_ref() == Some(&NativeAgentKind::Omp)
                     && !pane.launch_pending;
                 if session_changed || newly_attested {
                     let expected = if caller.agent_kind == Some(AgentKind::Subagent) {
@@ -973,7 +973,7 @@ fn retirement_read_scope(run: &Run, caller: &AgentCaller) -> Result<(), CliError
     if run.stage != RunStage::Closed && run.retirement.is_some() {
         return Err(mismatch());
     }
-    if caller.actual_agent_kind.as_deref() != Some("omp") {
+    if caller.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp) {
         if caller.actual_agent_kind.is_none() && startup_launch_matches(run, caller) {
             return Err(caller_not_ready());
         }
@@ -4049,7 +4049,7 @@ mod tests {
                 tab_id: evidence.tab_id.clone(), pane_id: evidence.pane_id.clone(),
                 boot_id: runtime.boot_id.clone(), terminal_id: pane.terminal_id.clone(),
                 native_session_id: pane.native_session_id.clone(),
-                actual_agent_kind: pane.agent_kind.clone(), env_run: None,
+                actual_agent_kind: pane.agent_kind.clone().map(NativeAgentKind::from), env_run: None,
                 omp_session_id: Some("main-native".into()), main_omp_session_id: None,
                 agent_kind: Some(AgentKind::Main), subagent_id: None, process: None,
             });

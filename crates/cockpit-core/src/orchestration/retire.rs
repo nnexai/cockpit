@@ -8,13 +8,13 @@ use parking_lot::Mutex;
 
 use cockpit_protocol::orchestration::{
     NativeProcessIdentity, NativeStopEvidence, RetainReason, RetirementIdentity, RetirementPhase,
-    RetirementState, Run, RunRetirement,
+    RetirementState, RetirementStateKind, Run, RunRetirement,
 };
 
 use super::{
     dispatch::Dispatcher,
     herdr::{OrchestrationHerdr, PaneProcessInfo, RuntimeView},
-    retirement::{self, OfferDecision, RetirementStateKind, TerminalDecision,
+    retirement::{self, OfferDecision, TerminalDecision,
         BUSY_TIMEOUT_SECS, NATIVE_STOP_TIMEOUT_SECS, OBSERVATION_RETRY_SECS,
         OBSERVATION_TIMEOUT_SECS, OFFER_RESPONSE_TIMEOUT_SECS},
     now, OrchestrationService,
@@ -202,7 +202,7 @@ struct Effect<'a> {
 }
 impl Effect<'_> {
     fn save(&self, next: RetirementState) -> Result<(), InspectionError> {
-        self.save_expected(retirement::kind(&self.record.state), next)
+        self.save_expected(self.record.state.kind(), next)
     }
     fn save_close(&self, next: RetirementState) -> Result<(), InspectionError> {
         self.save_expected(RetirementStateKind::CloseIntent, next)

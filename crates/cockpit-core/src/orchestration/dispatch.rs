@@ -239,7 +239,7 @@ impl Dispatcher {
                 "The packaged OMP integration is missing; inspect the configured extension path",
             ));
         }
-        if self.settings.agent_kind != "omp"
+        if !super::NativeAgentKind::is_omp(&self.settings.agent_kind)
             || !(3001..=300_000).contains(&self.settings.start_timeout_ms)
         {
             return Err(InspectionError::new(
@@ -1175,7 +1175,7 @@ fn launch_phase_error(runtime: &RuntimeView, run: &Run, tag: &str) -> Inspection
             "OMP startup is blocked. Open the recorded terminal to inspect the actual error; no additional launch was sent.",
         ),
         Some(pane)
-            if pane.agent_kind.as_deref() == Some("omp")
+            if pane.agent_kind.as_deref().is_some_and(super::NativeAgentKind::is_omp)
                 && !pane.launch_pending
                 && run.bound_omp_session.as_deref().is_none_or(str::is_empty) =>
         {
@@ -1300,7 +1300,7 @@ async fn bound_process_in_pane(
         return false;
     }
     let Some(pane) = launch_pane(runtime, tag, Some(location)).ok().flatten() else { return false };
-    if pane.native_session_id.is_some() || pane.agent_kind.as_deref() != Some("omp")
+    if pane.native_session_id.is_some() || !pane.agent_kind.as_deref().is_some_and(super::NativeAgentKind::is_omp)
         || pane.launch_pending || location.terminal_id.is_none() {
         return false;
     }
@@ -1377,7 +1377,7 @@ fn reconcile_tag(
     }) {
         return ReconciledLaunch::Conflict;
     }
-    if pane.agent_kind.as_deref() == Some("omp")
+    if pane.agent_kind.as_deref().is_some_and(super::NativeAgentKind::is_omp)
         && !pane.launch_pending
         && bound_omp_session.is_some_and(|session| !session.is_empty()
             && (pane.native_session_id.as_deref() == Some(session) || bound_process_running))
@@ -1747,11 +1747,7 @@ mod tests {
             self.run = self.current().1;
             let locked = self.service.store.lock().unwrap();
             let mut state = locked.read().unwrap();
-            super::super::messages::append(&mut state,
-                cockpit_protocol::orchestration::ActorRef::Operator,
-                &self.run.run_id, "preserved-message",
-                cockpit_protocol::orchestration::MessageKind::Observation,
-                "Existing operator message", None, None, false, None, None).unwrap();
+            super::super::messages::append(&mut state, super::super::messages::AppendMessage { from: cockpit_protocol::orchestration::ActorRef::Operator, to_run_id: &self.run.run_id, message_id: "preserved-message", kind: cockpit_protocol::orchestration::MessageKind::Observation, text: "Existing operator message", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None }).unwrap();
             locked.save(&mut state).unwrap();
         }
         fn worker_task(&mut self, prerequisite: Option<(&str, bool)>) {

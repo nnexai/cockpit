@@ -1,3 +1,5 @@
+mod agent;
+mod mutate;
 mod assignments;
 mod dependencies;
 mod steps;
@@ -16,6 +18,9 @@ pub mod routing;
 mod store;
 mod tasks_md;
 
+pub use agent::NativeAgentKind;
+use mutate::{Applied, MutationCtx};
+use mutate::reviewed::retry_review_matches;
 use crate::{
     InspectionError,
     project_store::{ExecutionLease, prepare_project_root},
@@ -52,7 +57,7 @@ pub struct AgentCaller {
     pub omp_session_id: Option<String>,
     pub agent_kind: Option<AgentKind>,
     /// Trusted fresh CLI process evidence, never supplied by action JSON.
-    pub actual_agent_kind: Option<String>,
+    pub actual_agent_kind: Option<NativeAgentKind>,
     pub subagent_id: Option<String>,
     pub main_omp_session_id: Option<String>,
     pub process: Option<NativeProcessIdentity>,
@@ -249,16 +254,7 @@ impl OrchestrationService {
             };
             let current = &state.runs[scoped_index(&state, &request.session_id, target)?];
             if target != &reviewed.run_id
-                || !same_launch_incarnation(current, reviewed)
-                || current.stage != reviewed.stage
-                || current.updated_at != reviewed.updated_at
-                || current.bound_omp_process != reviewed.bound_omp_process
-                || current.launch_shell_identity != reviewed.launch_shell_identity
-                || !matches!((current.dispatch.as_ref(), reviewed.dispatch.as_ref()),
-                    (Some(actual), Some(expected)) if actual.step == expected.step
-                        && actual.updated_at == expected.updated_at
-                        && actual.agent_started == expected.agent_started
-                        && actual.recovery == expected.recovery)
+                || !retry_review_matches(current, reviewed)
             {
                 return Err(error(
                     "attempt_stale",
@@ -299,951 +295,103 @@ impl OrchestrationService {
                 ));
             }
         }
-        let reporting = matches!(request.action, OrchestrationAction::Report { .. });
-        let adopting = matches!(request.action, OrchestrationAction::RunAdopt { .. });
-        let retiring = matches!(request.action, OrchestrationAction::RetirementNativeReceipt { .. });
-        let binding = matches!(request.action, OrchestrationAction::RunBindSession { .. });
-        let (caller, mut stale) = resolve(&state, actor, reporting, adopting, retiring, binding)?;
-        if let (Some(index), Actor::Agent(agent)) = (caller, actor) {
-            let run = &state.runs[index];
-            if run.bound_omp_session.is_some() && !session_matches(run, agent)
-                && !(binding && same_process_main_rollover(run, agent))
-            {
-                if reporting {
-                    stale = true;
-                } else {
-                    return Err(error(
-                        "session_mismatch",
-                        "Caller native-session evidence does not match the bound run",
-                    ));
-                }
-            } else if run.bound_omp_session.is_none()
-                && !matches!(request.action, OrchestrationAction::RunBindSession { .. })
-                && !reporting
-            {
-                return Err(error(
-                    "session_mismatch",
-                    "Bind the main native session before mutating this run",
-                ));
-            }
-        }
-        if let Actor::Operator(_) = actor {
-            match &request.action {
-                OrchestrationAction::MessageSend { to_run_id, .. } => {
-                    scoped_index(&state, &request.session_id, to_run_id)?;
-                }
-                OrchestrationAction::Annotate { run_id, .. }
-                | OrchestrationAction::SubagentControl { run_id, .. } => {
-                    scoped_index(&state, &request.session_id, run_id)?;
-                }
-                _ => {}
-            }
-        }
-        let mut location_changed = false;
-        if !stale && !retiring {
-            if let (Some(index), Actor::Agent(agent)) = (caller, actor) {
-                if let Some(location) = state.runs[index].location.as_mut() {
-                    location_changed = location.pane_id != agent.pane_id
-                        || location.workspace_id != agent.workspace_id
-                        || location.tab_id != agent.tab_id;
-                    location.pane_id = agent.pane_id.clone();
-                    location.workspace_id = agent.workspace_id.clone();
-                    location.tab_id = agent.tab_id.clone();
-                }
-            }
-        }
+        let Admission { caller, stale, location_changed } = admit(&mut state, actor, &request)?;
         if let Some(result) = messages::apply(&mut state, actor, caller, stale, &request.action)? {
             let revision = locked.save(&mut state)?;
             self.revision.send_replace(revision);
             return Ok(OrchestrationMutationResponse { revision, result });
         }
-        let mut machine_changed = true;
-        let result = match request.action {
-            OrchestrationAction::TaskAssign {
-                root_id,
-                task_id,
-                title,
-                description,
-            } => {
-                let origin = operator(actor)?;
-                let result = assignments::assign(
-                    &locked,
-                    &mut state,
-                    &request.session_id,
-                    origin,
-                    &root_id,
-                    &task_id,
-                    &title,
-                    &description,
-                );
-                self.revision.send_replace(state.revision);
-                return Ok(OrchestrationMutationResponse {
-                    revision: state.revision,
-                    result: result?,
-                });
-            }
-            OrchestrationAction::TaskAssignmentResolve {
-                root_id,
-                task_id,
-                expected_task_revision,
-                assign,
-            } => {
-                operator(actor)?;
-                let result = assignments::resolve(
-                    &locked,
-                    &mut state,
-                    &request.session_id,
-                    &root_id,
-                    &task_id,
-                    expected_task_revision.as_deref(),
-                    assign,
-                );
-                self.revision.send_replace(state.revision);
-                return Ok(OrchestrationMutationResponse {
-                    revision: state.revision,
-                    result: result?,
-                });
-            }
+        let mut ctx = MutationCtx {
+            service: self,
+            locked: &locked,
+            state: &mut state,
+            actor,
+            caller,
+            session_id: &request.session_id,
+            reviewed,
+        };
+        let applied = match request.action {
+            OrchestrationAction::TaskAssign { root_id, task_id, title, description } =>
+                mutate::tasks::assign(&mut ctx, root_id, task_id, title, description),
+            OrchestrationAction::TaskAssignmentResolve { root_id, task_id, expected_task_revision, assign } =>
+                mutate::tasks::assignment_resolve(&mut ctx, root_id, task_id, expected_task_revision, assign),
             OrchestrationAction::TaskCreate {
                 root_id, task_id, title, description, depends_on, follow_up_of,
                 expected_doc_revision, source_revision,
-            } => {
-                task_scope(&state, actor, caller, &request.session_id, &root_id)?;
-                active_task_root(&state, &request.session_id, &root_id)?;
-                bounded(&title, 256)?;
-                bounded(&description, 16 * 1024)?;
-                tasks_md::validate_authoring_creation(&title, &description)?;
-                let task_id = tasks_md::validate_uuid(&task_id)?.to_string();
-                let edges = normalize_task_edges(&depends_on)?;
-                let follow = follow_up_of.as_deref().map(tasks_md::validate_uuid)
-                    .transpose()?.map(|id| id.to_string());
-                if !edges.is_empty() || follow.is_some() {
-                    task_root_authority(&state, actor, caller, &request.session_id, &root_id)?;
-                    if expected_doc_revision.is_none() || (follow.is_some() && source_revision.is_none()) {
-                        return Err(error("invalid_task", "Relationships require document and follow-up source fences"));
-                    }
-                }
-                if follow.is_none() && source_revision.is_some() {
-                    return Err(error("invalid_task", "Source revision requires follow_up_of"));
-                }
-                let document = locked.tasks(&root_id)?;
-                // Only exact intended identity replay may bypass now-stale graph/source fences.
-                // Shape and fresh caller authority have already been checked.
-                let replay = document.tasks.iter().any(|task| task.task_id == task_id);
-                if !replay {
-                    if expected_doc_revision.as_deref().is_some_and(|revision| revision != document.doc_revision) {
-                        return Err(error("task_revision_conflict", "Task document changed"));
-                    }
-                    dependencies::validate_dependencies(&document.tasks, &task_id, &edges)?;
-                    if let Some(source) = &follow {
-                        if source == &task_id {
-                            return Err(error("task_relations_invalid", "A task cannot follow itself"));
-                        }
-                        let source_task = document.task(source)?;
-                        if source_revision.as_deref() != Some(source_task.task_revision.as_str()) {
-                            return Err(error("task_revision_conflict", "Follow-up source changed"));
-                        }
-                    }
-                }
-                machine_changed = false;
-                OrchestrationActionResult::Task {
-                    task: document.create_authoring_with_id(&task_id, &title, &description,
-                        &edges, follow.as_deref(), expected_doc_revision.as_deref(), source_revision.as_deref())?,
-                }
-            }
-            OrchestrationAction::TaskUpdate {
-                root_id, task_id, expected_task_revision, title, description,
-            } => {
-                let document = locked.tasks(&root_id)?;
-                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
-                if let Some(t) = &title { bounded(t, 256)?; }
-                if let Some(d) = &description { bounded(d, 16 * 1024)?; }
-                machine_changed = false;
-                OrchestrationActionResult::Task {
-                    task: document.update(&task_id, &expected_task_revision, title.as_deref(), description.as_deref())?,
-                }
-            }
+            } => mutate::tasks::create(&mut ctx, root_id, task_id, title, description, depends_on,
+                follow_up_of, expected_doc_revision, source_revision),
+            OrchestrationAction::TaskUpdate { root_id, task_id, expected_task_revision, title, description } =>
+                mutate::tasks::update(&mut ctx, root_id, task_id, expected_task_revision, title, description),
             OrchestrationAction::TaskDependenciesSet {
                 root_id, task_id, expected_task_revision, expected_doc_revision, depends_on,
-            } => {
-                task_root_authority(&state, actor, caller, &request.session_id, &root_id)?;
-                let document = locked.tasks(&root_id)?;
-                let task = mutable_task(&state, &root_id, &task_id, &document)?;
-                if task.task_revision != expected_task_revision || document.doc_revision != expected_doc_revision {
-                    return Err(error("task_revision_conflict", "Task or document changed"));
-                }
-                let edges = normalize_task_edges(&depends_on)?;
-                let live = state.runs.iter().any(|run| run.root_id == root_id
-                    && run.task_id.as_deref() == Some(task.task_id.as_str()) && run.stage != RunStage::Closed);
-                if live {
-                    if task.relations_diagnostic.is_some() || edges.len() >= task.depends_on.len()
-                        || edges.iter().any(|edge| !task.depends_on.contains(edge)) {
-                        return Err(error("task_relationships_live", "Open attempts allow only strictly removing positively parsed prerequisites"));
-                    }
-                } else {
-                    dependencies::validate_dependencies(&document.tasks, &task.task_id, &edges)?;
-                }
-                machine_changed = false;
-                OrchestrationActionResult::Task {
-                    task: document.set_dependencies(&task_id, &expected_task_revision, &expected_doc_revision, &edges)?,
-                }
-            }
+            } => mutate::tasks::dependencies_set(&mut ctx, root_id, task_id, expected_task_revision,
+                expected_doc_revision, depends_on),
             OrchestrationAction::TaskStepAdd {
                 root_id, task_id, expected_task_revision, step_id, parent_step_id, before_step_id, title,
-            } => {
-                let document = locked.tasks(&root_id)?;
-                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
-                machine_changed = false;
-                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
-                    steps::StepIntent::Add { step_id: tasks_md::validate_uuid(&step_id)?,
-                        parent_step_id: parent_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?,
-                        before_step_id: before_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?, title: &title })? }
-            }
-            OrchestrationAction::TaskStepRename { root_id, task_id, expected_task_revision, step_id, title } => {
-                let document = locked.tasks(&root_id)?;
-                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
-                machine_changed = false;
-                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
-                    steps::StepIntent::Rename { step_id: tasks_md::validate_uuid(&step_id)?, title: &title })? }
-            }
-            OrchestrationAction::TaskStepSetChecked { root_id, task_id, expected_task_revision, step_id, checked, scope } => {
-                let document = locked.tasks(&root_id)?;
-                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
-                machine_changed = false;
-                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
-                    steps::StepIntent::SetChecked { step_id: tasks_md::validate_uuid(&step_id)?, checked, scope })? }
-            }
-            OrchestrationAction::TaskStepMove { root_id, task_id, expected_task_revision, step_id, parent_step_id, before_step_id } => {
-                let document = locked.tasks(&root_id)?;
-                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
-                machine_changed = false;
-                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
-                    steps::StepIntent::Move { step_id: tasks_md::validate_uuid(&step_id)?,
-                        parent_step_id: parent_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?,
-                        before_step_id: before_step_id.as_deref().map(tasks_md::validate_uuid).transpose()? })? }
-            }
-            OrchestrationAction::TaskStepRemove { root_id, task_id, expected_task_revision, step_id } => {
-                let document = locked.tasks(&root_id)?;
-                task_content_target(&state, actor, caller, &request.session_id, &root_id, &task_id, &document)?;
-                machine_changed = false;
-                OrchestrationActionResult::Task { task: document.step(&task_id, &expected_task_revision,
-                    steps::StepIntent::Remove { step_id: tasks_md::validate_uuid(&step_id)? })? }
-            }
-            OrchestrationAction::TasksAssignIds {
-                root_id,
-                expected_doc_revision,
-            } => {
-                task_scope(&state, actor, caller, &request.session_id, &root_id)?;
-                machine_changed = false;
-                let (assigned, doc_revision) =
-                    locked.tasks(&root_id)?.assign_ids(&expected_doc_revision)?;
-                OrchestrationActionResult::TaskIds {
-                    assigned,
-                    doc_revision,
-                }
-            }
-            OrchestrationAction::SupervisorStart { target, label } => {
-                operator(actor)?;
-                let id = id();
-                let label = label.unwrap_or_else(|| "Supervisor".into());
-                bounded(&label, 256)?;
-                let target = match target {
-                    Some(t) => unfocused(t),
-                    None => {
-                        let path =
-                            prepare_project_root(&self.store.base().join("supervisors").join(&id))?;
-                        DispatchTarget::Setup {
-                            request: WorkspaceSetupRequest::Open {
-                                path: path.to_string_lossy().into_owned(),
-                                label: Some(label.clone()),
-                                task_name: None,
-                                focus: false,
-                            },
-                        }
-                    }
-                };
-                let mut run = new_run(
-                    &id,
-                    &request.session_id,
-                    RunKind::Supervisor,
-                    label,
-                    &id,
-                    None,
-                    None,
-                    1,
-                );
-                run.target = Some(target);
-                run.stage = RunStage::Preparing;
-                run.dispatch = Some(dispatch(DispatchStep::SetupPending));
-                run.prepare_brief = supervisor_guidance().into();
-                state.runs.push(run);
-                OrchestrationActionResult::Run {
-                    run_id: id,
-                    attempt: 1,
-                }
-            }
-            OrchestrationAction::RunAdopt { label } => {
-                let Actor::Agent(agent) = actor else {
-                    return Err(error(
-                        "actor_forbidden",
-                        "Only a real agent pane can adopt itself",
-                    ));
-                };
-                if caller.is_some() {
-                    return Err(error("caller_mismatch", "Pane already belongs to a run"));
-                }
-                if agent.agent_kind != Some(AgentKind::Main)
-                    || agent.omp_session_id.as_ref().is_none_or(|s| s.is_empty())
-                    || agent.actual_agent_kind.as_deref() != Some("omp")
-                {
-                    return Err(error(
-                        "report_requires_main",
-                        "Adoption requires the main OMP native session",
-                    ));
-                }
-                bounded(&label, 256)?;
-                let id = id();
-                let mut run = new_run(
-                    &id,
-                    &request.session_id,
-                    RunKind::Adopted,
-                    label,
-                    &id,
-                    None,
-                    None,
-                    1,
-                );
-                run.stage = RunStage::Active;
-                run.bound_omp_session = agent.omp_session_id.clone();
-                run.bound_omp_process = agent.process.clone();
-                run.location = Some(RunLocation {
-                    boot_id: agent.boot_id.clone(),
-                    terminal_id: agent.terminal_id.clone(),
-                    native_session_id: agent.native_session_id.clone(),
-                    endpoint_identity: agent.endpoint_identity.clone(),
-                    session_id: agent.session_id.clone(),
-                    workspace_id: agent.workspace_id.clone(),
-                    tab_id: agent.tab_id.clone(),
-                    pane_id: agent.pane_id.clone(),
-                    launch_tag: String::new(),
-                });
-                state.runs.push(run);
-                OrchestrationActionResult::Run {
-                    run_id: id,
-                    attempt: 1,
-                }
-            }
-            OrchestrationAction::RunBindSession { omp_session_id } => {
-                let index = required_caller(caller)?;
-                if dispatch::recovery_incarnation_revoked(&state.runs[index])
-                {
-                    return Err(error("attempt_stale",
-                        "The owned launch incarnation was revoked for cancellation; a late SDK binding cannot revive it"));
-                }
-                let Actor::Agent(agent) = actor else {
-                    return Err(error("actor_forbidden", "Binding is agent-only"));
-                };
-                validate_identity(&omp_session_id)?;
-                if agent.agent_kind != Some(AgentKind::Main)
-                    || agent.omp_session_id.as_deref() != Some(omp_session_id.as_str())
-                {
-                    return Err(error(
-                        "report_requires_main",
-                        "Only the main native session may bind this run",
-                    ));
-                }
-                if state.runs[index]
-                    .bound_omp_session
-                    .as_ref()
-                    .is_some_and(|s| s != &omp_session_id && !same_process_main_rollover(&state.runs[index], agent))
-                {
-                    return Err(error(
-                        "session_mismatch",
-                        "Run is already bound to another native session",
-                    ));
-                }
-                if state.runs[index].bound_omp_process.as_ref().is_some_and(|process| {
-                    agent.process.as_ref() != Some(process)
-                }) {
-                    return Err(error("session_mismatch", "Run is already bound to another native process"));
-                }
-                if state.runs[index].bound_omp_session.as_ref().is_some_and(|s| s != &omp_session_id) {
-                    // The native OS incarnation is unchanged; only its trusted
-                    // main SDK session advanced (for example OMP /new).
-                    state.runs[index].location.as_mut().expect("rollover location")
-                        .native_session_id = agent.native_session_id.clone();
-                    state.runs[index].annotations.push(Annotation {
-                        by: ActorRef::Dispatcher,
-                        text: "Main SDK session rolled over within the same verified native process and recorded terminal".into(),
-                        at: now(),
-                    });
-                    let run = &state.runs[index];
-                    let run_id = run.run_id.clone();
-                    let message_id = format!("sdk-binding-restored:{}:{}:{omp_session_id}", run.run_id, run.attempt);
-                    let text = if run.kind == RunKind::Worker {
-                        "Binding restored in the same native process after a main-session rollover. Inspect this Run's existing durable task, plans, grants, Ready/Result receipts and inbox, then resume only work already authorized by its current exact grants. Do not redo completed external writes, reset the task or replay preparation as a new job. Ask the managing supervisor only for a genuinely missing decision or grant."
-                    } else {
-                        "Binding restored in the same native process after a main-session rollover. Inspect the existing canonical task board, durable Runs, plans, grants, results and inbox, then resume supervision from that state. Do not redo completed external writes, recreate workers or tasks, or perform the workers' implementation work. Resolve non-blocking questions autonomously and ask the operator only for a genuinely blocking decision."
-                    };
-                    messages::append(&mut state, ActorRef::Dispatcher, &run_id, &message_id,
-                        MessageKind::Instruction, text, None, None, false, None, None)?;
-                }
-                state.runs[index].bound_omp_process = agent.process.clone();
-                state.runs[index].bound_omp_session = Some(omp_session_id);
-                OrchestrationActionResult::Done
-            }
-            OrchestrationAction::RetirementNativeReceipt { retirement_id, outcome } => {
-                let index = required_caller(caller)?;
-                let Actor::Agent(agent) = actor else {
-                    return Err(error("actor_forbidden", "Retirement receipts are agent-only"));
-                };
-                if matches!(outcome, NativeStopReceipt::ShutdownRequested)
-                    && !retirement::blockers(&state, &state.runs[index]).is_empty() {
-                    return Err(error("retirement_state_changed", "Worker has open descendants or running subagents"));
-                }
-                retirement::apply_native_receipt(&mut state.runs[index], agent, &retirement_id, outcome)?;
-                OrchestrationActionResult::Done
-            }
+            } => mutate::tasks::step(&mut ctx, &root_id, &task_id, &expected_task_revision, || {
+                Ok(steps::StepIntent::Add {
+                    step_id: tasks_md::validate_uuid(&step_id)?,
+                    parent_step_id: parent_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?,
+                    before_step_id: before_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?,
+                    title: &title,
+                })
+            }),
+            OrchestrationAction::TaskStepRename {
+                root_id, task_id, expected_task_revision, step_id, title,
+            } => mutate::tasks::step(&mut ctx, &root_id, &task_id, &expected_task_revision, || {
+                Ok(steps::StepIntent::Rename { step_id: tasks_md::validate_uuid(&step_id)?, title: &title })
+            }),
+            OrchestrationAction::TaskStepSetChecked {
+                root_id, task_id, expected_task_revision, step_id, checked, scope,
+            } => mutate::tasks::step(&mut ctx, &root_id, &task_id, &expected_task_revision, || {
+                Ok(steps::StepIntent::SetChecked { step_id: tasks_md::validate_uuid(&step_id)?, checked, scope })
+            }),
+            OrchestrationAction::TaskStepMove {
+                root_id, task_id, expected_task_revision, step_id, parent_step_id, before_step_id,
+            } => mutate::tasks::step(&mut ctx, &root_id, &task_id, &expected_task_revision, || {
+                Ok(steps::StepIntent::Move {
+                    step_id: tasks_md::validate_uuid(&step_id)?,
+                    parent_step_id: parent_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?,
+                    before_step_id: before_step_id.as_deref().map(tasks_md::validate_uuid).transpose()?,
+                })
+            }),
+            OrchestrationAction::TaskStepRemove { root_id, task_id, expected_task_revision, step_id } =>
+                mutate::tasks::step(&mut ctx, &root_id, &task_id, &expected_task_revision, || {
+                    Ok(steps::StepIntent::Remove { step_id: tasks_md::validate_uuid(&step_id)? })
+                }),
+            OrchestrationAction::TasksAssignIds { root_id, expected_doc_revision } =>
+                mutate::tasks::assign_ids(&mut ctx, root_id, expected_doc_revision),
+            OrchestrationAction::SupervisorStart { target, label } =>
+                mutate::runs::supervisor_start(&mut ctx, target, label),
+            OrchestrationAction::RunAdopt { label } => mutate::runs::adopt(&mut ctx, label),
+            OrchestrationAction::RunBindSession { omp_session_id } =>
+                mutate::runs::bind_session(&mut ctx, omp_session_id),
+            OrchestrationAction::RetirementNativeReceipt { retirement_id, outcome } =>
+                mutate::retirement::native_receipt(&mut ctx, retirement_id, outcome),
             OrchestrationAction::RunPropose {
-                task_id,
-                parent_run_id,
-                label,
-                target,
-                prepare_brief,
-                supersedes_run_id,
-            } => {
-                bounded(&prepare_brief, 16 * 1024)?;
-                let parent_id = parent_run_id
-                    .or_else(|| caller.map(|i| state.runs[i].run_id.clone()))
-                    .ok_or_else(|| error("root_not_found", "Choose a parent supervisor"))?;
-                let parent = run_index(&state, &parent_id)?;
-                scope_run(&state, &request.session_id, parent)?;
-                if state.runs[parent].stage == RunStage::Closed {
-                    return Err(error(
-                        "invalid_stage",
-                        "Closed runs cannot dispatch new work",
-                    ));
-                }
-                if let Some(index) = caller {
-                    if index != parent
-                        && !is_ancestor(&state, &state.runs[index].run_id, &parent_id)
-                    {
-                        return Err(error(
-                            "not_in_subtree",
-                            "Workers may only be proposed beneath the caller",
-                        ));
-                    }
-                }
-                let root = state.runs[parent].root_id.clone();
-                active_task_root(&state, &request.session_id, &root)?;
-                let document = locked.tasks(&root)?;
-                let task = mutable_task(&state, &root, &task_id, &document)?.clone();
-                if dependencies::DependencyGraph::new(&document.tasks).evaluate(&task).state == TaskDependencyState::Invalid {
-                    return Err(error("task_dependencies_invalid", "Task relationships are structurally invalid"));
-                }
-                let task_id = task.task_id.clone();
-                let open: Vec<_> = state
-                    .runs
-                    .iter()
-                    .filter(|r| {
-                        r.root_id == root
-                            && r.task_id.as_deref() == Some(&task_id)
-                            && r.stage != RunStage::Closed
-                    })
-                    .collect();
-                if !open.is_empty() {
-                    if open.len() != 1
-                        || supersedes_run_id.as_deref() != Some(open[0].run_id.as_str())
-                    {
-                        return Err(error(
-                            "task_has_active_run",
-                            "An explicit supersedes_run_id is required for this active task",
-                        ));
-                    }
-                    if let Some(index) = caller {
-                        if !is_ancestor(&state, &state.runs[index].run_id, &open[0].run_id) {
-                            return Err(error(
-                                "not_ancestor",
-                                "Cannot replace another subtree's worker",
-                            ));
-                        }
-                    }
-                } else if supersedes_run_id.is_some() {
-                    return Err(error(
-                        "task_has_active_run",
-                        "Replacement does not identify a live task attempt",
-                    ));
-                }
-                let attempt = state
-                    .runs
-                    .iter()
-                    .filter(|r| r.root_id == root && r.task_id.as_deref() == Some(&task_id))
-                    .map(|r| r.attempt)
-                    .max()
-                    .unwrap_or(0)
-                    .checked_add(1)
-                    .ok_or_else(|| error("orchestration_state_full", "Task attempt exhausted"))?;
-                let id = id();
-                let label = label.unwrap_or_else(|| task.title.clone());
-                bounded(&label, 256)?;
-                let mut run = new_run(
-                    &id,
-                    &request.session_id,
-                    RunKind::Worker,
-                    label,
-                    &root,
-                    Some(parent_id),
-                    Some(task_id),
-                    attempt,
-                );
-                run.target = Some(unfocused(target));
-                run.prepare_brief = prepare_brief;
-                run.task_revision_at_propose = Some(task.task_revision);
-                run.supersedes_run_id = supersedes_run_id;
-                run.dispatch = Some(dispatch(DispatchStep::Planning));
-                state.runs.push(run);
-                OrchestrationActionResult::Run {
-                    run_id: id,
-                    attempt,
-                }
-            }
-            OrchestrationAction::GrantPrepare {
-                run_id,
-                plan_revision,
-            } => {
-                let (index, provenance) =
-                    management_target(&state, actor, caller, &request.session_id, &run_id)?;
-                require_stage(&state.runs[index], RunStage::AwaitingPrepare)?;
-                match_plan(state.runs[index].prepare_plan.as_ref(), &plan_revision)?;
-                let document = locked.tasks(&state.runs[index].root_id)?;
-                task_transition_target(&state, &state.runs[index], &document, true)?;
-                if let Some(old) = state.runs[index].supersedes_run_id.clone() {
-                    let old_index = run_index(&state, &old)?;
-                    if state.runs[old_index].stage == RunStage::Closed {
-                        return Err(error(
-                            "task_has_active_run",
-                            "The replacement target changed; propose again",
-                        ));
-                    }
-                    state.runs[old_index].stage = RunStage::Closed;
-                    state.runs[old_index].close_reason = Some(CloseReason::Superseded);
-                    state.runs[old_index].updated_at = now();
-                    brief(
-                        &mut state,
-                        &old,
-                        MessageKind::CancelRequest,
-                        &format!(
-                            "Run superseded by {run_id}; stop work and report any outstanding effects."
-                        ),
-                        "superseded",
-                    )?;
-                }
-                let run = &mut state.runs[index];
-                run.grants
-                    .push(grant(provenance, GrantScope::Prepare, plan_revision));
-                run.stage = RunStage::Preparing;
-                run.dispatch = Some(dispatch(DispatchStep::SetupPending));
-                OrchestrationActionResult::Done
-            }
-            OrchestrationAction::GrantExecute {
-                run_id,
-                plan_revision,
-                note,
-            } => {
-                let (index, provenance) =
-                    management_target(&state, actor, caller, &request.session_id, &run_id)?;
-                require_stage(&state.runs[index], RunStage::Ready)?;
-                match_plan(state.runs[index].work_plan.as_ref(), &plan_revision)?;
-                if state.runs[index].init_receipt.as_ref().is_none_or(|receipt| {
-                    receipt.kind != ReportKind::Ready || receipt.plan.as_deref()
-                        != state.runs[index].work_plan.as_ref().map(|plan| plan.text.as_str())
-                }) {
-                    return Err(error("invalid_stage", "Matching initialization receipt is missing"));
-                }
-                let document = locked.tasks(&state.runs[index].root_id)?;
-                task_transition_target(&state, &state.runs[index], &document, false)?;
-                let mut text = state.runs[index]
-                    .work_plan
-                    .as_ref()
-                    .expect("matched plan")
-                    .text
-                    .clone();
-                if let Some(note) = note {
-                    bounded(&note, 16 * 1024)?;
-                    text.push_str("\n\nManagement note:\n");
-                    text.push_str(&note);
-                }
-                bounded(&text, 16 * 1024)?;
-                state.runs[index].grants.push(grant(
-                    provenance,
-                    GrantScope::Execute,
-                    plan_revision,
-                ));
-                state.runs[index].stage = RunStage::Working;
-                brief(
-                    &mut state,
-                    &run_id,
-                    MessageKind::WorkBrief,
-                    &text,
-                    "execute",
-                )?;
-                OrchestrationActionResult::Done
-            }
-            OrchestrationAction::Accept {
-                run_id,
-                expected_task_revision,
-            } => {
-                let (index, provenance) =
-                    management_target(&state, actor, caller, &request.session_id, &run_id)?;
-                require_stage(&state.runs[index], RunStage::Reported)?;
-                if state.runs[index].result.as_ref().and_then(|r| r.outcome)
-                    != Some(ReportOutcome::Succeeded)
-                {
-                    return Err(error(
-                        "invalid_stage",
-                        "Only an explicit successful result can be accepted",
-                    ));
-                }
-                if state
-                    .task_intents
-                    .iter()
-                    .any(|intent| intent.run_id == run_id)
-                {
-                    return Err(error(
-                        "intent_conflict",
-                        "Resolve the existing acceptance intent first",
-                    ));
-                }
-                let root_id = state.runs[index].root_id.clone();
-                let task_id = state.runs[index]
-                    .task_id
-                    .clone()
-                    .ok_or_else(|| error("task_not_found", "Root runs do not own tasks"))?;
-                let document = locked.tasks(&root_id)?;
-                let task = document.task(&task_id)?;
-                if task.task_revision != expected_task_revision {
-                    return Err(error(
-                        "task_revision_conflict",
-                        "Task changed before acceptance",
-                    ));
-                }
-                task_transition_target(&state, &state.runs[index], &document, false)?;
-                let intent_id = id();
-                state.task_intents.push(TaskIntent {
-                    intent_id: intent_id.clone(),
-                    root_id: root_id.clone(),
-                    task_id: task_id.clone(),
-                    run_id: run_id.clone(),
-                    expected_task_revision: expected_task_revision.clone(),
-                    state: IntentState::Pending,
-                    origin: Some(provenance.origin),
-                    supervisor_run_id: provenance.supervisor_run_id.clone(),
-                    omp_session_id: provenance.omp_session_id.clone(),
-                    result_message_id: state.runs[index]
-                        .result
-                        .as_ref()
-                        .map(|r| r.message_id.clone()),
-                });
-                let annotation = Annotation {
-                    at: now(),
-                    by: actor_ref(actor, caller, &state),
-                    text: format!(
-                        "Acceptance requested for Result {} at task revision {}; origin {:?}, main session {:?}.",
-                        state.runs[index]
-                            .result
-                            .as_ref()
-                            .expect("successful result")
-                            .message_id,
-                        expected_task_revision,
-                        provenance.origin,
-                        provenance.omp_session_id
-                    ),
-                };
-                state.runs[index].annotations.push(annotation);
-                let revision = locked.save(&mut state)?;
-                self.revision.send_replace(revision);
-                match document.check(&task_id, &expected_task_revision, true) {
-                    Ok(_) => {
-                        state.task_intents.retain(|i| i.intent_id != intent_id);
-                        retirement::close_accepted(&mut state, index, RetirementTrigger::Accept, &expected_task_revision);
-                        let annotation = Annotation {
-                            at: now(),
-                            by: actor_ref(actor, caller, &state),
-                            text: format!(
-                                "Accepted Result at exact task revision {expected_task_revision}."
-                            ),
-                        };
-                        state.runs[index].annotations.push(annotation);
-                    }
-                    Err(failure) => {
-                        if failure.code == "task_revision_conflict" {
-                            state
-                                .task_intents
-                                .iter_mut()
-                                .find(|i| i.intent_id == intent_id)
-                                .expect("intent exists")
-                                .state = IntentState::Conflict;
-                            let revision = locked.save(&mut state)?;
-                            self.revision.send_replace(revision);
-                        }
-                        return Err(failure);
-                    }
-                }
-                OrchestrationActionResult::Done
-            }
-            OrchestrationAction::SendBack { run_id, text } => {
-                let (index, provenance) =
-                    management_target(&state, actor, caller, &request.session_id, &run_id)?;
-                bounded(&text, 16 * 1024)?;
-                require_stage(&state.runs[index], RunStage::Reported)?;
-                let document = locked.tasks(&state.runs[index].root_id)?;
-                task_transition_target(&state, &state.runs[index], &document, false)?;
-                let result_message_id = &state.runs[index]
-                    .result
-                    .as_ref()
-                    .ok_or_else(|| error("invalid_stage", "Explicit Result is missing"))?
-                    .message_id;
-                let annotation = decision_annotation(
-                    actor_ref(actor, caller, &state),
-                    &provenance,
-                    &format!("Result {result_message_id} sent back"),
-                );
-                state.runs[index].stage = RunStage::Working;
-                state.runs[index].result = None;
-                let from = actor_ref(actor, caller, &state);
-                messages::append(
-                    &mut state,
-                    from,
-                    &run_id,
-                    &format!("sendback-{}", id()),
-                    MessageKind::Answer,
-                    &text,
-                    None,
-                    None,
-                    false,
-                    None,
-                    None,
-                )?;
-                state.runs[index].annotations.push(annotation);
-                OrchestrationActionResult::Done
-            }
-            OrchestrationAction::CancelRun { run_id } => {
-                let (index, provenance) =
-                    management_target(&state, actor, caller, &request.session_id, &run_id)?;
-                if dispatch::recovery_close_pending(&state.runs[index]) {
-                    return Err(error("recovery_pending", "Owned launch cancellation is still being observed; tracking cannot be closed until its bounded effect settles"));
-                }
-                if state.runs[index].stage == RunStage::Closed {
-                    return Err(error("invalid_stage", "Run is already closed"));
-                }
-                state.runs[index].stage = RunStage::Closed;
-                state.runs[index].close_reason = Some(CloseReason::Cancelled);
-                let from = actor_ref(actor, caller, &state);
-                messages::append(
-                    &mut state,
-                    from,
-                    &run_id,
-                    &format!("cancel-{}", id()),
-                    MessageKind::CancelRequest,
-                    "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.",
-                    None,
-                    None,
-                    false,
-                    None,
-                    None,
-                )?;
-                let annotation = decision_annotation(
-                    actor_ref(actor, caller, &state),
-                    &provenance,
-                    "Tracking closed; advisory cancellation recorded; descendants retained",
-                );
-                state.runs[index].annotations.push(annotation);
-                OrchestrationActionResult::Done
-            }
-            OrchestrationAction::RetryLaunch { run_id } => {
-                let (index, provenance) =
-                    management_target(&state, actor, caller, &request.session_id, &run_id)?;
-                if dispatch::recovery_close_pending(&state.runs[index]) {
-                    return Err(error("recovery_pending", "Owned launch cancellation is still being observed; do not erase its execution barrier"));
-                }
-                if matches!(actor, Actor::Agent(_)) && reviewed.is_none() {
-                    return Err(error(
-                        "retry_preflight_required",
-                        "Supervisor retry requires the fresh absence preflight",
-                    ));
-                }
-                if state.runs[index].kind == RunKind::Worker {
-                    let document = locked.tasks(&state.runs[index].root_id)?;
-                    task_transition_target(&state, &state.runs[index], &document, false)?;
-                }
-                let by = actor_ref(actor, caller, &state);
-                let run = &mut state.runs[index];
-                let previous = run
-                    .dispatch
-                    .as_ref()
-                    .ok_or_else(|| error("invalid_stage", "No launch to retry"))?;
-                if !matches!(
-                    previous.step,
-                    DispatchStep::LaunchUnknown | DispatchStep::NeedsReview
-                ) || matches!(run.stage, RunStage::Closed | RunStage::Reported)
-                {
-                    return Err(error(
-                        "invalid_stage",
-                        "Only uncertain launches can be retried explicitly",
-                    ));
-                }
-                let attempt = retry_launch_state(&mut state, index)?;
-                state.runs[index].annotations.push(decision_annotation(
-                    by,
-                    &provenance,
-                    &if reviewed.is_some() {
-                        format!("Launch retried as attempt {attempt} after absence preflight")
-                    } else {
-                        format!("Launch retried as attempt {attempt} by explicit operator decision")
-                    },
-                ));
-                OrchestrationActionResult::Done
-            }
-            OrchestrationAction::ReconcileRun { run_id, recovery } => {
-                let (index, provenance) =
-                    management_target(&state, actor, caller, &request.session_id, &run_id)?;
-                if dispatch::recovery_close_pending(&state.runs[index]) {
-                    return Err(error("recovery_pending", "Owned launch cancellation is still being observed; do not erase its execution barrier"));
-                }
-                if matches!(actor, Actor::Agent(_)) {
-                    if recovery == Some(cockpit_protocol::projects::WorkspaceRecoveryAction::RetryEnvironment) {
-                        return Err(error(
-                            "actor_forbidden",
-                            "Only the operator may retry an environment with uncertain prior effects",
-                        ));
-                    }
-                    if state.runs[index].dispatch.as_ref().is_some_and(|d| d.step == DispatchStep::LaunchPending) {
-                        return Err(error("invalid_stage", "Automatic launch proof is still pending"));
-                    }
-                }
-                let by = actor_ref(actor, caller, &state);
-                if state.runs[index].stage == RunStage::Closed {
-                    return Err(error("invalid_stage", "Closed runs cannot be reconciled"));
-                }
-                let run = &mut state.runs[index];
-                let d = run
-                    .dispatch
-                    .as_mut()
-                    .ok_or_else(|| error("invalid_stage", "No dispatch to reconcile"))?;
-                let queued_review = d.step == DispatchStep::LaunchIntent && d.agent_started;
-                if !matches!(
-                    d.step,
-                    DispatchStep::SetupUnknown
-                        | DispatchStep::LaunchUnknown
-                        | DispatchStep::NeedsReview
-                        | DispatchStep::LaunchPending
-                        | DispatchStep::PlanFailed
-                        | DispatchStep::Launched
-                ) && !queued_review
-                {
-                    return Err(error(
-                        "invalid_stage",
-                        "Only uncertain dispatch or a proven launch can be reconciled",
-                    ));
-                }
-                if d.step == DispatchStep::PlanFailed {
-                    d.step = DispatchStep::Planning;
-                    d.error = None;
-                } else if d.step == DispatchStep::SetupUnknown
-                    || (d.step == DispatchStep::NeedsReview
-                        && d.launch_tag.is_none()
-                        && run.setup.as_ref().is_some_and(|s| s.operation_id.is_some()))
-                {
-                    d.step = DispatchStep::SetupUnknown;
-                    d.recovery = Some(recovery.ok_or_else(|| {
-                        error("invalid_stage", "Choose an explicit setup recovery action")
-                    })?);
-                    d.error = None;
-                } else {
-                    if recovery.is_some() {
-                        return Err(error(
-                            "invalid_stage",
-                            "Setup recovery action does not apply to launch reconciliation",
-                        ));
-                    }
-                    d.recovery = None;
-                    if d.step == DispatchStep::Launched && !d.agent_started {
-                        d.step = DispatchStep::NeedsReview;
-                        d.error = Some(ErrorResponse {
-                            code: "launch_receipt_inconsistent".into(),
-                            message: "Launched run has no proven agent-start receipt; inspect before explicitly retrying".into(),
-                        });
-                    } else {
-                        // Keep the proven start marker and incarnation: this is a
-                        // read-only review request, not a new launch intent.
-                        d.step = DispatchStep::LaunchIntent;
-                        d.error = None;
-                    }
-                }
-                d.updated_at = now();
-                if matches!(actor, Actor::Agent(_)) || recovery.is_some() {
-                    run.annotations.push(decision_annotation(
-                        by,
-                        &provenance,
-                        "Dispatch reconciliation requested; setup recovery requires fresh checkout proof",
-                    ));
-                }
-                OrchestrationActionResult::Done
-            }
-            OrchestrationAction::IntentResolve { intent_id, apply } => {
-                operator(actor)?;
-                let intent = state
-                    .task_intents
-                    .iter()
-                    .find(|i| i.intent_id == intent_id)
-                    .cloned()
-                    .ok_or_else(|| error("intent_not_found", "Acceptance intent does not exist"))?;
-                let index = scoped_index(&state, &request.session_id, &intent.run_id)?;
-                if apply {
-                    require_stage(&state.runs[index], RunStage::Reported)?;
-                    if state.runs[index]
-                        .result
-                        .as_ref()
-                        .and_then(|report| report.outcome)
-                        != Some(ReportOutcome::Succeeded)
-                        || intent.result_message_id.as_ref().is_none_or(|message_id| {
-                            state.runs[index]
-                                .result
-                                .as_ref()
-                                .is_none_or(|report| &report.message_id != message_id)
-                        })
-                    {
-                        return Err(error(
-                            "intent_conflict",
-                            "Acceptance requires its unchanged explicit successful Result",
-                        ));
-                    }
-                    let document = locked.tasks(&intent.root_id)?;
-                    active_task_root(&state, &request.session_id, &intent.root_id)?;
-                    if state.runs[index].root_id != intent.root_id
-                        || state.runs[index].task_id.as_deref() != Some(intent.task_id.as_str())
-                        || projection::current_task_run(&state, &intent.root_id, &intent.task_id)
-                            .is_none_or(|run| run.run_id != intent.run_id) {
-                        return Err(error("intent_conflict", "Acceptance intent no longer owns this canonical task"));
-                    }
-                    dependencies::DependencyGraph::new(&document.tasks).require(document.task(&intent.task_id)?)?;
-                    let revision = document.task(&intent.task_id)?.task_revision.clone();
-                    document.check(&intent.task_id, &revision, true)?;
-                    retirement::close_accepted(&mut state, index, RetirementTrigger::OperatorConflictResolution, &revision);
-                    state.runs[index].annotations.push(Annotation {
-                        at: now(), by: ActorRef::Operator,
-                        text: format!("Operator resolved acceptance conflict using current canonical task revision {revision}; prior requested Result {:?}.", intent.result_message_id),
-                    });
-                }
-                state.task_intents.retain(|i| i.intent_id != intent_id);
-                OrchestrationActionResult::Done
-            }
-            _ => {
-                return Err(error(
-                    "actor_forbidden",
-                    "Unsupported actor/action combination",
-                ));
-            }
+                task_id, parent_run_id, label, target, prepare_brief, supersedes_run_id,
+            } => mutate::runs::propose(&mut ctx, task_id, parent_run_id, label, target,
+                prepare_brief, supersedes_run_id),
+            OrchestrationAction::GrantPrepare { run_id, plan_revision } =>
+                mutate::grants::prepare(&mut ctx, run_id, plan_revision),
+            OrchestrationAction::GrantExecute { run_id, plan_revision, note } =>
+                mutate::grants::execute(&mut ctx, run_id, plan_revision, note),
+            OrchestrationAction::Accept { run_id, expected_task_revision } =>
+                mutate::intents::accept(&mut ctx, run_id, expected_task_revision),
+            OrchestrationAction::SendBack { run_id, text } =>
+                mutate::grants::send_back(&mut ctx, run_id, text),
+            OrchestrationAction::CancelRun { run_id } => mutate::runs::cancel(&mut ctx, run_id),
+            OrchestrationAction::RetryLaunch { run_id } => mutate::runs::retry_launch(&mut ctx, run_id),
+            OrchestrationAction::ReconcileRun { run_id, recovery } =>
+                mutate::runs::reconcile(&mut ctx, run_id, recovery),
+            OrchestrationAction::IntentResolve { intent_id, apply } =>
+                mutate::intents::resolve(&mut ctx, intent_id, apply),
+            _ => Err(error("actor_forbidden", "Unsupported actor/action combination")),
+        }?;
+        let (result, mut machine_changed) = match applied {
+            Applied::Machine(result) => (result, true),
+            Applied::Document(result) => (result, false),
+            Applied::Published(response) => return Ok(response),
         };
         machine_changed |= location_changed;
         if machine_changed {
@@ -1271,92 +419,6 @@ impl OrchestrationService {
     ) -> Result<Option<ExecutionLease>, InspectionError> {
         self.store.try_acquire_execution_lease(run_id)
     }
-    /// Re-read the queue hint and canonical source together, releasing the
-    /// filesystem lock before the dispatcher performs any adapter await.
-    pub(crate) fn dispatch_task_eligible(&self, expected: &Run) -> Result<bool, InspectionError> {
-        let locked = self.store.lock()?;
-        let state = locked.read()?;
-        let Some(current) = state.runs.iter().find(|run| run.run_id == expected.run_id) else {
-            return Ok(false);
-        };
-        // An explicitly adopted active root has no dispatcher launch record.
-        // It remains a valid taskless root, fenced by its actual native binding.
-        if current.kind == RunKind::Adopted && current.dispatch.is_none() && expected.dispatch.is_none() {
-            return Ok(current.stage == RunStage::Active && current.stage == expected.stage
-                && current.kind == expected.kind && current.parent_run_id.is_none()
-                && current.run_id == current.root_id && current.task_id.is_none()
-                && current.run_id == expected.run_id && current.root_id == expected.root_id
-                && current.session_id == expected.session_id && current.attempt == expected.attempt
-                && current.bound_omp_session == expected.bound_omp_session
-                && current.bound_omp_process == expected.bound_omp_process
-                && same_launch_location(current.location.as_ref(), expected.location.as_ref()));
-        }
-        if !same_launch_incarnation(current, expected)
-            || current.bound_omp_process != expected.bound_omp_process || current.stage != expected.stage {
-            return Ok(false);
-        }
-        if matches!(current.kind, RunKind::Supervisor | RunKind::Adopted) {
-            return Ok(current.parent_run_id.is_none() && current.root_id == current.run_id
-                && current.task_id.is_none() && matches!(current.stage, RunStage::Preparing | RunStage::Active));
-        }
-        if !matches!(current.stage, RunStage::Preparing | RunStage::Initializing | RunStage::Ready | RunStage::Working) {
-            return Ok(false);
-        }
-        let Some(task_id) = &current.task_id else { return Ok(false) };
-        if active_task_root(&state, &current.session_id, &current.root_id).is_err()
-            || projection::current_task_run(&state, &current.root_id, task_id)
-                .is_none_or(|run| run.run_id != current.run_id) {
-            return Ok(false);
-        }
-        let document = locked.tasks(&current.root_id)?;
-        let task = match mutable_task(&state, &current.root_id, task_id, &document) {
-            Ok(task) => task,
-            Err(failure) if matches!(failure.code.as_str(),
-                "task_not_found" | "task_id_duplicate" | "task_checked" | "intent_conflict") => return Ok(false),
-            Err(failure) => return Err(failure),
-        };
-        Ok(matches!(dependencies::DependencyGraph::new(&document.tasks).evaluate(task).state,
-            TaskDependencyState::None | TaskDependencyState::Satisfied))
-    }
-
-    /// Only a caller that knows no launch RPC was issued may record this wait;
-    /// uncertain launch intents continue through existing no-replay reconciliation.
-    pub(crate) fn dispatch_unstarted_step(
-        &self, expected: &Run, step: DispatchStep,
-    ) -> Result<Option<Run>, InspectionError> {
-        if !matches!(step, DispatchStep::SetupPending | DispatchStep::LaunchIntent) {
-            return Err(error("invalid_stage", "Only a known-unsent launch may wait or resume"));
-        }
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let Some(index) = state.runs.iter().position(|run| run.run_id == expected.run_id) else {
-            return Ok(None);
-        };
-        let run = &state.runs[index];
-        if !same_launch_incarnation(run, expected) || run.stage != RunStage::Preparing
-            || expected.stage != RunStage::Preparing
-            || run.bound_omp_process != expected.bound_omp_process
-            || run.launch_shell_identity != expected.launch_shell_identity
-            || run.bound_omp_session.is_some() || run.bound_omp_process.is_some()
-            || (step == DispatchStep::LaunchIntent && !launch_receipt_coherent(run))
-            || run.dispatch.as_ref().zip(expected.dispatch.as_ref()).is_none_or(|(actual, reviewed)| {
-                actual.step != reviewed.step || actual.agent_started || reviewed.agent_started
-                    || actual.updated_at != reviewed.updated_at
-                    || !matches!(actual.step, DispatchStep::SetupPending | DispatchStep::LaunchIntent)
-            }) {
-            return Ok(None);
-        }
-        let run = &mut state.runs[index];
-        let dispatch = run.dispatch.as_mut().expect("matched dispatch");
-        dispatch.step = step;
-        dispatch.error = None;
-        dispatch.updated_at = now();
-        run.updated_at = now();
-        let result = run.clone();
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(Some(result))
-    }
 
     pub(crate) fn dispatch_queue(&self) -> Result<Vec<Run>, InspectionError> {
         Ok(self
@@ -1377,570 +439,6 @@ impl OrchestrationService {
             .into_iter()
             .filter(|r| r.stage != RunStage::Closed)
             .collect())
-    }
-    pub(crate) fn record_dispatch(
-        &self,
-        run_id: &str,
-        update: DispatchUpdate,
-    ) -> Result<u64, InspectionError> {
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let index = run_index(&state, run_id)?;
-        if state.runs[index].stage == RunStage::Closed {
-            return Err(error("invalid_stage", "Closed run cannot dispatch"));
-        }
-        let mut setup_notice = None;
-        {
-            let run = &mut state.runs[index];
-            match update {
-                DispatchUpdate::SetupPlanned {
-                    setup,
-                    prepare_plan,
-                } => {
-                    bounded(&prepare_plan.text, 16 * 1024)?;
-                    run.setup = Some(setup);
-                    run.prepare_plan = Some(prepare_plan);
-                    if run.kind == RunKind::Worker {
-                        setup_notice = Some((
-                            run.root_id.clone(),
-                            run.run_id.clone(),
-                            run.prepare_plan
-                                .as_ref()
-                                .expect("stored plan")
-                                .plan_revision
-                                .clone(),
-                        ));
-                        run.stage = RunStage::AwaitingPrepare;
-                    }
-                    run.dispatch = Some(dispatch(if run.kind == RunKind::Worker {
-                        DispatchStep::Planning
-                    } else {
-                        DispatchStep::SetupPending
-                    }));
-                }
-                DispatchUpdate::PlanFailed { error } => {
-                    let mut d = dispatch(DispatchStep::PlanFailed);
-                    d.error = Some(error);
-                    run.dispatch = Some(d);
-                }
-                DispatchUpdate::Step { step, error } => {
-                    let d = run.dispatch.get_or_insert_with(|| dispatch(step));
-                    d.step = step;
-                    d.error = error;
-                    d.updated_at = now();
-                }
-                DispatchUpdate::SetupDone {
-                    workspace_id,
-                    checkout_path,
-                } => {
-                    let setup = run
-                        .setup
-                        .as_mut()
-                        .ok_or_else(|| error("invalid_stage", "Setup summary missing"))?;
-                    setup.workspace_id = Some(workspace_id);
-                    setup.checkout_path = checkout_path;
-                }
-                DispatchUpdate::SetupProgress { generation } => {
-                    let setup = run
-                        .setup
-                        .as_mut()
-                        .ok_or_else(|| error("invalid_stage", "Setup summary missing"))?;
-                    setup.generation = Some(generation);
-                    let d = run
-                        .dispatch
-                        .get_or_insert_with(|| dispatch(DispatchStep::SetupRunning));
-                    d.recovery = None;
-                    d.step = DispatchStep::SetupRunning;
-                    d.updated_at = now();
-                }
-                DispatchUpdate::LaunchIntent {
-                    launch_tag,
-                    launch_attempt,
-                    endpoint_identity,
-                } => {
-                    run.launch_shell_identity = None;
-                    let d = run
-                        .dispatch
-                        .get_or_insert_with(|| dispatch(DispatchStep::LaunchIntent));
-                    d.step = DispatchStep::LaunchIntent;
-                    d.launch_tag = Some(launch_tag);
-                    d.launch_attempt = launch_attempt;
-                    d.endpoint_identity = Some(endpoint_identity);
-                    d.agent_started = false;
-                    d.error = None;
-                    d.updated_at = now();
-                }
-                DispatchUpdate::TabReceipt { location, launch_shell_identity } => {
-                    let d = run
-                        .dispatch
-                        .as_ref()
-                        .ok_or_else(|| error("invalid_stage", "Launch intent missing"))?;
-                    if d.launch_tag.as_deref() != Some(&location.launch_tag)
-                        || d.endpoint_identity.as_deref() != Some(&location.endpoint_identity)
-                        || run.session_id != location.session_id
-                    {
-                        return Err(error(
-                            "caller_mismatch",
-                            "Tab receipt does not match persisted launch intent",
-                        ));
-                    }
-                    run.location = Some(location);
-                    run.launch_shell_identity = launch_shell_identity;
-                }
-            }
-            run.updated_at = now();
-        }
-        if let Some((root_id, worker_id, revision)) = setup_notice {
-            let text = serde_json::json!({"event":"setup_ready","run_id":worker_id,"plan_revision":revision}).to_string();
-            messages::append(
-                &mut state,
-                ActorRef::Dispatcher,
-                &root_id,
-                &format!("setup-ready-{worker_id}-{revision}"),
-                MessageKind::Observation,
-                &text,
-                None,
-                None,
-                false,
-                None,
-                None,
-            )?;
-        }
-        escalation::failure(&mut state, index)?;
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(revision)
-    }
-
-    /// An accepted start request is not proof that OMP has started.
-    pub(crate) fn record_launch_pending(&self, reviewed: &Run) -> Result<u64, InspectionError> {
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let index = run_index(&state, &reviewed.run_id)?;
-        let current = &state.runs[index];
-        if !same_launch_request(current, reviewed)
-            || reviewed
-                .bound_omp_session
-                .as_ref()
-                .is_some_and(|bound| current.bound_omp_session.as_ref() != Some(bound))
-            || current.stage != RunStage::Preparing
-            || current.location.is_none()
-            || current
-                .dispatch
-                .as_ref()
-                .is_none_or(|d| d.step != DispatchStep::LaunchIntent)
-        {
-            return Ok(state.revision);
-        }
-        let run = &mut state.runs[index];
-        let dispatch = run.dispatch.as_mut().expect("fenced intent");
-        dispatch.step = DispatchStep::LaunchPending;
-        dispatch.agent_started = false;
-        dispatch.error = None;
-        dispatch.updated_at = now();
-        run.updated_at = dispatch.updated_at.clone();
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(revision)
-    }
-
-    /// Caller supplies fresh runtime proof. Commit only that exact bound incarnation.
-    pub(crate) fn record_launch_verified(&self, reviewed: &Run) -> Result<u64, InspectionError> {
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let index = run_index(&state, &reviewed.run_id)?;
-        let current = &state.runs[index];
-        let request_matches = match (current.dispatch.as_ref(), reviewed.dispatch.as_ref()) {
-            (Some(actual), Some(expected)) => {
-                actual.step == expected.step
-                    && actual.updated_at == expected.updated_at
-                    && actual.recovery == expected.recovery
-                    && actual.agent_started == expected.agent_started
-            }
-            _ => false,
-        };
-        if !same_launch_incarnation(current, reviewed)
-            || !request_matches
-            || current
-                .bound_omp_session
-                .as_deref()
-                .is_none_or(str::is_empty)
-            || current.location.is_none()
-            || !launch_receipt_coherent(current)
-            || current.dispatch.as_ref().is_none_or(|d| {
-                !matches!(
-                    d.step,
-                    DispatchStep::LaunchIntent
-                        | DispatchStep::LaunchPending
-                        | DispatchStep::LaunchUnknown
-                        | DispatchStep::NeedsReview
-                        | DispatchStep::Launched
-                )
-            })
-        {
-            return Ok(state.revision);
-        }
-        if current.dispatch.as_ref().is_some_and(|d| {
-            d.step == DispatchStep::Launched && d.agent_started && d.error.is_none()
-        }) && current.stage != RunStage::Preparing
-        {
-            return Ok(state.revision);
-        }
-        let run = &mut state.runs[index];
-        let dispatch = run.dispatch.as_mut().expect("fenced launch");
-        let initial = run.stage == RunStage::Preparing;
-        dispatch.step = DispatchStep::Launched;
-        dispatch.agent_started = true;
-        dispatch.error = None;
-        dispatch.updated_at = now();
-        if initial {
-            run.stage = if run.kind == RunKind::Worker {
-                RunStage::Initializing
-            } else {
-                RunStage::Active
-            };
-        }
-        run.updated_at = dispatch.updated_at.clone();
-        let kind = if run.kind == RunKind::Worker {
-            MessageKind::PrepareBrief
-        } else {
-            MessageKind::SupervisorBrief
-        };
-        // Generated root policy is delivered when this launch is first proven,
-        // even if its pending intent predates the installed CLI capabilities.
-        // A historical Launched review must not rewrite or replay the policy.
-        if (initial || reviewed.stage == RunStage::Preparing)
-            && run.parent_run_id.is_none()
-            && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
-        {
-            run.prepare_brief = supervisor_guidance().into();
-        }
-        let text = run.prepare_brief.clone();
-        let phase = format!("launch-{}-{}", run.attempt, dispatch.launch_attempt);
-        // Historical launched reviews must never replay execution or initialization.
-        if initial || reviewed.stage == RunStage::Preparing {
-            brief(&mut state, &reviewed.run_id, kind, &text, &phase)?;
-        }
-        escalation::recovered(&mut state, index)?;
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(revision)
-    }
-
-    /// Record a read-only review only for the launch/request that was observed.
-    /// Lifecycle and inbox progress may legitimately advance during the runtime read.
-    pub(crate) fn record_launch_review(
-        &self,
-        reviewed: &Run,
-        step: DispatchStep,
-        error: Option<ErrorResponse>,
-    ) -> Result<u64, InspectionError> {
-        if !matches!(
-            step,
-            DispatchStep::Launched | DispatchStep::LaunchUnknown | DispatchStep::NeedsReview
-        ) {
-            return Err(self::error(
-                "invalid_stage",
-                "Launch review requires a terminal review outcome",
-            ));
-        }
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let Some(index) = state
-            .runs
-            .iter()
-            .position(|run| run.run_id == reviewed.run_id)
-        else {
-            return Ok(state.revision);
-        };
-        let current = &state.runs[index];
-        let (Some(expected), Some(actual)) =
-            (reviewed.dispatch.as_ref(), current.dispatch.as_ref())
-        else {
-            return Ok(state.revision);
-        };
-        if !same_launch_incarnation(current, reviewed)
-            || !matches!(
-                expected.step,
-                DispatchStep::LaunchIntent
-                    | DispatchStep::LaunchPending
-                    | DispatchStep::LaunchUnknown
-                    | DispatchStep::NeedsReview
-            )
-            || actual.agent_started != expected.agent_started
-            || actual.step != expected.step
-            || actual.updated_at != expected.updated_at
-            || actual.recovery != expected.recovery
-            || (step == DispatchStep::Launched && !actual.agent_started)
-        {
-            return Ok(state.revision);
-        }
-        let at = now();
-        let run = &mut state.runs[index];
-        let dispatch = run.dispatch.as_mut().expect("guarded launch review");
-        dispatch.step = step;
-        dispatch.error = error;
-        dispatch.updated_at = at.clone();
-        run.updated_at = at;
-        if step == DispatchStep::Launched {
-            escalation::recovered(&mut state, index)?;
-        } else {
-            escalation::failure(&mut state, index)?;
-        }
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(revision)
-    }
-    /// Automatic mature review is queued just like explicit ReconcileRun.
-    /// A plain Launched snapshot never authorizes a review write.
-    pub(crate) fn queue_automatic_launch_review(&self, reviewed: &Run) -> Result<Option<Run>, InspectionError> {
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let index = run_index(&state, &reviewed.run_id)?;
-        let current = &state.runs[index];
-        if !recovery_review_matches(current, reviewed)
-            || !dispatch::automatic_recovery_available(current)
-            || current.dispatch.as_ref().is_none_or(|d| d.step != DispatchStep::Launched || !d.agent_started)
-        {
-            return Ok(None);
-        }
-        let run = &mut state.runs[index];
-        let d = run.dispatch.as_mut().expect("mature review");
-        d.step = DispatchStep::LaunchIntent;
-        d.updated_at = now();
-        run.updated_at = d.updated_at.clone();
-        let queued = run.clone();
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(Some(queued))
-    }
-
-    /// Write-ahead fence: an uncertain owned close is never replayed.
-    pub(crate) fn begin_launch_recovery(&self, reviewed: &Run, preserve_space: bool) -> Result<Option<Run>, InspectionError> {
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let index = run_index(&state, &reviewed.run_id)?;
-        let current = &state.runs[index];
-        if !recovery_review_matches(current, reviewed)
-            || !dispatch::automatic_recovery_available(current)
-            || current.dispatch.as_ref().is_none_or(|d| d.step != DispatchStep::LaunchUnknown)
-        {
-            return Ok(None);
-        }
-        let run = &mut state.runs[index];
-        let d = run.dispatch.as_mut().expect("reviewed dispatch");
-        d.step = DispatchStep::NeedsReview;
-        d.error = Some(ErrorResponse {
-            code: if preserve_space { dispatch::RECOVERY_PRESERVE_INTENT } else { dispatch::RECOVERY_CLOSE_INTENT }.into(),
-            message: if preserve_space { "Creating an ordinary working terminal to preserve the recorded Space before cancellation" } else { "Cancelling the exact owned launch pane before one automatic retry" }.into(),
-        });
-        d.updated_at = now();
-        run.updated_at = d.updated_at.clone();
-        run.annotations.push(Annotation {
-            by: ActorRef::Dispatcher,
-            text: format!("{}; launch_attempt={}", dispatch::RECOVERY_ATTEMPT_ANNOTATION, d.launch_attempt),
-            at: now(),
-        });
-        if preserve_space {
-            let source = serde_json::to_string(run.location.as_ref().expect("owned source"))
-                .map_err(|e| error("orchestration_state_invalid", e.to_string()))?;
-            run.annotations.push(Annotation {
-                by: ActorRef::Dispatcher,
-                text: format!("Working terminal creation intent; source={source}"),
-                at: now(),
-            });
-        }
-        let receipt = run.clone();
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(Some(receipt))
-    }
-
-    /// Record the real ordinary terminal ACK before authorizing the old close.
-    pub(crate) fn record_preserved_working_terminal(&self, reviewed: &Run, receipt: RunLocation) -> Result<Option<Run>, InspectionError> {
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let index = run_index(&state, &reviewed.run_id)?;
-        let current = &state.runs[index];
-        if !recovery_review_matches(current, reviewed)
-            || current.dispatch.as_ref().is_none_or(|d| d.error.as_ref()
-                .is_none_or(|e| e.code != dispatch::RECOVERY_PRESERVE_INTENT))
-        {
-            return Ok(None);
-        }
-        let source = current.location.as_ref().expect("owned source");
-        if receipt.endpoint_identity != source.endpoint_identity
-            || receipt.session_id != source.session_id
-            || receipt.workspace_id != source.workspace_id
-            || !optional_available(&source.boot_id, &receipt.boot_id)
-            || receipt.tab_id == source.tab_id || receipt.pane_id == source.pane_id
-            || receipt.terminal_id.is_none() || receipt.terminal_id == source.terminal_id
-        {
-            return Err(error("owned_launch_tab_unsafe", "Working terminal receipt did not preserve the exact source Space with a fresh terminal"));
-        }
-        let encoded = serde_json::to_string(&receipt)
-            .map_err(|e| error("orchestration_state_invalid", e.to_string()))?;
-        let run = &mut state.runs[index];
-        run.annotations.push(Annotation {
-            by: ActorRef::Dispatcher,
-            text: format!("Preserved ordinary working terminal receipt: {encoded}"),
-            at: now(),
-        });
-        let d = run.dispatch.as_mut().expect("preservation intent");
-        d.error = Some(ErrorResponse { code: dispatch::RECOVERY_CLOSE_INTENT.into(),
-            message: "Source Space preserved by a recorded ordinary working terminal; cancelling the old owned launch pane".into() });
-        d.updated_at = now();
-        run.updated_at = d.updated_at.clone();
-        let receipt = run.clone();
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(Some(receipt))
-    }
-
-    /// The caller proves the old owned tab and terminal absent after close.
-    pub(crate) fn finish_launch_recovery(&self, reviewed: &Run) -> Result<bool, InspectionError> {
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let index = run_index(&state, &reviewed.run_id)?;
-        if !recovery_review_matches(&state.runs[index], reviewed)
-            || !dispatch::recovery_close_pending(reviewed)
-            || reviewed.dispatch.as_ref().is_none_or(|d| d.error.as_ref().is_none_or(|e| e.code != dispatch::RECOVERY_CLOSE_INTENT))
-        {
-            return Ok(false);
-        }
-        if !dispatch::cancelled_launch_processes_stopped(reviewed)? {
-            return Ok(false);
-        }
-        let attempt = retry_launch_state(&mut state, index)?;
-        state.runs[index].annotations.push(Annotation {
-            by: ActorRef::Dispatcher,
-            text: format!("Owned launch layout absent and original shell/native kernel exit proved; automatic launch attempt {attempt}"),
-            at: now(),
-        });
-        let revision = locked.save(&mut state)?;
-        self.revision.send_replace(revision);
-        Ok(true)
-    }
-
-    pub(crate) fn recover_intents(&self) -> Result<(), InspectionError> {
-        let locked = self.store.lock()?;
-        let mut state = locked.read()?;
-        let assignment_recovery = assignments::recover(&locked, &mut state);
-        // Publish committed recovery (including before an error) or externally
-        // changed state, but do not wake the dispatcher for an unchanged revision.
-        self.revision.send_if_modified(|revision| {
-            if *revision == state.revision {
-                return false;
-            }
-            *revision = state.revision;
-            true
-        });
-        assignment_recovery?;
-        let mut changed = false;
-        for intent in state.task_intents.clone() {
-            if intent.state == IntentState::Conflict {
-                continue;
-            }
-            let index = run_index(&state, &intent.run_id)?;
-            let run = &state.runs[index];
-            let valid_receipt = run.root_id == intent.root_id
-                && run.task_id.as_ref() == Some(&intent.task_id)
-                && run.result.as_ref().and_then(|report| report.outcome)
-                    == Some(ReportOutcome::Succeeded)
-                && (run.stage == RunStage::Reported
-                    || (run.stage == RunStage::Closed
-                        && run.close_reason == Some(CloseReason::Accepted)));
-            if !valid_receipt
-                || intent.result_message_id.as_ref().is_none_or(|message_id| {
-                    state.runs[index]
-                        .result
-                        .as_ref()
-                        .is_none_or(|report| &report.message_id != message_id)
-                })
-            {
-                state
-                    .task_intents
-                    .iter_mut()
-                    .find(|entry| entry.intent_id == intent.intent_id)
-                    .expect("intent exists")
-                    .state = IntentState::Conflict;
-                changed = true;
-                continue;
-            }
-            let mut dependency_conflict = None;
-            let outcome = match locked.tasks(&intent.root_id) {
-                Ok(document) => match document.task(&intent.task_id) {
-                    Ok(task) if task.checked => {
-                        task.task_revision == intent.expected_task_revision
-                            || document.checked_matches_revision(
-                                &intent.task_id,
-                                &intent.expected_task_revision,
-                            )?
-                    }
-                    Ok(task) if task.task_revision == intent.expected_task_revision => {
-                        match dependencies::DependencyGraph::new(&document.tasks).require(task) {
-                            Err(failure) => {
-                                dependency_conflict = Some(format!("{}: {}", failure.code, failure.message));
-                                false
-                            }
-                            Ok(()) => match document.check(&intent.task_id, &intent.expected_task_revision, true) {
-                                Ok(_) => true,
-                                Err(failure) if failure.code == "task_revision_conflict" => false,
-                                Err(failure) => return Err(failure),
-                            },
-                        }
-                    }
-                    Ok(_) => false,
-                    Err(failure)
-                        if matches!(
-                            failure.code.as_str(),
-                            "task_not_found" | "task_id_duplicate"
-                        ) =>
-                    {
-                        false
-                    }
-                    Err(failure) => return Err(failure),
-                },
-                Err(failure) => return Err(failure),
-            };
-            if outcome {
-                let index = run_index(&state, &intent.run_id)?;
-                retirement::close_accepted(&mut state, index, RetirementTrigger::AcceptRecovery, &intent.expected_task_revision);
-                state
-                    .task_intents
-                    .retain(|i| i.intent_id != intent.intent_id);
-                state.runs[index].annotations.push(Annotation {
-                    at: now(),
-                    by: intent.supervisor_run_id.as_ref().map_or(ActorRef::Operator, |run_id| ActorRef::Run { run_id: run_id.clone() }),
-                    text: format!("Recovered acceptance of Result {:?} at exact task revision {}; origin {:?}, main session {:?}.",
-                        intent.result_message_id, intent.expected_task_revision, intent.origin, intent.omp_session_id),
-                });
-            } else {
-                state
-                    .task_intents
-                    .iter_mut()
-                    .find(|i| i.intent_id == intent.intent_id)
-                    .expect("intent exists")
-                    .state = IntentState::Conflict;
-                if let Some(mut reason) = dependency_conflict {
-                    if reason.len() > 2048 {
-                        let mut end = 2048;
-                        while !reason.is_char_boundary(end) { end -= 1; }
-                        reason.truncate(end);
-                    }
-                    state.runs[index].annotations.push(Annotation {
-                        at: now(), by: ActorRef::Operator,
-                        text: format!("Acceptance recovery retained conflict: {reason}"),
-                    });
-                }
-            }
-            changed = true;
-        }
-        if changed {
-            let revision = locked.save(&mut state)?;
-            self.revision.send_replace(revision);
-        }
-        Ok(())
     }
     pub(crate) fn record_observation(
         &self,
@@ -2059,19 +557,7 @@ impl OrchestrationService {
             );
             let duplicate = state.messages.iter().any(|m| m.message_id == key);
             if !duplicate {
-                messages::append(
-                    &mut state,
-                    ActorRef::Dispatcher,
-                    &recipient,
-                    &key,
-                    MessageKind::Observation,
-                    diagnostic,
-                    None,
-                    None,
-                    false,
-                    None,
-                    (recipient != original).then(|| original.to_owned()),
-                )?;
+                messages::append(&mut state, messages::AppendMessage { from: ActorRef::Dispatcher, to_run_id: &recipient, message_id: &key, kind: MessageKind::Observation, text: diagnostic, in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: (recipient != original).then(|| original.to_owned()) })?;
                 changed = true;
             }
         }
@@ -2195,7 +681,7 @@ pub(crate) fn management_target(
         || !matches!(root.kind, RunKind::Supervisor | RunKind::Adopted)
         || root.stage != RunStage::Active
         || agent.agent_kind != Some(AgentKind::Main)
-        || agent.actual_agent_kind.as_deref() != Some("omp")
+        || agent.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp)
         || !session_matches(root, agent)
         || !caller_matches(root, agent)
         || root.bound_omp_session.as_deref().is_none_or(str::is_empty)
@@ -2220,44 +706,6 @@ pub(crate) fn management_target(
     ))
 }
 
-fn recovery_review_matches(current: &Run, reviewed: &Run) -> bool {
-    same_launch_incarnation(current, reviewed)
-        && current.stage == reviewed.stage
-        && current.updated_at == reviewed.updated_at
-        && current.bound_omp_process == reviewed.bound_omp_process
-        && current.launch_shell_identity == reviewed.launch_shell_identity
-        && current.dispatch.as_ref().zip(reviewed.dispatch.as_ref()).is_some_and(|(a, b)| {
-            a.step == b.step && a.updated_at == b.updated_at && a.agent_started == b.agent_started
-                && a.error == b.error
-        })
-}
-
-/// Both explicit and automatic retries retain task, grants, plans and inbox.
-fn retry_launch_state(state: &mut OrchestrationState, index: usize) -> Result<u32, InspectionError> {
-    let run = &mut state.runs[index];
-    let attempt = run.dispatch.as_ref().ok_or_else(|| error("invalid_stage", "No launch to retry"))?
-        .launch_attempt.checked_add(1)
-        .ok_or_else(|| error("orchestration_state_full", "Launch attempt exhausted"))?;
-    run.location = None;
-    run.bound_omp_session = None;
-    run.bound_omp_process = None;
-    run.launch_shell_identity = None;
-    if run.kind == RunKind::Supervisor {
-        run.prepare_brief = supervisor_guidance().into();
-    }
-    for message in state.messages.iter_mut().filter(|message| {
-        message.to_run_id == run.run_id && matches!(message.kind,
-            MessageKind::WorkBrief | MessageKind::PrepareBrief | MessageKind::SupervisorBrief)
-    }) {
-        message.stale = true;
-    }
-    run.stage = RunStage::Preparing;
-    let mut next = dispatch(DispatchStep::SetupPending);
-    next.launch_attempt = attempt;
-    run.dispatch = Some(next);
-    run.updated_at = now();
-    Ok(attempt)
-}
 
 fn launch_receipt_coherent(run: &Run) -> bool {
     let (Some(location), Some(dispatch)) = (run.location.as_ref(), run.dispatch.as_ref()) else {
@@ -2270,27 +718,6 @@ fn launch_receipt_coherent(run: &Run) -> bool {
         && !matches!((&location.native_session_id, &run.bound_omp_session), (Some(native), Some(bound)) if native != bound)
 }
 
-fn same_launch_incarnation(current: &Run, reviewed: &Run) -> bool {
-    current.bound_omp_session == reviewed.bound_omp_session
-        && same_launch_request(current, reviewed)
-}
-
-fn same_launch_request(current: &Run, reviewed: &Run) -> bool {
-    let (Some(actual), Some(expected)) = (current.dispatch.as_ref(), reviewed.dispatch.as_ref())
-    else {
-        return false;
-    };
-    current.stage != RunStage::Closed
-        && current.run_id == reviewed.run_id
-        && current.session_id == reviewed.session_id
-        && current.root_id == reviewed.root_id
-        && current.task_id == reviewed.task_id
-        && current.attempt == reviewed.attempt
-        && actual.launch_attempt == expected.launch_attempt
-        && actual.launch_tag == expected.launch_tag
-        && actual.endpoint_identity == expected.endpoint_identity
-        && same_launch_location(current.location.as_ref(), reviewed.location.as_ref())
-}
 
 fn supervisor_guidance() -> &'static str {
     concat!(
@@ -2372,155 +799,73 @@ fn scoped_index(
     scope_run(state, session, index)?;
     Ok(index)
 }
-fn normalize_task_edges(edges: &[String]) -> Result<Vec<String>, InspectionError> {
-    if edges.len() > 32 {
-        return Err(error("task_relations_invalid", "At most 32 prerequisites are allowed"));
-    }
-    let mut normalized = edges.iter().map(|edge| tasks_md::validate_uuid(edge).map(|id| id.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    normalized.sort_unstable();
-    normalized.dedup();
-    Ok(normalized)
+struct Admission {
+    caller: Option<usize>,
+    stale: bool,
+    location_changed: bool,
 }
 
-fn active_task_root<'a>(
-    state: &'a OrchestrationState, session: &str, root_id: &str,
-) -> Result<&'a Run, InspectionError> {
-    let root = &state.runs[scoped_index(state, session, root_id)?];
-    if root.parent_run_id.is_some() || root.root_id != root.run_id
-        || !matches!(root.kind, RunKind::Supervisor | RunKind::Adopted) {
-        return Err(error("root_not_found", "Expected a supervisor root"));
-    }
-    require_stage(root, RunStage::Active)?;
-    Ok(root)
-}
-
-/// The host CLI supplies fresh native process evidence, never action JSON.
-fn native_task_caller(run: &Run, agent: &AgentCaller) -> bool {
-    agent.actual_agent_kind.as_deref() == Some("omp")
-        && caller_matches(run, agent) && session_matches(run, agent)
-        && run.bound_omp_session.as_deref().is_some_and(|session| !session.is_empty())
-        && run.bound_omp_process.as_ref().is_some_and(|process| {
-            process.kernel_boot_id.as_deref().is_some_and(|boot| !boot.is_empty())
-                && agent.process.as_ref() == Some(process)
-        })
-        && (run.kind == RunKind::Adopted && run.dispatch.is_none()
-            || run.dispatch.as_ref().is_some_and(|dispatch| dispatch.agent_started))
-        && !dispatch::recovery_incarnation_revoked(run)
-}
-
-fn task_root_authority(
-    state: &OrchestrationState, actor: &Actor, caller: Option<usize>, session: &str, root_id: &str,
-) -> Result<(), InspectionError> {
-    let root = active_task_root(state, session, root_id)?;
-    if matches!(actor, Actor::Operator(_)) { return Ok(()) }
-    let Actor::Agent(agent) = actor else { unreachable!() };
-    if state.runs[required_caller(caller)?].run_id != root.run_id
-        || agent.agent_kind != Some(AgentKind::Main) || agent.subagent_id.is_some()
-        || !native_task_caller(root, agent) {
-        return Err(error("actor_forbidden", "Only the bound main root or operator may author relationships"));
-    }
-    Ok(())
-}
-
-fn mutable_task<'a>(
-    state: &OrchestrationState, root_id: &str, task_id: &str, document: &'a tasks_md::TaskDocument<'_>,
-) -> Result<&'a Task, InspectionError> {
-    let task = document.task(task_id)?;
-    if task.checked { return Err(error("task_checked", "Accepted canonical tasks are read-only")) }
-    if state.task_intents.iter().any(|intent| intent.root_id == root_id && intent.task_id == task.task_id) {
-        return Err(error("intent_conflict", "Resolve the existing acceptance intent first"));
-    }
-    Ok(task)
-}
-
-fn task_content_target(
-    state: &OrchestrationState, actor: &Actor, caller: Option<usize>, session: &str,
-    root_id: &str, task_id: &str, document: &tasks_md::TaskDocument<'_>,
-) -> Result<(), InspectionError> {
-    active_task_root(state, session, root_id)?;
-    let task = mutable_task(state, root_id, task_id, document)?;
-    let current = projection::current_task_run(state, root_id, &task.task_id);
-    if matches!(actor, Actor::Operator(_))
-        || caller.is_some_and(|index| state.runs[index].run_id == root_id) {
-        task_root_authority(state, actor, caller, session, root_id)?;
-        if current.is_some_and(|run| run.stage == RunStage::Working) {
-            return Err(error("actor_forbidden", "Only the current executed worker may edit its own canonical task"));
+fn admit(
+    state: &mut OrchestrationState,
+    actor: &Actor,
+    request: &OrchestrationMutationRequest,
+) -> Result<Admission, InspectionError> {
+    let reporting = matches!(request.action, OrchestrationAction::Report { .. });
+    let adopting = matches!(request.action, OrchestrationAction::RunAdopt { .. });
+    let retiring = matches!(request.action, OrchestrationAction::RetirementNativeReceipt { .. });
+    let binding = matches!(request.action, OrchestrationAction::RunBindSession { .. });
+    let (caller, mut stale) = resolve(state, actor, reporting, adopting, retiring, binding)?;
+    if let (Some(index), Actor::Agent(agent)) = (caller, actor) {
+        let run = &state.runs[index];
+        if run.bound_omp_session.is_some() && !session_matches(run, agent)
+            && !(binding && same_process_main_rollover(run, agent))
+        {
+            if reporting {
+                stale = true;
+            } else {
+                return Err(error(
+                    "session_mismatch",
+                    "Caller native-session evidence does not match the bound run",
+                ));
+            }
+        } else if run.bound_omp_session.is_none()
+            && !matches!(request.action, OrchestrationAction::RunBindSession { .. })
+            && !reporting
+        {
+            return Err(error(
+                "session_mismatch",
+                "Bind the main native session before mutating this run",
+            ));
         }
-        return Ok(());
     }
-    let Actor::Agent(agent) = actor else { unreachable!() };
-    let run = &state.runs[required_caller(caller)?];
-    if run.root_id != root_id {
-        return Err(error("actor_forbidden", "Caller does not own this canonical root"));
+    if let Actor::Operator(_) = actor {
+        match &request.action {
+            OrchestrationAction::MessageSend { to_run_id, .. } => {
+                scoped_index(state, &request.session_id, to_run_id)?;
+            }
+            OrchestrationAction::Annotate { run_id, .. }
+            | OrchestrationAction::SubagentControl { run_id, .. } => {
+                scoped_index(state, &request.session_id, run_id)?;
+            }
+            _ => {}
+        }
     }
-    if run.kind != RunKind::Worker || run.stage != RunStage::Working
-        || run.task_id.as_deref() != Some(task.task_id.as_str())
-        || current.is_none_or(|current| current.run_id != run.run_id)
-        || run.init_receipt.as_ref().is_none_or(|receipt| receipt.kind != ReportKind::Ready)
-        || run.work_plan.as_ref().is_none_or(|plan| {
-            run.init_receipt.as_ref().and_then(|receipt| receipt.plan.as_deref()) != Some(plan.text.as_str())
-                || !run.grants.iter().any(|grant| {
-                    grant.scope == GrantScope::Execute && grant.plan_revision == plan.plan_revision
-                })
-        })
-        || !native_task_caller(run, agent) {
-        return Err(error("actor_forbidden", "Only the current executed worker may edit its own canonical task"));
-    }
-    match agent.agent_kind {
-        Some(AgentKind::Main) if agent.subagent_id.is_none() => {}
-        Some(AgentKind::Subagent) => {
-            let session = messages::authenticated_child_session(agent, run)?;
-            if !state.subagents.iter().any(|child| {
-                child.run_id == run.run_id && Some(child.subagent_id.as_str()) == agent.subagent_id.as_deref()
-                    && child.status == SubagentStatus::Running
-                    && child.bound_omp_session.as_deref() == Some(session)
-            }) {
-                return Err(error("actor_forbidden", "An authenticated live native child binding is required"));
+    let mut location_changed = false;
+    if !stale && !retiring {
+        if let (Some(index), Actor::Agent(agent)) = (caller, actor) {
+            if let Some(location) = state.runs[index].location.as_mut() {
+                location_changed = location.pane_id != agent.pane_id
+                    || location.workspace_id != agent.workspace_id
+                    || location.tab_id != agent.tab_id;
+                location.pane_id = agent.pane_id.clone();
+                location.workspace_id = agent.workspace_id.clone();
+                location.tab_id = agent.tab_id.clone();
             }
         }
-        _ => return Err(error("actor_forbidden", "An authenticated live native child binding is required")),
     }
-    dependencies::DependencyGraph::new(&document.tasks).require(task)
+    Ok(Admission { caller, stale, location_changed })
 }
 
-fn task_transition_target(
-    state: &OrchestrationState, run: &Run, document: &tasks_md::TaskDocument<'_>, allow_replacement: bool,
-) -> Result<(), InspectionError> {
-    active_task_root(state, &run.session_id, &run.root_id)?;
-    let task_id = run.task_id.as_deref().ok_or_else(|| error("task_not_found", "Worker task is missing"))?;
-    let task = mutable_task(state, &run.root_id, task_id, document)?;
-    let current = projection::current_task_run(state, &run.root_id, &task.task_id);
-    let selected = current.is_some_and(|current| current.run_id == run.run_id);
-    let pending = allow_replacement && matches!(run.stage, RunStage::Proposed | RunStage::AwaitingPrepare)
-        && current.is_some_and(|current| run.supersedes_run_id.as_deref() == Some(current.run_id.as_str()))
-        && !state.runs.iter().any(|other| other.root_id == run.root_id
-            && other.task_id == run.task_id && other.stage != RunStage::Closed && other.attempt > run.attempt);
-    if !selected && !pending {
-        return Err(error("attempt_stale", "Worker no longer owns the current canonical task attempt"));
-    }
-    dependencies::DependencyGraph::new(&document.tasks).require(task)
-}
-
-fn task_scope(
-    state: &OrchestrationState,
-    actor: &Actor,
-    caller: Option<usize>,
-    session: &str,
-    root: &str,
-) -> Result<(), InspectionError> {
-    let index = scoped_index(state, session, root)?;
-    if state.runs[index].parent_run_id.is_some() {
-        return Err(error("root_not_found", "Expected a supervisor root"));
-    }
-    if matches!(actor, Actor::Agent(_)) && state.runs[required_caller(caller)?].root_id != root {
-        return Err(error(
-            "actor_forbidden",
-            "Agent may only edit canonical tasks in its own root",
-        ));
-    }
-    Ok(())
-}
 fn resolve(
     state: &OrchestrationState,
     actor: &Actor,
@@ -2586,7 +931,7 @@ fn resolve(
 fn same_process_main_rollover(run: &Run, caller: &AgentCaller) -> bool {
     let (Some(location), Some(process)) = (&run.location, &run.bound_omp_process) else { return false };
     caller.agent_kind == Some(AgentKind::Main)
-        && caller.actual_agent_kind.as_deref() == Some("omp")
+        && caller.actual_agent_kind.as_ref() == Some(&NativeAgentKind::Omp)
         && caller.subagent_id.is_none()
         && caller.omp_session_id.as_deref().is_some_and(|s| !s.is_empty())
         && caller.native_session_id.as_ref().is_none_or(|s| caller.omp_session_id.as_ref() == Some(s))
@@ -2692,27 +1037,6 @@ fn require_stage(run: &Run, stage: RunStage) -> Result<(), InspectionError> {
         ))
     }
 }
-fn match_plan(plan: Option<&PlanRecord>, revision: &str) -> Result<(), InspectionError> {
-    if plan.is_some_and(|p| p.plan_revision == revision) {
-        Ok(())
-    } else {
-        Err(error(
-            "plan_changed",
-            "The exact plan changed; refresh and review it again",
-        ))
-    }
-}
-fn grant(provenance: DecisionProvenance, scope: GrantScope, plan_revision: String) -> Grant {
-    Grant {
-        grant_id: id(),
-        scope,
-        plan_revision,
-        origin: provenance.origin,
-        supervisor_run_id: provenance.supervisor_run_id,
-        omp_session_id: provenance.omp_session_id,
-        granted_at: now(),
-    }
-}
 fn dispatch(step: DispatchStep) -> DispatchState {
     DispatchState {
         step,
@@ -2769,15 +1093,6 @@ fn new_run(
         updated_at: now,
     }
 }
-fn unfocused(mut target: DispatchTarget) -> DispatchTarget {
-    if let DispatchTarget::Setup { request } = &mut target {
-        match request {
-            WorkspaceSetupRequest::Create { focus, .. }
-            | WorkspaceSetupRequest::Open { focus, .. } => *focus = false,
-        }
-    }
-    target
-}
 fn brief(
     state: &mut OrchestrationState,
     to: &str,
@@ -2796,19 +1111,7 @@ fn brief(
             "launch".into()
         }
     );
-    messages::append(
-        state,
-        ActorRef::Dispatcher,
-        to,
-        &message_id,
-        kind,
-        text,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )?;
+    messages::append(state, messages::AppendMessage { from: ActorRef::Dispatcher, to_run_id: to, message_id: &message_id, kind: kind, text: text, in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })?;
     Ok(())
 }
 #[cfg(test)]

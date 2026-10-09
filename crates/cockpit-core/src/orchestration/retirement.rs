@@ -7,26 +7,6 @@ pub(crate) const NATIVE_STOP_TIMEOUT_SECS: i64 = 120;
 pub(crate) const OBSERVATION_TIMEOUT_SECS: i64 = 10 * 60;
 pub(crate) const OBSERVATION_RETRY_SECS: u64 = 30;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RetirementStateKind {
-    Waiting, NativeStopOffered, NativeStopDeferred, NativeStopRequested,
-    NativeStopped, CloseIntent, Retired, Retained, Unknown,
-}
-
-pub(crate) fn kind(state: &RetirementState) -> RetirementStateKind {
-    match state {
-        RetirementState::Waiting { .. } => RetirementStateKind::Waiting,
-        RetirementState::NativeStopOffered { .. } => RetirementStateKind::NativeStopOffered,
-        RetirementState::NativeStopDeferred { .. } => RetirementStateKind::NativeStopDeferred,
-        RetirementState::NativeStopRequested { .. } => RetirementStateKind::NativeStopRequested,
-        RetirementState::NativeStopped { .. } => RetirementStateKind::NativeStopped,
-        RetirementState::CloseIntent { .. } => RetirementStateKind::CloseIntent,
-        RetirementState::Retired { .. } => RetirementStateKind::Retired,
-        RetirementState::Retained { .. } => RetirementStateKind::Retained,
-        RetirementState::Unknown { .. } => RetirementStateKind::Unknown,
-    }
-}
-
 pub(crate) fn terminal(state: &RetirementState) -> bool {
     matches!(state, RetirementState::Retired { .. } | RetirementState::Retained { .. } | RetirementState::Unknown { .. })
 }
@@ -135,7 +115,7 @@ pub(crate) fn caller_location_matches(run: &Run, caller: &AgentCaller) -> bool {
 pub(crate) fn apply_native_receipt(run: &mut Run, caller: &AgentCaller, retirement_id: &str, outcome: NativeStopReceipt) -> Result<(), InspectionError> {
     let retirement = run.retirement.as_ref().ok_or_else(|| error("retirement_not_found", "No retirement record"))?;
     let identity = retirement.identity.as_ref().ok_or_else(|| error("caller_mismatch", "Retirement identity is incomplete"))?;
-    if caller.agent_kind != Some(AgentKind::Main) || caller.actual_agent_kind.as_deref() != Some("omp")
+    if caller.agent_kind != Some(AgentKind::Main) || caller.actual_agent_kind != Some(NativeAgentKind::Omp)
         || !caller.env_run.as_ref().is_some_and(|(run_id, attempt)| run_id == &run.run_id && *attempt == identity.run_attempt)
         || !identity_matches(run, retirement) || !caller_location_matches(run, caller)
         || caller.omp_session_id.as_deref() != Some(identity.omp_session_id.as_str())
@@ -175,15 +155,50 @@ fn set_state(run: &mut Run, next: RetirementState, at: &str) {
     run.updated_at = at.into();
 }
 
-fn owner_transition(from: RetirementStateKind, next: &RetirementState) -> bool {
-    match from {
-        RetirementStateKind::Waiting => matches!(next, RetirementState::Waiting { .. } | RetirementState::NativeStopOffered { .. } | RetirementState::NativeStopped { evidence: NativeStopEvidence::AlreadyExited, .. } | RetirementState::Retained { native_stopped: false, .. }),
-        RetirementStateKind::NativeStopOffered | RetirementStateKind::NativeStopDeferred => matches!(next, RetirementState::Retained { native_stopped: false, .. }),
-        RetirementStateKind::NativeStopRequested => matches!(next, RetirementState::NativeStopped { evidence: NativeStopEvidence::ExitedAfterShutdownRequest, .. } | RetirementState::Unknown { phase: RetirementPhase::NativeStop, .. }),
-        RetirementStateKind::NativeStopped => matches!(next, RetirementState::CloseIntent { .. } | RetirementState::Retired { terminal: TerminalOutcome::AlreadyAbsent, .. } | RetirementState::Retained { native_stopped: true, .. }),
-        RetirementStateKind::CloseIntent => matches!(next, RetirementState::Retired { .. } | RetirementState::Retained { native_stopped: true, .. } | RetirementState::Unknown { phase: RetirementPhase::TerminalClose, .. }),
-        _ => false,
+#[derive(Clone, Copy)]
+enum TransitionGuard {
+    Any,
+    Evidence(NativeStopEvidence),
+    NativeStopped(bool),
+    Terminal(TerminalOutcome),
+    Phase(RetirementPhase),
+}
+
+impl TransitionGuard {
+    fn allows(self, next: &RetirementState) -> bool {
+        match (self, next) {
+            (Self::Any, _) => true,
+            (Self::Evidence(expected), RetirementState::NativeStopped { evidence, .. }) => expected == *evidence,
+            (Self::NativeStopped(expected), RetirementState::Retained { native_stopped, .. }) => expected == *native_stopped,
+            (Self::Terminal(expected), RetirementState::Retired { terminal, .. }) => expected == *terminal,
+            (Self::Phase(expected), RetirementState::Unknown { phase, .. }) => expected == *phase,
+            _ => false,
+        }
     }
+}
+
+// Owner effects only: native receipts have their own payload and caller fences.
+const OWNER_TRANSITIONS: &[(RetirementStateKind, RetirementStateKind, TransitionGuard)] = &[
+    (RetirementStateKind::Waiting, RetirementStateKind::Waiting, TransitionGuard::Any),
+    (RetirementStateKind::Waiting, RetirementStateKind::NativeStopOffered, TransitionGuard::Any),
+    (RetirementStateKind::Waiting, RetirementStateKind::NativeStopped, TransitionGuard::Evidence(NativeStopEvidence::AlreadyExited)),
+    (RetirementStateKind::Waiting, RetirementStateKind::Retained, TransitionGuard::NativeStopped(false)),
+    (RetirementStateKind::NativeStopOffered, RetirementStateKind::Retained, TransitionGuard::NativeStopped(false)),
+    (RetirementStateKind::NativeStopDeferred, RetirementStateKind::Retained, TransitionGuard::NativeStopped(false)),
+    (RetirementStateKind::NativeStopRequested, RetirementStateKind::NativeStopped, TransitionGuard::Evidence(NativeStopEvidence::ExitedAfterShutdownRequest)),
+    (RetirementStateKind::NativeStopRequested, RetirementStateKind::Unknown, TransitionGuard::Phase(RetirementPhase::NativeStop)),
+    (RetirementStateKind::NativeStopped, RetirementStateKind::CloseIntent, TransitionGuard::Any),
+    (RetirementStateKind::NativeStopped, RetirementStateKind::Retired, TransitionGuard::Terminal(TerminalOutcome::AlreadyAbsent)),
+    (RetirementStateKind::NativeStopped, RetirementStateKind::Retained, TransitionGuard::NativeStopped(true)),
+    (RetirementStateKind::CloseIntent, RetirementStateKind::Retired, TransitionGuard::Any),
+    (RetirementStateKind::CloseIntent, RetirementStateKind::Retained, TransitionGuard::NativeStopped(true)),
+    (RetirementStateKind::CloseIntent, RetirementStateKind::Unknown, TransitionGuard::Phase(RetirementPhase::TerminalClose)),
+];
+
+fn owner_transition(from: RetirementStateKind, next: &RetirementState) -> bool {
+    let next_kind = next.kind();
+    OWNER_TRANSITIONS.iter().any(|&(source, target, guard)|
+        source == from && target == next_kind && guard.allows(next))
 }
 
 impl OrchestrationService {
@@ -214,7 +229,7 @@ impl OrchestrationService {
         }
         let run = &mut state.runs[index];
         let retirement = run.retirement.as_ref().ok_or_else(|| error("retirement_state_changed", "Retirement is absent"))?;
-        if retirement.retirement_id != retirement_id || kind(&retirement.state) != expected || terminal(&retirement.state) {
+        if retirement.retirement_id != retirement_id || retirement.state.kind() != expected || terminal(&retirement.state) {
             return Err(error("retirement_state_changed", "Retirement state or incarnation changed"));
         }
         if !owner_transition(expected, &next) {
@@ -271,10 +286,10 @@ pub(crate) fn classify_offer(identity: &RetirementIdentity, runtime: &RuntimeVie
         Err(TerminalDecision::Retain(reason)) => return OfferDecision::Retain(reason),
     };
     if !running {
-        return if pane.agent_kind.as_deref() == Some("omp") || pane.launch_pending { OfferDecision::Retain(RetainReason::ProcessPaneMismatch) }
+        return if pane.agent_kind.as_deref().is_some_and(NativeAgentKind::is_omp) || pane.launch_pending { OfferDecision::Retain(RetainReason::ProcessPaneMismatch) }
             else { OfferDecision::AlreadyExited };
     }
-    if pane.agent_kind.as_deref() != Some("omp") || pane.launch_pending
+    if !pane.agent_kind.as_deref().is_some_and(NativeAgentKind::is_omp) || pane.launch_pending
         || pane.native_session_id.as_ref().is_some_and(|s| s != &identity.omp_session_id) {
         return OfferDecision::Retain(RetainReason::ProcessPaneMismatch);
     }

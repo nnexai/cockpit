@@ -440,7 +440,7 @@ pub(super) fn actual_omp(
     let Some(location) = run.location.as_ref() else { return false };
     run.stage != RunStage::Closed
         && run.bound_omp_session.as_deref().is_some_and(|s| !s.is_empty())
-        && pane.agent_kind.as_deref() == Some("omp") && !pane.launch_pending
+        && pane.agent_kind.as_deref().is_some_and(super::NativeAgentKind::is_omp) && !pane.launch_pending
         && (run.kind == RunKind::Adopted || super::launch_receipt_coherent(run))
         && pane.pane_id == location.pane_id
         && pane.workspace_id == location.workspace_id && pane.tab_id == location.tab_id

@@ -3,6 +3,35 @@ use cockpit_protocol::orchestration::*;
 use super::{messages, parse_time, store::OrchestrationState};
 use crate::InspectionError;
 
+#[derive(Clone, Copy)]
+enum EscalationErrorCode {
+    OwnedLaunchTabUnsafe,
+    AutomaticLaunchCloseUnproven,
+    AutomaticSpacePreservationUnproven,
+    InvalidReconcile,
+    WorkspaceConflict,
+    StaleIdentity,
+    RepositoryIdentityStale,
+    ReconciliationRequiresInspection,
+    Other,
+}
+
+impl From<&str> for EscalationErrorCode {
+    fn from(code: &str) -> Self {
+        match code {
+            "owned_launch_tab_unsafe" => Self::OwnedLaunchTabUnsafe,
+            "automatic_launch_close_unproven" => Self::AutomaticLaunchCloseUnproven,
+            "automatic_space_preservation_unproven" => Self::AutomaticSpacePreservationUnproven,
+            "invalid_reconcile" => Self::InvalidReconcile,
+            "workspace_conflict" => Self::WorkspaceConflict,
+            "stale_identity" => Self::StaleIdentity,
+            "repository_identity_stale" => Self::RepositoryIdentityStale,
+            "reconciliation_requires_inspection" => Self::ReconciliationRequiresInspection,
+            _ => Self::Other,
+        }
+    }
+}
+
 fn eligible(run: &Run) -> bool {
     run.kind == RunKind::Worker && !matches!(run.stage, RunStage::Reported | RunStage::Closed)
 }
@@ -19,8 +48,11 @@ fn dispatcher_message(message: &Message, root: &str) -> bool {
 
 fn next_steps(run: &Run) -> (&'static str, &'static [&'static str], Option<&'static str>) {
     let dispatch = run.dispatch.as_ref().expect("dispatch");
-    if dispatch.error.as_ref().is_some_and(|error| matches!(error.code.as_str(),
-        "owned_launch_tab_unsafe" | "automatic_launch_close_unproven" | "automatic_space_preservation_unproven"))
+    let error_code = dispatch.error.as_ref().map(|error| EscalationErrorCode::from(error.code.as_str()));
+    if matches!(error_code,
+        Some(EscalationErrorCode::OwnedLaunchTabUnsafe
+            | EscalationErrorCode::AutomaticLaunchCloseUnproven
+            | EscalationErrorCode::AutomaticSpacePreservationUnproven))
     {
         return ("unknown", &["show", "reconcile", "operator"],
             Some("Owned launch cancellation or source-Space preservation was refused or remains unproven; inspect the exact recorded Space, tab and terminal. Do not repeat uncertain creation or closure."));
@@ -31,8 +63,12 @@ fn next_steps(run: &Run) -> (&'static str, &'static [&'static str], Option<&'sta
     let unknown_setup = dispatch.launch_tag.is_none()
         && run.setup.as_ref().is_some_and(|setup| setup.operation_id.is_some() && setup.workspace_id.is_none());
     if unknown_setup {
-        if dispatch.error.as_ref().is_some_and(|error| matches!(error.code.as_str(),
-            "invalid_reconcile" | "workspace_conflict" | "stale_identity" | "repository_identity_stale" | "reconciliation_requires_inspection")) {
+        if matches!(error_code,
+            Some(EscalationErrorCode::InvalidReconcile
+                | EscalationErrorCode::WorkspaceConflict
+                | EscalationErrorCode::StaleIdentity
+                | EscalationErrorCode::RepositoryIdentityStale
+                | EscalationErrorCode::ReconciliationRequiresInspection)) {
             return ("unknown", &["show", "operator"], Some("Setup evidence did not prove one existing checkout; the operator must decide"));
         }
         return ("unknown", &["show", "reconcile_accept_existing_worktree", "operator"], Some("Only checkout-proven recovery is supervisor-owned; environment retry needs the operator"));
@@ -81,7 +117,18 @@ fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool
         "effect": effect, "next": next, "operator_reason": operator_reason,
     }).to_string();
     let root = run.root_id.clone();
-    messages::append(state, ActorRef::Dispatcher, &root, &key, MessageKind::Observation, &text, None, None, false, None, None)?;
+    messages::append(state, messages::AppendMessage {
+        from: ActorRef::Dispatcher,
+        to_run_id: &root,
+        message_id: &key,
+        kind: MessageKind::Observation,
+        text: &text,
+        in_reply_to: None,
+        report: None,
+        stale: false,
+        from_subagent_id: None,
+        escalated_from: None,
+    })?;
     Ok(true)
 }
 
@@ -124,7 +171,18 @@ pub(super) fn recovered(state: &mut OrchestrationState, index: usize) -> Result<
     let text = serde_json::json!({"event": "dispatch_recovered", "run_id": run.run_id,
         "run_attempt": run.attempt, "launch_attempt": dispatch.launch_attempt, "step": dispatch.step}).to_string();
     let root = run.root_id.clone();
-    messages::append(state, ActorRef::Dispatcher, &root, &key, MessageKind::Observation, &text, None, None, false, None, None)?;
+    messages::append(state, messages::AppendMessage {
+        from: ActorRef::Dispatcher,
+        to_run_id: &root,
+        message_id: &key,
+        kind: MessageKind::Observation,
+        text: &text,
+        in_reply_to: None,
+        report: None,
+        stale: false,
+        from_subagent_id: None,
+        escalated_from: None,
+    })?;
     Ok(true)
 }
 
