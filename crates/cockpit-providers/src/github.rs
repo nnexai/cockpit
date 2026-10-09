@@ -603,16 +603,16 @@ fn rendered_fields(
     if let Some(author) = author {
         fields.push(frontmatter("author", FrontmatterValue::String(author)));
     }
-    if let Some(created) = issue.created_at.clone() {
+    if let Some(created) = issue.created_at.as_deref() {
         fields.push(frontmatter(
             "created",
-            FrontmatterValue::String(rfc3339_seconds(&created)),
+            FrontmatterValue::String(rfc3339_seconds(created)),
         ));
     }
-    if let Some(updated) = issue.updated_at.clone() {
+    if let Some(updated) = issue.updated_at.as_deref() {
         fields.push(frontmatter(
             "updated",
-            FrontmatterValue::String(rfc3339_seconds(&updated)),
+            FrontmatterValue::String(rfc3339_seconds(updated)),
         ));
     }
     if issue.assignees.is_some() {
