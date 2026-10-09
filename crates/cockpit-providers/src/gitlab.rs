@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use crate::forge::{self, ByteBudget, COMMENTS_PER_PAGE, CliRunner, Forge, MAX_COMMENT_PAGES};
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
-use cockpit_core::process::run_bounded_command;
 use cockpit_core::repositories::resolve_gitlab_artifact;
 use cockpit_core::sources::{
     FrontmatterField, FrontmatterValue, SourceAsset, SourceContainer, SourceFetchRequest,
@@ -12,11 +12,12 @@ use cockpit_protocol::projects::{ProjectArtifact, ProjectConfiguration, ProjectD
 use cockpit_protocol::sources::SourceCapability;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::process::Command;
 use url::Url;
 
-const COMMENTS_PER_PAGE: usize = 100;
-const MAX_COMMENT_PAGES: usize = 5;
+#[path = "forge/gitlab.rs"]
+mod mapping;
+use mapping::*;
+
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 
 /// Read-only GitLab issue access through the owner's authenticated `glab` CLI.
@@ -83,43 +84,22 @@ impl GitlabSourceProvider {
     }
 
     async fn command(&self, args: &[String]) -> Result<Vec<u8>, InspectionError> {
-        let mut command = Command::new(&self.executable);
-        command
-            .args(args)
-            .env("GLAB_PROMPT_DISABLED", "1")
-            .env("GIT_TERMINAL_PROMPT", "0");
-        let output = run_bounded_command(
-            command,
-            self.limits.0,
-            self.limits.0,
-            self.limits.1,
-            "GitLab source",
+        CliRunner {
+            executable: &self.executable,
+            limits: self.limits,
+            label: "GitLab source",
+            failure: classify_cli_failure,
+            execution_error: map_execution_error,
+            empty_response: Some("GitLab CLI returned an empty response"),
+        }
+        .run(
+            args,
+            &[
+                ("GLAB_PROMPT_DISABLED", "1".as_ref()),
+                ("GIT_TERMINAL_PROMPT", "0".as_ref()),
+            ],
         )
         .await
-        .map_err(|error| match error.code.as_str() {
-            "execution_timeout" => InspectionError::new(
-                "source_provider_timeout",
-                "GitLab CLI request exceeded the configured deadline",
-            ),
-            "bounded_output" => InspectionError::new(
-                "source_truncated",
-                "GitLab CLI response exceeded Cockpit's explicit process limit",
-            ),
-            "execution_failed" => {
-                InspectionError::new("source_cli_unavailable", "GitLab CLI could not be started")
-            }
-            _ => InspectionError::new("source_provider_failed", "GitLab CLI request failed"),
-        })?;
-        if !output.status.success() {
-            return Err(classify_cli_failure(&output.stderr));
-        }
-        if output.stdout.is_empty() {
-            return Err(InspectionError::new(
-                "source_provider_contract",
-                "GitLab CLI returned an empty response",
-            ));
-        }
-        Ok(output.stdout)
     }
 
     fn endpoint(&self, suffix: &str) -> Result<(Url, String), InspectionError> {
@@ -235,7 +215,7 @@ impl GitlabSourceProvider {
             &self.api_get(&format!("projects/{encoded}")).await?,
             "project",
         )?;
-        budget.account_json(&value)?;
+        account_json(budget, &value)?;
         let id = value_u64(&value, "id")
             .ok_or_else(|| contract_error("GitLab project has no numeric ID"))?;
         if id == 0 {
@@ -264,7 +244,16 @@ impl GitlabSourceProvider {
                 .await?,
             "issue",
         )?;
-        budget.account_json(&value)?;
+        account_json(budget, &value)?;
+        self.parse_issue(&value, identity, project)
+    }
+
+    fn parse_issue(
+        &self,
+        value: &Value,
+        identity: &ResolvedIdentity,
+        project: &ProjectFacts,
+    ) -> Result<IssueFacts, InspectionError> {
         let project_id = value_u64(&value, "project_id")
             .ok_or_else(|| contract_error("GitLab issue has no project ID"))?;
         if project_id != project.id {
@@ -299,61 +288,7 @@ impl GitlabSourceProvider {
             &identity.project_path,
             identity.iid,
         )?;
-        let author = value
-            .get("author")
-            .and_then(|author| author.get("username"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| contract_error("GitLab issue has no author username"))?
-            .to_owned();
-        let state = required_string(&value, "state", "GitLab issue")?;
-        required_string_array(&value, "labels", "GitLab issue")?;
-        let mut assignees = value
-            .get("assignees")
-            .and_then(Value::as_array)
-            .ok_or_else(|| contract_error("GitLab issue has no assignees array"))?
-            .iter()
-            .map(|assignee| {
-                assignee
-                    .get("username")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| contract_error("GitLab issue assignee has no username"))
-                    .map(str::to_owned)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        assignees.sort();
-        assignees.dedup();
-        match value.get("milestone") {
-            Some(Value::Null) => {}
-            Some(milestone) => {
-                milestone
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| contract_error("GitLab issue milestone has no title"))?;
-            }
-            None => return Err(contract_error("GitLab issue has no milestone field")),
-        }
-        let created_at = required_string(&value, "created_at", "GitLab issue")?;
-        let updated_at = required_string(&value, "updated_at", "GitLab issue")?;
-        let description = match value.get("description") {
-            Some(Value::Null) => String::new(),
-            Some(Value::String(description)) => description.clone(),
-            Some(_) => {
-                return Err(contract_error(
-                    "GitLab issue description has an invalid type",
-                ));
-            }
-            None => return Err(contract_error("GitLab issue has no description field")),
-        };
-        Ok(IssueFacts {
-            title,
-            description,
-            author,
-            state,
-            assignees,
-            created_at,
-            updated_at,
-            web_url,
-        })
+        parse_issue_details(value, title, web_url)
     }
 
     async fn fetch_project_by_id(
@@ -365,7 +300,7 @@ impl GitlabSourceProvider {
             &self.api_get(&format!("projects/{project_id}")).await?,
             "source project",
         )?;
-        budget.account_json(&value)?;
+        account_json(budget, &value)?;
         parse_project_identity(&value, &self.base_url)
     }
 
@@ -384,7 +319,7 @@ impl GitlabSourceProvider {
                 .await?,
             "merge request",
         )?;
-        budget.account_json(&value)?;
+        account_json(budget, &value)?;
         let iid = value_u64(&value, "iid")
             .ok_or_else(|| contract_error("GitLab merge request has no IID"))?;
         if iid != identity.iid {
@@ -392,6 +327,45 @@ impl GitlabSourceProvider {
                 "GitLab returned a different merge request IID",
             ));
         }
+        let details = self.parse_review_details(&value, identity)?;
+        let (target_branch, source_branch, head_sha) = parse_review_refs(&value, project)?;
+        let target_project = ProjectIdentity {
+            path: identity.project_path.clone(),
+            web_url: project.web_url.clone(),
+        };
+        let source_project_id = value_u64(&value, "source_project_id");
+        let source_project = match source_project_id {
+            None => None,
+            Some(id) if id == project.id => Some(ProjectIdentity {
+                path: identity.project_path.clone(),
+                web_url: project.web_url.clone(),
+            }),
+            Some(id) => self.fetch_project_by_id(id, budget).await.ok(),
+        };
+        Ok(ReviewFacts {
+            title: details.title,
+            description: details.description,
+            state: details.state,
+            author: details.author,
+            labels: details.labels,
+            assignees: details.assignees,
+            reviewers: details.reviewers,
+            created_at: details.created_at,
+            updated_at: details.updated_at,
+            web_url: details.web_url,
+            target_project,
+            source_project,
+            source_branch,
+            target_branch,
+            head_sha,
+        })
+    }
+
+    fn parse_review_details(
+        &self,
+        value: &Value,
+        identity: &ResolvedIdentity,
+    ) -> Result<ReviewDetails, InspectionError> {
         let title = required_string(&value, "title", "GitLab merge request")?;
         let description = match value.get("description") {
             Some(Value::Null) => String::new(),
@@ -436,60 +410,7 @@ impl GitlabSourceProvider {
                 "GitLab returned a different merge request reference",
             ));
         }
-        let target_branch = required_string(&value, "target_branch", "GitLab merge request")?;
-        if !valid_branch(&target_branch) {
-            return Err(contract_error(
-                "GitLab merge request target branch is invalid",
-            ));
-        }
-        let source_branch = optional_string(&value, "source_branch", "GitLab merge request")?;
-        if source_branch
-            .as_deref()
-            .is_some_and(|branch| !valid_branch(branch))
-        {
-            return Err(contract_error(
-                "GitLab merge request source branch is invalid",
-            ));
-        }
-        let head_sha = value
-            .get("sha")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                value
-                    .get("diff_refs")
-                    .and_then(|refs| refs.get("head_sha"))
-                    .and_then(Value::as_str)
-            })
-            .map(str::to_owned);
-        if let Some(sha) = &head_sha {
-            if !valid_commit(sha) {
-                return Err(contract_error(
-                    "GitLab merge request head commit is invalid",
-                ));
-            }
-        }
-        let target_project_id = value_u64(&value, "target_project_id")
-            .or_else(|| value_u64(&value, "project_id"))
-            .ok_or_else(|| contract_error("GitLab merge request has no target project ID"))?;
-        if target_project_id != project.id {
-            return Err(identity_error(
-                "GitLab merge request target project mismatches requested project",
-            ));
-        }
-        let target_project = ProjectIdentity {
-            path: identity.project_path.clone(),
-            web_url: project.web_url.clone(),
-        };
-        let source_project_id = value_u64(&value, "source_project_id");
-        let source_project = match source_project_id {
-            None => None,
-            Some(id) if id == project.id => Some(ProjectIdentity {
-                path: identity.project_path.clone(),
-                web_url: project.web_url.clone(),
-            }),
-            Some(id) => self.fetch_project_by_id(id, budget).await.ok(),
-        };
-        Ok(ReviewFacts {
+        Ok(ReviewDetails {
             title,
             description,
             state,
@@ -500,11 +421,6 @@ impl GitlabSourceProvider {
             created_at,
             updated_at,
             web_url,
-            target_project,
-            source_project,
-            source_branch,
-            target_branch,
-            head_sha,
         })
     }
 
@@ -534,43 +450,7 @@ impl GitlabSourceProvider {
             budget.account(response.len());
             let full_page = values.len() == COMMENTS_PER_PAGE;
             for discussion in values {
-                let discussion_id = required_string(&discussion, "id", "GitLab discussion")?;
-                let raw_notes = discussion
-                    .get("notes")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| contract_error("GitLab discussion has no notes array"))?;
-                for note in raw_notes {
-                    let id = value_u64(note, "id").ok_or_else(|| {
-                        contract_error("GitLab discussion note has no numeric ID")
-                    })?;
-                    let body = required_string(note, "body", "GitLab discussion note")?;
-                    let author = note
-                        .get("author")
-                        .and_then(|author| author.get("username"))
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| {
-                            contract_error("GitLab discussion note has no author username")
-                        })?
-                        .to_owned();
-                    let created_at = required_string(note, "created_at", "GitLab discussion note")?;
-                    let updated_at = required_string(note, "updated_at", "GitLab discussion note")?;
-                    let url = comment_url(review_url, note, id)?;
-                    let position = note
-                        .get("position")
-                        .map(position_text)
-                        .transpose()?
-                        .unwrap_or_else(|| "unsupported local review anchor".into());
-                    notes.push(ReviewNote {
-                        discussion_id: discussion_id.clone(),
-                        id,
-                        author,
-                        created_at,
-                        updated_at,
-                        url,
-                        body,
-                        position,
-                    });
-                }
+                parse_discussion(&discussion, review_url, &mut notes)?;
             }
             if !full_page {
                 break;
@@ -674,26 +554,7 @@ impl GitlabSourceProvider {
             budget.account(response.len());
             let full_page = values.len() == COMMENTS_PER_PAGE;
             for value in values {
-                let id = value_u64(&value, "id")
-                    .ok_or_else(|| contract_error("GitLab issue comment has no numeric ID"))?;
-                let body = required_string(&value, "body", "GitLab issue comment")?;
-                let author = value
-                    .get("author")
-                    .and_then(|author| author.get("username"))
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| contract_error("GitLab issue comment has no author username"))?
-                    .to_owned();
-                let created_at = required_string(&value, "created_at", "GitLab issue comment")?;
-                let updated_at = required_string(&value, "updated_at", "GitLab issue comment")?;
-                let url = comment_url(issue_url, &value, id)?;
-                comments.push(CommentFacts {
-                    id,
-                    author,
-                    created_at,
-                    updated_at,
-                    url,
-                    body,
-                });
+                comments.push(parse_comment(&value, issue_url)?);
             }
             if !full_page {
                 break;
@@ -711,16 +572,15 @@ impl GitlabSourceProvider {
         Ok((comments, complete))
     }
 
-    async fn fetch_review_inner(
+    async fn fetch_review_comments(
         &self,
-        request: &SourceFetchRequest,
-    ) -> Result<SourceAsset, InspectionError> {
-        let identity = self.review_identity(request)?;
-        let mut budget = ByteBudget::new(self.limits.0.min(MAX_SOURCE_BYTES));
-        let project = self.fetch_project(&identity, &mut budget).await?;
-        let review = self.fetch_review(&identity, &project, &mut budget).await?;
+        identity: &ResolvedIdentity,
+        project: &ProjectFacts,
+        review: &ReviewFacts,
+        budget: &mut ByteBudget,
+    ) -> Result<ReviewComments, InspectionError> {
         let (notes, discussions_complete) = match self
-            .fetch_discussions(&identity, &project, &review.web_url, &mut budget)
+            .fetch_discussions(identity, project, &review.web_url, budget)
             .await
         {
             Ok(result) => result,
@@ -741,123 +601,48 @@ impl GitlabSourceProvider {
             }
             Err(error) => return Err(error),
         };
-        let (approvals, approvals_complete) =
-            self.fetch_approvals(&identity, &project, &mut budget).await;
-        let mut diagnostics = Vec::new();
-        if review.source_branch.as_deref().map_or(true, str::is_empty) {
-            diagnostics.push(review_diagnostic(
-                "source_branch_unavailable",
-                "GitLab merge request source branch is unavailable",
-                &request.artifact_url,
-            ));
-        }
-        if review
-            .head_sha
-            .as_deref()
-            .map_or(true, |sha| !valid_commit(sha))
-        {
-            diagnostics.push(review_diagnostic(
-                "source_commit_unavailable",
-                "GitLab merge request source commit is unavailable",
-                &request.artifact_url,
-            ));
-        }
-        if review.source_project.is_none() {
-            diagnostics.push(review_diagnostic(
-                "source_project_unavailable",
-                "GitLab merge request source project provenance is unavailable",
-                &request.artifact_url,
-            ));
-        }
-        if !discussions_complete {
-            diagnostics.push(review_diagnostic(
-                "source_discussions_incomplete",
-                "GitLab merge request discussions are unavailable or bounded",
-                &request.artifact_url,
-            ));
-        }
-        if !approvals_complete {
-            diagnostics.push(review_diagnostic(
-                "source_approvals_unavailable",
-                "GitLab merge request approvals are unavailable or bounded",
-                &request.artifact_url,
-            ));
-        }
-        let summary = summary_line("Merge request", &review.state, &review.author, &review.assignees);
-        let mut body = String::new();
-        let header = format!("{}\n", summary);
-        if !budget.append(&mut body, &header) {
-            diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request header exceeded Cockpit's explicit byte budget", &request.artifact_url));
-        }
-        if !review.description.trim().is_empty() {
-            let description = format!("\n## Description\n\n{}", demote_headings(&review.description, 3));
-            if !budget.append(&mut body, &description) {
-                diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request description exceeded Cockpit's explicit byte budget", &request.artifact_url));
-            }
-        }
-        let rendered_notes: Vec<String> = notes
-            .iter()
-            .map(|note| {
-                let edited = edited_timestamp(&note.created_at, &note.updated_at);
-                let extra = review_location(&note.position);
-                format!(
-                    "\n\n### {} · {}{}{}\n[#{id}]({url})\n\n{body}",
-                    note.author,
-                    local_timestamp(&note.created_at),
-                    edited.as_deref().unwrap_or(""),
-                    extra.as_deref().unwrap_or(""),
-                    id = note.id,
-                    url = note.url,
-                    body = demote_headings(&note.body, 4)
-                )
-            })
-            .collect();
-        let shown = comments_that_fit(
-            budget.limit.saturating_sub(budget.used),
-            &rendered_notes,
+        let (approvals, approvals_complete) = self.fetch_approvals(identity, project, budget).await;
+        Ok(ReviewComments {
+            notes,
             discussions_complete,
+            approvals,
+            approvals_complete,
+        })
+    }
+
+    fn assemble_review(
+        &self,
+        request: &SourceFetchRequest,
+        identity: ResolvedIdentity,
+        review: ReviewFacts,
+        comments: ReviewComments,
+        budget: &mut ByteBudget,
+    ) -> Result<SourceAsset, InspectionError> {
+        let ReviewComments {
+            notes,
+            discussions_complete,
+            approvals,
+            approvals_complete,
+        } = comments;
+        let mut diagnostics =
+            review_diagnostics(request, &review, discussions_complete, approvals_complete);
+        let mut body = String::new();
+        append_review_description(request, &review, budget, &mut body, &mut diagnostics);
+        append_review_notes(
+            request,
+            &notes,
+            discussions_complete,
+            budget,
+            &mut body,
+            &mut diagnostics,
         );
-        if !notes.is_empty() {
-            let comment_heading = comments_heading(shown, notes.len(), discussions_complete);
-            if !budget.append(&mut body, &comment_heading) {
-                diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request discussions exceeded Cockpit's explicit byte budget", &request.artifact_url));
-            }
-            if shown < notes.len() {
-                diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request discussions exceeded Cockpit's explicit byte budget", &request.artifact_url));
-            }
-            for rendered in rendered_notes.iter().take(shown) {
-                if !budget.append(&mut body, rendered) {
-                    diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request discussions exceeded Cockpit's explicit byte budget", &request.artifact_url));
-                    break;
-                }
-            }
-        }
-        if let Some(approvals) = approvals.as_ref() {
-            let approved_by = approvals.approved_by.as_deref().unwrap_or(&[]).join(", ");
-            let rendered = format!(
-                "\n\n## Approvals\nApproved: {}\nApprovals left: {}\nApproved by: {}\n",
-                approvals
-                    .approved
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "(unknown)".into()),
-                approvals
-                    .approvals_left
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "(unknown)".into()),
-                if approved_by.is_empty() {
-                    "(none)"
-                } else {
-                    &approved_by
-                },
-            );
-            if !budget.append(&mut body, &rendered) {
-                diagnostics.push(review_diagnostic(
-                    "source_review_truncated",
-                    "GitLab merge request approvals exceeded Cockpit's explicit byte budget",
-                    &request.artifact_url,
-                ));
-            }
-        }
+        append_review_approvals(
+            request,
+            approvals.as_ref(),
+            budget,
+            &mut body,
+            &mut diagnostics,
+        );
         diagnostics.sort_by(|left, right| {
             left.code
                 .cmp(&right.code)
@@ -893,77 +678,17 @@ impl GitlabSourceProvider {
         })
     }
 
-    async fn fetch_inner(
+    fn assemble_issue(
         &self,
         request: &SourceFetchRequest,
+        identity: ResolvedIdentity,
+        issue: IssueFacts,
+        comments: Vec<CommentFacts>,
+        comments_complete: bool,
+        budget: &mut ByteBudget,
     ) -> Result<SourceAsset, InspectionError> {
-        let identity = self.request_identity(request)?;
-        let mut budget = ByteBudget::new(self.limits.0.min(MAX_SOURCE_BYTES));
-        let project = self.fetch_project(&identity, &mut budget).await?;
-        let issue = self.fetch_issue(&identity, &project, &mut budget).await?;
-        let (comments, comments_complete) = self
-            .fetch_comments(&identity, &project, &issue.web_url, &mut budget)
-            .await?;
-        let mut diagnostics = Vec::new();
-        let summary = summary_line("Issue", &issue.state, &issue.author, &issue.assignees);
-        let mut body = String::new();
-        let header = format!("{}\n", summary);
-        if !budget.append(&mut body, &header) {
-            diagnostics.push(truncation_diagnostic(&request.artifact_url));
-        }
-        if !issue.description.trim().is_empty() {
-            let description = format!("\n## Description\n\n{}", demote_headings(&issue.description, 3));
-            if !budget.append(&mut body, &description) {
-                diagnostics.push(truncation_diagnostic(&request.artifact_url));
-            }
-        }
-        let rendered_comments: Vec<String> = comments
-            .iter()
-            .map(|comment| {
-                let edited = edited_timestamp(&comment.created_at, &comment.updated_at);
-                format!(
-                    "\n\n### {} · {}{}\n[#{id}]({url})\n\n{body}",
-                    comment.author,
-                    local_timestamp(&comment.created_at),
-                    edited.as_deref().unwrap_or(""),
-                    id = comment.id,
-                    url = comment.url,
-                    body = demote_headings(&comment.body, 4)
-                )
-            })
-            .collect();
-        let shown = comments_that_fit(
-            budget.limit.saturating_sub(budget.used),
-            &rendered_comments,
-            comments_complete,
-        );
-        if !comments.is_empty() {
-            let comment_heading = comments_heading(shown, comments.len(), comments_complete);
-            if !budget.append(&mut body, &comment_heading) {
-                diagnostics.push(truncation_diagnostic(&request.artifact_url));
-            }
-            if shown < comments.len() {
-                diagnostics.push(truncation_diagnostic(&request.artifact_url));
-            }
-            for rendered in rendered_comments.iter().take(shown) {
-                if !budget.append(&mut body, rendered) {
-                    diagnostics.push(truncation_diagnostic(&request.artifact_url));
-                    break;
-                }
-            }
-        }
-        if shown < comments.len() {
-            diagnostics.push(truncation_diagnostic(&request.artifact_url));
-        }
-        for rendered in rendered_comments.iter().take(shown) {
-            if !budget.append(&mut body, rendered) {
-                diagnostics.push(truncation_diagnostic(&request.artifact_url));
-                break;
-            }
-        }
-        if !comments_complete {
-            diagnostics.push(truncation_diagnostic(&request.artifact_url));
-        }
+        let (body, mut diagnostics) =
+            render_issue(request, &issue, &comments, comments_complete, budget);
         diagnostics.sort_by(|left, right| {
             left.code
                 .cmp(&right.code)
@@ -998,20 +723,20 @@ impl GitlabSourceProvider {
 }
 
 #[derive(Debug)]
-struct ResolvedIdentity {
+pub(crate) struct ResolvedIdentity {
     artifact: ProjectArtifact,
     project_path: String,
     iid: u64,
 }
 
 #[derive(Debug)]
-struct ProjectFacts {
+pub(crate) struct ProjectFacts {
     id: u64,
     web_url: String,
 }
 
 #[derive(Debug)]
-struct IssueFacts {
+pub(crate) struct IssueFacts {
     title: String,
     description: String,
     author: String,
@@ -1029,7 +754,7 @@ struct ProjectIdentity {
 }
 
 #[derive(Debug)]
-struct ReviewFacts {
+pub(crate) struct ReviewFacts {
     title: String,
     description: String,
     state: String,
@@ -1067,7 +792,7 @@ struct ApprovalFacts {
 }
 
 #[derive(Debug)]
-struct CommentFacts {
+pub(crate) struct CommentFacts {
     id: u64,
     author: String,
     created_at: String,
@@ -1076,49 +801,37 @@ struct CommentFacts {
     body: String,
 }
 
-struct ByteBudget {
-    limit: usize,
-    used: usize,
+fn map_execution_error(error: InspectionError, _: &[String]) -> InspectionError {
+    match error.code.as_str() {
+        "execution_timeout" => InspectionError::new(
+            "source_provider_timeout",
+            "GitLab CLI request exceeded the configured deadline",
+        ),
+        "bounded_output" => InspectionError::new(
+            "source_truncated",
+            "GitLab CLI response exceeded Cockpit's explicit process limit",
+        ),
+        "execution_failed" => {
+            InspectionError::new("source_cli_unavailable", "GitLab CLI could not be started")
+        }
+        _ => InspectionError::new("source_provider_failed", "GitLab CLI request failed"),
+    }
 }
 
-impl ByteBudget {
-    fn new(limit: usize) -> Self {
-        Self { limit, used: 0 }
+fn account_json(budget: &mut ByteBudget, value: &Value) -> Result<(), InspectionError> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|_| contract_error("GitLab JSON could not be read"))?
+        .len();
+    if !budget.can_account(bytes) {
+        return Err(InspectionError::new(
+            "source_truncated",
+            "GitLab issue metadata exceeded Cockpit's explicit byte budget",
+        ));
     }
-
-    fn can_account(&self, bytes: usize) -> bool {
-        bytes <= self.limit.saturating_sub(self.used)
-    }
-
-    fn account(&mut self, bytes: usize) {
-        self.used = self.used.saturating_add(bytes);
-    }
-
-    fn account_json(&mut self, value: &Value) -> Result<(), InspectionError> {
-        let bytes = serde_json::to_vec(value)
-            .map_err(|_| contract_error("GitLab JSON could not be read"))?
-            .len();
-        if !self.can_account(bytes) {
-            return Err(InspectionError::new(
-                "source_truncated",
-                "GitLab issue metadata exceeded Cockpit's explicit byte budget",
-            ));
-        }
-        self.account(bytes);
-        Ok(())
-    }
-
-    fn append(&mut self, output: &mut String, value: &str) -> bool {
-        if !self.can_account(value.len()) {
-            return false;
-        }
-        output.push_str(value);
-        self.account(value.len());
-
-        true
-    }
-
+    budget.account(bytes);
+    Ok(())
 }
+
 fn optional_string(
     value: &Value,
     field: &str,
@@ -1560,6 +1273,96 @@ fn hex_digest(input: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+pub(crate) enum GitlabItem {
+    Issue(ProjectFacts, IssueFacts),
+    Review(ProjectFacts, ReviewFacts),
+}
+
+pub(crate) enum GitlabComments {
+    Issue(Vec<CommentFacts>, bool),
+    Review(ReviewComments),
+}
+
+pub(crate) struct ReviewComments {
+    notes: Vec<ReviewNote>,
+    discussions_complete: bool,
+    approvals: Option<ApprovalFacts>,
+    approvals_complete: bool,
+}
+
+impl Forge for GitlabSourceProvider {
+    type Identity = ResolvedIdentity;
+    type Item = GitlabItem;
+    type Comments = GitlabComments;
+
+    fn resolve(&self, request: &SourceFetchRequest) -> Result<ResolvedIdentity, InspectionError> {
+        if self.artifact_is_review(request)? {
+            self.review_identity(request)
+        } else {
+            self.request_identity(request)
+        }
+    }
+
+    fn budget(&self) -> ByteBudget {
+        ByteBudget::new(self.limits.0.min(MAX_SOURCE_BYTES))
+    }
+
+    async fn fetch_item(
+        &self,
+        _: &SourceFetchRequest,
+        identity: &ResolvedIdentity,
+        budget: &mut ByteBudget,
+    ) -> Result<GitlabItem, InspectionError> {
+        let project = self.fetch_project(identity, budget).await?;
+        if identity.artifact.kind == "review" {
+            let review = self.fetch_review(identity, &project, budget).await?;
+            Ok(GitlabItem::Review(project, review))
+        } else {
+            let issue = self.fetch_issue(identity, &project, budget).await?;
+            Ok(GitlabItem::Issue(project, issue))
+        }
+    }
+
+    async fn fetch_comments(
+        &self,
+        identity: &ResolvedIdentity,
+        item: &GitlabItem,
+        budget: &mut ByteBudget,
+    ) -> Result<GitlabComments, InspectionError> {
+        match item {
+            GitlabItem::Issue(project, issue) => {
+                let (comments, complete) = self
+                    .fetch_comments(identity, project, &issue.web_url, budget)
+                    .await?;
+                Ok(GitlabComments::Issue(comments, complete))
+            }
+            GitlabItem::Review(project, review) => Ok(GitlabComments::Review(
+                self.fetch_review_comments(identity, project, review, budget)
+                    .await?,
+            )),
+        }
+    }
+
+    fn assemble(
+        &self,
+        request: &SourceFetchRequest,
+        identity: ResolvedIdentity,
+        item: GitlabItem,
+        comments: GitlabComments,
+        budget: &mut ByteBudget,
+    ) -> Result<SourceAsset, InspectionError> {
+        match (item, comments) {
+            (GitlabItem::Issue(_, issue), GitlabComments::Issue(comments, complete)) => {
+                self.assemble_issue(request, identity, issue, comments, complete, budget)
+            }
+            (GitlabItem::Review(_, review), GitlabComments::Review(comments)) => {
+                self.assemble_review(request, identity, review, comments, budget)
+            }
+            _ => unreachable!("comments belong to the fetched item kind"),
+        }
+    }
+}
+
 #[async_trait]
 impl SourceProvider for GitlabSourceProvider {
     fn provider_id(&self) -> &str {
@@ -1628,279 +1431,9 @@ impl SourceProvider for GitlabSourceProvider {
         &self,
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError> {
-        if self.artifact_is_review(request)? {
-            Ok(vec![self.fetch_review_inner(request).await?])
-        } else {
-            Ok(vec![self.fetch_inner(request).await?])
-        }
+        forge::fetch(self, request).await
     }
 }
-
-/// Linked work items are found in the first part of a description; a very
-/// long one is cut at a character boundary rather than rejected.
-fn bounded_description(mut description: String) -> String {
-    const MAX_DESCRIPTION_BYTES: usize = 64 * 1024;
-    if description.len() > MAX_DESCRIPTION_BYTES {
-        let mut end = MAX_DESCRIPTION_BYTES;
-        while !description.is_char_boundary(end) {
-            end -= 1;
-        }
-        description.truncate(end);
-    }
-    description
-}
-fn comments_heading(shown: usize, total: usize, complete: bool) -> String {
-    if shown == total && complete {
-        format!("\n\n## Comments ({total})")
-    } else {
-        format!("\n\n## Comments ({shown} of {total})")
-    }
-}
-
-fn comments_that_fit(remaining: usize, comments: &[String], complete: bool) -> usize {
-    for shown in (0..=comments.len()).rev() {
-        let heading_len = comments_heading(shown, comments.len(), complete).len();
-        let comments_len = comments[..shown]
-            .iter()
-            .fold(0usize, |total, comment| total.saturating_add(comment.len()));
-        if heading_len.saturating_add(comments_len) <= remaining {
-            return shown;
-        }
-    }
-    0
-}
-
-fn issue_fields(issue: &IssueFacts, comment_count: usize) -> Vec<FrontmatterField> {
-    let fields = vec![
-        string_field("item_type", "Issue"),
-        string_field("status", &status_value(&issue.state)),
-        string_field("author", &issue.author),
-        string_field("created", &rfc3339_seconds(&issue.created_at)),
-        string_field("updated", &rfc3339_seconds(&issue.updated_at)),
-        number_field("comment_count", comment_count),
-        FrontmatterField {
-            key: "assignee".into(),
-            value: if issue.assignees.is_empty() {
-                FrontmatterValue::Null
-            } else {
-                FrontmatterValue::String(issue.assignees.join(", "))
-            },
-        },
-    ];
-    fields
-}
-
-fn review_fields(review: &ReviewFacts, comment_count: usize) -> Vec<FrontmatterField> {
-    vec![
-        string_field("item_type", "Merge request"),
-        string_field("status", &status_value(&review.state)),
-        string_field("author", &review.author),
-        string_field("created", &rfc3339_seconds(&review.created_at)),
-        string_field("updated", &rfc3339_seconds(&review.updated_at)),
-        number_field("comment_count", comment_count),
-        FrontmatterField {
-            key: "assignee".into(),
-            value: if review.assignees.is_empty() {
-                FrontmatterValue::Null
-            } else {
-                FrontmatterValue::String(review.assignees.join(", "))
-            },
-        },
-    ]
-}
-
-fn summary_line(item_type: &str, state: &str, author: &str, assignees: &[String]) -> String {
-    let mut segments = vec![
-        format!("**{item_type}**"),
-        format!("**{}**", status_value(state).chars().enumerate()
-            .map(|(index, character)| if index == 0 { character.to_ascii_uppercase() } else { character })
-            .collect::<String>()),
-        format!("Reporter {author}"),
-    ];
-    segments.push(if assignees.is_empty() {
-        "Unassigned".into()
-    } else {
-        format!("Assignee {}", assignees.join(", "))
-    });
-    segments.join(" · ")
-}
-
-fn status_value(state: &str) -> String {
-    match state.to_ascii_lowercase().as_str() {
-        "opened" | "open" => "open".into(),
-        "closed" => "closed".into(),
-        "merged" => "merged".into(),
-        "draft" => "draft".into(),
-        other => other.into(),
-    }
-}
-
-fn string_field(key: &str, value: &str) -> FrontmatterField {
-    FrontmatterField {
-        key: key.into(),
-        value: FrontmatterValue::String(value.into()),
-    }
-}
-
-fn number_field(key: &str, value: usize) -> FrontmatterField {
-    FrontmatterField {
-        key: key.into(),
-        value: FrontmatterValue::Number(value as i64),
-    }
-}
-
-fn rfc3339_seconds(timestamp: &str) -> String {
-    let mut value = timestamp.to_owned();
-    if let Some(dot) = value.find('.') {
-        let suffix = value[dot..]
-            .find(|character| matches!(character, '+' | '-' | 'Z'))
-            .map(|offset| dot + offset)
-            .unwrap_or(value.len());
-        value.replace_range(dot..suffix, "");
-    }
-    value
-}
-
-fn local_timestamp(timestamp: &str) -> String {
-    let timestamp = rfc3339_seconds(timestamp);
-    timestamp.get(..16).unwrap_or(&timestamp).replace('T', " ")
-}
-
-fn edited_timestamp(created_at: &str, updated_at: &str) -> Option<String> {
-    (rfc3339_seconds(created_at) != rfc3339_seconds(updated_at))
-        .then(|| format!(" · edited {}", local_timestamp(updated_at)))
-}
-
-fn review_location(position: &str) -> Option<String> {
-    position
-        .strip_prefix("review on ")
-        .map(|location| format!(" · review on {location}"))
-}
-
-fn timestamp_order(left: &str, right: &str) -> std::cmp::Ordering {
-    match (timestamp_epoch(left), timestamp_epoch(right)) {
-        (Some(left), Some(right)) => left.cmp(&right),
-        _ => left.cmp(right),
-    }
-}
-
-fn timestamp_epoch(timestamp: &str) -> Option<i64> {
-    fn number(value: &str, range: std::ops::Range<usize>) -> Option<i64> {
-        value.get(range)?.parse().ok()
-    }
-
-    let year = number(timestamp, 0..4)?;
-    let month = number(timestamp, 5..7)?;
-    let day = number(timestamp, 8..10)?;
-    let hour = number(timestamp, 11..13)?;
-    let minute = number(timestamp, 14..16)?;
-    let second = number(timestamp, 17..19)?;
-    let bytes = timestamp.as_bytes();
-    if bytes.get(4) != Some(&b'-')
-        || bytes.get(7) != Some(&b'-')
-        || bytes.get(10) != Some(&b'T')
-        || bytes.get(13) != Some(&b':')
-        || bytes.get(16) != Some(&b':')
-        || !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 60
-    {
-        return None;
-    }
-    let (offset_sign, offset_hours, offset_minutes) = if bytes.last() == Some(&b'Z') {
-        (1, 0, 0)
-    } else {
-        let offset_start = timestamp.len().checked_sub(6)?;
-        let sign = match bytes.get(offset_start)? {
-            b'+' => 1,
-            b'-' => -1,
-            _ => return None,
-        };
-        let hours = number(timestamp, offset_start + 1..offset_start + 3)?;
-        let minutes = number(timestamp, offset_start + 4..offset_start + 6)?;
-        if bytes.get(offset_start + 3) != Some(&b':') || hours > 23 || minutes > 59 {
-            return None;
-        }
-        (sign, hours, minutes)
-    };
-    let adjusted_year = year - if month <= 2 { 1 } else { 0 };
-    let era = adjusted_year.div_euclid(400);
-    let year_of_era = adjusted_year - era * 400;
-    let adjusted_month = month + if month > 2 { -3 } else { 9 };
-    let day_of_year = (153 * adjusted_month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    let days = era * 146_097 + day_of_era;
-    let local_seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
-    let offset_seconds = offset_sign * (offset_hours * 3_600 + offset_minutes * 60);
-    Some(local_seconds - offset_seconds)
-}
-
-fn demote_headings(markdown: &str, minimum_level: usize) -> String {
-    let mut output = String::with_capacity(markdown.len());
-    let mut fence: Option<(u8, usize)> = None;
-    for line in markdown.split_inclusive('\n') {
-        let text = line.strip_suffix('\n').unwrap_or(line);
-        let trimmed = text.trim_start_matches(' ');
-        let indent = text.len() - trimmed.len();
-        if indent <= 3 {
-            let bytes = trimmed.as_bytes();
-            if let Some(marker @ (b'`' | b'~')) = bytes.first().copied() {
-                let run = bytes.iter().take_while(|byte| **byte == marker).count();
-                if run >= 3 {
-                    let suffix = trimmed[run..].trim();
-                    match fence {
-                        Some((open_marker, open_len))
-                            if marker == open_marker && run >= open_len && suffix.is_empty() =>
-                        {
-                            fence = None;
-                        }
-                        None => fence = Some((marker, run)),
-                        _ => {}
-                    }
-                }
-            }
-        }
-        if fence.is_none() {
-            if let Some((prefix_end, level)) = atx_heading(text) {
-                let leading = text.len() - text.trim_start().len();
-                output.push_str(&text[..leading]);
-                output.push_str(&"#".repeat(level.max(minimum_level)));
-                output.push_str(&text[prefix_end..]);
-            } else {
-                output.push_str(text);
-            }
-        } else {
-            output.push_str(text);
-        }
-        if line.ends_with('\n') {
-            output.push('\n');
-        }
-    }
-    output
-}
-
-fn atx_heading(line: &str) -> Option<(usize, usize)> {
-    let leading = line.len() - line.trim_start().len();
-    if leading > 3 {
-        return None;
-    }
-    let bytes = line.as_bytes();
-    let level = bytes[leading..]
-        .iter()
-        .take_while(|byte| **byte == b'#')
-        .count();
-    if !(1..=6).contains(&level)
-        || bytes
-            .get(leading + level)
-            .is_some_and(|byte| *byte != b' ' && *byte != b'\t')
-    {
-        return None;
-    }
-    Some((leading + level, level))
-}
-
 
 #[cfg(test)]
 mod tests {

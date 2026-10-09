@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use crate::forge::{self, ByteBudget, COMMENTS_PER_PAGE, CliRunner, Forge, MAX_COMMENT_PAGES};
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
-use cockpit_core::process::run_bounded_command;
 use cockpit_core::sources::{
     FrontmatterField, FrontmatterValue, SourceAsset, SourceContainer, SourceFetchRequest,
     SourceMetadata, SourceProvider, SourceRef,
@@ -11,10 +11,7 @@ use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::process::Command;
 use url::Url;
-const MAX_COMMENT_PAGES: u32 = 5;
-const COMMENTS_PER_PAGE: u32 = 100;
 const MAX_COMMENT_BYTES: usize = 1024 * 1024;
 const MAX_WIKI_BYTES: usize = 1024 * 1024;
 const WIKI_REVISIONS_PER_PAGE: u32 = 1;
@@ -82,20 +79,32 @@ impl TeaSourceProvider {
         })
     }
     async fn command(&self, args: &[String]) -> Result<Vec<u8>, InspectionError> {
-        let mut c = Command::new(&self.executable);
-        c.args(args).env("GIT_TERMINAL_PROMPT", "0");
-        if let Some(home) = &self.config_home {
-            c.env("XDG_CONFIG_HOME", home);
+        let prompt = ("GIT_TERMINAL_PROMPT", std::ffi::OsStr::new("0"));
+        let env = [
+            prompt,
+            (
+                "XDG_CONFIG_HOME",
+                self.config_home
+                    .as_deref()
+                    .map(|home| home.as_os_str())
+                    .unwrap_or_default(),
+            ),
+        ];
+        let env = if self.config_home.is_some() {
+            &env[..]
+        } else {
+            &env[..1]
+        };
+        CliRunner {
+            executable: &self.executable,
+            limits: self.limits,
+            label: "tea source",
+            failure: classify_cli_failure,
+            execution_error: forge::unchanged_execution_error,
+            empty_response: None,
         }
-        let out = run_bounded_command(c, self.limits.0, self.limits.0, self.limits.1, "tea source")
-            .await?;
-        if !out.status.success() {
-            return Err(InspectionError::new(
-                "source_provider_failed",
-                "Tea read request failed",
-            ));
-        }
-        Ok(out.stdout)
+        .run(args, env)
+        .await
     }
 
     async fn fetch_review(
@@ -103,7 +112,7 @@ impl TeaSourceProvider {
         request: &SourceFetchRequest,
         repo: &str,
         index: u64,
-    ) -> Result<Vec<SourceAsset>, InspectionError> {
+    ) -> Result<(Value, Option<String>), InspectionError> {
         let review: Value = serde_json::from_slice(
             &self
                 .command(&vec![
@@ -139,6 +148,93 @@ impl TeaSourceProvider {
             &self.base_url,
             value_string(&review, &["html_url", "url"]).as_deref(),
         )?;
+        Ok((review, source_url))
+    }
+
+    async fn fetch_issue(
+        &self,
+        request: &SourceFetchRequest,
+        repo: &str,
+        index: u64,
+    ) -> Result<(Issue, Option<String>), InspectionError> {
+        let issue: Issue = serde_json::from_slice(
+            &self
+                .command(&vec![
+                    "issues".into(),
+                    index.to_string(),
+                    "--output".into(),
+                    "json".into(),
+                    "--fields".into(),
+                    "index,title,body,url,updated,state,priority,assignee,assignees,user,created,comments".into(),
+                    "--repo".into(),
+                    repo.into(),
+                    "--login".into(),
+                    self.login.clone(),
+                ])
+                .await?,
+        )
+        .map_err(|_| {
+            InspectionError::new(
+                "source_provider_contract",
+                "Tea issue JSON did not match the verified contract",
+            )
+        })?;
+        if issue.index != index {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "Tea returned a different issue index",
+            ));
+        }
+        let source_url = optional_verified_url(request, &self.base_url, issue.html_url.as_deref())?;
+        Ok((issue, source_url))
+    }
+
+    async fn fetch_issue_comments(
+        &self,
+        repo: &str,
+        index: u64,
+    ) -> Result<Vec<Comment>, InspectionError> {
+        let mut comments = Vec::new();
+        for page in 1..=MAX_COMMENT_PAGES {
+            let page_comments = parse_comments(
+                &self
+                    .command(&vec![
+                        "comments".into(),
+                        "list".into(),
+                        index.to_string(),
+                        "--output".into(),
+                        "json".into(),
+                        "--page".into(),
+                        page.to_string(),
+                        "--limit".into(),
+                        COMMENTS_PER_PAGE.to_string(),
+                        "--repo".into(),
+                        repo.into(),
+                        "--login".into(),
+                        self.login.clone(),
+                    ])
+                    .await?,
+            )?;
+            let full = page_comments.len() == COMMENTS_PER_PAGE as usize;
+            comments.extend(page_comments);
+            if !full {
+                break;
+            }
+            if page == MAX_COMMENT_PAGES {
+                return Err(InspectionError::new(
+                    "source_truncated",
+                    "Tea comment pagination reached Cockpit's explicit limit",
+                ));
+            }
+        }
+        Ok(comments)
+    }
+
+    async fn fetch_review_comments(
+        &self,
+        repo: &str,
+        index: u64,
+    ) -> Result<(Vec<Value>, Vec<Value>), InspectionError> {
         let mut comments = Vec::new();
         for page in 1..=MAX_COMMENT_PAGES {
             let page_comments: Vec<Value> = serde_json::from_slice(
@@ -178,6 +274,21 @@ impl TeaSourceProvider {
                 ));
             }
         }
+        let review_comments = self.fetch_review_positions(repo, index).await?;
+        comments.extend(review_comments.iter().cloned());
+        comments.sort_by(|left, right| {
+            comment_timestamp(left)
+                .cmp(&comment_timestamp(right))
+                .then_with(|| value_string(left, &["id"]).cmp(&value_string(right, &["id"])))
+        });
+        Ok((comments, review_comments))
+    }
+
+    async fn fetch_review_positions(
+        &self,
+        repo: &str,
+        index: u64,
+    ) -> Result<Vec<Value>, InspectionError> {
         let review_comments: Vec<Value> = serde_json::from_slice(
             &self
                 .command(&vec![
@@ -201,97 +312,31 @@ impl TeaSourceProvider {
                 "Tea review-comment JSON did not match the verified contract",
             )
         })?;
-        comments.extend(review_comments.iter().cloned());
-        comments.sort_by(|left, right| {
-            comment_timestamp(left)
-                .cmp(&comment_timestamp(right))
-                .then_with(|| value_string(left, &["id"]).cmp(&value_string(right, &["id"])))
-        });
-        let title = value_string(&review, &["title"]).ok_or_else(|| {
-            InspectionError::new("source_provider_contract", "Tea pull request has no title")
-        })?;
+        Ok(review_comments)
+    }
+
+    fn assemble_review(
+        &self,
+        request: &SourceFetchRequest,
+        repo: String,
+        index: u64,
+        review: Value,
+        source_url: Option<String>,
+        comments: Vec<Value>,
+        review_comments: Vec<Value>,
+    ) -> Result<SourceAsset, InspectionError> {
+        let TeaReviewRendering {
+            title,
+            body,
+            status,
+            author,
+            assignee,
+            created,
+            updated,
+            comment_count,
+        } = render_review(&review, comments, &review_comments)?;
         let item_type = "Pull request";
-        let status = if review.get("draft").and_then(Value::as_bool) == Some(true) {
-            "draft".into()
-        } else if review.get("merged").and_then(Value::as_bool) == Some(true) {
-            "merged".into()
-        } else {
-            status_value(&value_string(&review, &["state"]).unwrap_or_else(|| "open".into()))
-        };
-        let author = review
-            .get("user")
-            .or_else(|| review.get("author"))
-            .and_then(|value| person_name(Some(value)));
-        let assignee = review
-            .get("assignees")
-            .or_else(|| review.get("assignee"))
-            .and_then(|value| person_name(Some(value)));
-        let created = value_string(&review, &["created", "created_at"]);
-        let updated = value_string(&review, &["updated", "updated_at"]);
-        let comment_count = comments.len();
-        let status_line = capitalize_status(&status);
-        let mut summary = vec![format!("**{item_type}**"), format!("**{status_line}**")];
-        if let Some(author) = &author {
-            summary.push(format!("Author {author}"));
-        }
-        if let Some(priority) = value_string(&review, &["priority"]) {
-            summary.push(format!("Priority {priority}"));
-        }
-        summary.push(assignee.as_deref().map_or_else(
-            || "Unassigned".into(),
-            |assignee| format!("Assignee {assignee}"),
-        ));
-        let mut body = format!("{}\n", summary.join(" · "));
-        let description = demote_headings(&value_string(&review, &["body"]).unwrap_or_default(), 3);
-        if !description.trim().is_empty() {
-            append_bounded(&mut body, "\n## Description\n\n", MAX_COMMENT_BYTES)?;
-            append_bounded(&mut body, &description, MAX_COMMENT_BYTES)?;
-        }
-        append_bounded(
-            &mut body,
-            "\n\n### Review metadata\n\nProvider positions below are unverified reference metadata. Cockpit does not use them as local anchors.\n",
-            MAX_COMMENT_BYTES,
-        )?;
-        for (label, value) in [
-            ("Base", value_reference(&review, "base")),
-            (
-                "Base commit",
-                value_string(&review, &["base_commit", "base-commit"]),
-            ),
-            ("Head", value_reference(&review, "head")),
-            (
-                "Head commit",
-                value_string(&review, &["head_commit", "head-commit"]),
-            ),
-        ] {
-            if let Some(value) = value {
-                append_bounded(
-                    &mut body,
-                    &format!("- {label}: {value}\n"),
-                    MAX_COMMENT_BYTES,
-                )?;
-            }
-        }
-        append_bounded(
-            &mut body,
-            "- Diff and structured changed-file metadata: unavailable in Tea 0.15.1's verified read-only JSON path.\n- Review summaries and reply threads: unavailable in Tea 0.15.1's documented read-only JSON commands.\n",
-            MAX_COMMENT_BYTES,
-        )?;
-        if !comments.is_empty() {
-            append_bounded(
-                &mut body,
-                &format!("\n## Comments ({comment_count})\n\n"),
-                MAX_COMMENT_BYTES,
-            )?;
-            for comment in comments {
-                let is_review = review_comments.iter().any(|review_comment| {
-                    value_string(review_comment, &["id"]) == value_string(&comment, &["id"])
-                        && value_string(review_comment, &["path"]).is_some()
-                });
-                append_comment_card(&mut body, &comment, is_review)?;
-            }
-        }
-        Ok(vec![SourceAsset {
+        Ok(SourceAsset {
             source: SourceRef {
                 provider_id: self.provider_id.clone(),
                 provider_instance: request.authority.provider_instance.clone(),
@@ -309,8 +354,8 @@ impl TeaSourceProvider {
             diagnostics: Vec::new(),
             body,
             container: Some(SourceContainer {
-                id: repo.into(),
-                label: repo.into(),
+                id: repo.clone(),
+                label: repo,
             }),
             fields: issue_fields(
                 item_type,
@@ -323,7 +368,58 @@ impl TeaSourceProvider {
                 comment_count,
             ),
             attachments: Vec::new(),
-        }])
+        })
+    }
+
+    fn assemble_issue(
+        &self,
+        request: &SourceFetchRequest,
+        repo: String,
+        issue: Issue,
+        source_url: Option<String>,
+        comments: Vec<Comment>,
+    ) -> Result<SourceAsset, InspectionError> {
+        let source = SourceRef {
+            provider_id: self.provider_id.clone(),
+            provider_instance: request.authority.provider_instance.clone(),
+            resource_type: "issue".into(),
+            canonical_id: format!("{repo}#{}", issue.index),
+        };
+        let TeaIssueRendering {
+            body,
+            status,
+            author,
+            assignee,
+            created,
+            updated,
+            comment_count,
+        } = render_issue(&issue, &comments)?;
+        let item_type = "Issue";
+        Ok(SourceAsset {
+            source,
+            title: issue.title,
+            source_url,
+            original_url: None,
+            source_revision: issue.updated,
+            complete: true,
+            diagnostics: Vec::new(),
+            body,
+            container: Some(SourceContainer {
+                id: repo.clone(),
+                label: repo,
+            }),
+            fields: issue_fields(
+                item_type,
+                Some(status.unwrap_or_else(|| "open".into())),
+                issue.priority,
+                assignee,
+                Some(author.unwrap_or_else(|| "Unknown".into())),
+                created,
+                updated,
+                comment_count,
+            ),
+            attachments: Vec::new(),
+        })
     }
 
     async fn fetch_wiki(
@@ -331,7 +427,7 @@ impl TeaSourceProvider {
         request: &SourceFetchRequest,
         repo: &str,
         page: &str,
-    ) -> Result<Vec<SourceAsset>, InspectionError> {
+    ) -> Result<TeaItem, InspectionError> {
         let wiki: Value = serde_json::from_slice(
             &self
                 .command(&vec![
@@ -380,6 +476,20 @@ impl TeaSourceProvider {
                 "Tea wiki content exceeds Cockpit's explicit byte limit",
             ));
         }
+        Ok(TeaItem::Wiki {
+            wiki,
+            source_url,
+            title,
+            body,
+        })
+    }
+
+    async fn fetch_wiki_revision(
+        &self,
+        wiki: &Value,
+        repo: &str,
+        page: &str,
+    ) -> Result<String, InspectionError> {
         let source_revision = if let Some(revision) =
             value_string(&wiki, &["sha", "updated"]).filter(|value| !value.is_empty())
         {
@@ -424,7 +534,20 @@ impl TeaSourceProvider {
                     )
                 })?
         };
-        Ok(vec![SourceAsset {
+        Ok(source_revision)
+    }
+
+    fn assemble_wiki(
+        &self,
+        request: &SourceFetchRequest,
+        repo: String,
+        page: String,
+        source_url: String,
+        title: String,
+        body: String,
+        source_revision: String,
+    ) -> SourceAsset {
+        SourceAsset {
             source: SourceRef {
                 provider_id: self.provider_id.clone(),
                 provider_instance: request.authority.provider_instance.clone(),
@@ -439,12 +562,12 @@ impl TeaSourceProvider {
             diagnostics: Vec::new(),
             body,
             container: Some(SourceContainer {
-                id: repo.into(),
-                label: repo.into(),
+                id: repo.clone(),
+                label: repo,
             }),
             fields: Vec::new(),
             attachments: Vec::new(),
-        }])
+        }
     }
 
     #[cfg(test)]
@@ -486,7 +609,7 @@ fn normalized_port(url: &Url) -> Option<u16> {
     url.port().filter(|port| *port != default_port)
 }
 #[derive(Deserialize)]
-struct Issue {
+pub(crate) struct Issue {
     index: u64,
     title: String,
     body: Option<String>,
@@ -511,7 +634,7 @@ struct Issue {
     comments: Option<Value>,
 }
 #[derive(Deserialize, Serialize)]
-struct Comment {
+pub(crate) struct Comment {
     #[serde(deserialize_with = "string_or_number")]
     id: String,
     body: Option<String>,
@@ -544,8 +667,14 @@ fn demote_headings(markdown: &str, minimum: usize) -> String {
         let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
         let trimmed = line_without_newline.trim_start();
         let indent = line_without_newline.len() - trimmed.len();
-        let fence_marker = trimmed.as_bytes().first().copied().filter(|byte| *byte == b'`' || *byte == b'~');
-        let fence_len = fence_marker.map(|marker| trimmed.bytes().take_while(|byte| *byte == marker).count()).unwrap_or(0);
+        let fence_marker = trimmed
+            .as_bytes()
+            .first()
+            .copied()
+            .filter(|byte| *byte == b'`' || *byte == b'~');
+        let fence_len = fence_marker
+            .map(|marker| trimmed.bytes().take_while(|byte| *byte == marker).count())
+            .unwrap_or(0);
         if let Some((marker, length)) = fence {
             if fence_marker == Some(marker) && fence_len >= length {
                 fence = None;
@@ -555,7 +684,10 @@ fn demote_headings(markdown: &str, minimum: usize) -> String {
         } else if indent <= 3 && trimmed.starts_with('#') {
             let hashes = trimmed.bytes().take_while(|byte| *byte == b'#').count();
             if (1..=6).contains(&hashes)
-                && trimmed.as_bytes().get(hashes).is_some_and(|byte| byte.is_ascii_whitespace())
+                && trimmed
+                    .as_bytes()
+                    .get(hashes)
+                    .is_some_and(|byte| byte.is_ascii_whitespace())
                 && hashes < minimum
             {
                 result.push_str(&line_without_newline[..indent]);
@@ -613,8 +745,14 @@ fn issue_fields(
         ("status", status.map(|value| status_value(&value))),
         ("priority", priority),
         ("author", author),
-        ("created", created.map(|value| frontmatter_timestamp(&value))),
-        ("updated", updated.map(|value| frontmatter_timestamp(&value))),
+        (
+            "created",
+            created.map(|value| frontmatter_timestamp(&value)),
+        ),
+        (
+            "updated",
+            updated.map(|value| frontmatter_timestamp(&value)),
+        ),
     ] {
         if let Some(value) = value {
             fields.push(text_field(key, value));
@@ -662,11 +800,7 @@ fn frontmatter_timestamp(value: &str) -> String {
         .get(19..)
         .and_then(|suffix| suffix.find(['+', '-']).map(|offset| offset + 19))
         .unwrap_or(value.len());
-    if value[zone..].len() == 5
-        && value[zone..].as_bytes()[1..]
-            .iter()
-            .all(u8::is_ascii_digit)
-    {
+    if value[zone..].len() == 5 && value[zone..].as_bytes()[1..].iter().all(u8::is_ascii_digit) {
         value.insert(zone + 3, ':');
     }
     value
@@ -694,14 +828,17 @@ fn append_comment_card(
     let created = card_timestamp(&created_raw);
     let updated = value_string(comment, &["updated", "updated_at"]);
     let edited = updated.filter(|updated| {
-        !updated.is_empty()
-            && !created_raw.is_empty()
-            && updated.as_str() != created_raw.as_str()
+        !updated.is_empty() && !created_raw.is_empty() && updated.as_str() != created_raw.as_str()
     });
     let path = value_string(comment, &["path"]);
     let line = value_string(comment, &["line"]).filter(|line| !line.is_empty());
     let review_path = if review {
-        path.map(|path| format!(" · review on {path}{}", line.map(|line| format!(":{line}")).unwrap_or_default()))
+        path.map(|path| {
+            format!(
+                " · review on {path}{}",
+                line.map(|line| format!(":{line}")).unwrap_or_default()
+            )
+        })
     } else {
         None
     };
@@ -726,7 +863,7 @@ fn append_comment_card(
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ArtifactKind {
+pub(crate) enum ArtifactKind {
     Issue(u64),
     Review(u64),
     Wiki(String),
@@ -836,7 +973,6 @@ fn card_timestamp(value: &str) -> String {
     }
 }
 
-
 fn value_string(value: &Value, names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| {
         value
@@ -891,8 +1027,7 @@ fn optional_verified_url(
 }
 
 fn append_bounded(body: &mut String, value: &str, limit: usize) -> Result<(), InspectionError> {
-    body.push_str(value);
-    if body.len() > limit {
+    if !ByteBudget::for_output(limit, body).append_checked(body, value) {
         return Err(InspectionError::new(
             "source_truncated",
             "Tea source content exceeds Cockpit's explicit byte limit",
@@ -910,6 +1045,328 @@ fn parse_comments(value: &[u8]) -> Result<Vec<Comment>, InspectionError> {
             "Tea comment JSON did not match the verified contract",
         )
     })
+}
+
+struct TeaIssueRendering {
+    body: String,
+    status: Option<String>,
+    author: Option<String>,
+    assignee: Option<String>,
+    created: Option<String>,
+    updated: Option<String>,
+    comment_count: usize,
+}
+
+fn render_issue(issue: &Issue, comments: &[Comment]) -> Result<TeaIssueRendering, InspectionError> {
+    let status = issue.state.clone().map(|state| status_value(&state));
+    let author = person_name(issue.user.as_ref());
+    let created = issue.created.clone().or(issue.created_at.clone());
+    let updated = issue.updated.clone();
+    let assignee = issue
+        .assignees
+        .as_ref()
+        .or(issue.assignee.as_ref())
+        .and_then(|value| person_name(Some(value)));
+    let comment_count = issue
+        .comments
+        .as_ref()
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            issue
+                .comments
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|values| values.len() as u64)
+        })
+        .unwrap_or(comments.len() as u64)
+        .max(comments.len() as u64) as usize;
+    let item_type = "Issue";
+    let status_text = status.as_deref().unwrap_or("open");
+    let author_text = author.as_deref().unwrap_or("Unknown");
+    let assignee_text = assignee.as_deref().unwrap_or("Unassigned");
+    let mut summary = vec![
+        format!("**{item_type}**"),
+        format!("**{}**", capitalize_status(status_text)),
+    ];
+    if let Some(priority) = &issue.priority {
+        summary.push(format!("Priority {priority}"));
+    }
+    summary.push(format!("Author {author_text}"));
+    summary.push(format!("Assignee {assignee_text}"));
+    let mut body = format!("{}\n", summary.join(" · "));
+    let description = demote_headings(issue.body.as_deref().unwrap_or_default(), 3);
+    if !description.trim().is_empty() {
+        append_bounded(&mut body, "\n## Description\n\n", MAX_COMMENT_BYTES)?;
+        append_bounded(&mut body, &description, MAX_COMMENT_BYTES)?;
+    }
+    if !comments.is_empty() {
+        let mut serialized = comments
+            .iter()
+            .map(|comment| serde_json::to_value(comment).unwrap_or(Value::Null))
+            .collect::<Vec<_>>();
+        serialized.sort_by(|left, right| {
+            comment_timestamp(left)
+                .cmp(&comment_timestamp(right))
+                .then_with(|| value_string(left, &["id"]).cmp(&value_string(right, &["id"])))
+        });
+        append_bounded(
+            &mut body,
+            &format!(
+                "\n\n## Comments ({}{})\n\n",
+                comments.len(),
+                if comment_count > comments.len() {
+                    format!(" of {comment_count}")
+                } else {
+                    String::new()
+                }
+            ),
+            MAX_COMMENT_BYTES,
+        )?;
+        for comment in serialized {
+            append_comment_card(&mut body, &comment, false)?;
+        }
+    }
+    Ok(TeaIssueRendering {
+        body,
+        status,
+        author,
+        assignee,
+        created,
+        updated,
+        comment_count,
+    })
+}
+
+fn append_review_metadata(body: &mut String, review: &Value) -> Result<(), InspectionError> {
+    append_bounded(
+        body,
+        "\n\n### Review metadata\n\nProvider positions below are unverified reference metadata. Cockpit does not use them as local anchors.\n",
+        MAX_COMMENT_BYTES,
+    )?;
+    for (label, value) in [
+        ("Base", value_reference(&review, "base")),
+        (
+            "Base commit",
+            value_string(&review, &["base_commit", "base-commit"]),
+        ),
+        ("Head", value_reference(&review, "head")),
+        (
+            "Head commit",
+            value_string(&review, &["head_commit", "head-commit"]),
+        ),
+    ] {
+        if let Some(value) = value {
+            append_bounded(body, &format!("- {label}: {value}\n"), MAX_COMMENT_BYTES)?;
+        }
+    }
+    append_bounded(
+        body,
+        "- Diff and structured changed-file metadata: unavailable in Tea 0.15.1's verified read-only JSON path.\n- Review summaries and reply threads: unavailable in Tea 0.15.1's documented read-only JSON commands.\n",
+        MAX_COMMENT_BYTES,
+    )?;
+    Ok(())
+}
+
+fn append_review_comments(
+    body: &mut String,
+    comments: Vec<Value>,
+    review_comments: &[Value],
+) -> Result<(), InspectionError> {
+    let comment_count = comments.len();
+    if !comments.is_empty() {
+        append_bounded(
+            body,
+            &format!("\n## Comments ({comment_count})\n\n"),
+            MAX_COMMENT_BYTES,
+        )?;
+        for comment in comments {
+            let is_review = review_comments.iter().any(|review_comment| {
+                value_string(review_comment, &["id"]) == value_string(&comment, &["id"])
+                    && value_string(review_comment, &["path"]).is_some()
+            });
+            append_comment_card(body, &comment, is_review)?;
+        }
+    }
+    Ok(())
+}
+
+struct TeaReviewRendering {
+    title: String,
+    body: String,
+    status: String,
+    author: Option<String>,
+    assignee: Option<String>,
+    created: Option<String>,
+    updated: Option<String>,
+    comment_count: usize,
+}
+
+fn render_review(
+    review: &Value,
+    comments: Vec<Value>,
+    review_comments: &[Value],
+) -> Result<TeaReviewRendering, InspectionError> {
+    let title = value_string(&review, &["title"]).ok_or_else(|| {
+        InspectionError::new("source_provider_contract", "Tea pull request has no title")
+    })?;
+    let item_type = "Pull request";
+    let status = if review.get("draft").and_then(Value::as_bool) == Some(true) {
+        "draft".into()
+    } else if review.get("merged").and_then(Value::as_bool) == Some(true) {
+        "merged".into()
+    } else {
+        status_value(&value_string(&review, &["state"]).unwrap_or_else(|| "open".into()))
+    };
+    let author = review
+        .get("user")
+        .or_else(|| review.get("author"))
+        .and_then(|value| person_name(Some(value)));
+    let assignee = review
+        .get("assignees")
+        .or_else(|| review.get("assignee"))
+        .and_then(|value| person_name(Some(value)));
+    let created = value_string(&review, &["created", "created_at"]);
+    let updated = value_string(&review, &["updated", "updated_at"]);
+    let comment_count = comments.len();
+    let status_line = capitalize_status(&status);
+    let mut summary = vec![format!("**{item_type}**"), format!("**{status_line}**")];
+    if let Some(author) = &author {
+        summary.push(format!("Author {author}"));
+    }
+    if let Some(priority) = value_string(&review, &["priority"]) {
+        summary.push(format!("Priority {priority}"));
+    }
+    summary.push(assignee.as_deref().map_or_else(
+        || "Unassigned".into(),
+        |assignee| format!("Assignee {assignee}"),
+    ));
+    let mut body = format!("{}\n", summary.join(" · "));
+    let description = demote_headings(&value_string(&review, &["body"]).unwrap_or_default(), 3);
+    if !description.trim().is_empty() {
+        append_bounded(&mut body, "\n## Description\n\n", MAX_COMMENT_BYTES)?;
+        append_bounded(&mut body, &description, MAX_COMMENT_BYTES)?;
+    }
+    append_review_metadata(&mut body, review)?;
+    append_review_comments(&mut body, comments, review_comments)?;
+    Ok(TeaReviewRendering {
+        title,
+        body,
+        status,
+        author,
+        assignee,
+        created,
+        updated,
+        comment_count,
+    })
+}
+
+pub(crate) enum TeaItem {
+    Issue(Issue, Option<String>),
+    Review(Value, Option<String>),
+    Wiki {
+        wiki: Value,
+        source_url: String,
+        title: String,
+        body: String,
+    },
+}
+
+pub(crate) enum TeaComments {
+    Issue(Vec<Comment>),
+    Review(Vec<Value>, Vec<Value>),
+    Wiki(String),
+}
+
+impl Forge for TeaSourceProvider {
+    type Identity = (String, ArtifactKind);
+    type Item = TeaItem;
+    type Comments = TeaComments;
+
+    fn resolve(&self, request: &SourceFetchRequest) -> Result<Self::Identity, InspectionError> {
+        artifact_kind(request, &self.base_url)
+    }
+
+    fn budget(&self) -> ByteBudget {
+        ByteBudget::new(MAX_COMMENT_BYTES)
+    }
+
+    async fn fetch_item(
+        &self,
+        request: &SourceFetchRequest,
+        identity: &Self::Identity,
+        _: &mut ByteBudget,
+    ) -> Result<TeaItem, InspectionError> {
+        let (repo, kind) = identity;
+        match kind {
+            ArtifactKind::Issue(index) => {
+                let (issue, url) = self.fetch_issue(request, repo, *index).await?;
+                Ok(TeaItem::Issue(issue, url))
+            }
+            ArtifactKind::Review(index) => {
+                let (review, url) = self.fetch_review(request, repo, *index).await?;
+                Ok(TeaItem::Review(review, url))
+            }
+            ArtifactKind::Wiki(page) => self.fetch_wiki(request, repo, page).await,
+        }
+    }
+
+    async fn fetch_comments(
+        &self,
+        identity: &Self::Identity,
+        item: &TeaItem,
+        _: &mut ByteBudget,
+    ) -> Result<TeaComments, InspectionError> {
+        let (repo, kind) = identity;
+        match (kind, item) {
+            (ArtifactKind::Issue(index), TeaItem::Issue(..)) => Ok(TeaComments::Issue(
+                self.fetch_issue_comments(repo, *index).await?,
+            )),
+            (ArtifactKind::Review(index), TeaItem::Review(..)) => {
+                let (comments, positions) = self.fetch_review_comments(repo, *index).await?;
+                Ok(TeaComments::Review(comments, positions))
+            }
+            (ArtifactKind::Wiki(page), TeaItem::Wiki { wiki, .. }) => Ok(TeaComments::Wiki(
+                self.fetch_wiki_revision(wiki, repo, page).await?,
+            )),
+            _ => unreachable!("resolved identity belongs to the fetched item kind"),
+        }
+    }
+
+    fn assemble(
+        &self,
+        request: &SourceFetchRequest,
+        identity: Self::Identity,
+        item: TeaItem,
+        comments: TeaComments,
+        _: &mut ByteBudget,
+    ) -> Result<SourceAsset, InspectionError> {
+        let (repo, kind) = identity;
+        match (kind, item, comments) {
+            (ArtifactKind::Issue(_), TeaItem::Issue(issue, url), TeaComments::Issue(comments)) => {
+                self.assemble_issue(request, repo, issue, url, comments)
+            }
+            (
+                ArtifactKind::Review(index),
+                TeaItem::Review(review, url),
+                TeaComments::Review(comments, positions),
+            ) => self.assemble_review(request, repo, index, review, url, comments, positions),
+            (
+                ArtifactKind::Wiki(page),
+                TeaItem::Wiki {
+                    source_url,
+                    title,
+                    body,
+                    ..
+                },
+                TeaComments::Wiki(revision),
+            ) => Ok(self.assemble_wiki(request, repo, page, source_url, title, body, revision)),
+            _ => unreachable!("comments belong to the fetched item kind"),
+        }
+    }
+}
+
+fn classify_cli_failure(_: &[u8]) -> InspectionError {
+    InspectionError::new("source_provider_failed", "Tea read request failed")
 }
 
 #[async_trait]
@@ -1031,162 +1488,7 @@ impl SourceProvider for TeaSourceProvider {
         &self,
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError> {
-        let (repo, kind) = artifact_kind(request, &self.base_url)?;
-        let ArtifactKind::Issue(index) = kind else {
-            return match kind {
-                ArtifactKind::Review(index) => self.fetch_review(request, &repo, index).await,
-                ArtifactKind::Wiki(page) => self.fetch_wiki(request, &repo, &page).await,
-                ArtifactKind::Issue(_) => unreachable!(),
-            };
-        };
-        let issue: Issue = serde_json::from_slice(
-            &self
-                .command(&vec![
-                    "issues".into(),
-                    index.to_string(),
-                    "--output".into(),
-                    "json".into(),
-                    "--fields".into(),
-                    "index,title,body,url,updated,state,priority,assignee,assignees,user,created,comments".into(),
-                    "--repo".into(),
-                    repo.clone(),
-                    "--login".into(),
-                    self.login.clone(),
-                ])
-                .await?,
-        )
-        .map_err(|_| {
-            InspectionError::new(
-                "source_provider_contract",
-                "Tea issue JSON did not match the verified contract",
-            )
-        })?;
-        if issue.index != index {
-            return Err(InspectionError::new(
-                "source_provider_contract",
-                "Tea returned a different issue index",
-            ));
-        }
-        let source_url =
-            optional_verified_url(request, &self.base_url, issue.html_url.as_deref())?;
-        let mut comments = Vec::new();
-        for page in 1..=MAX_COMMENT_PAGES {
-            let page_comments = parse_comments(
-                &self
-                    .command(&vec![
-                        "comments".into(),
-                        "list".into(),
-                        index.to_string(),
-                        "--output".into(),
-                        "json".into(),
-                        "--page".into(),
-                        page.to_string(),
-                        "--limit".into(),
-                        COMMENTS_PER_PAGE.to_string(),
-                        "--repo".into(),
-                        repo.clone(),
-                        "--login".into(),
-                        self.login.clone(),
-                    ])
-                    .await?,
-            )?;
-            let full = page_comments.len() == COMMENTS_PER_PAGE as usize;
-            comments.extend(page_comments);
-            if !full {
-                break;
-            }
-            if page == MAX_COMMENT_PAGES {
-                return Err(InspectionError::new(
-                    "source_truncated",
-                    "Tea comment pagination reached Cockpit's explicit limit",
-                ));
-            }
-        }
-        let source = SourceRef {
-            provider_id: self.provider_id.clone(),
-            provider_instance: request.authority.provider_instance.clone(),
-            resource_type: "issue".into(),
-            canonical_id: format!("{repo}#{}", issue.index),
-        };
-        let status = issue.state.clone().map(|state| status_value(&state));
-        let author = person_name(issue.user.as_ref());
-        let created = issue.created.clone().or(issue.created_at.clone());
-        let updated = issue.updated.clone();
-        let assignee = issue
-            .assignees
-            .as_ref()
-            .or(issue.assignee.as_ref())
-            .and_then(|value| person_name(Some(value)));
-        let comment_count = issue
-            .comments
-            .as_ref()
-            .and_then(Value::as_u64)
-            .or_else(|| issue.comments.as_ref().and_then(Value::as_array).map(|values| values.len() as u64))
-            .unwrap_or(comments.len() as u64)
-            .max(comments.len() as u64) as usize;
-        let item_type = "Issue";
-        let status_text = status.as_deref().unwrap_or("open");
-        let author_text = author.as_deref().unwrap_or("Unknown");
-        let assignee_text = assignee.as_deref().unwrap_or("Unassigned");
-        let mut summary = vec![
-            format!("**{item_type}**"),
-            format!("**{}**", capitalize_status(status_text)),
-        ];
-        if let Some(priority) = &issue.priority {
-            summary.push(format!("Priority {priority}"));
-        }
-        summary.push(format!("Author {author_text}"));
-        summary.push(format!("Assignee {assignee_text}"));
-        let mut body = format!("{}\n", summary.join(" · "));
-        let description = demote_headings(issue.body.as_deref().unwrap_or_default(), 3);
-        if !description.trim().is_empty() {
-            append_bounded(&mut body, "\n## Description\n\n", MAX_COMMENT_BYTES)?;
-            append_bounded(&mut body, &description, MAX_COMMENT_BYTES)?;
-        }
-        if !comments.is_empty() {
-            let mut serialized = comments
-                .iter()
-                .map(|comment| serde_json::to_value(comment).unwrap_or(Value::Null))
-                .collect::<Vec<_>>();
-            serialized.sort_by(|left, right| {
-                comment_timestamp(left)
-                    .cmp(&comment_timestamp(right))
-                    .then_with(|| value_string(left, &["id"]).cmp(&value_string(right, &["id"])))
-            });
-            append_bounded(
-                &mut body,
-                &format!("\n\n## Comments ({}{})\n\n", comments.len(), if comment_count > comments.len() { format!(" of {comment_count}") } else { String::new() }),
-                MAX_COMMENT_BYTES,
-            )?;
-            for comment in serialized {
-                append_comment_card(&mut body, &comment, false)?;
-            }
-        }
-        Ok(vec![SourceAsset {
-            source,
-            title: issue.title,
-            source_url,
-            original_url: None,
-            source_revision: issue.updated,
-            complete: true,
-            diagnostics: Vec::new(),
-            body,
-            container: Some(SourceContainer {
-                id: repo.clone(),
-                label: repo,
-            }),
-            fields: issue_fields(
-                item_type,
-                Some(status.unwrap_or_else(|| "open".into())),
-                issue.priority,
-                assignee,
-                Some(author.unwrap_or_else(|| "Unknown".into())),
-                created,
-                updated,
-                comment_count,
-            ),
-            attachments: Vec::new(),
-        }])
+        forge::fetch(self, request).await
     }
 }
 
