@@ -1416,7 +1416,6 @@ mod tests {
         sources::SourceCapability,
     };
     use std::{
-        collections::BTreeMap,
         sync::{
             Mutex,
             atomic::{AtomicBool, Ordering},
@@ -1550,13 +1549,8 @@ mod tests {
     pub(super) fn fixture() -> Fixture {
         let root = std::env::temp_dir().join(format!("cockpit-library-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let configuration = ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![],
-        worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
-        companion_root: root.join("companions").to_string_lossy().into_owned(),
-        state_root: root.join("state").to_string_lossy().into_owned(),
-        cache_root: root.join("cache").to_string_lossy().into_owned(),
-        library_root: root.join("library").to_string_lossy().into_owned(),
-        notes_root: root.join("notes").to_string_lossy().into_owned(),
+        let configuration = ProjectConfiguration {
+        repository_roots: vec![],
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
@@ -1585,7 +1579,8 @@ mod tests {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20000,
         },
-        origins: BTreeMap::new(), };
+        ..ProjectConfiguration::for_tests(&root)
+        };
         let provider = Arc::new(Provider {
             state: Mutex::new(ProviderState {
                 body: "Original body".into(),

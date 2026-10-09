@@ -71,13 +71,8 @@ elif name == 'glab':
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let config = ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![],
-        worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
-        companion_root: root.join("companions").to_string_lossy().into_owned(),
-        state_root: root.join("state").to_string_lossy().into_owned(),
-        cache_root: root.join("cache").to_string_lossy().into_owned(),
-        library_root: root.join("library").to_string_lossy().into_owned(),
-        notes_root: root.join("notes").to_string_lossy().into_owned(),
+        let config = ProjectConfiguration {
+        repository_roots: vec![],
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
@@ -106,7 +101,8 @@ elif name == 'glab':
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: Default::default(), };
+        ..ProjectConfiguration::for_tests(&root)
+        };
         let data = serde_json::from_str(include_str!("fixtures/source_contracts.json")).unwrap();
         let fixture = Self { root, config, data };
         fixture.save();

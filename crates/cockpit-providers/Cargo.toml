@@ -19,5 +19,8 @@ parking_lot.workspace = true
 cockpit-core = { path = "../cockpit-core" }
 cockpit-protocol = { path = "../cockpit-protocol" }
 
+[dev-dependencies]
+cockpit-protocol = { path = "../cockpit-protocol", features = ["test-support"] }
+
 [lints]
 workspace = true

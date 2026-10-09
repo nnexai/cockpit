@@ -101,7 +101,7 @@ mod tests {
     use super::RepositoryDiscoveryCache;
     use crate::repositories::RepositoryCatalog;
     use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits};
-    use std::{collections::BTreeMap, path::{Path, PathBuf}, sync::Arc, time::Duration};
+    use std::{path::{Path, PathBuf}, sync::Arc, time::Duration};
 
     struct TempRoot(PathBuf);
 
@@ -126,16 +126,11 @@ mod tests {
     }
 
     fn configuration(root: &Path) -> ProjectConfiguration {
-        ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![root.display().to_string()],
-        worktree_root: "worktrees".into(),
-        companion_root: "companions".into(),
-        state_root: "state".into(),
-        cache_root: "cache".into(),
-        library_root: "library".into(),
+        ProjectConfiguration {
+        repository_roots: vec![root.display().to_string()],
         notes_root: root.with_extension("notes").display().to_string(),
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
-        providers: Vec::new(),
         limits: ProjectLimits {
             catalog_depth: 3,
             catalog_entries: 100,
@@ -154,7 +149,8 @@ mod tests {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: BTreeMap::new(), }
+        ..ProjectConfiguration::for_tests(Path::new(""))
+        }
     }
 
     #[tokio::test]

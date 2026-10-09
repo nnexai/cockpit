@@ -17,8 +17,6 @@ const MEDIA: &str = "media-query-private";
 
 fn configuration(base_url: &str, service: Service) -> ProjectConfiguration {
     ProjectConfiguration {
-        version: 1,
-        orchestration: Default::default(),
         repository_roots: vec![],
         worktree_root: "/tmp/w".into(),
         companion_root: "/tmp/c".into(),
@@ -57,7 +55,7 @@ fn configuration(base_url: &str, service: Service) -> ProjectConfiguration {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: Default::default(),
+        ..ProjectConfiguration::for_tests(std::path::Path::new("/tmp"))
     }
 }
 

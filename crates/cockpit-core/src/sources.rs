@@ -1591,7 +1591,6 @@ pub(crate) fn source_id(source: &SourceRef) -> String {
 mod tests {
     use super::*;
     use cockpit_protocol::projects::{ProjectLimits, ProjectProvider};
-    use std::collections::BTreeMap;
     use std::sync::Mutex;
     use uuid::Uuid;
 
@@ -1812,13 +1811,12 @@ mod tests {
     fn service(asset: SourceAsset) -> (SourceService, Arc<Mutex<SourceAsset>>, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!("cockpit-source-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("root");
-        let config = ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![],
+        let config = ProjectConfiguration {
+        repository_roots: vec![],
         worktree_root: "worktrees".into(),
         companion_root: "companions".into(),
         state_root: root.to_string_lossy().into_owned(),
-        cache_root: root.join("cache").to_string_lossy().into_owned(),
         library_root: "library".into(),
-        notes_root: root.join("notes").to_string_lossy().into_owned(),
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),
         providers: vec![ProjectProvider {
@@ -1847,7 +1845,8 @@ mod tests {
             library_item_attachment_bytes: 100 * 1024 * 1024,
             library_max_items: 20_000,
         },
-        origins: BTreeMap::new(), };
+        ..ProjectConfiguration::for_tests(&root)
+        };
         let shared = Arc::new(Mutex::new(asset));
         let service =
             SourceService::new(&config, vec![Arc::new(Provider(shared.clone()))]).expect("service");

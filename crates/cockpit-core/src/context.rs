@@ -1392,12 +1392,11 @@ fn diagnostic(code: &str, message: &str, path: Option<&str>) -> ProjectDiagnosti
 #[cfg(test)]
 mod review_checkout_tests {
     use super::*;
-    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use cockpit_protocol::{
         viewer::{ViewerContext, ViewerKind, ViewerOpenRequest, ViewerSourceSelector},
-        projects::{ProjectLimits, ProjectProvider},
+        projects::ProjectProvider,
         v1::{
             FocusRequest, FocusResponse, HerdrCompatibility, ResourceMutationRequest,
             ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse,
@@ -1857,42 +1856,20 @@ mod review_checkout_tests {
     }
 
     fn configuration(root: &Path) -> ProjectConfiguration {
-        ProjectConfiguration { version: 1, orchestration: Default::default(), repository_roots: vec![root.to_string_lossy().into_owned()],
-        worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
-        companion_root: root.join("companions").to_string_lossy().into_owned(),
-        state_root: root.join("state").to_string_lossy().into_owned(),
-        cache_root: root.join("cache").to_string_lossy().into_owned(),
-        library_root: root.join("library").to_string_lossy().into_owned(),
-        notes_root: root.with_extension("notes").to_string_lossy().into_owned(),
-        branch_template: "{repo}/{task_id}".to_owned(),
-        checkout_template: "{repo}-{task_id}".to_owned(),
-        providers: vec![ProjectProvider {
-            id: "test".to_owned(),
-            kind: cockpit_protocol::projects::ProviderKind::Gitea,
-            base_url: "https://example.test/".to_owned(),
-            executable: Some("false".to_owned()),
-            login: None,
-            deployment: None,
-        }],
-        limits: ProjectLimits {
-            catalog_depth: 4,
-            catalog_entries: 256,
-            git_timeout_ms: 2_000,
-            git_output_bytes: 2 * 1024 * 1024,
-            operation_timeout_ms: 2_000,
-            context_preview_bytes: 1024 * 1024,
-            context_preview_lines: 2_000,
-            context_directory_entries: 64,
-            context_tree_depth: 8,
-            library_folder_files: 512,
-            library_folder_bytes: 32 * 1024 * 1024,
-            library_file_bytes: 4 * 1024 * 1024,
-            library_space_pages: 200,
-            library_attachment_bytes: 25 * 1024 * 1024,
-            library_item_attachment_bytes: 100 * 1024 * 1024,
-            library_max_items: 20_000,
-        },
-        origins: BTreeMap::new(), }
+        ProjectConfiguration {
+            notes_root: root.with_extension("notes").to_string_lossy().into_owned(),
+            branch_template: "{repo}/{task_id}".to_owned(),
+            checkout_template: "{repo}-{task_id}".to_owned(),
+            providers: vec![ProjectProvider {
+                id: "test".to_owned(),
+                kind: cockpit_protocol::projects::ProviderKind::Gitea,
+                base_url: "https://example.test/".to_owned(),
+                executable: Some("false".to_owned()),
+                login: None,
+                deployment: None,
+            }],
+            ..ProjectConfiguration::for_tests(root)
+        }
     }
 
     fn git(root: &Path, args: &[&str]) {
