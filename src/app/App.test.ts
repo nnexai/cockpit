@@ -1,15 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ResourceMutationRequest, ResourceMutationResponse, SessionSnapshotResponse, SessionSummary, TerminalCommand } from "../protocol/generated/v1";
-import {
-  authoritativeMutationSnapshot,
-  canSwitchSessions,
-  contextMenuPosition,
-  mutationFailureCanRetry,
-  moveDestinationLabel,
-  reconcileSessionChoice,
-  rendererReasonFor,
-  tabLabelIsRedundant,
-} from "./App";
+import type { HerdrCommand, ResourceMutationRequest, ResourceMutationResponse, SessionSnapshotResponse, SessionSummary, SpaceGitStatus, TerminalCommand, ViewerSourceOptions } from "../protocol/generated/v1";
+import { authoritativeMutationSnapshot } from "./shell/model";
+import { contextMenuPosition } from "./shell/ContextMenu";
+import { mutationFailureCanRetry } from "./shell/RecoveryPanel";
+import { moveDestinationLabel } from "./shell/PaneDialogOverlay";
+import { reconcileSessionChoice } from "./shell/SessionDialogOverlay";
+import { tabLabelIsRedundant } from "./shell/TabStrip";
+import { buildCommands, rendererAvailability, viewerCapability, viewerSourcesDetail, type CommandInput, type ViewerSourcesState } from "./shell/commands";
+import { initialWorkareaState, workareaReducer } from "./shell/useWorkarea";
 import { tabDropInsertionIndex } from "./layout/layoutProjection";
 import { initialMutationCoordinatorState, mutationCoordinatorReducer } from "./session/mutationCoordinator";
 import { initialSessionState, sessionReducer } from "./session/sessionStore";
@@ -167,11 +165,6 @@ describe("desktop command routing", () => {
   });
 
 
-  it("offers session switching only when another session exists", () => {
-    expect(canSwitchSessions(0)).toBe(false);
-    expect(canSwitchSessions(1)).toBe(false);
-    expect(canSwitchSessions(2)).toBe(true);
-  });
   it("replays only idempotent absolute mutations", () => {
     const retryable: ResourceMutationRequest[] = [
       { type: "space_rename", space_id: "space-1", label: "Main" },
@@ -242,13 +235,169 @@ describe("focus fallback", () => {
   });
 });
 
-describe("rendererReasonFor", () => {
-  const chain = "pane is not a supported extension; Open Context requires a live Space for Library context; Open files requires a safe source pane directory";
-  it("picks the clause for the requested action", () => {
-    expect(rendererReasonFor("context", chain)).toBe("Requires a live Space for Library context");
-    expect(rendererReasonFor("files", chain)).toBe("Requires a safe source pane directory");
+function viewerOptions(overrides: Partial<ViewerSourceOptions> = {}): ViewerSourceOptions {
+  return {
+    session_id: "session-1", pane_id: "pane-1", tab_id: "tab-1", space_id: "space-1",
+    files_context_root_id: null, files_folder_root_id: null, review_repository_ids: [],
+    roots: [], reason: "Files use the full Library, selected repositories, or this terminal's verified folder",
+    diagnostics: [], ...overrides,
+  };
+}
+
+describe("renderer capabilities", () => {
+  it("uses each DTO capability independently, not diagnostic wording", () => {
+    const capabilities = [
+      ["review", { review_repository_ids: ["repo-1"] }],
+      ["files", { files_folder_root_id: "folder-1" }],
+      ["context", { files_context_root_id: "library-1" }],
+    ] as const;
+    for (const [kind, options] of capabilities) {
+      const state: ViewerSourcesState = { status: "ready", options: viewerOptions({ ...options, review_repository_ids: "review_repository_ids" in options ? [...options.review_repository_ids] : [], reason: "Viewer source diagnostic detail" }) };
+      for (const candidate of ["review", "files", "context"] as const) {
+        expect(viewerCapability(candidate, state)).toBe(candidate === kind);
+      }
+    }
+    for (const state of [{ status: "pending", source: true }, { status: "failed", message: "Could not inspect sources" }] satisfies ViewerSourcesState[]) {
+      expect(viewerCapability("review", state)).toBe(false);
+    }
   });
-  it("leaves unmatched chains to the caller's fallback", () => {
-    expect(rendererReasonFor("review", chain)).toBeUndefined();
+
+  it("keeps source details while gating live and busy renderer execution", () => {
+    const ready: ViewerSourcesState = { status: "ready", options: viewerOptions({ review_repository_ids: ["repo-1"] }) };
+    const detail = ready.options.reason;
+    expect(rendererAvailability("review", ready, true, false)).toEqual({ enabled: true, reason: detail, detail });
+    expect(rendererAvailability("review", ready, true, true)).toEqual({ enabled: false, reason: detail, detail });
+    expect(rendererAvailability("review", ready, false, false)).toMatchObject({ enabled: false, detail });
+    expect(rendererAvailability("review", ready, false, false).reason).not.toBe(detail);
+    expect(rendererAvailability("context", ready, true, false)).toMatchObject({ enabled: false, detail });
+    expect(rendererAvailability("context", ready, true, false).reason).not.toBe(detail);
+    const failed: ViewerSourcesState = { status: "failed", message: "Could not inspect sources" };
+    expect(viewerSourcesDetail(failed)).toBe(failed.message);
+    expect(viewerSourcesDetail({ status: "pending", source: true })).not.toBe(viewerSourcesDetail({ status: "pending", source: false }));
+  });
+});
+
+function commandInput(): CommandInput {
+  const source = snapshot();
+  return {
+    herdr: { commands: [], prefixes: [], reason: undefined, popupOpen: false },
+    view: {
+      spaces: source.spaces, allTabs: source.tabs, selectedSpace: source.spaces[0], selectedTab: source.tabs[0],
+      selectedLeaf: { t: "leaf", kind: "terminal", id: "pane-1", w: 1 }, selectedPane: source.panes[0], live: true, busy: false,
+    },
+    libraryOpen: false, notesOpen: false, browser: { open: false, reason: null },
+    git: { target: undefined, status: undefined, pending: undefined, blocked: undefined },
+    widgets: { pending: false, dockTabId: null, list: [] },
+    viewerSources: { status: "ready", options: viewerOptions() },
+    local: {},
+    run: {
+      herdr: vi.fn(), prefix: vi.fn(), supervisor: vi.fn(), git: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
+      openBrowser: vi.fn(), closeBrowser: vi.fn(), retryBrowserCleanup: vi.fn(), showWidgets: vi.fn(),
+      cycleWidget: vi.fn(), removeWidget: vi.fn(), goToWidget: vi.fn(), libraryAdd: vi.fn(), library: vi.fn(), openViewer: vi.fn(),
+    },
+  };
+}
+
+describe("command consumers", () => {
+  it("offers local subscription limits only with a bound handler", () => {
+    const input = commandInput();
+    expect(buildCommands(input).find(row => row.id === "subscription-limits")).toBeUndefined();
+    input.local = { "subscription-limits": () => undefined };
+    expect(buildCommands(input).find(row => row.id === "subscription-limits")).toBeDefined();
+  });
+
+  it("gates missing selections and renderer capabilities without losing their details", () => {
+    const input = commandInput();
+    input.view.selectedSpace = undefined;
+    input.view.selectedTab = undefined;
+    input.view.selectedLeaf = undefined;
+    input.view.selectedPane = undefined;
+    input.browser = { open: false, reason: "Select a tab first" };
+    input.viewerSources = { status: "failed", message: "Source inspection failed" };
+    const rows = buildCommands(input);
+    expect(rows.find(row => row.id === "prefix:rename-space")?.disabled).toBe(true);
+    expect(rows.find(row => row.id === "prefix:rename-tab")?.disabled).toBe(true);
+    expect(rows.find(row => row.id === "prefix:rename-pane")?.disabled).toBe(true);
+    expect(rows.find(row => row.id === "browser:open")).toMatchObject({ disabled: true, reason: input.browser.reason });
+    expect(rows.find(row => row.id === "renderer:files")).toMatchObject({ disabled: true, reason: input.viewerSources.message, reasonDetail: input.viewerSources.message });
+    expect(rows.find(row => row.id === "renderer:context")).toMatchObject({ disabled: true, reasonDetail: input.viewerSources.message });
+    input.view.selectedLeaf = { t: "leaf", kind: "files", id: "files-1", w: 1 };
+    expect(buildCommands(input).find(row => row.id === "prefix:rename-pane")?.disabled).toBe(true);
+    input.view.live = false;
+    expect(buildCommands(input).find(row => row.id === "prefix:setup-space")?.disabled).toBe(true);
+  });
+
+  it("targets Git actions at the confirmed checkout rather than the displayed selection", () => {
+    const input = commandInput();
+    const target = { ...snapshot().spaces[0], id: "confirmed-space", label: "Confirmed" };
+    const status: SpaceGitStatus = {
+      space_id: target.id, source: "herdr_checkout",
+      checkout: { state: "branch", root: "/checkout", branch: "main", upstream: { state: "tracked", name: "origin/main", ahead: 1, behind: 0 } },
+    };
+    input.git = { target, status, pending: undefined, blocked: undefined };
+    const rows = buildCommands(input);
+    for (const action of ["pull", "push"] as const) {
+      const row = rows.find(row => row.id === `${action}-space`)!;
+      expect(row.disabled).toBe(false);
+      row.run();
+      expect(input.run.git).toHaveBeenLastCalledWith(target.id, action);
+    }
+    input.git.blocked = "A mutation is pending";
+    expect(buildCommands(input).find(row => row.id === "pull-space")).toMatchObject({ disabled: true, reason: "A mutation is pending" });
+  });
+
+  it("offers supported Herdr actions but blocks them during a popup", () => {
+    const input = commandInput();
+    const command: HerdrCommand = { command_id: "x", binding_labels: [], action: "popup", description: "custom action" };
+    input.herdr.commands = [command, { ...command, command_id: "unknown", action: "unknown" }];
+    const row = buildCommands(input).find(candidate => candidate.id === "herdr:x")!;
+    expect(row.disabled).toBe(false);
+    expect(buildCommands(input).find(candidate => candidate.id === "herdr:unknown")).toBeUndefined();
+    input.herdr.popupOpen = true;
+    expect(buildCommands(input).find(candidate => candidate.id === "herdr:x")!.disabled).toBe(true);
+  });
+
+  it("offers widget controls only for pending and docked widgets", () => {
+    const input = commandInput();
+    expect(buildCommands(input).find(row => row.id === "show-widgets")).toBeUndefined();
+    expect(buildCommands(input).find(row => row.id === "next-widget")).toBeUndefined();
+    input.widgets = { pending: true, dockTabId: "dock-tab", list: [] };
+    const rows = buildCommands(input);
+    expect(rows.find(row => row.id === "show-widgets")).toBeDefined();
+    expect(rows.find(row => row.id === "next-widget")).toBeDefined();
+    expect(rows.find(row => row.id === "previous-widget")).toBeDefined();
+    expect(rows.find(row => row.id === "remove-widget")).toBeDefined();
+  });
+
+});
+
+describe("local workarea transitions", () => {
+  it("keeps the inactive Supervisor surface when switching among local views and terminals", () => {
+    const supervisor = workareaReducer(initialWorkareaState, { type: "supervisor/open", sessionId: "session-1", start: true });
+    const command = { kind: "refresh" as const, token: 1 };
+    const library = workareaReducer(supervisor, { type: "show", view: { kind: "library", command } });
+    const notes = workareaReducer(library, { type: "show", view: { kind: "notes" } });
+    const terminal = workareaReducer(notes, { type: "show", view: { kind: "terminal" } });
+    expect(library.view).toEqual({ kind: "library", command });
+    expect(notes.view.kind).toBe("notes");
+    expect(terminal.view.kind).toBe("terminal");
+    expect(library.supervisor).toEqual(supervisor.supervisor);
+    expect(notes.supervisor).toEqual(supervisor.supervisor);
+    expect(terminal.supervisor).toEqual(supervisor.supervisor);
+    const reopened = workareaReducer(terminal, { type: "supervisor/open", sessionId: "session-1", start: false });
+    expect(reopened.view.kind).toBe("supervisor");
+    expect(reopened.supervisor).toEqual(supervisor.supervisor);
+  });
+
+  it("does not replay Library commands or carry a Supervisor start request into another session", () => {
+    const library = workareaReducer(initialWorkareaState, { type: "show", view: { kind: "library", command: { kind: "tokens", token: 1 } } });
+    const notes = workareaReducer(library, { type: "show", view: { kind: "notes" } });
+    expect(workareaReducer(notes, { type: "show", view: { kind: "library", command: null } }).view).toEqual({ kind: "library", command: null });
+    const started = workareaReducer(notes, { type: "supervisor/open", sessionId: "session-1", start: true });
+    const modal = workareaReducer(started, { type: "supervisor/modal", modal: true });
+    const reset = workareaReducer(modal, { type: "session/reset" });
+    expect(reset.view.kind).toBe("supervisor");
+    expect(reset.supervisor).toEqual({ modal: true, startSessionId: null, startToken: 0 });
+    expect(workareaReducer(reset, { type: "supervisor/open", sessionId: "session-2", start: true }).supervisor).toEqual({ modal: true, startSessionId: "session-2", startToken: 1 });
   });
 });
