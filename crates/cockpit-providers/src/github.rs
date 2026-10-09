@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
-use cockpit_core::process::run_bounded_command;
 use cockpit_core::sources::{
     FrontmatterField, FrontmatterValue, SourceAsset, SourceContainer, SourceFetchRequest,
     SourceMetadata, SourceProvider, SourceRef,
@@ -11,13 +10,10 @@ use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::process::Command;
 use url::Url;
 
 const MAX_ISSUE_BYTES: usize = 1024 * 1024;
-const COMMENTS_PER_PAGE: usize = 100;
-const MAX_COMMENT_PAGES: usize = 5;
-
+use crate::forge::{self, ByteBudget, COMMENTS_PER_PAGE, CliRunner, Forge, MAX_COMMENT_PAGES};
 
 /// Read-only GitHub issue and pull request access through the owner's authenticated `gh` CLI.
 /// The provider is intentionally restricted to github.com; a configured
@@ -75,50 +71,23 @@ impl GithubSourceProvider {
     }
 
     async fn command(&self, args: &[String]) -> Result<Vec<u8>, InspectionError> {
-        let mut command = Command::new(&self.executable);
-        command
-            .args(args)
-            .env("GH_HOST", "github.com")
-            .env("GH_PROMPT_DISABLED", "1")
-            .env("GIT_TERMINAL_PROMPT", "0");
-        let output = run_bounded_command(
-            command,
-            self.limits.0,
-            self.limits.0,
-            self.limits.1,
-            "GitHub source",
+        CliRunner {
+            executable: &self.executable,
+            limits: self.limits,
+            label: "GitHub source",
+            failure: classify_cli_failure,
+            execution_error: map_execution_error,
+            empty_response: None,
+        }
+        .run(
+            args,
+            &[
+                ("GH_HOST", "github.com".as_ref()),
+                ("GH_PROMPT_DISABLED", "1".as_ref()),
+                ("GIT_TERMINAL_PROMPT", "0".as_ref()),
+            ],
         )
         .await
-        .map_err(|error| {
-            if matches!(error.code.as_str(), "bounded_output" | "execution_timeout")
-                && args.first().is_some_and(|arg| arg == "api")
-            {
-                InspectionError::new(
-                    "source_truncated",
-                    "GitHub comment pagination exceeded Cockpit's explicit process limit",
-                )
-            } else {
-                error
-            }
-        })?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-            if stderr.contains("auth")
-                || stderr.contains("logged in")
-                || stderr.contains("token")
-                || stderr.contains("credential")
-            {
-                return Err(InspectionError::new(
-                    "source_auth_required",
-                    "GitHub CLI authentication is unavailable",
-                ));
-            }
-            return Err(InspectionError::new(
-                "source_provider_failed",
-                "GitHub read request failed",
-            ));
-        }
-        Ok(output.stdout)
     }
 
     async fn fetch_comments(
@@ -156,7 +125,7 @@ impl GithubSourceProvider {
 }
 
 #[derive(Debug, Deserialize)]
-struct Issue {
+pub(crate) struct Issue {
     number: u64,
     title: String,
     url: String,
@@ -181,7 +150,7 @@ struct Issue {
 }
 
 #[derive(Debug, Deserialize)]
-struct Comment {
+pub(crate) struct Comment {
     id: Value,
     body: Option<String>,
     #[serde(alias = "user")]
@@ -218,7 +187,7 @@ fn provider_instance(url: &Url) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GithubKind {
+pub(crate) enum GithubKind {
     Issue,
     PullRequest,
 }
@@ -334,7 +303,10 @@ fn append_comment(
         .and_then(|author| author.login)
         .unwrap_or_else(|| "Unknown author".into());
     let created = comment.created_at.as_deref().unwrap_or_default();
-    append_bounded(body, &format!("\n\n### {author} · {}", local_timestamp(created)))?;
+    append_bounded(
+        body,
+        &format!("\n\n### {author} · {}", local_timestamp(created)),
+    )?;
     if let Some(updated) = comment
         .updated_at
         .as_deref()
@@ -388,7 +360,11 @@ fn capitalize_status(value: &str) -> String {
         .unwrap_or_default()
 }
 
-fn append_markdown(body: &mut String, markdown: &str, minimum_heading: usize) -> Result<(), InspectionError> {
+fn append_markdown(
+    body: &mut String,
+    markdown: &str,
+    minimum_heading: usize,
+) -> Result<(), InspectionError> {
     let mut fenced = None;
     for (index, line) in markdown.lines().enumerate() {
         if index > 0 {
@@ -419,7 +395,10 @@ fn append_markdown(body: &mut String, markdown: &str, minimum_heading: usize) ->
             append_bounded(body, line)?;
             continue;
         }
-        let hashes = trimmed.chars().take_while(|character| *character == '#').count();
+        let hashes = trimmed
+            .chars()
+            .take_while(|character| *character == '#')
+            .count();
         if indent <= 3
             && (1..=6).contains(&hashes)
             && trimmed[hashes..]
@@ -439,8 +418,7 @@ fn append_markdown(body: &mut String, markdown: &str, minimum_heading: usize) ->
 }
 
 fn append_bounded(body: &mut String, value: &str) -> Result<(), InspectionError> {
-    body.push_str(value);
-    if body.len() > MAX_ISSUE_BYTES {
+    if !ByteBudget::for_output(MAX_ISSUE_BYTES, body).append_checked(body, value) {
         return Err(InspectionError::new(
             "source_truncated",
             "GitHub issue body and comments exceed Cockpit's explicit byte limit",
@@ -518,6 +496,258 @@ fn frontmatter(key: &str, value: FrontmatterValue) -> FrontmatterField {
     }
 }
 
+fn map_execution_error(error: InspectionError, args: &[String]) -> InspectionError {
+    if matches!(error.code.as_str(), "bounded_output" | "execution_timeout")
+        && args.first().is_some_and(|arg| arg == "api")
+    {
+        InspectionError::new(
+            "source_truncated",
+            "GitHub comment pagination exceeded Cockpit's explicit process limit",
+        )
+    } else {
+        error
+    }
+}
+
+fn classify_cli_failure(stderr: &[u8]) -> InspectionError {
+    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if stderr.contains("auth")
+        || stderr.contains("logged in")
+        || stderr.contains("token")
+        || stderr.contains("credential")
+    {
+        InspectionError::new(
+            "source_auth_required",
+            "GitHub CLI authentication is unavailable",
+        )
+    } else {
+        InspectionError::new("source_provider_failed", "GitHub read request failed")
+    }
+}
+
+fn render_issue(
+    issue: &Issue,
+    kind: GithubKind,
+    comments: Vec<(bool, Comment)>,
+) -> Result<(String, Vec<FrontmatterField>), InspectionError> {
+    let item_type = match kind {
+        GithubKind::Issue => "Issue",
+        GithubKind::PullRequest => "Pull request",
+    };
+    let status = if issue.merged_at.is_some() {
+        Some("merged".to_owned())
+    } else if issue.is_draft == Some(true) {
+        Some("draft".to_owned())
+    } else {
+        issue.state.clone().map(|state| state.to_ascii_lowercase())
+    };
+    let author = issue
+        .author
+        .as_ref()
+        .and_then(|author| author.login.clone());
+    let assignees: Vec<String> = issue
+        .assignees
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|assignee| assignee.login.clone())
+        .collect();
+    let comment_count = comments.len();
+    let mut summary = vec![format!("**{item_type}**")];
+    if let Some(status) = &status {
+        summary.push(format!("**{}**", capitalize_status(status)));
+    }
+    if let Some(author) = &author {
+        summary.push(format!("Reporter {author}"));
+    }
+    if issue.assignees.is_some() {
+        summary.push(if assignees.is_empty() {
+            "Unassigned".into()
+        } else {
+            format!("Assignee {}", assignees.join(", "))
+        });
+    }
+    let mut body = format!("{}\n", summary.join(" · "));
+    if let Some(description) = issue.body.as_deref().filter(|body| !body.trim().is_empty()) {
+        append_bounded(&mut body, "\n## Description\n\n")?;
+        append_markdown(&mut body, description, 3)?;
+    }
+    if comment_count > 0 {
+        append_bounded(&mut body, &format!("\n\n## Comments ({comment_count})"))?;
+        for (review, comment) in comments {
+            append_comment(&mut body, comment, review)?;
+        }
+    }
+    let fields = rendered_fields(issue, item_type, status, author, assignees, comment_count);
+    Ok((body, fields))
+}
+
+fn rendered_fields(
+    issue: &Issue,
+    item_type: &str,
+    status: Option<String>,
+    author: Option<String>,
+    assignees: Vec<String>,
+    comment_count: usize,
+) -> Vec<FrontmatterField> {
+    let mut fields = vec![
+        frontmatter("item_type", FrontmatterValue::String(item_type.into())),
+        frontmatter(
+            "comment_count",
+            FrontmatterValue::Number(comment_count as i64),
+        ),
+    ];
+    if let Some(status) = status {
+        fields.push(frontmatter("status", FrontmatterValue::String(status)));
+    }
+    if let Some(author) = author {
+        fields.push(frontmatter("author", FrontmatterValue::String(author)));
+    }
+    if let Some(created) = issue.created_at.clone() {
+        fields.push(frontmatter(
+            "created",
+            FrontmatterValue::String(rfc3339_seconds(&created)),
+        ));
+    }
+    if let Some(updated) = issue.updated_at.clone() {
+        fields.push(frontmatter(
+            "updated",
+            FrontmatterValue::String(rfc3339_seconds(&updated)),
+        ));
+    }
+    if issue.assignees.is_some() {
+        fields.push(frontmatter(
+            "assignee",
+            if assignees.is_empty() {
+                FrontmatterValue::Null
+            } else {
+                FrontmatterValue::String(assignees.join(", "))
+            },
+        ));
+    }
+    fields
+}
+
+impl Forge for GithubSourceProvider {
+    type Identity = (String, GithubKind, u64);
+    type Item = Issue;
+    type Comments = Vec<(bool, Comment)>;
+
+    fn resolve(&self, request: &SourceFetchRequest) -> Result<Self::Identity, InspectionError> {
+        github_artifact(request, &self.base_url)
+    }
+
+    fn budget(&self) -> ByteBudget {
+        ByteBudget::new(MAX_ISSUE_BYTES)
+    }
+
+    async fn fetch_item(
+        &self,
+        _: &SourceFetchRequest,
+        identity: &Self::Identity,
+        _: &mut ByteBudget,
+    ) -> Result<Issue, InspectionError> {
+        let (repository, kind, number) = identity;
+        let issue = parse_issue(
+            &self
+                .command(&[
+                    kind.command().into(),
+                    "view".into(),
+                    number.to_string(),
+                    "--repo".into(),
+                    repository.clone(),
+                    "--json".into(),
+                    match kind {
+                        GithubKind::Issue => {
+                            "number,title,body,url,state,author,assignees,createdAt,updatedAt"
+                        }
+                        GithubKind::PullRequest => {
+                            "number,title,body,url,state,isDraft,mergedAt,author,assignees,createdAt,updatedAt,headRefName,headRefOid,baseRefName"
+                        }
+                    }
+                    .into(),
+                ])
+                .await?,
+        )?;
+        verify_identity(&issue, repository, *kind, *number)?;
+        Ok(issue)
+    }
+
+    async fn fetch_comments(
+        &self,
+        identity: &Self::Identity,
+        _: &Issue,
+        _: &mut ByteBudget,
+    ) -> Result<Self::Comments, InspectionError> {
+        let (repository, kind, number) = identity;
+        let mut comments: Vec<(bool, Comment)> = self
+            .fetch_comments(&repository, "issues", *number)
+            .await?
+            .into_iter()
+            .map(|comment| (false, comment))
+            .collect();
+        if *kind == GithubKind::PullRequest {
+            comments.extend(
+                self.fetch_comments(&repository, "pulls", *number)
+                    .await?
+                    .into_iter()
+                    .map(|comment| (true, comment)),
+            );
+        }
+        comments.sort_by(|(_, left), (_, right)| left.created_at.cmp(&right.created_at));
+        Ok(comments)
+    }
+
+    fn assemble(
+        &self,
+        request: &SourceFetchRequest,
+        identity: Self::Identity,
+        issue: Issue,
+        comments: Self::Comments,
+        _: &mut ByteBudget,
+    ) -> Result<SourceAsset, InspectionError> {
+        let (repository, kind, number) = identity;
+        let (body, fields) = render_issue(&issue, kind, comments)?;
+        Ok(SourceAsset {
+            source: SourceRef {
+                provider_id: self.provider_id.clone(),
+                provider_instance: request.authority.provider_instance.clone(),
+                resource_type: if kind == GithubKind::PullRequest {
+                    "review"
+                } else {
+                    "issue"
+                }
+                .into(),
+                canonical_id: format!(
+                    "{repository}{}{number}",
+                    if kind == GithubKind::PullRequest {
+                        '!'
+                    } else {
+                        '#'
+                    }
+                ),
+            },
+            title: issue.title,
+            source_url: Some(issue.url),
+            original_url: None,
+            source_revision: if kind == GithubKind::PullRequest {
+                issue.head_ref_oid
+            } else {
+                issue.updated_at
+            },
+            complete: true,
+            diagnostics: Vec::new(),
+            body,
+            container: Some(SourceContainer {
+                id: repository.clone(),
+                label: repository,
+            }),
+            fields,
+            attachments: Vec::new(),
+        })
+    }
+}
+
 #[async_trait]
 impl SourceProvider for GithubSourceProvider {
     fn provider_id(&self) -> &str {
@@ -580,157 +810,7 @@ impl SourceProvider for GithubSourceProvider {
         &self,
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError> {
-        let (repository, kind, number) = github_artifact(request, &self.base_url)?;
-        let issue = parse_issue(
-            &self
-                .command(&[
-                    kind.command().into(),
-                    "view".into(),
-                    number.to_string(),
-                    "--repo".into(),
-                    repository.clone(),
-                    "--json".into(),
-                    match kind {
-                        GithubKind::Issue => {
-                            "number,title,body,url,state,author,assignees,createdAt,updatedAt"
-                        }
-                        GithubKind::PullRequest => {
-                            "number,title,body,url,state,isDraft,mergedAt,author,assignees,createdAt,updatedAt,headRefName,headRefOid,baseRefName"
-                        }
-                    }
-                    .into(),
-                ])
-                .await?,
-        )?;
-        verify_identity(&issue, &repository, kind, number)?;
-
-        let mut comments: Vec<(bool, Comment)> = self
-            .fetch_comments(&repository, "issues", number)
-            .await?
-            .into_iter()
-            .map(|comment| (false, comment))
-            .collect();
-        if kind == GithubKind::PullRequest {
-            comments.extend(
-                self.fetch_comments(&repository, "pulls", number)
-                    .await?
-                    .into_iter()
-                    .map(|comment| (true, comment)),
-            );
-        }
-        comments.sort_by(|(_, left), (_, right)| {
-            left.created_at.cmp(&right.created_at)
-        });
-
-        let item_type = match kind {
-            GithubKind::Issue => "Issue",
-            GithubKind::PullRequest => "Pull request",
-        };
-        let status = if issue.merged_at.is_some() {
-            Some("merged".to_owned())
-        } else if issue.is_draft == Some(true) {
-            Some("draft".to_owned())
-        } else {
-            issue.state.clone().map(|state| state.to_ascii_lowercase())
-        };
-        let author = issue.author.as_ref().and_then(|author| author.login.clone());
-        let assignees: Vec<String> = issue
-            .assignees
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|assignee| assignee.login.clone())
-            .collect();
-        let comment_count = comments.len();
-        let mut summary = vec![format!("**{item_type}**")];
-        if let Some(status) = &status {
-            summary.push(format!("**{}**", capitalize_status(status)));
-        }
-        if let Some(author) = &author {
-            summary.push(format!("Reporter {author}"));
-        }
-        if issue.assignees.is_some() {
-            summary.push(if assignees.is_empty() {
-                "Unassigned".into()
-            } else {
-                format!("Assignee {}", assignees.join(", "))
-            });
-        }
-        let mut body = format!("{}\n", summary.join(" · "));
-        if let Some(description) = issue.body.as_deref().filter(|body| !body.trim().is_empty()) {
-            append_bounded(&mut body, "\n## Description\n\n")?;
-            append_markdown(&mut body, description, 3)?;
-        }
-        if comment_count > 0 {
-            append_bounded(&mut body, &format!("\n\n## Comments ({comment_count})"))?;
-            for (review, comment) in comments {
-                append_comment(&mut body, comment, review)?;
-            }
-        }
-
-        let mut fields = vec![
-            frontmatter("item_type", FrontmatterValue::String(item_type.into())),
-            frontmatter("comment_count", FrontmatterValue::Number(comment_count as i64)),
-        ];
-        if let Some(status) = status {
-            fields.push(frontmatter("status", FrontmatterValue::String(status)));
-        }
-        if let Some(author) = author {
-            fields.push(frontmatter("author", FrontmatterValue::String(author)));
-        }
-        if let Some(created) = issue.created_at {
-            fields.push(frontmatter("created", FrontmatterValue::String(rfc3339_seconds(&created))));
-        }
-        if let Some(updated) = issue.updated_at.clone() {
-            fields.push(frontmatter("updated", FrontmatterValue::String(rfc3339_seconds(&updated))));
-        }
-        if issue.assignees.is_some() {
-            fields.push(frontmatter(
-                "assignee",
-                if assignees.is_empty() {
-                    FrontmatterValue::Null
-                } else {
-                    FrontmatterValue::String(assignees.join(", "))
-                },
-            ));
-        }
-        Ok(vec![SourceAsset {
-            source: SourceRef {
-                provider_id: self.provider_id.clone(),
-                provider_instance: request.authority.provider_instance.clone(),
-                resource_type: if kind == GithubKind::PullRequest {
-                    "review"
-                } else {
-                    "issue"
-                }
-                .into(),
-                canonical_id: format!(
-                    "{repository}{}{number}",
-                    if kind == GithubKind::PullRequest {
-                        '!'
-                    } else {
-                        '#'
-                    }
-                ),
-            },
-            title: issue.title,
-            source_url: Some(issue.url),
-            original_url: None,
-            source_revision: if kind == GithubKind::PullRequest {
-                issue.head_ref_oid
-            } else {
-                issue.updated_at
-            },
-            complete: true,
-            diagnostics: Vec::new(),
-            body,
-            container: Some(SourceContainer {
-                id: repository.clone(),
-                label: repository,
-            }),
-            fields,
-            attachments: Vec::new(),
-        }])
+        forge::fetch(self, request).await
     }
 }
 

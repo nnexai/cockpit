@@ -11,6 +11,7 @@ use cockpit_protocol::sources::SourceCapability;
 
 pub mod confluence;
 mod confluence_storage;
+mod forge;
 pub mod github;
 pub mod gitlab;
 pub mod jira;
