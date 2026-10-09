@@ -118,7 +118,6 @@ struct TomlConfiguration {
     version: Option<u32>,
     repository_roots: Option<Vec<String>>,
     worktree_root: Option<String>,
-    companion_root: Option<String>,
     state_root: Option<String>,
     cache_root: Option<String>,
     branch_template: Option<String>,
@@ -272,21 +271,14 @@ pub fn load_project_configuration(
         file.worktree_root.clone(),
         &path_text(&default_state.join("worktrees"), "worktree_root")?,
     )?;
-    let (companion_root, companion_origin) = choose_path(
-        "COCKPIT_COMPANION_ROOT",
-        file.companion_root.clone(),
-        &path_text(&default_state.join("companions"), "companion_root")?,
-    )?;
     let (state_root, state_origin) = choose_path(
         "COCKPIT_STATE_ROOT",
         file.state_root.clone(),
         &path_text(&default_state.join("operations"), "state_root")?,
     )?;
     validate_paths(&[worktree_root.clone()], "worktree_root")?;
-    validate_paths(&[companion_root.clone()], "companion_root")?;
     validate_paths(&[state_root.clone()], "state_root")?;
     origins.insert("worktree_root".into(), worktree_origin.into());
-    origins.insert("companion_root".into(), companion_origin.into());
     origins.insert("state_root".into(), state_origin.into());
     let default_library = xdg_directory("XDG_DATA_HOME", ".local/share")?.join("cockpit/library");
     let (library_root, library_origin) = choose_path(
@@ -297,7 +289,6 @@ pub fn load_project_configuration(
     validate_paths(&[library_root.clone()], "library_root")?;
     for (field, root) in [
         ("state_root", state_root.as_str()),
-        ("companion_root", companion_root.as_str()),
         ("worktree_root", worktree_root.as_str()),
         ("cache_root", cache_root.as_str()),
     ] {
@@ -320,7 +311,6 @@ pub fn load_project_configuration(
     for (field, root) in [
         ("library_root", library_root.as_str()),
         ("state_root", state_root.as_str()),
-        ("companion_root", companion_root.as_str()),
         ("worktree_root", worktree_root.as_str()),
         ("cache_root", cache_root.as_str()),
     ]
@@ -534,7 +524,6 @@ pub fn load_project_configuration(
         repository_roots: roots,
         worktree_root,
         cache_root,
-        companion_root,
         state_root,
         library_root,
         notes_root,
@@ -955,16 +944,10 @@ fn validate_provider(provider: &ProjectProvider) -> Result<(), InspectionError> 
     validate_text(&provider.id, "provider_id")?;
     validate_text(&provider.base_url, "provider_base_url")?;
     if matches!(provider.kind, ProviderKind::Jira | ProviderKind::Confluence) {
-        if provider.executable.is_some() {
+        if provider.executable.is_some() || provider.login.is_some() {
             return Err(InspectionError::new(
-                "invalid_provider_executable",
-                "Jira and Confluence use Cockpit's HTTP client; remove executable",
-            ));
-        }
-        if provider.login.is_some() {
-            return Err(InspectionError::new(
-                "invalid_provider_login",
-                "Jira and Confluence use tokens stored in Cockpit; remove login",
+                "invalid_config",
+                "provider fields are incompatible with kind",
             ));
         }
     } else {
@@ -1615,8 +1598,6 @@ mod tests {
         let path = std::env::temp_dir().join(format!("cockpit-provider-transport-{nonce}.toml"));
         let cases = [
             ("", "https://jira.example", "executable = 'jira'\n", "invalid_config"),
-            ("jira", "https://jira.example", "executable = 'jira'\n", "invalid_provider_executable"),
-            ("confluence", "https://wiki.example", "login = 'default'\n", "invalid_provider_login"),
             ("gitlab", "https://gitlab.example", "", "invalid_provider_executable"),
             ("gitea", "https://forge.example", "executable = 'tea'\ndeployment = 'cloud'\n", "invalid_provider_deployment"),
             ("confluence", "https://team.atlassian.net", "", "invalid_provider_base_url"),
@@ -1668,31 +1649,22 @@ mod tests {
             .as_nanos();
         let base = std::env::temp_dir().join(format!("cockpit-library-root-{nonce}"));
         let path = std::env::temp_dir().join(format!("cockpit-library-root-{nonce}.toml"));
-        let config = |library: &str, companion: &str| {
+        let config = |library: &str| {
             format!(
-                "version = 1\nworktree_root = '{}'\ncompanion_root = '{}'\nstate_root = '{}'\nlibrary_root = '{}'\n",
+                "version = 1\nworktree_root = '{}'\nstate_root = '{}'\nlibrary_root = '{}'\n",
                 base.join("worktrees").display(),
-                companion,
                 base.join("state").display(),
                 library,
             )
         };
         let inside_state = base.join("state/nested");
-        fs::write(&path, config(&inside_state.to_string_lossy(), &base.join("companions").to_string_lossy()))
+        fs::write(&path, config(&inside_state.to_string_lossy()))
             .expect("write overlapping state roots");
         assert_eq!(
             load_project_configuration(Some(&path), None).expect_err("state overlap").code,
             "invalid_library_root"
         );
 
-        let library = base.join("library");
-        let companion = library.join("companions");
-        fs::write(&path, config(&library.to_string_lossy(), &companion.to_string_lossy()))
-            .expect("write overlapping companion roots");
-        assert_eq!(
-            load_project_configuration(Some(&path), None).expect_err("companion overlap").code,
-            "invalid_library_root"
-        );
         let _ = fs::remove_file(path);
     }
     #[test]
@@ -1755,7 +1727,6 @@ mod tests {
                     &configuration.notes_root,
                     &configuration.library_root,
                     &configuration.state_root,
-                    &configuration.companion_root,
                     &configuration.worktree_root,
                     &configuration.cache_root,
                 ]) {
@@ -1789,7 +1760,7 @@ mod tests {
         ] {
             cases.push((Some(invalid), None, "invalid_notes_root".into(), "", true));
         }
-        for field in ["library", "state", "companions", "worktrees", "cache", "repositories"] {
+        for field in ["library", "state", "worktrees", "cache", "repositories"] {
             for notes in [base.join(field), base.join(field).join("child"), base.clone()] {
                 cases.push((Some(notes.to_string_lossy().into_owned()), None,
                     "invalid_notes_root".into(), "", true));
@@ -1800,10 +1771,9 @@ mod tests {
             "invalid_notes_root".into(), "", true));
         for (toml_notes, environment_notes, expected, expected_origin, use_xdg) in cases {
             let mut content = format!(
-                "version = 1\nrepository_roots = [{:?}]\nworktree_root = {:?}\ncompanion_root = {:?}\nstate_root = {:?}\ncache_root = {:?}\nlibrary_root = {:?}\n",
+                "version = 1\nrepository_roots = [{:?}]\nworktree_root = {:?}\nstate_root = {:?}\ncache_root = {:?}\nlibrary_root = {:?}\n",
                 base.join("repositories").to_string_lossy(),
                 base.join("worktrees").to_string_lossy(),
-                base.join("companions").to_string_lossy(),
                 base.join("state").to_string_lossy(),
                 base.join("cache").to_string_lossy(),
                 base.join("library").to_string_lossy(),
@@ -1823,7 +1793,6 @@ mod tests {
             for name in [
                 "COCKPIT_REPOSITORY_ROOTS",
                 "COCKPIT_WORKTREE_ROOT",
-                "COCKPIT_COMPANION_ROOT",
                 "COCKPIT_STATE_ROOT",
                 "COCKPIT_CACHE_ROOT",
                 "COCKPIT_LIBRARY_ROOT",

@@ -239,7 +239,6 @@ fn launch_environment(env: &BTreeMap<String, String>) -> Result<Value, Inspectio
                 | "COCKPIT_STATE_ROOT"
                 | "COCKPIT_CACHE_ROOT"
                 | "COCKPIT_WORKTREE_ROOT"
-                | "COCKPIT_COMPANION_ROOT"
                 | "COCKPIT_REPOSITORY_ROOTS"
                 | "PI_CODING_AGENT_DIR"
                 | "PI_CODING_AGENT_SESSION_DIR"

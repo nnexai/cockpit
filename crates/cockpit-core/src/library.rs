@@ -1,8 +1,7 @@
-//! Durable, session-independent provider snapshots. Legacy source caches are inert.
+//! Durable, session-independent provider snapshots.
 mod attachments;
 mod folder;
 pub(crate) mod folder_io;
-mod legacy;
 mod follow;
 mod jira_follow;
 mod operations;
@@ -160,7 +159,7 @@ impl LibraryService {
         self.herdr = Some(herdr);
         self
     }
-    /// Lazy and independent of ContextService, companions and the obsolete cache.
+    /// Lazily opens the durable Library store independently of ContextService.
     pub(crate) fn open(&self) -> Result<Arc<Store>, InspectionError> {
         if let Some(store) = self.store.get() {
             store.recover_pending()?;
@@ -1696,22 +1695,19 @@ mod tests {
     #[test]
     fn listing_projects_the_jira_parent_across_pages_and_leaves_storage_alone() {
         let site = "https://acme.atlassian.net";
-        let mut entries = vec![
+        let entries = vec![
             jira_entry(site, "OPS-2", Some("OPS-1")),
             jira_entry(site, "OPS-3", Some("OPS-9")),
             jira_entry(site, "OPS-1", None),
             jira_entry("https://other.atlassian.net", "OPS-4", Some("OPS-1")),
         ];
-        let mut legacy = jira_entry(site, "OPS-5", Some("OPS-1"));
-        legacy.references = None;
-        entries.push(legacy);
         // The child is on the first page, its parent on the second.
         let first = jira_parent_projection(&entries, 0, 1);
         assert_eq!(first[0].parent_item_id.as_deref(), Some(entries[2].summary.item_id.as_str()));
         let rest = jira_parent_projection(&entries, 1, 10);
         let parents: Vec<_> = rest.iter().map(|item| item.parent_item_id.as_deref()).collect();
-        // A parent outside the Library, another site's issue and a legacy copy have none.
-        assert_eq!(parents, vec![None, None, None, None]);
+        // A parent outside the Library and another site's issue have none.
+        assert_eq!(parents, vec![None, None, None]);
         assert!(entries.iter().all(|entry| entry.summary.parent_item_id.is_none()));
     }
 
@@ -2095,39 +2091,6 @@ mod tests {
             item.revision
         );
         assert_store_valid(&f.service.open().unwrap());
-    }
-    #[tokio::test]
-    async fn library_open_never_imports_or_mutates_legacy_or_companion_files() {
-        let f = fixture();
-        let legacy = Path::new(&f.service.configuration.state_root).join("sources");
-        let companion = Path::new(&f.service.configuration.companion_root).join("existing");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::create_dir_all(&companion).unwrap();
-        let files = [
-            (legacy.join("index.json"), b"legacy opaque index".as_slice()),
-            (legacy.join("record.md"), b"legacy source".as_slice()),
-            (
-                companion.join("context-manifest.json"),
-                b"existing manifest without Library links".as_slice(),
-            ),
-            (
-                companion.join("context.md"),
-                b"Space-owned context".as_slice(),
-            ),
-        ];
-        for (path, bytes) in &files {
-            std::fs::write(path, bytes).unwrap();
-        }
-        assert!(f.service.listing(None).await.unwrap().items.is_empty());
-        assert!(reopen(&f).listing(None).await.unwrap().items.is_empty());
-        for (path, bytes) in &files {
-            assert_eq!(&std::fs::read(path).unwrap(), bytes);
-        }
-        // Explicit re-add does not consult or rewrite any legacy/companion file either.
-        saved(&f, 1).await;
-        for (path, bytes) in files {
-            assert_eq!(std::fs::read(path).unwrap(), bytes);
-        }
     }
     #[tokio::test]
     async fn library_reader_hides_metadata_and_honors_revision_and_depth() {

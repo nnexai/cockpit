@@ -4070,7 +4070,6 @@ mod tests {
             });
             let configuration = ProjectConfiguration {
                 repository_roots: vec![],
-                companion_root: root.join("unused-companions").to_string_lossy().into_owned(),
                 branch_template: "test/{task}".into(),
                 checkout_template: "{task}".into(),
                 limits: cockpit_protocol::projects::ProjectLimits {

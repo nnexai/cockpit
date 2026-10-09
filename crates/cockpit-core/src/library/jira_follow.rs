@@ -60,10 +60,8 @@ pub(super) fn is_issue_of(entry: &LibraryIndexEntry, follow: &LibraryFollowSumma
 }
 
 /// D4: why a listed issue needs a fetch, or `None` when the stored item
-/// matches the row. Compares listing format with listing format. With a
-/// reference depth, an item saved before references were extracted is fetched once;
-/// so is any item saved before the structured relations (its parent issue) were captured.
-pub(super) fn change_reason(old: &LibraryIndexEntry, row: &IssueRow, depth: u32) -> Option<&'static str> {
+/// matches the row. Compares listing format with listing format.
+pub(super) fn change_reason(old: &LibraryIndexEntry, row: &IssueRow) -> Option<&'static str> {
     if matches!(
         old.summary.state,
         LibraryItemState::RemovedAtSource | LibraryItemState::Failed | LibraryItemState::Unknown
@@ -73,8 +71,6 @@ pub(super) fn change_reason(old: &LibraryIndexEntry, row: &IssueRow, depth: u32)
         != Some(row.updated.as_str())
     {
         Some("changed")
-    } else if (depth > 0 && old.references.is_none()) || !old.relations_captured {
-        Some("rechecked")
     } else {
         None
     }
@@ -471,7 +467,7 @@ impl LibraryService {
             let old = snapshot.items.get(&issue_item_id(&follow, &row.key)).cloned();
             let reason = match &old {
                 None => None,
-                Some(old) => match change_reason(old, row, snapshot.depth) {
+                Some(old) => match change_reason(old, row) {
                     Some(reason) => Some(reason.to_owned()),
                     None if download
                         && old.summary.attachments.iter().any(|a| {
@@ -1269,31 +1265,6 @@ mod tests {
         assert_eq!(f.provider.take_fetched(), keys(&["OPS-2"]));
         let meta = issues(service).await["OPS-2"].issue.clone().unwrap();
         assert_eq!(meta.fetched_updated.as_deref(), Some(plain(20).as_str()));
-    }
-
-    #[tokio::test]
-    async fn a_copy_saved_before_relations_were_captured_is_fetched_once() {
-        let f = fixture();
-        let service = &f.base.service;
-        f.provider.set(OPS, &["OPS-1", "OPS-2", "OPS-3"]);
-        let (_, id) = follow(service, OPS, LibraryFollowMode::Accumulate).await;
-        f.provider.take_fetched();
-        // OPS-2 predates parent capture: the copy is unchanged at source, yet its next refresh fetches it.
-        service
-            .open()
-            .unwrap()
-            .mutate_index(|index| {
-                for entry in &mut index.items {
-                    entry.relations_captured = entry.summary.canonical_id.as_deref() != Some("OPS-2");
-                }
-                Ok(())
-            })
-            .unwrap();
-        refresh(service, &id).await;
-        assert_eq!(f.provider.take_fetched(), keys(&["OPS-2"]));
-        // Once fetched it is settled: nothing is fetched again.
-        refresh(service, &id).await;
-        assert!(f.provider.take_fetched().is_empty());
     }
 
     #[tokio::test]

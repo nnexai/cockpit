@@ -9,7 +9,6 @@ const MAX_REPOSITORIES: usize = 64;
 
 #[derive(Clone)]
 struct AuthorizedSpace {
-    endpoint: String,
     context_id: String,
     label: String,
     checkout_path: Option<String>,
@@ -50,7 +49,7 @@ impl LibraryService {
         if adapter.project_endpoint_identity(&target.session_id).await? != endpoint {
             return Err(error("stale_identity", "Herdr endpoint changed while resolving Space context"));
         }
-        Ok(AuthorizedSpace { context_id: context_id(&endpoint, target), endpoint, label: space.label.clone(), checkout_path: space.git.as_ref().map(|git| git.checkout_path.clone()) })
+        Ok(AuthorizedSpace { context_id: context_id(&endpoint, target), label: space.label.clone(), checkout_path: space.git.as_ref().map(|git| git.checkout_path.clone()) })
     }
 
     async fn validate_repositories(&self, paths: &[String]) -> Result<Vec<String>, InspectionError> {
@@ -92,7 +91,6 @@ impl LibraryService {
                 Ok::<_, InspectionError>(())
             }).await.map_err(|e| error("library_unavailable", e.to_string()))??;
         };
-        super::legacy::migrate_target(&store, &self.configuration, target, &fresh.endpoint, &fresh.context_id)?;
         if add.is_empty() && remove.is_empty() && repositories.is_none() {
             drop(lock);
             return Ok(());
@@ -132,17 +130,18 @@ impl LibraryService {
     }
 
     pub async fn space_listing(&self, target: &SpaceTarget) -> Result<SpaceContextListing, InspectionError> {
-        // Empty mutation performs the one-time read-only legacy metadata migration.
-        self.mutate_space(target, &[], &[], None).await?;
         let authorized = self.authorize_space(target).await?;
         let store = self.open()?;
         let (items, repository_paths) = {
             let _lock = store.shared()?;
             let index = store.index_shared()?;
-            let context = index.space_contexts.iter().find(|context| context.space_context_id == authorized.context_id)
-                .ok_or_else(|| error("stale_identity", "Space endpoint changed while reading context"))?;
-            let items = index.items.iter().filter(|entry| context.item_ids.binary_search(&entry.summary.item_id).is_ok()).map(|entry| entry.summary.clone()).collect();
-            (items, context.repository_paths.clone())
+            match index.space_contexts.iter().find(|context| context.space_context_id == authorized.context_id) {
+                Some(context) => {
+                    let items = index.items.iter().filter(|entry| context.item_ids.binary_search(&entry.summary.item_id).is_ok()).map(|entry| entry.summary.clone()).collect();
+                    (items, context.repository_paths.clone())
+                }
+                None => (vec![], vec![]),
+            }
         };
         let mut diagnostics = vec![];
         if !repository_paths.is_empty() {
@@ -257,10 +256,18 @@ pub(in crate::library) mod tests {
     }
 
     #[tokio::test]
-    async fn selections_persist_and_keep_saved_items_without_creating_companions() {
+    async fn selections_persist_and_keep_saved_items_without_copying_content() {
         let f = fixture();
         let runtime = adapter("space");
         let service = f.service.clone().with_herdr(runtime.clone());
+        let store = service.open().unwrap();
+        let generation = store.index().unwrap().generation;
+        let empty = service.space_listing(&target()).await.unwrap();
+        assert!(empty.items.is_empty());
+        assert!(empty.repository_paths.is_empty());
+        let index = store.index().unwrap();
+        assert!(index.space_contexts.is_empty());
+        assert_eq!(index.generation, generation);
         finished(&service, service.start_add(add(1)).await.unwrap()).await;
         let item = service.listing(None).await.unwrap().items.remove(0);
         let notes = f.root.join("existing-notes");
@@ -272,7 +279,6 @@ pub(in crate::library) mod tests {
         let listing = reopened.space_listing(&target()).await.unwrap();
         assert_eq!(listing.space_label, "Test Space");
         assert_eq!(listing.items[0].item_id, item.item_id);
-        assert!(!Path::new(&service.configuration.companion_root).exists());
         assert_eq!(std::fs::read(notes.join("notes.md")).unwrap(), b"keep my notes");
         let store = service.open().unwrap();
         store.mutate_index(|index| {
@@ -335,6 +341,8 @@ pub(in crate::library) mod tests {
         assert_eq!(service.listing(None).await.unwrap().items.len(), 1);
         runtime.reachable.store(true, Ordering::SeqCst);
         runtime.change_on_call.store(runtime.endpoint_calls.load(Ordering::SeqCst) + 2, Ordering::SeqCst);
+        assert_eq!(service.space_listing(&target()).await.unwrap_err().code, "stale_identity");
+        runtime.change_on_call.store(runtime.endpoint_calls.load(Ordering::SeqCst) + 3, Ordering::SeqCst);
         assert_eq!(service.space_listing(&target()).await.unwrap_err().code, "stale_identity");
     }
 

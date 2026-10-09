@@ -23,7 +23,7 @@ const MAX_TREE_ENTRIES: usize = 1_000_000;
 const MAX_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024 + MAX_RECORD;
 const MAX_TREE_DEPTH: usize = 64;
 
-/// Schema 4 replaces companion ownership with durable Space selections.
+/// Current index format with durable Space selections.
 const SCHEMA: u32 = 4;
 const INTENT_SCHEMA: u32 = 2;
 
@@ -35,14 +35,9 @@ pub(crate) struct LibraryIndexEntry {
     pub canonical_url: Option<String>,
     /// Trusted inventory of this item's owned entries; not reconstructed from disk.
     pub inventory: Vec<MarkerFile>,
-    /// Outgoing references extracted when the content was saved. `None` means a
-    /// legacy save that never extracted them.
-    #[serde(default)]
+    /// Outgoing references extracted when the content was saved, when applicable.
     pub references: Option<Vec<crate::sources::SourceReference>>,
-    /// The saved Jira document carries the structured `parent`/`subtasks`/`links`
-    /// fields. Copies saved before those were captured read `false` and are
-    /// fetched once by the next follow refresh, so their parent becomes known.
-    #[serde(default)]
+    /// Whether the saved Jira document carries structured `parent`/`subtasks`/`links`.
     pub relations_captured: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +48,6 @@ pub(crate) struct SpaceContextRecord {
     pub space_id: String,
     pub item_ids: Vec<String>,
     pub repository_paths: Vec<String>,
-    #[serde(default)]
     pub legacy_migrated: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,7 +57,6 @@ pub(crate) struct Index {
     pub generation: String,
     pub items: Vec<LibraryIndexEntry>,
     pub follows: Vec<LibraryFollowSummary>,
-    #[serde(default)]
     pub space_contexts: Vec<SpaceContextRecord>,
 }
 impl Default for Index {
@@ -110,11 +103,8 @@ struct Intent {
     new_entry: Option<LibraryIndexEntry>,
     old_entry: Option<LibraryIndexEntry>,
     predecessor: Option<Vec<MarkerFile>>,
-    #[serde(default)]
     source: Option<String>,
-    #[serde(default)]
     moved_entries: Option<Vec<LibraryIndexEntry>>,
-    #[serde(default)]
     move_inventory: Option<Vec<MarkerFile>>,
 }
 
@@ -310,132 +300,8 @@ impl Store {
             store.commit(&mut Index::default())?;
         }
         store.ensure_readme()?;
-        store.upgrade_v2()?;
-        store.upgrade_v3()?;
         store.recover()?;
         Ok(store)
-    }
-    /// Rewrites a schema 2 index and its journal intents to schema 3 in place.
-    /// Works on raw JSON so no schema 2 types are retained. Journal intents go
-    /// first and the index (with its schema flip) last, so an interrupted
-    /// upgrade reruns cleanly: summaries that already carry `refs` are skipped.
-    /// Caller holds the exclusive library lock.
-    fn upgrade_v2(&self) -> Result<(), InspectionError> {
-        // An unreadable index is reported by the first `index_shared` call, as before.
-        let Ok(mut index) = read_json_bounded::<serde_json::Value>(&self.meta, "index.json", MAX_INDEX) else {
-            return Ok(());
-        };
-        if index.get("schema").and_then(serde_json::Value::as_u64) != Some(2) {
-            return Ok(());
-        }
-        let follows = index
-            .get("follows")
-            .and_then(serde_json::Value::as_array)
-            .map(|follows| {
-                follows
-                    .iter()
-                    .filter_map(|follow| follow.get("follow_id").and_then(serde_json::Value::as_str))
-                    .map(str::to_owned)
-                    .collect::<std::collections::HashSet<_>>()
-            })
-            .unwrap_or_default();
-        let mut pending = Vec::new();
-        for entry in self.journal.entries().map_err(io_error)? {
-            let name = entry.map_err(io_error)?.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".json") {
-                pending.push(name);
-            }
-        }
-        for name in pending {
-            let mut intent: serde_json::Value = read_json_bounded(&self.journal, &name, MAX_RECORD)
-                .map_err(|e| corrupt(e.message))?;
-            let mut changed = false;
-            for key in ["new_entry", "old_entry"] {
-                if let Some(entry) = intent.get_mut(key) {
-                    changed |= upgrade_v2_entry(entry, &follows);
-                }
-            }
-            if let Some(entries) = intent.get_mut("moved_entries").and_then(serde_json::Value::as_array_mut) {
-                for entry in entries {
-                    changed |= upgrade_v2_entry(entry, &follows);
-                }
-            }
-            if changed {
-                bounded_write(&self.journal, &name, &intent, MAX_RECORD)?;
-            }
-        }
-        if let Some(items) = index.get_mut("items").and_then(serde_json::Value::as_array_mut) {
-            for entry in items {
-                upgrade_v2_entry(entry, &follows);
-            }
-        }
-        if let Some(records) = index.get_mut("follows").and_then(serde_json::Value::as_array_mut) {
-            for record in records {
-                upgrade_v2_follow(record);
-            }
-        }
-        index["schema"] = 3.into();
-        index["generation"] = Uuid::new_v4().to_string().into();
-        bounded_write(&self.meta, "index.json", &index, MAX_INDEX)
-    }
-    /// Journal and operation records are rewritten before the schema flip.
-    /// Raw JSON keeps interrupted old transactions readable during cutover.
-    fn upgrade_v3(&self) -> Result<(), InspectionError> {
-        let mut index: serde_json::Value = read_json_bounded(&self.meta, "index.json", MAX_INDEX)
-            .map_err(|e| corrupt(e.message))?;
-        if index.get("schema").and_then(serde_json::Value::as_u64) != Some(3) {
-            return Ok(());
-        }
-        for name in super::legacy::json_names(&self.journal, 4096)? {
-            let mut intent: serde_json::Value = read_json_bounded(&self.journal, &name, MAX_RECORD)
-                .map_err(|e| corrupt(e.message))?;
-            for key in ["new_entry", "old_entry"] {
-                if let Some(entry) = intent.get_mut(key) {
-                    super::legacy::upgrade_entry(entry)?;
-                }
-            }
-            if let Some(entries) = intent.get_mut("moved_entries").and_then(serde_json::Value::as_array_mut) {
-                for entry in entries {
-                    super::legacy::upgrade_entry(entry)?;
-                }
-            }
-            let schema = intent.get("schema").and_then(serde_json::Value::as_u64);
-            if !matches!(schema, Some(1 | 2)) {
-                return Err(corrupt("unsupported Library journal schema"));
-            }
-            intent["schema"] = INTENT_SCHEMA.into();
-            bounded_write(&self.journal, &name, &intent, MAX_RECORD)?;
-        }
-        let saved = super::legacy::upgrade_operations(self)?;
-        // Newly published entries may exist only in the pending journal. Protect
-        // their saved IDs before replay can make them visible without ownership.
-        for name in super::legacy::json_names(&self.journal, 4096)? {
-            let mut intent: serde_json::Value = read_json_bounded(&self.journal, &name, MAX_RECORD)
-                .map_err(|e| corrupt(e.message))?;
-            for key in ["new_entry", "old_entry"] {
-                if let Some(entry) = intent.get_mut(key) {
-                    super::legacy::protect_saved_entry(entry, &saved)?;
-                }
-            }
-            if let Some(entries) = intent.get_mut("moved_entries").and_then(serde_json::Value::as_array_mut) {
-                for entry in entries {
-                    super::legacy::protect_saved_entry(entry, &saved)?;
-                }
-            }
-            bounded_write(&self.journal, &name, &intent, MAX_RECORD)?;
-        }
-        if let Some(items) = index.get_mut("items").and_then(serde_json::Value::as_array_mut) {
-            for entry in items {
-                super::legacy::upgrade_entry(entry)?;
-                super::legacy::protect_saved_entry(entry, &saved)?;
-            }
-        }
-        if index.get("space_contexts").is_none() {
-            index["space_contexts"] = serde_json::json!([]);
-        }
-        index["schema"] = SCHEMA.into();
-        index["generation"] = Uuid::new_v4().to_string().into();
-        bounded_write(&self.meta, "index.json", &index, MAX_INDEX)
     }
     fn ensure_readme(&self) -> Result<(), InspectionError> {
         const README: &str = "# Library\n\nThis directory is a human-readable mirror of saved provider content.\nProvider items are nested under provider, host, and source hierarchy; each Markdown document is named after its title. Attachments are stored in `_files/` beside the document. `.cockpit/` contains private Library index, journal, staging, and lock state and must not be edited.\n";
@@ -506,23 +372,8 @@ impl Store {
             && *cached_identity == identity {
             return Ok(Arc::clone(index));
         }
-        let index: Index = match read_json_bounded(&self.meta, "index.json", MAX_INDEX) {
-            Ok(index) => index,
-            Err(parse_error) => {
-                if let Ok(value) = read_json_bounded::<serde_json::Value>(&self.meta, "index.json", MAX_INDEX)
-                    && value.get("schema").and_then(serde_json::Value::as_u64) == Some(1)
-                {
-                    return Err(error(
-                        "library_layout_outdated",
-                        format!(
-                            "Library layout at {} is outdated; delete this Library root and re-add it",
-                            self.path.display()
-                        ),
-                    ));
-                }
-                return Err(corrupt(parse_error.message));
-            }
-        };
+        let index: Index = read_json_bounded(&self.meta, "index.json", MAX_INDEX)
+            .map_err(|e| corrupt(e.message))?;
         if index.schema != SCHEMA || index.items.len() > 1_000_000 {
             return Err(corrupt("unsupported or oversized Library index"));
         }
@@ -1605,52 +1456,6 @@ fn upsert(index: &mut Index, mut entry: LibraryIndexEntry) {
         index.items.push(entry);
     }
 }
-/// Rewrites one schema 2 index entry (`{summary, ..}`) in place. A summary that
-/// already has `refs` is left alone. An existing follow becomes `[Follow]`; no
-/// follow or a dangling one becomes `[Manual]`, matching how a dangling
-/// `follow_id` was treated as unfollowed.
-fn upgrade_v2_entry(entry: &mut serde_json::Value, follows: &std::collections::HashSet<String>) -> bool {
-    let Some(summary) = entry.get_mut("summary").and_then(serde_json::Value::as_object_mut) else {
-        return false;
-    };
-    if summary.contains_key("refs") {
-        return false;
-    }
-    let follow_id = summary
-        .remove("follow_id")
-        .and_then(|id| id.as_str().map(str::to_owned))
-        .filter(|id| follows.contains(id));
-    let reference = match follow_id {
-        Some(follow_id) => serde_json::json!({ "kind": "follow", "follow_id": follow_id }),
-        None => serde_json::json!({ "kind": "manual" }),
-    };
-    summary.insert("refs".into(), serde_json::Value::Array(vec![reference]));
-    summary.insert("purge_after".into(), serde_json::Value::Null);
-    summary.insert("issue".into(), serde_json::Value::Null);
-    true
-}
-/// Rewrites one schema 2 follow record: Confluence space fields move into
-/// `source`, `page_count` becomes `item_count`, `excluded_page_ids` becomes `excluded_ids`.
-fn upgrade_v2_follow(record: &mut serde_json::Value) {
-    let Some(record) = record.as_object_mut() else {
-        return;
-    };
-    if record.contains_key("source") {
-        return;
-    }
-    let space_key = record.remove("space_key").unwrap_or(serde_json::Value::Null);
-    let space_name = record.remove("space_name").unwrap_or(serde_json::Value::Null);
-    record.insert(
-        "source".into(),
-        serde_json::json!({ "kind": "confluence_space", "space_key": space_key, "space_name": space_name }),
-    );
-    if let Some(count) = record.remove("page_count") {
-        record.insert("item_count".into(), count);
-    }
-    if let Some(excluded) = record.remove("excluded_page_ids") {
-        record.insert("excluded_ids".into(), excluded);
-    }
-}
 pub(crate) fn bounded_write<T: Serialize>(
     dir: &Dir,
     name: &str,
@@ -2710,17 +2515,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn schema_one_index_requires_readding_library() {
-        let f = fixture();
-        let store = f.service.open().unwrap();
-        atomic_write_bytes(&store.meta, "index.json", br#"{"schema":1}"#).unwrap();
-        let error = store.index().unwrap_err();
-        assert_eq!(error.code, "library_layout_outdated");
-        assert!(error.message.contains(&store.path.display().to_string()));
-        assert!(error.message.contains("delete this Library root and re-add it"));
-    }
-
     fn publish_asset(store: &Arc<Store>, n: u32, body: &str, previous: Option<&LibraryIndexEntry>) -> LibraryIndexEntry {
         let mut entry = asset_entry(&asset(n, body), previous);
         let stage = store.stage_asset(&mut entry, &asset(n, body)).unwrap();
@@ -2731,82 +2525,6 @@ mod tests {
             .publish(stage, entry.clone(), previous.map(|e| e.summary.revision.as_str()), None)
             .unwrap();
         entry
-    }
-
-    #[test]
-    fn schema_two_index_and_journal_upgrade_to_reference_sets() {
-        let f = fixture();
-        let store = f.service.open().unwrap();
-        let one = publish_asset(&store, 1, "one", None);
-        let two = publish_asset(&store, 2, "two", None);
-        let three = publish_asset(&store, 3, "three", None);
-        // A publish that crashes after journaling leaves a journal intent behind.
-        let mut changed = asset_entry(&asset(2, "two changed"), Some(&two));
-        let stage = store.stage_asset(&mut changed, &asset(2, "two changed")).unwrap();
-        fault(&store, "journal");
-        let crash = store.publish(stage, changed, Some(&two.summary.revision), None).unwrap_err();
-        assert_eq!(crash.code, "library_test_crash");
-
-        // Rewrite everything into the schema 2 shape.
-        let follow_of = |item_id: &str| -> serde_json::Value {
-            if item_id == one.summary.item_id {
-                "follow:sd".into()
-            } else if item_id == three.summary.item_id {
-                "follow:gone".into()
-            } else {
-                serde_json::Value::Null
-            }
-        };
-        let downgrade = |entry: &mut serde_json::Value| {
-            let summary = entry["summary"].as_object_mut().unwrap();
-            let id = summary["item_id"].as_str().unwrap().to_owned();
-            for key in ["refs", "purge_after", "issue"] {
-                summary.remove(key);
-            }
-            summary.insert("follow_id".into(), follow_of(&id));
-        };
-        let mut index: serde_json::Value = read_json_bounded(&store.meta, "index.json", MAX_INDEX).unwrap();
-        index["schema"] = 2.into();
-        for entry in index["items"].as_array_mut().unwrap() {
-            downgrade(entry);
-        }
-        index["follows"] = serde_json::json!([{
-            "follow_id": "follow:sd", "provider_id": "cloud", "provider_instance": "https://x.atlassian.net/wiki",
-            "space_key": "SD", "space_name": "Software Development", "include_attachments": false,
-            "page_count": 1, "partial": null, "excluded_page_ids": ["201"],
-            "last_refreshed_at": "1759000000000", "state": "fresh"
-        }]);
-        atomic_write_bytes(&store.meta, "index.json", &serde_json::to_vec(&index).unwrap()).unwrap();
-        let names = store
-            .journal
-            .entries()
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(names.len(), 1);
-        let mut intent: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
-        downgrade(&mut intent["new_entry"]);
-        downgrade(&mut intent["old_entry"]);
-        atomic_write_bytes(&store.journal, &names[0], &serde_json::to_vec(&intent).unwrap()).unwrap();
-
-        let upgraded = reopen(&f).open().unwrap();
-        let raw: serde_json::Value = read_json_bounded(&upgraded.meta, "index.json", MAX_INDEX).unwrap();
-        assert_eq!(raw["schema"], 4);
-        let index = upgraded.index().unwrap();
-        let refs = |id: &str| index.items.iter().find(|e| e.summary.item_id == id).unwrap().summary.refs.clone();
-        assert_eq!(refs(&one.summary.item_id), [LibraryItemRef::Follow { follow_id: "follow:sd".into() }]);
-        assert_eq!(refs(&two.summary.item_id), [LibraryItemRef::Manual]);
-        assert_eq!(refs(&three.summary.item_id), [LibraryItemRef::Manual], "dangling follow is unfollowed");
-        let follow = &index.follows[0];
-        assert_eq!(
-            follow.source,
-            LibraryFollowSource::ConfluenceSpace { space_key: "SD".into(), space_name: "Software Development".into() }
-        );
-        assert_eq!((follow.item_count, follow.excluded_ids.as_slice()), (1, ["201".to_owned()].as_slice()));
-        assert_eq!(upgraded.journal.entries().unwrap().count(), 0, "the intent recovered");
-        assert_store_valid(&upgraded);
-        // A second open is a no-op on the upgraded store.
-        assert_eq!(reopen(&f).open().unwrap().index().unwrap().items.len(), 3);
     }
 
     #[test]
@@ -2868,111 +2586,6 @@ mod tests {
         let saved = store.index().unwrap().items.remove(0).summary;
         assert_ne!(saved.revision, first.summary.revision, "the publish happened");
         assert_eq!((saved.reference_depth, saved.included_by), (Some(2), Some(vec![inclusion])));
-    }
-
-    #[test]
-    fn schema_three_migrates_pending_journal_ownership_and_preserves_saved_items() {
-        let f = fixture();
-        let store = f.service.open().unwrap();
-        let existing = publish_asset(&store, 1, "one", None);
-        let mut pending = asset_entry(&asset(2, "pending"), None);
-        let pending_id = pending.summary.item_id.clone();
-        let stage = store.stage_asset(&mut pending, &asset(2, "pending")).unwrap();
-        // Publication reached the durable target; only the index commit was
-        // interrupted. A journal-only crash is correctly rolled back instead.
-        fault(&store, "new_to_target");
-        assert_eq!(store.publish(stage, pending, None, None).unwrap_err().code, "library_test_crash");
-        let names = super::super::legacy::json_names(&store.journal, 4096).unwrap();
-        let mut intent: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
-        intent["schema"] = 1.into();
-        intent["new_entry"]["summary"]["refs"] = serde_json::json!([
-            {"kind": "space", "companion_root_id": "unknown-pending"}
-        ]);
-        intent["moved_entries"] = serde_json::json!([intent["new_entry"].clone()]);
-        bounded_write(&store.journal, &names[0], &intent, MAX_RECORD).unwrap();
-        let mut index: serde_json::Value = read_json_bounded(&store.meta, "index.json", MAX_INDEX).unwrap();
-        index["schema"] = 3.into();
-        index.as_object_mut().unwrap().remove("space_contexts");
-        index["items"][0]["summary"]["refs"] = serde_json::json!([
-            {"kind": "space", "companion_root_id": "unknown-existing"}
-        ]);
-        bounded_write(&store.meta, "index.json", &index, MAX_INDEX).unwrap();
-        store.meta.create_dir("space-adds").unwrap();
-        let attempts = store.meta.open_dir_nofollow("space-adds").unwrap();
-        bounded_write(&attempts, "saved.json", &serde_json::json!({
-            "target": {"session_id": "missing-session", "space_id": "missing-space"},
-            "item_id": pending_id, "state": "pending"
-        }), MAX_RECORD).unwrap();
-        let _lock = store.exclusive().unwrap();
-        store.upgrade_v3().unwrap();
-        let migrated: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
-        assert_eq!(migrated["schema"], INTENT_SCHEMA);
-        assert_eq!(migrated["new_entry"]["summary"]["refs"], serde_json::json!([
-            {"kind": "space", "space_context_id": "legacy:unknown-pending"}, {"kind": "manual"}
-        ]));
-        assert_eq!(migrated["moved_entries"][0]["summary"]["refs"], migrated["new_entry"]["summary"]["refs"]);
-        assert_eq!(migrated["target"], intent["target"]);
-        assert_eq!(migrated["staging"], intent["staging"]);
-        store.recover().unwrap();
-        let index = store.index().unwrap();
-        let pending = index.items.iter().find(|e| e.summary.item_id == pending_id).unwrap();
-        assert!(pending.summary.refs.contains(&LibraryItemRef::Manual));
-        assert!(pending.summary.refs.contains(&LibraryItemRef::Space { space_context_id: "legacy:unknown-pending".into() }));
-        assert!(index.items.iter().find(|e| e.summary.item_id == existing.summary.item_id).unwrap().summary.refs
-            .contains(&LibraryItemRef::Space { space_context_id: "legacy:unknown-existing".into() }));
-        assert!(index.space_contexts.is_empty());
-        let generation = index.generation;
-        store.upgrade_v3().unwrap();
-        assert_eq!(store.index().unwrap().generation, generation, "schema migration is idempotent");
-        assert!(attempts.symlink_metadata("saved.json").unwrap().is_file(), "legacy attempts stay inert on disk");
-    }
-
-    #[test]
-    fn schema_three_preserves_replacement_journal_predecessor_references() {
-        let f = fixture();
-        let store = f.service.open().unwrap();
-        let first = publish_asset(&store, 1, "one", None);
-        let mut replacement = asset_entry(&asset(1, "changed"), Some(&first));
-        let stage = store.stage_asset(&mut replacement, &asset(1, "changed")).unwrap();
-        fault(&store, "journal");
-        assert_eq!(store.publish(stage, replacement, Some(&first.summary.revision), None).unwrap_err().code, "library_test_crash");
-        let names = super::super::legacy::json_names(&store.journal, 4096).unwrap();
-        let mut intent: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
-        for key in ["new_entry", "old_entry"] {
-            intent[key]["summary"]["refs"] = serde_json::json!([{"kind": "space", "companion_root_id": "predecessor"}]);
-        }
-        intent["schema"] = 1.into();
-        let inventory = intent["old_entry"]["inventory"].clone();
-        let previous_revision = intent["previous_revision"].clone();
-        bounded_write(&store.journal, &names[0], &intent, MAX_RECORD).unwrap();
-        let mut index: serde_json::Value = read_json_bounded(&store.meta, "index.json", MAX_INDEX).unwrap();
-        index["schema"] = 3.into();
-        index["items"][0]["summary"]["refs"] = intent["old_entry"]["summary"]["refs"].clone();
-        bounded_write(&store.meta, "index.json", &index, MAX_INDEX).unwrap();
-        let _lock = store.exclusive().unwrap();
-        store.upgrade_v3().unwrap();
-        let migrated: serde_json::Value = read_json_bounded(&store.journal, &names[0], MAX_RECORD).unwrap();
-        assert_eq!(migrated["old_entry"]["summary"]["refs"], serde_json::json!([{"kind": "space", "space_context_id": "legacy:predecessor"}]));
-        assert_eq!(migrated["new_entry"]["summary"]["refs"], migrated["old_entry"]["summary"]["refs"]);
-        assert_eq!(migrated["old_entry"]["inventory"], inventory);
-        assert_eq!(migrated["previous_revision"], previous_revision);
-        store.recover().unwrap();
-        assert_eq!(store.index().unwrap().items[0].summary.refs,
-            [LibraryItemRef::Space { space_context_id: "legacy:predecessor".into() }]);
-    }
-
-    #[test]
-    fn schema_three_unknown_reference_blocks_flip_without_discarding_it() {
-        let f = fixture();
-        let store = f.service.open().unwrap();
-        publish_asset(&store, 1, "one", None);
-        let mut raw: serde_json::Value = read_json_bounded(&store.meta, "index.json", MAX_INDEX).unwrap();
-        raw["schema"] = 3.into();
-        raw["items"][0]["summary"]["refs"] = serde_json::json!([{"kind": "future-owner", "identity": "retain"}]);
-        bounded_write(&store.meta, "index.json", &raw, MAX_INDEX).unwrap();
-        let _lock = store.exclusive().unwrap();
-        assert_eq!(store.upgrade_v3().unwrap_err().code, "library_corrupt");
-        assert_eq!(read_json_bounded::<serde_json::Value>(&store.meta, "index.json", MAX_INDEX).unwrap(), raw);
     }
 
     #[test]

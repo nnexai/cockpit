@@ -131,7 +131,7 @@ async fn source_changes_are_isolated_until_explicit_refresh_and_library_edits_re
 #[tokio::test]
 async fn owned_roots_ancestors_descendants_and_symlink_roots_are_refused() {
     let f = fixture();
-    for owned in [&f.service.configuration.library_root, &f.service.configuration.companion_root,
+    for owned in [&f.service.configuration.library_root,
         &f.service.configuration.state_root, &f.service.configuration.worktree_root, &f.service.configuration.cache_root] {
         std::fs::create_dir_all(Path::new(owned).join("child")).unwrap();
         for path in [PathBuf::from(owned), Path::new(owned).join("child"), f.root.clone()] {

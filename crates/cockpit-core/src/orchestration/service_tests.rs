@@ -15,7 +15,6 @@ impl Fixture {
             std::env::temp_dir().join(format!("cockpit-orchestration-service-{}", Uuid::new_v4()));
         let configuration = ProjectConfiguration {
             repository_roots: vec![],
-            companion_root: root.join("unused-companions").to_string_lossy().into_owned(),
             branch_template: "test/{task}".into(),
             checkout_template: "{task}".into(),
             limits: cockpit_protocol::projects::ProjectLimits {

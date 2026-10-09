@@ -674,10 +674,6 @@ impl Dispatcher {
                 ("COCKPIT_CACHE_ROOT".into(), configuration.cache_root),
                 ("COCKPIT_WORKTREE_ROOT".into(), configuration.worktree_root),
                 (
-                    "COCKPIT_COMPANION_ROOT".into(),
-                    configuration.companion_root,
-                ),
-                (
                     "COCKPIT_REPOSITORY_ROOTS".into(),
                     std::env::join_paths(&configuration.repository_roots)
                         .map_err(|error| {

@@ -27,7 +27,6 @@ fn configuration(server: &FakeConfluence) -> ProjectConfiguration {
     ProjectConfiguration {
         repository_roots: Vec::new(),
         worktree_root: "/w".into(),
-        companion_root: "/c".into(),
         state_root: "/s".into(),
         library_root: "/l".into(),
         branch_template: "{repo}/{task_id}".into(),

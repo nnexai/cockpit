@@ -2986,7 +2986,6 @@ mod tests {
                 let expected_read = if item.canonical_id.as_deref() == Some("other/service#7") { 1 } else { 2 };
                 assert!(bytes.contains(&format!("Setup context body: fetch {expected_read}")), "Library must contain the validated provider result");
             }
-            assert!(!Path::new(&configuration.companion_root).exists(), "setup never creates companion directories");
             {
                 let requests = adapter.terminal_requests.lock().expect("terminal requests");
                 let env = &requests[0].env;
@@ -3009,9 +3008,6 @@ mod tests {
         git(&repository, &["init"]);
         std::fs::write(nested.join("keep.txt"), "keep\n").expect("borrowed file");
         let configuration = configuration(&root);
-        let legacy_notes = Path::new(&configuration.companion_root).join("legacy-task/notes.md");
-        std::fs::create_dir_all(legacy_notes.parent().unwrap()).expect("legacy companion");
-        std::fs::write(&legacy_notes, "user notes\n").expect("legacy notes");
         std::fs::create_dir_all(&configuration.worktree_root).expect("worktree root");
         let adapter = Arc::new(NestedDirectoryAdapter::default());
         let service = ProjectService::new(configuration, adapter.clone()).expect("project service");
@@ -3098,7 +3094,6 @@ mod tests {
             std::fs::read_to_string(nested.join("keep.txt")).expect("borrowed file"),
             "keep\n"
         );
-        assert_eq!(std::fs::read_to_string(&legacy_notes).expect("retained legacy notes"), "user notes\n");
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

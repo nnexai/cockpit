@@ -319,7 +319,7 @@ export type ProjectProvider = { id: string, kind: ProviderKind, base_url: string
  */
 deployment?: ProviderDeployment, };
 
-export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, cache_root: string, library_root: string, notes_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, orchestration: OrchestrationConfiguration, origins: { [key in string]: string }, };
+export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, state_root: string, cache_root: string, library_root: string, notes_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, orchestration: OrchestrationConfiguration, origins: { [key in string]: string }, };
 
 export type OrchestrationConfiguration = { omp_extension: string | null, model: string | null, extra_args: Array<string>, routes: Array<OrchestrationRoute>, };
 

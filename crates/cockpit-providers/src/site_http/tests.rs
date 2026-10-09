@@ -19,7 +19,6 @@ fn configuration(base_url: &str, service: Service) -> ProjectConfiguration {
     ProjectConfiguration {
         repository_roots: vec![],
         worktree_root: "/tmp/w".into(),
-        companion_root: "/tmp/c".into(),
         state_root: "/tmp/s".into(),
         cache_root: "/tmp/k".into(),
         library_root: "/tmp/l".into(),

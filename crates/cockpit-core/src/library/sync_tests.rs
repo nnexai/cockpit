@@ -584,7 +584,7 @@ impl Fixture {
         let mut state = if self.state_path().exists() {
             self.state()
         } else {
-            json!({"schema":1,"sources":{},"queue":{},"audits":{},"active_operation":null})
+            json!({"schema":1,"sources":{},"queue":{},"audits":{},"origins":{},"active_operation":null})
         };
         change(&mut state);
         std::fs::create_dir_all(self.state_path().parent().unwrap()).unwrap();
@@ -597,14 +597,28 @@ impl Fixture {
     fn quiet_audits(&self) {
         self.edit_state(|s| {
             for group in [format!("jira:{JIRA}"), format!("confluence:{WIKI}")] {
-                s["audits"][group] = json!({"cursor":null,"next_due_ms":now()+100*DAY});
+                s["audits"][group] = json!({"cursor":null,"next_due_ms":now()+100*DAY,"failures":{}});
             }
         });
     }
     fn due(&self, id: &str, delta: bool, inventory: bool) {
         self.edit_state(|s| {
             if s["sources"].get(id).is_none() {
-                s["sources"][id] = json!({});
+                s["sources"][id] = json!({
+                    "next_delta_ms": 0,
+                    "next_inventory_ms": 0,
+                    "next_related_ms": 0,
+                    "last_started_ms": 0,
+                    "last_success_ms": null,
+                    "committed_upper_ms": null,
+                    "window": null,
+                    "failures": 0,
+                    "last_error": null,
+                    "absent": {},
+                    "related_absent": {},
+                    "held": null,
+                    "inventory": null
+                });
             }
             s["sources"][id]["next_delta_ms"] = json!(if delta { 0 } else { now() + 100 * DAY });
             s["sources"][id]["next_inventory_ms"] =

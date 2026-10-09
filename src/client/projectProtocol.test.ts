@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { parseProjectConfiguration, parseWorkspaceOperation, parseWorkspaceSetupRequest, parseWorkspaceDefaults } from "./projectProtocol";
-import { parseWorkspaceTeardownPreview, parseWorkspaceTeardownExecuteRequest, parseWorkspaceTeardownResult, parseWorkspaceTeardownRecoveryList } from "./projectTeardownProtocol";
+import { parseWorkspaceTeardownPreview, parseWorkspaceTeardownExecuteRequest } from "./projectTeardownProtocol";
 
 function configuration(providers: unknown[]) {
   return {
-    version: 1, repository_roots: [], worktree_root: "/worktrees", companion_root: "/companions", state_root: "/state", cache_root: "/cache",
+    version: 1, repository_roots: [], worktree_root: "/worktrees", state_root: "/state", cache_root: "/cache",
     library_root: "/library", notes_root: "/notes", branch_template: "{task}", checkout_template: "{task}", providers, origins: {},
     orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
     limits: {
@@ -124,7 +124,7 @@ it("carries linked work items in defaults and worktree requests", () => {
   expect(() => parseWorkspaceSetupRequest({ ...request, linked_artifact_urls: Array(5).fill(jira.canonical_url) })).toThrow();
 });
 
-it("decodes worktree teardown without companion state and rejects removed destructive actions", () => {
+it("decodes worktree teardown and rejects invalid ownership and actions", () => {
   const preview = {
     operation_id: "operation-1", workspace_id: "space-1", endpoint_identity: "endpoint-1",
     repository_key: "repo", repository_root: "/repos/repo", checkout_path: "/worktrees/task",
@@ -139,14 +139,6 @@ it("decodes worktree teardown without companion state and rejects removed destru
     action: "remove_owned_worktree", confirmation: "task",
   };
   expect(parseWorkspaceTeardownExecuteRequest(request)).toEqual(request);
-  for (const action of ["remove_orphaned_companion", "forget_association"]) {
-    expect(() => parseWorkspaceTeardownExecuteRequest({ ...request, action })).toThrow();
-    expect(() => parseWorkspaceTeardownPreview({ ...preview, allowed_actions: [action] })).toThrow();
-  }
-  expect(() => parseWorkspaceTeardownResult({
-    operation_id: "operation-1", workspace_id: "space-1", action: "close_space", outcome: "orphaned_companion", message: "old",
-  })).toThrow();
-  expect(() => parseWorkspaceTeardownRecoveryList({
-    recoveries: [{ operation_id: "operation-1", workspace_id: "space-1", checkout_path: "/worktrees/task", state: "orphaned_companion" }],
-  })).toThrow();
+  expect(() => parseWorkspaceTeardownExecuteRequest({ ...request, action: "invalid" })).toThrow();
+  expect(() => parseWorkspaceTeardownPreview({ ...preview, allowed_actions: ["invalid"] })).toThrow();
 });

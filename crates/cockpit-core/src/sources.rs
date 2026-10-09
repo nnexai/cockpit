@@ -92,11 +92,8 @@ pub struct SourceAsset {
     pub complete: bool,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub body: String,
-    #[serde(default)]
     pub container: Option<SourceContainer>,
-    #[serde(default)]
     pub fields: Vec<FrontmatterField>,
-    #[serde(default)]
     pub attachments: Vec<SourceAttachment>,
 }
 
@@ -1686,19 +1683,6 @@ mod tests {
     }
 
     #[test]
-    fn old_source_assets_deserialize_with_empty_extensions() {
-        let original = asset("body");
-        let mut value = serde_json::to_value(&original).unwrap();
-        for key in ["container", "fields", "attachments"] {
-            value.as_object_mut().unwrap().remove(key);
-        }
-        let restored: SourceAsset = serde_json::from_value(value).unwrap();
-        assert!(restored.container.is_none());
-        assert!(restored.fields.is_empty());
-        assert!(restored.attachments.is_empty());
-        assert_eq!(content_revision(&restored), content_revision(&original));
-    }
-    #[test]
     fn library_markdown_preserves_structured_values_and_attachment_availability() {
         let mut source = asset("Body");
         source.container = Some(SourceContainer {
@@ -1756,7 +1740,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_only_neither_initializes_nor_reads_or_changes_legacy_cache() {
+    async fn fetch_only_neither_initializes_nor_changes_prefetch_cache() {
         let (service, shared, root) = service(asset("body"));
         let cache = root.join("sources");
         assert!(!cache.exists());
@@ -1767,13 +1751,6 @@ mod tests {
         service.prefetch_for_setup(request()).await;
         let recent_before = service.recent.lock().unwrap().fetches.clone();
         assert_eq!(recent_before.len(), 1);
-        std::fs::create_dir(&cache).unwrap();
-        let sentinel = cache.join("source-current.json");
-        std::fs::write(&sentinel, b"legacy cache must not even be read").unwrap();
-        let before: Vec<_> = std::fs::read_dir(&cache)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
         let fetched = service.fetch_assets(request()).await.unwrap();
         assert_eq!(fetched.assets[0].body, "body");
         let recent_after = service.recent.lock().unwrap();
@@ -1784,15 +1761,6 @@ mod tests {
             recent_after.fetches[0].2[0].body,
             recent_before[0].2[0].body
         );
-        assert_eq!(
-            std::fs::read(&sentinel).unwrap(),
-            b"legacy cache must not even be read"
-        );
-        let after: Vec<_> = std::fs::read_dir(&cache)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        assert_eq!(after, before);
         shared.lock().unwrap().source.provider_instance = "https://other.test".into();
         assert_eq!(
             service
@@ -1802,10 +1770,6 @@ mod tests {
                 .code,
             "source_provider_contract"
         );
-        assert_eq!(
-            std::fs::read(&sentinel).unwrap(),
-            b"legacy cache must not even be read"
-        );
         std::fs::remove_dir_all(root).unwrap();
     }
     fn service(asset: SourceAsset) -> (SourceService, Arc<Mutex<SourceAsset>>, std::path::PathBuf) {
@@ -1814,7 +1778,6 @@ mod tests {
         let config = ProjectConfiguration {
         repository_roots: vec![],
         worktree_root: "worktrees".into(),
-        companion_root: "companions".into(),
         state_root: root.to_string_lossy().into_owned(),
         library_root: "library".into(),
         branch_template: "{repo}/{task_id}".into(),

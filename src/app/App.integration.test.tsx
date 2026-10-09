@@ -638,7 +638,7 @@ describe("mounted App mutation and session ordering", () => {
     realViewerClients.add(fixture.client);
     emptyLibrary(fixture);
     vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
-      version: 1, repository_roots: [], worktree_root: "", companion_root: "", state_root: "", cache_root: "",
+      version: 1, repository_roots: [], worktree_root: "", state_root: "", cache_root: "",
       library_root: "/data/cockpit/library", notes_root: "/data/cockpit/notes", branch_template: "", checkout_template: "", providers: [], origins: {},
       orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,

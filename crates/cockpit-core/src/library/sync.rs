@@ -64,7 +64,6 @@ struct State {
     sources: BTreeMap<String, SourceState>,
     queue: BTreeMap<String, Candidate>,
     audits: BTreeMap<String, Audit>,
-    #[serde(default)]
     origins: BTreeMap<String, i64>,
     active_operation: Option<String>,
 }
@@ -81,7 +80,7 @@ impl Default for State {
     }
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 struct SourceState {
     next_delta_ms: i64,
     next_inventory_ms: i64,
@@ -124,14 +123,14 @@ struct Candidate {
     last_error: Option<String>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 struct Audit {
     cursor: Option<String>,
     next_due_ms: i64,
     failures: BTreeMap<String, AuditFailure>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 struct AuditFailure {
     failures: u8,
     next_attempt_ms: i64,
@@ -814,8 +813,7 @@ impl LibraryService {
                         .iter()
                         .find(|entry| entry.summary.item_id == id);
                     if old.is_none_or(|entry| {
-                        jira_follow::change_reason(entry, row, current.reference_depth.unwrap_or(0))
-                            .is_some()
+                        jira_follow::change_reason(entry, row).is_some()
                     }) {
                         let mut work = candidate(
                             source(follow, &row.key, "issue"),
@@ -1317,13 +1315,7 @@ impl LibraryService {
                             }) else {
                                 continue;
                             };
-                            if jira_follow::change_reason(
-                                old,
-                                &row,
-                                old.summary.reference_depth.unwrap_or(0),
-                            )
-                            .is_some()
-                            {
+                            if jira_follow::change_reason(old, &row).is_some() {
                                 let source = SourceRef {
                                     provider_id: provider.into(),
                                     provider_instance: old

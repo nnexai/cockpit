@@ -115,7 +115,7 @@ def start(with_plugins=False, with_action_launcher=False):
         configure_action_launcher(root)
     (root / "cockpit.toml").write_text(
         f'version = 1\nrepository_roots = ["{root}/repositories"]\n'
-        f'worktree_root = "{root}/worktrees"\ncompanion_root = "{root}/companions"\n'
+        f'worktree_root = "{root}/worktrees"\n'
         f'state_root = "{root}/cockpit-state"\n')
     fixture = root / "repositories/sample"
     (fixture / "README.md").write_text('---\ntitle: Polish fixture\n---\n# Sample project\n\n## Summary\n\nOriginal source coordinates survive rendered Markdown.\n\n## Detail\n\nSelect this text to leave a comment.\n')

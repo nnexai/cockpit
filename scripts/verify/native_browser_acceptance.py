@@ -550,7 +550,7 @@ def main():
     (root / "config/herdr/config.toml").write_text("")
     (root / "cockpit.toml").write_text(
         f'version = 1\nrepository_roots = ["{root}"]\nworktree_root = "{root}/worktrees"\n'
-        f'companion_root = "{root}/companions"\nstate_root = "{root}/cockpit-state"\n')
+        f'state_root = "{root}/cockpit-state"\n')
     fixture = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
     fixture_thread = threading.Thread(target=fixture.serve_forever, daemon=True)
     fixture_thread.start()
