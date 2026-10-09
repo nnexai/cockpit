@@ -68,7 +68,6 @@ mod tests {
         for value in [
             serde_json::json!({"kind": "files_repository", "path": "/repository"}),
             serde_json::json!({"kind": "files_repository", "root_id": "root", "path": "/repository"}),
-            serde_json::json!({"kind": "files_context", "companion_id": "legacy"}),
             serde_json::json!({"kind": "files_folder", "path": "/repository"}),
         ] {
             assert!(serde_json::from_value::<ViewerSourceSelector>(value).is_err());

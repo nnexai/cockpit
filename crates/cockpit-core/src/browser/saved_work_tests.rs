@@ -204,7 +204,7 @@ async fn cleanup_retries_failed_discard_and_removes_only_its_association_work() 
     std::fs::write(&pending_path, serde_json::to_vec(&json!({
         "format_version":1,"association_key":key,"browser_incarnation":capture.context.browser_instance,
         "draft_id":draft.draft_id,"draft_revision":1,"annotation_ids":[id],
-        "original_annotation_digests":[],"context":capture.context,
+        "original_annotation_digests":["a".repeat(64)],"context":capture.context,
         "submission":{"association_key":key,"browser_instance":capture.context.browser_instance,
             "capture_id":capture_id,"page":capture.page,"annotations":capture.annotations,"png_base64":png},
         "last_error":"interrupted"
@@ -212,7 +212,7 @@ async fn cleanup_retries_failed_discard_and_removes_only_its_association_work() 
     std::fs::write(&preparation_path, serde_json::to_vec(&json!({
         "format_version":1,"association_key":key,"browser_incarnation":capture.context.browser_instance,
         "capture_id":capture_id,"draft_id":second.draft_id,"draft_revision":1,
-        "annotation_ids":[id],"original_annotation_digests":[],"context":capture.context
+        "annotation_ids":[id],"original_annotation_digests":["a".repeat(64)],"context":capture.context
     })).unwrap()).unwrap();
     // A failed artifact removal must keep both its capture record and the
     // browser receipt. Retry must work even when the image is now absent.

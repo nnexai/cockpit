@@ -127,7 +127,6 @@ struct BrowserReceipt {
     tab_label: String,
     artifacts: cleanup::ArtifactIdentities,
     cleanup_reason: Option<String>,
-    #[serde(default)]
     unproven_paths: Vec<String>,
     playwright_session: String,
     working_directory: String,
@@ -135,14 +134,11 @@ struct BrowserReceipt {
     config_path: String,
     /// The loopback endpoint and browser identity captured after a verified
     /// inline launch. Both must still match before a helper can attach.
-    #[serde(default)]
     cdp_endpoint: Option<String>,
-    #[serde(default)]
     cdp_browser_identity: Option<String>,
     intent: ReceiptIntent,
     state: ReceiptState,
-    /// Stable CDP target identity; absent in legacy receipts and unresolved opens.
-    #[serde(default)]
+    /// Stable CDP target identity; absent during unresolved opens.
     target_id: Option<String>,
     /// Historical Playwright CLI tab index, never used as attachment authority.
     opened_tab: Option<String>,

@@ -14,7 +14,7 @@ import {
   parseTerminalOpenRequest,
   parseTerminalStreamMessage,
   parseSessionStreamMessage,
-  parseBrowserRequest, parseBrowserWorkScope, parseBrowserFeedbackSendRequest, parseBrowserDraftRecoveryRequest,
+  parseBrowserRequest, parseBrowserFeedbackSendRequest,
   parseBrowserCleanupStatus,
   type CockpitClient,
   type CockpitSessionSnapshot,
@@ -166,17 +166,18 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
 }
 
 describe("client DTO parsers", () => {
-  it("normalizes legacy and validates status capabilities", () => {
-    const legacy = { protocol_version: "v1", cockpit_version: "0.1.0", mode: "normal", herdr: status.herdr };
-    expect(parseStatusResponse(legacy).capabilities).toEqual({ terminal_mouse_input: false });
+  it("validates required status capabilities", () => {
     expect(parseStatusResponse(status).capabilities).toEqual({ terminal_mouse_input: true });
-    expect(() => parseStatusResponse({ ...legacy, capabilities: { terminal_mouse_input: "yes" } })).toThrow(CockpitClientError);
-    expect(() => parseStatusResponse({ ...legacy, capabilities: undefined })).toThrow(CockpitClientError);
+    expect(() => parseStatusResponse({ ...status, capabilities: { terminal_mouse_input: "yes" } })).toThrow(CockpitClientError);
+    expect(() => parseStatusResponse({ ...status, capabilities: undefined })).toThrow(CockpitClientError);
   });
   it("strictly validates session and terminal contracts", () => {
     expect(parseSessionListResponse(sessions)).toEqual(sessions);
-    const legacyAgent = { pane_id: "pane-1", space_id: "space-1", tab_id: "tab-1", name: "omp", status: "working", title: null, focused: true };
-    expect(parseSessionSnapshotResponse({ ...snapshot, agents: [legacyAgent] }).agents[0]?.state_change_seq).toBe(0);
+    const agent = { pane_id: "pane-1", space_id: "space-1", tab_id: "tab-1", name: "omp", status: "working", title: null, focused: true, state_change_seq: 7 };
+    expect(parseSessionSnapshotResponse({ ...snapshot, agents: [agent] }).agents).toEqual([agent]);
+    for (const state_change_seq of [undefined, null, -1, 0.5, "7"]) {
+      expect(() => parseSessionSnapshotResponse({ ...snapshot, agents: [{ ...agent, state_change_seq }] })).toThrow(CockpitClientError);
+    }
     expect(() => parseSessionSnapshotResponse({ ...snapshot, session_id: undefined })).toThrow(CockpitClientError);
     expect(() => parseSessionSnapshotResponse({
       ...snapshot,
@@ -976,7 +977,7 @@ describe("owned-tab client identity boundaries", () => {
     expect(() => matchViewerContext(parseViewerContext(context), "session-1", { ...open, tab_id: "other" })).toThrow(CockpitClientError);
   });
 
-  it("opens selected repository Files roots and full Library Context without companion fields", async () => {
+  it("opens selected repository Files roots and full Library Context", async () => {
     const repository = { ...folder, root_id: "repository:selected", kind: "repository", repository_id: "repo" };
     const library = { ...folder, root_id: "library:root", kind: "library", repository_id: "library", path: "/library" };
     const sources = { session_id: "session-1", pane_id: "pane-1", tab_id: "tab-1", space_id: "space-1", files_context_root_id: "library:root", files_folder_root_id: null, review_repository_ids: ["repo"], roots: [library, repository], reason: "", diagnostics: [] };
@@ -990,7 +991,7 @@ describe("owned-tab client identity boundaries", () => {
       await expect(client.viewerOpen("session-1", selectedOpen)).resolves.toMatchObject({ roots: [repository] });
       await expect(client.viewerOpen("session-1", { ...selectedOpen, source: { kind: "files_repository", root_id: "other" } })).rejects.toThrow(CockpitClientError);
     }
-    expect(() => parseViewerSourceOptions({ ...sources, roots: [{ ...library, kind: "companion" }, repository] })).toThrow(CockpitClientError);
+    expect(() => parseViewerSourceOptions({ ...sources, roots: [{ ...library, kind: "unknown" }, repository] })).toThrow(CockpitClientError);
   });
 
   it("rejects viewer-open responses from another tab through both transports", async () => {
@@ -1005,31 +1006,16 @@ describe("owned-tab client identity boundaries", () => {
     expect(() => parseBrowserRequest({ target: { ...target, tab_id: null }, action: { kind: "status" } })).toThrow(CockpitClientError);
   });
 
-  it.each(["saved_tab", "legacy_archive"])("rejects the removed %s browser work scope", (kind) => {
-    const scope = { kind, association_key: key };
-    expect(() => parseBrowserWorkScope(scope)).toThrow(CockpitClientError);
-    expect(() => parseBrowserFeedbackSendRequest({
-      scope, ids: ["capture"], operation_id: "operation", acknowledge_duplicate_risk: false,
-    })).toThrow(CockpitClientError);
-    expect(() => parseBrowserDraftRecoveryRequest({
-      scope, action: { type: "discard_pending" },
-    })).toThrow(CockpitClientError);
-  });
-
-  it("rejects detached cleanup scopes and obsolete cleanup status fields", () => {
+  it("validates cleanup targets and rejects unknown status fields", () => {
     const failure = {
       association_key: key, scope: { kind: "tab", session_id: "session-1", tab_id: "tab-1" },
       reason: "blocked", unproven_paths: ["/profile"],
     };
     expect(parseBrowserCleanupStatus({ failures: [failure] }).failures[0]?.scope).toEqual(failure.scope);
     expect(() => parseBrowserCleanupStatus({
-      failures: [{ ...failure, scope: { kind: "legacy_space", space_id: "space-1" } }],
-    })).toThrow(CockpitClientError);
-    expect(() => parseBrowserCleanupStatus({
       failures: [{ ...failure, scope: { kind: "tab", session_id: "session-1" } }],
     })).toThrow(CockpitClientError);
-    expect(() => parseBrowserCleanupStatus({ failures: [], cutover: "done" })).toThrow(CockpitClientError);
-    expect(() => parseBrowserCleanupStatus({ failures: [], saved_tabs: [] })).toThrow(CockpitClientError);
+    expect(() => parseBrowserCleanupStatus({ failures: [], unexpected: true })).toThrow(CockpitClientError);
   });
 
   it("rejects explicit feedback recipients for current-run tab delivery", () => {

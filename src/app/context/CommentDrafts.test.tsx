@@ -12,7 +12,7 @@ it("retains prose after a remote deletion and requires explicit source capture t
   const root: ContextRoot = { root_id: "root", kind: "library", label: "Library", path: "/library", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
   const document = { text: "new source\n", revision: "new-revision" } as ContextDocument;
-  const batch: CommentBatch = { batch_id: "batch", generation: 2, owner: { kind: "legacy_pane", session_id: "session", pane_id: "old-pane", terminal_id: "old-terminal", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now" };
+  const batch: CommentBatch = { batch_id: "batch", generation: 2, owner: { kind: "viewer", session_id: "session", server_instance: "previous-server", tab_id: "previous-tab", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now" };
   const upsert = vi.fn(async () => ({ ...batch, generation: 3 }));
   const client = { commentBatch: vi.fn(async () => batch), commentUpsert: upsert } as unknown as CockpitClient;
   function Harness() {
@@ -264,14 +264,14 @@ it("ignores an in-flight explicit refresh after the comment identity changes", a
   } finally { await act(async () => mounted.unmount()); host.remove(); }
 });
 
-it("reattaches legacy saved comments only after explicit confirmation of the viewer source", async () => {
+it("reattaches detached saved comments only after explicit confirmation of the viewer source", async () => {
   const root: ContextRoot = { root_id: "folder", kind: "folder", label: "Folder", path: "/repo", repository_id: "repo", checkout_path: "/repo" };
   const context: ViewerContext = { session_id: "session", viewer_id: "viewer", binding_id: "binding", tab_id: "tab", space_id: "space", kind: "files", source_kind: "context", source_id: "folder-source", roots: [root], default_root_id: root.root_id, diagnostics: [] };
-  const legacy: CommentBatch = { batch_id: "legacy", generation: 1, owner: { kind: "legacy_pane", session_id: "session", pane_id: "gone-pane", terminal_id: "gone-terminal", source_kind: "context", source_id: "folder-source" }, last_known_location: { workspace_id: "space", tab_id: "old-tab" }, live_attachment: null, drafts: [], updated_at: "now" };
+  const detached: CommentBatch = { batch_id: "detached", generation: 1, owner: { kind: "viewer", session_id: "session", server_instance: "previous-server", tab_id: "previous-tab", source_kind: "context", source_id: "folder-source" }, last_known_location: { workspace_id: "space", tab_id: "previous-tab" }, live_attachment: null, drafts: [], updated_at: "now" };
   const attachment: CommentBatchList["attachment"] = { owner: { kind: "viewer", session_id: "session", server_instance: "server", tab_id: "tab", source_kind: "context", source_id: "folder-source" }, location: { workspace_id: "space", tab_id: "tab" }, binding_id: "binding", client_id: "client" };
-  const attached: CommentBatch = { ...legacy, generation: 2, owner: attachment.owner, last_known_location: attachment.location, live_attachment: attachment };
+  const attached: CommentBatch = { ...detached, generation: 2, owner: attachment.owner, last_known_location: attachment.location, live_attachment: attachment };
   const attach = vi.fn(async () => attached);
-  const client = { commentBatch: vi.fn(async () => legacy), commentBatches: vi.fn(async () => ({ attachment, batches: [], truncated: false })), commentAttach: attach } as unknown as CockpitClient;
+  const client = { commentBatch: vi.fn(async () => detached), commentBatches: vi.fn(async () => ({ attachment, batches: [], truncated: false })), commentAttach: attach } as unknown as CockpitClient;
   const host = window.document.createElement("div"); window.document.body.append(host); const mounted = createRoot(host);
   try {
     await act(async () => mounted.render(<CommentDrafts client={client} context={context} root={root} path="" document={null} selection={null} mode="source" editorState={null} onEditorStateChange={() => {}} />));
@@ -281,7 +281,7 @@ it("reattaches legacy saved comments only after explicit confirmation of the vie
     const confirm = [...host.querySelectorAll("button")].find(item => item.textContent === "Reattach")!;
     expect(confirm.disabled).toBe(false);
     await act(async () => confirm.click());
-    expect(attach).toHaveBeenCalledWith("session", "viewer", expect.objectContaining({ batch_id: "legacy", expected_generation: 1 }));
+    expect(attach).toHaveBeenCalledWith("session", "viewer", expect.objectContaining({ batch_id: "detached", expected_generation: 1 }));
     expect(host.textContent).not.toContain("Detached recovery");
     expect(host.textContent).not.toContain("Detached batch");
   } finally { await act(async () => mounted.unmount()); host.remove(); }

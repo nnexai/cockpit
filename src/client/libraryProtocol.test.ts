@@ -27,10 +27,10 @@ describe("parseLibraryOperation", () => {
 
 describe("Library-direct Space requests", () => {
   const target = { session_id: "session", space_id: "space" };
-  it("rejects obsolete copy/follow shapes instead of silently translating them", () => {
-    expect(() => parseSpaceAddRequest({ target, item_ids: [], follow_ids: [] })).toThrow();
-    expect(() => parseSpaceRemoveRequest({ target, logical_id: "source:one", confirmed: [] })).toThrow();
-    expect(() => parseSpaceRepositoriesRequest({ target, repository_paths: [], confirmed: [] })).toThrow();
+  it("rejects unknown request fields", () => {
+    expect(() => parseSpaceAddRequest({ target, item_ids: [], unexpected: true })).toThrow();
+    expect(() => parseSpaceRemoveRequest({ target, item_ids: [], unexpected: true })).toThrow();
+    expect(() => parseSpaceRepositoriesRequest({ target, repository_paths: [], unexpected: true })).toThrow();
   });
   it("checks the completed selection phase against the requested Space identity", () => {
     const operation = parseLibraryOperation({

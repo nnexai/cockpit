@@ -1124,14 +1124,6 @@ mod tests {
     }
 
     #[test]
-    fn detached_legacy_feedback_is_not_addressable() {
-        assert!(Cli::try_parse_from([
-            "cockpit", "browser", "feedback", "ack",
-            "--legacy", "0123456789abcdef01234567", "--id", "capture-one",
-        ]).is_err());
-    }
-
-    #[test]
     fn widget_input_rejects_symlinks_non_regular_and_oversized_files() {
         let root = std::env::temp_dir().join(format!("widget-cli-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();

@@ -985,23 +985,22 @@ mod tests {
     }
 
     #[test]
-    fn legacy_owner_cannot_autoattach_but_matching_source_can_explicitly_reattach() {
+    fn detached_viewer_cannot_autoattach_but_matching_source_can_explicitly_reattach() {
         let attachment = attachment();
         let evidence = evidence("root");
         let mut batch = empty_batch(&attachment);
-        batch.owner = CommentOwner::LegacyPane {
+        batch.owner = CommentOwner::Viewer {
             session_id: "session".to_owned(),
-            pane_id: "pane".to_owned(),
-            terminal_id: "terminal".to_owned(),
+            server_instance: "previous-server".to_owned(),
+            tab_id: "previous-tab".to_owned(),
             source_kind: ViewerSourceKind::Context,
             source_id: "library".to_owned(),
         };
         assert!(!same_attachment(&batch, &attachment, &evidence));
-        assert_eq!(require_owner(&batch, &attachment, &evidence).expect_err("legacy detached").code, "comments_detached");
+        assert_eq!(require_owner(&batch, &attachment, &evidence).expect_err("viewer detached").code, "comments_detached");
         require_original_source(&batch, &attachment, &evidence).expect("explicit matching reattach");
-        if let CommentOwner::LegacyPane { source_id, .. } = &mut batch.owner {
-            *source_id = "another-source".to_owned();
-        }
+        let CommentOwner::Viewer { source_id, .. } = &mut batch.owner;
+        *source_id = "another-source".to_owned();
         assert_eq!(require_original_source(&batch, &attachment, &evidence).expect_err("different source").code, "comments_source_mismatch");
     }
 }
