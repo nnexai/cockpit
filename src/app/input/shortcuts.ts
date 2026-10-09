@@ -74,8 +74,12 @@ export type ShortcutEntry = {
   scope: ShortcutScope;
   prefix?: PrefixKey;
   chords?: readonly Chord[];
-  /** Listed as a row in Commands. False for keys that only exist for tooltips and docs. */
-  palette?: boolean;
+  /** Omitted for shared Commands rows, custom for stateful rows, false for docs/tooltips only. */
+  palette?: false | "custom";
+  /** Listed in the initial Quick commands view. */
+  primary?: true;
+  /** Moves focus or opens a surface without requiring an idle mutation coordinator. */
+  allowWhileBusy?: true;
   /** Prefix command that needs a selected Space / tab / pane. */
   needs?: "space" | "tab" | "pane";
   /** Acts on the selected pane, so the Library view is closed first (design §6.3). */
@@ -93,48 +97,48 @@ const SELECT_TABS: ShortcutEntry[] = ([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map(
 export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "help", label: "Commands", group: "Navigate", scope: "global", prefix: k("?", "any"), palette: false, note: "A bare ? outside text fields also opens Commands." },
   ...SELECT_TABS,
-  { id: "previous-tab", label: "Previous tab", group: "Tab", scope: "global", prefix: k("p"), needs: "tab" },
-  { id: "next-tab", label: "Next tab", group: "Tab", scope: "global", prefix: k("n"), needs: "tab" },
-  { id: "new-tab", label: "New tab", group: "Tab", scope: "global", prefix: k("c") },
+  { id: "previous-tab", label: "Previous tab", group: "Tab", scope: "global", prefix: k("p"), needs: "tab", allowWhileBusy: true },
+  { id: "next-tab", label: "Next tab", group: "Tab", scope: "global", prefix: k("n"), needs: "tab", allowWhileBusy: true },
+  { id: "new-tab", label: "New tab", group: "Tab", scope: "global", prefix: k("c"), primary: true },
   { id: "rename-tab", label: "Rename tab", group: "Tab", scope: "global", prefix: k("t", true), needs: "tab" },
   { id: "close-tab", label: "Close tab", group: "Tab", scope: "global", prefix: k("x", true), needs: "tab", note: "Asks for confirmation." },
   { id: "new-space", label: "New Space", group: "Space", scope: "global", prefix: k("n", true), note: "Creates a bare Herdr workspace." },
   { id: "rename-space", label: "Rename Space", group: "Space", scope: "global", prefix: k("w", true), needs: "space" },
   { id: "close-space", label: "Close Space", group: "Space", scope: "global", prefix: k("d", true), needs: "space", note: "Asks for confirmation." },
-  { id: "pull-space", label: "Pull Space (fast-forward only)", group: "Space", scope: "global", needs: "space", note: "Commands or a Space row menu; targets the selected checkout's upstream. No assigned shortcut." },
-  { id: "push-space", label: "Push Space to upstream", group: "Space", scope: "global", needs: "space", note: "Commands or a Space row menu; normal push to the tracked upstream, never forced. No assigned shortcut." },
-  { id: "setup-space", label: "Set up a Space", group: "Navigate", scope: "global", prefix: k("s", true), note: "Opens the task Space setup dialog, like the Spaces + button." },
+  { id: "pull-space", label: "Pull Space (fast-forward only)", group: "Space", scope: "global", needs: "space", palette: "custom", primary: true, note: "Commands or a Space row menu; targets the selected checkout's upstream. No assigned shortcut." },
+  { id: "push-space", label: "Push Space to upstream", group: "Space", scope: "global", needs: "space", palette: "custom", primary: true, note: "Commands or a Space row menu; normal push to the tracked upstream, never forced. No assigned shortcut." },
+  { id: "setup-space", label: "Set up a Space", group: "Navigate", scope: "global", prefix: k("s", true), primary: true, note: "Opens the task Space setup dialog, like the Spaces + button." },
   { id: "rename-pane", label: "Rename terminal", group: "Pane", scope: "global", prefix: k("p", true), needs: "pane", paneScoped: true, note: "Real terminals only; viewers have fixed titles." },
   { id: "split-right", label: "New terminal beside pane", group: "Pane", scope: "global", prefix: k("v"), palette: false, needs: "pane", paneScoped: true, note: "Creates a terminal beside the selected terminal or viewer." },
   { id: "split-down", label: "New terminal below pane", group: "Pane", scope: "global", prefix: k("-"), palette: false, needs: "pane", paneScoped: true, note: "Creates a terminal below the selected terminal or viewer." },
   { id: "close-pane", label: "Close pane", group: "Pane", scope: "global", prefix: k("x"), needs: "pane", paneScoped: true, note: "Terminals ask for confirmation; Files and Review close locally. Browser close stops its session and removes its managed profile." },
-  { id: "zoom-pane", label: "Toggle local pane zoom", group: "Pane", scope: "global", prefix: k("z"), needs: "pane", paneScoped: true, note: "Zooms the selected terminal or viewer in Cockpit only." },
-  { id: "resize", label: "Focus adjacent pane divider", group: "Navigate", scope: "global", prefix: k("r"), needs: "pane", paneScoped: true, note: "Arrow keys resize by 24 px, Shift+arrow by 96 px; Esc returns focus to the selected pane." },
-  { id: "focus-left", label: "Focus pane left", group: "Navigate", scope: "global", prefix: k("h"), needs: "pane", note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
-  { id: "focus-down", label: "Focus pane below", group: "Navigate", scope: "global", prefix: k("j"), needs: "pane", note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
-  { id: "focus-up", label: "Focus pane above", group: "Navigate", scope: "global", prefix: k("k"), needs: "pane", note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
-  { id: "focus-right", label: "Focus pane right", group: "Navigate", scope: "global", prefix: k("l"), needs: "pane", note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
+  { id: "zoom-pane", label: "Toggle local pane zoom", group: "Pane", scope: "global", prefix: k("z"), needs: "pane", paneScoped: true, primary: true, note: "Zooms the selected terminal or viewer in Cockpit only." },
+  { id: "resize", label: "Focus adjacent pane divider", group: "Navigate", scope: "global", prefix: k("r"), needs: "pane", paneScoped: true, allowWhileBusy: true, note: "Arrow keys resize by 24 px, Shift+arrow by 96 px; Esc returns focus to the selected pane." },
+  { id: "focus-left", label: "Focus pane left", group: "Navigate", scope: "global", prefix: k("h"), needs: "pane", allowWhileBusy: true, note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
+  { id: "focus-down", label: "Focus pane below", group: "Navigate", scope: "global", prefix: k("j"), needs: "pane", allowWhileBusy: true, note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
+  { id: "focus-up", label: "Focus pane above", group: "Navigate", scope: "global", prefix: k("k"), needs: "pane", allowWhileBusy: true, note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
+  { id: "focus-right", label: "Focus pane right", group: "Navigate", scope: "global", prefix: k("l"), needs: "pane", allowWhileBusy: true, note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
   { id: "swap-left", label: "Swap pane left", group: "Pane", scope: "global", prefix: k("h", true), needs: "pane", paneScoped: true, note: "Swaps locally with a terminal or viewer; Herdr's layout is unchanged." },
   { id: "swap-down", label: "Swap pane below", group: "Pane", scope: "global", prefix: k("j", true), needs: "pane", paneScoped: true, note: "Swaps locally with a terminal or viewer; Herdr's layout is unchanged." },
   { id: "swap-up", label: "Swap pane above", group: "Pane", scope: "global", prefix: k("k", true), needs: "pane", paneScoped: true, note: "Swaps locally with a terminal or viewer; Herdr's layout is unchanged." },
   { id: "swap-right", label: "Swap pane right", group: "Pane", scope: "global", prefix: k("l", true), needs: "pane", paneScoped: true, note: "Swaps locally with a terminal or viewer; Herdr's layout is unchanged." },
-  { id: "next-pane", label: "Next pane", group: "Navigate", scope: "global", prefix: { key: "Tab", shift: false, display: "Tab" }, needs: "pane", note: "Cycles all terminals and viewers in visual tree order, restoring zoom when needed. Only as the key right after Ctrl+B; a plain Tab reaches the focused surface." },
-  { id: "previous-pane", label: "Previous pane", group: "Navigate", scope: "global", prefix: { key: "Tab", shift: true, display: "Shift+Tab" }, needs: "pane", note: "Cycles all terminals and viewers in reverse visual tree order, restoring zoom when needed. Ctrl+B, Shift, Tab works too." },
-  { id: "toggle-sidebar", label: "Toggle sidebar", group: "Navigate", scope: "global", prefix: k("b"), note: "Collapses or expands the sidebar; opens or closes the drawer on narrow windows." },
-  { id: "focus-spaces", label: "Focus Spaces list", group: "Navigate", scope: "global", prefix: k("w"), note: "Then ↑ ↓ move, Enter selects through Herdr, Esc returns." },
-  { id: "focus-agents", label: "Focus Agents list", group: "Navigate", scope: "global", prefix: k("a") },
-  { id: "switch-session", label: "Switch session…", group: "Navigate", scope: "global", prefix: k("g") },
+  { id: "next-pane", label: "Next pane", group: "Navigate", scope: "global", prefix: { key: "Tab", shift: false, display: "Tab" }, needs: "pane", allowWhileBusy: true, note: "Cycles all terminals and viewers in visual tree order, restoring zoom when needed. Only as the key right after Ctrl+B; a plain Tab reaches the focused surface." },
+  { id: "previous-pane", label: "Previous pane", group: "Navigate", scope: "global", prefix: { key: "Tab", shift: true, display: "Shift+Tab" }, needs: "pane", allowWhileBusy: true, note: "Cycles all terminals and viewers in reverse visual tree order, restoring zoom when needed. Ctrl+B, Shift, Tab works too." },
+  { id: "toggle-sidebar", label: "Toggle sidebar", group: "Navigate", scope: "global", prefix: k("b"), allowWhileBusy: true, note: "Collapses or expands the sidebar; opens or closes the drawer on narrow windows." },
+  { id: "focus-spaces", label: "Focus Spaces list", group: "Navigate", scope: "global", prefix: k("w"), allowWhileBusy: true, note: "Then ↑ ↓ move, Enter selects through Herdr, Esc returns." },
+  { id: "focus-agents", label: "Focus Agents list", group: "Navigate", scope: "global", prefix: k("a"), allowWhileBusy: true },
+  { id: "switch-session", label: "Switch session…", group: "Navigate", scope: "global", prefix: k("g"), primary: true, allowWhileBusy: true },
   { id: "subscription-limits", label: "Subscription limits", group: "Navigate", scope: "global", note: "Commands-only; opens read-only subscription limits in the lower workarea strip." },
-  { id: "show-supervisor", label: "Show Supervisor", group: "Navigate", scope: "global", note: "Commands or top bar; opens tasks, progress and genuine questions without changing Herdr focus. No assigned shortcut." },
-  { id: "start-supervisor", label: "Start agent", group: "Navigate", scope: "global", note: "Commands-only; starts an OMP supervisor in a new tab in the fresh current Space, without changing terminal focus. Location options appear only when needed. The supervisor manages its workers. No assigned shortcut." },
-  { id: "show-widgets", label: "Show widgets", group: "Pane", scope: "global", note: "Commands-only; opens widgets waiting in the selected tab without taking terminal focus." },
-  { id: "next-widget", label: "Next widget", group: "Pane", scope: "global", note: "Commands-only; shows the next widget in the selected tab's dock." },
-  { id: "previous-widget", label: "Previous widget", group: "Pane", scope: "global", note: "Commands-only; shows the previous widget in the selected tab's dock." },
-  { id: "remove-widget", label: "Remove widget", group: "Pane", scope: "global", note: "Commands-only; immediately removes the current widget. The agent must explicitly reopen it." },
-  { id: "toggle-library", label: "Open Library", group: "Library", scope: "global", prefix: k("i"), note: "Closing with Ctrl+B i returns focus to the pane it was opened from." },
+  { id: "show-supervisor", label: "Show Supervisor", group: "Navigate", scope: "global", palette: "custom", primary: true, note: "Commands or top bar; opens tasks, progress and genuine questions without changing Herdr focus. No assigned shortcut." },
+  { id: "start-supervisor", label: "Start agent", group: "Navigate", scope: "global", palette: "custom", primary: true, note: "Commands-only; starts an OMP supervisor in a new tab in the fresh current Space, without changing terminal focus. Location options appear only when needed. The supervisor manages its workers. No assigned shortcut." },
+  { id: "show-widgets", label: "Show widgets", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; opens widgets waiting in the selected tab without taking terminal focus." },
+  { id: "next-widget", label: "Next widget", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; shows the next widget in the selected tab's dock." },
+  { id: "previous-widget", label: "Previous widget", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; shows the previous widget in the selected tab's dock." },
+  { id: "remove-widget", label: "Remove widget", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; immediately removes the current widget. The agent must explicitly reopen it." },
+  { id: "toggle-library", label: "Open Library", group: "Library", scope: "global", prefix: k("i"), primary: true, allowWhileBusy: true, note: "Closing with Ctrl+B i returns focus to the pane it was opened from." },
   { id: "toggle-browser", label: "Toggle browser for tab", group: "Browser", scope: "global", prefix: k("b", true), palette: false, note: "Opens or closes the selected tab's browser, like the tab-strip button." },
   {
-    id: "open-file-picker", label: "Open file picker", group: "Navigate", scope: "viewer", prefix: k("f"),
+    id: "open-file-picker", label: "Open file picker", group: "Navigate", scope: "viewer", prefix: k("f"), allowWhileBusy: true,
     chords: [{ mod: true, key: "p", display: "P" }, { key: "/", display: "/" }],
     note: "Acts only when focus is inside a Files, Review, Context or Library viewer.",
   },
