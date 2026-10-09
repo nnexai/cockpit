@@ -854,7 +854,9 @@ impl NotesCommand {
 
 async fn execute(args: NotesArgs) -> Result<NotesResponse, InspectionError> {
     let operation = args.command.into_operation()?;
-    let config = cockpit_core::config::load_project_configuration(args.config.as_deref(), None)?;
+    let config = cockpit_core::config::ConfigurationFile::load(args.config.as_deref())?
+        .project
+        .resolve(None)?;
     let mut service = NotesService::new(PathBuf::from(config.notes_root));
     if matches!(operation, NotesOperation::CatalogList) {
         if args.current || args.space.is_some() || args.notes.is_some() {

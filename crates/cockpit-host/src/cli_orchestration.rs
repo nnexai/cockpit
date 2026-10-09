@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, io::Read, path::PathBuf, sync::Arc, time::Durat
 use clap::{Args, Subcommand, ValueEnum};
 use cockpit_core::{
     InspectionError,
-    config::load_project_configuration,
+    config::ConfigurationFile,
     extension_adapter::SourcePaneEvidence,
     orchestration::{Actor, AgentCaller, OrchestrationService, herdr::OrchestrationHerdr},
     process_identity::{is_ancestor_of_self, kernel_boot_id, start_identity},
@@ -371,10 +371,11 @@ impl OrchestrationArgs {
             .config
             .clone()
             .or_else(|| std::env::var_os("COCKPIT_CONFIG").map(PathBuf::from));
-        Ok(load_project_configuration(
-            config.as_deref(),
-            (!self.repository_roots.is_empty()).then_some(self.repository_roots.as_slice()),
-        )?)
+        Ok(ConfigurationFile::load(config.as_deref())?
+            .project
+            .resolve(
+                (!self.repository_roots.is_empty()).then_some(self.repository_roots.as_slice()),
+            )?)
     }
 
     fn endpoint(&self) -> Result<Endpoint, CliError> {

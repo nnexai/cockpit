@@ -82,7 +82,8 @@ mod tests {
             .as_nanos();
         let path = std::env::temp_dir().join(format!("cockpit-routing-config-{}-{nonce}.toml", std::process::id()));
         std::fs::write(&path, "version = 1\n").expect("write isolated routing configuration");
-        let configuration = crate::config::load_project_configuration(Some(&path), None);
+        let configuration = crate::config::ConfigurationFile::load(Some(&path))
+            .and_then(|configuration| configuration.project.resolve(None));
         std::fs::remove_file(path).expect("remove routing configuration");
         configuration.expect("isolated routing configuration")
     }

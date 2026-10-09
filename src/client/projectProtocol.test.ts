@@ -5,7 +5,7 @@ import { parseWorkspaceTeardownPreview, parseWorkspaceTeardownExecuteRequest } f
 function configuration(providers: unknown[]) {
   return {
     version: 1, repository_roots: [], worktree_root: "/worktrees", state_root: "/state", cache_root: "/cache",
-    library_root: "/library", notes_root: "/notes", branch_template: "{task}", checkout_template: "{task}", providers, origins: {},
+    library_root: "/library", notes_root: "/notes", branch_template: "{task}", checkout_template: "{task}", providers,
     orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
     limits: {
       catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,

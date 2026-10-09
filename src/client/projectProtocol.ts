@@ -44,7 +44,6 @@ export function parseProjectConfiguration(value: unknown): ProjectConfiguration 
     || !u64(value.limits.library_file_bytes) || !u32(value.limits.library_space_pages)
     || !u64(value.limits.library_attachment_bytes) || !u64(value.limits.library_item_attachment_bytes)
     || !u32(value.limits.library_max_items)
-    || !record(value.origins) || !Object.values(value.origins).every(text)
     || !Array.isArray(value.providers) || !value.providers.every((provider) => record(provider)
       && text(provider.id) && text(provider.base_url)
       && text(provider.kind) && ["github", "gitlab", "gitea", "jira", "confluence"].includes(provider.kind)

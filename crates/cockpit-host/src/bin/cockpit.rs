@@ -14,15 +14,15 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use cockpit_core::{
     CockpitService,
     browser::BrowserService,
-    config::{load_browser_configuration, load_library_sync_configuration, load_project_configuration},
+    config::{BrowserConfiguration, ConfigurationFile},
     library::LibraryService,
     projects::ProjectService,
     widget::WidgetService,
 };
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
 use cockpit_protocol::browser::{
-    BrowserAction, BrowserFeedbackAckRequest, BrowserFeedbackRequest, BrowserRequest, BrowserTarget,
-    BrowserWorkScope,
+    BrowserAction, BrowserFeedbackAckRequest, BrowserFeedbackRequest, BrowserRequest,
+    BrowserTarget, BrowserWorkScope,
 };
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::v1::CockpitMode;
@@ -293,11 +293,13 @@ struct ProjectArgs {
 }
 
 fn project_configuration(args: &ProjectArgs) -> Result<ProjectConfiguration, String> {
-    load_project_configuration(
-        args.config.as_deref(),
-        (!args.repository_roots.is_empty()).then_some(args.repository_roots.as_slice()),
-    )
-    .map_err(|error| error.to_string())
+    ConfigurationFile::load(args.config.as_deref())
+        .and_then(|configuration| {
+            configuration.project.resolve(
+                (!args.repository_roots.is_empty()).then_some(args.repository_roots.as_slice()),
+            )
+        })
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Args)]
@@ -395,10 +397,9 @@ fn make_service(
 
 async fn browser_owner_runtime(
     herdr: HerdrArgs,
-    config_path: Option<&std::path::Path>,
+    config: BrowserConfiguration,
     state_root: PathBuf,
 ) -> Result<Arc<BrowserRuntime>, String> {
-    let config = load_browser_configuration(config_path).map_err(|error| error.to_string())?;
     let herdr_config =
         HerdrCliConfig::from_options(herdr.herdr, herdr.herdr_session, herdr.herdr_socket)
             .map_err(|error| error.to_string())?;
@@ -435,35 +436,42 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
             } else {
                 CockpitMode::Normal
             };
-            let projects = if args.test_mode {
-                None
+            let (projects, quota, browser_runtime, library_sync) = if args.test_mode {
+                (None, None, None, None)
             } else {
-                Some(project_configuration(&args.project)?)
-            };
-            let quota = projects
-                .as_ref()
-                .map(|configuration| {
-                    cockpit_core::config::load_quota_configuration(args.project.config.as_deref())
-                        .map(|quota_configuration| {
-                            Arc::new(cockpit_core::quota::QuotaService::new(
-                                quota_configuration,
-                                std::path::Path::new(&configuration.cache_root),
-                            ))
-                        })
-                        .map_err(|error| error.to_string())
-                })
-                .transpose()?;
-            let browser_runtime = if let Some(projects_config) = projects.as_ref() {
-                Some(
-                    browser_owner_runtime(
-                        args.herdr.clone(),
-                        args.project.config.as_deref(),
-                        PathBuf::from(&projects_config.state_root),
+                let configuration = ConfigurationFile::load(args.project.config.as_deref())
+                    .map_err(|error| error.to_string())?;
+                let projects = configuration
+                    .project
+                    .resolve(
+                        (!args.project.repository_roots.is_empty())
+                            .then_some(args.project.repository_roots.as_slice()),
                     )
-                    .await?,
+                    .map_err(|error| error.to_string())?;
+                let quota_configuration = configuration
+                    .quota
+                    .resolve()
+                    .map_err(|error| error.to_string())?;
+                let quota = Arc::new(cockpit_core::quota::QuotaService::new(
+                    quota_configuration,
+                    std::path::Path::new(&projects.cache_root),
+                ));
+                let browser_config = configuration
+                    .browser
+                    .resolve()
+                    .map_err(|error| error.to_string())?;
+                let browser_runtime = browser_owner_runtime(
+                    args.herdr.clone(),
+                    browser_config,
+                    PathBuf::from(&projects.state_root),
                 )
-            } else {
-                None
+                .await?;
+                (
+                    Some(projects),
+                    Some(quota),
+                    Some(browser_runtime),
+                    Some(configuration.library_sync),
+                )
             };
             let service = make_service(args.herdr.clone(), mode, projects.clone())?;
             let orchestration_runtime = if let Some(configuration) = projects.as_ref() {
@@ -487,9 +495,8 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
             };
             // Only the long-lived host owns a scheduler; one-shot CLI service
             // construction remains side-effect free.
-            let library_sync_runtime = if projects.is_some() {
-                let sync_config = load_library_sync_configuration(args.project.config.as_deref())
-                    .map_err(|error| error.to_string())?;
+            let library_sync_runtime = if let Some(library_sync) = library_sync {
+                let sync_config = library_sync.resolve().map_err(|error| error.to_string())?;
                 Some(service.library().map_err(|error| error.to_string())?
                     .start_sync(sync_config).map_err(|error| error.to_string())?)
             } else {
@@ -669,9 +676,15 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
     };
     let adapter = Arc::new(HerdrCliAdapter::new(endpoint.config));
     let paste_adapter = adapter.paste_adapter();
-    let browser_config =
-        load_browser_configuration(args.config.as_deref()).map_err(|error| error.to_string())?;
-    let project_config = load_project_configuration(args.config.as_deref(), None)
+    let configuration =
+        ConfigurationFile::load(args.config.as_deref()).map_err(|error| error.to_string())?;
+    let browser_config = configuration
+        .browser
+        .resolve()
+        .map_err(|error| error.to_string())?;
+    let project_config = configuration
+        .project
+        .resolve(None)
         .map_err(|error| error.to_string())?;
     let state_root = PathBuf::from(project_config.state_root);
     let service = Arc::new(
@@ -970,9 +983,15 @@ async fn run_widget(args: WidgetArgs) -> Result<u8, CliError> {
         .map(str::to_owned).ok_or_else(|| CliError::widget("widget_usage", "Herdr socket path must be valid UTF-8"))).transpose()?;
     let address = WidgetAddress { session_id: endpoint.session, endpoint_path, source_pane_id, locator, space_check };
     let adapter = Arc::new(HerdrCliAdapter::new(endpoint.config));
-    let browser_config = load_browser_configuration(args.config.as_deref())
+    let configuration = ConfigurationFile::load(args.config.as_deref())
         .map_err(|error| CliError::widget("widget_no_owner", error))?;
-    let project_config = load_project_configuration(args.config.as_deref(), None)
+    let browser_config = configuration
+        .browser
+        .resolve()
+        .map_err(|error| CliError::widget("widget_no_owner", error))?;
+    let project_config = configuration
+        .project
+        .resolve(None)
         .map_err(|error| CliError::widget("widget_no_owner", error))?;
     let state_root = PathBuf::from(project_config.state_root);
     let service = Arc::new(BrowserService::new(browser_config, state_root.clone(), adapter.clone())

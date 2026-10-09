@@ -1805,17 +1805,27 @@ async fn cockpit_widget_subscribe(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let window_config = cockpit_core::config::load_window_configuration(None)
+    let configuration = cockpit_core::config::ConfigurationFile::load(None)
+        .unwrap_or_else(|error| panic!("failed to load native window configuration: {error}"));
+    let window_config = configuration
+        .window
+        .resolve()
         .unwrap_or_else(|error| panic!("failed to load native window configuration: {error}"));
     let config =
         HerdrCliConfig::from_options(None, None, None).expect("failed to load Herdr configuration");
     let inspector = Arc::new(HerdrCliAdapter::new(config).with_server_autostart());
     let startup_inspector = Arc::clone(&inspector);
-    let project_config = cockpit_core::config::load_project_configuration(None, None)
+    let project_config = configuration
+        .project
+        .resolve(None)
         .expect("failed to load project configuration");
-    let library_sync_config = cockpit_core::config::load_library_sync_configuration(None)
+    let library_sync_config = configuration
+        .library_sync
+        .resolve()
         .expect("failed to load Library synchronization configuration");
-    let quota_config = cockpit_core::config::load_quota_configuration(None)
+    let quota_config = configuration
+        .quota
+        .resolve()
         .expect("failed to load quota configuration");
     let quota = Arc::new(cockpit_core::quota::QuotaService::new(
         quota_config,
@@ -1838,7 +1848,9 @@ pub fn run() {
         cockpit_core::projects::ProjectService::new(project_config.clone(), inspector.clone())
             .expect("failed to initialize project operations")
             .with_sources(sources.clone());
-    let browser_config = cockpit_core::config::load_browser_configuration(None)
+    let browser_config = configuration
+        .browser
+        .resolve()
         .expect("failed to load browser configuration");
     let paste_adapter = inspector.paste_adapter();
     let browser_service = Arc::new(

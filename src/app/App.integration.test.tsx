@@ -639,7 +639,7 @@ describe("mounted App mutation and session ordering", () => {
     emptyLibrary(fixture);
     vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
       version: 1, repository_roots: [], worktree_root: "", state_root: "", cache_root: "",
-      library_root: "/data/cockpit/library", notes_root: "/data/cockpit/notes", branch_template: "", checkout_template: "", providers: [], origins: {},
+      library_root: "/data/cockpit/library", notes_root: "/data/cockpit/notes", branch_template: "", checkout_template: "", providers: [],
       orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
         context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,

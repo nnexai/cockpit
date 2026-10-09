@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -101,7 +99,6 @@ pub struct ProjectConfiguration {
     pub limits: ProjectLimits,
     #[serde(default)]
     pub orchestration: OrchestrationConfiguration,
-    pub origins: BTreeMap<String, String>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -138,7 +135,6 @@ impl ProjectConfiguration {
                 library_max_items: 20_000,
             },
             orchestration: OrchestrationConfiguration::default(),
-            origins: BTreeMap::new(),
         }
     }
 }
