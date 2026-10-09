@@ -44,7 +44,9 @@ impl BrowserService {
     ) -> Result<BrowserFeedbackImage, InspectionError> {
         let _operation = self.operation_lock.lock().await;
         let resolved = self.resolve_work_scope(&request.scope).await?;
-        let bytes = self.feedback.read_image(&resolved.association_key, &request.capture_id)?;
+        let bytes = self
+            .feedback
+            .read_image(&resolved.association_key, &request.capture_id)?;
         Ok(BrowserFeedbackImage {
             mime_type: "image/png".to_owned(),
             data_base64: BASE64.encode(bytes),
@@ -59,22 +61,49 @@ impl BrowserService {
         validate_operation_id(&request.operation_id)?;
         let ids = normalized_ids(&request.ids)?;
         let resolved = self.resolve_work_scope(&request.scope).await?;
-        let association = resolved.association_key;
+        let association = &resolved.association_key;
         let target = &resolved.tab;
 
+        if let Some(response) = self
+            .validate_delivery_admission(&request, association, &ids)
+            .await?
+        {
+            return Ok(response);
+        }
+
+        let framed = self.render_feedback_paste(association, target, &ids)?;
+        if framed.as_bytes().len() > MAX_PASTE_BYTES {
+            return self.record_delivery_response(
+                &request.operation_id,
+                association,
+                &ids,
+                None,
+                CommentPasteState::Rejected,
+                "browser feedback payload exceeds the 64 KiB framed paste limit",
+            );
+        }
+
+        self.deliver_feedback_paste(&request.operation_id, association, target, &ids, &framed)
+            .await
+    }
+
+    async fn validate_delivery_admission(
+        &self,
+        request: &BrowserFeedbackSendRequest,
+        association: &str,
+        ids: &[String],
+    ) -> Result<Option<BrowserFeedbackSendResponse>, InspectionError> {
         if let Some(existing) = self.feedback.load_delivery(&request.operation_id)? {
-            if existing.association_key != association
-                || existing.selected_ids != ids
-            {
+            if existing.association_key != association || existing.selected_ids != ids {
                 return Err(InspectionError::new(
                     "browser_feedback_operation_conflict",
                     "operation ID was already used for another source or annotation selection",
                 ));
             }
-            return self.recover_delivery(&association, existing).await;
+            return self.recover_delivery(association, existing).await.map(Some);
         }
 
-        if self.feedback.has_delivery_overlap(&association, &ids)?
+        if self.feedback.has_delivery_overlap(association, ids)?
             && !request.acknowledge_duplicate_risk
         {
             return Err(InspectionError::new(
@@ -82,167 +111,182 @@ impl BrowserService {
                 "a prior browser feedback paste outcome is unknown; inspect the terminal and explicitly acknowledge duplicate risk before retrying",
             ));
         }
+        Ok(None)
+    }
 
-        let browser = self.load(&association)?;
+    fn render_feedback_paste(
+        &self,
+        association: &str,
+        target: &super::ResolvedTarget,
+        ids: &[String],
+    ) -> Result<String, InspectionError> {
+        let browser = self.load(association)?;
         let browser = browser.as_ref().map(|receipt| {
             self.association(
                 receipt,
                 cockpit_protocol::browser::BrowserConnectionState::Disconnected,
             )
         });
-        let feedback = self.feedback.list(&association)?;
-        let selected = select_pending(&feedback.captures, &ids)?;
-        let payload = feedback_payload(&association, target, browser.as_ref(), &selected, &ids)?;
-        let framed = format!("{PASTE_PREFIX}{payload}{PASTE_SUFFIX}");
-        if framed.as_bytes().len() > MAX_PASTE_BYTES {
-            let receipt = self.persist_outcome(
-                &request.operation_id,
-                &association,
-                &ids,
-                None,
-                CommentPasteState::Rejected,
-                "browser feedback payload exceeds the 64 KiB framed paste limit",
-            )?;
-            return self.delivery_response(&association, receipt);
-        }
+        let feedback = self.feedback.list(association)?;
+        let selected = select_pending(&feedback.captures, ids)?;
+        let payload = feedback_payload(association, target, browser.as_ref(), &selected, ids)?;
+        Ok(format!("{PASTE_PREFIX}{payload}{PASTE_SUFFIX}"))
+    }
 
-        let adapter = self
-            .paste_adapter
-            .as_ref()
-            .ok_or_else(|| {
-                InspectionError::new(
-                    "browser_feedback_unavailable",
-                    "acknowledged Herdr paste is not configured",
-                )
-            })?
-            .clone();
-        let selected_target = self.select_target(target).await;
-        let paste_target = match selected_target {
+    async fn deliver_feedback_paste(
+        &self,
+        operation_id: &str,
+        association: &str,
+        target: &super::ResolvedTarget,
+        ids: &[String],
+        framed: &str,
+    ) -> Result<BrowserFeedbackSendResponse, InspectionError> {
+        let adapter = self.paste_adapter.as_deref().ok_or_else(|| {
+            InspectionError::new(
+                "browser_feedback_unavailable",
+                "acknowledged Herdr paste is not configured",
+            )
+        })?;
+        let paste_target = match self.select_target(target).await {
             Ok(Some(value)) => value,
             Ok(None) => {
-                let receipt = self.persist_outcome(
-                    &request.operation_id,
-                    &association,
-                    &ids,
+                return self.record_delivery_response(
+                    operation_id,
+                    association,
+                    ids,
                     None,
                     CommentPasteState::Rejected,
                     "no eligible agent target is available in this tab",
-                )?;
-                return self.delivery_response(&association, receipt);
+                );
             }
             Err(error) => {
                 if error.code == "browser_feedback_tab_inactive" || error.code == "stale_identity" {
                     return Err(error);
                 }
-                let receipt = self.persist_outcome(
-                    &request.operation_id,
-                    &association,
-                    &ids,
+                return self.record_delivery_response(
+                    operation_id,
+                    association,
+                    ids,
                     None,
                     CommentPasteState::Rejected,
                     &format!(
                         "could not resolve an eligible agent target: {}",
                         error.message
                     ),
-                )?;
-                return self.delivery_response(&association, receipt);
+                );
             }
         };
 
         self.persist_outcome(
-            &request.operation_id,
-            &association,
-            &ids,
+            operation_id,
+            association,
+            ids,
             Some(paste_target.clone()),
             CommentPasteState::Pending,
             "browser feedback paste is pending Herdr acknowledgement",
         )?;
 
         if let Err(error) = adapter.focus_comment_paste_target(&paste_target).await {
-            let receipt = self.persist_outcome(
-                &request.operation_id,
-                &association,
-                &ids,
+            return self.record_delivery_response(
+                operation_id,
+                association,
+                ids,
                 Some(paste_target),
                 CommentPasteState::Rejected,
                 &format!("Herdr did not acknowledge target focus: {}", error.message),
-            )?;
-            return self.delivery_response(&association, receipt);
+            );
         }
         if let Err(error) = adapter
             .confirm_comment_paste_target_focus(&paste_target)
             .await
         {
-            let receipt = self.persist_outcome(
-                &request.operation_id,
-                &association,
-                &ids,
+            return self.record_delivery_response(
+                operation_id,
+                association,
+                ids,
                 Some(paste_target),
                 CommentPasteState::Rejected,
                 &format!("paste target lost confirmed focus: {}", error.message),
-            )?;
-            return self.delivery_response(&association, receipt);
+            );
         }
         // Revalidate the focused tab, pane, and agent fingerprint before dispatch.
         if let Err(error) = self
-            .revalidate_paste_target(target, &paste_target, adapter.as_ref())
+            .revalidate_paste_target(target, &paste_target, adapter)
             .await
         {
-            let receipt = self.persist_outcome(
-                &request.operation_id,
-                &association,
-                &ids,
+            return self.record_delivery_response(
+                operation_id,
+                association,
+                ids,
                 Some(paste_target),
                 CommentPasteState::Rejected,
                 &format!("paste target changed before dispatch: {}", error.message),
-            )?;
-            return self.delivery_response(&association, receipt);
+            );
         }
 
-        match adapter.send_comment_paste(&paste_target, &framed).await {
+        let outcome = adapter.send_comment_paste(&paste_target, framed).await;
+        self.record_dispatch_outcome(operation_id, association, ids, paste_target, outcome)
+    }
+
+    fn record_dispatch_outcome(
+        &self,
+        operation_id: &str,
+        association: &str,
+        ids: &[String],
+        paste_target: CommentPasteTarget,
+        outcome: Result<(), InspectionError>,
+    ) -> Result<BrowserFeedbackSendResponse, InspectionError> {
+        match outcome {
             Ok(()) => {
                 let accepted = self.persist_outcome(
-                    &request.operation_id,
-                    &association,
-                    &ids,
+                    operation_id,
+                    association,
+                    ids,
                     Some(paste_target),
                     CommentPasteState::Accepted,
                     "Herdr accepted one raw bracketed-paste write; no Enter was sent",
                 )?;
-                let ack = self.feedback.ack(&association, &ids)?;
+                let ack = self.feedback.ack(association, ids)?;
                 let mut accepted = accepted;
                 accepted.acknowledged_ids = ack.acknowledged_ids;
                 let accepted = self.feedback.save_delivery(accepted)?;
-                self.delivery_response(&association, accepted)
+                self.delivery_response(association, accepted)
             }
-            Err(error) if error.code == "comments_paste_rejected" => {
-                let receipt = self.persist_outcome(
-                    &request.operation_id,
-                    &association,
-                    &ids,
-                    Some(paste_target),
-                    CommentPasteState::Rejected,
-                    &format!(
-                        "Herdr rejected the raw paste queue write: {}",
-                        error.message
-                    ),
-                )?;
-                self.delivery_response(&association, receipt)
-            }
-            Err(error) => {
-                let receipt = self.persist_outcome(
-                    &request.operation_id,
-                    &association,
-                    &ids,
-                    Some(paste_target),
-                    CommentPasteState::OutcomeUnknown,
-                    &format!("paste dispatch outcome is unknown: {}", error.message),
-                )?;
-                self.delivery_response(&association, receipt)
-            }
+            Err(error) if error.code == "comments_paste_rejected" => self.record_delivery_response(
+                operation_id,
+                association,
+                ids,
+                Some(paste_target),
+                CommentPasteState::Rejected,
+                &format!(
+                    "Herdr rejected the raw paste queue write: {}",
+                    error.message
+                ),
+            ),
+            Err(error) => self.record_delivery_response(
+                operation_id,
+                association,
+                ids,
+                Some(paste_target),
+                CommentPasteState::OutcomeUnknown,
+                &format!("paste dispatch outcome is unknown: {}", error.message),
+            ),
         }
     }
 
+    fn record_delivery_response(
+        &self,
+        operation_id: &str,
+        association: &str,
+        ids: &[String],
+        target: Option<CommentPasteTarget>,
+        state: CommentPasteState,
+        message: &str,
+    ) -> Result<BrowserFeedbackSendResponse, InspectionError> {
+        let receipt =
+            self.persist_outcome(operation_id, association, ids, target, state, message)?;
+        self.delivery_response(association, receipt)
+    }
 
     async fn select_target(
         &self,
@@ -284,25 +328,32 @@ impl BrowserService {
                 "acknowledged Herdr paste is not configured",
             )
         })?;
-        let mut candidates = adapter.comment_paste_targets(session_id).await?
-            .into_iter()
-            .filter(|candidate| {
-                candidate.endpoint_identity == snapshot.endpoint_identity
-                    && candidate.session_id == *session_id
-                    && candidate.tab_id == active_tab
-                    && snapshot.snapshot.tabs.iter().any(|tab| {
-                        tab.id == active_tab && tab.space_id == candidate.workspace_id
-                    })
-                    && snapshot.snapshot.panes.iter().any(|pane| {
-                        pane.id == candidate.pane_id
-                            && pane.tab_id == active_tab
-                            && pane.space_id == candidate.workspace_id
-                            && pane.terminal_id == candidate.terminal_id
-                    })
-            })
-            .collect::<Vec<_>>();
+        let mut candidates =
+            adapter
+                .comment_paste_targets(session_id)
+                .await?
+                .into_iter()
+                .filter(|candidate| {
+                    candidate.endpoint_identity == snapshot.endpoint_identity
+                        && candidate.session_id == *session_id
+                        && candidate.tab_id == active_tab
+                        && snapshot.snapshot.tabs.iter().any(|tab| {
+                            tab.id == active_tab && tab.space_id == candidate.workspace_id
+                        })
+                        && snapshot.snapshot.panes.iter().any(|pane| {
+                            pane.id == candidate.pane_id
+                                && pane.tab_id == active_tab
+                                && pane.space_id == candidate.workspace_id
+                                && pane.terminal_id == candidate.terminal_id
+                        })
+                })
+                .collect::<Vec<_>>();
         candidates.sort_by_key(|candidate| {
-            snapshot.snapshot.panes.iter().position(|pane| pane.id == candidate.pane_id)
+            snapshot
+                .snapshot
+                .panes
+                .iter()
+                .position(|pane| pane.id == candidate.pane_id)
                 .unwrap_or(usize::MAX)
         });
         Ok(candidates)
@@ -314,14 +365,19 @@ impl BrowserService {
         paste_target: &CommentPasteTarget,
         adapter: &dyn crate::paste_adapter::CommentPasteAdapter,
     ) -> Result<(), InspectionError> {
-        let snapshot = self.adapter.browser_snapshot(&paste_target.session_id).await?;
+        let snapshot = self
+            .adapter
+            .browser_snapshot(&paste_target.session_id)
+            .await?;
         if snapshot.endpoint_identity != paste_target.endpoint_identity
             || snapshot.snapshot.session_id != paste_target.session_id
             || snapshot.endpoint_identity != target.endpoint_identity
             || snapshot.endpoint_path != target.endpoint_path
             || paste_target.session_id != target.session_id
         {
-            return Err(recipient_changed("Herdr endpoint or session changed before paste dispatch"));
+            return Err(recipient_changed(
+                "Herdr endpoint or session changed before paste dispatch",
+            ));
         }
         if snapshot.snapshot.focused_tab_id.as_deref() != Some(paste_target.tab_id.as_str())
             || target.tab_id != paste_target.tab_id
@@ -332,20 +388,34 @@ impl BrowserService {
             ));
         }
         if snapshot.snapshot.focused_pane_id.as_deref() != Some(paste_target.pane_id.as_str()) {
-            return Err(recipient_changed("browser feedback agent pane changed before paste dispatch"));
+            return Err(recipient_changed(
+                "browser feedback agent pane changed before paste dispatch",
+            ));
         }
-        let pane = snapshot.snapshot.panes.iter()
+        let pane = snapshot
+            .snapshot
+            .panes
+            .iter()
             .find(|pane| pane.id == paste_target.pane_id)
             .ok_or_else(|| recipient_changed("browser feedback agent pane disappeared"))?;
         if pane.space_id != paste_target.workspace_id
             || pane.tab_id != paste_target.tab_id
             || pane.terminal_id != paste_target.terminal_id
         {
-            return Err(recipient_changed("browser feedback agent destination changed"));
+            return Err(recipient_changed(
+                "browser feedback agent destination changed",
+            ));
         }
-        let targets = adapter.comment_paste_targets(&paste_target.session_id).await?;
-        if !targets.iter().any(|candidate| same_paste_target(candidate, paste_target)) {
-            return Err(recipient_changed("browser feedback agent identity changed before paste dispatch"));
+        let targets = adapter
+            .comment_paste_targets(&paste_target.session_id)
+            .await?;
+        if !targets
+            .iter()
+            .any(|candidate| same_paste_target(candidate, paste_target))
+        {
+            return Err(recipient_changed(
+                "browser feedback agent identity changed before paste dispatch",
+            ));
         }
         Ok(())
     }
@@ -439,7 +509,6 @@ impl BrowserService {
         })
     }
 }
-
 
 fn recipient_changed(message: &str) -> InspectionError {
     InspectionError::new("browser_feedback_recipient_changed", message)
