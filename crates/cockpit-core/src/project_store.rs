@@ -50,37 +50,6 @@ struct StoredOperation {
     operation: WorkspaceOperation,
 }
 
-/// Remove the retired lifecycle before serde sees the current, strict DTOs.
-/// This only rewrites the journal; companion/user paths are never opened.
-fn migrate_legacy_operation_json(value: &mut serde_json::Value) -> bool {
-    let Some(operation) = value.get_mut("operation").and_then(serde_json::Value::as_object_mut) else {
-        return false;
-    };
-    let mut changed = operation.remove("companion_id").is_some();
-    if let Some(plan) = operation.get_mut("plan").and_then(serde_json::Value::as_object_mut) {
-        for field in ["companion_path", "companion_id", "companion_created_by_operation"] {
-            changed |= plan.remove(field).is_some();
-        }
-        if let Some(effects) = plan.get_mut("effects").and_then(serde_json::Value::as_array_mut) {
-            let before = effects.len();
-            effects.retain(|effect| !effect.as_str().is_some_and(|effect| effect.contains("companion")));
-            changed |= effects.len() != before;
-        }
-    }
-    if let Some(resources) = operation.get_mut("owned_resources").and_then(serde_json::Value::as_array_mut) {
-        let before = resources.len();
-        resources.retain(|resource| resource.get("kind").and_then(serde_json::Value::as_str) != Some("companion"));
-        changed |= resources.len() != before;
-    }
-    if operation.get("step").and_then(serde_json::Value::as_str)
-        .is_some_and(|step| matches!(step, "companion_ready" | "associate_companion"))
-    {
-        operation.insert("step".to_owned(), serde_json::json!("workspace_verified"));
-        changed = true;
-    }
-    changed
-}
-
 fn receipt_matches_operation(receipt: &TeardownReceipt, operation: &WorkspaceOperation) -> bool {
     let repository = operation.plan.repository.as_ref();
     receipt.operation_id == operation.operation_id
@@ -92,96 +61,6 @@ fn receipt_matches_operation(receipt: &TeardownReceipt, operation: &WorkspaceOpe
         && receipt.checkout_path == operation.plan.checkout_path
         && receipt.repository_key == repository.map(|repository| repository.common_dir.as_str()).unwrap_or("")
         && receipt.repository_root == repository.map(|repository| repository.root.as_str()).unwrap_or("")
-}
-
-fn migrate_legacy_teardown_receipt(
-    value: &mut serde_json::Value,
-    load: impl FnOnce() -> Result<WorkspaceOperation, InspectionError>,
-) -> Result<bool, InspectionError> {
-    let Some(receipt) = value.as_object_mut() else {
-        return Ok(false);
-    };
-    let orphaned = receipt.get("state").and_then(serde_json::Value::as_str) == Some("orphaned_companion");
-    let companion = receipt.remove("companion");
-    let mut changed = companion.is_some() || orphaned;
-    // Herdr removal was already confirmed. Retire only the obsolete cleanup
-    // obligation; every old directory and note is retained.
-    if orphaned {
-        receipt.insert("state".to_owned(), serde_json::json!("completed"));
-    }
-    if let Some(companion) = companion {
-        let operation = if orphaned { load().ok() } else { Some(load()?) };
-        let exact = operation.as_ref().is_some_and(|operation| {
-            let repository = operation.plan.repository.as_ref();
-            companion.get("cockpit_operation_id") == receipt.get("operation_id")
-            && companion.get("herdr_workspace_id") == receipt.get("workspace_id")
-            && companion.get("herdr_session_identity") == receipt.get("endpoint_identity")
-            && companion.get("checkout_path") == receipt.get("checkout_path")
-            && companion.get("ownership").and_then(serde_json::Value::as_str) == Some("cockpit")
-            && receipt.get("operation_id").and_then(serde_json::Value::as_str) == Some(operation.operation_id.as_str())
-            && receipt.get("workspace_id").and_then(serde_json::Value::as_str) == operation.workspace_id.as_deref()
-            && receipt.get("endpoint_identity").and_then(serde_json::Value::as_str) == Some(operation.plan.endpoint_identity.as_str())
-            && receipt.get("checkout_path").and_then(serde_json::Value::as_str) == Some(operation.plan.checkout_path.as_str())
-            && companion.get("repository_key").and_then(serde_json::Value::as_str) == Some(repository.map(|repository| repository.common_dir.as_str()).unwrap_or(""))
-            && companion.get("repository_root").and_then(serde_json::Value::as_str) == Some(repository.map(|repository| repository.root.as_str()).unwrap_or(""))
-        });
-        // Foreign evidence cannot acquire reconciliation authority. An
-        // identity mismatch keeps the obligation but prohibits redispatch.
-        receipt.insert("session_id".to_owned(), serde_json::json!(
-            operation.as_ref().filter(|_| exact).map(|operation| operation.session_id.as_str()).unwrap_or("")
-        ));
-        for field in ["repository_key", "repository_root"] {
-            receipt.insert(field.to_owned(), companion.get(field).cloned().unwrap_or(serde_json::json!("")));
-        }
-    }
-    for field in ["companion_path", "companion_id", "companion_created_by_operation"] {
-        changed |= receipt.remove(field).is_some();
-    }
-    Ok(changed)
-}
-
-fn migrate_legacy_operation(operation: &mut WorkspaceOperation) -> bool {
-    use cockpit_protocol::{
-        projects::{WorkspaceCheckoutOwnership, WorkspaceOperationState, WorkspaceSetupMode},
-        v1::ErrorResponse,
-    };
-
-    // `ownership` was absent before path-only setup. Serde defaults it to
-    // borrowed so incomplete history can never gain delete authority. An
-    // exact created-worktree receipt is the only proof that can promote a
-    // legacy Create. Open has always borrowed its checkout.
-    if operation.plan.mode == WorkspaceSetupMode::Open {
-        if operation.plan.ownership != WorkspaceCheckoutOwnership::BorrowedDirectory {
-            operation.plan.ownership = WorkspaceCheckoutOwnership::BorrowedDirectory;
-            return true;
-        }
-        return false;
-    }
-    if operation.plan.ownership != WorkspaceCheckoutOwnership::BorrowedDirectory {
-        return false;
-    }
-    if operation.owned_resources.iter().any(|resource| {
-        resource.kind == "worktree"
-            && resource.path == operation.plan.checkout_path
-            && resource.created_by_operation
-    }) {
-        operation.plan.ownership = WorkspaceCheckoutOwnership::OwnedWorktree;
-        return true;
-    }
-    let error = ErrorResponse {
-        code: "needs_review".to_owned(),
-        message: "legacy Create operation lacks a recorded created-worktree receipt".to_owned(),
-    };
-    if operation.state == WorkspaceOperationState::NeedsReview
-        && !operation.resume_allowed
-        && operation.error.as_ref() == Some(&error)
-    {
-        return false;
-    }
-    operation.state = WorkspaceOperationState::NeedsReview;
-    operation.resume_allowed = false;
-    operation.error = Some(error);
-    true
 }
 
 /// A short journal compare-and-swap lock. The lock file is retained forever;
@@ -463,14 +342,7 @@ impl ProjectStore {
                 InspectionError::new("unsafe_path", "teardown receipt is not a regular file"),
             ),
             Ok(_) => {
-                let mut value: serde_json::Value = read_json(&self.root_dir, &name)?;
-                let migrated = migrate_legacy_teardown_receipt(&mut value, || self.load(operation_id))?;
-                let receipt: TeardownReceipt = serde_json::from_value(value)
-                    .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?;
-                if migrated {
-                    atomic_write_json(&self.root_dir, &name, &receipt)
-                        .map_err(io_error("teardown_write"))?;
-                }
+                let receipt: TeardownReceipt = read_json(&self.root_dir, &name)?;
                 Ok(Some(receipt))
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -511,16 +383,7 @@ impl ProjectStore {
 
     /// Call only while holding the operation's journal lock.
     fn read_stored_operation(&self, name: &str) -> Result<StoredOperation, InspectionError> {
-        let mut value: serde_json::Value = read_json(&self.root_dir, name)?;
-        let raw_migrated = migrate_legacy_operation_json(&mut value);
-        let mut stored: StoredOperation = serde_json::from_value(value)
-            .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?;
-        let ownership_migrated = migrate_legacy_operation(&mut stored.operation);
-        if raw_migrated || ownership_migrated {
-            atomic_write_json(&self.root_dir, name, &stored).map_err(io_error("state_write"))?;
-            self.bump_mutation_generation();
-        }
-        Ok(stored)
+        read_json(&self.root_dir, name)
     }
 
     fn acquire_lock(&self, id: &str) -> Result<LockGuard, InspectionError> {
@@ -940,10 +803,7 @@ fn map_io(error: io::Error, code: &str) -> InspectionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cockpit_protocol::projects::{
-        WorkspaceCheckoutOwnership, WorkspaceOperationState, WorkspaceOwnedResource,
-        WorkspaceSetupMode,
-    };
+    use cockpit_protocol::projects::{WorkspaceOperationState, WorkspaceSetupMode};
     use std::fs;
     use std::sync::Arc;
 
@@ -999,22 +859,6 @@ mod tests {
         }
     }
 
-    fn omit_legacy_ownership(root: &Path, id: &str) {
-        let record = root.join(format!("{id}.json"));
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&record).expect("read operation record"))
-                .expect("parse operation record");
-        value["operation"]["plan"]
-            .as_object_mut()
-            .expect("plan object")
-            .remove("ownership");
-        fs::write(
-            record,
-            serde_json::to_vec(&value).expect("serialize legacy operation"),
-        )
-        .expect("write legacy operation");
-    }
-
     #[test]
     fn only_a_never_started_plan_is_discarded_with_its_lock_files() {
         let root = temp_root("discard-unstarted");
@@ -1057,78 +901,6 @@ mod tests {
                 .map(|operation| operation.operation_id.clone())
                 .collect::<Vec<_>>(),
             vec![started]
-        );
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn legacy_create_with_exact_worktree_receipt_migrates_to_owned_worktree() {
-        let root = temp_root("legacy-created-worktree");
-        let store = ProjectStore::new(&root).expect("store");
-        let id = Uuid::new_v4().to_string();
-        store.persist_plan(plan(&id)).expect("persist plan");
-        store
-            .update(&id, None, |operation| {
-                operation.owned_resources.push(WorkspaceOwnedResource {
-                    kind: "worktree".to_owned(),
-                    path: operation.plan.checkout_path.clone(),
-                    created_by_operation: true,
-                });
-                Ok(())
-            })
-            .expect("record created worktree");
-        omit_legacy_ownership(&root, &id);
-
-        let migrated = store.load(&id).expect("migrate legacy Create");
-        assert_eq!(
-            migrated.plan.ownership,
-            WorkspaceCheckoutOwnership::OwnedWorktree
-        );
-        assert_eq!(migrated.state, WorkspaceOperationState::Planned);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn legacy_create_without_worktree_receipt_requires_review() {
-        let root = temp_root("legacy-unproven-create");
-        let store = ProjectStore::new(&root).expect("store");
-        let id = Uuid::new_v4().to_string();
-        store.persist_plan(plan(&id)).expect("persist plan");
-        omit_legacy_ownership(&root, &id);
-
-        let migrated = store.load(&id).expect("read legacy Create");
-        assert_eq!(migrated.state, WorkspaceOperationState::NeedsReview);
-        assert!(!migrated.resume_allowed);
-        assert_eq!(
-            migrated.error.as_ref().map(|error| error.code.as_str()),
-            Some("needs_review")
-        );
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn open_operations_always_migrate_to_borrowed_directory() {
-        let root = temp_root("legacy-open");
-        let store = ProjectStore::new(&root).expect("store");
-        let id = Uuid::new_v4().to_string();
-        store.persist_plan(plan(&id)).expect("persist plan");
-        store
-            .update(&id, None, |operation| {
-                operation.plan.mode = WorkspaceSetupMode::Open;
-                operation.plan.ownership = WorkspaceCheckoutOwnership::OwnedWorktree;
-                operation.owned_resources.push(WorkspaceOwnedResource {
-                    kind: "worktree".to_owned(),
-                    path: operation.plan.checkout_path.clone(),
-                    created_by_operation: true,
-                });
-                Ok(())
-            })
-            .expect("record legacy Open");
-
-        let migrated = store.load(&id).expect("migrate Open");
-        assert_eq!(
-            migrated.plan.ownership,
-            WorkspaceCheckoutOwnership::BorrowedDirectory
         );
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -1351,178 +1123,6 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    fn legacy_companion(id: &str) -> serde_json::Value {
-        serde_json::json!({
-            "schema_version": 1,
-            "cockpit_operation_id": id,
-            "herdr_session_identity": "endpoint-a",
-            "herdr_workspace_id": "workspace-a",
-            "repository_key": "/repo/.git",
-            "repository_root": "/repo",
-            "checkout_path": "/work/task",
-            "artifact": null,
-            "created_at": "1",
-            "updated_at": "1",
-            "ownership": "cockpit"
-        })
-    }
-
-    fn legacy_operation(root: &Path, id: &str, step: &str) {
-        let path = root.join(record_name(id));
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).expect("record")).expect("json");
-        value["operation"]["companion_id"] = serde_json::json!(id);
-        value["operation"]["step"] = serde_json::json!(step);
-        let plan = &mut value["operation"]["plan"];
-        plan["companion_path"] = serde_json::json!(root.join("old-companion").to_str().unwrap());
-        plan["companion_id"] = serde_json::json!(id);
-        plan["companion_created_by_operation"] = serde_json::json!(true);
-        plan["effects"] = serde_json::json!(["create worktree", "create companion context"]);
-        value["operation"]["owned_resources"].as_array_mut().unwrap().push(serde_json::json!({
-            "kind": "companion",
-            "path": root.join("old-companion").to_str().unwrap(),
-            "created_by_operation": true
-        }));
-        fs::write(path, serde_json::to_vec(&value).unwrap()).expect("legacy record");
-    }
-
-    #[test]
-    fn legacy_companion_journals_migrate_before_load_list_and_update() {
-        for access in 0..3 {
-            let root = temp_root("legacy-companion-operation");
-            let store = ProjectStore::new(&root).expect("store");
-            let id = Uuid::new_v4().to_string();
-            store.persist_plan(plan(&id)).expect("plan");
-            fs::create_dir(root.join("old-companion")).expect("old directory");
-            fs::write(root.join("old-companion/notes.md"), "user notes").expect("notes");
-            legacy_operation(&root, &id, if access == 1 { "associate_companion" } else { "companion_ready" });
-            let record = root.join(record_name(&id));
-            let mut raw: serde_json::Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
-            raw["operation"]["owned_resources"].as_array_mut().unwrap().push(serde_json::json!({
-                "kind": "worktree", "path": "/work/task", "created_by_operation": true
-            }));
-            fs::write(record, serde_json::to_vec(&raw).unwrap()).unwrap();
-            let operation = match access {
-                0 => store.load(&id).expect("load"),
-                1 => store.list().expect("list").remove(0),
-                2 => store.update(&id, Some(1), |_| Ok(())).expect("update"),
-                _ => unreachable!(),
-            };
-            assert_eq!(operation.step, cockpit_protocol::projects::WorkspaceOperationStep::WorkspaceVerified);
-            assert_eq!(operation.owned_resources.len(), 1);
-            assert_eq!(operation.owned_resources[0].kind, "worktree");
-            assert_eq!(operation.owned_resources[0].path, "/work/task");
-            assert!(operation.owned_resources[0].created_by_operation);
-            assert_eq!(operation.plan.effects, ["create worktree"]);
-            assert_eq!(operation.session_id, "setup-fixture");
-            let persisted: serde_json::Value = serde_json::from_slice(&fs::read(root.join(record_name(&id))).unwrap()).unwrap();
-            assert!(persisted["operation"].get("companion_id").is_none());
-            assert!(persisted["operation"]["plan"].get("companion_path").is_none());
-            assert!(persisted["operation"]["plan"].get("companion_id").is_none());
-            assert!(persisted["operation"]["plan"].get("companion_created_by_operation").is_none());
-            assert_eq!(fs::read_to_string(root.join("old-companion/notes.md")).unwrap(), "user notes");
-            fs::remove_dir_all(root).expect("cleanup");
-        }
-    }
-
-    #[test]
-    fn discard_legacy_unstarted_plan_keeps_old_companion_files() {
-        let root = temp_root("discard-legacy-companion");
-        let store = ProjectStore::new(&root).expect("store");
-        let id = Uuid::new_v4().to_string();
-        store.persist_plan(plan(&id)).expect("plan");
-        fs::create_dir(root.join("old-companion")).expect("old directory");
-        fs::write(root.join("old-companion/notes.md"), "notes").expect("notes");
-        legacy_operation(&root, &id, "planned");
-        assert!(store.discard_unstarted_plan(&id).expect("discard"));
-        assert_eq!(fs::read_to_string(root.join("old-companion/notes.md")).unwrap(), "notes");
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn legacy_teardown_receipts_preserve_unknown_outcomes_and_retire_cleanup() {
-        for state in ["pending", "outcome_unknown", "orphaned_companion", "completed"] {
-            let root = temp_root("legacy-teardown-receipt");
-            let store = ProjectStore::new(&root).expect("store");
-            let id = Uuid::new_v4().to_string();
-            store.persist_plan(plan(&id)).expect("plan");
-            store.update(&id, None, |operation| {
-                operation.workspace_id = Some("workspace-a".to_owned());
-                Ok(())
-            }).expect("workspace");
-            fs::create_dir(root.join("old-companion")).expect("old directory");
-            fs::write(root.join("old-companion/notes.md"), "user notes").expect("notes");
-            let value = serde_json::json!({
-                "operation_id": id,
-                "workspace_id": "workspace-a",
-                "endpoint_identity": "endpoint-a",
-                "checkout_path": "/work/task",
-                "companion": legacy_companion(&id),
-                "state": state,
-                "updated_at": "1"
-            });
-            fs::write(root.join(teardown_record_name(&id)), serde_json::to_vec(&value).unwrap()).expect("legacy receipt");
-            let receipt = store.read_teardown_receipt(&id).expect("migration").unwrap();
-            assert_eq!(receipt.session_id, "setup-fixture");
-            assert_eq!(receipt.repository_key, "/repo/.git");
-            assert_eq!(receipt.repository_root, "/repo");
-            assert_eq!(receipt.state, match state {
-                "pending" => TeardownReceiptState::Pending,
-                "outcome_unknown" => TeardownReceiptState::OutcomeUnknown,
-                _ => TeardownReceiptState::Completed,
-            });
-            let upgraded: serde_json::Value = serde_json::from_slice(&fs::read(root.join(teardown_record_name(&id))).unwrap()).unwrap();
-            assert!(upgraded.get("companion").is_none());
-            assert_eq!(fs::read_to_string(root.join("old-companion/notes.md")).unwrap(), "user notes");
-            assert_eq!(ProjectStore::new(&root).unwrap().read_teardown_receipt(&id).unwrap().unwrap(), receipt);
-            fs::remove_dir_all(root).expect("cleanup");
-        }
-    }
-
-    #[test]
-    fn orphaned_cleanup_receipt_without_operation_retires_without_filesystem_access() {
-        let root = temp_root("orphaned-legacy-receipt");
-        let store = ProjectStore::new(&root).expect("store");
-        let id = Uuid::new_v4().to_string();
-        let value = serde_json::json!({
-            "operation_id": id, "workspace_id": "workspace-a",
-            "endpoint_identity": "endpoint-a", "checkout_path": "/work/task",
-            "companion": legacy_companion(&id),
-            "state": "orphaned_companion", "updated_at": "1"
-        });
-        fs::write(root.join(teardown_record_name(&id)), serde_json::to_vec(&value).unwrap()).unwrap();
-        let receipt = store.read_teardown_receipt(&id).expect("safe retirement").unwrap();
-        assert_eq!(receipt.state, TeardownReceiptState::Completed);
-        assert!(receipt.session_id.is_empty());
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn foreign_legacy_receipt_cannot_gain_reconciliation_identity() {
-        let root = temp_root("foreign-legacy-receipt");
-        let store = ProjectStore::new(&root).expect("store");
-        let id = Uuid::new_v4().to_string();
-        store.persist_plan(plan(&id)).unwrap();
-        store.update(&id, None, |operation| {
-            operation.workspace_id = Some("workspace-a".to_owned());
-            Ok(())
-        }).unwrap();
-        let mut companion = legacy_companion(&id);
-        companion["herdr_session_identity"] = serde_json::json!("other-endpoint");
-        let value = serde_json::json!({
-            "operation_id": id, "workspace_id": "workspace-a",
-            "endpoint_identity": "endpoint-a", "checkout_path": "/work/task",
-            "session_id": "setup-fixture",
-            "companion": companion, "state": "outcome_unknown", "updated_at": "1"
-        });
-        fs::write(root.join(teardown_record_name(&id)), serde_json::to_vec(&value).unwrap()).unwrap();
-        let receipt = store.read_teardown_receipt(&id).expect("migration").unwrap();
-        assert_eq!(receipt.state, TeardownReceiptState::OutcomeUnknown);
-        assert!(receipt.session_id.is_empty());
-        assert!(!receipt_matches_operation(&receipt, &store.load(&id).unwrap()));
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
     #[test]
     fn teardown_receipt_requires_exact_operation_provenance() {
         let root = temp_root("teardown-provenance");
@@ -1578,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_journal_is_rejected_before_migration() {
+    fn oversized_journal_is_rejected_before_decoding() {
         let root = temp_root("oversized-journal");
         let store = ProjectStore::new(&root).expect("store");
         let id = Uuid::new_v4().to_string();

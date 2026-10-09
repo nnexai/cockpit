@@ -2935,10 +2935,6 @@ mod tests {
                 .find(|candidate| candidate.checkout_path == repository.to_string_lossy()).unwrap();
             adapter.repository.set(candidate.clone()).unwrap();
             let library = Arc::new(LibraryService::new(configuration.clone(), sources).with_herdr(adapter.clone()));
-            let legacy = Path::new(&configuration.state_root).join("sources");
-            std::fs::create_dir_all(&legacy).unwrap();
-            let sentinel = legacy.join("source-current.json");
-            std::fs::write(&sentinel, b"opaque legacy fixture").unwrap();
             let plan = service.plan("session", &WorkspaceSetupRequest::Create {
                 repository_id: candidate.repository_id, artifact_url: Some("https://forge.test/other/service/issues/7".into()),
                 linked_artifact_urls: vec!["https://jira.test/browse/OPS-3".into()],
@@ -2993,8 +2989,6 @@ mod tests {
                 assert_eq!(env.get("COCKPIT_WORKSPACE_ID").map(String::as_str), Some("workspace"));
                 assert!(!env.contains_key("COCKPIT_CONTEXT_PATH"));
             }
-            assert_eq!(std::fs::read(&sentinel).unwrap(), b"opaque legacy fixture");
-            assert_eq!(std::fs::read_dir(&legacy).unwrap().count(), 1);
             std::fs::remove_dir_all(root).unwrap();
         }
     }
@@ -3009,9 +3003,6 @@ mod tests {
         git(&repository, &["init"]);
         std::fs::write(nested.join("keep.txt"), "keep\n").expect("borrowed file");
         let configuration = configuration(&root);
-        let legacy_notes = Path::new(&configuration.companion_root).join("legacy-task/notes.md");
-        std::fs::create_dir_all(legacy_notes.parent().unwrap()).expect("legacy companion");
-        std::fs::write(&legacy_notes, "user notes\n").expect("legacy notes");
         std::fs::create_dir_all(&configuration.worktree_root).expect("worktree root");
         let adapter = Arc::new(NestedDirectoryAdapter::default());
         let service = ProjectService::new(configuration, adapter.clone()).expect("project service");
@@ -3098,7 +3089,6 @@ mod tests {
             std::fs::read_to_string(nested.join("keep.txt")).expect("borrowed file"),
             "keep\n"
         );
-        assert_eq!(std::fs::read_to_string(&legacy_notes).expect("retained legacy notes"), "user notes\n");
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

@@ -211,14 +211,6 @@ pub enum WorkspaceCheckoutOwnership {
     BorrowedDirectory,
 }
 
-impl Default for WorkspaceCheckoutOwnership {
-    fn default() -> Self {
-        // Legacy journals did not record ownership. Borrowed is the only safe
-        // default because it can never authorize a filesystem removal.
-        Self::BorrowedDirectory
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct ProjectArtifact {
     pub provider_id: String,
@@ -236,7 +228,6 @@ pub struct WorkspaceSetupPlan {
     pub session_id: String,
     pub repository: Option<RepositoryCandidate>,
     pub mode: WorkspaceSetupMode,
-    #[serde(default)]
     pub ownership: WorkspaceCheckoutOwnership,
     pub branch: Option<String>,
     pub base: Option<String>,
