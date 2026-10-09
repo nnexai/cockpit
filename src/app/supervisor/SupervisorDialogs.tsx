@@ -7,7 +7,9 @@ import { UiIcon } from "../UiIcon";
 import type { EditDraft, FollowUpDraft, RelationDraft } from "./useSupervisorDrafts";
 import type { StepScope, StepReadOutcome } from "./stepInteractions";
 import type { SourceSubmission, SourceResolution, SourceResolutionOutcome, TaskMutationOutcome } from "./useSupervisor";
-import { dependencyCandidateReason, taskContentReason, uniqueTask } from "./dependencies";
+import { taskContentReason, uniqueTask } from "./dependencies";
+import { TaskSourceForm } from "./taskSourceForm";
+import { TaskSourcePreview } from "./taskSourcePreview";
 import "../projects/setup.css";
 
 export type StartDraft = { label: string; location: "existing" | "directory" | "dedicated"; spaceId: string; directory: string };
@@ -334,52 +336,20 @@ export function TaskSourceDialog({ dialog, snapshot, changed, busy, available, w
     setConfirmRemoval(null); setError(null); changed();
   };
   const title = dialog.mode === "edit" ? "Edit task" : dialog.mode === "relations" ? "Edit prerequisites" : "Create follow-up";
-  const saved = dialog.draft.reviewed;
-  const submitted = dialog.draft.submitted?.action;
-  const matches = saved && submitted ? submitted.action === "task_update"
-    ? saved.title === submitted.title && saved.description === submitted.description
-    : submitted.action === "task_dependencies_set"
-      ? saved.depends_on.length === submitted.depends_on.length && saved.depends_on.every(id => submitted.depends_on.includes(id))
-      : saved.title === submitted.title && saved.description === submitted.description && saved.follow_up_of === submitted.follow_up_of && JSON.stringify(saved.depends_on) === JSON.stringify(submitted.depends_on) : false;
-  const comparisonTask = saved ?? current?.task;
   return createPortal(<div className="setup-overlay" role="presentation"><section ref={ref} className="supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby={headingId} aria-busy={locked} tabIndex={-1} onKeyDown={keys}>
     <header className="supervisor-dialog-header"><UiIcon name={dialog.mode === "follow_up" ? "plus" : "edit"} /><h2 id={headingId}>{title}</h2></header>
     <p>{dialog.mode === "follow_up" ? "Follow-up of " : ""}{dialog.task.task.title}</p>
-    <form onSubmit={event => { event.preventDefault(); void save(); }}>
-      {dialog.mode === "relations" ? <>
-        <p>Waits until all of these are accepted. A Result alone does not satisfy a prerequisite.</p>
-        <h3>Prerequisites · {dialog.draft.dependsOn.length} of 32</h3>
-        {current?.task.relations_diagnostic ? <p className="supervisor-warning" role="alert">{current.task.relations_diagnostic}</p> : null}
-        {current?.dependencies.problems.map((problem, index) => <p className="supervisor-warning" key={`${problem.code}:${index}`}>{problem.message} ({problem.code})</p>)}
-        {current?.task.relations_diagnostic || current?.dependencies.state === "invalid" ? <p>Repair ambiguous or malformed relationships in the canonical task file: <code className="supervisor-path">{snapshot.board?.path}</code> <button type="button" disabled={locked || !snapshot.board?.path} onClick={async () => setNotice(await copyText(snapshot.board!.path) ? "Task file path copied." : "Could not copy the path.")}>Copy task file path</button></p> : null}
-        <ul className="supervisor-prerequisite-editor">{dialog.draft.dependsOn.map(id => <li key={id}><span>{uniqueTask(tasks, id)?.task.title ?? `${tasks.some(view => view.task.task_id === id) ? "Ambiguous task identity" : "Not in this task file"} · ${id}`}{additions.includes(id) && attemptsOpen ? " · addition cannot be saved during work" : ""}</span><button type="button" data-initial={attemptsOpen || undefined} aria-label={`Remove prerequisite ${uniqueTask(tasks, id)?.task.title ?? id}`} disabled={locked || sourceUncertain} onClick={() => { dialog.draft.dependsOn = dialog.draft.dependsOn.filter(value => value !== id); setConfirmRemoval(null); changed(); }}><UiIcon name="close" /></button></li>)}</ul>
-        <label>Add prerequisite<input data-initial={!attemptsOpen || undefined} role="combobox" aria-expanded={pickerOpen} aria-controls={pickerId} aria-autocomplete="list" aria-activedescendant={pickerOpen && candidates[option] ? `${pickerId}-${option}` : undefined} value={dialog.draft.query} disabled={locked || sourceUncertain || attemptsOpen || dialog.draft.dependsOn.length >= 32} onChange={event => { dialog.draft.query = event.target.value; setPickerOpen(true); setOption(0); changed(); }} onFocus={() => setPickerOpen(true)} onKeyDown={event => {
-          if (event.nativeEvent.isComposing) return;
-          if (event.key === "Escape" && pickerOpen) { event.preventDefault(); event.stopPropagation(); setPickerOpen(false); dialog.draft.query = ""; changed(); }
-          else if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setPickerOpen(true); const step = event.key === "ArrowDown" ? 1 : -1; let index = option + step; while (index >= 0 && index < candidates.length && dependencyCandidateReason(tasks, dialog.scope.taskId, candidates[index].task.task_id)) index += step; if (index >= 0 && index < candidates.length) setOption(index); }
-          else if (event.key === "Enter" && pickerOpen) { event.preventDefault(); const candidate = candidates[option]; if (candidate && !dependencyCandidateReason(tasks, dialog.scope.taskId, candidate.task.task_id)) { dialog.draft.dependsOn.push(candidate.task.task_id); dialog.draft.query = ""; setOption(0); changed(); } }
-        }} /></label>
-        {pickerOpen && !attemptsOpen && !sourceUncertain ? <ul id={pickerId} role="listbox" aria-label="Available prerequisite tasks" className="supervisor-prerequisite-picker">{candidates.map((candidate, index) => { const candidateReason = dependencyCandidateReason(tasks, dialog.scope.taskId, candidate.task.task_id); return <li id={`${pickerId}-${index}`} role="option" aria-selected={index === option} aria-disabled={!!candidateReason} key={candidate.task.task_id}><button type="button" tabIndex={-1} disabled={!!candidateReason || locked || dialog.draft.dependsOn.length >= 32} onClick={() => { dialog.draft.dependsOn.push(candidate.task.task_id); dialog.draft.query = ""; setOption(0); changed(); ref.current?.querySelector<HTMLInputElement>('[role="combobox"]')?.focus(); }}>{candidate.task.title} · {candidate.task.checked ? "Accepted" : "Open"}{candidateReason ? ` · ${candidateReason}` : ""}</button></li>; })}</ul> : null}
-        {attemptsOpen ? <p>Work is tracked: remove existing prerequisites only. Removal deliberately changes sequencing.</p> : null}
-        {attemptsOpen && additions.length ? <button type="button" disabled={locked || sourceUncertain} onClick={() => { if (current) { dialog.draft.dependsOn = dialog.draft.dependsOn.filter(id => current.task.depends_on.includes(id)); setConfirmRemoval(null); changed(); } }}>Keep only my removals</button> : null}
-      </> : <>
-        <label>Task title<input data-initial value={dialog.draft.title} readOnly={locked || sourceUncertain} aria-invalid={!!validation} aria-describedby={validation ? reasonId : undefined} onChange={event => { dialog.draft.title = event.target.value; changed(); }} /></label>
-        <label>Task description<textarea rows={8} value={dialog.draft.description} readOnly={locked || sourceUncertain} onChange={event => { dialog.draft.description = event.target.value; changed(); }} /></label>
-        {dialog.mode === "follow_up" ? <><label className="supervisor-followup-wait"><input type="checkbox" checked={dialog.draft.waitForSource} disabled={locked || sourceUncertain} onChange={event => { dialog.draft.waitForSource = event.target.checked; changed(); }} />Also wait for “{dialog.draft.baseSource.title}” to be accepted</label><p>{current?.task.checked ? "The source is already accepted, so this prerequisite is satisfied now. Uncheck for an independent follow-up." : "Provenance alone does not block the follow-up."} Creating a task does not assign it. The supervisor assigns work.</p></> : <p>Saving title/description preserves saved steps and prerequisites.</p>}
-      </>}
-      {stale || sourceUncertain ? <section className="supervisor-source-review"><p className="supervisor-warning">{sourceUncertain ? "Change unconfirmed. Read the original saved task before another write." : "Task or task file changed elsewhere. Review current description, steps and prerequisites before advancing either fence."}</p>
-        {sourceUncertain ? <button type="button" disabled={locked} onClick={() => void read()}>Check saved {dialog.mode === "follow_up" ? "tasks" : "task"}</button> : null}
-        {sourceUncertain && dialog.mode === "follow_up" && missingRead ? <button type="button" disabled={locked || !available || rootClosed} onClick={() => void retrySameCreation()}>Retry same follow-up</button> : null}
-        {comparisonTask ? <div className="supervisor-dialog-comparison"><section><h3>{sourceUncertain ? "Original submission" : "Base task"}</h3><pre className="supervisor-plan">{sourceUncertain ? JSON.stringify(dialog.draft.submitted?.action, null, 2) : `${base.title}\n${base.description}\nSteps ${base.step_progress ? `${base.step_progress.done}/${base.step_progress.total}` : "unavailable"}\nPrerequisites ${base.depends_on.join(", ")}`}</pre></section><section><h3>Current saved task</h3><h4>{comparisonTask.title}</h4><p className="supervisor-exact-text">{comparisonTask.description}</p><p>Steps {comparisonTask.step_progress ? `${comparisonTask.step_progress.done}/${comparisonTask.step_progress.total}` : "unavailable"}</p><ul>{comparisonTask.steps.map((step, index) => <li key={step.step_id ?? `untracked-${index}`}>{step.status} · {step.title}</li>)}</ul><p>Prerequisites: {comparisonTask.depends_on.map(id => uniqueTask(tasks, id)?.task.title ?? id).join(" · ") || "none"}</p>{tasks.flatMap(task => task.dependencies.problems).map((problem, index) => <p key={index} className="supervisor-warning">{problem.message}</p>)}</section></div> : null}
-        {!sourceUncertain && current ? <div className="supervisor-action-row"><button type="button" disabled={locked} onClick={() => review(false)}>{dialog.mode === "follow_up" ? "Review current source and task file" : dialog.mode === "relations" ? "Apply my changes to current" : "Keep my draft for reviewed save"}</button>{dialog.mode !== "follow_up" ? <button type="button" disabled={locked} onClick={() => review(true)}>Use current</button> : null}</div> : null}
-        {sourceUncertain && saved ? <><p>{matches ? "Saved state matches your submission. This does not prove which actor wrote it." : "Saved state differs from your submission."}</p><button type="button" disabled={locked} onClick={() => void resolve(matches ? "use_saved" : "keep_saved")}>{matches ? "Use saved state" : "Keep saved state"}</button>{!matches && dialog.mode !== "follow_up" ? <button type="button" disabled={locked || !current || !!taskContentReason(snapshot, current, available) && dialog.mode === "edit" || dialog.mode === "relations" && (acceptancePending || attemptsOpen && additions.length > 0)} onClick={() => void resolve("apply_reviewed")}>Apply reviewed change</button> : null}</> : null}
-      </section> : null}
-      {confirmRemoval ? <section className="supervisor-source-confirmation"><p>Removing these prerequisites changes when this task may continue: {removed.map(id => uniqueTask(tasks, id)?.task.title ?? id).join(" · ")}</p><button type="button" data-keep-prerequisites onClick={() => setConfirmRemoval(null)}>Keep prerequisites</button><button type="button" disabled={locked || !available || rootClosed || !sourceUncertain && stale || sourceUncertain && current?.task.task_revision !== dialog.draft.reviewed?.task_revision || !!validation || acceptancePending || additions.length > 0 || removed.length === 0 || confirmRemoval !== JSON.stringify([dialog.mode === "relations" ? dialog.draft.reviewed?.task_revision ?? dialog.draft.revision : "", docRevision, dialog.mode === "relations" ? dialog.draft.dependsOn : []])} onClick={() => sourceUncertain ? void resolve("apply_reviewed") : void save()}>Remove prerequisites</button></section> : null}
-      <ErrorSlot placement="dialog" message={error} className="supervisor-dialog-error-slot" />
-      {notice ? <p role="status">{notice}</p> : null}{reason || validation ? <p id={reasonId} className="supervisor-disabled-reason">{validation ?? reason}</p> : null}
-      <div className="supervisor-dialog-draft-actions"><button type="button" disabled={locked} onClick={async () => setNotice(await copyText(dialog.mode === "relations" ? dialog.draft.dependsOn.join("\n") : `${dialog.draft.title}\n\n${dialog.draft.description}`) ? "Draft copied." : "Could not copy. Select draft text and copy manually.")}>Copy draft</button><button type="button" disabled={locked || sourceUncertain} onClick={() => setDiscard(true)}>Discard draft…</button></div>
-      {discard ? <p>Discard these unsaved changes? <button type="button" onClick={() => setDiscard(false)}>Keep draft</button><button type="button" onClick={() => { onDiscard(); onClose(); }}>Discard</button></p> : null}
-      <footer><button type="button" disabled={locked} onClick={onClose}>Cancel</button><button type="submit" data-primary disabled={!!reason || !!validation || !!confirmRemoval} aria-describedby={reason || validation ? reasonId : undefined}>{pending ? "Saving…" : dialog.mode === "edit" ? "Save task" : dialog.mode === "relations" ? attemptsOpen ? "Remove prerequisites…" : "Save prerequisites" : "Create follow-up"}</button></footer>
-    </form>
+    <TaskSourceForm dialog={dialog} snapshot={snapshot} current={current} tasks={tasks} dialogRef={ref} reasonId={reasonId} pickerId={pickerId}
+      locked={locked} pending={pending} sourceUncertain={sourceUncertain} available={available} rootClosed={rootClosed}
+      attemptsOpen={attemptsOpen} acceptancePending={acceptancePending} stale={stale} docRevision={docRevision}
+      additions={additions} removed={removed} candidates={candidates} validation={validation} reason={reason}
+      pickerOpen={pickerOpen} option={option} confirmRemoval={confirmRemoval} discard={discard} error={error} notice={notice}
+      changed={changed} save={save} resolve={resolve} setPickerOpen={setPickerOpen} setOption={setOption}
+      setConfirmRemoval={setConfirmRemoval} setNotice={setNotice} setDiscard={setDiscard} onDiscard={onDiscard} onClose={onClose}>
+      <TaskSourcePreview dialog={dialog} snapshot={snapshot} current={current} tasks={tasks} stale={stale}
+        sourceUncertain={sourceUncertain} locked={locked} available={available} rootClosed={rootClosed}
+        missingRead={missingRead} acceptancePending={acceptancePending} attemptsOpen={attemptsOpen} additions={additions}
+        read={read} retrySameCreation={retrySameCreation} review={review} resolve={resolve} />
+    </TaskSourceForm>
   </section></div>, document.body);
 }
