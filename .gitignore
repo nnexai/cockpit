@@ -34,3 +34,21 @@ __pycache__/
 /.stryker-tmp/
 /mutants.out/
 /mutants.out.old/
+
+# Archived experiments: dependencies, builds and disposable browser state
+/archive/poc/**/node_modules/
+/archive/poc/**/target/
+/archive/poc/**/dist/
+/archive/poc/**/build/
+/archive/poc/**/runtime/
+/archive/poc/**/.runtime/
+/archive/poc/**/.tauri/
+/archive/poc/**/profile*/
+/archive/poc/**/browser-profile*/
+/archive/poc/**/.cef/
+/archive/poc/**/.downloads/
+
+# Editor locks and local agent/browser tooling
+.~lock.*#
+/.codex/
+/.playwright/

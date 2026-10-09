@@ -7,7 +7,7 @@ export default defineConfig({
   root: ".",
   plugins: [react()],
   test: {
-    exclude: [...configDefaults.exclude, ".stryker-tmp/**"],
+    exclude: [...configDefaults.exclude, ".stryker-tmp/**", "archive/**"],
   },
   build: {
     outDir: "dist",

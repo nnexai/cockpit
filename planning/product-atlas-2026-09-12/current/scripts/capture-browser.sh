@@ -7,7 +7,7 @@ set -Eeuo pipefail
 
 ROOT="${COCKPIT_BROWSER_RUN_ROOT:-/tmp/cab12-rerun}"
 PROFILE="$ROOT/profileatlas-browser"
-FIXTURE="${COCKPIT_FIXTURE_DIR:-$PWD/poc/interactive-browser-panel/fixture}"
+FIXTURE="${COCKPIT_FIXTURE_DIR:-$PWD/archive/poc/interactive-browser-panel/fixture}"
 CDP_PORT="${COCKPIT_CDP_PORT:-4206}"
 FIXTURE_PORT="${COCKPIT_FIXTURE_PORT:-4205}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

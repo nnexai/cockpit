@@ -14,9 +14,9 @@
   "cleanTempDir": "always",
   "ignorePatterns": [
     "/tsconfig.json",
-    "/target", "/crates", "/src-tauri", "/poc", "/spikes", "/planning", "/archive",
+    "/target", "/crates", "/src-tauri", "/planning", "/archive",
     "/research", "/scripts", "/quality/reports", "/dist", "/browser-runtime",
-    "/.playwright-cli", "/.playwright", "/.audit", "/.ruff_cache", "/.codex",
+    "/.playwright-cli", "/.playwright", "/.ruff_cache", "/.codex",
     "/.agents", "/.omp", "/mutants.out*"
   ]
 }

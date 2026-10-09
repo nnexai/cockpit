@@ -24,12 +24,12 @@ The transport variants keep the same Chromium CDP `Page.startScreencast` capture
 | Variant | Direct observation | Decision |
 | --- | --- | --- |
 | Baseline screencast | Base64 JPEG data URLs cross the helper/Tauri JSON event path. | Retain as the compatibility baseline only. |
-| Binary screencast (`poc/interactive-browser-panel-screencast-transport`) | Raw JPEG bytes and geometry cross a loopback binary WebSocket with latest-only delivery. Chromium capture CPU remains unchanged, but the large JSON/data-URL hop is removed. | Best practical local transport. |
-| MJPEG variant (`poc/interactive-browser-panel-screencast-mjpeg`) | Native Tauri/Wayland self-test passed. WebKitGTK rejected `fetch()` responses declared as `multipart/x-mixed-replace`, so the POC carries the same multipart bytes as bounded `application/octet-stream` with an exposed boundary header. | Compatibility fallback, not the performance default. |
+| Binary screencast (`archive/poc/interactive-browser-panel-screencast-transport`) | Raw JPEG bytes and geometry cross a loopback binary WebSocket with latest-only delivery. Chromium capture CPU remains unchanged, but the large JSON/data-URL hop is removed. | Best practical local transport. |
+| MJPEG variant (`archive/poc/interactive-browser-panel-screencast-mjpeg`) | Native Tauri/Wayland self-test passed. WebKitGTK rejected `fetch()` responses declared as `multipart/x-mixed-replace`, so the POC carries the same multipart bytes as bounded `application/octet-stream` with an exposed boundary header. | Compatibility fallback, not the performance default. |
 
 ## MediaStream/WebSocket experiment
 
-`poc/interactive-browser-panel-screencast-mediastream` proves a separate transport path without JPEG or CDP screencast frames. A Playwright `addInitScript` bootstrap injects a fixed capture control into each top-level document, including the local fixture and arbitrary HTTPS destinations. Its trusted click calls `getDisplayMedia()` on the current tab with `displaySurface: 'browser'`, `selfBrowserSurface: 'include'`, and `preferCurrentTab: true`, then sends realtime VP8 `VideoEncoder` output through a token-authenticated loopback WebSocket. The native Tauri/WebKit surface decodes the fixed 48-byte `IPWC` packets with `VideoDecoder` and renders each `VideoFrame` to a canvas; CDP remains input control traffic. The helper reacquires a page-owned stream after every local reload and HTTP(S) navigation, waiting for a fresh keyframe. Since each page-owned producer restarts packet numbering, the native receiver resets on a lower-sequence keyframe and its self-test asserts a fresh rendered frame after navigation rather than relying on monotonic packet sequence. This test-only browser passes `--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets` so an HTTPS destination can reach the authenticated loopback ingress; that launch mode is not a general browsing security posture.
+`archive/poc/interactive-browser-panel-screencast-mediastream` proves a separate transport path without JPEG or CDP screencast frames. A Playwright `addInitScript` bootstrap injects a fixed capture control into each top-level document, including the local fixture and arbitrary HTTPS destinations. Its trusted click calls `getDisplayMedia()` on the current tab with `displaySurface: 'browser'`, `selfBrowserSurface: 'include'`, and `preferCurrentTab: true`, then sends realtime VP8 `VideoEncoder` output through a token-authenticated loopback WebSocket. The native Tauri/WebKit surface decodes the fixed 48-byte `IPWC` packets with `VideoDecoder` and renders each `VideoFrame` to a canvas; CDP remains input control traffic. The helper reacquires a page-owned stream after every local reload and HTTP(S) navigation, waiting for a fresh keyframe. Since each page-owned producer restarts packet numbering, the native receiver resets on a lower-sequence keyframe and its self-test asserts a fresh rendered frame after navigation rather than relying on monotonic packet sequence. This test-only browser passes `--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets` so an HTTPS destination can reach the authenticated loopback ingress; that launch mode is not a general browsing security posture.
 
 The supplied `chrome.tabCapture`/MV3 route was not usable in this headless automation environment. `getMediaStreamId({ targetTabId })` failed with `Extension has not been invoked for the current page (see activeTab permission)`, and the action/user-gesture invocation required by `tabCapture` is not supplied by the external service-worker message. The POC therefore uses a real `getDisplayMedia()` self-tab capture gesture rather than claiming extension capture parity.
 
@@ -104,9 +104,9 @@ CEF opened several black windows during the comparison. Their source is unexplai
 
 The compared implementations are:
 
-- `poc/embedded-webview-panel`
-- `poc/interactive-browser-panel` (screenshot-based CDP)
-- `poc/interactive-browser-panel-screencast` (CDP screencast)
-- `poc/cef-osr-panel` (CEF OSR with CDP)
+- `archive/poc/embedded-webview-panel`
+- `archive/poc/interactive-browser-panel` (screenshot-based CDP)
+- `archive/poc/interactive-browser-panel-screencast` (CDP screencast)
+- `archive/poc/cef-osr-panel` (CEF OSR with CDP)
 
 The run was performed on Wayland with the Tauri windows forced to Wayland. Compatibility, audio, fullscreen behavior, and performance on other operating systems remain unverified.

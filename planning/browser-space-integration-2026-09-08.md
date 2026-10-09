@@ -244,7 +244,7 @@ The spike used all-site extension permissions to enable capture from its full-ta
 
 ## Evidence and limits of the spike
 
-Commit `b317ea4` contains the [isolated browser-space spike](../spikes/browser-space/package.json). It used Bun, Playwright 1.63.0, visible Chromium and an unpacked MV3 extension. No production Cockpit integration was included.
+Commit `b317ea4` contains the [isolated browser-space spike](../archive/spikes/browser-space/package.json). It used Bun, Playwright 1.63.0, visible Chromium and an unpacked MV3 extension. No production Cockpit integration was included.
 
 The recorded disposable-session verification demonstrated:
 

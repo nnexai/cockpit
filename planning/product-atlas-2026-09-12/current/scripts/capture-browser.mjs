@@ -4,7 +4,7 @@
  * production extension. capture-browser.sh owns the fixture and Chrome
  * lifecycle; this file owns only CDP targets and screenshots.
  */
-import { chromium } from "/home/nnex/dev/prj/cockpit/poc/interactive-browser-panel/node_modules/playwright/index.mjs";
+import { chromium } from "/home/nnex/dev/prj/cockpit/archive/poc/interactive-browser-panel/node_modules/playwright/index.mjs";
 import { writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 

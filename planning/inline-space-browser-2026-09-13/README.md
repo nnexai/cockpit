@@ -6,7 +6,7 @@ Scope update from the user: implement the complete inline replacement and finish
 
 ## Outcome
 
-Replace the current external Space browser and in-page annotation extension with an interactive Chromium image surface inside Cockpit. Use the binary JPEG `Page.startScreencast` approach in [the transport POC](../../poc/interactive-browser-panel-screencast-transport/), not screenshot polling, MJPEG, MediaStream/WebCodecs, CEF, or an iframe loading arbitrary sites.
+Replace the current external Space browser and in-page annotation extension with an interactive Chromium image surface inside Cockpit. Use the binary JPEG `Page.startScreencast` approach in [the transport POC](../../archive/poc/interactive-browser-panel-screencast-transport/), not screenshot polling, MJPEG, MediaStream/WebCodecs, CEF, or an iframe loading arbitrary sites.
 
 The complete loop is: open the selected Space's browser inline → browse with real pointer/keyboard input → observe page-driven and agent-driven changes → draw/pick/comment over its image → save the image plus structured evidence → let an agent fetch/acknowledge it or explicitly paste feedback without submitting Enter.
 
@@ -46,10 +46,10 @@ Source inspection and implementation verification were performed for this plan. 
 
 | Source | Grounded baseline |
 | --- | --- |
-| [POC helper](../../poc/interactive-browser-panel-screencast-transport/helper/browser-helper.mjs), `startFrameStream`, `processScreencastFrame`, `dispatchInput` | Token-authenticated loopback JPEG WebSocket; 48-byte IPBF v1 header; CDP and viewer ACKs; one pending latest frame; mouse/wheel/key input; cursor returned in command responses. Single fixed-viewport page. |
-| [POC frontend](../../poc/interactive-browser-panel-screencast-transport/dist/app.js), `scheduleFrameRender`, `applySnapshot` | Binary parsing and Blob image rendering, coalesced motion and serialized input. ACK precedes decode; no continuous metadata subscription or production navigation identity. |
-| [POC native bridge](../../poc/interactive-browser-panel-screencast-transport/src-tauri/src/main.rs) | Tauri commands supervise a helper using synchronous JSON stdio. Useful process-boundary evidence, not the production async lifecycle design. |
-| [POC results](../../research/browser-rendering-poc-results.md) | Recorded user interaction favors binary screencast; it removes the large JSON hop, not Chromium's JPEG capture cost. Fullscreen alignment has a known gap. Audio was observed only in CEF in the comparison. This file had pre-existing edits and was left untouched. |
+| [POC helper](../../archive/poc/interactive-browser-panel-screencast-transport/helper/browser-helper.mjs), `startFrameStream`, `processScreencastFrame`, `dispatchInput` | Token-authenticated loopback JPEG WebSocket; 48-byte IPBF v1 header; CDP and viewer ACKs; one pending latest frame; mouse/wheel/key input; cursor returned in command responses. Single fixed-viewport page. |
+| [POC frontend](../../archive/poc/interactive-browser-panel-screencast-transport/dist/app.js), `scheduleFrameRender`, `applySnapshot` | Binary parsing and Blob image rendering, coalesced motion and serialized input. ACK precedes decode; no continuous metadata subscription or production navigation identity. |
+| [POC native bridge](../../archive/poc/interactive-browser-panel-screencast-transport/src-tauri/src/main.rs) | Tauri commands supervise a helper using synchronous JSON stdio. Useful process-boundary evidence, not the production async lifecycle design. |
+| [POC results](../../archive/research/browser-rendering-poc-results.md) | Recorded user interaction favors binary screencast; it removes the large JSON hop, not Chromium's JPEG capture cost. Fullscreen alignment has a known gap. Audio was observed only in CEF in the comparison. This file had pre-existing edits and was left untouched. |
 | [Browser service](../../crates/cockpit-core/src/browser.rs), [owner runtime](../../crates/cockpit-host/src/browser_runtime.rs) | Fresh Space identity, named CLI session/profile, ownership receipts, observer routing, scoped close/reconcile, and the inline browser stream. |
 | [Browser protocol](../../crates/cockpit-protocol/src/browser.rs), [feedback schema](../../crates/cockpit-protocol/src/browser_feedback.rs) | Existing lifecycle/feedback contracts; annotation kinds are Freehand, Element, Region. |
 | [Historical browser plan](../browser-space-integration-2026-09-08.md) | Earlier external-window and extension behavior, retained as historical context only; it is not a supported runtime path. |
