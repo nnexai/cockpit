@@ -368,7 +368,7 @@ it("shows a followed Jira query as a container titled by its JQL, marks unrefere
   }
 });
 
-it("offers Provider token… on a Jira or Confluence instance row, opens it for that provider, and reads token states only when an issue's menu opens", async () => {
+it("reads token states only for attachment menus, keeps instance menus focused on refresh, and gates Jira downloads", async () => {
   const config: ProjectProvider[] = [
     { id: "jira", kind: "jira" as const, base_url: "https://team.atlassian.net", deployment: "cloud" as const },
     { id: "cloud", kind: "confluence" as const, base_url: "https://nnexai.atlassian.net/wiki", deployment: "cloud" as const },
@@ -394,24 +394,20 @@ it("offers Provider token… on a Jira or Confluence instance row, opens it for 
   try {
     await act(async () => root.render(<LibraryTree items={[issue, wiki, repo]} providers={config} selectedItemId={null} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
     expect(credentials.ensure).not.toHaveBeenCalled();
-    await rightClick(rowNamed("Jira · team.atlassian.net"));
-    expect(menuItems()).toEqual(["Refresh all in Jira · team.atlassian.net", "Provider token…"]);
-    await act(async () => menuItem("Provider token…")!.click());
-    expect(credentials.open).toHaveBeenLastCalledWith("jira");
-    await rightClick(rowNamed("Confluence · nnexai.atlassian.net"));
-    await act(async () => menuItem("Provider token…")!.click());
-    expect(credentials.open).toHaveBeenLastCalledWith("cloud");
-    // A provider that can't store a token has no entry.
-    await rightClick(rowNamed("GitLab · gitlab.test"));
-    expect(menuItems()).toEqual(["Refresh all in GitLab · gitlab.test"]);
-    await act(async () => { document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })); });
+    for (const name of ["Jira · team.atlassian.net", "Confluence · nnexai.atlassian.net", "GitLab · gitlab.test"]) {
+      await rightClick(rowNamed(name));
+      const entries = document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+      expect(entries).toHaveLength(1);
+      await act(async () => entries[0]!.click());
+    }
+    expect(actions.refresh).toHaveBeenCalledTimes(3);
+    expect(credentials.open).not.toHaveBeenCalled();
     expect(credentials.ensure).not.toHaveBeenCalled();
     // A Jira issue's menu reads the token states, and without a token offers the dialog instead of a download.
     await rightClick(rows().find((row) => row.dataset.libraryRow === "source:ops-1")!);
     expect(credentials.ensure).toHaveBeenCalledTimes(1);
-    expect(menuItems()).toContain("Store a token to download attachments…");
     expect(menuItems()).not.toContain("Download attachments");
-    await act(async () => menuItem("Store a token to download attachments…")!.click());
+    await act(async () => menuItem("Provider token…")!.click());
     expect(credentials.open).toHaveBeenLastCalledWith("jira");
     expect(attachments.start).not.toHaveBeenCalled();
     // With a token stored the same menu downloads.

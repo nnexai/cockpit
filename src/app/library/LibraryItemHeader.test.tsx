@@ -208,3 +208,27 @@ it.each([false, true])("keeps the selection toggle in the narrow menu when selec
     host.remove();
   }
 });
+
+it("keeps a Jira item's generic overflow focused on item actions when no attachment download is blocked", async () => {
+  const credentials = { statuses: null, ensure: vi.fn(), open: vi.fn(), attachmentAccess: vi.fn(() => null) };
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: true, refreshBusy: false, credentials };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<LibraryItemHeader item={selectionItem}
+      providers={[{ id: "jira", kind: "jira", base_url: "https://example.atlassian.net", deployment: "cloud" }]}
+      narrow rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
+    const opener = host.querySelector<HTMLButtonElement>(".library-more")!;
+    await act(async () => { opener.focus(); opener.click(); });
+    const entries = [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(entries).toHaveLength(3);
+    await act(async () => entries[0]!.click());
+    expect(actions.refresh).toHaveBeenCalledWith({ scope: "items", item_ids: [selectionItem.item_id] }, [selectionItem.item_id]);
+    expect(credentials.open).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(opener);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});

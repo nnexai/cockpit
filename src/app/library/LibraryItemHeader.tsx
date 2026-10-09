@@ -4,7 +4,7 @@ import type { ProviderFacts } from "../context/providerDocument";
 import { UiIcon } from "../UiIcon";
 import { ErrorSlot } from "../ErrorSlot";
 import { attachmentSummary, instanceHost, isConfluencePage, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip, providerFamily, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
-import { ATTACHMENT_STATE, LibraryMenu, attachmentMark, attachmentPath, attachmentProgress, byteSize, downloadableAttachments, itemMenuEntries, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions, type LibraryMenuEntry } from "./LibraryTree";
+import { ATTACHMENT_STATE, LibraryMenu, attachmentMark, attachmentPath, attachmentProgress, byteSize, downloadableAttachments, itemMenuEntries, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions } from "./LibraryTree";
 import { ProviderMark } from "./ProviderMark";
 import { PendingPill, StatePill } from "./StatePill";
 
@@ -63,8 +63,7 @@ function breadcrumb(segments: readonly string[]): string {
  * or `Remove from Space`. Attachments are metadata only until the user
  * explicitly downloads (`Download all`, `Download selected` or a row's
  * `Download`); `Remove downloaded` drops the bytes and keeps the rows. A Jira
- * issue whose files need a token says so on the state line, and `⋯` offers
- * `Provider tokens…` for every provider that stores one.
+ * issue whose files need a token says so on the state line.
  * `⋯` takes `Refresh`, the Space actions and the attachment bulk actions, and the attachments list stacks, when the pane is ≤ 520 px wide or the header itself is ≤ 640 px (the tree beside an item can leave it that narrow in a wider pane; the attachments table needs about 590 px).
  */
 export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCrumb, pending, actions, onReplace, details, space = null, pageUpdate = null, facts = null }: {
@@ -123,8 +122,6 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
   const attachments = page || jira === "stored" ? actions.attachments : undefined;
   // The cue outside the folded attachments panel: this issue's files can't be downloaded until a token is stored.
   const needsToken = jira === "needs_token" && credentials ? credentials : null;
-  // `Provider tokens…` in `⋯` for every provider that stores one; it stays before the destructive entry.
-  const tokenProvider = credentials && item.provider_id && (family.key === "jira" || family.key === "confluence") ? item.provider_id : null;
   const spacePending = Boolean(space && (space.adding || space.busy));
   const spaceActionLabel = space
     ? spacePending ? space.adding || !space.selected ? "Adding…" : "Removing…"
@@ -133,16 +130,6 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
   const changeSpaceSelection = () => {
     if (!space || spacePending) return;
     if (space.selected) space.onRemove(); else space.onAdd();
-  };
-  const menuEntries = (): LibraryMenuEntry[] => {
-    const entries = itemMenuEntries(item, space ? {
-      ...actions,
-      spaceEntries: () => [{ label: spaceActionLabel!, onSelect: changeSpaceSelection, disabled: spacePending }],
-    } : actions, false);
-    if (!credentials || !tokenProvider) return entries;
-    const destructive = entries.lastIndexOf("separator");
-    const tokens = { label: "Provider tokens…", onSelect: () => credentials.open(tokenProvider) };
-    return destructive < 0 ? [...entries, tokens] : [...entries.slice(0, destructive), tokens, ...entries.slice(destructive)];
   };
   const ensureCredentials = credentials?.ensure;
   useEffect(() => { if (jira === "loading" && item.attachments.length > 0) ensureCredentials?.(); }, [jira, item.attachments.length, ensureCredentials]);
@@ -233,7 +220,7 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
         </span> : null}
         {needsToken ? <span className="library-token-cue" role="status">
           <UiIcon name="info" />Attachments need a token
-          <button type="button" className="library-link" onClick={() => needsToken.open(item.provider_id ?? "")}>Provider tokens…</button>
+          <button type="button" className="library-link" onClick={() => needsToken.open(item.provider_id ?? "")}>Provider token…</button>
         </span> : null}
         <span className="context-toolbar-spacer" />
         {item.attachments.length > 0 ? <button type="button" className="library-attachments-toggle" aria-expanded={attachmentsOpen} aria-controls={attachmentsOpen ? attachmentListId : undefined} onClick={() => setAttachmentsOpenFor(attachmentsOpen ? null : item.item_id)}>
@@ -295,7 +282,10 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
         </div>
       </div> : null}
     </div>
-    {menu ? <LibraryMenu x={menu.x} y={menu.y} label={`${item.title} actions`} entries={menuEntries()} onDismiss={() => setMenu(null)} /> : null}
+    {menu ? <LibraryMenu x={menu.x} y={menu.y} label={`${item.title} actions`} entries={itemMenuEntries(item, space ? {
+      ...actions,
+      spaceEntries: () => [{ label: spaceActionLabel!, onSelect: changeSpaceSelection, disabled: spacePending }],
+    } : actions, false)} onDismiss={() => setMenu(null)} /> : null}
   </div>;
 }
 

@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import { expect, it } from "vitest";
 import { remarkBoundDiagrams } from "./markdownPolicy";
+import { localImagePath } from "./MarkdownView";
 it("caps actual parsed Mermaid blocks across whitespace and list nesting", async () => {
   const source = ['``` mermaid\ngraph TD; A-->B\n```', '~~~  mermaid\ngraph TD; A-->B\n~~~', ...Array(4).fill('- nested\n\n  ``` mermaid\n  graph TD; A-->B\n  ```')].join('\n\n');
   const host = document.createElement('div'); const root = createRoot(host);
@@ -15,7 +16,6 @@ it("caps actual parsed Mermaid blocks across whitespace and list nesting", async
 });
 
 it("resolves local image references without permitting root escape or URL fetches", async () => {
-  const { localImagePath } = await import("./ContextViewer");
   expect(localImagePath("docs/readme.md", "../images/a%20b.png")).toBe("images/a b.png");
   expect(localImagePath("readme.md", "../outside.png")).toBeNull();
   expect(localImagePath("readme.md", "https://remote.example/x.png")).toBeNull();

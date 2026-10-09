@@ -2,15 +2,13 @@ import { CommentOverview } from "./CommentOverview";
 import { CommentEditor } from "./CommentEditor";
 import type { CommentReviewRef, ViewerSourceKind } from "../../protocol/generated/v1";
 import { CommentPasteControls } from "./CommentPasteControls";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type {
   CommentAnchor,
-  CommentBatch,
   CommentBatchList,
   CommentCapture,
   CommentDraft,
-  CommentPreview,
   CommentRequestScope,
   CommentRemoveRequest,
   CommentUpsertRequest,
@@ -20,6 +18,7 @@ import type {
 } from "../../protocol/generated/v1";
 import type { ContextCommentEditorState } from "./ContextViewer";
 import { getViewerClientId } from "../layout/viewerLifecycle";
+import { commentErrorText, useCommentBatch } from "./useCommentBatch";
 import "./comments.css";
 
 type CommentSelection = { start: number; end: number } | null;
@@ -57,12 +56,6 @@ type CommentDraftsProps = {
   onViewerError?: (error: unknown) => void;
 };
 
-function errorText(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string" && error) return error;
-  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") return error.message;
-  return "The comments request could not be completed.";
-}
 
 function draftAnchorLabel(anchor: CommentAnchor): string {
   return anchor.kind === "whole_file" ? "Whole file" : `Lines ${anchor.start_line}–${anchor.end_line}`;
@@ -98,32 +91,22 @@ export function InlineCommentDrafts({ drafts, line, actions, rootId, path }: { d
 export function CommentDrafts({ client, context, root, path, document, selection, mode, editorState, onEditorStateChange, children, inlineEditor = false, showToolbar = true, onCommentStatusChange, onEditorDismissed, onCountChange, invalidationGeneration = 0, refreshGeneration = 0, sourceIdentity, sourceKind = context.source_kind, reviewCapture, onViewerError }: CommentDraftsProps) {
   const currentSourceId = sourceIdentity ?? context.source_id;
   const scope = useMemo<CommentRequestScope>(() => ({ binding_id: context.binding_id, client_id: getViewerClientId() }), [context.binding_id]);
-  const [batch, setBatch] = useState<CommentBatch | null>(null);
   const [batchList, setBatchList] = useState<CommentBatchList | null>(null);
   const [discardConfirmation, setDiscardConfirmation] = useState<string | null>(null);
   const [newDraftTarget, setNewDraftTarget] = useState<NewDraftTarget | null>(null);
-  const [loading, setLoading] = useState(true);
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [editor, setEditor] = useState<"whole_file" | "lines" | null>(null);
   const [editing, setEditing] = useState<CommentDraft | null>(null);
   const [text, setText] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const identity = `${context.session_id}\u0000${context.viewer_id}\u0000${context.binding_id}\u0000${root.root_id}\u0000${currentSourceId ?? ""}`;
-  const [pending, setPending] = useState(false);
-  const [preview, setPreview] = useState<CommentPreview | null>(null);
-  const [retainedStale, setRetainedStale] = useState(false);
-  const generationRef = useRef(0);
-  const refreshedInvalidation = useRef(invalidationGeneration);
-  const refreshedRefresh = useRef(refreshGeneration);
-  const persistedBatchId = batch && batch.generation > 0 ? batch.batch_id : null;
-  const identityRef = useRef(identity);
-  identityRef.current = identity;
-  const onViewerErrorRef = useRef(onViewerError);
-  onViewerErrorRef.current = onViewerError;
-  const reportError = useCallback((reason: unknown) => {
-    setError(errorText(reason));
-    onViewerErrorRef.current?.(reason);
-  }, []);
+  const {
+    batch, setBatch, loading, pending, setPending, error, setError,
+    preview, setPreview, retainedStale, setRetainedStale, persistedBatchId,
+    generationRef, identityRef, onViewerErrorRef, reportError, loadBatch, attach, makePreview,
+  } = useCommentBatch({
+    client, sessionId: context.session_id, viewerId: context.viewer_id, scope, identity, currentSourceId,
+    invalidationGeneration, refreshGeneration, onCountChange, onViewerError,
+  });
 
   const clearEditor = useCallback(() => {
     setEditor(null);
@@ -134,32 +117,6 @@ export function CommentDrafts({ client, context, root, path, document, selection
     onEditorDismissed?.();
   }, [onEditorDismissed, onEditorStateChange]);
 
-  const loadBatch = useCallback(async (batchId: string | null = null) => {
-    const generation = ++generationRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await client.commentBatch(context.session_id, context.viewer_id, { scope, batch_id: batchId });
-      if (generation !== generationRef.current || identityRef.current !== identity) return;
-      setBatch(next);
-      setPreview(null);
-      onCountChange?.(next.drafts.length);
-    } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
-    } finally {
-      if (generation === generationRef.current && identityRef.current === identity) setLoading(false);
-    }
-  }, [client, identity, onCountChange, context.viewer_id, context.session_id, reportError, scope]);
-
-  useEffect(() => {
-    if (pending || loading) return;
-    const invalidated = refreshedInvalidation.current !== invalidationGeneration;
-    const explicitlyRefreshed = refreshedRefresh.current !== refreshGeneration;
-    if (!invalidated && !explicitlyRefreshed) return;
-    refreshedInvalidation.current = invalidationGeneration;
-    refreshedRefresh.current = refreshGeneration;
-    void loadBatch(persistedBatchId);
-  }, [persistedBatchId, invalidationGeneration, refreshGeneration, loadBatch, loading, pending]);
   const switchBatch = useCallback((batchId: string) => {
     if (batch?.batch_id !== batchId) clearEditor();
     void loadBatch(batchId);
@@ -356,7 +313,7 @@ export function CommentDrafts({ client, context, root, path, document, selection
       }
     } catch (reason) {
       if (generation !== generationRef.current || identityRef.current !== identity) return;
-      const message = errorText(reason);
+      const message = commentErrorText(reason);
       reportError(reason);
       setDiscardConfirmation(null);
       if (message.includes("stale_generation") || message.includes("generation is no longer current")) void refreshBatchList();
@@ -365,43 +322,6 @@ export function CommentDrafts({ client, context, root, path, document, selection
     }
   };
 
-  const attach = async () => {
-    if (!batch || pending || !currentSourceId) return;
-    const generation = ++generationRef.current;
-    setPending(true); setError(null);
-    try {
-      const next = await client.commentAttach(context.session_id, context.viewer_id, { scope, batch_id: batch.batch_id, expected_generation: batch.generation });
-      if (generation === generationRef.current && identityRef.current === identity) { setBatch(next); setPreview(null); }
-    } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
-    } finally {
-      if (generation === generationRef.current && identityRef.current === identity) setPending(false);
-    }
-  };
-
-  const makePreview = async (retain: boolean) => {
-    if (!batch || pending) return;
-    const generation = ++generationRef.current;
-    setPending(true); setError(null);
-    try {
-      const request = { batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, retain_stale_excerpts: retain };
-      const next = await client.commentPreview(context.session_id, context.viewer_id, request);
-      if (generation === generationRef.current && identityRef.current === identity) {
-        setPreview(next);
-        setRetainedStale(retain);
-        if (next.stale_draft_ids.length > 0) {
-          setBatch((current) => current ? {
-            ...current,
-            drafts: current.drafts.map((draft) => next.stale_draft_ids.includes(draft.draft_id) && draft.source_state === "current" ? { ...draft, source_state: "changed" } : draft),
-          } : current);
-        }
-      }
-    } catch (reason) {
-      if (generation === generationRef.current && identityRef.current === identity) reportError(reason);
-    } finally {
-      if (generation === generationRef.current && identityRef.current === identity) setPending(false);
-    }
-  };
 
   const fileDrafts = currentDrafts.filter((draft) => draft.file_ref.root_id === root.root_id && draft.file_ref.path === path && (sourceKind !== "review" || (draft.file_ref.review?.file_id === reviewCapture?.file_id && draft.file_ref.review?.side === reviewCapture?.side)));
   const fileBottomDrafts = fileDrafts.filter((draft) => mode === "markdown" || draft.anchor.kind === "whole_file" || stale(draft));
