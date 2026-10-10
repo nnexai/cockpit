@@ -2,20 +2,19 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cockpit_protocol::typescript::{check, render_v1, write_atomic};
+use cockpit_protocol::browser::{
+    BrowserCleanupScope, BrowserCleanupStatus, BrowserFeedbackSendRequest, BrowserWorkScope,
+};
+use cockpit_protocol::typescript::{check, check_generated, render_generated, write_generated};
 use cockpit_protocol::v1::{
-    CockpitCapabilities, CockpitMode, FocusKind, FocusRequest, FocusResponse,
-    HerdrCompatibility, HerdrIdentity, PaneMoveDestination,
-    PaneSplitDirection,
-    ResourceMutationRequest, SessionListResponse, SessionStreamMessage,
-    SessionSummary, StatusResponse,
-    TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalScrollDirection,
-    TerminalScrollSource, TerminalStreamMessage,
-    SpaceGitAction, SpaceGitActionRequest, SpaceGitActionOutcome, SpaceGitCheckout,
-    SpaceGitRefusal, SpaceGitSource, SpaceGitUpstream,
+    CockpitCapabilities, CockpitMode, FocusKind, FocusRequest, FocusResponse, HerdrCompatibility,
+    HerdrIdentity, PaneMoveDestination, PaneSplitDirection, ResourceMutationRequest,
+    SessionListResponse, SessionStreamMessage, SessionSummary, SpaceGitAction,
+    SpaceGitActionOutcome, SpaceGitActionRequest, SpaceGitCheckout, SpaceGitRefusal,
+    SpaceGitSource, SpaceGitUpstream, StatusResponse, TerminalCommand, TerminalMode,
+    TerminalOpenRequest, TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };
 use serde_json::json;
-use cockpit_protocol::browser::{BrowserCleanupScope, BrowserCleanupStatus, BrowserFeedbackSendRequest, BrowserWorkScope};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -36,12 +35,18 @@ fn remove_temporary_directory(directory: PathBuf) {
 
 #[test]
 fn browser_work_rejects_unknown_fields() {
-    assert!(serde_json::from_value::<BrowserCleanupScope>(json!({
-        "kind": "tab", "session_id": "session-1", "tab_id": "tab-1", "unexpected": true
-    })).is_err());
-    assert!(serde_json::from_value::<BrowserCleanupStatus>(json!({
-        "failures": [], "unexpected": true
-    })).is_err());
+    assert!(
+        serde_json::from_value::<BrowserCleanupScope>(json!({
+            "kind": "tab", "session_id": "session-1", "tab_id": "tab-1", "unexpected": true
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<BrowserCleanupStatus>(json!({
+            "failures": [], "unexpected": true
+        }))
+        .is_err()
+    );
     let scope = json!({
         "kind": "tab",
         "target": { "session_id": "session-1", "tab_id": "tab-1", "pane_id": null, "endpoint_path": null }
@@ -91,24 +96,60 @@ fn compatibility_uses_stable_status_tag() {
 
 #[test]
 fn space_git_closed_unions_and_action_expectations_use_exact_wire_tags() {
-    assert_eq!(serde_json::to_value(SpaceGitSource::PaneFolder).unwrap(), json!("pane_folder"));
-    assert_eq!(serde_json::to_value(SpaceGitCheckout::Detached { root: "/repo".into() }).unwrap(),
-        json!({ "state": "detached", "root": "/repo" }));
-    assert_eq!(serde_json::to_value(SpaceGitUpstream::Gone { name: "origin/main".into() }).unwrap(),
-        json!({ "state": "gone", "name": "origin/main" }));
-    assert_eq!(serde_json::to_value(SpaceGitActionOutcome::Refused {
-        reason: SpaceGitRefusal::NotFastForward, detail: "diverged".into(),
-    }).unwrap(), json!({ "result": "refused", "reason": "not_fast_forward", "detail": "diverged" }));
-    let request = SpaceGitActionRequest { space_id: "w1".into(), action: SpaceGitAction::Pull,
-        expected_root: "/repo".into(), expected_branch: "main".into(), expected_upstream: "origin/main".into() };
+    assert_eq!(
+        serde_json::to_value(SpaceGitSource::PaneFolder).unwrap(),
+        json!("pane_folder")
+    );
+    assert_eq!(
+        serde_json::to_value(SpaceGitCheckout::Detached {
+            root: "/repo".into()
+        })
+        .unwrap(),
+        json!({ "state": "detached", "root": "/repo" })
+    );
+    assert_eq!(
+        serde_json::to_value(SpaceGitUpstream::Gone {
+            name: "origin/main".into()
+        })
+        .unwrap(),
+        json!({ "state": "gone", "name": "origin/main" })
+    );
+    assert_eq!(
+        serde_json::to_value(SpaceGitActionOutcome::Refused {
+            reason: SpaceGitRefusal::NotFastForward,
+            detail: "diverged".into(),
+        })
+        .unwrap(),
+        json!({ "result": "refused", "reason": "not_fast_forward", "detail": "diverged" })
+    );
+    let request = SpaceGitActionRequest {
+        space_id: "w1".into(),
+        action: SpaceGitAction::Pull,
+        expected_root: "/repo".into(),
+        expected_branch: "main".into(),
+        expected_upstream: "origin/main".into(),
+    };
     let mut wire = serde_json::to_value(&request).unwrap();
     assert_eq!(wire["action"], json!("pull"));
     wire["root"] = json!("/other");
     assert!(serde_json::from_value::<SpaceGitActionRequest>(wire).is_err());
-    assert!(serde_json::from_value::<SpaceGitCheckout>(json!({ "state": "missing", "root": "/repo" })).is_err());
-    assert!(serde_json::from_value::<SpaceGitUpstream>(json!({ "state": "tracked", "name": "origin/main", "ahead": -1, "behind": 0 })).is_err());
+    assert!(
+        serde_json::from_value::<SpaceGitCheckout>(json!({ "state": "missing", "root": "/repo" }))
+            .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SpaceGitUpstream>(
+            json!({ "state": "tracked", "name": "origin/main", "ahead": -1, "behind": 0 })
+        )
+        .is_err()
+    );
     for result in ["success", "not_sent", "failed"] {
-        assert!(serde_json::from_value::<SpaceGitActionOutcome>(json!({ "result": result, "detail": "unproven" })).is_err());
+        assert!(
+            serde_json::from_value::<SpaceGitActionOutcome>(
+                json!({ "result": result, "detail": "unproven" })
+            )
+            .is_err()
+        );
     }
 }
 
@@ -510,28 +551,29 @@ fn pane_move_destinations_preserve_space_terminology() {
 }
 
 #[test]
-fn check_accepts_exact_generated_bytes() {
-    let (directory, target) = temporary_target();
-    let expected = render_v1();
-    write_atomic(&target, expected.as_bytes()).expect("generated file written");
-    assert!(check(&target).expect("generated file checked"));
-    assert_eq!(
-        fs::read(&target).expect("generated file read"),
-        expected.as_bytes()
-    );
-    remove_temporary_directory(directory);
-}
-
-#[test]
 fn check_detects_drift_without_rewriting() {
     let (directory, target) = temporary_target();
-    let mut drifted = render_v1().into_bytes();
-    let index = drifted.len() - 2;
-    drifted[index] = b'X';
-    fs::write(&target, &drifted).expect("drifted file written");
+    write_generated(&target).expect("generated artifacts written");
+    let validator = render_generated()
+        .expect("artifacts rendered")
+        .into_iter()
+        .find(|(path, _)| {
+            path != std::path::Path::new("v1.ts")
+                && path != std::path::Path::new("validate/runtime.ts")
+        })
+        .expect("validator emitted")
+        .0;
+    let validator = directory.join(validator);
+    let mut drifted = fs::read(&validator).expect("validator read");
+    drifted.push(b'X');
+    fs::write(&validator, &drifted).expect("drifted validator written");
 
     assert!(!check(&target).expect("drifted file checked"));
-    assert_eq!(fs::read(&target).expect("drifted file read"), drifted);
+    assert_eq!(
+        check_generated(&target).expect("drift paths checked"),
+        vec![validator.clone()]
+    );
+    assert_eq!(fs::read(&validator).expect("drifted file read"), drifted);
     remove_temporary_directory(directory);
 }
 
@@ -557,7 +599,57 @@ fn compatible_status_round_trips() {
 }
 
 #[test]
-fn typescript_rendering_is_deterministic() {
-    let rendered = render_v1();
-    assert_eq!(rendered, render_v1());
+fn check_reports_missing_validator_without_writing() {
+    let (directory, target) = temporary_target();
+    write_generated(&target).expect("generated artifacts written");
+    let missing = directory.join("validate/runtime.ts");
+    fs::remove_file(&missing).expect("validator removed");
+    assert_eq!(
+        check_generated(&target).expect("missing paths checked"),
+        vec![missing.clone()]
+    );
+    assert!(!missing.exists());
+    remove_temporary_directory(directory);
+}
+
+#[test]
+fn check_reports_stale_validators_and_write_preserves_user_files() {
+    let (directory, target) = temporary_target();
+    write_generated(&target).expect("generated artifacts written");
+    let header = fs::read_to_string(directory.join("validate/runtime.ts")).expect("runtime read");
+    let stale = directory.join("validate/obsolete.ts");
+    fs::write(
+        &stale,
+        format!(
+            "{}\nexport const obsolete = true;\n",
+            header.lines().next().unwrap()
+        ),
+    )
+    .expect("stale file written");
+    let user = directory.join("validate/manual.ts");
+    fs::write(&user, "// User-owned file\n").expect("user file written");
+    assert_eq!(
+        check_generated(&target).expect("stale paths checked"),
+        vec![stale.clone()]
+    );
+    write_generated(&target).expect("artifacts refreshed");
+    assert!(!stale.exists());
+    assert_eq!(fs::read_to_string(user).unwrap(), "// User-owned file\n");
+    assert!(check(&target).expect("all artifacts current"));
+    remove_temporary_directory(directory);
+}
+
+#[cfg(unix)]
+#[test]
+fn generated_writes_reject_symlinked_validator_directory() {
+    let (directory, target) = temporary_target();
+    let outside = directory.join("outside");
+    fs::create_dir(&outside).unwrap();
+    let sentinel = outside.join("runtime.ts");
+    fs::write(&sentinel, "owned elsewhere").unwrap();
+    std::os::unix::fs::symlink(&outside, directory.join("validate")).unwrap();
+    assert!(write_generated(&target).is_err());
+    assert_eq!(fs::read_to_string(sentinel).unwrap(), "owned elsewhere");
+    assert!(!target.exists());
+    remove_temporary_directory(directory);
 }

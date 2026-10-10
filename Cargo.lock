@@ -768,7 +768,9 @@ name = "cockpit-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_derive_internals",
  "serde_json",
+ "syn 2.0.119",
  "ts-rs",
 ]
 

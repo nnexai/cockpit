@@ -10,6 +10,8 @@ test-support = []
 serde.workspace = true
 serde_json.workspace = true
 ts-rs.workspace = true
+syn.workspace = true
+serde_derive_internals.workspace = true
 
 [lints]
 workspace = true

@@ -1,241 +1,122 @@
-import type {
-  ContextDirectory, ContextDocument, ContextMedia, ContextFileIndex, LibraryFileIndexRequest,
-  LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest,
-  LibraryFollowSource, LibraryFollowSummary, LibraryInclusion, LibraryIssueMeta, LibraryItemRef, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
-  LibraryRemoveRequest, LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, ProjectDiagnostic,
-  SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceRepositoriesRequest, SpaceRemoveRequest,
-} from "../protocol/generated/v1";
+import type { ContextDirectory, ContextDocument, ContextMedia, ContextFileIndex, LibraryFileIndexRequest, LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceRepositoriesRequest, SpaceRemoveRequest } from "../protocol/generated/v1";
+import { wireLibraryFileIndexRequest, wireLibraryAddRequest, wireLibraryAttachmentRequest, wireLibraryConfluenceSpacesRequest, wireLibraryDirectoryRequest, wireLibraryDocumentRequest, wireLibraryListing, wireLibraryMediaRequest, wireLibraryOperation, wireLibraryRefreshRequest, wireLibraryRemoveRequest, wireLibraryReplaceRequest, wireLibraryResolution, wireLibraryResolveRequest, wireSpaceContextRequest, wireSpaceContextListing, wireSpaceAddRequest, wireSpaceRepositoriesRequest, wireSpaceRemoveRequest, type WireFields } from "../protocol/generated/validate";
 import { CockpitClientError, validateSessionId, validateResourceId } from "./CockpitClient";
 import { parseContextDirectory, parseContextDocument, parseContextFileIndex } from "./contextProtocol";
 import { parseContextMedia } from "./contextMediaProtocol";
-const MAX_LIBRARY_ITEMS = 1_000_000;
+import { constantMessage, definePolicy, parseWire, parseWireList } from "./wire";
 
 const fail = (): never => { throw new CockpitClientError("malformed_response", "Invalid library request or response"); };
-const record = (value: unknown): Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : fail();
-const text = (value: unknown, max = 4096): string => typeof value === "string" && value.length <= max && !value.includes("\0") ? value : fail();
-const id = (value: unknown): string => { const v = text(value, 512); return v.length > 0 && !/[\x00-\x1f\x7f]/.test(v) ? v : fail(); };
-const nullable = <T>(value: unknown, parse: (value: unknown) => T): T | null => value === null ? null : parse(value);
-const bool = (value: unknown): boolean => typeof value === "boolean" ? value : fail();
-const onlyKeys = (value: Record<string, unknown>, keys: readonly string[]): void => {
-  if (Object.keys(value).some(key => !keys.includes(key))) fail();
-};
-const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= max ? value as number : fail();
-const array = <T>(value: unknown, max: number, parse: (value: unknown) => T): T[] => Array.isArray(value) && value.length <= max ? value.map(parse) : fail();
-const oneOf = <T extends string>(value: unknown, options: readonly T[]): T => typeof value === "string" && options.includes(value as T) ? value as T : fail();
-const optionalText = (value: unknown): string | null => value === undefined || value === null ? null : text(value);
-function path(value: unknown, allowEmpty = false): string {
-  const result = text(value, 4096);
-  if ((result.length === 0 && !allowEmpty) || result.startsWith("/") || /^[A-Za-z]:/.test(result) || result.includes("\\") || (result.length > 0 && result.split("/").some(part => part === "" || part === "." || part === ".."))) return fail();
-  return result;
+const text = (v: string, max = 4096): boolean => v.length <= max && !v.includes("\0");
+const id = (v: string): boolean => text(v, 512) && v.length > 0 && !/[\x00-\x1f\x7f]/.test(v);
+const path = (v: string, empty = false): boolean => text(v) && (empty || v.length > 0) && !v.startsWith("/") && !/^[A-Za-z]:/.test(v) && !v.includes("\\") && (v.length === 0 || v.split("/").every(p => p !== "" && p !== "." && p !== ".."));
+const absolutePath = (v: string): boolean => text(v) && v.startsWith("/") && !/[\x00-\x1f\x7f]/.test(v) && !v.split("/").some(p => p === "." || p === "..");
+function fields<K extends keyof WireFields>(names: readonly K[], check: (v: WireFields[K]) => boolean) {
+  const unary = (v: WireFields[K]): boolean => check(v);
+  return Object.fromEntries(names.map(name => [name, unary])) as Record<K, (v: WireFields[K]) => boolean>;
 }
-function diagnostics(value: unknown): ProjectDiagnostic[] {
-  return array(value, 256, v => { const r = record(v); return { code: id(r.code), message: text(r.message), path: nullable(r.path, text) } as ProjectDiagnostic; });
-}
-function conflict(value: unknown): LibraryConflictFile {
-  const r = record(value); return { path: path(r.path), current_hash: id(r.current_hash) };
-}
-function partial(value: unknown) {
-  if (value === null) return null;
-  const r = record(value); return { unit: id(r.unit), have: integer(r.have), total: nullable(r.total, integer), reason: text(r.reason) };
-}
-function attachment(value: unknown) {
-  const r = record(value);
-  const relative_path = nullable(r.relative_path, path);
-  return { attachment_id: id(r.attachment_id), original_name: text(r.original_name), stored_name: text(r.stored_name), media_type: optionalText(r.media_type), bytes: nullable(r.bytes, integer), version: optionalText(r.version), state: oneOf(r.state, ["not_downloaded", "downloaded", "over_limit", "failed"] as const), relative_path };
-}
-function item(value: unknown): LibraryItemSummary {
-  const r = record(value);
-  const container = nullable(r.container, v => { const c = record(v); return { container_id: id(c.container_id), label: text(c.label) }; });
-  const folder = nullable(r.folder, v => { const f = record(v); return { origin_path: text(f.origin_path), git_working_tree: bool(f.git_working_tree), files: integer(f.files), bytes: integer(f.bytes), skipped_symlinks: integer(f.skipped_symlinks, 0xffffffff), skipped_special: integer(f.skipped_special, 0xffffffff), skipped_ignored: integer(f.skipped_ignored, 0xffffffff), skipped_other: integer(f.skipped_other, 0xffffffff) }; });
-  return {
-    item_id: id(r.item_id), logical_id: id(r.logical_id), kind: oneOf(r.kind, ["provider_snapshot", "folder_copy"] as const),
-    provider_id: optionalText(r.provider_id), provider_instance: optionalText(r.provider_instance), resource_type: optionalText(r.resource_type), canonical_id: optionalText(r.canonical_id),
-    container, parent_item_id: optionalText(r.parent_item_id), ancestors: array(r.ancestors, 5000, v => { const a = record(v); return { id: id(a.id), title: text(a.title) }; }),
-    order: nullable(r.order, v => integer(v, 0xffffffff)), title: text(r.title), document_path: nullable(r.document_path, v => path(v)), item_path: path(r.item_path),
-    source_url: optionalText(r.source_url), original_url: optionalText(r.original_url), source_revision: optionalText(r.source_revision), revision: id(r.revision),
-    state: oneOf(r.state, ["fresh", "changed", "unknown", "removed_at_source", "conflict", "failed", "partial"] as const), partial: partial(r.partial),
-    conflict: array(r.conflict, 5000, conflict), fetched_at: optionalText(r.fetched_at), checked_at: optionalText(r.checked_at),
-    refs: array(r.refs, 5000, itemRef), purge_after: optionalText(r.purge_after), issue: nullable(r.issue, issueMeta),
-    attachments: array(r.attachments, 5000, attachment), folder, diagnostics: diagnostics(r.diagnostics),
-    ...optionalDepth(r), ...(r.included_by === undefined || r.included_by === null ? {} : { included_by: array(r.included_by, 64, inclusion) }),
-  };
-}
-/** `reference_depth` is optional on the wire: an absent (or null) field stays absent. */
-const MAX_REFERENCE_DEPTH = 5;
-function optionalDepth(r: Record<string, unknown>): { reference_depth?: number } {
-  return r.reference_depth === undefined || r.reference_depth === null ? {} : { reference_depth: integer(r.reference_depth, MAX_REFERENCE_DEPTH) };
-}
-function inclusion(value: unknown): LibraryInclusion {
-  const r = record(value); const h = record(r.holder);
-  const holder = h.kind === "item" ? { kind: "item" as const, item_id: id(h.item_id) }
-    : h.kind === "follow" ? { kind: "follow" as const, follow_id: id(h.follow_id) }
-    : fail();
-  return { holder, from_item_id: nullable(r.from_item_id, id), from_label: text(r.from_label, 512), relation: text(r.relation, 128), depth: integer(r.depth, MAX_REFERENCE_DEPTH) };
-}
-const followMode = (value: unknown) => oneOf(value, ["live", "accumulate"] as const);
-function itemRef(value: unknown): LibraryItemRef {
-  const r = record(value);
-  switch (r.kind) {
-    case "manual": return { kind: "manual" };
-    case "follow": return { kind: "follow", follow_id: id(r.follow_id) };
-    case "space": return { kind: "space", space_context_id: id(r.space_context_id) };
-    default: return fail();
-  }
-}
-function issueMeta(value: unknown): LibraryIssueMeta {
-  const r = record(value);
-  return { updated: text(r.updated, 128), fetched_updated: nullable(r.fetched_updated, v => text(v, 128)), status: text(r.status, 512), issue_type: text(r.issue_type, 512), assignee: nullable(r.assignee, v => text(v, 512)) };
-}
-function followSource(value: unknown): LibraryFollowSource {
-  const r = record(value);
-  switch (r.kind) {
-    case "confluence_space": return { kind: "confluence_space", space_key: id(r.space_key), space_name: text(r.space_name) };
-    case "jira_query": return { kind: "jira_query", jql: text(r.jql, 2048), mode: followMode(r.mode) };
-    default: return fail();
-  }
-}
-function follow(value: unknown): LibraryFollowSummary {
-  const r = record(value); return { follow_id: id(r.follow_id), provider_id: id(r.provider_id), provider_instance: id(r.provider_instance), source: followSource(r.source), include_attachments: bool(r.include_attachments), item_count: integer(r.item_count, 0xffffffff), partial: partial(r.partial), excluded_ids: array(r.excluded_ids, 5000, id), last_refreshed_at: optionalText(r.last_refreshed_at), state: oneOf(r.state, ["fresh", "changed", "unknown", "removed_at_source", "conflict", "failed", "partial"] as const), ...optionalDepth(r) };
-}
-function libraryRoot(value: unknown) {
-  const r = record(value);
-  if (r.kind !== "library" || typeof r.root_id !== "string" || !r.root_id.startsWith("library:")) return fail();
-  return { root_id: id(r.root_id), kind: "library" as const, label: text(r.label), path: text(r.path), repository_id: id(r.repository_id), checkout_path: text(r.checkout_path) };
-}
-export function parseLibraryListing(value: unknown): LibraryListing {
-  const r = record(value); const items = array(r.items, 5000, item); const follows = array(r.follows, 5000, follow);
-  if (new Set(items.map(x => x.item_id)).size !== items.length || new Set(follows.map(x => x.follow_id)).size !== follows.length) return fail();
-  return { root: libraryRoot(r.root), generation: id(r.generation), items, follows, next_offset: nullable(r.next_offset, v => integer(v, 0xffffffff)), diagnostics: diagnostics(r.diagnostics) };
-}
-export function parseLibraryResolveRequest(value: unknown): LibraryResolveRequest { const r = record(value); return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id) }; }
-export function parseLibraryResolution(value: unknown): LibraryResolution {
-  const r = record(value); return { kind: oneOf(r.kind, ["artifact", "confluence_page", "confluence_space", "jira_query", "folder"] as const), provider_id: optionalText(r.provider_id), provider_instance: optionalText(r.provider_instance), title: text(r.title), canonical_id: optionalText(r.canonical_id), container_label: optionalText(r.container_label), existing_item_id: optionalText(r.existing_item_id), existing_follow_id: optionalText(r.existing_follow_id), item_count: nullable(r.item_count, v => integer(v, 0xffffffff)), item_count_exact: bool(r.item_count_exact), follow_mode: nullable(r.follow_mode, followMode), git_working_tree: nullable(r.git_working_tree, bool), file_count: nullable(r.file_count, integer), diagnostics: diagnostics(r.diagnostics), ...optionalDepth(r) };
-}
-export function parseLibraryConfluenceSpacesRequest(value: unknown): LibraryConfluenceSpacesRequest {
-  const r = record(value); const provider_id = id(r.provider_id);
-  return provider_id.length <= 128 ? { provider_id } : fail();
-}
-/** Every browsed space belongs to the requested provider and is a Confluence space. */
+const POLICY = definePolicy({
+  message: constantMessage("Invalid library request or response"),
+  wire: {
+    exact: new Set(["SpaceAddRequest", "SpaceRemoveRequest", "SpaceRepositoriesRequest"]),
+    absent: new Set(["LibraryAddRequest.follow_mode"]),
+    nullish: new Set([
+      "LibraryAttachment.media_type", "LibraryAttachment.version", "LibraryItemSummary.provider_id", "LibraryItemSummary.provider_instance", "LibraryItemSummary.resource_type", "LibraryItemSummary.canonical_id", "LibraryItemSummary.parent_item_id", "LibraryItemSummary.source_url", "LibraryItemSummary.original_url", "LibraryItemSummary.source_revision", "LibraryItemSummary.fetched_at", "LibraryItemSummary.checked_at", "LibraryItemSummary.purge_after", "LibraryFollowSummary.last_refreshed_at", "LibraryResolveRequest.provider_id", "LibraryResolution.provider_id", "LibraryResolution.provider_instance", "LibraryResolution.canonical_id", "LibraryResolution.container_label", "LibraryResolution.existing_item_id", "LibraryResolution.existing_follow_id", "LibraryAddRequest.provider_id", "LibraryAddRequest.label", "LibraryPhase.message", "LibraryReportRow.reason",
+      "LibraryItemSummary.reference_depth", "LibraryItemSummary.included_by", "LibraryFollowSummary.reference_depth", "LibraryResolution.reference_depth", "LibraryAddRequest.reference_depth",
+    ]),
+    order: {
+      SpaceTarget: ["session_id", "space_id"],
+      LibraryAddRequest: ["target", "input", "provider_id", "reference_depth", "follow", "follow_mode", "download_attachments", "refresh_existing", "label"],
+      LibraryOperation: ["phases", "report", "space", "target", "operation_id", "kind", "item_ids", "cancel_requested", "finished", "created_at", "updated_at"],
+      SpaceContextRequest: ["target"], SpaceAddRequest: ["keys", "target", "item_ids"], SpaceRemoveRequest: ["keys", "target", "item_ids"],
+      SpaceRepositoriesRequest: ["keys", "target", "repository_paths"],
+      SpaceContextListing: ["target", "space_label", "library_root", "checkout_path", "items", "repository_paths", "diagnostics"],
+    },
+    lengths: {
+      "LibraryItemSummary.ancestors": { max: 5000 }, "LibraryItemSummary.conflict": { max: 5000 }, "LibraryItemSummary.refs": { max: 5000 }, "LibraryItemSummary.attachments": { max: 5000 }, "LibraryItemSummary.diagnostics": { max: 256 }, "LibraryItemSummary.included_by": { max: 64 },
+      "LibraryFollowSummary.excluded_ids": { max: 5000 }, "LibraryListing.items": { max: 5000 }, "LibraryListing.follows": { max: 5000 }, "LibraryListing.diagnostics": { max: 256 }, "LibraryResolution.diagnostics": { max: 256 },
+      "LibraryRefreshRequest[items].item_ids": { max: 5000 }, "LibraryAttachmentRequest.attachment_ids": { min: 1, max: 256 }, "LibraryReplaceRequest.confirmed": { max: 5000 }, "LibraryOperation.phases": { max: 256 }, "LibraryOperation.item_ids": { max: 1_000_000 }, "LibraryRefreshReport.rows": { max: 256 }, "SpacePhaseResult.item_ids": { max: 1_000_000 },
+      "SpaceAddRequest.item_ids": { max: 5000 }, "SpaceRemoveRequest.item_ids": { max: 5000 }, "SpaceRepositoriesRequest.repository_paths": { max: 64 }, "SpaceContextListing.items": { max: 1_000_000 }, "SpaceContextListing.repository_paths": { max: 64 }, "SpaceContextListing.diagnostics": { max: 256 },
+    },
+    fields: {
+      ...fields(["ProjectDiagnostic.code", "LibraryConflictFile.current_hash", "LibraryPartial.unit", "LibraryAttachment.attachment_id", "LibraryContainer.container_id", "LibraryAncestor.id", "LibraryItemSummary.item_id", "LibraryItemSummary.logical_id", "LibraryItemSummary.revision", "LibraryInclusionHolder[item].item_id", "LibraryInclusionHolder[follow].follow_id", "LibraryItemRef[follow].follow_id", "LibraryItemRef[space].space_context_id", "LibraryFollowSource[confluence_space].space_key", "LibraryFollowSummary.follow_id", "LibraryFollowSummary.provider_id", "LibraryFollowSummary.provider_instance", "LibraryListing.generation", "LibraryRefreshRequest[follow].follow_id", "LibraryRefreshRequest[container].provider_instance", "LibraryRefreshRequest[container].container_id", "LibraryAttachmentRequest.item_id", "LibraryReplaceRequest.item_id", "LibraryRemoveRequest[item].item_id", "LibraryRemoveRequest[item].expected_revision", "LibraryRemoveRequest[stop_following].follow_id", "LibraryRemoveRequest[follow].follow_id", "LibraryOperation.operation_id", "ErrorResponse.code", "SpacePhaseResult.space_id"], id),
+      ...fields(["ProjectDiagnostic.message", "LibraryPartial.reason", "LibraryAttachment.original_name", "LibraryAttachment.stored_name", "LibraryContainer.label", "LibraryFolderInfo.origin_path", "LibraryAncestor.title", "LibraryItemSummary.title", "LibraryFollowSource[confluence_space].space_name", "ContextRoot.label", "ContextRoot.path", "ContextRoot.checkout_path", "LibraryResolution.title", "ErrorResponse.message", "LibraryReportRow.title", "LibraryOperation.created_at", "LibraryOperation.updated_at", "SpaceContextListing.space_label"], text),
+      ...fields(["ProjectDiagnostic.path", "LibraryAttachment.media_type", "LibraryAttachment.version", "LibraryItemSummary.provider_id", "LibraryItemSummary.provider_instance", "LibraryItemSummary.resource_type", "LibraryItemSummary.canonical_id", "LibraryItemSummary.parent_item_id", "LibraryItemSummary.source_url", "LibraryItemSummary.original_url", "LibraryItemSummary.source_revision", "LibraryItemSummary.fetched_at", "LibraryItemSummary.checked_at", "LibraryItemSummary.purge_after", "LibraryFollowSummary.last_refreshed_at", "LibraryResolveRequest.provider_id", "LibraryResolution.provider_id", "LibraryResolution.provider_instance", "LibraryResolution.canonical_id", "LibraryResolution.container_label", "LibraryResolution.existing_item_id", "LibraryResolution.existing_follow_id", "LibraryAddRequest.provider_id", "LibraryAddRequest.label", "LibraryPhase.message", "LibraryReportRow.reason"], v => v === null || text(v)),
+      ...fields(["LibraryConflictFile.path", "LibraryItemSummary.item_path", "LibraryDocumentRequest.path", "LibraryMediaRequest.path"], path),
+      ...fields(["LibraryAttachment.relative_path", "LibraryItemSummary.document_path"], v => v === null || path(v)),
+      ...fields(["LibraryInclusion.from_item_id", "LibraryReportRow.item_id", "LibraryReportRow.follow_id", "LibraryDirectoryRequest.revision", "LibraryDocumentRequest.expected_revision", "LibraryMediaRequest.expected_revision"], v => v === null || id(v)),
+      ...fields(["LibraryFollowSummary.excluded_ids", "LibraryRefreshRequest[items].item_ids", "LibraryAttachmentRequest.attachment_ids", "LibraryOperation.item_ids", "SpacePhaseResult.item_ids", "SpaceAddRequest.item_ids", "SpaceRemoveRequest.item_ids"], v => v.every(id)),
+      ...fields(["LibraryItemSummary.reference_depth", "LibraryFollowSummary.reference_depth", "LibraryResolution.reference_depth"], v => v === undefined || v <= 5),
+      ...fields(["LibraryResolveRequest.input", "LibraryAddRequest.input"], v => text(v, 16 * 1024)),
+      ...fields(["LibraryIssueMeta.updated"], v => text(v, 128)), "LibraryIssueMeta.fetched_updated": v => v === null || text(v, 128),
+      ...fields(["LibraryIssueMeta.status", "LibraryIssueMeta.issue_type", "LibraryInclusion.from_label"], v => text(v, 512)), "LibraryIssueMeta.assignee": v => v === null || text(v, 512),
+      "LibraryInclusion.relation": v => text(v, 128), "LibraryInclusion.depth": v => v <= 5, "LibraryAddRequest.reference_depth": v => v <= 5,
+      "LibraryFollowSource[jira_query].jql": v => text(v, 2048), "LibraryConfluenceSpacesRequest.provider_id": v => id(v) && v.length <= 128,
+      "ContextRoot.root_id": v => v.startsWith("library:") && id(v), "ContextRoot.kind": v => v === "library", "ContextRoot.repository_id": id,
+      "LibraryDirectoryRequest.path": v => path(v, true),
+      "SpaceTarget.session_id": v => id(v) && !!validateSessionId(v), "SpaceTarget.space_id": v => id(v) && !!validateResourceId(v),
+      "SpaceContextListing.library_root": absolutePath, "SpaceContextListing.checkout_path": v => v === null || absolutePath(v),
+      ...fields(["SpaceContextListing.repository_paths", "SpaceRepositoriesRequest.repository_paths"], v => v.every(absolutePath)),
+    },
+    checks: {
+      LibraryListing: { unique: v => new Set(v.items.map(x => x.item_id)).size === v.items.length && new Set(v.follows.map(x => x.follow_id)).size === v.follows.length },
+      LibraryAttachmentRequest: { unique: v => new Set(v.attachment_ids).size === v.attachment_ids.length },
+    },
+  },
+});
+export function parseLibraryListing(value: unknown): LibraryListing { return parseWire(value, wireLibraryListing, POLICY); }
+export function parseLibraryResolveRequest(value: unknown): LibraryResolveRequest { return parseWire(value, wireLibraryResolveRequest, POLICY); }
+export function parseLibraryResolution(value: unknown): LibraryResolution { return parseWire(value, wireLibraryResolution, POLICY); }
+export function parseLibraryConfluenceSpacesRequest(value: unknown): LibraryConfluenceSpacesRequest { return parseWire(value, wireLibraryConfluenceSpacesRequest, POLICY); }
 export function parseLibraryConfluenceSpaces(value: unknown, request: LibraryConfluenceSpacesRequest): LibraryResolution[] {
-  return array(value, 10_000, parseLibraryResolution).map(space => space.kind === "confluence_space" && space.provider_id === request.provider_id && space.canonical_id !== null ? space : fail());
+  return parseWireList(value, wireLibraryResolution, POLICY, { max: 10_000 }).map(v => v.kind === "confluence_space" && v.provider_id === request.provider_id && v.canonical_id !== null ? v : fail());
 }
-export function parseLibraryAddRequest(value: unknown): LibraryAddRequest {
-  const r = record(value); const target = nullable(r.target, parseSpaceTarget);
-  return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id), reference_depth: integer(r.reference_depth ?? 0, MAX_REFERENCE_DEPTH), follow: bool(r.follow), follow_mode: r.follow_mode === undefined ? null : nullable(r.follow_mode, followMode), download_attachments: bool(r.download_attachments), refresh_existing: bool(r.refresh_existing), label: optionalText(r.label), target };
-}
-export function parseLibraryRefreshRequest(value: unknown): LibraryRefreshRequest {
-  const r = record(value);
-  switch (r.scope) {
-    case "items": return { scope: "items", item_ids: array(r.item_ids, 5000, id) };
-    case "follow": return { scope: "follow", follow_id: id(r.follow_id) };
-    case "container": return { scope: "container", provider_instance: id(r.provider_instance), container_id: id(r.container_id) };
-    case "all": return { scope: "all" };
-    default: return fail();
-  }
-}
-
-export function parseLibraryAttachmentRequest(value: unknown): LibraryAttachmentRequest {
-  const r = record(value);
-  const attachmentIds = array(r.attachment_ids, 256, id);
-  if (attachmentIds.length === 0 || new Set(attachmentIds).size !== attachmentIds.length) return fail();
-  return {
-    item_id: id(r.item_id),
-    attachment_ids: attachmentIds,
-    action: oneOf(r.action, ["download", "remove_downloaded"] as const),
-  };
-}
-export function parseLibraryReplaceRequest(value: unknown): LibraryReplaceRequest { const r = record(value); return { item_id: id(r.item_id), confirmed: array(r.confirmed, 5000, conflict) }; }
-export function parseLibraryRemoveRequest(value: unknown): LibraryRemoveRequest {
-  const r = record(value);
-  switch (r.mode) {
-    case "item": return { mode: "item", item_id: id(r.item_id), expected_revision: id(r.expected_revision) };
-    case "stop_following": return { mode: "stop_following", follow_id: id(r.follow_id) };
-    case "follow": return { mode: "follow", follow_id: id(r.follow_id) };
-    default: return fail();
-  }
-}
-const opKinds = ["add", "refresh", "space_add", "attachments"] as const;
-const phaseStates = ["pending", "running", "done", "partial", "failed", "cancelled"] as const;
-export function parseLibraryOperation(value: unknown): LibraryOperation {
-  const r = record(value);
-  const phases = array(r.phases, 256, v => { const p = record(v); return { phase: oneOf(p.phase, ["library", "space"] as const), state: oneOf(p.state, phaseStates), done: integer(p.done), total: nullable(p.total, integer), message: optionalText(p.message), error: nullable(p.error, e => { const x = record(e); return { code: id(x.code), message: text(x.message) }; }) }; });
-  const report = nullable(r.report, v => { const x = record(v); return { new: integer(x.new), updated: integer(x.updated), unchanged: integer(x.unchanged), removed_at_source: integer(x.removed_at_source), dropped: integer(x.dropped), partial: integer(x.partial), failed: integer(x.failed), conflict: integer(x.conflict), rows: array(x.rows, 256, row => { const a = record(row); return { item_id: nullable(a.item_id, id), follow_id: nullable(a.follow_id, id), title: text(a.title), outcome: oneOf(a.outcome, ["new", "updated", "unchanged", "removed_at_source", "dropped", "partial", "failed", "conflict"] as const), reason: optionalText(a.reason) }; }), truncated_rows: bool(x.truncated_rows) }; });
-  const space = nullable(r.space, v => { const x = record(v); return { space_id: id(x.space_id), item_ids: array(x.item_ids, MAX_LIBRARY_ITEMS, id) }; });
-  const target = nullable(r.target, parseSpaceTarget);
-  return { operation_id: id(r.operation_id), kind: oneOf(r.kind, opKinds), phases, item_ids: array(r.item_ids, 1_000_000, id), report, space, target, cancel_requested: bool(r.cancel_requested), finished: bool(r.finished), created_at: text(r.created_at), updated_at: text(r.updated_at) };
-}
+export function parseLibraryAddRequest(value: unknown): LibraryAddRequest { return parseWire(value, wireLibraryAddRequest, POLICY); }
+export function parseLibraryRefreshRequest(value: unknown): LibraryRefreshRequest { return parseWire(value, wireLibraryRefreshRequest, POLICY); }
+export function parseLibraryAttachmentRequest(value: unknown): LibraryAttachmentRequest { return parseWire(value, wireLibraryAttachmentRequest, POLICY); }
+export function parseLibraryReplaceRequest(value: unknown): LibraryReplaceRequest { return parseWire(value, wireLibraryReplaceRequest, POLICY); }
+export function parseLibraryRemoveRequest(value: unknown): LibraryRemoveRequest { return parseWire(value, wireLibraryRemoveRequest, POLICY); }
+export function parseLibraryOperation(value: unknown): LibraryOperation { return parseWire(value, wireLibraryOperation, POLICY); }
 export function matchLibraryOperation(value: LibraryOperation, operationId: string): LibraryOperation { return value.operation_id === operationId ? value : fail(); }
 export function matchLibraryAttachmentsOperation(value: LibraryOperation, request: LibraryAttachmentRequest): LibraryOperation {
-  return value.kind === "attachments" && value.item_ids.length <= 1
-    && (value.item_ids.length === 0 || value.item_ids[0] === request.item_id) ? value : fail();
+  return value.kind === "attachments" && value.item_ids.length <= 1 && (value.item_ids.length === 0 || value.item_ids[0] === request.item_id) ? value : fail();
 }
-export function parseLibraryOperationId(value: unknown): string { return id(value); }
-export function parseLibraryDirectoryRequest(value: unknown): LibraryDirectoryRequest { const r = record(value); return { path: path(r.path, true), offset: nullable(r.offset, v => integer(v, 0xffffffff)), revision: nullable(r.revision, id) }; }
-export function parseLibraryDocumentRequest(value: unknown): LibraryDocumentRequest { const r = record(value); return { path: path(r.path), expected_revision: nullable(r.expected_revision, id), offset: nullable(r.offset, integer) }; }
-export function parseLibraryMediaRequest(value: unknown): LibraryMediaRequest { const r = record(value); return { path: path(r.path), expected_revision: nullable(r.expected_revision, id) }; }
-export function parseLibraryFileIndexRequest(value: unknown): LibraryFileIndexRequest {
-  const r = record(value);
-  if (r.mode !== "cached" && r.mode !== "fresh") return fail();
-  return { mode: r.mode };
-}
+export function parseLibraryOperationId(value: unknown): string { return typeof value === "string" && id(value) ? value : fail(); }
+export function parseLibraryDirectoryRequest(value: unknown): LibraryDirectoryRequest { return parseWire(value, wireLibraryDirectoryRequest, POLICY); }
+export function parseLibraryDocumentRequest(value: unknown): LibraryDocumentRequest { return parseWire(value, wireLibraryDocumentRequest, POLICY); }
+export function parseLibraryMediaRequest(value: unknown): LibraryMediaRequest { return parseWire(value, wireLibraryMediaRequest, POLICY); }
+export function parseLibraryFileIndexRequest(value: unknown): LibraryFileIndexRequest { return parseWire(value, wireLibraryFileIndexRequest, POLICY); }
 export function parseLibraryFileIndex(value: unknown): ContextFileIndex {
-  const parsed = parseContextFileIndex(value);
-  return parsed.binding_id === "library" && parsed.root_id.startsWith("library:") ? parsed : fail();
+  const v = parseContextFileIndex(value);
+  return v.binding_id === "library" && v.root_id.startsWith("library:") ? v : fail();
 }
 export function parseLibraryDirectory(value: unknown): ContextDirectory {
-  const parsed = parseContextDirectory(value);
-  if (parsed.binding_id !== "library" || !parsed.root_id.startsWith("library:") || parsed.entries.length > 10_000) return fail();
-  return parsed;
+  const v = parseContextDirectory(value);
+  return v.binding_id === "library" && v.root_id.startsWith("library:") && v.entries.length <= 10_000 ? v : fail();
 }
-export function matchLibraryDirectory(value: ContextDirectory, request: LibraryDirectoryRequest): ContextDirectory { return value.binding_id === "library" && value.root_id.startsWith("library:") && value.path === request.path && (request.revision === null || value.revision === request.revision) ? value : fail(); }
-export function parseLibraryDocument(value: unknown): ContextDocument { const parsed = parseContextDocument(value); if (parsed.binding_id !== "library" || !parsed.root_id.startsWith("library:")) return fail(); return parsed; }
-export function matchLibraryDocument(value: ContextDocument, request: LibraryDocumentRequest): ContextDocument { return value.binding_id === "library" && value.root_id.startsWith("library:") && value.path === request.path && (request.expected_revision === null || value.revision === request.expected_revision) && (request.offset === null || value.offset === request.offset) ? value : fail(); }
-export function parseLibraryMedia(value: unknown): ContextMedia { const parsed = parseContextMedia(value); if (parsed.binding_id !== "library" || !parsed.root_id.startsWith("library:")) return fail(); return parsed; }
-export function matchLibraryMedia(value: ContextMedia, request: LibraryMediaRequest): ContextMedia { return value.binding_id === "library" && value.root_id.startsWith("library:") && value.path === request.path && (request.expected_revision === null || value.revision === request.expected_revision) ? value : fail(); }
-
-function parseSpaceTarget(value: unknown): SpaceTarget {
-  const r = record(value);
-  return { session_id: validateSessionId(id(r.session_id)), space_id: validateResourceId(id(r.space_id)) };
+export function matchLibraryDirectory(value: ContextDirectory, request: LibraryDirectoryRequest): ContextDirectory {
+  return value.binding_id === "library" && value.root_id.startsWith("library:") && value.path === request.path && (request.revision === null || value.revision === request.revision) ? value : fail();
 }
-function sameTarget(left: SpaceTarget, right: SpaceTarget): boolean {
-  return left.session_id === right.session_id && left.space_id === right.space_id;
+export function parseLibraryDocument(value: unknown): ContextDocument {
+  const v = parseContextDocument(value);
+  return v.binding_id === "library" && v.root_id.startsWith("library:") ? v : fail();
 }
-export function parseSpaceContextRequest(value: unknown): SpaceContextRequest {
-  return { target: parseSpaceTarget(record(value).target) };
+export function matchLibraryDocument(value: ContextDocument, request: LibraryDocumentRequest): ContextDocument {
+  return value.binding_id === "library" && value.root_id.startsWith("library:") && value.path === request.path && (request.expected_revision === null || value.revision === request.expected_revision) && (request.offset === null || value.offset === request.offset) ? value : fail();
 }
-export function parseSpaceAddRequest(value: unknown): SpaceAddRequest {
-  const r = record(value);
-  onlyKeys(r, ["target", "item_ids"]);
-  return { target: parseSpaceTarget(r.target), item_ids: array(r.item_ids, 5000, id) };
+export function parseLibraryMedia(value: unknown): ContextMedia {
+  const v = parseContextMedia(value);
+  return v.binding_id === "library" && v.root_id.startsWith("library:") ? v : fail();
 }
-export function parseSpaceRemoveRequest(value: unknown): SpaceRemoveRequest {
-  const r = record(value);
-  onlyKeys(r, ["target", "item_ids"]);
-  return { target: parseSpaceTarget(r.target), item_ids: array(r.item_ids, 5000, id) };
+export function matchLibraryMedia(value: ContextMedia, request: LibraryMediaRequest): ContextMedia {
+  return value.binding_id === "library" && value.root_id.startsWith("library:") && value.path === request.path && (request.expected_revision === null || value.revision === request.expected_revision) ? value : fail();
 }
-function absolutePath(value: unknown): string {
-  const result = text(value);
-  return result.startsWith("/") && !/[\x00-\x1f\x7f]/.test(result)
-    && !result.split("/").some(part => part === "." || part === "..") ? result : fail();
-}
-export function parseSpaceRepositoriesRequest(value: unknown): SpaceRepositoriesRequest {
-  const r = record(value);
-  onlyKeys(r, ["target", "repository_paths"]);
-  return { target: parseSpaceTarget(r.target), repository_paths: array(r.repository_paths, 64, absolutePath) };
-}
-export function parseSpaceContextListing(value: unknown): SpaceContextListing {
-  const r = record(value);
-  return {
-    target: parseSpaceTarget(r.target), space_label: text(r.space_label),
-    library_root: absolutePath(r.library_root), checkout_path: nullable(r.checkout_path, absolutePath),
-    items: array(r.items, MAX_LIBRARY_ITEMS, item),
-    repository_paths: array(r.repository_paths, 64, absolutePath), diagnostics: diagnostics(r.diagnostics),
-  };
-}
-export function matchSpaceContextListing(value: SpaceContextListing, request: SpaceContextRequest): SpaceContextListing {
-  return sameTarget(value.target, request.target) ? value : fail();
-}
+function sameTarget(left: SpaceTarget, right: SpaceTarget): boolean { return left.session_id === right.session_id && left.space_id === right.space_id; }
+export function parseSpaceContextRequest(value: unknown): SpaceContextRequest { return parseWire(value, wireSpaceContextRequest, POLICY); }
+export function parseSpaceAddRequest(value: unknown): SpaceAddRequest { return parseWire(value, wireSpaceAddRequest, POLICY); }
+export function parseSpaceRemoveRequest(value: unknown): SpaceRemoveRequest { return parseWire(value, wireSpaceRemoveRequest, POLICY); }
+export function parseSpaceRepositoriesRequest(value: unknown): SpaceRepositoriesRequest { return parseWire(value, wireSpaceRepositoriesRequest, POLICY); }
+export function parseSpaceContextListing(value: unknown): SpaceContextListing { return parseWire(value, wireSpaceContextListing, POLICY); }
+export function matchSpaceContextListing(value: SpaceContextListing, request: SpaceContextRequest): SpaceContextListing { return sameTarget(value.target, request.target) ? value : fail(); }
 export function matchSpaceOperation(value: LibraryOperation, target: SpaceTarget): LibraryOperation {
-  return value.target && sameTarget(value.target, target)
-    && (value.space === null || value.space.space_id === target.space_id) ? value : fail();
+  return value.target && sameTarget(value.target, target) && (value.space === null || value.space.space_id === target.space_id) ? value : fail();
 }

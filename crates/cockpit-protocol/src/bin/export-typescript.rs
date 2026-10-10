@@ -2,7 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use cockpit_protocol::typescript::{check, render_v1, write_atomic};
+use cockpit_protocol::typescript::{check_generated, write_generated};
 
 fn usage() -> &'static str {
     "usage: export-typescript (--write|--check) <path>"
@@ -36,14 +36,18 @@ fn run() -> Result<ExitCode, String> {
 
     let path = resolve_path(&path).map_err(|error| format!("cannot resolve target: {error}"))?;
     match mode.as_str() {
-        "--write" => write_atomic(&path, render_v1().as_bytes())
+        "--write" => write_generated(&path)
             .map(|()| ExitCode::SUCCESS)
             .map_err(|error| format!("cannot write {}: {error}", path.display())),
-        "--check" => match check(&path) {
-            Ok(true) => Ok(ExitCode::SUCCESS),
-            Ok(false) => Err(format!(
-                "generated TypeScript is out of date: {}",
-                path.display()
+        "--check" => match check_generated(&path) {
+            Ok(drifted) if drifted.is_empty() => Ok(ExitCode::SUCCESS),
+            Ok(drifted) => Err(format!(
+                "generated TypeScript is out of date:\n{}",
+                drifted
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
             )),
             Err(error) => Err(format!("cannot read {}: {error}", path.display())),
         },

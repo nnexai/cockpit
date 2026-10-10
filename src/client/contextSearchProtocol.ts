@@ -1,149 +1,70 @@
-import type {
-  ContextInvalidation,
-  ContextInvalidationRequest,
-  ContextInvalidationResponse,
-  ContextInvalidationState,
-  ContextKnownRevision,
-  ContextSearchRequest,
-  ContextSearchResponse,
-  ContextSearchResult,
-} from "../protocol/generated/v1";
+import type { ContextInvalidationRequest, ContextInvalidationResponse, ContextSearchRequest, ContextSearchResponse } from "../protocol/generated/v1";
+import { wireContextInvalidationRequest, wireContextInvalidationResponse, wireContextSearchRequest, wireContextSearchResponse } from "../protocol/generated/validate";
 import { CockpitClientError } from "./CockpitClient";
+import { definePolicy, messageTable, parseWire } from "./wire";
 
-const MAX_QUERY_BYTES = 256;
-const MAX_RESULTS = 1_000;
-const MAX_SCANNED_FILES = 100_000;
-const MAX_EXCERPT_BYTES = 512;
-const MAX_KNOWN_REVISIONS = 128;
 const encoder = new TextEncoder();
-const record = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-const text = (value: unknown): value is string => typeof value === "string";
-const identity = (value: unknown): value is string => text(value) && value.length > 0 && value.length <= 4096 && !value.includes("\0");
-const positiveU32 = (value: unknown): value is number =>
-  typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 0xffffffff;
-const relativePath = (value: unknown): value is string =>
-  text(value) && value.length > 0 && value.length <= 4096 && !value.includes("\0")
-    && value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
-
-function malformed(label: string): never {
-  throw new CockpitClientError("malformed_response", `Invalid Context ${label}`);
-}
-
-function parseKnown(value: unknown): ContextKnownRevision {
-  if (!record(value) || !relativePath(value.path) || !identity(value.revision)) malformed("known revision");
-  return { path: value.path, revision: value.revision };
-}
-
+const identity = (v: string): boolean => v.length > 0 && v.length <= 4096 && !v.includes("\0");
+const relativePath = (v: string): boolean => identity(v) && v.split("/").every(p => p !== "" && p !== "." && p !== "..");
+const POLICY = definePolicy({
+  message: messageTable({
+    ContextSearchRequest: f => `Invalid Context ${f.path.find(p => p.type === "ContextSearchRequest")?.field === "offset" ? "search continuation" : f.path.find(p => p.type === "ContextSearchRequest")?.field === "revision" ? "search revision" : "search request"}`,
+    ContextSearchResponse: f => `Invalid Context ${({ revision: "search revision", next_offset: "search continuation", partial_reason: "search partial reason" } as Record<string, string>)[f.path.find(p => p.type === "ContextSearchResponse")?.field ?? ""] ?? "search response"}`,
+    ContextSearchResult: "Invalid Context search result", ContextKnownRevision: "Invalid Context known revision",
+    ContextInvalidation: f => `Invalid Context ${f.refinement === "changed" ? "changed invalidation" : "invalidation"}`,
+    ContextInvalidationRequest: f => `Invalid Context ${f.refinement === "unique" ? "duplicate known path" : "invalidation request"}`,
+    ContextInvalidationResponse: f => `Invalid Context ${f.refinement === "unique" ? "duplicate invalidation path" : "invalidation response"}`,
+  }, "Invalid Context search response"),
+  wire: {
+    nullish: new Set(["ContextSearchRequest.revision", "ContextSearchResponse.revision", "ContextSearchResponse.next_offset", "ContextSearchResponse.partial_reason"]),
+    order: {
+      ContextSearchRequest: ["binding_id", "root_id", "query", "request_generation", "offset", "revision"],
+      ContextSearchResponse: ["binding_id", "root_id", "query", "request_generation", "results:shallow", "scanned_files", "truncated", "results", "revision", "next_offset", "partial_reason"],
+      ContextInvalidationRequest: ["binding_id", "root_id", "request_generation", "known:shallow", "known"],
+      ContextInvalidationResponse: ["binding_id", "root_id", "request_generation", "invalidations:shallow", "truncated", "invalidations"],
+    },
+    lengths: { "ContextSearchResponse.results": { max: 1000 }, "ContextInvalidationRequest.known": { max: 128 }, "ContextInvalidationResponse.invalidations": { max: 128 } },
+    fields: {
+      "ContextSearchRequest.binding_id": identity, "ContextSearchRequest.root_id": identity,
+      "ContextSearchRequest.query": v => v.length > 0 && encoder.encode(v).byteLength <= 256 && !/[\u0000-\u001f\u007f-\u009f]/.test(v),
+      "ContextSearchRequest.request_generation": v => v > 0, "ContextSearchRequest.offset": v => v === undefined || (v !== null && v <= 100_000),
+      "ContextSearchRequest.revision": v => v === undefined || identity(v),
+      "ContextSearchResponse.binding_id": identity, "ContextSearchResponse.root_id": identity,
+      "ContextSearchResponse.request_generation": v => v > 0, "ContextSearchResponse.scanned_files": v => v <= 100_000,
+      "ContextSearchResponse.revision": v => v === undefined || identity(v), "ContextSearchResponse.next_offset": v => v === undefined || v <= 100_000,
+      "ContextSearchResult.path": relativePath, "ContextSearchResult.line": v => v > 0,
+      "ContextSearchResult.excerpt": v => encoder.encode(v).byteLength <= 512, "ContextSearchResult.revision": identity,
+      "ContextKnownRevision.path": relativePath, "ContextKnownRevision.revision": identity,
+      "ContextInvalidation.path": relativePath, "ContextInvalidation.revision": v => v === null || identity(v),
+      "ContextInvalidationRequest.binding_id": identity, "ContextInvalidationRequest.root_id": identity, "ContextInvalidationRequest.request_generation": v => v > 0,
+      "ContextInvalidationResponse.binding_id": identity, "ContextInvalidationResponse.root_id": identity, "ContextInvalidationResponse.request_generation": v => v > 0,
+    },
+    checks: {
+      ContextInvalidation: { changed: v => v.state !== "changed" || v.revision !== null },
+      ContextInvalidationRequest: { unique: v => new Set(v.known.map(x => x.path)).size === v.known.length },
+      ContextInvalidationResponse: { unique: v => new Set(v.invalidations.map(x => x.path)).size === v.invalidations.length },
+    },
+  },
+});
 export function parseContextSearchRequest(value: unknown): ContextSearchRequest {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id)
-    || !text(value.query) || value.query.length === 0 || encoder.encode(value.query).byteLength > MAX_QUERY_BYTES
-    || /[\u0000-\u001f\u007f-\u009f]/.test(value.query) || !positiveU32(value.request_generation)) {
-    return malformed("search request");
-  }
-  if (value.offset !== undefined && (!Number.isSafeInteger(value.offset) || (value.offset as number) < 0 || (value.offset as number) > 100_000)) return malformed("search continuation");
-  if (value.revision !== undefined && value.revision !== null && !identity(value.revision)) return malformed("search revision");
-  return {
-    binding_id: value.binding_id,
-    root_id: value.root_id,
-    query: value.query,
-    request_generation: value.request_generation,
-    offset: value.offset === undefined ? undefined : value.offset as number,
-    revision: value.revision === undefined || value.revision === null ? undefined : value.revision as string,
-  };
+  const v = parseWire(value, wireContextSearchRequest, POLICY);
+  return { binding_id: v.binding_id, root_id: v.root_id, query: v.query, request_generation: v.request_generation, offset: v.offset, revision: v.revision };
 }
-
-export function parseContextInvalidationRequest(value: unknown): ContextInvalidationRequest {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id)
-    || !positiveU32(value.request_generation) || !Array.isArray(value.known)
-    || value.known.length > MAX_KNOWN_REVISIONS) return malformed("invalidation request");
-  const known = value.known.map(parseKnown);
-  if (new Set(known.map((entry) => entry.path)).size !== known.length) malformed("duplicate known path");
-  return {
-    binding_id: value.binding_id,
-    root_id: value.root_id,
-    request_generation: value.request_generation,
-    known,
-  };
-}
-
-function parseResult(value: unknown): ContextSearchResult {
-  if (!record(value) || !relativePath(value.path) || !positiveU32(value.line)
-    || !text(value.excerpt) || encoder.encode(value.excerpt).byteLength > MAX_EXCERPT_BYTES
-    || !identity(value.revision)) malformed("search result");
-  return { path: value.path, line: value.line, excerpt: value.excerpt, revision: value.revision };
-}
-
-function parseInvalidation(value: unknown): ContextInvalidation {
-  if (!record(value) || !relativePath(value.path)
-    || (value.state !== "changed" && value.state !== "missing" && value.state !== "unavailable")
-    || !(value.revision === null || identity(value.revision))) malformed("invalidation");
-  if (value.state === "changed" && value.revision === null) malformed("changed invalidation");
-  return {
-    path: value.path,
-    state: value.state as ContextInvalidationState,
-    revision: value.revision,
-  };
-}
-
 export function parseContextSearchResponse(value: unknown): ContextSearchResponse {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id) || !text(value.query)
-    || !positiveU32(value.request_generation) || !Array.isArray(value.results) || value.results.length > MAX_RESULTS
-    || !Number.isSafeInteger(value.scanned_files) || (value.scanned_files as number) < 0
-    || (value.scanned_files as number) > MAX_SCANNED_FILES || typeof value.truncated !== "boolean") {
-    return malformed("search response");
-  }
-  const results = value.results.map(parseResult);
-  if (value.revision !== undefined && value.revision !== null && !identity(value.revision)) return malformed("search revision");
-  if (value.next_offset !== undefined && value.next_offset !== null && (!Number.isSafeInteger(value.next_offset) || (value.next_offset as number) < 0 || (value.next_offset as number) > 100_000)) return malformed("search continuation");
-  if (value.partial_reason !== undefined && value.partial_reason !== null && !text(value.partial_reason)) return malformed("search partial reason");
-  return {
-    binding_id: value.binding_id,
-    root_id: value.root_id,
-    query: value.query,
-    request_generation: value.request_generation,
-    results,
-    scanned_files: value.scanned_files as number,
-    truncated: value.truncated,
-    revision: value.revision === undefined || value.revision === null ? undefined : value.revision as string,
-    next_offset: value.next_offset === undefined || value.next_offset === null ? undefined : value.next_offset as number,
-    partial_reason: value.partial_reason === undefined || value.partial_reason === null ? undefined : value.partial_reason as string,
-  };
+  const v = parseWire(value, wireContextSearchResponse, POLICY);
+  return { binding_id: v.binding_id, root_id: v.root_id, query: v.query, request_generation: v.request_generation, results: v.results, scanned_files: v.scanned_files, truncated: v.truncated, revision: v.revision, next_offset: v.next_offset, partial_reason: v.partial_reason };
 }
-
-export function parseContextInvalidationResponse(value: unknown): ContextInvalidationResponse {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id)
-    || !positiveU32(value.request_generation) || !Array.isArray(value.invalidations)
-    || value.invalidations.length > MAX_KNOWN_REVISIONS || typeof value.truncated !== "boolean") {
-    return malformed("invalidation response");
-  }
-  const invalidations = value.invalidations.map(parseInvalidation);
-  if (new Set(invalidations.map((entry) => entry.path)).size !== invalidations.length) malformed("duplicate invalidation path");
-  return {
-    binding_id: value.binding_id,
-    root_id: value.root_id,
-    request_generation: value.request_generation,
-    invalidations,
-    truncated: value.truncated,
-  };
-}
-
-export function matchContextSearchResponse(
-  value: ContextSearchResponse,
-  request: ContextSearchRequest,
-): ContextSearchResponse {
-  if (value.binding_id !== request.binding_id || value.root_id !== request.root_id
-    || value.query !== request.query || value.request_generation !== request.request_generation) {
-    return malformed("search response identity");
+export function parseContextInvalidationRequest(value: unknown): ContextInvalidationRequest { return parseWire(value, wireContextInvalidationRequest, POLICY); }
+export function parseContextInvalidationResponse(value: unknown): ContextInvalidationResponse { return parseWire(value, wireContextInvalidationResponse, POLICY); }
+export function matchContextSearchResponse(value: ContextSearchResponse, request: ContextSearchRequest): ContextSearchResponse {
+  if (value.binding_id !== request.binding_id || value.root_id !== request.root_id || value.query !== request.query || value.request_generation !== request.request_generation) {
+    throw new CockpitClientError("malformed_response", "Invalid Context search response identity");
   }
   return value;
 }
-
-export function matchContextInvalidationResponse(
-  value: ContextInvalidationResponse,
-  request: ContextInvalidationRequest,
-): ContextInvalidationResponse {
-  if (value.binding_id !== request.binding_id || value.root_id !== request.root_id
-    || value.request_generation !== request.request_generation) return malformed("invalidation response identity");
+export function matchContextInvalidationResponse(value: ContextInvalidationResponse, request: ContextInvalidationRequest): ContextInvalidationResponse {
+  if (value.binding_id !== request.binding_id || value.root_id !== request.root_id || value.request_generation !== request.request_generation) {
+    throw new CockpitClientError("malformed_response", "Invalid Context invalidation response identity");
+  }
   return value;
 }

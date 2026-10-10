@@ -1,195 +1,123 @@
-import type {
-  NotesRequest, NotesResponse, NotesTarget, NotesOperation, NotesTodoSelector,
-  NotesTodo, NotesDecisionSummary, NotesDecision, NotesComment, NotesTargetInfo, NotesResult,
-} from "../protocol/generated/v1";
+import type { NotesRequest, NotesResponse, NotesTodo } from "../protocol/generated/v1";
+import { wireNotesRequest, wireNotesResponse, type TypedWirePolicy } from "../protocol/generated/validate";
+import { definePolicy, parseWire, constantMessage } from "./wire";
 import { CockpitClientError, validateSessionId, validateResourceId } from "./CockpitClient";
 
-const KiB = 1024;
-const MiB = 1024 * KiB;
+const KiB = 1024, MiB = 1024 * KiB;
 const utf8 = new TextEncoder();
 const fail = (): never => { throw new CockpitClientError("malformed_response", "Invalid Notes request or response"); };
-function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return fail();
-  const result = value as Record<string, unknown>;
-  if (Object.keys(result).length !== keys.length || keys.some(key => !Object.hasOwn(result, key))) return fail();
-  return result;
-}
 /** Count UTF-8 bytes without silently replacing lone UTF-16 surrogates. */
-function text(value: unknown, max = 4096): string {
-  if (typeof value !== "string" || value.length > max) return fail();
+function text(value: string, max = 4096): boolean {
+  if (value.length > max) return false;
   let bytes = 0;
   for (let i = 0; i < value.length; i++) {
     const c = value.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff) {
       const next = value.charCodeAt(++i);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) return fail();
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
       bytes += 4;
-    } else if (c >= 0xdc00 && c <= 0xdfff) return fail();
+    } else if (c >= 0xdc00 && c <= 0xdfff) return false;
     else bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
-    if (bytes > max) return fail();
+    if (bytes > max) return false;
   }
-  return value;
+  return true;
 }
-const bool = (value: unknown): boolean => typeof value === "boolean" ? value : fail();
-const nullable = <T>(value: unknown, parse: (value: unknown) => T): T | null => value === null ? null : parse(value);
-const array = <T>(value: unknown, max: number, parse: (value: unknown) => T): T[] => Array.isArray(value) && value.length <= max ? value.map(item => parse(item)) : fail();
-const oneOf = <T extends string>(value: unknown, options: readonly T[]): T => typeof value === "string" && options.includes(value as T) ? value as T : fail();
-const uint = (value: unknown, min = 0): number => Number.isInteger(value) && (value as number) >= min && (value as number) <= 0xffffffff ? value as number : fail();
-const uuid = (value: unknown): string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value) ? value : fail();
-const todoId = (value: unknown): string => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : fail();
-const decisionId = (value: unknown): string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : fail();
-const hash = (value: unknown): string => typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value) ? value : fail();
-const revision = (value: unknown): string => value === "absent" ? value : hash(value);
-/** Metadata change tokens are compared for equality, never used as CAS revisions. */
-const changeToken = (value: unknown): string => {
-  const token = text(value, 256);
-  return token.length > 0 ? token : fail();
+const bound = (max: number) => (value: string) => text(value, max);
+const nullable = (check: (value: string) => boolean) => (value: string | null) => value === null || check(value);
+const uuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+const todoId = (value: string) => /^[A-Za-z0-9_-]{1,64}$/.test(value);
+const decisionId = (value: string) => /^[A-Za-z0-9_-]{1,128}$/.test(value);
+const hash = (value: string) => /^sha256:[0-9a-f]{64}$/.test(value);
+const revision = (value: string) => value === "absent" || hash(value);
+const changeToken = (value: string) => value.length > 0 && text(value, 256);
+const sessionId = (value: string) => text(value, 96) && Boolean(validateSessionId(value));
+const resourceId = (value: string) => text(value, 128) && Boolean(validateResourceId(value));
+const reference = (value: string) => {
+  const match = /^L([1-9][0-9]*)@(sha256:[0-9a-f]{64})$/.exec(value);
+  return text(value, 96) && match !== null && Number(match[1]) <= 0xffffffff;
 };
-const reference = (value: unknown): string => {
-  const v = text(value, 96);
-  const match = /^L([1-9][0-9]*)@(sha256:[0-9a-f]{64})$/.exec(v);
-  return match && Number(match[1]) <= 0xffffffff ? v : fail();
-};
-const lane = (value: unknown) => oneOf(value, ["backlog", "doing"] as const);
-function absolutePath(value: unknown): string {
-  const v = text(value);
-  if (!v || /[\x00-\x1f\x7f]/.test(v) || !(v.startsWith("/") || /^[A-Za-z]:[\\/]/.test(v)) || v.split(/[\\/]/).some(part => part === "." || part === "..")) return fail();
-  return v;
-}
-function todoText(value: unknown): string {
-  const v = text(value, 2 * KiB);
-  return v.includes("<!--") || v.includes("-->") ? fail() : v;
-}
-function author(value: unknown): string {
-  const v = text(value, 128);
-  return /[\x00-\x1f\x7f-\x9f]/.test(v) ? fail() : v;
-}
-function title(value: unknown): string {
-  const v = text(value, 512);
-  return !v.trim() || /[\x00-\x1f\x7f-\x9f]/.test(v) ? fail() : v;
-}
-function decided(value: unknown): string {
-  const v = text(value, 128);
-  const date = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(v);
-  if (!date || (!/^\d{4}-\d{2}-\d{2}$/.test(v) && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(v))) return fail();
+const absolutePath = (value: string) => text(value) && value.length > 0 && !/[\x00-\x1f\x7f]/.test(value)
+  && (value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)) && !value.split(/[\\/]/).some(part => part === "." || part === "..");
+const todoText = (value: string) => text(value, 2 * KiB) && !value.includes("<!--") && !value.includes("-->");
+const author = (value: string) => text(value, 128) && !/[\x00-\x1f\x7f-\x9f]/.test(value);
+const title = (value: string) => text(value, 512) && value.trim().length > 0 && !/[\x00-\x1f\x7f-\x9f]/.test(value);
+function decided(value: string): boolean {
+  const date = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value);
+  if (!text(value, 128) || !date || (!/^\d{4}-\d{2}-\d{2}$/.test(value) && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value))) return false;
   const year = Number(date[1]), month = Number(date[2]), day = Number(date[3]);
   const days = [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (month < 1 || month > 12 || day < 1 || day > days[month - 1]! || (v.length > 10 && (!Number.isFinite(Date.parse(v)) || Number(v.slice(11, 13)) > 23 || Number(v.slice(14, 16)) > 59 || Number(v.slice(17, 19)) > 59))) return fail();
-  return v;
+  return month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1]! && (value.length <= 10 || (Number.isFinite(Date.parse(value)) && Number(value.slice(11, 13)) <= 23 && Number(value.slice(14, 16)) <= 59 && Number(value.slice(17, 19)) <= 59));
 }
-function target(value: unknown): NotesTarget {
-  const kind = (value as Record<string, unknown> | null)?.kind;
-  switch (kind) {
-    case "root": record(value, ["kind"]); return { kind };
-    case "notes": { const r = record(value, ["kind", "notes_id"]); return { kind, notes_id: uuid(r.notes_id) }; }
-    case "space": { const r = record(value, ["kind", "session_id", "space_id"]); return { kind, session_id: validateSessionId(text(r.session_id, 96)), space_id: validateResourceId(text(r.space_id, 128)) }; }
-    default: return fail();
-  }
-}
-function selector(value: unknown): NotesTodoSelector {
-  const by = (value as Record<string, unknown> | null)?.by;
-  if (by === "id") { const r = record(value, ["by", "id", "expected_revision"]); return { by, id: todoId(r.id), expected_revision: hash(r.expected_revision) }; }
-  if (by === "ref") { const r = record(value, ["by", "ref"]); return { by, ref: reference(r.ref) }; }
-  return fail();
-}
-function operation(value: unknown): NotesOperation {
-  const op = (value as Record<string, unknown> | null)?.op;
-  switch (op) {
-    case "catalog_list": case "target_resolve": case "target_create": case "scratchpad_read": case "kanban_list":
-      record(value, ["op"]); return { op };
-    case "target_attach": { const r = record(value, ["op", "notes_id"]); return { op, notes_id: uuid(r.notes_id) }; }
-    case "scratchpad_append": { const r = record(value, ["op", "text", "expected_revision"]); return { op, text: text(r.text, MiB), expected_revision: nullable(r.expected_revision, revision) }; }
-    case "scratchpad_replace": { const r = record(value, ["op", "content", "expected_revision"]); return { op, content: text(r.content, MiB), expected_revision: revision(r.expected_revision) }; }
-    case "todo_list": { const r = record(value, ["op", "filter"]); return { op, filter: oneOf(r.filter, ["all", "open", "done"] as const) }; }
-    case "todo_add": { const r = record(value, ["op", "text", "lane"]); return { op, text: todoText(r.text), lane: nullable(r.lane, lane) }; }
-    case "todo_update": { const r = record(value, ["op", "todo", "text"]); return { op, todo: selector(r.todo), text: nullable(r.text, todoText) }; }
-    case "todo_set_done": { const r = record(value, ["op", "todo", "done"]); return { op, todo: selector(r.todo), done: bool(r.done) }; }
-    case "todo_remove": case "kanban_promote": case "kanban_unboard": { const r = record(value, ["op", "todo"]); return { op, todo: selector(r.todo) }; }
-    case "kanban_move": { const r = record(value, ["op", "todo", "to"]); return { op, todo: selector(r.todo), to: oneOf(r.to, ["backlog", "doing", "done"] as const) }; }
-    case "decision_list": { const r = record(value, ["op", "status", "query"]); return { op, status: oneOf(r.status, ["current", "history", "all"] as const), query: nullable(r.query, text) }; }
-    case "decision_get": { const r = record(value, ["op", "decision_id"]); return { op, decision_id: decisionId(r.decision_id) }; }
-    case "decision_create": { const r = record(value, ["op", "title", "body", "decided"]); return { op, title: title(r.title), body: text(r.body, 256 * KiB), decided: nullable(r.decided, decided) }; }
-    case "decision_update": { const r = record(value, ["op", "decision_id", "expected_revision", "title", "body"]); return { op, decision_id: decisionId(r.decision_id), expected_revision: hash(r.expected_revision), title: nullable(r.title, title), body: nullable(r.body, v => text(v, 256 * KiB)) }; }
-    case "decision_replace": { const r = record(value, ["op", "decision_id", "expected_revision", "title", "body", "decided"]); return { op, decision_id: decisionId(r.decision_id), expected_revision: hash(r.expected_revision), title: title(r.title), body: text(r.body, 256 * KiB), decided: nullable(r.decided, decided) }; }
-    case "comment_list": { const r = record(value, ["op", "todo_id"]); return { op, todo_id: todoId(r.todo_id) }; }
-    case "comment_get": { const r = record(value, ["op", "todo_id", "comment_id"]); return { op, todo_id: todoId(r.todo_id), comment_id: uuid(r.comment_id) }; }
-    case "comment_add": { const r = record(value, ["op", "todo_id", "body", "author"]); return { op, todo_id: todoId(r.todo_id), body: text(r.body, 64 * KiB), author: nullable(r.author, author) }; }
-    case "comment_update": { const r = record(value, ["op", "todo_id", "comment_id", "expected_revision", "body"]); return { op, todo_id: todoId(r.todo_id), comment_id: uuid(r.comment_id), expected_revision: hash(r.expected_revision), body: text(r.body, 64 * KiB) }; }
-    case "comment_remove": { const r = record(value, ["op", "todo_id", "comment_id", "expected_revision"]); return { op, todo_id: todoId(r.todo_id), comment_id: uuid(r.comment_id), expected_revision: hash(r.expected_revision) }; }
-    default: return fail();
-  }
-}
+const unique = <T>(values: readonly T[], key: (value: T) => string) => new Set(values.map(key)).size === values.length;
+const totalBytes = <T>(values: readonly T[], content: (value: T) => string) => values.reduce((size, value) => size + utf8.encode(content(value)).byteLength, 0);
+const todos = (values: readonly NotesTodo[], rev: string) => unique(values, t => t.ref)
+  && values.every(t => t.ref === `L${t.line}@${rev}`) && totalBytes(values, t => t.text) <= MiB;
+
+const wire: TypedWirePolicy = {
+  complete: new Set(["NotesRequest", "NotesResponse", "NotesTarget", "NotesTodoSelector", "NotesOperation", "NotesResult", "NotesCatalogEntry", "NotesSpaceInfo", "NotesChangeTokens", "NotesTargetInfo", "NotesDocument", "NotesTodo", "NotesBoard", "NotesDecisionSummary", "NotesDecision", "NotesComment"]),
+  order: {
+    NotesRequest: ["keys", "target", "operation"], NotesResponse: ["keys", "notes_id", "changed", "result"],
+    NotesTargetInfo: ["keys", "change_tokens:keys", "notes_id", "folder", "space", "change_tokens"],
+    NotesSpaceInfo: ["keys", "session_id", "space_id", "label"],
+    "NotesTarget[space]": ["keys", "session_id", "space_id"],
+  },
+  lengths: {
+    "NotesTodo.problems": { max: 4 }, "NotesDecisionSummary.replaced_by": { max: 4096 }, "NotesDecisionSummary.problems": { max: 256 },
+    "NotesResult[catalog].entries": { max: 4096 }, "NotesResult[todos].todos": { max: 5000 }, "NotesResult[decisions].decisions": { max: 4096 }, "NotesResult[comments].comments": { max: 1000 },
+    "NotesBoard.backlog": { max: 5000 }, "NotesBoard.doing": { max: 5000 }, "NotesBoard.done": { max: 5000 },
+  },
+  fields: {
+    "NotesTarget[notes].notes_id": uuid, "NotesTarget[space].session_id": sessionId, "NotesTarget[space].space_id": resourceId,
+    "NotesTodoSelector[id].id": todoId, "NotesTodoSelector[id].expected_revision": hash, "NotesTodoSelector[ref].ref": reference,
+    "NotesOperation[target_attach].notes_id": uuid, "NotesOperation[scratchpad_append].text": bound(MiB), "NotesOperation[scratchpad_append].expected_revision": nullable(revision),
+    "NotesOperation[scratchpad_replace].content": bound(MiB), "NotesOperation[scratchpad_replace].expected_revision": revision,
+    "NotesOperation[todo_add].text": todoText, "NotesOperation[todo_update].text": nullable(todoText), "NotesOperation[decision_list].query": nullable(text),
+    "NotesOperation[decision_get].decision_id": decisionId,
+    "NotesOperation[decision_create].title": title, "NotesOperation[decision_create].body": bound(256 * KiB), "NotesOperation[decision_create].decided": nullable(decided),
+    "NotesOperation[decision_update].decision_id": decisionId, "NotesOperation[decision_update].expected_revision": hash, "NotesOperation[decision_update].title": nullable(title), "NotesOperation[decision_update].body": nullable(bound(256 * KiB)),
+    "NotesOperation[decision_replace].decision_id": decisionId, "NotesOperation[decision_replace].expected_revision": hash, "NotesOperation[decision_replace].title": title, "NotesOperation[decision_replace].body": bound(256 * KiB), "NotesOperation[decision_replace].decided": nullable(decided),
+    "NotesOperation[comment_list].todo_id": todoId, "NotesOperation[comment_get].todo_id": todoId, "NotesOperation[comment_get].comment_id": uuid,
+    "NotesOperation[comment_add].todo_id": todoId, "NotesOperation[comment_add].body": bound(64 * KiB), "NotesOperation[comment_add].author": nullable(author),
+    "NotesOperation[comment_update].todo_id": todoId, "NotesOperation[comment_update].comment_id": uuid, "NotesOperation[comment_update].expected_revision": hash, "NotesOperation[comment_update].body": bound(64 * KiB),
+    "NotesOperation[comment_remove].todo_id": todoId, "NotesOperation[comment_remove].comment_id": uuid, "NotesOperation[comment_remove].expected_revision": hash,
+    "NotesCatalogEntry.notes_id": uuid, "NotesCatalogEntry.label": nullable(text), "NotesCatalogEntry.created": nullable(text),
+    "NotesSpaceInfo.session_id": sessionId, "NotesSpaceInfo.space_id": resourceId, "NotesSpaceInfo.label": value => text(value),
+    "NotesChangeTokens.scratchpad": changeToken, "NotesChangeTokens.todos": changeToken, "NotesChangeTokens.decisions": changeToken, "NotesChangeTokens.comments": changeToken,
+    "NotesTargetInfo.notes_id": uuid, "NotesTargetInfo.folder": absolutePath, "NotesDocument.content": bound(MiB), "NotesDocument.revision": revision,
+    "NotesTodo.id": nullable(todoId), "NotesTodo.ref": reference, "NotesTodo.text": bound(2 * KiB), "NotesTodo.revision": hash, "NotesTodo.line": value => value >= 1,
+    "NotesDecisionSummary.decision_id": decisionId, "NotesDecisionSummary.title": bound(512), "NotesDecisionSummary.recorded": nullable(text), "NotesDecisionSummary.decided": nullable(text),
+    "NotesDecisionSummary.replaces": nullable(decisionId), "NotesDecisionSummary.replaced_by": values => values.every(decisionId), "NotesDecisionSummary.revision": hash, "NotesDecisionSummary.problems": values => values.every(value => text(value)),
+    "NotesDecision.body": bound(256 * KiB), "NotesDecision.relative_path": bound(256), "NotesDecision.path": absolutePath,
+    "NotesComment.todo_id": todoId, "NotesComment.comment_id": uuid, "NotesComment.created": nullable(text), "NotesComment.author": nullable(author), "NotesComment.body": bound(64 * KiB), "NotesComment.revision": hash,
+    "NotesResult[todos].revision": revision, "NotesResult[todo].revision": hash, "NotesResult[todo_removed].revision": hash, "NotesResult[board].revision": revision,
+    "NotesResult[comments].todo_id": todoId, "NotesResult[comment_removed].todo_id": todoId, "NotesResult[comment_removed].comment_id": uuid, "NotesResponse.notes_id": nullable(uuid),
+  },
+  checks: {
+    NotesTodo: { consistency: t => t.ref.startsWith(`L${t.line}@`) && new Set(t.problems).size === t.problems.length },
+    NotesDocument: { absent: d => d.revision !== "absent" || d.content === "" },
+    NotesDecision: { document: d => d.relative_path === `decisions/${d.summary.decision_id}.md` && utf8.encode(d.summary.title).byteLength + utf8.encode(d.body).byteLength <= 256 * KiB },
+    "NotesResult[catalog]": { unique: r => unique(r.entries, e => e.notes_id) },
+    "NotesResult[todos]": { consistency: r => todos(r.todos, r.revision) },
+    "NotesResult[todo]": { consistency: r => r.todo.ref === `L${r.todo.line}@${r.revision}` },
+    "NotesResult[board]": { consistency: r => {
+      const { backlog, doing, done } = r.columns, all = [...backlog, ...doing, ...done];
+      return all.length <= 5000 && todos(all, r.revision) && backlog.every(t => !t.done && t.lane === "backlog") && doing.every(t => !t.done && t.lane === "doing") && done.every(t => t.done && t.lane !== null);
+    } },
+    "NotesResult[decisions]": { unique: r => unique(r.decisions, d => d.decision_id) },
+    "NotesResult[comments]": { consistency: r => unique(r.comments, c => c.comment_id) && r.comments.every(c => c.todo_id === r.todo_id) && totalBytes(r.comments, c => c.body) <= 16 * MiB },
+  },
+};
+const policy = definePolicy({ wire, message: constantMessage("Invalid Notes request or response") });
 export function parseNotesRequest(value: unknown): NotesRequest {
-  const r = record(value, ["target", "operation"]);
-  const request = { target: target(r.target), operation: operation(r.operation) };
-  const op = request.operation.op;
+  const request = parseWire(value, wireNotesRequest, policy), op = request.operation.op;
   if (op === "catalog_list" ? request.target.kind !== "root"
     : op === "target_create" || op === "target_attach" ? request.target.kind !== "space"
     : op === "target_resolve" ? request.target.kind === "root" : request.target.kind !== "notes") return fail();
-  text(JSON.stringify(request), 4 * MiB);
+  if (!text(JSON.stringify(request), 4 * MiB)) return fail();
   return request;
 }
-function todo(value: unknown): NotesTodo {
-  const r = record(value, ["id", "ref", "text", "done", "lane", "revision", "line", "depth", "problems"]);
-  const result: NotesTodo = { id: nullable(r.id, todoId), ref: reference(r.ref), text: text(r.text, 2 * KiB), done: bool(r.done), lane: nullable(r.lane, lane), revision: hash(r.revision), line: uint(r.line, 1), depth: uint(r.depth), problems: array(r.problems, 4, v => oneOf(v, ["duplicate_id", "unknown_lane", "metadata_malformed", "lazy_continuation"] as const)) };
-  if (!result.ref.startsWith(`L${result.line}@`) || new Set(result.problems).size !== result.problems.length) return fail();
-  return result;
-}
-function summary(value: unknown): NotesDecisionSummary {
-  const r = record(value, ["decision_id", "title", "recorded", "decided", "replaces", "replaced_by", "status", "revision", "problems"]);
-  return { decision_id: decisionId(r.decision_id), title: text(r.title, 512), recorded: nullable(r.recorded, text), decided: nullable(r.decided, text), replaces: nullable(r.replaces, decisionId), replaced_by: array(r.replaced_by, 4096, decisionId), status: oneOf(r.status, ["current", "replaced"] as const), revision: hash(r.revision), problems: array(r.problems, 256, text) };
-}
-function decision(value: unknown): NotesDecision {
-  const r = record(value, ["summary", "body", "relative_path", "path"]);
-  const s = summary(r.summary), relative_path = text(r.relative_path, 256), body = text(r.body, 256 * KiB);
-  if (relative_path !== `decisions/${s.decision_id}.md` || utf8.encode(s.title).byteLength + utf8.encode(body).byteLength > 256 * KiB) return fail();
-  return { summary: s, body, relative_path, path: absolutePath(r.path) };
-}
-function comment(value: unknown): NotesComment {
-  const r = record(value, ["todo_id", "comment_id", "created", "author", "body", "revision"]);
-  return { todo_id: todoId(r.todo_id), comment_id: uuid(r.comment_id), created: nullable(r.created, text), author: nullable(r.author, author), body: text(r.body, 64 * KiB), revision: hash(r.revision) };
-}
-function info(value: unknown): NotesTargetInfo {
-  const r = record(value, ["notes_id", "folder", "space", "change_tokens"]);
-  const tokens = record(r.change_tokens, ["scratchpad", "todos", "decisions", "comments"]);
-  return { notes_id: uuid(r.notes_id), folder: absolutePath(r.folder), space: nullable(r.space, v => { const s = record(v, ["session_id", "space_id", "label"]); return { session_id: validateSessionId(text(s.session_id, 96)), space_id: validateResourceId(text(s.space_id, 128)), label: text(s.label) }; }), change_tokens: { scratchpad: changeToken(tokens.scratchpad), todos: changeToken(tokens.todos), decisions: changeToken(tokens.decisions), comments: changeToken(tokens.comments) } };
-}
-function unique<T>(values: T[], key: (value: T) => string): T[] {
-  return new Set(values.map(key)).size === values.length ? values : fail();
-}
-function todos(value: unknown, fileRevision: string): NotesTodo[] {
-  const result = array(value, 5000, todo);
-  if (result.some(item => item.ref !== `L${item.line}@${fileRevision}`) || result.reduce((size, item) => size + utf8.encode(item.text).byteLength, 0) > MiB) return fail();
-  return unique(result, item => item.ref);
-}
-function result(value: unknown): NotesResult {
-  const kind = (value as Record<string, unknown> | null)?.kind;
-  switch (kind) {
-    case "catalog": { const r = record(value, ["kind", "entries"]); return { kind, entries: unique(array(r.entries, 4096, v => { const e = record(v, ["notes_id", "label", "created", "bound"]); return { notes_id: uuid(e.notes_id), label: nullable(e.label, text), created: nullable(e.created, text), bound: bool(e.bound) }; }), e => e.notes_id) }; }
-    case "target": { const r = record(value, ["kind", "info"]); return { kind, info: info(r.info) }; }
-    case "scratchpad": { const r = record(value, ["kind", "document"]), d = record(r.document, ["content", "revision"]); const document = { content: text(d.content, MiB), revision: revision(d.revision) }; if (document.revision === "absent" && document.content !== "") return fail(); return { kind, document }; }
-    case "todos": { const r = record(value, ["kind", "revision", "todos"]), rev = revision(r.revision); return { kind, revision: rev, todos: todos(r.todos, rev) }; }
-    case "todo": { const r = record(value, ["kind", "revision", "todo"]), rev = hash(r.revision), item = todo(r.todo); if (item.ref !== `L${item.line}@${rev}`) return fail(); return { kind, revision: rev, todo: item }; }
-    case "todo_removed": { const r = record(value, ["kind", "revision"]); return { kind, revision: hash(r.revision) }; }
-    case "board": {
-      const r = record(value, ["kind", "revision", "columns"]), rev = revision(r.revision), c = record(r.columns, ["backlog", "doing", "done"]);
-      const columns = { backlog: todos(c.backlog, rev), doing: todos(c.doing, rev), done: todos(c.done, rev) };
-      const all = [...columns.backlog, ...columns.doing, ...columns.done];
-      if (all.length > 5000 || all.reduce((size, t) => size + utf8.encode(t.text).byteLength, 0) > MiB || columns.backlog.some(t => t.done || t.lane !== "backlog") || columns.doing.some(t => t.done || t.lane !== "doing") || columns.done.some(t => !t.done || t.lane === null)) return fail();
-      unique(all, t => t.ref);
-      return { kind, revision: rev, columns };
-    }
-    case "decisions": { const r = record(value, ["kind", "decisions"]); return { kind, decisions: unique(array(r.decisions, 4096, summary), d => d.decision_id) }; }
-    case "decision": { const r = record(value, ["kind", "decision"]); return { kind, decision: decision(r.decision) }; }
-    case "comments": { const r = record(value, ["kind", "todo_id", "comments"]), todo_id = todoId(r.todo_id), comments = unique(array(r.comments, 1000, comment), c => c.comment_id); if (comments.some(c => c.todo_id !== todo_id) || comments.reduce((size, c) => size + utf8.encode(c.body).byteLength, 0) > 16 * MiB) return fail(); return { kind, todo_id, comments }; }
-    case "comment": { const r = record(value, ["kind", "comment"]); return { kind, comment: comment(r.comment) }; }
-    case "comment_removed": { const r = record(value, ["kind", "todo_id", "comment_id"]); return { kind, todo_id: todoId(r.todo_id), comment_id: uuid(r.comment_id) }; }
-    default: return fail();
-  }
-}
 export function parseNotesResponse(value: unknown): NotesResponse {
-  const r = record(value, ["notes_id", "changed", "result"]);
-  const response = { notes_id: nullable(r.notes_id, uuid), changed: bool(r.changed), result: result(r.result) };
+  const response = parseWire(value, wireNotesResponse, policy);
   if (response.result.kind === "catalog" ? response.notes_id !== null || response.changed
     : response.notes_id === null || (response.result.kind === "target" && response.result.info.notes_id !== response.notes_id)) return fail();
   return response;

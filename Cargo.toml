@@ -34,6 +34,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs"] }
 ts-rs = "=12.0.1"
+syn = { version = "2", default-features = false, features = ["full", "parsing", "derive", "clone-impls", "printing"] }
+serde_derive_internals = "=0.29.1"
 percent-encoding = "2"
 futures-util = "0.3"
 base64 = "0.22"

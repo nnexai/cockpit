@@ -1,278 +1,105 @@
-import type { CommentReviewRef } from "../protocol/generated/v1";
-import type {
-  CommentAnchor, CommentAttachment, CommentBatch, CommentBatchList, CommentBatchMutation,
-  CommentBatchRequest, CommentBatchSummary, CommentCapture, CommentDraft, CommentFileRef,
-  CommentLocation, CommentOwner, CommentPreview, CommentPreviewRequest, CommentRemoveRequest,
-  CommentRequestScope, CommentSourceState, CommentUpsertRequest,
-} from "../protocol/generated/v1";
+import type { CommentAttachment, CommentBatch, CommentBatchList, CommentBatchMutation, CommentBatchRequest,
+  CommentPreview, CommentPreviewRequest, CommentRemoveRequest, CommentRequestScope, CommentUpsertRequest } from "../protocol/generated/v1";
+import { wireCommentRequestScope, wireCommentBatchRequest, wireCommentBatchMutation, wireCommentUpsertRequest,
+  wireCommentRemoveRequest, wireCommentPreviewRequest, wireCommentBatch, wireCommentBatchList,
+  wireCommentPreview, type TypedWirePolicy } from "../protocol/generated/validate";
 import { CockpitClientError } from "./CockpitClient";
-
-type CommentRecord = Record<string, unknown>;
+import { definePolicy, messageTable, parseWire } from "./wire";
 const encoder = new TextEncoder();
-const MAX_COMMENT_ANCHOR_LINES = 20_000;
-const COMMENT_PREVIEW_LIMIT_BYTES = 64 * 1024;
-const COMMENT_PREVIEW_FRAMING_BYTES = 12;
-const MAX_COMMENT_PREVIEW_PAYLOAD_BYTES = 4 * 1024 * 1024;
-const invalid = (label: string): never => {
-  throw new CockpitClientError("malformed_response", `Malformed comments ${label}`);
+const identity = (value: string): boolean => value.length > 0 && value.length <= 4096 && !value.includes("\0");
+const relativePath = (value: string): boolean => identity(value) && !value.startsWith("/") && !value.includes("\\")
+  && value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+const invalid = (label: string): never => { throw new CockpitClientError("malformed_response", `Malformed comments ${label}`); };
+const batchSize = (value: unknown): boolean => {
+  try { const encoded = JSON.stringify(value); return encoded !== undefined && encoder.encode(encoded).byteLength <= 4 * 1024 * 1024; }
+  catch { return false; }
 };
-const record = (value: unknown): value is CommentRecord =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-const text = (value: unknown): value is string => typeof value === "string";
-const identity = (value: unknown): value is string => text(value) && value.length > 0 && value.length <= 4096 && !value.includes("\0");
-const integer = (value: unknown): value is number =>
-  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 0xffffffff;
-const keys = (value: CommentRecord, allowed: readonly string[]): boolean =>
-  Object.keys(value).every((key) => allowed.includes(key));
-const relativePath = (value: unknown): value is string =>
-  identity(value) && !value.startsWith("/") && !value.includes("\\")
-    && value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
-
-function parseScope(value: unknown): CommentRequestScope {
-  if (!record(value) || !keys(value, ["binding_id", "client_id"])
-    || !identity(value.binding_id) || !identity(value.client_id)) return invalid("scope");
-  return { binding_id: value.binding_id, client_id: value.client_id };
-}
-
-function parseOwner(value: unknown): CommentOwner {
-  if (!record(value) || !identity(value.session_id)
-    || (value.source_kind !== "context" && value.source_kind !== "review") || !identity(value.source_id)) return invalid("owner");
-  if (value.kind === "viewer" && keys(value, ["kind", "session_id", "server_instance", "tab_id", "source_kind", "source_id"])
-    && text(value.server_instance) && /^[0-9a-f]{16}$/.test(value.server_instance) && identity(value.tab_id)) {
-    return { kind: "viewer", session_id: value.session_id, server_instance: value.server_instance,
-      tab_id: value.tab_id, source_kind: value.source_kind, source_id: value.source_id };
-  }
-  return invalid("owner");
-}
-
-function parseLocation(value: unknown): CommentLocation {
-  if (!record(value) || !keys(value, ["workspace_id", "tab_id"])
-    || !identity(value.workspace_id) || !identity(value.tab_id)) return invalid("location");
-  return { workspace_id: value.workspace_id, tab_id: value.tab_id };
-}
-
-function parseAttachment(value: unknown): CommentAttachment {
-  if (!record(value) || !keys(value, ["owner", "location", "binding_id", "client_id"])
-    || !identity(value.binding_id) || !identity(value.client_id)) return invalid("attachment");
-  const owner = parseOwner(value.owner);
-  const location = parseLocation(value.location);
-  if (owner.kind !== "viewer" || owner.tab_id !== location.tab_id) return invalid("live viewer attachment");
-  return {
-    owner,
-    location,
-    binding_id: value.binding_id,
-    client_id: value.client_id,
-  };
-}
-
-function parseReviewRef(value: unknown): CommentReviewRef {
-  if (!record(value) || !keys(value, ["review_id", "generation", "file_id", "side"]) || !identity(value.review_id) || !identity(value.file_id) || !integer(value.generation) || value.generation < 1 || (value.side !== "old" && value.side !== "new")) return invalid("review anchor");
-  return { review_id: value.review_id, generation: value.generation, file_id: value.file_id, side: value.side };
-}
-
-function parseCapture(value: unknown): CommentCapture {
-  if (!record(value) || !keys(value, ["root_id", "path", "expected_revision", "start_line", "end_line", "review"])
-    || !identity(value.root_id) || !relativePath(value.path) || !identity(value.expected_revision)) {
-    return invalid("capture");
-  }
-  const startLine = value.start_line;
-  const endLine = value.end_line;
-  const wholeFile = startLine === null && endLine === null;
-  const lines = integer(startLine) && startLine > 0 && integer(endLine) && endLine >= startLine;
-  if (!wholeFile && !lines) return invalid("capture");
-  return {
-    ...(value.review === undefined ? {} : { review: parseReviewRef(value.review) }),
-    root_id: value.root_id,
-    path: value.path,
-    expected_revision: value.expected_revision,
-    start_line: wholeFile ? null : startLine,
-    end_line: wholeFile ? null : endLine,
-  };
-}
-
-function parseAnchor(value: unknown): CommentAnchor {
-  if (!record(value) || typeof value.kind !== "string") return invalid("anchor");
-  if (value.kind === "whole_file") return { kind: "whole_file" };
-  if (value.kind !== "lines" || !integer(value.start_line) || value.start_line === 0
-    || !integer(value.end_line) || value.end_line < value.start_line || !Array.isArray(value.selected_lines)
-    || value.selected_lines.length !== value.end_line - value.start_line + 1 || value.selected_lines.length > MAX_COMMENT_ANCHOR_LINES) {
-    return invalid("anchor");
-  }
-  const selectedLines = value.selected_lines.map((line) => {
-    if (!text(line)) return invalid("anchor");
-    return line;
-  });
-  return {
-    kind: "lines",
-    start_line: value.start_line,
-    end_line: value.end_line,
-    selected_lines: selectedLines,
-  };
-}
-
-function parseFileRef(value: unknown): CommentFileRef {
-  if (!record(value) || !keys(value, ["root_id", "path", "absolute_path", "revision", "content_hash", "review"])
-    || !identity(value.root_id) || !relativePath(value.path) || !identity(value.absolute_path)
-    || !identity(value.revision) || !(value.content_hash === null || identity(value.content_hash))) {
-    return invalid("file reference");
-  }
-  return {
-    ...(value.review === undefined ? {} : { review: parseReviewRef(value.review) }),
-    root_id: value.root_id,
-    path: value.path,
-    absolute_path: value.absolute_path,
-    revision: value.revision,
-    content_hash: value.content_hash,
-  };
-}
-
-function parseSourceState(value: unknown): CommentSourceState {
-  if (value === "current" || value === "changed" || value === "missing" || value === "unavailable") return value;
-  return invalid("source state");
-}
-
-function parseDraft(value: unknown): CommentDraft {
-  if (!record(value) || !keys(value, ["draft_id", "file_ref", "anchor", "comment_text", "source_state", "updated_at"])
-    || !identity(value.draft_id) || !text(value.comment_text)
-    || encoder.encode(value.comment_text).byteLength > 8 * 1024 || !identity(value.updated_at)) {
-    return invalid("draft");
-  }
-  return {
-    draft_id: value.draft_id,
-    file_ref: parseFileRef(value.file_ref),
-    anchor: parseAnchor(value.anchor),
-    comment_text: value.comment_text,
-    source_state: parseSourceState(value.source_state),
-    updated_at: value.updated_at,
-  };
-}
-
-function parseMutation(value: unknown): CommentBatchMutation {
-  if (!record(value) || !keys(value, ["scope", "batch_id", "expected_generation"])
-    || !identity(value.batch_id) || !integer(value.expected_generation)) return invalid("mutation");
-  return {
-    scope: parseScope(value.scope),
-    batch_id: value.batch_id,
-    expected_generation: value.expected_generation,
-  };
-}
-
-function validateBatchSize(value: unknown): void {
-  let encoded: string | undefined;
-  try { encoded = JSON.stringify(value); } catch { return invalid("batch size"); }
-  if (encoded === undefined || encoder.encode(encoded).byteLength > 4 * 1024 * 1024) return invalid("batch size");
-}
-
-export function parseCommentScope(value: unknown): CommentRequestScope {
-  return parseScope(value);
-}
-
-export function parseCommentBatchRequest(value: unknown): CommentBatchRequest {
-  if (!record(value) || !keys(value, ["scope", "batch_id"])
-    || !(value.batch_id === null || identity(value.batch_id))) return invalid("batch request");
-  return { scope: parseScope(value.scope), batch_id: value.batch_id };
-}
-
-export function parseCommentMutation(value: unknown): CommentBatchMutation {
-  return parseMutation(value);
-}
-
-export function parseCommentUpsert(value: unknown): CommentUpsertRequest {
-  if (!record(value) || !keys(value, ["batch", "draft_id", "capture", "comment_text"])
-    || !(value.draft_id === null || identity(value.draft_id)) || !text(value.comment_text)
-    || encoder.encode(value.comment_text).byteLength > 8 * 1024) return invalid("upsert request");
-  if (value.draft_id === null && value.capture === null) return invalid("upsert request");
-  if (value.draft_id !== null && value.capture !== null) return invalid("upsert request");
-  return {
-    batch: parseMutation(value.batch),
-    draft_id: value.draft_id,
-    capture: value.capture === null ? null : parseCapture(value.capture),
-    comment_text: value.comment_text,
-  };
-}
-
-export function parseCommentRemove(value: unknown): CommentRemoveRequest {
-  if (!record(value) || !keys(value, ["batch", "draft_id"]) || !identity(value.draft_id)) return invalid("remove request");
-  return { batch: parseMutation(value.batch), draft_id: value.draft_id };
-}
-
-export function parseCommentPreviewRequest(value: unknown): CommentPreviewRequest {
-  if (!record(value) || !keys(value, ["batch", "retain_stale_excerpts"])
-    || typeof value.retain_stale_excerpts !== "boolean") return invalid("preview request");
-  return { batch: parseMutation(value.batch), retain_stale_excerpts: value.retain_stale_excerpts };
-}
-
-export function parseCommentBatch(value: unknown): CommentBatch {
-  if (!record(value) || !identity(value.batch_id) || !integer(value.generation)
-    || !(value.live_attachment === null || record(value.live_attachment))
-    || !Array.isArray(value.drafts) || value.drafts.length > 64 || !identity(value.updated_at)) return invalid("batch");
-  const drafts = value.drafts.map(parseDraft);
-  if (new Set(drafts.map((draft) => draft.draft_id)).size !== drafts.length) return invalid("duplicate draft identity");
-  validateBatchSize(value);
-  const owner = parseOwner(value.owner);
-  const liveAttachment = value.live_attachment === null ? null : parseAttachment(value.live_attachment);
-  return {
-    batch_id: value.batch_id,
-    generation: value.generation,
-    owner,
-    last_known_location: parseLocation(value.last_known_location),
-    live_attachment: liveAttachment,
-    drafts,
-    updated_at: value.updated_at,
-  };
-}
-
-function parseBatchSummary(value: unknown): CommentBatchSummary {
-  if (!record(value) || !keys(value, ["batch_id", "generation", "owner", "last_known_location", "draft_count", "updated_at"])
-    || !identity(value.batch_id) || !integer(value.generation) || !integer(value.draft_count)
-    || value.draft_count > 64 || !identity(value.updated_at)) return invalid("batch summary");
-  return {
-    batch_id: value.batch_id,
-    generation: value.generation,
-    owner: parseOwner(value.owner),
-    last_known_location: parseLocation(value.last_known_location),
-    draft_count: value.draft_count,
-    updated_at: value.updated_at,
-  };
-}
-
-export function parseCommentBatchList(value: unknown): CommentBatchList {
-  if (!record(value) || !Array.isArray(value.batches) || value.batches.length > 256
-    || typeof value.truncated !== "boolean") return invalid("batch list");
-  const batches = value.batches.map(parseBatchSummary);
-  if (new Set(batches.map((batch) => batch.batch_id)).size !== batches.length) return invalid("duplicate batch identity");
-  return { attachment: parseAttachment(value.attachment), batches, truncated: value.truncated };
-}
-
-export function parseCommentPreview(value: unknown): CommentPreview {
-  if (!record(value) || !identity(value.batch_id) || !integer(value.generation) || !text(value.payload)
-    || !integer(value.payload_bytes) || !integer(value.framed_bytes) || !integer(value.limit_bytes)
-    || !integer(value.sanitized_controls) || typeof value.exportable !== "boolean"
-    || !(value.reason === null || text(value.reason)) || !Array.isArray(value.stale_draft_ids)
-    || value.stale_draft_ids.length > 64) return invalid("preview");
-  const staleDraftIds = value.stale_draft_ids.map((draftId) => {
-    if (!identity(draftId)) return invalid("preview");
-    return draftId;
-  });
-  const payloadBytes = encoder.encode(value.payload).byteLength;
-  if (value.limit_bytes !== COMMENT_PREVIEW_LIMIT_BYTES || payloadBytes > MAX_COMMENT_PREVIEW_PAYLOAD_BYTES
-    || payloadBytes !== value.payload_bytes || value.framed_bytes !== payloadBytes + COMMENT_PREVIEW_FRAMING_BYTES
-    || new Set(staleDraftIds).size !== staleDraftIds.length
-    || (value.exportable && (value.framed_bytes > value.limit_bytes || value.reason !== null))
-    || (!value.exportable && value.reason === null)) return invalid("preview byte count");
-  return {
-    batch_id: value.batch_id,
-    generation: value.generation,
-    payload: value.payload,
-    payload_bytes: value.payload_bytes,
-    framed_bytes: value.framed_bytes,
-    limit_bytes: value.limit_bytes,
-    sanitized_controls: value.sanitized_controls,
-    stale_draft_ids: staleDraftIds,
-    exportable: value.exportable,
-    reason: value.reason,
-  };
-}
+// Names-only policies preserve the former guards before each nested parser and the projected key order.
+export const COMMENT_WIRE = {
+  exact: new Set(["CommentRequestScope", "CommentOwner[viewer]", "CommentLocation", "CommentAttachment",
+    "CommentReviewRef", "CommentCapture", "CommentFileRef", "CommentDraft", "CommentBatchMutation",
+    "CommentBatchRequest", "CommentUpsertRequest", "CommentRemoveRequest", "CommentPreviewRequest", "CommentBatchSummary"]),
+  absent: new Set(["CommentCapture.review", "CommentFileRef.review"]),
+  order: {
+    CommentAttachment: ["keys", "binding_id", "client_id", "owner", "location", "check:live_viewer"],
+    CommentCapture: ["keys", "root_id", "path", "expected_revision", "start_line", "end_line", "check:lines", "review"],
+    CommentFileRef: ["keys", "root_id", "path", "absolute_path", "revision", "content_hash", "review"],
+    CommentDraft: ["keys", "draft_id", "comment_text", "updated_at", "file_ref", "anchor", "source_state"],
+    CommentBatchMutation: ["keys", "batch_id", "expected_generation", "scope"],
+    CommentBatchRequest: ["keys", "batch_id", "scope"],
+    CommentUpsertRequest: ["keys", "draft_id", "comment_text", "check:capture_choice", "batch", "capture"],
+    CommentRemoveRequest: ["keys", "draft_id", "batch"],
+    CommentPreviewRequest: ["keys", "retain_stale_excerpts", "batch"],
+    CommentBatch: ["batch_id", "generation", "live_attachment:record", "drafts:shallow", "updated_at", "drafts",
+      "check:duplicate_draft", "check:batch_size", "owner", "live_attachment", "last_known_location"],
+    CommentBatchSummary: ["keys", "batch_id", "generation", "draft_count", "updated_at", "owner", "last_known_location"],
+    CommentBatchList: ["batches:shallow", "truncated", "batches", "check:duplicate_batch", "attachment"],
+  },
+  emit: {
+    "CommentOwner[viewer]": ["tag", "session_id", "server_instance", "tab_id", "source_kind", "source_id"],
+    CommentCapture: ["review", "root_id", "path", "expected_revision", "start_line", "end_line"],
+    CommentFileRef: ["review", "root_id", "path", "absolute_path", "revision", "content_hash"],
+  },
+  lengths: { "CommentAnchor[lines].selected_lines": { max: 20_000 }, "CommentBatch.drafts": { max: 64 },
+    "CommentBatchList.batches": { max: 256 }, "CommentPreview.stale_draft_ids": { max: 64 } },
+  fields: {
+    "CommentRequestScope.binding_id": identity, "CommentRequestScope.client_id": identity, "CommentOwner[viewer].session_id": identity, "CommentOwner[viewer].source_id": identity,
+    "CommentOwner[viewer].server_instance": v => /^[0-9a-f]{16}$/.test(v), "CommentOwner[viewer].tab_id": identity,
+    "CommentLocation.workspace_id": identity, "CommentLocation.tab_id": identity, "CommentAttachment.binding_id": identity, "CommentAttachment.client_id": identity,
+    "CommentReviewRef.review_id": identity, "CommentReviewRef.file_id": identity, "CommentReviewRef.generation": v => v >= 1,
+    "CommentCapture.root_id": identity, "CommentCapture.path": relativePath, "CommentCapture.expected_revision": identity,
+    "CommentFileRef.root_id": identity, "CommentFileRef.path": relativePath, "CommentFileRef.absolute_path": identity,
+    "CommentFileRef.revision": identity, "CommentFileRef.content_hash": v => v === null || identity(v),
+    "CommentDraft.draft_id": identity, "CommentDraft.comment_text": v => encoder.encode(v).byteLength <= 8 * 1024,
+    "CommentDraft.updated_at": identity, "CommentBatchMutation.batch_id": identity, "CommentBatchRequest.batch_id": v => v === null || identity(v),
+    "CommentUpsertRequest.draft_id": v => v === null || identity(v), "CommentUpsertRequest.comment_text": v => encoder.encode(v).byteLength <= 8 * 1024,
+    "CommentRemoveRequest.draft_id": identity, "CommentBatch.batch_id": identity, "CommentBatch.updated_at": identity,
+    "CommentBatchSummary.batch_id": identity, "CommentBatchSummary.draft_count": v => v <= 64,
+    "CommentBatchSummary.updated_at": identity, "CommentPreview.batch_id": identity, "CommentPreview.stale_draft_ids": v => v.every(identity),
+  },
+  checks: {
+    CommentAttachment: { live_viewer: v => v.owner.kind === "viewer" && v.owner.tab_id === v.location.tab_id },
+    CommentCapture: { lines: v => (v.start_line === null && v.end_line === null)
+      || (v.start_line !== null && v.start_line > 0 && v.end_line !== null && v.end_line >= v.start_line) },
+    "CommentAnchor[lines]": { lines: v => v.start_line > 0 && v.end_line >= v.start_line
+      && v.selected_lines.length === v.end_line - v.start_line + 1 },
+    CommentUpsertRequest: { capture_choice: (_v, original) => (original.draft_id === null) !== (original.capture === null) },
+    CommentBatch: { duplicate_draft: v => new Set(v.drafts.map(d => d.draft_id)).size === v.drafts.length,
+      batch_size: (_v, original) => batchSize(original) },
+    CommentBatchList: { duplicate_batch: v => new Set(v.batches.map(b => b.batch_id)).size === v.batches.length },
+    CommentPreview: { byte_count: v => {
+      const bytes = encoder.encode(v.payload).byteLength;
+      return v.limit_bytes === 64 * 1024 && bytes <= 4 * 1024 * 1024 && bytes === v.payload_bytes
+        && v.framed_bytes === bytes + 12 && new Set(v.stale_draft_ids).size === v.stale_draft_ids.length
+        && (v.exportable ? v.framed_bytes <= v.limit_bytes && v.reason === null : v.reason !== null);
+    } },
+  },
+} satisfies TypedWirePolicy;
+const comments = definePolicy({
+  wire: COMMENT_WIRE,
+  message: messageTable({
+    CommentRequestScope: "Malformed comments scope", CommentOwner: "Malformed comments owner", CommentLocation: "Malformed comments location",
+    CommentAttachment: f => `Malformed comments ${f.refinement === "live_viewer" ? "live viewer attachment" : "attachment"}`,
+    CommentReviewRef: "Malformed comments review anchor", CommentCapture: "Malformed comments capture",
+    CommentAnchor: "Malformed comments anchor", CommentFileRef: "Malformed comments file reference",
+    CommentSourceState: "Malformed comments source state", CommentDraft: "Malformed comments draft",
+    CommentBatchMutation: "Malformed comments mutation", CommentBatchRequest: "Malformed comments batch request",
+    CommentUpsertRequest: "Malformed comments upsert request", CommentRemoveRequest: "Malformed comments remove request", CommentPreviewRequest: "Malformed comments preview request",
+    CommentBatch: f => `Malformed comments ${f.refinement === "duplicate_draft" ? "duplicate draft identity" : f.refinement === "batch_size" ? "batch size" : "batch"}`,
+    CommentBatchSummary: "Malformed comments batch summary",
+    CommentBatchList: f => `Malformed comments ${f.refinement === "duplicate_batch" ? "duplicate batch identity" : "batch list"}`,
+    CommentPreview: f => `Malformed comments ${f.refinement === "byte_count" ? "preview byte count" : "preview"}`,
+  }, "Malformed comments owner"),
+});
+export const parseCommentScope = (v: unknown): CommentRequestScope => parseWire(v, wireCommentRequestScope, comments);
+export const parseCommentBatchRequest = (v: unknown): CommentBatchRequest => parseWire(v, wireCommentBatchRequest, comments);
+export const parseCommentMutation = (v: unknown): CommentBatchMutation => parseWire(v, wireCommentBatchMutation, comments);
+export const parseCommentUpsert = (v: unknown): CommentUpsertRequest => parseWire(v, wireCommentUpsertRequest, comments);
+export const parseCommentRemove = (v: unknown): CommentRemoveRequest => parseWire(v, wireCommentRemoveRequest, comments);
+export const parseCommentPreviewRequest = (v: unknown): CommentPreviewRequest => parseWire(v, wireCommentPreviewRequest, comments);
+export const parseCommentBatch = (v: unknown): CommentBatch => parseWire(v, wireCommentBatch, comments);
+export const parseCommentBatchList = (v: unknown): CommentBatchList => parseWire(v, wireCommentBatchList, comments);
+export const parseCommentPreview = (v: unknown): CommentPreview => parseWire(v, wireCommentPreview, comments);
 
 export function matchCommentAttachment(
   value: CommentAttachment,

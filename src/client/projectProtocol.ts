@@ -1,145 +1,87 @@
 import type {
-  LinkedArtifact, ProjectArtifact, ProjectConfiguration, RepositoryCandidate, RepositoryListResponse, WorkspaceDefaults, WorkspaceDefaultsRequest,
-  WorkspaceOperation, WorkspaceOperationRequest, WorkspaceSetupPlan, WorkspaceSetupRequest,
-  WorkspaceReconcileRequest,
+  ProjectConfiguration, RepositoryListResponse, WorkspaceDefaults, WorkspaceDefaultsRequest, WorkspaceOperation,
+  WorkspaceOperationRequest, WorkspaceSetupPlan, WorkspaceSetupRequest, WorkspaceReconcileRequest,
 } from "../protocol/generated/v1";
-import { CockpitClientError, parseErrorEnvelope } from "./CockpitClient";
+import {
+  wireProjectConfiguration, wireRepositoryListResponse, wireWorkspaceDefaults, wireWorkspaceDefaultsRequest,
+  wireWorkspaceOperation, wireWorkspaceOperationRequest, wireWorkspaceSetupPlan, wireWorkspaceSetupRequest,
+  wireWorkspaceReconcileRequest, type TypedWirePolicy,
+} from "../protocol/generated/validate";
+import { CockpitClientError } from "./CockpitClient";
+import { definePolicy, parseWire, constantMessage, rootMessage, type ProtocolPolicy } from "./wire";
 
-const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const text = (value: unknown): value is string => typeof value === "string";
-const nullableText = (value: unknown): value is string | null => value === null || text(value);
-const bool = (value: unknown): value is boolean => typeof value === "boolean";
-const u32 = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
-const u64 = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-const texts = (value: unknown): value is string[] => Array.isArray(value) && value.every(text);
-const mode = (value: unknown) => value === "create" || value === "open";
+function malformed(label: string): never { throw new CockpitClientError("malformed_response", `Invalid ${label}`); }
+const nonempty = (value: string) => value.length > 0;
+const operationId = (value: string) => /^[A-Za-z0-9_-]{1,96}$/.test(value);
+const RULES = {
+  absent: new Set(["ProjectConfiguration.orchestration"]), // projects.rs:100: #[serde(default)], still validates supplied values.
+  exact: new Set(["WorkspaceSetupRequest[open]", "WorkspaceSetupRequest[create]"]),
+  raw: new Set(["ProjectConfiguration", "RepositoryListResponse", "WorkspaceOperationRequest", "WorkspaceReconcileRequest",
+    "WorkspaceSetupPlan", "WorkspaceOperation", "WorkspaceDefaults.artifact", "WorkspaceDefaults.repositories", "WorkspaceDefaults.linked_artifacts",
+    "WorkspaceSetupRequest[create].linked_artifact_urls"]),
+  fields: {
+    "RepositoryCandidate.repository_id": nonempty, "RepositoryCandidate.provenance": nonempty,
+    "ProjectArtifact.kind": (value) => ["issue", "review", "wiki", "custom"].includes(value),
+    "ProjectProvider.executable": (value) => value !== null,
+    "ProjectProvider.deployment": (value) => value !== null,
+    "ProjectProvider.login": (value) => value !== undefined && value !== null && value.length > 0 && value.length <= 256,
+    "WorkspaceDefaultsRequest.artifact_url": (value) => !!value.trim() && value.length <= 2048,
+    "WorkspaceSetupRequest[open].path": (value) => !!value.trim(),
+    "WorkspaceSetupRequest[create].repository_id": nonempty,
+    "WorkspaceOperationRequest.operation_id": operationId, "WorkspaceReconcileRequest.operation_id": operationId,
+    "WorkspaceSetupPlan.endpoint_identity": nonempty,
+  },
+  lengths: { "WorkspaceSetupRequest[create].linked_artifact_urls": { max: 4 } },
+  order: {
+    WorkspaceSetupRequest: ["label", "task_name", "focus", "tag", "tag:known"],
+    "WorkspaceSetupRequest[open]": ["path", "keys"],
+    "WorkspaceSetupRequest[create]": ["repository_id", "branch", "base_ref", "checkout_path", "artifact_url", "linked_artifact_urls", "keys"],
+    WorkspaceOperation: ["operation_id", "generation", "sequence", "session_id", "state", "step", "workspace_id", "tab_id",
+      "pane_id", "resume_allowed", "cancel_requested", "updated_at", "error", "owned_resources", "plan"],
+  },
+  emit: {
+    "WorkspaceSetupRequest[open]": ["tag", "path", "label", "task_name", "focus"],
+    "WorkspaceSetupRequest[create]": ["tag", "repository_id", "branch", "base_ref", "checkout_path", "label", "task_name", "artifact_url", "linked_artifact_urls", "focus"],
+  },
+} satisfies TypedWirePolicy;
+const policy = (label: string): ProtocolPolicy => definePolicy({ wire: RULES, message: constantMessage(`Invalid ${label}`) });
+const CONFIGURATION = policy("project configuration"), CATALOG = policy("repository catalog");
+const DEFAULTS_REQUEST = policy("workspace defaults request"), DEFAULTS = policy("workspace defaults");
+const OPERATION_REQUEST = policy("workspace operation request"), RECONCILE = policy("workspace reconciliation request");
+const PLAN = policy("workspace setup plan");
+const OPERATION = definePolicy({ wire: RULES, message: rootMessage("Invalid", {
+  WorkspaceOperation: "workspace operation", WorkspaceSetupPlan: "workspace setup plan",
+}) });
+const SETUP = definePolicy({ wire: RULES, message: (failure) => {
+  const owner = failure.path.find((frame) => frame.type === "WorkspaceSetupRequest");
+  if (failure.reason === "shape" && !owner?.field && !owner?.variant) return "Invalid workspace setup request";
+  if (owner?.field === "label" || owner?.field === "task_name" || owner?.field === "focus") return "Invalid workspace setup request";
+  return owner?.variant === "open" ? "Invalid directory setup request" : "Invalid worktree setup request";
+} });
 
-function malformed(label: string): never {
-  throw new CockpitClientError("malformed_response", `Invalid ${label}`);
-}
-
-function isRepository(value: unknown): value is RepositoryCandidate {
-  return record(value) && text(value.repository_id) && value.repository_id.length > 0
-    && text(value.name) && text(value.root) && text(value.checkout_path) && text(value.common_dir)
-    && nullableText(value.branch) && bool(value.is_linked_worktree) && bool(value.is_detached)
-    && text(value.provenance) && value.provenance.length > 0;
-}
-
-function isArtifact(value: unknown): value is ProjectArtifact {
-  return record(value) && text(value.provider_id) && text(value.kind)
-    && ["issue", "review", "wiki", "custom"].includes(value.kind)
-    && text(value.canonical_id) && text(value.original_url) && text(value.canonical_url);
-}
-
-export function parseProjectConfiguration(value: unknown): ProjectConfiguration {
-  if (!record(value) || !u32(value.version) || !texts(value.repository_roots)
-    || !text(value.worktree_root) || !text(value.state_root) || !text(value.library_root)
-    || !text(value.notes_root)
-    || !text(value.branch_template) || !text(value.checkout_template)
-    || !record(value.limits) || !u32(value.limits.catalog_depth) || !u32(value.limits.catalog_entries)
-    || !u32(value.limits.git_timeout_ms) || !u32(value.limits.git_output_bytes) || !u32(value.limits.operation_timeout_ms)
-    || !u32(value.limits.context_preview_bytes) || !u32(value.limits.context_preview_lines)
-    || !u32(value.limits.context_directory_entries) || !u32(value.limits.context_tree_depth)
-    || !u32(value.limits.library_folder_files) || !u64(value.limits.library_folder_bytes)
-    || !u64(value.limits.library_file_bytes) || !u32(value.limits.library_space_pages)
-    || !u64(value.limits.library_attachment_bytes) || !u64(value.limits.library_item_attachment_bytes)
-    || !u32(value.limits.library_max_items)
-    || !Array.isArray(value.providers) || !value.providers.every((provider) => record(provider)
-      && text(provider.id) && text(provider.base_url)
-      && text(provider.kind) && ["github", "gitlab", "gitea", "jira", "confluence"].includes(provider.kind)
-      && (provider.executable === undefined || text(provider.executable))
-      && (provider.deployment === undefined || provider.deployment === "cloud" || provider.deployment === "data_center")
-      && (provider.login === undefined || (text(provider.login) && provider.login.length > 0 && provider.login.length <= 256)))) {
-    malformed("project configuration");
-  }
-  return value as unknown as ProjectConfiguration;
-}
-
+export function parseProjectConfiguration(value: unknown): ProjectConfiguration { return parseWire(value, wireProjectConfiguration, CONFIGURATION); }
 export function parseRepositoryList(value: unknown): RepositoryListResponse {
-  if (!record(value) || !Array.isArray(value.repositories) || !value.repositories.every(isRepository)
-    || !Array.isArray(value.diagnostics) || !value.diagnostics.every((diagnostic) => record(diagnostic)
-      && text(diagnostic.code) && text(diagnostic.message) && nullableText(diagnostic.path))) {
-    malformed("repository catalog");
-  }
-  const ids = value.repositories.map((repository) => repository.repository_id);
-  if (new Set(ids).size !== ids.length) malformed("duplicate repository identities");
-  return value as unknown as RepositoryListResponse;
+  const result = parseWire(value, wireRepositoryListResponse, CATALOG);
+  if (new Set(result.repositories.map((repository) => repository.repository_id)).size !== result.repositories.length) malformed("duplicate repository identities");
+  return result;
 }
-
-export function parseWorkspaceDefaultsRequest(value: unknown): WorkspaceDefaultsRequest {
-  if (!record(value) || !text(value.artifact_url) || !value.artifact_url.trim() || value.artifact_url.length > 2048 || !nullableText(value.repository_id)) malformed("workspace defaults request");
-  return { artifact_url: value.artifact_url, repository_id: value.repository_id };
-}
-
-function isLinkedArtifact(value: unknown): value is LinkedArtifact {
-  return record(value) && isArtifact(value.artifact) && nullableText(value.title) && nullableText(value.error);
-}
-
+export function parseWorkspaceDefaultsRequest(value: unknown): WorkspaceDefaultsRequest { return parseWire(value, wireWorkspaceDefaultsRequest, DEFAULTS_REQUEST); }
 export function parseWorkspaceDefaults(value: unknown): WorkspaceDefaults {
-  if (!record(value) || !isArtifact(value.artifact) || !Array.isArray(value.repositories) || !value.repositories.every(isRepository)
-    || !nullableText(value.repository_id) || !nullableText(value.branch) || !nullableText(value.label) || !nullableText(value.checkout_path)
-    || !nullableText(value.title) || !Array.isArray(value.linked_artifacts) || !value.linked_artifacts.every(isLinkedArtifact)) malformed("workspace defaults");
-  if (value.repository_id !== null && !value.repositories.some(repository => repository.repository_id === value.repository_id)) malformed("workspace defaults repository identity");
-  return { artifact: value.artifact, repositories: value.repositories, repository_id: value.repository_id, branch: value.branch, label: value.label, checkout_path: value.checkout_path, title: value.title, linked_artifacts: value.linked_artifacts };
+  const result = parseWire(value, wireWorkspaceDefaults, DEFAULTS);
+  if (result.repository_id !== null && !result.repositories.some((repository) => repository.repository_id === result.repository_id)) malformed("workspace defaults repository identity");
+  return result;
 }
-
-export function parseWorkspaceSetupRequest(value: unknown): WorkspaceSetupRequest {
-  if (!record(value) || !nullableText(value.label) || !nullableText(value.task_name) || !bool(value.focus)) malformed("workspace setup request");
-  if (value.operation === "open") {
-    if (!text(value.path) || !value.path.trim() || Object.keys(value).some(key => !["operation", "path", "label", "task_name", "focus"].includes(key))) malformed("directory setup request");
-    return { operation: "open", path: value.path, label: value.label, task_name: value.task_name, focus: value.focus };
-  }
-  if (value.operation !== "create" || !text(value.repository_id) || !value.repository_id || !nullableText(value.branch) || !nullableText(value.base_ref)
-    || !nullableText(value.checkout_path) || !nullableText(value.artifact_url) || !texts(value.linked_artifact_urls) || value.linked_artifact_urls.length > 4
-    || Object.keys(value).some(key => !["operation", "repository_id", "branch", "base_ref", "checkout_path", "label", "task_name", "artifact_url", "linked_artifact_urls", "focus"].includes(key))) malformed("worktree setup request");
-  return { operation: "create", repository_id: value.repository_id, branch: value.branch, base_ref: value.base_ref, checkout_path: value.checkout_path, label: value.label, task_name: value.task_name, artifact_url: value.artifact_url, linked_artifact_urls: value.linked_artifact_urls, focus: value.focus };
-}
-
-export function parseWorkspaceOperationRequest(value: unknown): WorkspaceOperationRequest {
-  if (!record(value) || !text(value.operation_id) || !/^[A-Za-z0-9_-]{1,96}$/.test(value.operation_id)
-    || !u32(value.expected_generation)) malformed("workspace operation request");
-  return value as unknown as WorkspaceOperationRequest;
-}
-
+export function parseWorkspaceSetupRequest(value: unknown): WorkspaceSetupRequest { return parseWire(value, wireWorkspaceSetupRequest, SETUP); }
+export function parseWorkspaceOperationRequest(value: unknown): WorkspaceOperationRequest { return parseWire(value, wireWorkspaceOperationRequest, OPERATION_REQUEST); }
 export function parseWorkspaceReconcileRequest(value: unknown): WorkspaceReconcileRequest {
-  const request = parseWorkspaceOperationRequest(value) as WorkspaceReconcileRequest;
-  if (request.action !== "accept_existing_worktree" && request.action !== "retry_environment") {
-    malformed("workspace reconciliation request");
-  }
-  return request;
+  parseWorkspaceOperationRequest(value);
+  return parseWire(value, wireWorkspaceReconcileRequest, RECONCILE);
 }
-
-export function parseWorkspaceSetupPlan(value: unknown): WorkspaceSetupPlan {
-  if (!record(value) || !text(value.operation_id) || !u32(value.generation) || !text(value.session_id)
-    || !text(value.endpoint_identity) || value.endpoint_identity.length === 0
-    || !(value.repository === null || isRepository(value.repository)) || !mode(value.mode) || !nullableText(value.branch) || !nullableText(value.base)
-    || !text(value.checkout_path) || !text(value.label)
-    || !bool(value.focus) || !["owned_worktree", "borrowed_directory"].includes(String(value.ownership))
-    || !(value.artifact === null || isArtifact(value.artifact)) || !Array.isArray(value.linked_artifacts) || !value.linked_artifacts.every(isArtifact)
-    || !texts(value.effects) || !texts(value.warnings)) {
-    malformed("workspace setup plan");
-  }
-  return value as unknown as WorkspaceSetupPlan;
-}
-
+export function parseWorkspaceSetupPlan(value: unknown): WorkspaceSetupPlan { return parseWire(value, wireWorkspaceSetupPlan, PLAN); }
 export function parseWorkspaceOperation(value: unknown): WorkspaceOperation {
-  if (!record(value) || !text(value.operation_id) || !u32(value.generation) || !u32(value.sequence)
-    || !text(value.session_id) || !text(value.state)
-    || !["planned", "running", "completed", "partial", "outcome_unknown", "cancelled", "needs_review"].includes(value.state)
-    || !text(value.step) || !["planned", "validated", "herdr_requested", "herdr_observed", "worktree_ready", "workspace_verified",
-      "context_preparing", "context_ready", "environment_requested", "environment_ready", "completed"].includes(value.step)
-    || !nullableText(value.workspace_id) || !nullableText(value.tab_id) || !nullableText(value.pane_id)
-    || !bool(value.resume_allowed) || !bool(value.cancel_requested)
-    || !text(value.updated_at) || !(value.error === null || parseErrorEnvelope(value.error) !== undefined)
-    || !Array.isArray(value.owned_resources) || !value.owned_resources.every((resource) => record(resource)
-      && text(resource.kind) && text(resource.path) && bool(resource.created_by_operation))) {
-    malformed("workspace operation");
-  }
-  const plan = parseWorkspaceSetupPlan(value.plan);
-  if (plan.operation_id !== value.operation_id || plan.session_id !== value.session_id) {
-    malformed("workspace operation identity");
-  }
-  return value as unknown as WorkspaceOperation;
+  const result = parseWire(value, wireWorkspaceOperation, OPERATION);
+  if (result.plan.operation_id !== result.operation_id || result.plan.session_id !== result.session_id) malformed("workspace operation identity");
+  return result;
 }
 
 export function matchProjectSession<T extends { session_id: string; operation_id: string }>(

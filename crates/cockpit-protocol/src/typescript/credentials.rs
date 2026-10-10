@@ -1,0 +1,12 @@
+section!(
+    CREDENTIALS,
+    credentials,
+    [
+        ProviderAuthKind,
+        ProviderCredentialState,
+        ProviderCredentialStatus,
+        ProviderCredentialStatusList,
+        ProviderCredentialSetRequest,
+        ProviderCredentialClearRequest,
+    ]
+);

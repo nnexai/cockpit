@@ -1,0 +1,28 @@
+section!(
+    NOTES,
+    notes,
+    [
+        NotesTarget,
+        NotesLane,
+        NotesColumn,
+        NotesTodoFilter,
+        NotesDecisionFilter,
+        NotesTodoSelector,
+        NotesOperation,
+        NotesRequest,
+        NotesCatalogEntry,
+        NotesSpaceInfo,
+        NotesChangeTokens,
+        NotesTargetInfo,
+        NotesDocument,
+        NotesTodoProblem,
+        NotesTodo,
+        NotesBoard,
+        NotesDecisionStatus,
+        NotesDecisionSummary,
+        NotesDecision,
+        NotesComment,
+        NotesResult,
+        NotesResponse,
+    ]
+);

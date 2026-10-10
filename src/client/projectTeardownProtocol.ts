@@ -1,83 +1,41 @@
 import type {
-  WorkspaceTeardownAction,
-  WorkspaceTeardownExecuteRequest,
-  WorkspaceTeardownOutcome,
-  WorkspaceTeardownPreview,
-  WorkspaceTeardownPreviewRequest,
-  WorkspaceTeardownRecovery,
-  WorkspaceTeardownRecoveryList,
-  WorkspaceTeardownResult,
+  WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreview, WorkspaceTeardownPreviewRequest,
+  WorkspaceTeardownRecoveryList, WorkspaceTeardownResult,
 } from "../protocol/generated/v1";
+import {
+  wireWorkspaceTeardownExecuteRequest, wireWorkspaceTeardownPreview, wireWorkspaceTeardownPreviewRequest,
+  wireWorkspaceTeardownRecoveryList, wireWorkspaceTeardownResult, type TypedWirePolicy,
+} from "../protocol/generated/validate";
 import { CockpitClientError } from "./CockpitClient";
+import { definePolicy, parseWire, constantMessage, type ProtocolPolicy } from "./wire";
 
-const record = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-const text = (value: unknown): value is string => typeof value === "string";
-const texts = (value: unknown): value is string[] => Array.isArray(value) && value.every(text);
-const nullableText = (value: unknown): value is string | null => value === null || text(value);
-const workspaceId = (value: unknown): value is string =>
-  text(value) && /^[A-Za-z0-9:_-]{1,128}$/.test(value);
-const operationId = (value: unknown): value is string =>
-  text(value) && /^[A-Za-z0-9_-]{1,96}$/.test(value);
-const action = (value: unknown): value is WorkspaceTeardownAction =>
-  value === "close_space" || value === "remove_owned_worktree" || value === "reconcile_remove_outcome";
-const outcome = (value: unknown): value is WorkspaceTeardownOutcome =>
-  value === "completed" || value === "outcome_unknown" || value === "retained";
-
-function malformed(label: string): never {
-  throw new CockpitClientError("malformed_response", `Invalid ${label}`);
-}
-
-export function parseWorkspaceTeardownPreviewRequest(value: unknown): WorkspaceTeardownPreviewRequest {
-  if (!record(value) || !workspaceId(value.workspace_id)) malformed("workspace teardown preview request");
-  return value as WorkspaceTeardownPreviewRequest;
-}
-
-export function parseWorkspaceTeardownExecuteRequest(value: unknown): WorkspaceTeardownExecuteRequest {
-  if (!record(value) || !operationId(value.operation_id) || !workspaceId(value.workspace_id)
-    || !text(value.expected_endpoint_identity) || value.expected_endpoint_identity.length === 0
-    || !text(value.expected_checkout_path) || value.expected_checkout_path.length === 0
-    || !action(value.action) || !text(value.confirmation)) {
-    malformed("workspace teardown execution request");
-  }
-  return value as WorkspaceTeardownExecuteRequest;
-}
-
-export function parseWorkspaceTeardownPreview(value: unknown): WorkspaceTeardownPreview {
-  if (!record(value) || !operationId(value.operation_id) || !workspaceId(value.workspace_id)
-    || !text(value.endpoint_identity) || !nullableText(value.repository_key) || !nullableText(value.repository_root)
-    || !text(value.checkout_path) || !["owned_created", "borrowed_opened", "unknown"].includes(String(value.ownership))
-    || !["live", "missing", "ambiguous"].includes(String(value.workspace_state))
-    || typeof value.is_linked_worktree !== "boolean"
-    || !["clean", "dirty", "unknown"].includes(String(value.dirty_state))
-    || !Array.isArray(value.allowed_actions) || !value.allowed_actions.every(action)
-    || !texts(value.blockers) || !texts(value.warnings) || !nullableText(value.required_confirmation)) {
-    malformed("workspace teardown preview");
-  }
-  return value as WorkspaceTeardownPreview;
-}
-
-export function parseWorkspaceTeardownResult(value: unknown): WorkspaceTeardownResult {
-  if (!record(value) || !operationId(value.operation_id) || !workspaceId(value.workspace_id)
-    || !action(value.action) || !outcome(value.outcome) || !text(value.message)) {
-    malformed("workspace teardown result");
-  }
-  return value as WorkspaceTeardownResult;
-}
-
-function recovery(value: unknown): value is WorkspaceTeardownRecovery {
-  return record(value) && operationId(value.operation_id) && workspaceId(value.workspace_id)
-    && text(value.checkout_path)
-    && (value.state === "pending" || value.state === "outcome_unknown");
-}
-
+const workspaceId = (value: string) => /^[A-Za-z0-9:_-]{1,128}$/.test(value);
+const operationId = (value: string) => /^[A-Za-z0-9_-]{1,96}$/.test(value);
+function malformed(label: string): never { throw new CockpitClientError("malformed_response", `Invalid ${label}`); }
+const RULES = {
+  raw: new Set(["WorkspaceTeardownPreviewRequest", "WorkspaceTeardownExecuteRequest", "WorkspaceTeardownPreview",
+    "WorkspaceTeardownResult", "WorkspaceTeardownRecoveryList"]),
+  fields: {
+    "WorkspaceTeardownPreviewRequest.workspace_id": workspaceId,
+    "WorkspaceTeardownExecuteRequest.operation_id": operationId, "WorkspaceTeardownExecuteRequest.workspace_id": workspaceId,
+    "WorkspaceTeardownExecuteRequest.expected_endpoint_identity": (value) => value.length > 0,
+    "WorkspaceTeardownExecuteRequest.expected_checkout_path": (value) => value.length > 0,
+    "WorkspaceTeardownPreview.operation_id": operationId, "WorkspaceTeardownPreview.workspace_id": workspaceId,
+    "WorkspaceTeardownResult.operation_id": operationId, "WorkspaceTeardownResult.workspace_id": workspaceId,
+    "WorkspaceTeardownRecovery.operation_id": operationId, "WorkspaceTeardownRecovery.workspace_id": workspaceId,
+  },
+} satisfies TypedWirePolicy;
+const policy = (label: string): ProtocolPolicy => definePolicy({ wire: RULES, message: constantMessage(`Invalid ${label}`) });
+const PREVIEW_REQUEST = policy("workspace teardown preview request"), EXECUTE_REQUEST = policy("workspace teardown execution request");
+const PREVIEW = policy("workspace teardown preview"), RESULT = policy("workspace teardown result"), RECOVERIES = policy("workspace teardown recoveries");
+export function parseWorkspaceTeardownPreviewRequest(value: unknown): WorkspaceTeardownPreviewRequest { return parseWire(value, wireWorkspaceTeardownPreviewRequest, PREVIEW_REQUEST); }
+export function parseWorkspaceTeardownExecuteRequest(value: unknown): WorkspaceTeardownExecuteRequest { return parseWire(value, wireWorkspaceTeardownExecuteRequest, EXECUTE_REQUEST); }
+export function parseWorkspaceTeardownPreview(value: unknown): WorkspaceTeardownPreview { return parseWire(value, wireWorkspaceTeardownPreview, PREVIEW); }
+export function parseWorkspaceTeardownResult(value: unknown): WorkspaceTeardownResult { return parseWire(value, wireWorkspaceTeardownResult, RESULT); }
 export function parseWorkspaceTeardownRecoveryList(value: unknown): WorkspaceTeardownRecoveryList {
-  if (!record(value) || !Array.isArray(value.recoveries) || !value.recoveries.every(recovery)) {
-    malformed("workspace teardown recoveries");
-  }
-  const operationIds = value.recoveries.map((entry) => entry.operation_id);
-  if (new Set(operationIds).size !== operationIds.length) malformed("duplicate workspace teardown recovery");
-  return value as WorkspaceTeardownRecoveryList;
+  const result = parseWire(value, wireWorkspaceTeardownRecoveryList, RECOVERIES);
+  if (new Set(result.recoveries.map((entry) => entry.operation_id)).size !== result.recoveries.length) malformed("duplicate workspace teardown recovery");
+  return result;
 }
 
 export function matchWorkspaceTeardownPreview(

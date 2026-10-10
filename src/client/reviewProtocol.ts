@@ -1,31 +1,46 @@
-import type { ReviewChangedFile, ReviewComparison, ReviewFileDiff, ReviewFileRequest, ReviewSnapshot, ReviewSnapshotRequest, ProjectDiagnostic, ReviewHunk } from "../protocol/generated/v1";
+import type { ReviewFileDiff, ReviewFileRequest, ReviewSnapshot, ReviewSnapshotRequest } from "../protocol/generated/v1";
+import { wireReviewSnapshotRequest, wireReviewFileRequest, wireReviewSnapshot, wireReviewFileDiff, type TypedWirePolicy } from "../protocol/generated/validate";
 import { CockpitClientError } from "./CockpitClient";
+import { constantMessage, definePolicy, parseWire } from "./wire";
+
 const fail = (): never => { throw new CockpitClientError("malformed_response", "Malformed local review response"); };
-const record = (v: unknown): Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : fail();
-const text = (v: unknown, max = 4096): string => typeof v === "string" && v.length <= max ? v : fail();
-const id = (v: unknown): string => { const s = text(v); return s.length > 0 && !/[\x00-\x1f\x7f]/.test(s) ? s : fail(); };
-const nullable = (v: unknown, max = 4096): string | null => v === null ? null : text(v, max);
-const integer = (v: unknown): number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 0xffffffff ? v : fail();
-const maybeNumber = (v: unknown): number | null => v === null ? null : integer(v);
-const defaultInteger = (v: unknown, fallback = 0): number => v === undefined || v === null ? fallback : integer(v);
-const bool = (v: unknown): boolean => typeof v === "boolean" ? v : fail();
-const array = (v: unknown, max: number): unknown[] => Array.isArray(v) && v.length <= max ? v : fail();
-const comparison = (v: unknown): ReviewComparison => ["all_local", "staged", "unstaged", "branch", "untracked"].includes(String(v)) ? v as ReviewComparison : fail();
-const diagnostics = (v: unknown): ProjectDiagnostic[] => array(v, 1024).map(item => { const d = record(item); return { code: id(d.code), message: text(d.message), path: nullable(d.path) }; });
-export function parseReviewSnapshotRequest(v: unknown): ReviewSnapshotRequest { const r = record(v); return { binding_id: id(r.binding_id), repository_id: id(r.repository_id), comparison: comparison(r.comparison), base_ref: nullable(r.base_ref) }; }
-export function parseReviewFileRequest(v: unknown): ReviewFileRequest { const r = record(v); return { binding_id: id(r.binding_id), review_id: id(r.review_id), generation: integer(r.generation), file_id: id(r.file_id), source_side: r.source_side == null ? null : (r.source_side === "old" || r.source_side === "new" ? r.source_side : fail()), source_offset: defaultInteger(r.source_offset), source_revision: nullable(r.source_revision) }; }
-function changedFile(v: unknown): ReviewChangedFile {
-  const r = record(v); if (!["added", "modified", "deleted", "renamed", "copied", "untracked", "binary", "mode_only", "submodule", "unreadable"].includes(String(r.status))) return fail();
-  return { file_id: id(r.file_id), comparison: comparison(r.comparison), status: r.status as ReviewChangedFile["status"], old_path: nullable(r.old_path), new_path: nullable(r.new_path), binary: bool(r.binary), additions: maybeNumber(r.additions), deletions: maybeNumber(r.deletions), summary: text(r.summary), old_revision: nullable(r.old_revision), new_revision: nullable(r.new_revision) };
-}
-export function parseReviewSnapshot(v: unknown): ReviewSnapshot {
-  const r = record(v); return { binding_id: id(r.binding_id), session_id: id(r.session_id), viewer_id: id(r.viewer_id), review_id: id(r.review_id), generation: integer(r.generation), repository_id: id(r.repository_id), checkout_path: text(r.checkout_path), source_id: id(r.source_id), comparison: comparison(r.comparison), base_revision: nullable(r.base_revision), head_revision: nullable(r.head_revision), index_revision: id(r.index_revision), worktree_revision: id(r.worktree_revision), files: array(r.files, 100000).map(changedFile), truncated: bool(r.truncated), diagnostics: diagnostics(r.diagnostics) };
-}
-export function parseReviewFile(v: unknown): ReviewFileDiff {
-  const r = record(v); let totalLines = 0;
-  const hunks: ReviewHunk[] = array(r.hunks, 2048).map(item => { const h = record(item); const lines = array(h.lines, 100000).map(item => { const line = record(item); if (++totalLines > 100000 || !["context", "added", "deleted"].includes(String(line.kind))) return fail(); return { kind: line.kind as "context" | "added" | "deleted", old_line: maybeNumber(line.old_line), new_line: maybeNumber(line.new_line), text: text(line.text, 2 * 1024 * 1024) }; }); return { old_path: nullable(h.old_path), new_path: nullable(h.new_path), old_start: integer(h.old_start), new_start: integer(h.new_start), lines }; });
-  return { binding_id: id(r.binding_id), session_id: id(r.session_id), viewer_id: id(r.viewer_id), review_id: id(r.review_id), generation: integer(r.generation), file: changedFile(r.file), hunks, old_source: nullable(r.old_source, 512 * 1024), new_source: nullable(r.new_source, 512 * 1024), old_source_hash: nullable(r.old_source_hash), new_source_hash: nullable(r.new_source_hash), old_source_offset: defaultInteger(r.old_source_offset), new_source_offset: defaultInteger(r.new_source_offset), old_source_total_bytes: maybeNumber(r.old_source_total_bytes), new_source_total_bytes: maybeNumber(r.new_source_total_bytes), old_total_lines: maybeNumber(r.old_total_lines), new_total_lines: maybeNumber(r.new_total_lines), old_source_truncated: bool(r.old_source_truncated), new_source_truncated: bool(r.new_source_truncated), truncated: bool(r.truncated), diagnostics: diagnostics(r.diagnostics) };
-}
+const text = (v: string | null): boolean => v === null || v.length <= 4096;
+const id = (v: string): boolean => v.length > 0 && v.length <= 4096 && !/[\x00-\x1f\x7f]/.test(v);
+const review = definePolicy({
+  message: constantMessage("Malformed local review response"),
+  wire: {
+    // source_revision remains required nullable; only the fields accepted by the old defaults are nullish.
+    nullish: new Set(["ReviewFileRequest.source_side", "ReviewFileRequest.source_offset", "ReviewFileDiff.old_source_offset", "ReviewFileDiff.new_source_offset"]),
+    lengths: { "ReviewSnapshot.files": { max: 100_000 }, "ReviewSnapshot.diagnostics": { max: 1024 },
+      "ReviewFileDiff.hunks": { max: 2048 }, "ReviewHunk.lines": { max: 100_000 }, "ReviewFileDiff.diagnostics": { max: 1024 } },
+    fields: {
+      "ReviewSnapshotRequest.binding_id": id, "ReviewSnapshotRequest.repository_id": id, "ReviewSnapshotRequest.base_ref": text,
+      "ReviewFileRequest.binding_id": id, "ReviewFileRequest.review_id": id, "ReviewFileRequest.file_id": id,
+      "ReviewFileRequest.source_revision": text, "ReviewChangedFile.file_id": id,
+      "ReviewChangedFile.old_path": text, "ReviewChangedFile.new_path": text, "ReviewChangedFile.summary": text,
+      "ReviewChangedFile.old_revision": text, "ReviewChangedFile.new_revision": text,
+      "ReviewSnapshot.binding_id": id, "ReviewSnapshot.session_id": id, "ReviewSnapshot.viewer_id": id,
+      "ReviewSnapshot.review_id": id, "ReviewSnapshot.repository_id": id, "ReviewSnapshot.checkout_path": text,
+      "ReviewSnapshot.source_id": id, "ReviewSnapshot.base_revision": text, "ReviewSnapshot.head_revision": text,
+      "ReviewSnapshot.index_revision": id, "ReviewSnapshot.worktree_revision": id,
+      "ProjectDiagnostic.code": id, "ProjectDiagnostic.message": text, "ProjectDiagnostic.path": text,
+      "ReviewHunk.old_path": text, "ReviewHunk.new_path": text, "ReviewDiffLine.text": v => v.length <= 2 * 1024 * 1024,
+      "ReviewFileDiff.binding_id": id, "ReviewFileDiff.session_id": id, "ReviewFileDiff.viewer_id": id,
+      "ReviewFileDiff.review_id": id, "ReviewFileDiff.old_source": v => v === null || v.length <= 512 * 1024,
+      "ReviewFileDiff.new_source": v => v === null || v.length <= 512 * 1024,
+      "ReviewFileDiff.old_source_hash": text, "ReviewFileDiff.new_source_hash": text,
+    },
+    checks: { ReviewFileDiff: { total_lines: v => {
+      let total = 0;
+      for (const hunk of v.hunks) { total += hunk.lines.length; if (total > 100_000) return false; }
+      return true;
+    } } },
+  } satisfies TypedWirePolicy,
+});
+export const parseReviewSnapshotRequest = (v: unknown): ReviewSnapshotRequest => parseWire(v, wireReviewSnapshotRequest, review);
+export const parseReviewFileRequest = (v: unknown): ReviewFileRequest => parseWire(v, wireReviewFileRequest, review);
+export const parseReviewSnapshot = (v: unknown): ReviewSnapshot => parseWire(v, wireReviewSnapshot, review);
+export const parseReviewFile = (v: unknown): ReviewFileDiff => parseWire(v, wireReviewFileDiff, review);
 export function matchReviewSnapshot(value: ReviewSnapshot, session: string, viewer: string, request: ReviewSnapshotRequest): ReviewSnapshot { if (value.session_id !== session || value.viewer_id !== viewer || value.binding_id !== request.binding_id || value.repository_id !== request.repository_id || value.comparison !== request.comparison) return fail(); return value; }
 export function matchReviewFile(value: ReviewFileDiff, session: string, viewer: string, request: ReviewFileRequest): ReviewFileDiff { if (value.session_id !== session || value.viewer_id !== viewer || value.binding_id !== request.binding_id || value.review_id !== request.review_id || value.generation !== request.generation || value.file.file_id !== request.file_id) return fail(); if (request.source_revision !== null) { const revision = request.source_side === "old" ? value.file.old_revision : value.file.new_revision; if (revision !== request.source_revision) return fail(); } return value; }
 

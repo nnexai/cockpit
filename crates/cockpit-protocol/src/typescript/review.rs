@@ -1,0 +1,17 @@
+section!(
+    REVIEW,
+    review,
+    [
+        ReviewSide,
+        ReviewComparison,
+        ReviewFileStatus,
+        ReviewDiffLineKind,
+        ReviewSnapshotRequest,
+        ReviewChangedFile,
+        ReviewSnapshot,
+        ReviewFileRequest,
+        ReviewDiffLine,
+        ReviewHunk,
+        ReviewFileDiff,
+    ]
+);

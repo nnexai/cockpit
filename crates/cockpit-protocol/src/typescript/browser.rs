@@ -1,0 +1,26 @@
+section!(
+    BROWSER,
+    browser,
+    [
+        BrowserTarget,
+        BrowserAction,
+        BrowserRequest,
+        BrowserConnectionState,
+        BrowserAssociation,
+        BrowserResponse,
+        BrowserWorkScope,
+        BrowserCleanupState,
+        BrowserCleanupScope,
+        BrowserCleanupFailure,
+        BrowserCleanupStatus,
+        BrowserCleanupRetryRequest,
+        BrowserFeedbackRequest,
+        BrowserFeedbackAckRequest,
+        BrowserFeedbackDeliveryStatus,
+        BrowserFeedbackLookup,
+        BrowserFeedbackImageRequest,
+        BrowserFeedbackImage,
+        BrowserFeedbackSendRequest,
+        BrowserFeedbackSendResponse,
+    ]
+);

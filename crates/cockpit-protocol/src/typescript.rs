@@ -1,627 +1,118 @@
-use crate::browser::{
-    BrowserAction, BrowserAssociation, BrowserCleanupFailure, BrowserCleanupRetryRequest,
-    BrowserCleanupScope, BrowserCleanupState, BrowserCleanupStatus, BrowserConnectionState,
-    BrowserFeedbackAckRequest, BrowserFeedbackDeliveryStatus, BrowserFeedbackImage,
-    BrowserFeedbackImageRequest, BrowserFeedbackLookup, BrowserFeedbackRequest,
-    BrowserFeedbackSendRequest, BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse,
-    BrowserTarget, BrowserWorkScope,
-};
-use crate::browser_view::{
-    BrowserDraftRecoveryAction, BrowserDraftRecoveryRequest, BrowserViewBlocker,
-    BrowserViewBlockerKind, BrowserViewCapabilities, BrowserViewCapability,
-    BrowserViewCaptureCommand, BrowserViewCaptureOutcome, BrowserViewClipboardCommand,
-    BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewCommandRequest,
-    BrowserViewCommandResponse, BrowserViewCompositionInput, BrowserViewCompositionKind,
-    BrowserViewControlState, BrowserViewControlStatus, BrowserViewCursor, BrowserViewCursorState,
-    BrowserViewDialogCommand, BrowserViewDocumentCommandContext, BrowserViewDocumentState,
-    BrowserViewDownloadCommand, BrowserViewDraftAnnotation, BrowserViewDraftCommand,
-    BrowserViewDraftEditorState, BrowserViewDraftInventory, BrowserViewDraftState,
-    BrowserViewEvent, BrowserViewEventMetadata, BrowserViewFileCommand, BrowserViewFocusState,
-    BrowserViewFrameDescriptor, BrowserViewFrameEnvelopeV2, BrowserViewFrameGrant,
-    BrowserViewIdentity, BrowserViewInspectCommand, BrowserViewInspectResult,
-    BrowserViewInspectionFreshness, BrowserViewKeyKind, BrowserViewKeyboardInput,
-    BrowserViewLocation, BrowserViewNavigationCommand, BrowserViewNavigationState,
-    BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPermissionCommand,
-    BrowserViewPermissionDecision, BrowserViewPointerButton, BrowserViewPointerInput,
-    BrowserViewPointerKind, BrowserViewSnapshot, BrowserViewTabCommand, BrowserViewTargetKind,
-    BrowserViewTargetSummary, BrowserViewTextInput, BrowserViewViewportRequest,
-    BrowserViewViewportState, BrowserViewWheelInput,
-};
-use crate::orchestration::*;
-
-use crate::browser_feedback::{
-    BrowserAnnotation, BrowserAnnotationKind, BrowserCaptureContext, BrowserCaptureSaved,
-    BrowserCaptureSubmission, BrowserElementEvidence, BrowserFeedbackAck, BrowserFeedbackCapture,
-    BrowserFeedbackResponse, BrowserInlineCaptureProvenance, BrowserPageEvidence, BrowserPoint,
-    BrowserRect, BrowserViewport,
-};
-
-use crate::comment_paste::{
-    CommentPasteMarkPastedRequest, CommentPastePrepareRequest, CommentPastePrepareResponse,
-    CommentPasteReceipt, CommentPasteSendRequest, CommentPasteState, CommentPasteTarget,
-};
-
-use crate::context_media::{ContextMedia, ContextMediaRequest};
-use crate::context_search::{
-    ContextInvalidation, ContextInvalidationRequest, ContextInvalidationResponse,
-    ContextInvalidationState, ContextKnownRevision, ContextSearchRequest, ContextSearchResponse,
-    ContextSearchResult,
-};
-use crate::credentials::{
-    ProviderAuthKind, ProviderCredentialClearRequest, ProviderCredentialSetRequest,
-    ProviderCredentialState, ProviderCredentialStatus, ProviderCredentialStatusList,
-};
-use crate::library::{
-    LibraryAddRequest, LibraryAncestor, LibraryAttachment, LibraryAttachmentAction,
-    LibraryAttachmentRequest, LibraryAttachmentState, LibraryConflictFile,
-    LibraryConfluenceSpacesRequest, LibraryContainer, LibraryDirectoryRequest,
-    LibraryDocumentRequest, LibraryFileIndexMode, LibraryFileIndexRequest, LibraryFolderInfo,
-    LibraryFollowMode, LibraryFollowSource, LibraryFollowSummary, LibraryInclusion,
-    LibraryInclusionHolder, LibraryInputKind, LibraryIssueMeta, LibraryItemKind, LibraryItemRef,
-    LibraryItemState, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation,
-    LibraryOperationKind, LibraryPartial, LibraryPhase, LibraryPhaseName, LibraryPhaseState,
-    LibraryRefreshReport, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
-    LibraryReportOutcome, LibraryReportRow, LibraryResolution, LibraryResolveRequest,
-    SpaceAddRequest, SpaceContextListing, SpaceContextRequest, SpacePhaseResult,
-    SpaceRemoveRequest, SpaceRepositoriesRequest, SpaceTarget,
-};
-use crate::notes::{
-    NotesBoard, NotesCatalogEntry, NotesChangeTokens, NotesColumn, NotesComment, NotesDecision,
-    NotesDecisionFilter, NotesDecisionStatus, NotesDecisionSummary, NotesDocument, NotesLane,
-    NotesOperation, NotesRequest, NotesResponse, NotesResult, NotesSpaceInfo, NotesTarget,
-    NotesTargetInfo, NotesTodo, NotesTodoFilter, NotesTodoProblem, NotesTodoSelector,
-};
-use crate::project_teardown::{
-    WorkspaceTeardownAction, WorkspaceTeardownDirtyState, WorkspaceTeardownExecuteRequest,
-    WorkspaceTeardownOutcome, WorkspaceTeardownOwnership, WorkspaceTeardownPreview,
-    WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecovery, WorkspaceTeardownRecoveryList,
-    WorkspaceTeardownRecoveryState, WorkspaceTeardownResult, WorkspaceTeardownWorkspaceState,
-};
-use crate::quota::{
-    QuotaAccount, QuotaErrorCode, QuotaLevel, QuotaLimit, QuotaProvider, QuotaProviderState,
-    QuotaProviderStatus, QuotaStatusRequest, QuotaStatusResponse, QuotaUnit,
-};
-use crate::review::{
-    ReviewChangedFile, ReviewComparison, ReviewDiffLine, ReviewDiffLineKind, ReviewFileDiff,
-    ReviewFileRequest, ReviewFileStatus, ReviewHunk, ReviewSide, ReviewSnapshot,
-    ReviewSnapshotRequest,
-};
-use crate::sources::SourceCapability;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use crate::comments::{
-    CommentAnchor, CommentAttachment, CommentBatch, CommentBatchList, CommentBatchMutation,
-    CommentBatchRequest, CommentBatchSummary, CommentCapture, CommentDraft, CommentFileRef,
-    CommentLocation, CommentOwner, CommentPreview, CommentPreviewRequest, CommentRemoveRequest,
-    CommentRequestScope, CommentReviewRef, CommentSourceState, CommentUpsertRequest,
-};
-use crate::context::{
-    ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
-    ContextEntry, ContextEntryKind, ContextFileIndex, ContextFileIndexMode,
-    ContextFileIndexRequest, ContextFileIndexSource, ContextFileIndexState, ContextIndexedFile,
-    ContextRoot, ContextRootKind, ViewerSourceKind,
-};
-use crate::herdr_shell::{
-    HerdrCommand, HerdrCommandAction, HerdrPopup, HerdrPopupSize, HerdrShellState, HerdrShellStatus,
-};
-use crate::project_defaults::{LinkedArtifact, WorkspaceDefaults, WorkspaceDefaultsRequest};
-use crate::projects::{
-    OrchestrationConfiguration, OrchestrationRoute, ProjectArtifact, ProjectConfiguration,
-    ProjectDiagnostic, ProjectLimits, ProjectProvider, ProviderKind, ProviderDeployment, RepositoryCandidate, RepositoryListResponse,
-    WorkspaceCheckoutOwnership, WorkspaceOperation, WorkspaceOperationRequest,
-    WorkspaceOperationState, WorkspaceOperationStep, WorkspaceOwnedResource,
-    WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode, WorkspaceSetupPlan,
-    WorkspaceSetupRequest,
-};
-use crate::viewer::{
-    ViewerContext, ViewerKind, ViewerOpenRequest, ViewerSourceOptions, ViewerSourceSelector,
-};
-use ts_rs::{Config, TS};
+use ts_rs::Config;
 
-use crate::v1::TerminalTargetKind;
-use crate::v1::{
-    AgentSummary, CockpitCapabilities, CockpitMode, CreatedPane, ErrorResponse, FocusKind,
-    FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity, PaneMoveDestination,
-    PaneOutputResponse, PaneSplitDirection, PaneSummary, ResourceMutationRequest,
-    ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse, SessionStreamMessage,
-    SessionSummary, SpaceGitAction, SpaceGitActionOutcome, SpaceGitActionRequest,
-    SpaceGitActionResponse, SpaceGitCheckout, SpaceGitRefusal, SpaceGitSource, SpaceGitStatus,
-    SpaceGitStatusResponse, SpaceGitSummary, SpaceGitUpstream, SpaceSummary, StatusResponse,
-    TabSummary, TerminalCommand, TerminalMode, TerminalMouseButton, TerminalMouseKind,
-    TerminalOpenRequest, TerminalOwnershipState, TerminalScrollDirection, TerminalScrollSource,
-    TerminalStreamMessage,
-};
-use crate::widget::{
-    WidgetAddress, WidgetArrival, WidgetBlocker, WidgetBody, WidgetChange, WidgetChoice,
-    WidgetChoicesSpec, WidgetCloseRequest, WidgetCloseResponse, WidgetCloseResult, WidgetContent,
-    WidgetContentFacts, WidgetContentInput, WidgetContentRequest, WidgetDisplayed, WidgetEvent,
-    WidgetInputKind, WidgetKey, WidgetKind, WidgetListEntry, WidgetListRequest, WidgetListResponse,
-    WidgetListState, WidgetLocator, WidgetPresentation, WidgetRemovalReason, WidgetRemoveRequest,
-    WidgetRemoveResponse, WidgetRemoveResult, WidgetResolvedFrom, WidgetSelectRequest,
-    WidgetSelectResponse, WidgetSelectValue, WidgetSelectionFacts, WidgetSelectionRequest,
-    WidgetSelectionResponse, WidgetSelectionStatus, WidgetShowRequest, WidgetShowResponse,
-    WidgetShowResult, WidgetSourceFacts, WidgetSourceStatus, WidgetSourceSummary, WidgetSummary,
-    WidgetTargetFacts, WidgetWindowReport,
-};
+pub(crate) struct Section {
+    pub module: &'static str,
+    pub source: &'static str,
+    pub decls: fn(&Config, &mut String),
+    pub names: &'static [&'static str],
+}
+
+macro_rules! section {
+    ($name:ident, $module:ident, [$($ty:ident),+ $(,)?]) => {
+        pub(super) const $name: super::Section = super::Section {
+            module: stringify!($module),
+            source: include_str!(concat!("../", stringify!($module), ".rs")),
+            decls: |config, declarations| {
+                $(
+                    super::append_declaration(
+                        declarations,
+                        &<crate::$module::$ty as ts_rs::TS>::decl(config),
+                    );
+                )+
+            },
+            names: &[$(stringify!($ty)),+],
+        };
+    };
+}
+
+mod browser;
+mod browser_feedback;
+mod browser_view;
+mod comment_paste;
+mod comments;
+mod context;
+mod context_media;
+mod context_search;
+mod credentials;
+mod herdr_shell;
+mod library;
+mod notes;
+mod orchestration;
+mod project_defaults;
+mod project_teardown;
+mod projects;
+mod quota;
+mod review;
+mod sources;
+mod v1;
+mod validators;
+mod viewer;
+mod widget;
+mod wire_model;
+
+pub(crate) const SECTIONS: &[&Section] = &[
+    &v1::STATUS,
+    &browser::BROWSER,
+    &browser_feedback::FEEDBACK,
+    &browser_view::VIEW,
+    &v1::GIT_SUMMARIES,
+    &herdr_shell::SHELL,
+    &v1::SESSION_TERMINAL,
+    &projects::CONFIGURATION,
+    &library::LIBRARY,
+    &notes::NOTES,
+    &projects::REPOSITORIES,
+    &project_defaults::DEFAULTS,
+    &projects::WORKSPACE,
+    &context::VIEWER_SOURCE,
+    &viewer::VIEWER,
+    &context::CONTEXT,
+    &context_media::MEDIA,
+    &comments::COMMENTS,
+    &comment_paste::PASTE,
+    &project_teardown::TEARDOWN,
+    &sources::SOURCES,
+    &review::REVIEW,
+    &context_search::SEARCH,
+    &credentials::CREDENTIALS,
+    &quota::QUOTA,
+    &widget::WIDGET,
+    &orchestration::ORCHESTRATION,
+];
 
 const HEADER: &str = "// This file was generated by [ts-rs](https://github.com/Aleph-Alpha/ts-rs). Do not edit this file manually.";
 
 /// Render every v1 DTO in a stable order using the declarations generated by ts-rs.
 pub fn render_v1() -> String {
     let config = Config::default();
-    let declarations = [
-        CockpitMode::decl(&config),
-        HerdrIdentity::decl(&config),
-        HerdrCompatibility::decl(&config),
-        CockpitCapabilities::decl(&config),
-        StatusResponse::decl(&config),
-        ErrorResponse::decl(&config),
-        BrowserTarget::decl(&config),
-        BrowserAction::decl(&config),
-        BrowserRequest::decl(&config),
-        BrowserConnectionState::decl(&config),
-        BrowserAssociation::decl(&config),
-        BrowserResponse::decl(&config),
-        BrowserWorkScope::decl(&config),
-        BrowserCleanupState::decl(&config),
-        BrowserCleanupScope::decl(&config),
-        BrowserCleanupFailure::decl(&config),
-        BrowserCleanupStatus::decl(&config),
-        BrowserCleanupRetryRequest::decl(&config),
-        BrowserFeedbackRequest::decl(&config),
-        BrowserFeedbackAckRequest::decl(&config),
-        BrowserFeedbackDeliveryStatus::decl(&config),
-        BrowserFeedbackLookup::decl(&config),
-        BrowserFeedbackImageRequest::decl(&config),
-        BrowserFeedbackImage::decl(&config),
-        BrowserFeedbackSendRequest::decl(&config),
-        BrowserFeedbackSendResponse::decl(&config),
-        BrowserPoint::decl(&config),
-        BrowserRect::decl(&config),
-        BrowserViewport::decl(&config),
-        BrowserElementEvidence::decl(&config),
-        BrowserAnnotationKind::decl(&config),
-        BrowserAnnotation::decl(&config),
-        BrowserPageEvidence::decl(&config),
-        BrowserCaptureSubmission::decl(&config),
-        BrowserCaptureContext::decl(&config),
-        BrowserInlineCaptureProvenance::decl(&config),
-        BrowserFeedbackCapture::decl(&config),
-        BrowserCaptureSaved::decl(&config),
-        BrowserFeedbackResponse::decl(&config),
-        BrowserFeedbackAck::decl(&config),
-        BrowserViewViewportRequest::decl(&config),
-        BrowserViewOpenRequest::decl(&config),
-        BrowserViewIdentity::decl(&config),
-        BrowserViewTargetKind::decl(&config),
-        BrowserViewTargetSummary::decl(&config),
-        BrowserViewDocumentState::decl(&config),
-        BrowserViewViewportState::decl(&config),
-        BrowserViewNavigationState::decl(&config),
-        BrowserViewCursor::decl(&config),
-        BrowserViewCursorState::decl(&config),
-        BrowserViewFocusState::decl(&config),
-        BrowserViewBlockerKind::decl(&config),
-        BrowserViewBlocker::decl(&config),
-        BrowserViewCapability::decl(&config),
-        BrowserViewCapabilities::decl(&config),
-        BrowserViewControlStatus::decl(&config),
-        BrowserViewControlState::decl(&config),
-        BrowserViewFrameEnvelopeV2::decl(&config),
-        BrowserViewFrameGrant::decl(&config),
-        BrowserViewFrameDescriptor::decl(&config),
-        BrowserViewSnapshot::decl(&config),
-        BrowserViewEventMetadata::decl(&config),
-        BrowserViewEvent::decl(&config),
-        BrowserViewLocation::decl(&config),
-        BrowserViewDocumentCommandContext::decl(&config),
-        BrowserViewPointerKind::decl(&config),
-        BrowserViewPointerButton::decl(&config),
-        BrowserViewPointerInput::decl(&config),
-        BrowserViewWheelInput::decl(&config),
-        BrowserViewKeyKind::decl(&config),
-        BrowserViewKeyboardInput::decl(&config),
-        BrowserViewTextInput::decl(&config),
-        BrowserViewCompositionKind::decl(&config),
-        BrowserViewCompositionInput::decl(&config),
-        BrowserViewClipboardCommand::decl(&config),
-        BrowserViewNavigationCommand::decl(&config),
-        BrowserViewTabCommand::decl(&config),
-        BrowserViewDialogCommand::decl(&config),
-        BrowserViewFileCommand::decl(&config),
-        BrowserViewDownloadCommand::decl(&config),
-        BrowserViewPermissionDecision::decl(&config),
-        BrowserViewPermissionCommand::decl(&config),
-        BrowserViewInspectionFreshness::decl(&config),
-        BrowserViewInspectResult::decl(&config),
-        BrowserViewInspectCommand::decl(&config),
-        BrowserViewCaptureCommand::decl(&config),
-        BrowserViewDraftAnnotation::decl(&config),
-        BrowserViewDraftEditorState::decl(&config),
-        BrowserViewDraftState::decl(&config),
-        BrowserViewDraftInventory::decl(&config),
-        BrowserViewPendingCapture::decl(&config),
-        BrowserViewCaptureOutcome::decl(&config),
-        BrowserViewDraftCommand::decl(&config),
-        BrowserDraftRecoveryAction::decl(&config),
-        BrowserDraftRecoveryRequest::decl(&config),
-        BrowserViewCommand::decl(&config),
-        BrowserViewCommandRequest::decl(&config),
-        BrowserViewCommandOutcome::decl(&config),
-        BrowserViewCommandResponse::decl(&config),
-        SpaceGitSummary::decl(&config),
-        SpaceGitStatus::decl(&config),
-        SpaceGitStatusResponse::decl(&config),
-        SpaceGitSource::decl(&config),
-        SpaceGitCheckout::decl(&config),
-        SpaceGitUpstream::decl(&config),
-        SpaceGitAction::decl(&config),
-        SpaceGitActionRequest::decl(&config),
-        SpaceGitActionResponse::decl(&config),
-        SpaceGitActionOutcome::decl(&config),
-        SpaceGitRefusal::decl(&config),
-        SpaceSummary::decl(&config),
-        TabSummary::decl(&config),
-        PaneSummary::decl(&config),
-        AgentSummary::decl(&config),
-        HerdrShellStatus::decl(&config),
-        HerdrCommandAction::decl(&config),
-        HerdrCommand::decl(&config),
-        HerdrPopupSize::decl(&config),
-        HerdrPopup::decl(&config),
-        HerdrShellState::decl(&config),
-        SessionSnapshotResponse::decl(&config),
-        PaneOutputResponse::decl(&config),
-        SessionSummary::decl(&config),
-        SessionListResponse::decl(&config),
-        FocusKind::decl(&config),
-        FocusRequest::decl(&config),
-        FocusResponse::decl(&config),
-        PaneSplitDirection::decl(&config),
-        PaneMoveDestination::decl(&config),
-        ResourceMutationRequest::decl(&config),
-        CreatedPane::decl(&config),
-        ResourceMutationResponse::decl(&config),
-        SessionStreamMessage::decl(&config),
-        TerminalMode::decl(&config),
-        TerminalTargetKind::decl(&config),
-        TerminalOpenRequest::decl(&config),
-        TerminalScrollDirection::decl(&config),
-        TerminalScrollSource::decl(&config),
-        TerminalMouseButton::decl(&config),
-        TerminalMouseKind::decl(&config),
-        TerminalCommand::decl(&config),
-        TerminalOwnershipState::decl(&config),
-        TerminalStreamMessage::decl(&config),
-        ProjectLimits::decl(&config),
-        ProviderKind::decl(&config),
-        ProviderDeployment::decl(&config),
-        ProjectProvider::decl(&config),
-        ProjectConfiguration::decl(&config),
-        OrchestrationConfiguration::decl(&config),
-        OrchestrationRoute::decl(&config),
-        LibraryItemKind::decl(&config),
-        LibraryItemState::decl(&config),
-        LibraryContainer::decl(&config),
-        LibraryAncestor::decl(&config),
-        LibraryPartial::decl(&config),
-        LibraryConflictFile::decl(&config),
-        LibraryAttachmentState::decl(&config),
-        LibraryAttachment::decl(&config),
-        LibraryFolderInfo::decl(&config),
-        LibraryItemRef::decl(&config),
-        LibraryInclusionHolder::decl(&config),
-        LibraryInclusion::decl(&config),
-        LibraryIssueMeta::decl(&config),
-        LibraryItemSummary::decl(&config),
-        LibraryFollowMode::decl(&config),
-        LibraryFollowSource::decl(&config),
-        LibraryFollowSummary::decl(&config),
-        LibraryListing::decl(&config),
-        SpaceTarget::decl(&config),
-        LibraryInputKind::decl(&config),
-        LibraryResolveRequest::decl(&config),
-        LibraryConfluenceSpacesRequest::decl(&config),
-        LibraryResolution::decl(&config),
-        LibraryAddRequest::decl(&config),
-        LibraryRefreshRequest::decl(&config),
-        LibraryReplaceRequest::decl(&config),
-        LibraryRemoveRequest::decl(&config),
-        LibraryAttachmentAction::decl(&config),
-        LibraryAttachmentRequest::decl(&config),
-        LibraryOperationKind::decl(&config),
-        LibraryPhaseName::decl(&config),
-        LibraryPhaseState::decl(&config),
-        LibraryPhase::decl(&config),
-        LibraryReportOutcome::decl(&config),
-        LibraryReportRow::decl(&config),
-        LibraryRefreshReport::decl(&config),
-        SpacePhaseResult::decl(&config),
-        LibraryOperation::decl(&config),
-        LibraryDirectoryRequest::decl(&config),
-        LibraryFileIndexMode::decl(&config),
-        LibraryFileIndexRequest::decl(&config),
-        LibraryDocumentRequest::decl(&config),
-        LibraryMediaRequest::decl(&config),
-        SpaceContextRequest::decl(&config),
-        SpaceContextListing::decl(&config),
-        SpaceAddRequest::decl(&config),
-        SpaceRepositoriesRequest::decl(&config),
-        SpaceRemoveRequest::decl(&config),
-        NotesTarget::decl(&config),
-        NotesLane::decl(&config),
-        NotesColumn::decl(&config),
-        NotesTodoFilter::decl(&config),
-        NotesDecisionFilter::decl(&config),
-        NotesTodoSelector::decl(&config),
-        NotesOperation::decl(&config),
-        NotesRequest::decl(&config),
-        NotesCatalogEntry::decl(&config),
-        NotesSpaceInfo::decl(&config),
-        NotesChangeTokens::decl(&config),
-        NotesTargetInfo::decl(&config),
-        NotesDocument::decl(&config),
-        NotesTodoProblem::decl(&config),
-        NotesTodo::decl(&config),
-        NotesBoard::decl(&config),
-        NotesDecisionStatus::decl(&config),
-        NotesDecisionSummary::decl(&config),
-        NotesDecision::decl(&config),
-        NotesComment::decl(&config),
-        NotesResult::decl(&config),
-        NotesResponse::decl(&config),
-        RepositoryCandidate::decl(&config),
-        ProjectDiagnostic::decl(&config),
-        RepositoryListResponse::decl(&config),
-        WorkspaceDefaultsRequest::decl(&config),
-        LinkedArtifact::decl(&config),
-        WorkspaceDefaults::decl(&config),
-        WorkspaceSetupMode::decl(&config),
-        WorkspaceCheckoutOwnership::decl(&config),
-        WorkspaceSetupRequest::decl(&config),
-        ProjectArtifact::decl(&config),
-        WorkspaceSetupPlan::decl(&config),
-        WorkspaceOperationRequest::decl(&config),
-        WorkspaceRecoveryAction::decl(&config),
-        WorkspaceReconcileRequest::decl(&config),
-        WorkspaceOperationState::decl(&config),
-        WorkspaceOperationStep::decl(&config),
-        WorkspaceOwnedResource::decl(&config),
-        WorkspaceOperation::decl(&config),
-        ViewerSourceKind::decl(&config),
-        ViewerKind::decl(&config),
-        ViewerSourceSelector::decl(&config),
-        ViewerSourceOptions::decl(&config),
-        ViewerOpenRequest::decl(&config),
-        ViewerContext::decl(&config),
-        ContextRootKind::decl(&config),
-        ContextRoot::decl(&config),
-        ContextDirectoryRequest::decl(&config),
-        ContextFileIndexMode::decl(&config),
-        ContextFileIndexRequest::decl(&config),
-        ContextIndexedFile::decl(&config),
-        ContextFileIndexSource::decl(&config),
-        ContextFileIndexState::decl(&config),
-        ContextFileIndex::decl(&config),
-        ContextEntryKind::decl(&config),
-        ContextEntry::decl(&config),
-        ContextDirectory::decl(&config),
-        ContextDocumentRequest::decl(&config),
-        ContextDocument::decl(&config),
-        ContextMediaRequest::decl(&config),
-        ContextMedia::decl(&config),
-        CommentRequestScope::decl(&config),
-        CommentOwner::decl(&config),
-        CommentLocation::decl(&config),
-        CommentAttachment::decl(&config),
-        CommentFileRef::decl(&config),
-        CommentSourceState::decl(&config),
-        CommentReviewRef::decl(&config),
-        CommentAnchor::decl(&config),
-        CommentDraft::decl(&config),
-        CommentBatch::decl(&config),
-        CommentBatchSummary::decl(&config),
-        CommentBatchList::decl(&config),
-        CommentBatchRequest::decl(&config),
-        CommentBatchMutation::decl(&config),
-        CommentCapture::decl(&config),
-        CommentUpsertRequest::decl(&config),
-        CommentRemoveRequest::decl(&config),
-        CommentPreviewRequest::decl(&config),
-        CommentPreview::decl(&config),
-        CommentPasteTarget::decl(&config),
-        CommentPasteState::decl(&config),
-        CommentPastePrepareRequest::decl(&config),
-        CommentPastePrepareResponse::decl(&config),
-        CommentPasteSendRequest::decl(&config),
-        CommentPasteMarkPastedRequest::decl(&config),
-        CommentPasteReceipt::decl(&config),
-        WorkspaceTeardownAction::decl(&config),
-        WorkspaceTeardownOwnership::decl(&config),
-        WorkspaceTeardownDirtyState::decl(&config),
-        WorkspaceTeardownWorkspaceState::decl(&config),
-        WorkspaceTeardownPreviewRequest::decl(&config),
-        WorkspaceTeardownExecuteRequest::decl(&config),
-        WorkspaceTeardownPreview::decl(&config),
-        WorkspaceTeardownOutcome::decl(&config),
-        WorkspaceTeardownResult::decl(&config),
-        WorkspaceTeardownRecoveryState::decl(&config),
-        WorkspaceTeardownRecovery::decl(&config),
-        WorkspaceTeardownRecoveryList::decl(&config),
-        SourceCapability::decl(&config),
-        ReviewSide::decl(&config),
-        ReviewComparison::decl(&config),
-        ReviewFileStatus::decl(&config),
-        ReviewDiffLineKind::decl(&config),
-        ReviewSnapshotRequest::decl(&config),
-        ReviewChangedFile::decl(&config),
-        ReviewSnapshot::decl(&config),
-        ReviewFileRequest::decl(&config),
-        ReviewDiffLine::decl(&config),
-        ReviewHunk::decl(&config),
-        ReviewFileDiff::decl(&config),
-        ContextSearchRequest::decl(&config),
-        ContextSearchResult::decl(&config),
-        ContextSearchResponse::decl(&config),
-        ContextKnownRevision::decl(&config),
-        ContextInvalidationState::decl(&config),
-        ContextInvalidation::decl(&config),
-        ContextInvalidationRequest::decl(&config),
-        ContextInvalidationResponse::decl(&config),
-        ProviderAuthKind::decl(&config),
-        ProviderCredentialState::decl(&config),
-        ProviderCredentialStatus::decl(&config),
-        ProviderCredentialStatusList::decl(&config),
-        ProviderCredentialSetRequest::decl(&config),
-        ProviderCredentialClearRequest::decl(&config),
-        QuotaProvider::decl(&config),
-        QuotaProviderState::decl(&config),
-        QuotaErrorCode::decl(&config),
-        QuotaUnit::decl(&config),
-        QuotaLevel::decl(&config),
-        QuotaLimit::decl(&config),
-        QuotaAccount::decl(&config),
-        QuotaProviderStatus::decl(&config),
-        QuotaStatusRequest::decl(&config),
-        QuotaStatusResponse::decl(&config),
-        WidgetLocator::decl(&config),
-        WidgetAddress::decl(&config),
-        WidgetInputKind::decl(&config),
-        WidgetContentInput::decl(&config),
-        WidgetShowRequest::decl(&config),
-        WidgetShowResult::decl(&config),
-        WidgetDisplayed::decl(&config),
-        WidgetPresentation::decl(&config),
-        WidgetResolvedFrom::decl(&config),
-        WidgetContentFacts::decl(&config),
-        WidgetSourceFacts::decl(&config),
-        WidgetTargetFacts::decl(&config),
-        WidgetShowResponse::decl(&config),
-        WidgetCloseRequest::decl(&config),
-        WidgetCloseResult::decl(&config),
-        WidgetCloseResponse::decl(&config),
-        WidgetListRequest::decl(&config),
-        WidgetListState::decl(&config),
-        WidgetListEntry::decl(&config),
-        WidgetListResponse::decl(&config),
-        WidgetSelectionRequest::decl(&config),
-        WidgetSelectionStatus::decl(&config),
-        WidgetSelectionResponse::decl(&config),
-        WidgetKey::decl(&config),
-        WidgetKind::decl(&config),
-        WidgetArrival::decl(&config),
-        WidgetChange::decl(&config),
-        WidgetSourceStatus::decl(&config),
-        WidgetSourceSummary::decl(&config),
-        WidgetSelectionFacts::decl(&config),
-        WidgetSummary::decl(&config),
-        WidgetRemovalReason::decl(&config),
-        WidgetEvent::decl(&config),
-        WidgetBlocker::decl(&config),
-        WidgetWindowReport::decl(&config),
-        WidgetContentRequest::decl(&config),
-        WidgetBody::decl(&config),
-        WidgetContent::decl(&config),
-        WidgetRemoveRequest::decl(&config),
-        WidgetRemoveResult::decl(&config),
-        WidgetRemoveResponse::decl(&config),
-        WidgetSelectValue::decl(&config),
-        WidgetSelectRequest::decl(&config),
-        WidgetSelectResponse::decl(&config),
-        WidgetChoicesSpec::decl(&config),
-        WidgetChoice::decl(&config),
-        OrchestrationSnapshotRequest::decl(&config),
-        OrchestrationWaitRequest::decl(&config),
-        OrchestrationWaitResponse::decl(&config),
-        OrchestrationMutationRequest::decl(&config),
-        OrchestrationMutationResponse::decl(&config),
-        OrchestrationSnapshot::decl(&config),
-        UnmanagedAgent::decl(&config),
-        RootSummary::decl(&config),
-        TaskBoard::decl(&config),
-        Task::decl(&config),
-        TaskStep::decl(&config),
-        TaskStepProgress::decl(&config),
-        TaskStepStatus::decl(&config),
-        TaskStepScope::decl(&config),
-        TaskDependencies::decl(&config),
-        TaskDependencyState::decl(&config),
-        TaskDependencyBlocker::decl(&config),
-        TaskDependencyBlockerReason::decl(&config),
-        TaskView::decl(&config),
-        TaskLane::decl(&config),
-        RunKind::decl(&config),
-        RunStage::decl(&config),
-        CloseReason::decl(&config),
-        DispatchStep::decl(&config),
-        DispatchTarget::decl(&config),
-        SetupSummary::decl(&config),
-        PlanRecord::decl(&config),
-        Grant::decl(&config),
-        GrantScope::decl(&config),
-        GrantOrigin::decl(&config),
-        OperatorOrigin::decl(&config),
-        RunLocation::decl(&config),
-        NativeProcessIdentity::decl(&config),
-        NativeShellIdentity::decl(&config),
-        RetirementTrigger::decl(&config),
-        RetirementIdentity::decl(&config),
-        RunRetirement::decl(&config),
-        RetirementState::decl(&config),
-        RetirementBlocker::decl(&config),
-        NativeDeferReason::decl(&config),
-        NativeStopEvidence::decl(&config),
-        TerminalOutcome::decl(&config),
-        RetainReason::decl(&config),
-        RetirementPhase::decl(&config),
-        NativeRefuseReason::decl(&config),
-        NativeStopReceipt::decl(&config),
-        Run::decl(&config),
-        DispatchState::decl(&config),
-        Annotation::decl(&config),
-        ActorRef::decl(&config),
-        ReportKind::decl(&config),
-        ReportOutcome::decl(&config),
-        Report::decl(&config),
-        MessageKind::decl(&config),
-        DeliveryStage::decl(&config),
-        Message::decl(&config),
-        QuestionStatus::decl(&config),
-        QuestionReceipt::decl(&config),
-        AnswerReceipt::decl(&config),
-        SubagentStatus::decl(&config),
-        Subagent::decl(&config),
-        ControlStage::decl(&config),
-        SubagentControlState::decl(&config),
-        AgentKind::decl(&config),
-        IntentState::decl(&config),
-        TaskIntent::decl(&config),
-        TaskAssignmentIntent::decl(&config),
-        Presence::decl(&config),
-        RunObservation::decl(&config),
-        RuntimeObservation::decl(&config),
-        AttentionKind::decl(&config),
-        Attention::decl(&config),
-        OrchestrationAction::decl(&config),
-        SubagentOp::decl(&config),
-        OrchestrationActionResult::decl(&config),
-    ]
-    .into_iter()
-    .map(|declaration| format!("export {declaration}"))
-    .collect::<Vec<_>>()
-    .join("\n\n");
+    let mut declarations = String::new();
+    for section in SECTIONS {
+        (section.decls)(&config, &mut declarations);
+    }
+    declarations.truncate(declarations.len() - 2);
 
-    format!(
-        "{HEADER}\n\n{}\n",
-        declarations
-            .lines()
-            .map(str::trim_end)
-            .collect::<Vec<_>>()
-            .join("\n")
-    )
+    let mut output = String::with_capacity(HEADER.len() + declarations.len() + 3);
+    output.push_str(HEADER);
+    output.push_str("\n\n");
+    for (index, line) in declarations.lines().enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        output.push_str(line.trim_end());
+    }
+    output.push('\n');
+    output
+}
+
+fn append_declaration(declarations: &mut String, declaration: &str) {
+    declarations.push_str("export ");
+    declarations.push_str(declaration);
+    declarations.push_str("\n\n");
 }
 
 /// Replace `path` with `contents` using a same-directory temporary file and rename.
@@ -676,11 +167,118 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     result
 }
 
-/// Return whether `path` contains exactly the generated v1 bytes.
-pub fn check(path: &Path) -> io::Result<bool> {
-    match fs::read(path) {
-        Ok(actual) => Ok(actual == render_v1().as_bytes()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
+/// Render the declarations and every source-derived validator artifact.
+pub fn render_generated() -> io::Result<Vec<(PathBuf, String)>> {
+    let model = wire_model::wire_model(SECTIONS).map_err(io::Error::other)?;
+    let mut files = validators::render(&model).map_err(io::Error::other)?;
+    let declarations = render_v1();
+    if declarations.lines().count() > 1_500 {
+        return Err(io::Error::other("generated file v1.ts exceeds 1500 lines"));
     }
+    files.insert(0, (PathBuf::from("v1.ts"), declarations));
+    Ok(files)
+}
+
+fn output_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn emitted_path(target: &Path, relative: &Path) -> PathBuf {
+    if relative == Path::new("v1.ts") {
+        target.to_owned()
+    } else {
+        output_parent(target).join(relative)
+    }
+}
+
+// Only direct, generated .ts children of the exact validator output directory
+// are eligible for pruning. Symlinks and user-authored files are never removed.
+fn stale_validators(target: &Path, files: &[(PathBuf, String)]) -> io::Result<Vec<PathBuf>> {
+    let directory = output_parent(target).join("validate");
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(io::Error::other(
+                "validator output directory must not be a symlink",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    }
+    let mut stale = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !entry.file_type()?.is_file()
+            || path.extension().is_none_or(|extension| extension != "ts")
+        {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(output_parent(target))
+            .map_err(io::Error::other)?;
+        if files.iter().any(|(expected, _)| expected == relative) {
+            continue;
+        }
+        let contents = fs::read(&path)?;
+        if contents.starts_with(validators::GENERATED_HEADER.as_bytes()) {
+            stale.push(path);
+        }
+    }
+    stale.sort();
+    Ok(stale)
+}
+
+/// Atomically replace every generated artifact, then prune recognized stale validators.
+pub fn write_generated(path: &Path) -> io::Result<()> {
+    let files = render_generated()?;
+    let stale = stale_validators(path, &files)?;
+    for (relative, _) in &files {
+        let target = emitted_path(path, relative);
+        if fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(io::Error::other(format!(
+                "generated output must not be a symlink: {}",
+                target.display()
+            )));
+        }
+    }
+    for (relative, contents) in &files {
+        write_atomic(&emitted_path(path, relative), contents.as_bytes())?;
+    }
+    for stale_path in stale {
+        if fs::symlink_metadata(&stale_path)?.file_type().is_file()
+            && fs::read(&stale_path)?.starts_with(validators::GENERATED_HEADER.as_bytes())
+        {
+            fs::remove_file(stale_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Return drifted, missing and recognized stale paths without changing any file.
+pub fn check_generated(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let files = render_generated()?;
+    let mut drifted = stale_validators(path, &files)?;
+    for (relative, contents) in &files {
+        let target = emitted_path(path, relative);
+        if fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            drifted.push(target);
+            continue;
+        }
+        match fs::read(&target) {
+            Ok(actual) if actual == contents.as_bytes() => {}
+            Ok(_) => drifted.push(target),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => drifted.push(target),
+            Err(error) => return Err(error),
+        }
+    }
+    drifted.sort();
+    Ok(drifted)
+}
+
+/// Return whether the declarations and all sibling validator artifacts are current.
+pub fn check(path: &Path) -> io::Result<bool> {
+    check_generated(path).map(|drifted| drifted.is_empty())
 }

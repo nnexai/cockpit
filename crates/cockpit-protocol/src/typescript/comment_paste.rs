@@ -1,0 +1,13 @@
+section!(
+    PASTE,
+    comment_paste,
+    [
+        CommentPasteTarget,
+        CommentPasteState,
+        CommentPastePrepareRequest,
+        CommentPastePrepareResponse,
+        CommentPasteSendRequest,
+        CommentPasteMarkPastedRequest,
+        CommentPasteReceipt,
+    ]
+);

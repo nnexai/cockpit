@@ -1,0 +1,14 @@
+section!(
+    SEARCH,
+    context_search,
+    [
+        ContextSearchRequest,
+        ContextSearchResult,
+        ContextSearchResponse,
+        ContextKnownRevision,
+        ContextInvalidationState,
+        ContextInvalidation,
+        ContextInvalidationRequest,
+        ContextInvalidationResponse,
+    ]
+);

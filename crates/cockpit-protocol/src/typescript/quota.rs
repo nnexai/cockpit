@@ -1,0 +1,16 @@
+section!(
+    QUOTA,
+    quota,
+    [
+        QuotaProvider,
+        QuotaProviderState,
+        QuotaErrorCode,
+        QuotaUnit,
+        QuotaLevel,
+        QuotaLimit,
+        QuotaAccount,
+        QuotaProviderStatus,
+        QuotaStatusRequest,
+        QuotaStatusResponse,
+    ]
+);

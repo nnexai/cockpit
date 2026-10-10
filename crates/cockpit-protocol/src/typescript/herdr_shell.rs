@@ -1,0 +1,12 @@
+section!(
+    SHELL,
+    herdr_shell,
+    [
+        HerdrShellStatus,
+        HerdrCommandAction,
+        HerdrCommand,
+        HerdrPopupSize,
+        HerdrPopup,
+        HerdrShellState,
+    ]
+);

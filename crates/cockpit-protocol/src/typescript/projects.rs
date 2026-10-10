@@ -1,0 +1,42 @@
+section!(
+    CONFIGURATION,
+    projects,
+    [
+        ProjectLimits,
+        ProviderKind,
+        ProviderDeployment,
+        ProjectProvider,
+        ProjectConfiguration,
+        OrchestrationConfiguration,
+        OrchestrationRoute,
+    ]
+);
+
+section!(
+    REPOSITORIES,
+    projects,
+    [
+        RepositoryCandidate,
+        ProjectDiagnostic,
+        RepositoryListResponse,
+    ]
+);
+
+section!(
+    WORKSPACE,
+    projects,
+    [
+        WorkspaceSetupMode,
+        WorkspaceCheckoutOwnership,
+        WorkspaceSetupRequest,
+        ProjectArtifact,
+        WorkspaceSetupPlan,
+        WorkspaceOperationRequest,
+        WorkspaceRecoveryAction,
+        WorkspaceReconcileRequest,
+        WorkspaceOperationState,
+        WorkspaceOperationStep,
+        WorkspaceOwnedResource,
+        WorkspaceOperation,
+    ]
+);

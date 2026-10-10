@@ -42,6 +42,13 @@ describe("provider configuration protocol", () => {
   ])("rejects missing kinds and malformed optional provider fields: %j", (fields) => {
     expect(() => parseProjectConfiguration(configuration([{ id: "invalid", base_url: "https://jira.test", ...fields }]))).toThrow("Invalid project configuration");
   });
+
+  it.each([
+    { cache_root: 42 },
+    { orchestration: { omp_extension: null, model: 42, extra_args: [], routes: [] } },
+  ])("rejects malformed typed configuration fields: %j", (fields) => {
+    expect(() => parseProjectConfiguration({ ...configuration([]), ...fields })).toThrow();
+  });
 });
 
 const repository = {

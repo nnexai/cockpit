@@ -1,0 +1,11 @@
+section!(
+    VIEWER,
+    viewer,
+    [
+        ViewerKind,
+        ViewerSourceSelector,
+        ViewerSourceOptions,
+        ViewerOpenRequest,
+        ViewerContext,
+    ]
+);

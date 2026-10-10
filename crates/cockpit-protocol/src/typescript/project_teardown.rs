@@ -1,0 +1,18 @@
+section!(
+    TEARDOWN,
+    project_teardown,
+    [
+        WorkspaceTeardownAction,
+        WorkspaceTeardownOwnership,
+        WorkspaceTeardownDirtyState,
+        WorkspaceTeardownWorkspaceState,
+        WorkspaceTeardownPreviewRequest,
+        WorkspaceTeardownExecuteRequest,
+        WorkspaceTeardownPreview,
+        WorkspaceTeardownOutcome,
+        WorkspaceTeardownResult,
+        WorkspaceTeardownRecoveryState,
+        WorkspaceTeardownRecovery,
+        WorkspaceTeardownRecoveryList,
+    ]
+);

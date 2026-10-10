@@ -1,184 +1,101 @@
-import type {
-  ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
-  ContextEntry, ContextFileIndex, ContextFileIndexRequest,
-  ContextRoot, ViewerSourceOptions, ViewerSourceSelector, ViewerOpenRequest, ViewerContext,
-} from "../protocol/generated/v1";
+import type { ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest, ContextFileIndex, ContextFileIndexRequest, ViewerSourceOptions, ViewerSourceSelector, ViewerOpenRequest, ViewerContext } from "../protocol/generated/v1";
+import { wireContextDirectory, wireContextDirectoryRequest, wireContextDocument, wireContextDocumentRequest, wireContextFileIndex, wireContextFileIndexRequest, wireViewerSourceOptions, wireViewerSourceSelector, wireViewerOpenRequest, wireViewerContext, type WireFields } from "../protocol/generated/validate";
 import { CockpitClientError } from "./CockpitClient";
+import { definePolicy, messageTable, parseWire } from "./wire";
 
-const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const text = (value: unknown): value is string => typeof value === "string";
-const nullableText = (value: unknown): value is string | null => value === null || text(value);
-const identity = (value: unknown): value is string => text(value) && value.length > 0 && value.length <= 512 && !value.includes("\0");
-const bytes = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-const boundedOffset = (value: unknown): value is number => bytes(value) && value <= 100_000;
-const diagnostics = (value: unknown): boolean => Array.isArray(value) && value.every((item) => record(item) && text(item.code) && text(item.message) && nullableText(item.path));
-
-function malformed(label: string): never {
-  throw new CockpitClientError("malformed_response", `Invalid ${label}`);
+const identity = (v: string): boolean => v.length > 0 && v.length <= 512 && !v.includes("\0");
+const relativePath = (v: string, empty = false): boolean => v.length <= 4096 && !v.includes("\0") && ((empty && v === "") || (v.length > 0 && v.split("/").every(p => p !== "" && p !== "." && p !== "..")));
+function fields<K extends keyof WireFields>(names: readonly K[], check: (v: WireFields[K]) => boolean) {
+  const unary = (v: WireFields[K]): boolean => check(v);
+  return Object.fromEntries(names.map(name => [name, unary])) as Record<K, (v: WireFields[K]) => boolean>;
 }
-
-function relativePath(value: unknown, allowEmpty: boolean): value is string {
-  return text(value) && value.length <= 4096 && !value.includes("\0")
-    && ((allowEmpty && value === "") || (value.length > 0 && value.split("/").every((part) => part !== "" && part !== "." && part !== "..")));
-}
-
-function root(value: unknown): value is ContextRoot {
-  return record(value) && identity(value.root_id) && (value.kind === "repository" || value.kind === "library" || value.kind === "folder")
-    && text(value.label) && text(value.path) && identity(value.repository_id)
-    && text(value.checkout_path);
-}
-
-export function parseViewerSourceOptions(value: unknown): ViewerSourceOptions {
-  if (!record(value) || !identity(value.session_id) || !identity(value.pane_id) || !identity(value.tab_id)
-    || !identity(value.space_id) || !nullableText(value.files_context_root_id) || !nullableText(value.files_folder_root_id)
-    || !Array.isArray(value.review_repository_ids) || !value.review_repository_ids.every(identity)
-    || !Array.isArray(value.roots) || !value.roots.every(root) || !text(value.reason)
-    || !diagnostics(value.diagnostics)) malformed("viewer source options");
-  const roots = value.roots;
-  if (new Set(roots.map((item) => item.root_id)).size !== roots.length
-    || new Set(value.review_repository_ids).size !== value.review_repository_ids.length
-    || (value.files_context_root_id !== null && !roots.some((item) => item.root_id === value.files_context_root_id && item.kind === "library"))
-    || (value.files_folder_root_id !== null && !roots.some((item) => item.root_id === value.files_folder_root_id && item.kind === "folder"))
-    || value.review_repository_ids.some((id) => !roots.some((item) => item.repository_id === id && item.kind === "repository"))) {
-    malformed("viewer source root identity");
-  }
-  return value as unknown as ViewerSourceOptions;
-}
-
+function malformed(label: string): never { throw new CockpitClientError("malformed_response", `Invalid ${label}`); }
+const POLICY = definePolicy({
+  message: messageTable({
+    ViewerSourceOptions: f => `Invalid viewer source ${f.refinement === "identity" ? "root identity" : "options"}`, ViewerSourceSelector: "Invalid viewer source selector", ViewerOpenRequest: "Invalid viewer open request", ViewerContext: f => `Invalid viewer context${f.refinement === "identity" ? " root identity" : ""}`,
+    ContextDirectoryRequest: f => `Invalid Context directory ${f.path.find(p => p.type === "ContextDirectoryRequest")?.field === "offset" ? "continuation" : f.path.find(p => p.type === "ContextDirectoryRequest")?.field === "revision" ? "revision" : "request"}`,
+    ContextFileIndexRequest: "Invalid Context file-index request", ContextFileIndex: "Invalid Context file index", ContextDocumentRequest: "Invalid Context document request",
+    ContextDirectory: f => `Invalid ${f.refinement === "unique" ? "duplicate Context entry identities" : ({ revision: "Context directory revision", next_offset: "Context directory continuation", total_entries: "Context directory count" } as Record<string, string>)[f.path.find(p => p.type === "ContextDirectory")?.field ?? ""] ?? "Context directory"}`,
+    ContextDocument: f => `Invalid ${({ offset: "Context document offset", next_offset: "Context document next_offset", line_offset: "Context document line_offset", total_bytes: "Context document total bytes" } as Record<string, string>)[f.path.find(p => p.type === "ContextDocument")?.field ?? ""] ?? "Context document"}`,
+  }, "Invalid Context document"),
+  wire: {
+    raw: new Set(["ViewerSourceOptions", "ViewerContext", "ContextFileIndexRequest", "ContextFileIndex", "ContextDirectory", "ContextDocument"]),
+    nullish: new Set(["ContextDirectoryRequest.offset", "ContextDirectoryRequest.revision", "ContextDocumentRequest.offset", "ContextDirectory.revision", "ContextDirectory.next_offset", "ContextDirectory.total_entries", "ContextDocument.offset", "ContextDocument.next_offset", "ContextDocument.line_offset", "ContextDocument.total_bytes"]),
+    order: {
+      ViewerOpenRequest: ["tab_id", "source_pane_id", "client_id", "kind", "source"],
+      ContextDirectoryRequest: ["binding_id", "root_id", "path", "offset", "revision"],
+      ContextDirectory: ["binding_id", "root_id", "path", "entries", "truncated", "diagnostics", "check:unique", "revision", "next_offset", "total_entries"],
+      ContextDocument: ["binding_id", "root_id", "path", "revision", "content_hash", "bytes", "media_type", "text", "truncated", "diagnostics", "check:content", "offset", "next_offset", "line_offset", "total_bytes"],
+    },
+    emit: { ViewerOpenRequest: ["tab_id", "source_pane_id", "client_id", "kind", "source"] },
+    lengths: { "ContextFileIndex.files": { max: 50_000 }, "ContextDirectory.entries": { max: 10_000 } },
+    fields: {
+      ...fields(["ContextRoot.root_id", "ContextRoot.repository_id", "ViewerSourceOptions.session_id", "ViewerSourceOptions.pane_id", "ViewerSourceOptions.tab_id", "ViewerSourceOptions.space_id", "ViewerSourceSelector[files_repository].root_id", "ViewerSourceSelector[review].repository_id", "ViewerOpenRequest.tab_id", "ViewerOpenRequest.source_pane_id", "ViewerOpenRequest.client_id", "ViewerContext.session_id", "ViewerContext.viewer_id", "ViewerContext.binding_id", "ViewerContext.tab_id", "ViewerContext.space_id", "ViewerContext.source_id", "ContextDirectoryRequest.binding_id", "ContextDirectoryRequest.root_id", "ContextFileIndexRequest.binding_id", "ContextFileIndexRequest.root_id", "ContextFileIndex.binding_id", "ContextFileIndex.root_id", "ContextDirectory.binding_id", "ContextDirectory.root_id", "ContextDocumentRequest.binding_id", "ContextDocumentRequest.root_id", "ContextDocument.binding_id", "ContextDocument.root_id", "ContextDocument.revision", "ContextEntry.entry_id"], identity),
+      ...fields(["ContextIndexedFile.path", "ContextDocumentRequest.path", "ContextDocument.path"], relativePath),
+      ...fields(["ContextDirectoryRequest.path", "ContextDirectory.path"], v => relativePath(v, true)),
+      "ViewerSourceOptions.review_repository_ids": v => v.every(identity), "ContextEntry.path": v => v === null || relativePath(v),
+      "ContextDirectoryRequest.offset": v => v === undefined || v <= 100_000, "ContextDirectoryRequest.revision": v => v === undefined || identity(v),
+      "ContextDirectory.next_offset": v => v === undefined || v <= 100_000,
+    },
+    checks: {
+      ContextDirectory: { unique: v => new Set(v.entries.map(x => x.entry_id)).size === v.entries.length },
+      ContextDocument: { content: v => (!v.truncated || v.content_hash === null) && (v.text === null || v.text.length <= 8 * 1024 * 1024) },
+      ViewerSourceOptions: {
+        identity: v => new Set(v.roots.map(x => x.root_id)).size === v.roots.length && new Set(v.review_repository_ids).size === v.review_repository_ids.length
+          && (v.files_context_root_id === null || v.roots.some(x => x.root_id === v.files_context_root_id && x.kind === "library"))
+          && (v.files_folder_root_id === null || v.roots.some(x => x.root_id === v.files_folder_root_id && x.kind === "folder"))
+          && v.review_repository_ids.every(id => v.roots.some(x => x.repository_id === id && x.kind === "repository")),
+      },
+      ViewerContext: {
+        source: v => (v.kind === "review") === (v.source_kind === "review"),
+        identity: v => {
+          const ids = v.roots.map(x => x.root_id);
+          return new Set(ids).size === ids.length && (v.default_root_id === null || ids.includes(v.default_root_id));
+        },
+      },
+    },
+  },
+});
+export function parseViewerSourceOptions(value: unknown): ViewerSourceOptions { return parseWire(value, wireViewerSourceOptions, POLICY); }
 export function matchViewerSourceOptions(value: ViewerSourceOptions, sessionId: string, paneId: string): ViewerSourceOptions {
   if (value.session_id !== sessionId || value.pane_id !== paneId) malformed("viewer source options identity");
   return value;
 }
-
-export function parseViewerSourceSelector(value: unknown): ViewerSourceSelector {
-  if (!record(value)) malformed("viewer source selector");
-  if (value.kind === "files_context" || value.kind === "files_folder") return { kind: value.kind };
-  if (value.kind === "files_repository" && identity(value.root_id)) return { kind: "files_repository", root_id: value.root_id };
-  if (value.kind === "review" && identity(value.repository_id)) return { kind: "review", repository_id: value.repository_id };
-  return malformed("viewer source selector");
-}
-
+export function parseViewerSourceSelector(value: unknown): ViewerSourceSelector { return parseWire(value, wireViewerSourceSelector, POLICY); }
 export function parseViewerOpenRequest(value: unknown): ViewerOpenRequest {
-  if (!record(value) || !identity(value.tab_id) || !identity(value.source_pane_id)
-    || !identity(value.client_id) || (value.kind !== "files" && value.kind !== "review")) malformed("viewer open request");
-  const source = parseViewerSourceSelector(value.source);
-  if ((value.kind === "review") !== (source.kind === "review")) malformed("viewer source kind");
-  return { tab_id: value.tab_id, source_pane_id: value.source_pane_id, client_id: value.client_id, kind: value.kind, source };
+  const v = parseWire(value, wireViewerOpenRequest, POLICY);
+  if ((v.kind === "review") !== (v.source.kind === "review")) malformed("viewer source kind");
+  return v;
 }
-
-export function parseViewerContext(value: unknown): ViewerContext {
-  if (!record(value) || !identity(value.session_id) || !identity(value.viewer_id) || !identity(value.binding_id)
-    || !identity(value.tab_id) || !identity(value.space_id) || !identity(value.source_id)
-    || (value.kind !== "files" && value.kind !== "review")
-    || (value.source_kind !== "context" && value.source_kind !== "review")
-    || ((value.kind === "review") !== (value.source_kind === "review"))
-    || !Array.isArray(value.roots) || !value.roots.every(root)
-    || !nullableText(value.default_root_id) || !diagnostics(value.diagnostics)) malformed("viewer context");
-  const ids = value.roots.map((item) => item.root_id);
-  if (new Set(ids).size !== ids.length || (value.default_root_id !== null && !ids.includes(value.default_root_id))) {
-    malformed("viewer context root identity");
-  }
-  return value as unknown as ViewerContext;
-}
-
+export function parseViewerContext(value: unknown): ViewerContext { return parseWire(value, wireViewerContext, POLICY); }
 export function matchViewerContext(value: ViewerContext, sessionId: string, request: ViewerOpenRequest): ViewerContext {
   if (value.session_id !== sessionId || value.tab_id !== request.tab_id || value.kind !== request.kind) malformed("viewer context identity");
   const source = request.source;
-  if (source.kind === "review" && !value.roots.some((item) => item.kind === "repository" && item.repository_id === source.repository_id)) {
-    malformed("viewer context repository identity");
-  }
-  if (source.kind === "files_repository" && !value.roots.some((item) => item.kind === "repository" && item.root_id === source.root_id)) {
-    malformed("viewer context selected repository identity");
-  }
+  if (source.kind === "review" && !value.roots.some(x => x.kind === "repository" && x.repository_id === source.repository_id)) malformed("viewer context repository identity");
+  if (source.kind === "files_repository" && !value.roots.some(x => x.kind === "repository" && x.root_id === source.root_id)) malformed("viewer context selected repository identity");
   return value;
 }
-
 export function parseContextDirectoryRequest(value: unknown): ContextDirectoryRequest {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id) || !relativePath(value.path, true)) malformed("Context directory request");
-  if (value.offset !== undefined && value.offset !== null && !boundedOffset(value.offset)) malformed("Context directory continuation");
-  if (value.revision !== undefined && value.revision !== null && !identity(value.revision)) malformed("Context directory revision");
-  return {
-    binding_id: value.binding_id as string,
-    root_id: value.root_id as string,
-    path: value.path as string,
-    offset: value.offset === undefined || value.offset === null ? undefined : value.offset,
-    revision: value.revision === undefined || value.revision === null ? undefined : value.revision,
-  };
+  const v = parseWire(value, wireContextDirectoryRequest, POLICY);
+  return { binding_id: v.binding_id, root_id: v.root_id, path: v.path, offset: v.offset, revision: v.revision };
 }
-
-export function parseContextFileIndexRequest(value: unknown): ContextFileIndexRequest {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id)
-    || (value.mode !== "cached" && value.mode !== "fresh")) malformed("Context file-index request");
-  return value as unknown as ContextFileIndexRequest;
-}
-
-export function parseContextFileIndex(value: unknown): ContextFileIndex {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id)
-    || !Array.isArray(value.files) || value.files.length > 50_000
-    || !value.files.every((file) => record(file) && relativePath(file.path, false) && (file.bytes === null || bytes(file.bytes)))
-    || typeof value.truncated !== "boolean" || !["git", "walk"].includes(String(value.source))
-    || !["fresh", "cached", "miss"].includes(String(value.state)) || !diagnostics(value.diagnostics)) malformed("Context file index");
-  return value as unknown as ContextFileIndex;
-}
-
+export function parseContextFileIndexRequest(value: unknown): ContextFileIndexRequest { return parseWire(value, wireContextFileIndexRequest, POLICY); }
+export function parseContextFileIndex(value: unknown): ContextFileIndex { return parseWire(value, wireContextFileIndex, POLICY); }
 export function parseContextDocumentRequest(value: unknown): ContextDocumentRequest {
-  const request = parseContextDirectoryRequest(value);
-  if (!relativePath(request.path, false) || !record(value) || !nullableText(value.expected_revision)) malformed("Context document request");
-  if (value.offset !== undefined && value.offset !== null && !bytes(value.offset)) malformed("Context document continuation");
-  return {
-    binding_id: value.binding_id as string,
-    root_id: value.root_id as string,
-    path: value.path as string,
-    expected_revision: value.expected_revision as string | null,
-    offset: value.offset === undefined || value.offset === null ? undefined : value.offset,
-  };
+  const directory = parseContextDirectoryRequest(value);
+  if (!relativePath(directory.path)) malformed("Context document request");
+  const v = parseWire(value, wireContextDocumentRequest, POLICY);
+  return { ...v, offset: v.offset };
 }
-
-function entry(value: unknown): value is ContextEntry {
-  return record(value) && identity(value.entry_id) && text(value.name)
-    && (value.path === null || relativePath(value.path, false))
-    && text(value.kind) && ["directory", "file", "symlink", "other"].includes(value.kind)
-    && (value.bytes === null || bytes(value.bytes)) && text(value.revision) && nullableText(value.refusal);
-}
-
 export function parseContextDirectory(value: unknown): ContextDirectory {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id) || !relativePath(value.path, true)
-    || !Array.isArray(value.entries) || value.entries.length > 10_000 || !value.entries.every(entry)
-    || typeof value.truncated !== "boolean" || !diagnostics(value.diagnostics)) malformed("Context directory");
-  const ids = value.entries.map((item) => item.entry_id);
-  if (new Set(ids).size !== ids.length) malformed("duplicate Context entry identities");
-  if (value.revision !== undefined && !nullableText(value.revision)) malformed("Context directory revision");
-  if (value.next_offset !== undefined && value.next_offset !== null && !boundedOffset(value.next_offset)) malformed("Context directory continuation");
-  if (value.total_entries !== undefined && value.total_entries !== null && !bytes(value.total_entries)) malformed("Context directory count");
-  return {
-    ...value,
-    revision: value.revision === undefined || value.revision === null ? undefined : value.revision,
-    next_offset: value.next_offset === undefined || value.next_offset === null ? undefined : value.next_offset,
-    total_entries: value.total_entries === undefined || value.total_entries === null ? undefined : value.total_entries,
-  } as unknown as ContextDirectory;
+  const v = parseWire(value, wireContextDirectory, POLICY);
+  return { ...v, revision: v.revision ?? undefined, next_offset: v.next_offset ?? undefined, total_entries: v.total_entries ?? undefined };
 }
-
 export function parseContextDocument(value: unknown): ContextDocument {
-  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id) || !relativePath(value.path, false)
-    || !identity(value.revision) || !nullableText(value.content_hash) || !bytes(value.bytes)
-    || !text(value.media_type) || !nullableText(value.text) || typeof value.truncated !== "boolean"
-    || !diagnostics(value.diagnostics) || (value.truncated && value.content_hash !== null)
-    || (text(value.text) && value.text.length > 8 * 1024 * 1024)) malformed("Context document");
-  for (const [name, item] of [["offset", value.offset], ["next_offset", value.next_offset], ["line_offset", value.line_offset]] as const) {
-    if (item !== undefined && item !== null && !bytes(item)) malformed(`Context document ${name}`);
-  }
-  if (value.total_bytes !== undefined && value.total_bytes !== null && !bytes(value.total_bytes)) malformed("Context document total bytes");
-  return {
-    ...value,
-    offset: value.offset === undefined || value.offset === null ? undefined : value.offset,
-    next_offset: value.next_offset === undefined || value.next_offset === null ? undefined : value.next_offset,
-    line_offset: value.line_offset === undefined || value.line_offset === null ? undefined : value.line_offset,
-    total_bytes: value.total_bytes === null ? undefined : value.total_bytes,
-  } as unknown as ContextDocument;
+  const v = parseWire(value, wireContextDocument, POLICY);
+  return { ...v, offset: v.offset ?? undefined, next_offset: v.next_offset ?? undefined, line_offset: v.line_offset ?? undefined, total_bytes: v.total_bytes ?? undefined };
 }
-
 export function matchContextResponse<T extends { binding_id: string; root_id: string; path: string }>(value: T, request: ContextDirectoryRequest): T {
   if (value.binding_id !== request.binding_id || value.root_id !== request.root_id || value.path !== request.path) malformed("Context response identity");
   return value;
 }
-

@@ -1,0 +1,25 @@
+section!(
+    COMMENTS,
+    comments,
+    [
+        CommentRequestScope,
+        CommentOwner,
+        CommentLocation,
+        CommentAttachment,
+        CommentFileRef,
+        CommentSourceState,
+        CommentReviewRef,
+        CommentAnchor,
+        CommentDraft,
+        CommentBatch,
+        CommentBatchSummary,
+        CommentBatchList,
+        CommentBatchRequest,
+        CommentBatchMutation,
+        CommentCapture,
+        CommentUpsertRequest,
+        CommentRemoveRequest,
+        CommentPreviewRequest,
+        CommentPreview,
+    ]
+);

@@ -1,0 +1,20 @@
+section!(
+    FEEDBACK,
+    browser_feedback,
+    [
+        BrowserPoint,
+        BrowserRect,
+        BrowserViewport,
+        BrowserElementEvidence,
+        BrowserAnnotationKind,
+        BrowserAnnotation,
+        BrowserPageEvidence,
+        BrowserCaptureSubmission,
+        BrowserCaptureContext,
+        BrowserInlineCaptureProvenance,
+        BrowserFeedbackCapture,
+        BrowserCaptureSaved,
+        BrowserFeedbackResponse,
+        BrowserFeedbackAck,
+    ]
+);

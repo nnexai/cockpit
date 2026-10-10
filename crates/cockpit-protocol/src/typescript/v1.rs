@@ -1,0 +1,64 @@
+section!(
+    STATUS,
+    v1,
+    [
+        CockpitMode,
+        HerdrIdentity,
+        HerdrCompatibility,
+        CockpitCapabilities,
+        StatusResponse,
+        ErrorResponse,
+    ]
+);
+
+section!(
+    GIT_SUMMARIES,
+    v1,
+    [
+        SpaceGitSummary,
+        SpaceGitStatus,
+        SpaceGitStatusResponse,
+        SpaceGitSource,
+        SpaceGitCheckout,
+        SpaceGitUpstream,
+        SpaceGitAction,
+        SpaceGitActionRequest,
+        SpaceGitActionResponse,
+        SpaceGitActionOutcome,
+        SpaceGitRefusal,
+        SpaceSummary,
+        TabSummary,
+        PaneSummary,
+        AgentSummary,
+    ]
+);
+
+section!(
+    SESSION_TERMINAL,
+    v1,
+    [
+        SessionSnapshotResponse,
+        PaneOutputResponse,
+        SessionSummary,
+        SessionListResponse,
+        FocusKind,
+        FocusRequest,
+        FocusResponse,
+        PaneSplitDirection,
+        PaneMoveDestination,
+        ResourceMutationRequest,
+        CreatedPane,
+        ResourceMutationResponse,
+        SessionStreamMessage,
+        TerminalMode,
+        TerminalTargetKind,
+        TerminalOpenRequest,
+        TerminalScrollDirection,
+        TerminalScrollSource,
+        TerminalMouseButton,
+        TerminalMouseKind,
+        TerminalCommand,
+        TerminalOwnershipState,
+        TerminalStreamMessage,
+    ]
+);
