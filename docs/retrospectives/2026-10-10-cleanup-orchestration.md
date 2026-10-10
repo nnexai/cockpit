@@ -136,6 +136,22 @@ This is not a controlled benchmark or proof of a particular speedup: much implem
 
 ## Recommended direction: fewer primitives, not more policies
 
+### Clarified product role: liaison, not micromanager
+
+The owner subsequently clarified the desired supervisor as a **liaison for kicking off work**, pointing to [Firstmate](https://github.com/kunchenguid/firstmate) as inspiration. This sharpens the recommendation: worker autonomy is the normal arrangement, not an exception the supervisor repeatedly grants.
+
+The liaison translates intent into a useful brief, selects workers, coordinates cross-worker dependencies and brings back outcomes or real user decisions. A worker owns its implementation, ordinary command choices, verification proportional to the change, local recovery and delegation to its own subagents. Its specialists can question and review its work without making the top-level liaison approve each exchange.
+
+For example, extracting a helper, fixing an import, choosing affected tests, copying compatible dependencies or adapting a local test driver should not generate supervisor confirmation requests. A conflict over a shared file or compiler resource needs coordination, not a second approval of the implementation. Product ambiguity that changes the requested outcome, a genuinely new external commitment or a destructive operation outside standing authority belongs with the liaison/user.
+
+This also separates **confirmation from escalation**. “I received your message,” “may I perform the next planned step?” and “please approve my updated helper hash” are not inherently decisions. Routine delivery receipts can be machine bookkeeping; routine progress can be a coalesced state update. The useful upward message is “here is the choice I cannot resolve within this task,” not “please confirm that I may keep working.”
+
+#### What to borrow from Firstmate—and what not to assume
+
+Firstmate's [README](https://github.com/kunchenguid/firstmate#what-it-is) explicitly describes one liaison, autonomous crew, plain outcomes and disk-backed restart reconciliation. Its [architecture](https://github.com/kunchenguid/firstmate/blob/main/docs/architecture.md#event-driven-supervision) places ordinary polling and benign-wake suppression in a non-model watcher. Its [session-start recovery procedure](https://github.com/kunchenguid/firstmate/blob/main/.agents/skills/session-start-recovery/SKILL.md) keeps slow network checks off the blocking digest path and keeps routine bootstrap confirmations silent. These are useful directions: keep the conversation available, persist work and interrupt the liaison only when judgment is needed.
+
+Firstmate is not evidence that the entire implementation is lightweight. The architecture includes substantial gate, acknowledgement, escalation and recovery machinery, and its [project-management procedure](https://github.com/kunchenguid/firstmate/blob/main/.agents/skills/project-management/SKILL.md#delivery-posture) offers a full `no-mistakes` validation pipeline alongside `direct-PR` and `local-only`. Copying the whole policy stack could recreate the same verification overhead. Borrow the role separation and event-driven mechanics, not another hierarchy of approvals. This assessment is based on reading those published documents, not running or auditing Firstmate.
+
 ### First: make the normal path lightweight
 
 - **Delegate once at task level.** Fold routine Prepare/Ready/Execute into a normal start for trusted local work. Retain a separate preparation phase where placement or scope is genuinely unknown; do not impose two-stage ceremony on every known workstream.
