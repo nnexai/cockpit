@@ -109,7 +109,7 @@ Restart banner (existing banner slot): `Restored from saved tasks · reconnectin
 
 Removed from the happy path: the Restart agent dialog (`SupervisorDialogs.tsx:163-165`), "Check again first", "Restart anyway", "Check status" as a routine step.
 
-**Duplicate-writer dialog** (only reachable from a Decide row when a live old writer exists for the same root/checkout; PLAN `run resume` conflicts only then):
+**Duplicate-writer dialog** (only reachable from a Decide row for a genuine competing-writer tradeoff that runtime/liaison cannot resolve). A recognized living managed worker normally reattaches automatically; mere liveness does not trigger this dialog.
 
 - Title **Another agent is still running here**. Body: `<Task or supervisor label> already has a running agent in this checkout. Replace stops it first, then continues from its saved work. Nothing runs twice.`
 - Buttons: **Keep existing** (default focus, safe) and **Replace existing**. There is no "Start new" label and no "Restart anyway".
@@ -151,7 +151,7 @@ State order seen by the user: saved tasks immediately → banner `Restored from 
 
 - The runtime reattaches workers and sweeps historical cleanup on its own; it does not depend on the supervisor model. Root shows `Resuming…`, not "Waiting for supervisor" (`SupervisorActions.tsx:27`), until OMP is connected.
 - Worker cards keep task identity, checkout and last progress; no "stranded", "Agent terminal is gone" or "Cannot confirm the agent" while PLAN `reattach` is in progress.
-- Failure (PLAN `reattach` = `needs_decision{reason}`: checkout changed outside Cockpit, live old writer, Herdr unavailable after retries): one **Recover** row per affected job: `<Task> can't resume · <one-sentence cause>`; actions **Resume** (retry), **Open terminal** (if present), **Show in Tasks**. Cause sentences come from a fixed table with no pids or hashes: `its worktree changed outside Cockpit`, `another agent is still running in its checkout` (→ duplicate-writer dialog), `Herdr isn't reachable`.
+- After automatic recovery cannot proceed, distinguish causes: unknown outcome, checkout changes or Herdr unavailability produce one **Recover** row with **Resume**, **Open terminal** (when present), and **Show in Tasks**. A genuine competing live writer requiring a user Keep/Replace choice produces **Decide** and the safe-handover dialog. A recognized living managed worker reattaches without either row. Causes use plain text, not PIDs or hashes.
 - Cockpit↔Herdr loss keeps the existing "Connection lost" semantics and is not described as an agent failure.
 - No duplicates: while Resume is in flight the button reads `Resuming…` and is disabled with the existing reason pattern (`startLock`, `useStartAgentFlow.ts:31`).
 
@@ -229,7 +229,7 @@ Rules:
 
 ## 8. Decisions (no open product questions)
 
-1. Start reuses the selected live root for the same project, resumes a stopped root, and creates a new root only via **Start another agent…** (distinct root through the Start options dialog).
+1. Start creates a root when none exists, reuses the selected live root for the same project, or resumes its stopped root. **Start another agent…** explicitly creates an additional distinct root through the existing options dialog.
 2. Live-writer conflict dialog: **Keep existing** (default) / **Replace existing**; replace = runtime stop and quiescence, then handover; never a CAS/TTL override.
 3. Scope updates use the existing Follow-up form (canonical description update + automatic Instruction, same worker); no Amend-scope control.
 4. No Ready/Scoping gate lane; lanes Queued, Starting, Working, Review, Done; readiness is status text.
@@ -292,11 +292,11 @@ Tasks
   Done card:    Fix import cycle   Outcome: Done, source complete Cleanup: kept — 2 commits not merged
 
 Overview (selected Done task)
-  State          Done · integrated (equivalent patch in main)
+  State          Done · accepted output integrated (equivalent patch in main)
   Cleanup
     Worker terminal  Removed
-    Task worktree    Kept — 2 commits not merged
-    Branch           Waiting — not integrated yet
+    Task worktree    Kept — 2 later commits not merged
+    Branch           Kept — source added after integration receipt
     Space            Waiting — worktree still present
     Scratch          Removed
   [Finish cleanup]   (optional retry; the runtime keeps checking on its own)

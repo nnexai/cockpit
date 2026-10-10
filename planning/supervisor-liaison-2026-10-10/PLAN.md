@@ -2,6 +2,8 @@
 
 Status: proposed implementation, not implemented or runtime-verified. Based on the [cleanup retrospective](../../docs/retrospectives/2026-10-10-cleanup-orchestration.md), its Firstmate discussion, and the current repository. [UX.md](UX.md) supplies the interaction contract. No live sessions, settings or resources were modified to make this plan.
 
+Read the [HTML planning edition](plan.html) for the expanded semantics, ownership matrix, lifecycle/recovery views, UI fragments and dependency diagram. This Markdown file remains the concise implementation/cutover outline.
+
 ## 1. Outcome
 
 Start a supervisor, give it work, and let it delegate. Workers implement, use their own subagents, make ordinary decisions and perform affected checks. The supervisor coordinates outcomes and integration—not every tool, plan revision, message receipt or compiler slot. Restarting a machine, Cockpit, an OMP conversation or a compatible CLI must not strand the work. Completed managed workers and their safely disposable resources clean themselves up.
@@ -58,6 +60,8 @@ Do not make every instruction an answer, or every delivered answer a resolved de
 The owner reconciles launch/reconnect, prerequisites, transport delivery, worker retirement and cleanup. The extension consumes messages durably, advances transport cursors and delivers actionable instructions/questions/results. A wake is a coalesced latest-state digest, not an obligation to perform a list/ACK conversation. Explicit question answering, result review and source acceptance remain semantic actions; routine ACK becomes invisible bookkeeping.
 
 During disconnection workers keep editing/checkpointing/committing locally. Persist outgoing results/instructions with stable operation IDs and replay once the owner returns. Delivery deduplication must survive interruption between write, delivery and cursor advance. Replayed results still have to satisfy task-version and checkout ownership checks; offline progress must not silently authorize a conflicting takeover.
+
+Session-start/switch and before-agent-start attachment refresh retry quietly in the background; an unavailable CLI/owner must not block local model/tool work. A cached brief and durable outbox bridge disconnection. If the existing Cockpit owner is stopped, spawning and physical cleanup wait until it returns; this plan does not introduce an always-on daemon.
 
 Use revision notifications for changed state. A bounded cross-process/liveness fallback may remain, but do not rebuild whole snapshots or wake the model for unchanged observations. Latest progress replaces latest progress; preserve decisions, scope changes and result history, not every transient “still working” report.
 

@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Proposed Cockpit supervisor liaison design: durable work, autonomous workers, quiet recovery, integration-aware cleanup and dependency-ordered delivery.">
+<title>Supervisor as liaison — semantic implementation plan</title>
+<style>
+:root { color-scheme: light dark; --bg:#f7f8fa; --paper:#ffffff; --ink:#202b37; --muted:#526273; --line:#cbd4df; --accent:#185ca8; --tint:#eaf2fc; --safe:#196342; --safe-bg:#e9f4ee; --note:#754b10; --note-bg:#fff5df; --code:#edf0f4; --shadow:0 8px 30px #24394c08; }
+@media (prefers-color-scheme:dark) { :root { --bg:#151a21; --paper:#1c232d; --ink:#e6ecf4; --muted:#b1bdcb; --line:#445367; --accent:#97c3ff; --tint:#243750; --safe:#9edbbc; --safe-bg:#203b30; --note:#f2cd8c; --note-bg:#3b3020; --code:#2a3442; --shadow:none; } }
+* { box-sizing:border-box; }
+html { scroll-padding-top:1rem; }
+body { margin:0; background:var(--bg); color:var(--ink); font:1rem/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+a { color:var(--accent); text-underline-offset:.18em; }
+a:hover { text-decoration-thickness:.13em; }
+a:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline:3px solid var(--accent); outline-offset:4px; }
+.skip { position:absolute; top:-5rem; left:1rem; z-index:5; padding:.6rem 1rem; background:var(--paper); }
+.skip:focus { top:1rem; }
+.page { max-width:1160px; margin:auto; padding:2.8rem 2rem 5rem; }
+header.hero { border-bottom:2px solid var(--line); padding-bottom:2rem; margin-bottom:2rem; }
+.eyebrow { margin:0 0 .65rem; color:var(--accent); font-size:.8rem; font-weight:750; letter-spacing:.12em; text-transform:uppercase; }
+h1 { margin:.1rem 0 1rem; font-size:clamp(2.1rem,5vw,3.8rem); line-height:1.12; letter-spacing:-.035em; max-width:19ch; }
+.lede { font-size:1.22rem; max-width:72ch; }
+h2 { font-size:1.8rem; line-height:1.25; margin:0 0 1.2rem; letter-spacing:-.02em; }
+h3 { font-size:1.24rem; line-height:1.35; margin:1.8rem 0 .65rem; }
+h4 { font-size:1rem; margin:1.2rem 0 .4rem; }
+p { margin:.6rem 0 1rem; }
+ul, ol { padding-left:1.4rem; }
+li { margin:.35rem 0; }
+section.major { margin-top:3.5rem; padding-top:1rem; border-top:1px solid var(--line); }
+section.major:first-child { margin-top:0; }
+.label { font-size:.75rem; font-weight:700; letter-spacing:.045em; text-transform:uppercase; }
+.status { display:inline-block; color:var(--note); background:var(--note-bg); border:1px solid var(--note); border-radius:.25rem; padding:.18rem .55rem; font-weight:650; font-size:.86rem; }
+.sources, .evidence, .small { color:var(--muted); font-size:.88rem; }
+.sources { margin-top:1rem; }
+code { font: .9em/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; background:var(--code); border-radius:.2rem; padding:.1rem .25rem; overflow-wrap:anywhere; }
+nav.toc { background:var(--paper); border:1px solid var(--line); padding:1.3rem 1.5rem; border-radius:.5rem; }
+nav.toc h2 { font-size:1.1rem; margin-bottom:.6rem; }
+nav.toc ol { columns:2; column-gap:2.5rem; margin:0; }
+nav.toc li { break-inside:avoid; padding:.13rem 0; }
+.cards, .pair, .triad { display:grid; gap:1rem; }
+.pair { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.triad { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.card { background:var(--paper); border:1px solid var(--line); border-radius:.45rem; padding:1.2rem; box-shadow:var(--shadow); min-width:0; }
+.card h3, .card h4 { margin-top:0; }
+.card p:last-child { margin-bottom:0; }
+.callout { border-left:4px solid var(--accent); padding:.75rem 1.1rem; background:var(--tint); margin:1.2rem 0; }
+.callout p { margin:.2rem 0; }
+.callout.keep { border-color:var(--note); background:var(--note-bg); }
+.table-wrap { overflow-x:auto; margin:1rem 0; border:1px solid var(--line); border-radius:.3rem; }
+table { width:100%; border-collapse:collapse; font-size:.93rem; }
+caption { text-align:left; padding:.8rem 1rem; font-weight:700; background:var(--paper); }
+th, td { padding:.75rem .85rem; border-top:1px solid var(--line); vertical-align:top; text-align:left; }
+thead th { background:var(--code); font-size:.82rem; }
+tbody th { font-weight:650; min-width:8.5rem; }
+td p { margin:0 0 .5rem; }
+figure { margin:1.5rem 0; }
+figcaption { margin:.7rem 0 0; color:var(--muted); font-size:.88rem; }
+figure.diagram { padding:1.1rem; border:1px solid var(--line); border-radius:.4rem; background:var(--paper); }
+.flow { list-style:none; padding:0; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.65rem; margin:0; }
+.flow li { border-top:3px solid var(--accent); padding:.7rem; background:var(--tint); font-size:.88rem; }
+.flow strong { display:block; font-size:1rem; }
+.flow small { display:block; margin-top:.4rem; }
+.tree { list-style:none; padding:0; }
+.tree ul { list-style:none; border-left:2px solid var(--line); margin:.6rem 0 .6rem .4rem; padding-left:1.2rem; }
+.tree li { margin:.6rem 0; }
+.branch { display:block; font-weight:650; }
+.axis { border-top:4px solid var(--accent); }
+.axis:nth-child(2) { border-top-color:var(--safe); }
+.axis:nth-child(3) { border-top-color:var(--note); }
+dl { margin:.5rem 0 1rem; }
+dt { font-weight:700; margin-top:.8rem; }
+dd { margin:.25rem 0 .6rem; }
+details { margin:1rem 0; background:var(--paper); border:1px solid var(--line); border-radius:.35rem; padding:.8rem 1rem; }
+summary { cursor:pointer; font-weight:700; }
+details[open] summary { margin-bottom:1rem; }
+.mock { background:var(--paper); border:1px solid var(--line); border-radius:.4rem; padding:1rem; }
+.mock .bar { display:flex; flex-wrap:wrap; align-items:center; gap:.65rem 1rem; padding:.6rem 0; border-bottom:1px solid var(--line); }
+.mock .bar:first-child { padding-top:0; }
+.mock .bar:last-child { border-bottom:0; }
+.mock .bar .grow { flex:1 1 15rem; }
+.mock .quiet { color:var(--muted); font-size:.88rem; }
+.mock-action { display:inline-block; border:1px solid var(--line); border-radius:.25rem; padding:.22rem .55rem; font-size:.86rem; white-space:normal; font-weight:600; }
+.mock-action.primary { border-color:var(--accent); color:var(--accent); background:var(--tint); }
+.mock-notice { border-left:3px solid var(--note); padding:.6rem .8rem; background:var(--note-bg); }
+.mock-list { list-style:none; padding:0; margin:.6rem 0; }
+.mock-list li { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.2rem 1rem; border-bottom:1px solid var(--line); padding:.4rem 0; }
+.mock-list li span:last-child { color:var(--muted); }
+.wave { margin:1.6rem 0; padding:1.3rem; background:var(--paper); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:.35rem; }
+.wave h3 { margin:0 0 .5rem; }
+.wave dl { margin-bottom:.6rem; }
+.wave .accept { border-top:1px solid var(--line); padding-top:.7rem; }
+.diagram-scroll { overflow-x:auto; }
+svg.dep { display:block; width:100%; min-width:650px; height:auto; }
+svg .node { fill:var(--tint); stroke:var(--accent); stroke-width:1.5; }
+svg .parallel-node { fill:var(--paper); stroke:var(--line); stroke-width:1.5; stroke-dasharray:5 4; }
+svg text { fill:var(--ink); font-family:system-ui,sans-serif; font-size:15px; }
+svg .minor { fill:var(--muted); font-size:13px; }
+svg .edge { fill:none; stroke:var(--accent); stroke-width:2; marker-end:url(#arrow); }
+svg .draft-edge { fill:none; stroke:var(--muted); stroke-width:1.5; stroke-dasharray:5 4; marker-end:url(#arrow-muted); }
+footer { margin-top:3rem; border-top:1px solid var(--line); padding-top:1rem; color:var(--muted); font-size:.88rem; }
+@media (max-width:740px) { .page { padding:1.5rem 1rem 3rem; } .pair,.triad { grid-template-columns:1fr; } nav.toc ol { columns:1; } .flow { grid-template-columns:1fr; } .flow li { border-top:0; border-left:3px solid var(--accent); } th,td { padding:.6rem; } h2 { font-size:1.55rem; } section.major { margin-top:2.5rem; } }
+@media print {
+:root { color-scheme:light; --bg:#fff; --paper:#fff; --ink:#111; --muted:#444; --line:#aaa; --accent:#16446e; --tint:#f3f6fa; --safe:#235438; --safe-bg:#f6faf7; --note:#644818; --note-bg:#faf7ef; --code:#f3f3f3; --shadow:none; }
+body { font-size:10pt; line-height:1.45; } .page { max-width:none; padding:0; } h1 { font-size:28pt; } h2 { font-size:18pt; } h3 { font-size:13pt; } .skip { display:none; } nav.toc { break-after:page; } section.major { margin-top:1.8rem; } h2,h3,h4,summary { break-after:avoid; } .card,.mock,figure { break-inside:avoid; } .wave { break-inside:auto; } tr { break-inside:avoid; } .table-wrap,.diagram-scroll { overflow:visible; } svg.dep { min-width:0; } details > :not(summary) { display:block !important; } details::details-content { content-visibility:visible; } details { break-inside:auto; } a { text-decoration:underline; } a[href^="https:"]::after { content:" (" attr(href) ")"; font-size:8pt; overflow-wrap:anywhere; } .status { color:#333; border-color:#666; } @page { margin:16mm; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#outcome">Skip contents and read the plan</a>
+<div class="page">
+<header class="hero">
+<p class="eyebrow">Cockpit · implementation design · 10 October 2026</p>
+<h1>Supervisor as liaison</h1>
+<p class="lede">Durable work survives replaceable agents. Workers own implementation. The runtime carries the bookkeeping. The user sees outcomes and real decisions.</p>
+<p><span class="status">Proposed · not implemented or runtime-verified</span></p>
+<p>This document elaborates the reviewed first-iteration plan with state semantics, ownership boundaries, static interaction examples and executable work slices. It is a planning document, not a product dashboard or an operational console. Nothing here launches, answers, stops or removes anything.</p>
+<p class="sources">Authorities: <a href="PLAN.md">PLAN.md</a> · <a href="UX.md">UX.md</a> · <a href="../../docs/retrospectives/2026-10-10-cleanup-orchestration.md">cleanup retrospective</a>. Current-product baseline: <a href="../../CONTEXT.md">CONTEXT.md</a>, <a href="../../DECISIONS.md">DECISIONS.md</a>, <a href="../../CODE_GUIDE.md">CODE_GUIDE.md</a>. Source citations below identify inspected locations, not executed checks.</p>
+</header>
+<nav class="toc" aria-labelledby="contents-title">
+<h2 id="contents-title">Contents</h2>
+<ol>
+<li><a href="#outcome">Outcome and boundaries</a></li>
+<li><a href="#evidence">Evidence: mechanisms, not anecdotes alone</a></li>
+<li><a href="#decisions">Decisions and the durable model</a></li>
+<li><a href="#authority">Who owns which authority?</a></li>
+<li><a href="#lifecycle">Lifecycle and interrupted recovery</a></li>
+<li><a href="#completion">Completion, integration and cleanup</a></li>
+<li><a href="#coordination">Mutable plans, mail and resource queues</a></li>
+<li><a href="#ui">Minimal UI primitives</a></li>
+<li><a href="#questions">Resolved wording and implementation probes</a></li>
+<li><a href="#slices">Five waves and real parallelism</a></li>
+<li><a href="#cutover">Owners, caller cutover and active jobs</a></li>
+<li><a href="#verification">Risks, proportional verification and A–L</a></li>
+<li><a href="#learning">Performance learning and Firstmate</a></li>
+</ol>
+</nav>
+<main>
+<section class="major" id="outcome" aria-labelledby="outcome-title">
+<h2 id="outcome-title">1. Outcome and boundaries</h2>
+<p>A task continues through CLI replacement, conversation rollover, Cockpit interruption and a proven machine reboot without becoming a new task or a new approval exercise. One start request delegates work; the worker chooses ordinary implementation steps, uses its own subagents and returns committed output with affected checks. The liaison coordinates dependencies, acceptance and integration. The existing private owner resumes work and cleans eligible managed resources without waiting for the root conversation.</p>
+<div class="pair">
+<article class="card"><h3>In scope: the whole retrospective</h3><p>Relaxed bindings and recovery; liaison and worker autonomy; one start; mutable scope; quiet delivery; deterministic shared-resource scheduling; source/integration separation; proportional verification; useful batching; automatic resource cleanup; observational UI; bounded learning from the result.</p></article>
+<article class="card"><h3>Not a new platform</h3><p>No extra daemon, mandatory companion context, dashboard, composer, approval hierarchy, build-command executor, metrics product or proof infrastructure. No global OMP setting changes. Herdr remains the runtime resource authority; canonical task Markdown remains the task authority.</p></article>
+</div>
+<p class="evidence">Scope: <a href="PLAN.md#1-outcome">PLAN.md:5–9</a>, <a href="PLAN.md#9-retro-coverage-check">PLAN.md:152–167</a>; UI exclusions: <a href="UX.md#1-goal--users">UX.md:7–18</a>. Current authority split: <a href="../../CONTEXT.md#supervisor-lifecycle-and-authority">CONTEXT.md:80–92</a>.</p>
+</section>
+<section class="major" id="evidence" aria-labelledby="evidence-title">
+<h2 id="evidence-title">2. Evidence: change the mechanism</h2>
+<p>The current rules were built to bind actions to an exact actor and plan. The proposed cutover does not merely rename those rules or instruct models to be more autonomous: it removes routine gates while retaining ownership and external-effect safety.</p>
+<div class="table-wrap" tabindex="0" aria-label="Current mechanisms and proposed changes; horizontally scrollable on small screens">
+<table>
+<caption>Observed baseline → architectural consequence</caption>
+<thead><tr><th scope="col">Current fact</th><th scope="col">Evidence</th><th scope="col">Proposed consequence</th></tr></thead>
+<tbody>
+<tr><th scope="row">Every tool can depend on Cockpit being reachable</th><td><a href="../../integrations/omp/extension.ts">extension.ts:30–42</a> refreshes CLI state and checks worker permission before the tool. Its <code>before_agent_start</code> hook also awaits refresh at lines 21–27.</td><td>Remove the tool gate, and make startup/turn binding refresh nonblocking under transport loss. Removing only the tool hook would not fulfill offline local work.</td></tr>
+<tr><th scope="row">Working scope is actor- and exact-plan-gated</th><td><a href="../../crates/cockpit-core/src/orchestration/mutate/tasks.rs">mutate/tasks.rs:265–307</a> rejects accepted-task edits, restricts root edits while Working and checks Ready/Execute plan equality for the worker.</td><td>Retain accepted-history and CAS protection; remove exact-plan permission. Allow scoped root/operator updates to the same Working task.</td></tr>
+<tr><th scope="row">An owner already dispatches</th><td><a href="../../crates/cockpit-host/src/orchestration_runtime.rs">orchestration_runtime.rs:90–98</a> starts the private owner's dispatcher once; lines 131–140 shut its task down.</td><td>Extend that owner. There is no claim that recovery can launch a process while this owner is stopped.</td></tr>
+<tr><th scope="row">Space association can block teardown</th><td><a href="../../crates/cockpit-core/src/projects/teardown.rs">projects/teardown.rs:231–255</a> rejects zero or multiple matching operation records; lines 288–305 require exact stored/fresh provenance.</td><td>Reconcile equivalent records and historical attachment drift without weakening ownership. Git cleanup must not depend on an owned Space still existing.</td></tr>
+<tr><th scope="row">Useful UI already exists</th><td><a href="../../src/app/supervisor/useStartAgentFlow.ts">useStartAgentFlow.ts:30–45</a> starts in the focused Space and protects focus; lines 46–62 implement the current restart ladder. <a href="../../docs/supervisor-surfaces.md">supervisor-surfaces.md:7–22</a> maps Tasks, Graph, Dependencies, drafts and attention.</td><td>Reuse surfaces and focus behavior. Replace the restart ladder and gate controls, rather than adding another work-entry UI.</td></tr>
+<tr><th scope="row">Delivery and work are already different facts</th><td><a href="../../DECISIONS.md#supervisor-orchestration">DECISIONS.md:123–137</a> distinguishes messages, answer receipts, explicit Results, acceptance and uncertain external effects.</td><td>Automate transport bookkeeping, not semantic answering or result acceptance. Preserve uncertainty instead of reporting success from an ACK.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="evidence">The retrospective recorded 25 workstreams plus three integration runs, 26h47m from first creation to delivery announcement, 469 messages into workers, 629 reports and 2,091 direct root tool calls, including 612 inbox calls. These are retained-record observations, not active compute time or a controlled benchmark. <a href="../../docs/retrospectives/2026-10-10-cleanup-orchestration.md#recorded-scale">Retrospective:19–31</a>.</p>
+</section>
+<section class="major" id="decisions" aria-labelledby="decisions-title">
+<h2 id="decisions-title">3. Decisions: fewer primitives, clearer meaning</h2>
+<p><strong>Everything described as a target below is proposed.</strong> Concept labels describe required information and effects, not existing Rust types, wire actions or runnable CLI commands. Exact API spellings must be generated through the repository's existing protocol path, not copied out of these diagrams.</p>
+<h3 id="model">The job is durable; its execution attachment is replaceable</h3>
+<div class="pair">
+<article class="card"><p class="label">Durable work</p><h4>Keep across restart</h4><dl><dt>Root / run / task identity</dt><dd>Who owns the work and which canonical task it serves. A new conversation is not a new task.</dd><dt>Canonical scope and history</dt><dd>Task Markdown, checklist, scope revisions, decisions, unanswered questions and explicit Results.</dd><dt>Checkout and resource ownership</dt><dd>Current exclusive managed writer claim; owned versus borrowed resources; creation-time cleanup authority.</dd><dt>Output, integration and uncertain effects</dt><dd>Accepted committed output, target mapping and verification, delivery operation IDs, cleanup intentions and per-effect outcomes.</dd></dl></article>
+<article class="card"><p class="label">Replaceable execution</p><h4>Observe and reconcile</h4><dl><dt>OMP conversation and executable</dt><dd>A compatible installed CLI is a transport client, not the source of the job's right to continue.</dd><dt>Process / launch identity</dt><dd>PID, process start, launch attempt and boot identity help establish what is actually alive.</dd><dt>Herdr endpoint and location</dt><dd>Session, Space, tab, pane and terminal are physical attachment evidence, not durable permission to recreate work.</dd><dt>Runtime observations</dt><dd>Liveness and readiness are observations. Missing or old observations do not prove a process has exited.</dd></dl></article>
+</div>
+<div class="callout"><p><strong>A checkout claim is not an expiring permission to overwrite.</strong> An offline worker may still be editing. Missing heartbeat, expired TTL, changed endpoint or an unavailable machine does not authorize a replacement writer. Actual handover or proven exit is required.</p></div>
+<p>The existing canonical Markdown/store split stays. The new private, role-scoped job credential authorizes orchestration calls; it does not make local shell execution dependent on a live owner. Credentials never enter task Markdown, progress, logs or UI diagnostics. This is same-user accident prevention, not a sandbox against arbitrary same-user writes.</p>
+<p class="evidence">Proposed model and fence: <a href="PLAN.md#durable-job-replaceable-attachment">PLAN.md:32–48</a>. Current store boundaries: <a href="../../CONTEXT.md">CONTEXT.md:56–59</a>; current atomic-store/no-exactly-once caveat: <a href="../../DECISIONS.md#supervisor-orchestration">DECISIONS.md:135–137</a>.</p>
+<h3>Rejected alternatives</h3>
+<ul>
+<li><strong>Cache the old per-tool gate:</strong> rejected because local work would still depend on a cached permission model and eventual transport checks. Remove the gate; authorize actual orchestration API calls.</li>
+<li><strong>Use heartbeat expiry as ownership transfer:</strong> rejected because disconnection does not stop filesystem writes. Reattach or establish quiescence.</li>
+<li><strong>Keep Prepare/Execute but hide them:</strong> rejected because invisible ceremony still consumes model time and blocks plan changes. One task-level start replaces both.</li>
+<li><strong>Give every extraction a private product environment:</strong> rejected because the changed contract, not the touched subsystem, determines verification. Integrate and exercise a mechanical batch once.</li>
+<li><strong>Make source acceptance imply integration or deletion:</strong> rejected because accepted output may still exist only on its branch, and later work may not be covered by a prior integration record.</li>
+<li><strong>Make Finish cleanup the normal completion step:</strong> rejected because ownership belongs to the runtime, even without a root model. The action only retries that same safe operation.</li>
+<li><strong>Import Firstmate's full policy stack:</strong> rejected because role separation and benign-wake suppression are useful; another exact-plan/ACK/approval hierarchy is not.</li>
+</ul>
+<p class="evidence">Decisions elaborated from <a href="PLAN.md#3-the-simpler-primitives">PLAN.md:30–89</a> and <a href="UX.md#7-options-considered">UX.md:217–228</a>; no additional approval requirement is introduced.</p>
+<section id="authority" aria-labelledby="authority-title">
+<h3 id="authority-title">Authority follows the job; destructive effects follow the resource</h3>
+<div class="table-wrap" tabindex="0" aria-label="Proposed ownership authority matrix">
+<table>
+<caption>Proposed authority matrix — responsibility is not universal permission</caption>
+<thead><tr><th scope="col">Owner</th><th scope="col">May decide / perform</th><th scope="col">Must not be inferred</th></tr></thead>
+<tbody>
+<tr><th scope="row">User / operator</th><td>Requested outcome; real unresolved tradeoffs; new external or destructive commitments outside standing scope. Explicit advanced removal retains the existing typed confirmation.</td><td>Starting one root is not authority over unrelated roots, directories, borrowed Spaces or arbitrary processes.</td></tr>
+<tr><th scope="row">Liaison root</th><td>Delegate useful task slices within its subtree; coordinate dependencies; amend advisory scope; review source results; arrange integration; request the same scoped cleanup the runtime performs.</td><td>Not an approver of every command, message, plan edit or build slot. Not the implementation worker. Root authority is never passed wholesale to workers.</td></tr>
+<tr><th scope="row">Worker</th><td>Implement its task; refine its own scope using CAS; choose affected checks; commit and report output; use local subagents; request/release shared resource keys.</td><td>No sibling, ancestor or cross-root control; no root credential; no authority to reassign a live checkout or accept its own output by transport receipt.</td></tr>
+<tr><th scope="row">Worker-local subagent</th><td>Perform delegated local work and report to its worker through existing local delegation. Keep parentage and attribution.</td><td>Not a second checkout owner, root coordinator or substitute for the worker's main Result. No new top-level approval chain.</td></tr>
+<tr><th scope="row">Integrator role</th><td>Combine accepted outputs; exercise changed contracts; record how each accepted output maps to target output, including explicit verified adaptations.</td><td>The existence of a target commit alone is not proof that accepted output was integrated. This is a role in the existing workflow, not a new daemon or UI.</td></tr>
+<tr><th scope="row">Private runtime owner</th><td>Admit and dispatch starts, reconcile attachments, enforce checkout claims, schedule resource keys, publish changed state, retire workers and clean owned resources.</td><td>No arbitrary shell build execution, invented user answer, inferred adaptation or broad kill/delete. A root model being absent does not disable the owner; the owner process itself being stopped does.</td></tr>
+<tr><th scope="row">OMP extension</th><td>Keep cached brief/context, consume messages durably, maintain cursors/outbox, coalesce actionable wakes and quietly retry binding.</td><td>Delivery is not semantic answering. CLI loss must not prohibit ordinary local model/tool work. No global OMP settings changes.</td></tr>
+<tr><th scope="row">Herdr and existing adapters</th><td>Perform supported identity-checked launch, stop and resource operations using current physical evidence.</td><td>Historical endpoint/PID text is not a current target. Missing Space does not imply missing Git checkout or permission to use an unsupported removal path.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Two checks, different moments:</strong> orchestration calls validate job, role, task/checkout claim and request revisions. Stop, close, handover and deletion additionally re-observe the exact physical target immediately before the effect. Relaxing routine binding checks does not relax destructive-effect identity.</p>
+<p class="evidence">Authority and cleanup scope: <a href="PLAN.md#durable-job-replaceable-attachment">PLAN.md:34–48</a>, <a href="PLAN.md#owned-cleanup-independent-of-the-root-conversation">PLAN.md:74–89</a>. Existing operator/native separation: <a href="../../CODE_GUIDE.md#supervisor-tasks-execution-and-messages">CODE_GUIDE.md:267–269</a>.</p>
+</section>
+<section id="lifecycle" aria-labelledby="lifecycle-title">
+<h3 id="lifecycle-title">Lifecycle transitions: progress is not permission</h3>
+<figure class="diagram">
+<ol class="flow" aria-label="Proposed task progression">
+<li><strong>Queued</strong>Task start recorded.<small>Prerequisites or a resource may still be unavailable.</small></li>
+<li><strong>Starting</strong>Owner launches or connects.<small>Readiness is observed, not granted by another model.</small></li>
+<li><strong>Working</strong>Worker owns implementation.<small>Ordinary refinement stays on this task and actor.</small></li>
+<li><strong>Review</strong>Explicit source result.<small>Committed output and affected checks await acceptance.</small></li>
+<li><strong>Done</strong>Source accepted.<small>Integration and cleanup continue independently.</small></li>
+</ol>
+<figcaption>These are projected lanes, not five approval gates. A cancelled/failed task retains its source and literal result; it is not rewritten as a successful Done. Reconnection is an attachment overlay, not a reset to Queued.</figcaption>
+</figure>
+<dl>
+<dt>Admission → start</dt><dd>A durable start request binds task, scope, placement and ordinary cleanup authority. The dispatcher checks prerequisite readiness and checkout ownership, then launches idempotently. Placement uncertainty is resolved by the liaison; it does not create a permanent Scoping or Ready lane.</dd>
+<dt>Starting → Working</dt><dd>Actual connection and startup observation establish the worker attachment. A launch ACK alone does not establish a usable actor. The same start operation advances; no new exact-plan Execute request is required.</dd>
+<dt>Working → Review → Done</dt><dd>Only an explicit successful source Result and its review can lead to acceptance. Idle process, completed checklist, transport ACK and green runtime status are insufficient. Scope/version conflicts remain visible; a stale replay cannot accept a newer task silently.</dd>
+<dt>Send back / new work</dt><dd>Send back retains meaningful review semantics. Ordinary pre-acceptance refinement does not replace the worker. Accepted history stays protected; a genuinely new outcome is new work, not a rewrite of the accepted result.</dd>
+</dl>
+<p class="evidence">Target: <a href="PLAN.md#one-start-one-checkout-writer">PLAN.md:42–68</a>; <a href="UX.md#43-spawned-workers-local-autonomy-and-routine-gates">UX.md:124–146</a>. Baseline explicit-result distinction: <a href="../../CONTEXT.md#supervisor-lifecycle-and-authority">CONTEXT.md:90</a>.</p>
+<h4>Interrupted recovery decision tree</h4>
+<figure class="diagram">
+<ul class="tree">
+<li><span class="branch">Owner returns → load saved tasks, claims, outbox and effect receipts.</span>
+<ul>
+<li><span class="branch">Is an external launch / stop / removal outcome uncertain?</span><ul><li><strong>Yes:</strong> observe the actual resource; reconcile the saved intent. Do not repeat the effect merely because its receipt was interrupted.</li><li><strong>No, or reconciled:</strong> continue attachment assessment below. Independent jobs and safe cleanup items need not wait for an unrelated uncertain resource.</li></ul></li>
+<li><span class="branch">Can the existing managed writer be recognized and reattached?</span><ul><li><strong>Yes:</strong> reattach automatically; keep task, checkout, scope, result and unanswered questions. A recognized living worker is the normal recovery path, not a dialog.</li><li><strong>No:</strong> establish whether the previous writer is actually gone.</li></ul></li>
+<li><span class="branch">Is exit proven, including a proven boot change on the same machine?</span><ul><li><strong>Yes:</strong> revoke the prior attachment's orchestration claim, atomically hand over the checkout claim, then attach or launch one replacement in that checkout.</li><li><strong>Uncertain:</strong> preserve the writer claim. Retry bounded observations; a changed endpoint or unreachable/different machine is not a reboot proof. If recovery cannot proceed, show one <strong>Recover</strong> row with the cause and Resume.</li><li><strong>A genuinely conflicting live writer remains:</strong> first reconcile automatically where possible. Only a real unresolved Keep/Replace tradeoff becomes <strong>Decide</strong>. Replace requests a verified cooperative stop and waits for quiescence; a draft, busy/foreign consumer or failed stop keeps the original. Never override by timeout.</li></ul></li>
+<li><span class="branch">Reconnected → replay durable operations, coalesce current state, sweep cleanup.</span><ul><li>Replayed results still meet current task-version and ownership checks. Show saved tasks immediately; update connection status without focus theft or a renewed grant conversation.</li></ul></li>
+</ul></li>
+</ul>
+<figcaption>There is no independent always-on service being proposed. Already-running workers can preserve local work while the owner is stopped; launches, reassignment and cleanup resume when the existing owner returns. This tree elaborates PLAN.md:34–62, 76–89 and UX recovery decisions.</figcaption>
+</figure>
+<div class="callout"><p><strong>Offline means offline all the way through the extension:</strong> <code>session_start</code>, <code>session_switch</code> and <code>before_agent_start</code> binding refresh use quiet, bounded background retry. A cached job brief and durable outbox allow ordinary local editing, checkpointing and committing while the owner or CLI is unavailable. No manual exact-SDK-session rebinding workaround is part of the product path.</p></div>
+<p>A currently available compatible CLI is resolved with an explicit protocol-version check; incompatibility yields one useful transport error, not permanent job invalidation or a repeated local-tool block. Background retry is recovery, not a claim that an orchestration mutation succeeded offline.</p>
+</section>
+<section id="completion" aria-labelledby="completion-title">
+<h3 id="completion-title">Three independent facts, two readable UI segments</h3>
+<div class="triad">
+<article class="card axis"><p class="label">Source</p><h4>What was accepted?</h4><p>Explicit worker Result, committed output and focused checks. Review is not yet acceptance; acceptance is not a full-product smoke.</p><p><strong>UI:</strong> Review → Done · source complete.</p></article>
+<article class="card axis"><p class="label">Integration</p><h4>Where did that output go?</h4><p><code>pending</code>, <code>integrated</code> with output-to-target mapping and changed-contract verification, or <code>not_applicable</code> for non-code work.</p><p><strong>UI:</strong> Outcome names source complete or integrated.</p></article>
+<article class="card axis"><p class="label">Cleanup</p><h4>What resources remain?</h4><p>Per-resource intent and outcome. Worker, Git resources, Space, scratch and fixture set may have different eligible effects.</p><p><strong>UI:</strong> Cleanup remains a separate text segment.</p></article>
+</div>
+<p><strong>Example:</strong> accepted output A maps to target commit T and passed the relevant integration checks. Later, the worker branch gains two new commits B and C. The task's accepted output is still integrated, but B and C are not covered by that fact; branch and worktree stay. “Integrated” describes accepted output, never all future content of a mutable checkout.</p>
+<details>
+<summary>Integration record semantics — proposed data contract, not an existing API</summary>
+<dl>
+<dt>Accepted output identity</dt><dd>Name the accepted Result and its exact committed output within the task/run. A subsequent task or source revision cannot silently inherit the record.</dd>
+<dt>Target identity and mapping</dt><dd>Retain target reference/commit and the relationship from each accepted output to the target output. A target commit without this mapping is incomplete evidence.</dd>
+<dt>Method</dt><dd><code>ancestor</code>: accepted output is included by history. <code>patch_equivalent</code>: deterministic patch equivalence establishes equivalent output. <code>recorded_adaptation</code>: the integrator explicitly supplies a verified output-to-target mapping for adapted changes. Runtime validation checks that record; it cannot infer the adaptation from a hash, source acceptance or a “merged” label.</dd>
+<dt>Changed-contract verification outcome</dt><dd>Preserve what was actually checked on the integrated artifact, the result, and any unrun limitation. Source checks are not silently promoted to integrated checks. Incomplete or contradictory verification must not be presented as successful integration merely to enable cleanup.</dd>
+<dt>Cleanup consumption</dt><dd>Re-observe repository/checkout identity and all additional dirty or unmerged work since the receipt before deletion. <code>not_applicable</code> is for non-code deliverables; it is not an escape hatch for coding in a borrowed directory.</dd>
+</dl>
+<p class="evidence">Binding source: <a href="PLAN.md#source-completion-integration-and-proportional-verification">PLAN.md:64–70</a>, <a href="PLAN.md#owned-cleanup-independent-of-the-root-conversation">PLAN.md:81–89</a>, <a href="UX.md">UX.md:3, 158–163</a>.</p>
+</details>
+<h4>Cleanup is a set of safe effects, not a single delete switch</h4>
+<div class="table-wrap" tabindex="0" aria-label="Resource-specific cleanup eligibility">
+<table>
+<caption>Eligibility is evaluated for each owned resource</caption>
+<thead><tr><th scope="col">Resource / case</th><th scope="col">Safe outcome</th><th scope="col">Retain or reconcile instead when…</th></tr></thead>
+<tbody>
+<tr><th scope="row">Worker process and terminal</th><td>Retire an accepted idle worker or a safely quiesced cancelled/failed managed worker; close only its verified disposable terminal resources.</td><td>Unsent draft, user activity, live subagents, another terminal consumer, moved/renamed/shared tab or uncertain native stop. Source acceptance alone does not make an entire tab disposable.</td></tr>
+<tr><th scope="row">Worktree and branch</th><td>Remove owned resources only after validated integration, fresh clean/no-additional-unmerged checks and no live writer.</td><td>Accepted but not integrated; added commits; dirty/unclassified files; a live writer; incomplete cancelled/failed output; conflicting ownership. No force removal.</td></tr>
+<tr><th scope="row">Borrowed checkout or Space</th><td>Leave the borrowed resource intact. Independently eligible owned worker/scratch resources may still retire.</td><td>Ownership cannot be acquired by usefulness, proximity or the root's creation. Coding output still needs an integration fact even in a borrowed checkout.</td></tr>
+<tr><th scope="row">Owned task Space</th><td>Remove only if no user notes, drafts, browser state or other consumers must survive. An already-missing Space is already absent.</td><td>Surviving user state or shared terminals. Missing Space must not block an independently safe Git-only cleanup.</td></tr>
+<tr><th scope="row">Owned generated scratch</th><td>Remove explicitly registered generated scratch after its consumers quiesce and containment/identity are verified; then recheck worktree cleanliness.</td><td>Arbitrary untracked files, unclassified paths, foreign processes or shared/live consumers. A path name such as <code>tmp</code> is not proof of ownership.</td></tr>
+<tr><th scope="row">Disposable fixture set</th><td>Register one runtime-owned set with its normal shutdown operation. Owner performs normal shutdown, records per-effect outcomes and removes owned scratch once managed consumers are quiesced.</td><td>Unknown shutdown effect, foreign process or user/shared state. Do not turn each fixture into a model-managed PID checklist or delete scratch before consumers stop.</td></tr>
+<tr><th scope="row">Stale / duplicate ownership records</th><td>Reconcile current resource identity; consolidate records only when they describe equivalent ownership of that resource.</td><td>Genuinely conflicting provenance remains kept with one reason. Changed endpoint does not rewrite ownership or prove absence.</td></tr>
+<tr><th scope="row">Interrupted cleanup effect</th><td>Load durable intent; inspect actual state; finish or reconcile the missing receipt, then continue remaining effects.</td><td>Unknown outcome remains unknown, not success and not automatic repeat. A blocked item does not stop unrelated safe items.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The owner runs this reconciliation at completion/cancellation, startup, reconnect and relevant state changes. <strong>Finish cleanup</strong> retries the same operation under existing standing authority; it neither adds authority nor bypasses retention reasons. Compact task/output/cleanup history remains after resources retire.</p>
+<p class="evidence">Resource semantics: <a href="PLAN.md#owned-cleanup-independent-of-the-root-conversation">PLAN.md:74–89</a>; presentation and retry: <a href="UX.md#45-completion-and-cleanup-independent-axes">UX.md:165–193</a>.</p>
+</section>
+<section id="coordination" aria-labelledby="coordination-title">
+<h3 id="coordination-title">Mutable plans, quiet messages and a small resource queue</h3>
+<div class="pair">
+<article class="card"><h4>Scope is mutable; history is not disposable</h4><p>Existing <strong>Follow-up to agent</strong> becomes one durable operation: update canonical task description with normal task/document CAS and deliver an instruction to the same worker. If delivery is interrupted, preserve the original operation ID and draft; reconcile that operation instead of sending a different duplicate.</p><p>A worker's own refinement updates its advisory scope without sending an instruction back to itself. Root/operator updates while Working are allowed within scope; accepted results remain protected. There is no Amend-scope form, exact-plan reapproval or successor actor just to change an implementation step.</p></article>
+<article class="card"><h4>Progress is a snapshot; a decision is an event</h4><p>Latest progress replaces latest progress. Scope changes, questions, answers, Results and acceptance retain meaningful history. Extension/runtime consumes durable messages and advances transport cursors; a coalesced digest wakes the model only for actionable changed state.</p><p>Transport consumption never answers a question. An explicit answer retains its question link; “answer delivered” does not establish that the task resumed or its question was semantically resolved.</p></article>
+</div>
+<details>
+<summary>Outbox and cursor boundaries — interruption cases workers must implement</summary>
+<ol>
+<li><strong>Before owner delivery:</strong> persist the outgoing operation locally with stable identity and original payload. A disconnected report is pending delivery, not accepted.</li>
+<li><strong>After delivery, before local confirmation:</strong> replay the same operation ID. Receiver deduplication preserves one semantic operation, including after restart; changed payload under that identity conflicts rather than silently overwriting.</li>
+<li><strong>After receive, before cursor advance:</strong> extension resumes durable consumption without losing the actionable instruction. Cursor/receipt bookkeeping must not manufacture a second task update or model answer.</li>
+<li><strong>After scope or ownership changes:</strong> apply current task/version and checkout-claim checks. Replayed Result may conflict; retained output and one useful conflict are safer than implicit acceptance or conflicting takeover.</li>
+<li><strong>Unknown external effect:</strong> do not generalize message replay into replaying launch, stop or remove. External-effect reconciliation remains its own boundary.</li>
+</ol>
+<p>These are semantic boundaries, not a promise of globally exactly-once external effects or a new general message broker. Reuse the existing store/intents and operation identities.</p>
+</details>
+<figure class="diagram">
+<div class="triad">
+<div><p class="label">Request</p><p>Worker / integrator requests a resource key for a checkout or shared build-artifact identity.</p></div>
+<div><p class="label">Schedule</p><p>Existing owner selects FIFO-ready requests; prerequisites and live holders constrain readiness.</p></div>
+<div><p class="label">Execute / release</p><p>Worker runs its own build and releases the key. Verified abandonment permits recovery; stale heartbeat alone does not.</p></div>
+</div>
+<figcaption>The queue owns exclusion, not commands. No arbitrary shell build payload, model slot approval or new queue UI. A worker waiting for a resource shows at most a latest-progress line.</figcaption>
+</figure>
+<p>Artifact identity must match the actual source/input used. Safe dependency caches may be shared; incompatible worktree outputs may not be blindly reused. One integrator build for a mechanical batch is preferred over private frozen host/native pairs per worker. Batch adjacent small extractions into one worker checklist unless independent ownership or a useful standalone outcome justifies a split. Function-size counts guide planning, not acceptance.</p>
+<p class="evidence">Coordination and queue: <a href="PLAN.md#mutable-scope-meaningful-decisions">PLAN.md:50–72</a>; UX uses existing form and details: <a href="UX.md#43-spawned-workers-local-autonomy-and-routine-gates">UX.md:138–146</a>. No claim is made that this product queue exists today.</p>
+</section>
+<section id="ui" aria-labelledby="ui-title">
+<h3 id="ui-title">Minimal UI primitives, not a redesigned dashboard</h3>
+<p>Keep terminal-chat work entry and Tasks / Graph / Dependencies. Reuse the Summary shortcut slot, attention rows, existing forms, card status and Overview details. The examples are isolated static fragments; outlined labels are <strong>text, not working buttons</strong>. Colors here serve document readability, not a new product token specification.</p>
+<div class="pair">
+<figure>
+<div class="mock" aria-label="Static summary and restart banner example">
+<div class="bar"><div class="grow"><strong>Supervisor · Cockpit</strong><br><span class="quiet">Managing tasks</span></div><span class="mock-action primary">Open terminal</span></div>
+<div class="bar"><span class="quiet">Decide 0 · Recover 0 · Notice 0</span></div>
+<div class="bar"><div><strong>Resuming…</strong><p class="quiet">Restored from saved tasks · reconnecting agents (2 of 4) · finishing cleanup for 3 tasks</p></div></div>
+</div>
+<figcaption>Alternative Summary states, not simultaneous live state. No root → Start agent; connected root → Open terminal; intact stopped root → Resume. The banner clears without a toast or focus movement.</figcaption>
+</figure>
+<figure>
+<div class="mock" aria-label="Static completed task and protected work example">
+<p class="quiet">Done · 1 kept</p>
+<strong>Extract provider helpers</strong>
+<p><strong>Outcome:</strong> Done, integrated<br><strong>Cleanup:</strong> kept — 2 later commits not merged</p>
+<p class="quiet">Accepted output in main · additional branch work preserved</p>
+<div class="mock-notice">Notice · Kept for you: 2 later commits not merged</div>
+<p><span class="mock-action">Open terminal</span> <span class="mock-action">Show in Tasks</span></p>
+</div>
+<figcaption>Outcome and Cleanup are separate accessible text segments. A kept item is a status/Notice, not an error or a reason to revoke accepted output.</figcaption>
+</figure>
+</div>
+<div class="pair">
+<figure>
+<div class="mock" aria-label="Static Overview cleanup group">
+<strong>Overview · Cleanup</strong>
+<ul class="mock-list" aria-label="Example cleanup items">
+<li><span>Worker terminal</span><span>Removed</span></li>
+<li><span>Task worktree</span><span>Kept — 2 later commits not merged</span></li>
+<li><span>Branch</span><span>Kept — same additional source</span></li>
+<li><span>Space</span><span>Waiting — retained checkout in use</span></li>
+<li><span>Scratch</span><span>Removed</span></li>
+<li><span>Disposable fixture set</span><span>Removed — normal shutdown completed</span></li>
+</ul>
+<span class="mock-action">Finish cleanup</span><p class="quiet">Optional re-check. The runtime keeps checking without this action.</p>
+</div>
+<figcaption>One item cannot make every other item green or blocked. Fixture set is one owned resource with internal per-effect receipts, not a new process-management panel.</figcaption>
+</figure>
+<figure>
+<div class="mock" aria-label="Static live-writer conflict dialog content">
+<p class="label">Only for a genuine unresolved conflict</p>
+<strong>Another agent is still running here</strong>
+<p>Extract provider helpers already has a running agent in this checkout. Replace stops it first, then continues from its saved work. Nothing runs twice.</p>
+<p><span class="mock-action primary">Keep existing</span> <span class="mock-action">Replace existing</span></p>
+<p class="quiet">Default focus: Keep existing. Escape keeps the existing writer.</p>
+<div class="mock-notice">If it cannot quiesce: Existing agent kept · unsent text in its terminal</div>
+</div>
+<figcaption>A recognized managed worker reattaches automatically and never sees this dialog. Replace does not ignore a claim, TTL, live consumer or draft.</figcaption>
+</figure>
+</div>
+<h4>Interaction semantics retained from UX</h4>
+<ul>
+<li><strong>Start / Show:</strong> select the already-selected matching root, otherwise the most recently active matching root. Reuse a live root; resume a stopped root. Initial Start creates a root only when none exists for the project. <strong>Start another agent…</strong> explicitly creates an additional root through the existing Name/Location dialog. No new shortcut or top-bar button.</li>
+<li><strong>Attention:</strong> routine grants, ACKs, slot contention, worker-local questions and verification never become user prompts. Genuine outcome/tradeoff/new-commitment choices become root Decide. A recognized writer reconnects silently; only an unresolved live-writer Keep/Replace tradeoff is Decide. Unreachable Herdr, changed checkout or an unconfirmed effect after recovery attempts is Recover.</li>
+<li><strong>Follow-up:</strong> same textarea, Send, scoped draft and Retry same message identity. Success reads “Update sent · task description updated.” Activity shows read-only Scope. No armed Prepare/Execute override or new Amend control.</li>
+<li><strong>Cleanup states:</strong> running, waiting, waiting for integration and reconnecting are quiet. Kept user work is Notice; stalled automatic cleanup is Notice with optional Finish cleanup; unknown outcome after retry is Recover. Plain causes, not PIDs/hashes, explain the result.</li>
+<li><strong>Inspection:</strong> Overview gains a Cleanup group. Advanced retains explicit result acceptance, Send back, Close tracking and Diagnostics; opening it grants nothing. Done stays collapsed; only an explicit Show in Tasks reveals it. Graph still omits completed tasks and adds a kept count.</li>
+<li><strong>Removal distinction:</strong> Commands “Finish task cleanup” retries pending records without a dialog; Pending cleanup becomes an inspection list with that retry. User-initiated Space-menu “Review task cleanup…” keeps the typed <code>REMOVE &lt;path&gt;</code> safeguard. The automatic route does not inherit a new typed-confirmation ceremony.</li>
+<li><strong>Focus and drafts:</strong> automatic updates never move focus, scroll, select or expand. Explicit Open terminal is the terminal-focus action. User-invoked Start/Resume retains the existing invoker-aware restoration; if the user moved focus, do not move it back. If an action row disappears, use the existing nearest-surviving-row rule. Answer, follow-up, note and send-back drafts survive reconnect, root switch and hide/return; terminal text is never submitted or cleared by cleanup.</li>
+<li><strong>Accessibility:</strong> one polite coalesced product status region; routine progress unannounced. Recover and failed user actions use alerts; kept work uses status. Verb labels, disabled reasons and existing dialog Tab/Escape rules remain. Narrow windows stack the existing Cleanup list; no extra responsive surface.</li>
+</ul>
+<p class="evidence">Interaction authority: <a href="UX.md#4-screens--components">UX.md:79–215</a>, <a href="UX.md#10-acceptance-scenarios-observable-ui-checks">UX.md:260–275</a>. Static fragments intentionally contain no forms, buttons, scripted handlers or fake operation links.</p>
+</section>
+</section>
+<section class="major" id="questions" aria-labelledby="questions-title">
+<h2 id="questions-title">4. Open questions: no new product choice required</h2>
+<p>The proposed architecture uses the following explicit interpretations so workers do not reconstruct contradictory behavior from a compact example or an old current-product rule.</p>
+<dl>
+<dt>Live writer: automatic reattach versus Decide versus Recover</dt><dd>Recognized living managed worker → reattach automatically. Genuinely conflicting writer that cannot be reconciled and needs a Keep/Replace tradeoff → Decide. Unreachable runtime, externally changed checkout or unknown-effect retry failure → Recover. UX §4.4 uses this distinction; no routine Resume dialog or TTL permission is added.</dd>
+<dt>Integrated task with an unmerged branch</dt><dd>Integration applies to the recorded accepted output. Later source is retained separately. UX §11 and the static fragment here explicitly distinguish the integrated accepted output from later commits that still protect the branch/worktree.</dd>
+<dt>“New root only via Start another”</dt><dd>The restriction concerns an additional root when a matching root already exists. Initial Start still creates a root when there is none; Show/Start does not silently multiply roots.</dd>
+</dl>
+<p><strong>Remaining evidence probes are implementation prerequisites, not policy questions:</strong></p>
+<ul>
+<li><strong>Project lookup:</strong> use recorded source-project/repository identity, not process cwd, labels or a UI guess. Current <a href="../../crates/cockpit-protocol/src/orchestration.rs">orchestration.rs:229–254</a> exposes target Space, repository identity and optional <code>project_workspace_id</code>; the latter is explicitly absent for non-SpaceWorktree targets. The wave-1 contract owner must trace all start/adopt/setup targets and publish one host-owned lookup contract. Do not pretend that optional field alone is already a complete “same project” key.</li>
+<li><strong>Missing-Space cleanup adapter:</strong> inspect current supported Herdr/Git adapter behavior before selecting the call path. Use supported local Git cleanup with the same ownership/concurrency checks if the Herdr path requires a live Space. Do not invent an upstream endpoint, raw-command fallback or new user ceremony. This probe belongs before wave 4 effects are implemented.</li>
+<li><strong>Exported callers and active storage shape:</strong> use actual references and representative persisted records before changing schema. The owner inventory is a map, not an exhaustive reference result. Unknown records or attachment evidence remain retained, not guessed into a cleanup-eligible state.</li>
+</ul>
+<p class="evidence">These probes are already required by <a href="PLAN.md#5-cutover-inventory-and-continuity">PLAN.md:105–117</a> and <a href="PLAN.md#owned-cleanup-independent-of-the-root-conversation">PLAN.md:87</a>; project lookup is identified as an inference in <a href="UX.md#41-show--start--resume-summary-strip--empty-state">UX.md:93–96</a>. No unsupported API is specified here.</p>
+</section>
+<section class="major" id="slices" aria-labelledby="slices-title">
+<h2 id="slices-title">5. Delivery slices: five coherent waves</h2>
+<p>Each wave changes a usable vertical contract, not a model approval stage. Shared Rust DTOs/store/projection and generated contracts have one wave owner at a time. Parallel workers consume fixed interfaces; they do not independently edit the same facade or invent alternate schemas.</p>
+<figure class="diagram">
+<div class="diagram-scroll" tabindex="0" aria-label="Five-wave dependency diagram; scroll horizontally on small screens">
+<svg class="dep" viewBox="0 0 940 340" role="img" aria-labelledby="dependency-title dependency-description">
+<title id="dependency-title">Five delivery waves with a parallel preparation track</title>
+<desc id="dependency-description">Wave 1 durable execution enables wave 2 one start; wave 2 enables wave 3 quiet transport and integration facts. Wave 4 cleanup needs wave 1 ownership plus wave 3 integration facts. Wave 5 surface and continuity acceptance needs all four. Static UI and caller inventory preparation may run alongside the backend, but cannot expose unimplemented actions. Within wave 3 the integration contract can unlock wave 4 while independent message and queue work finishes.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/></marker><marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/></marker></defs>
+<rect class="node" x="10" y="65" width="160" height="85" rx="6"/><text x="24" y="91">1 · Durable jobs</text><text class="minor" x="24" y="115">job / writer claim</text><text class="minor" x="24" y="135">offline local work</text>
+<rect class="node" x="200" y="65" width="150" height="85" rx="6"/><text x="214" y="91">2 · One start</text><text class="minor" x="214" y="115">autonomy / scope</text><text class="minor" x="214" y="135">remove grant gates</text>
+<rect class="node" x="380" y="65" width="170" height="85" rx="6"/><text x="394" y="91">3 · Quiet transport</text><text class="minor" x="394" y="115">mail / integration</text><text class="minor" x="394" y="135">fact published first</text>
+<rect class="node" x="585" y="65" width="155" height="85" rx="6"/><text x="599" y="91">4 · Cleanup</text><text class="minor" x="599" y="115">per-resource effects</text><text class="minor" x="599" y="135">fixture shutdown</text>
+<rect class="node" x="775" y="65" width="155" height="85" rx="6"/><text x="789" y="91">5 · Cutover</text><text class="minor" x="789" y="115">all callers / active jobs</text><text class="minor" x="789" y="135">lifecycle acceptance</text>
+<path class="edge" d="M170 106 H195"/><path class="edge" d="M350 106 H375"/><path class="edge" d="M550 106 H580"/><path class="edge" d="M740 106 H770"/>
+<path class="edge" d="M90 65 V27 H660 V60"/><text class="minor" x="285" y="20">Wave 4 also consumes wave 1 ownership / handover</text>
+<rect class="parallel-node" x="200" y="215" width="430" height="68" rx="6"/><text x="216" y="241">Parallel preparation: UI fragments + caller inventory</text><text class="minor" x="216" y="265">No live actions until the backend contract exists</text>
+<path class="draft-edge" d="M90 150 V248 H195"/><path class="draft-edge" d="M630 248 H851 V155"/>
+<text class="minor" x="12" y="322">Solid arrows: contract dependencies. Dashed: independent preparation, not permission to ship placeholders.</text>
+</svg>
+</div>
+<figcaption>Wave 3's validated integration fact, not every notification optimization, is the cleanup prerequisite. That enables real overlap after the interface lands. Final wave-5 lifecycle acceptance still waits for all contracts; static UI preparation can start early.</figcaption>
+</figure>
+<article class="wave" id="wave-1">
+<h3>Wave 1 · Durable execution and unattended resume</h3>
+<p><strong>Goal:</strong> the same task and checkout survive replacement of CLI, main conversation and runtime attachment without duplicate writers or loss of local work.</p>
+<dl><dt>Exclusive ownership</dt><dd>Protocol/store attachment and claim contract; core <code>orchestration.rs</code>, <code>caller.rs</code>, <code>mutate/runs.rs</code>, <code>mutate/reviewed.rs</code>; host CLI <code>caller.rs</code>/<code>context.rs</code> and runtime dispatcher; OMP <code>identity.ts</code>, <code>cliCall.ts</code>, main binding and <code>extension.ts</code>. Exact owner inventory below.</dd><dt>Fixed interface</dt><dd>Durable job/role credential; replaceable attachment; one checkout writer; idempotent resume; current compatible CLI routing; host-owned root-for-project lookup. Fresh process/pane checks stay at physical effects, not local tool permission.</dd></dl>
+<ol><li>Trace exported references and stored attachment/target variants; retain root/task IDs and checkout ownership.</li><li>Implement private role-scoped credential authorization and atomic claim handover. Preserve operator origin and cross-root boundaries.</li><li>Implement reattach-first recovery, same-machine boot proof, verified cooperative handover and uncertain-effect reconciliation in the existing owner.</li><li>Delete the global tool-call gate. Make session/turn binding refresh quietly retry in the background; cached brief/outbox permits local work when CLI/owner is absent.</li><li>Resolve a compatible current CLI without pinning the job forever to a removed launch executable. Return a useful incompatibility cause; no global installation/settings changes.</li></ol>
+<p><strong>Non-goals:</strong> replacing Herdr, a new daemon, actor replacement for scope edits, a security sandbox, lease-expiry takeover.</p>
+<p class="accept"><strong>Acceptance:</strong> cases B/C/D. Change CLI and main conversation, disconnect the owner, then restore it; observe continued local editing/commit and the same task/checkout. Reattach a living writer without a dialog. Deny duplicate launch while the old writer lives or its exit is unproven. Native attachment/effect changes require the corresponding disposable native path later.</p>
+</article>
+<article class="wave" id="wave-2">
+<h3>Wave 2 · One start and autonomous liaison</h3>
+<p><strong>Goal:</strong> one task-level request reaches source results, and ordinary scope refinement stays with the same worker.</p>
+<dl><dt>Exclusive ownership</dt><dd>Protocol actions/stages; core <code>mutate/grants.rs</code>, <code>mutate/dispatch_records.rs</code>, <code>messages/report.rs</code>, <code>mutate/tasks.rs</code>, prerequisite/intents/projection; CLI args/subcommands; OMP management tools and guidance. Serial handoff of shared files from wave 1.</dd><dt>Fixed interface</dt><dd>One start request includes scope, placement, prerequisites and normal scoped cleanup authority. Readiness is observation. Task/document CAS remains; root/operator Follow-up updates task and delivers one instruction. Worker self-refinement has no self-message. Accepted history remains protected.</dd></dl>
+<ol><li>Replace Prepare/Execute with the start-to-working lifecycle and remove plan-equality permission checks and obsolete actions.</li><li>Preserve actual launch observation, canonical prerequisite checks and idempotent dispatch under the new lifecycle.</li><li>Implement Working scope updates as recoverable task/message intent, including unchanged retry identity and conflict outcomes.</li><li>Update worker/root brief guidance for autonomous local command choice, subagents, proportional checks and useful batching; remove routine grant questions.</li><li>Expose backend Start reuse/resume semantics and explicit additional-root creation for the existing UI to consume.</li></ol>
+<p><strong>Non-goals:</strong> a new composer, new Scoping/Ready lane, widened external commitments, making every instruction an answer.</p>
+<p class="accept"><strong>Acceptance:</strong> cases A/E. Two workers and local subagents reach source results without routine grants; a Working Follow-up changes canonical scope and reaches the same actor once. One genuine outcome-changing ambiguity reaches the user. Accepted task history cannot be silently amended.</p>
+</article>
+<article class="wave" id="wave-3">
+<h3>Wave 3 · Quiet transport and integration-sized verification</h3>
+<p><strong>Goal:</strong> machine bookkeeping no longer fills the model conversation, and combined verification is recorded separately from source acceptance.</p>
+<dl><dt>Exclusive ownership</dt><dd>OMP <code>wake.ts</code>, inbox/message tools and durable local outbox; core <code>messages.rs</code>/<code>messages/inbox.rs</code> publication; host wait/notification and owner resource queue; result/integration DTOs, <code>mutate/intents.rs</code>, projection and worker/root briefs. One protocol/projection owner serializes shared changes.</dd><dt>Fixed interface</dt><dd>Stable operation IDs and durable delivery cursors; explicit question/answer links; latest-progress replacement; required integration fact with accepted-output mapping and verification outcome; FIFO-ready resource keys with verified holder release/abandonment. No build-command payload.</dd></dl>
+<ol><li>Land the integration data contract and runtime validation first, including explicit verified adaptation mapping; make it available to wave 4.</li><li>Move receive/ACK bookkeeping into extension/runtime, coalesce actionable changed-state digests and preserve semantic Results/questions.</li><li>Persist and replay outbox operations through interruption boundaries without duplicate semantic writes or stale-result acceptance.</li><li>Use revision notifications; retain only a bounded liveness/cross-process fallback. Unchanged observations do not rebuild full snapshots or wake the model.</li><li>Add resource request/release scheduling to the existing owner. Workers/integrator execute their own builds; artifact identity and living holders remain protected.</li><li>Make mechanical-batch briefs request focused source checks, followed by one combined integration build/affected smoke. Keep real contract/native/external-service checks where changed.</li></ol>
+<p><strong>Parallel opportunity:</strong> after interfaces land, OMP transport, owner queue and integrator-result wiring can proceed in disjoint files. Shared protocol/projection edits stay with one owner. Wave 4 can start against the integration fact while independent transport work finishes.</p>
+<p><strong>Non-goals:</strong> a general broker, model build-slot approvals, per-worker proof projects, new quality/mutation thresholds.</p>
+<p class="accept"><strong>Acceptance:</strong> cases B/F/G/H. Interrupt between delivery and cursor advance; one operation remains. Deliver a question without answering it. Repeated unchanged status causes no repeated model wake. Competing builds do not share incompatible artifacts or steal a live holder. Accepted source is not labeled integrated until its required mapping/check outcome exists.</p>
+</article>
+<article class="wave" id="wave-4">
+<h3>Wave 4 · Autonomous resource cleanup</h3>
+<p><strong>Goal:</strong> the owner, not the root conversation, retires finished workers and safely removes eligible owned resources, including historical drift and fixture sets.</p>
+<dl><dt>Exclusive ownership</dt><dd>Core retirement and project teardown/ownership records; host <code>orchestration_runtime/retire.rs</code>, dispatcher and project adapters; scoped cleanup CLI/tool/shared transport. Integration schema remains owned by the wave-3 contract owner until handed off.</dd><dt>Fixed interface</dt><dd>Standing creation-time owned/borrowed authority; per-resource intent/outcome; same idempotent subtree cleanup for owner and optional retry; integration mapping consumed as evidence, not inferred; one fixture resource set with normal shutdown and per-effect outcomes.</dd></dl>
+<ol><li>Inspect actual supported missing-Space/worktree adapter semantics; select existing supported Herdr or local Git paths with the same identity/ownership safeguards.</li><li>Register resources at creation, including fixture sets and generated scratch classification. Remove the root's blanket “Never tear down resources” prohibition.</li><li>Implement independent eligibility for process/tab, worktree, branch, Space, scratch and fixture set using the cleanup table above.</li><li>Reconcile stale endpoints, proven same-machine reboot and equivalent ownership receipts. Preserve genuine conflict and user/foreign state with a compact reason.</li><li>Persist intent before effect, observe actual state after interruption and record each outcome. Never replay an unknown stop/remove blindly.</li><li>Run cleanup on completion/cancellation, startup, reconnection and changed eligibility. Expose Finish cleanup as a retry of that same operation, not a separate force path.</li></ol>
+<p><strong>Non-goals:</strong> deletion of borrowed/unmerged/unknown resources, broad process kills, per-fixture model closure protocols, cleanup that waits for the root to ACK.</p>
+<p class="accept"><strong>Acceptance:</strong> cases H–L with root model offline. Accepted-only output survives; integrated eligible resources disappear; adapted mapping is validated; later commits, drafts, borrowed Spaces and live/foreign consumers survive; normal fixture shutdown precedes scratch deletion. Interrupt an effect and observe reconciliation without a repeated destructive operation.</p>
+</article>
+<article class="wave" id="wave-5">
+<h3>Wave 5 · Surface cutover and existing-job continuity</h3>
+<p><strong>Goal:</strong> expose the completed contracts through existing UI and installed clients, preserving work created before the cutover.</p>
+<dl><dt>Exclusive ownership</dt><dd>Supervisor hooks/actions/attention/lanes and dialogs; Commands and task-cleanup surfaces; browser/native decoders and generated TypeScript integration; final active-record conversion in the store; current docs and portable OMP guidance. Conversion design starts with wave 1, not after automatic effects ship.</dd><dt>Fixed interface</dt><dd>UX Start/reuse/Resume, explicit additional-root action, five lanes, outcome/cleanup segments, quiet recovery, optional cleanup retry, existing forms/drafts/focus. Current schema only after atomic resumable conversion; no legacy action aliases or dual lifecycle.</dd></dl>
+<ol><li>Wire existing surfaces to the completed contracts and remove Prepare/Execute overrides, manual ACK language and restart ceremony.</li><li>Apply the static fragment semantics and attention distinctions; keep explicit terminal navigation, root/task drafts and conditional focus restoration.</li><li>Generate protocol/client contracts through the normal exporter and remove obsolete callers/tests across source and installed/bundled OMP integration.</li><li>Complete and exercise active-record conversion and installed-client continuity described below. Do not wipe jobs/worktrees to obtain a clean demonstration.</li><li>Update current authority/surface/CLI documentation, portable guides and concise changelog. Keep the retrospective and prior verification history as historical evidence.</li></ol>
+<p><strong>Parallel opportunity:</strong> static UI draft, documentation inventory and reference mapping can precede backend completion. Final live actions and lifecycle acceptance wait for waves 1–4; no placeholder buttons are delivered.</p>
+<p><strong>Non-goals:</strong> a new product dashboard or composer, new keyboard shortcuts, a permanent migration framework, erasing active data.</p>
+<p class="accept"><strong>Acceptance:</strong> one disposable start → delegate → source accept → integrate → cleanup → restart/resume run, with the A/C/H/I spine and UX checks. Browser and affected native transport operate on the real contract. Verify no focus theft, lost draft, extra root, routine prompt or legacy action path.</p>
+</article>
+<p class="evidence">Wave scope and ordering: <a href="PLAN.md#4-dependency-ordered-delivery-five-coherent-waves">PLAN.md:91–103</a>; cutover/continuity: <a href="PLAN.md#5-cutover-inventory-and-continuity">PLAN.md:105–117</a>. Slice-specific tests are proposed acceptance work, not checks run for this HTML document.</p>
+<section id="cutover" aria-labelledby="cutover-title">
+<h3 id="cutover-title">Repository owners and caller cutover</h3>
+<p>Start exported-contract work with actual references. The paths below are the inspected repository's ownership map; they are not a complete LSP result. Absolute module roots are expanded here so workers do not mistake core and host modules with similar names.</p>
+<details>
+<summary>Protocol → core → host → OMP → client: concrete cutover inventory</summary>
+<div class="table-wrap" tabindex="0" aria-label="Repository contract owner inventory">
+<table>
+<caption>One authoritative path per layer; migrate consumers rather than adding shims</caption>
+<thead><tr><th scope="col">Layer / owners</th><th scope="col">Cutover responsibility</th></tr></thead>
+<tbody>
+<tr><th scope="row">Protocol and generation</th><td><code>crates/cockpit-protocol/src/orchestration.rs</code>, <code>project_teardown.rs</code>, <code>typescript/orchestration.rs</code>, <code>typescript/project_teardown.rs</code>, descriptor validators and <code>src/protocol/generated/v1.ts</code>/<code>validate/</code>. Define job/attachment, lifecycle, integration and cleanup once; generate TS/validators, never maintain a second schema by hand.</td></tr>
+<tr><th scope="row">Core authority and durable state</th><td><code>crates/cockpit-core/src/orchestration.rs</code>; <code>orchestration/{caller,agent,store,tasks_md,assignments,dependencies,projection,routing}.rs</code>; <code>orchestration/mutate/{mod,runs,tasks,grants,reviewed,intents,dispatch_records,retirement}.rs</code>. Preserve canonical Markdown and atomic intents; remove grant-only actions and same-process-only job authority. Keep initialization as observation only.</td></tr>
+<tr><th scope="row">Core delivery / runtime effects</th><td><code>crates/cockpit-core/src/orchestration/{dispatch,herdr,retirement,retire,messages}.rs</code>; <code>messages/{inbox,report,subagent_control}.rs</code>; <code>crates/cockpit-core/src/projects/teardown.rs</code>. Keep explicit Result/answer semantics and destructive no-replay; replace ordinary transport ACK ceremony and brittle resource association requirements.</td></tr>
+<tr><th scope="row">Host and Herdr adapters</th><td><code>crates/cockpit-host/src/cli_orchestration/{args,caller,context,wait,retirement}.rs</code>; <code>orchestration_runtime.rs</code> and its dispatcher/retire modules; <code>transport/operations/{orchestration,projects}.rs</code> and shared registry; <code>crates/cockpit-herdr/src/cli/orchestration.rs</code>. Reuse private owner and typed effects; preserve browser/native origin and current physical identity.</td></tr>
+<tr><th scope="row">OMP and installed copies</th><td><code>integrations/omp/{extension,identity,cliCall,wake,controlLoop,tools,retirement}.ts</code>, management/message tools, <code>bundle.ts</code>, bundled <code>cockpit-orchestration.ts</code>, <code>integrations/agent-skills/</code>. Remove per-tool and blocking startup/turn dependence, grants and model ACK instructions from every installed/bundled path, not only the editable entry file.</td></tr>
+<tr><th scope="row">Frontend and transport decoders</th><td><code>src/app/supervisor/{useStartAgentFlow,SupervisorActions,SupervisorDialogs,supervisorViewModel,supervisorViewWorkarea,supervisorViewSurface,attention,retirementView}</code> in their existing TS/TSX files; <code>src/app/projects/{TeardownDialog,TeardownRecoveryPanel}.tsx</code>; <code>src/app/shell/commands.ts</code>; <code>src/client/{orchestrationProtocol,projectTeardownProtocol,operations,browser,native}.ts</code>. Preserve drafts/focus while replacing old action/stage assumptions; native host facade remains part of caller references.</td></tr>
+<tr><th scope="row">Tests and current documentation</th><td>Existing service/caller/grant/launch/retirement/teardown, OMP identity/wake, protocol decoder and Supervisor interaction tests. Remove obsolete gate/wording assertions; retain consumer-visible behavior, negative authority and retention checks. Update <code>CONTEXT.md</code>, <code>DECISIONS.md</code>, <code>CODE_GUIDE.md</code>, <code>docs/supervisor-surfaces.md</code>, affected CLI/config docs and portable guides with the implementation.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="evidence">Owner map sources: <a href="../../CODE_GUIDE.md#orchestration-service-cli-and-omp-integration">CODE_GUIDE.md:159–182</a>, <a href="../../CODE_GUIDE.md#protocol-clients-and-host-adapters">CODE_GUIDE.md:185–217</a>, <a href="../../CODE_GUIDE.md#protocol-domain-declarations-and-renderers">CODE_GUIDE.md:236–239</a>, <a href="PLAN.md#5-cutover-inventory-and-continuity">PLAN.md:107–115</a>. Frontend map: <a href="../../CODE_GUIDE.md#supervisor-frontend">CODE_GUIDE.md:82–103</a>.</p>
+</details>
+<details>
+<summary>Operation semantics to fix before parallel caller work — names are conceptual</summary>
+<ul>
+<li><strong>Resume:</strong> same durable run/task/checkout; idempotent reattach or one verified replacement; stable cause when blocked; no Prepare/Execute. It is not a blind launch retry.</li>
+<li><strong>Start / project lookup:</strong> host resolves matching recorded project; selected matching root wins, otherwise most recently active; additional-root creation is explicit. UI supplies intent, not a guess based on cwd or display name.</li>
+<li><strong>Scope update:</strong> expected task/document revision plus stable operation identity; update canonical task and enqueue one instruction durably; expose original unknown operation, not a false failure that encourages a new duplicate.</li>
+<li><strong>Integration report:</strong> accepted-output identity, target mapping/reference/commit, method, changed-contract verification outcome. Adaptation is supplied by the integrator and validated by runtime. Coding in a borrowed path never means not-applicable.</li>
+<li><strong>Resource request / release:</strong> resource key and holder identity; FIFO-ready scheduling and verified abandonment; worker-owned build execution. No arbitrary shell payload or model approval.</li>
+<li><strong>Cleanup retry:</strong> subtree-scoped repeat of safe reconciliation; per-resource outcome with a reason, not a force flag or per-resource destructive selection. Fixture normal shutdown is one owned-set operation with internal effect receipts.</li>
+</ul>
+<p>UX shorthand such as <code>run resume</code>, <code>Run.integration</code> and <code>CleanupFinish</code> names proposed contracts. This document does not claim those are existing commands, fields or wire symbols. The protocol owner assigns exact schema through the existing Rust-derived pipeline.</p>
+</details>
+<h4>Existing active-job conversion: continuity, not permanent compatibility</h4>
+<ol>
+<li><strong>Read and stage under the existing store discipline.</strong> Design conversion alongside the durable model. At the release boundary, prevent mixed-schema dispatch and make conversion atomic/resumable using the existing locking and intent pattern; do not invent a second task store.</li>
+<li><strong>Preserve durable meaning.</strong> Keep task/run/root IDs, canonical content, committed output, checkout/resource ownership, unanswered questions, pending messages, stable delivery IDs and uncertain-effect receipts. Never turn “unknown” into “absent” to simplify conversion.</li>
+<li><strong>Map old preparation to status, not permission.</strong> Prepare/Ready/Execute history remains history. Active preparation becomes queued/starting/active status as warranted by actual launch evidence; a ready worker does not need renewed approval. An existing Working task retains its work.</li>
+<li><strong>Reconcile before dispatching.</strong> Recognize living attachments or prove old writer exit before a replacement gets the checkout. An unknown attachment/ownership record remains preserved and diagnosable. Old source acceptance without a validated integration record remains pending integration, not cleanup-eligible by default.</li>
+<li><strong>Resume interrupted conversion/effects from actual state.</strong> Preserve external canonical edits and uncertain receipts. A crash between conversion intent and publication cannot duplicate task identity, lose mail or replay a destructive effect.</li>
+<li><strong>Cut over callers completely.</strong> Once the current schema is active, remove old grant actions, aliases, exact-plan tests and duplicate lifecycle code. No permanent dual implementation; no task/worktree wipe. Update current docs at that boundary, not the historical retrospective.</li>
+</ol>
+<p class="evidence">Required continuity: <a href="PLAN.md#5-cutover-inventory-and-continuity">PLAN.md:117</a>. Existing recoverable assignment/acceptance and canonical CAS pattern: <a href="../../DECISIONS.md#supervisor-orchestration">DECISIONS.md:89–105, 135–137</a>. The step order above is a proposed implementation elaboration, not a claim that conversion already exists.</p>
+</section>
+</section>
+<section class="major" id="verification" aria-labelledby="verification-title">
+<h2 id="verification-title">6. Risks &amp; verification</h2>
+<p><strong>For this HTML handoff:</strong> no product code, test, configuration, live session or setting was changed. No build, lint, test, formatter, render or smoke was run. The parent owns rendering and document verification after handoff.</p>
+<h3>Choose evidence by the changed contract</h3>
+<ul>
+<li><strong>Mechanical source changes:</strong> compilation/typechecking and focused existing checks for the changed artifact. Integrator builds the combined batch and exercises the affected runtime path once.</li>
+<li><strong>Public DTO / authority / concurrency changes:</strong> actual producer-consumer checks and focused negative cases for identity, current revision, duplicate delivery and ownership. This redesign changes these contracts; a source-only pass is insufficient.</li>
+<li><strong>Native transport/effects:</strong> one real affected native path on the disposable fixture. A browser-only pass does not establish native process/stop behavior.</li>
+<li><strong>External service changes:</strong> an actual live-service run for that contract if changed. Merely touching a file that contains a provider does not create an unrelated service test obligation.</li>
+<li><strong>Harness limits:</strong> disclose unrun coverage and the blocker. Do not turn a mechanical extraction into a private-LSP/namespace/NoModel proof-platform project or claim a mock echo as live evidence.</li>
+</ul>
+<p>Implementation uses the existing disposable fixture entry, <code>python3 scripts/verify/ui_polish_runtime.py start|stop &lt;root&gt;</code> (recipe notation: choose <code>start</code> or <code>stop</code>). Never perform interruption or cleanup experiments on persistent user sessions. One lifecycle run can cover A + C + H + I and the normal UI path; focused cases cover dangerous boundaries without twelve full environments.</p>
+<p class="evidence">Verification source: <a href="PLAN.md#6-verification-proportional-to-these-changes">PLAN.md:119–140</a>; change-based rationale: <a href="../../docs/retrospectives/2026-10-10-cleanup-orchestration.md#2-verification-was-inherited-from-touched-subsystems-not-selected-by-the-change">retrospective:70–86</a>.</p>
+<h3>A–L acceptance catalogue</h3>
+<div class="table-wrap" tabindex="0" aria-label="Acceptance cases A through L">
+<table>
+<caption>Observe actual outcomes, not just matching source strings</caption>
+<thead><tr><th scope="col">Case / waves</th><th scope="col">Scenario and required observation</th><th scope="col">Failure this rules out</th></tr></thead>
+<tbody>
+<tr><th scope="row">A · Start and delegate<br><span class="small">2, 3, 4, 5</span></th><td>One supervisor request starts two workers; their local subagents return source results; integration completes and eligible resources clean. No routine model/user confirmation loop. Existing terminal is the work-entry path.</td><td>A hidden two-stage workflow or new composer masquerading as autonomy.</td></tr>
+<tr><th scope="row">B · CLI / session / offline<br><span class="small">1, 3</span></th><td>Compatible CLI replacement and new main conversation keep the job. Owner/CLI absence does not block startup/turn hooks or ordinary local edit/checkpoint/commit. Replay deduplicates. Delivered question remains unanswered without an explicit answer.</td><td>Removing only the tool gate; fake semantic ACK; duplicate outbox effects.</td></tr>
+<tr><th scope="row">C · Boot interruption<br><span class="small">1, 5</span></th><td>Saved tasks/worktrees resume with original IDs after a proven same-machine reboot and owner return; no renewed Ready/Execute, duplicate terminal or second writer. UI immediately shows saved state.</td><td>Workflow restart disguised as recovery; interpreting endpoint change as exit.</td></tr>
+<tr><th scope="row">D · Old writer alive<br><span class="small">1, 5</span></th><td>Recognized writer reattaches automatically. True unresolved conflict offers Keep/Replace; replacement waits for verified stop/quiescence and refuses while draft/unreachable/foreign live state prevents it.</td><td>TTL or missing heartbeat handing the checkout to another writer.</td></tr>
+<tr><th scope="row">E · Plan refinement<br><span class="small">2, 5</span></th><td>Working Follow-up updates task and instructs the same actor once; failed delivery keeps draft/operation identity. Worker self-refinement has no self-message. A real outcome ambiguity escalates once.</td><td>Successor worker for a plan edit; new amend/approval ceremony.</td></tr>
+<tr><th scope="row">F · Progress volume<br><span class="small">3</span></th><td>Many progress reports leave one latest state; meaningful revision yields a coalesced wake; repeated unchanged observations do not wake the model. Decisions and Results remain durable.</td><td>Quiet-looking UI hiding an unchanged high-volume model ACK loop.</td></tr>
+<tr><th scope="row">G · Shared builds<br><span class="small">3</span></th><td>Mechanical batch has one integration build; incompatible source/output identities do not race or reuse foreign artifacts. Queue is FIFO-ready; a still-running holder is not stolen. Worker executes its own build.</td><td>Model slot grants, unsafe shared Cargo artifacts, per-worker frozen pairs.</td></tr>
+<tr><th scope="row">H · Accepted ≠ integrated<br><span class="small">3, 4, 5</span></th><td>Accepted idle worker can retire, but owned source worktree/branch remain pending validated integration. UI says source complete and waiting for integration separately from retirement.</td><td>Source acceptance deleting the only committed output.</td></tr>
+<tr><th scope="row">I · Root offline / drift<br><span class="small">4, 5</span></th><td>With owner running and root model absent, integrated owned resources clean. Missing Space, stale endpoint, equivalent receipts and adapted cherry-pick mapping reconcile. Fixture normal shutdown occurs as a set.</td><td>Root-dependent cleanup or integration guessed from a target commit.</td></tr>
+<tr><th scope="row">J · Protected resources<br><span class="small">4, 5</span></th><td>Drafts, user edits, later/unmerged commits, borrowed Spaces, live/foreign consumers and unknown scratch survive with one plain reason. Unrelated eligible resources still clean; kept work is status/Notice.</td><td>Force-delete, broad kill, lost draft, or all-or-nothing cleanup stall.</td></tr>
+<tr><th scope="row">K · Cancelled / failed<br><span class="small">4</span></th><td>Checkpoint and incomplete output remain. Safely quiesced owned processes can retire without discarding source or presenting a successful source Result.</td><td>“Unused” treated as disposable or cancellation converted to acceptance.</td></tr>
+<tr><th scope="row">L · Interrupted cleanup<br><span class="small">4, 5</span></th><td>Interrupt between effect and receipt. On restart, actual state plus durable intent reconciles; completed effects are not blindly repeated; unknown outcomes stay visible; independent safe effects proceed.</td><td>False success or destructive replay after an uncertain response.</td></tr>
+</tbody>
+</table>
+</div>
+<details>
+<summary>High-consequence risk review — one focused independent round, not new gates</summary>
+<dl>
+<dt>Data loss: accepted output, later commits and user state</dt><dd>Wave 4 verifies H/J/K/L with dirty/unmerged additions after integration, unsent text, owned generated versus unclassified scratch and borrowed resources. Adapted output requires explicit integrator mapping. Per-resource retention must not be a blanket failure.</dd>
+<dt>Concurrency: writer and build holder</dt><dd>Waves 1/3 verify D/G with a living disconnected worker/build, competing requests and interrupted handover. Claim/CAS publication and observed quiescence, not timeout, establish exclusive ownership.</dd>
+<dt>Wrong identity / security: credential and physical target</dt><dd>Waves 1/4 verify role/subtree denial, no root credential inherited by workers/subagents, no credential in diagnostics, operator-origin preservation and fresh process/pane/resource checks at stop/remove. Same-user hostile-process isolation is not promised.</dd>
+<dt>Delivery: duplicate or semantically misclassified messages</dt><dd>Waves 2/3 verify B/E/F at persistence/delivery/cursor boundaries, stale task revisions and linked answers. Observe that a stored or consumed message does not complete work or answer a question.</dd>
+<dt>Conversion: old active work and ambiguous effects</dt><dd>Waves 1/5 interrupt conversion and resume representative Preparing/Ready/Working/Review records, pending messages and unknown receipts. Compare preserved IDs/content/ownership and observe no old grant execution or duplicate launch.</dd>
+<dt>UX: background automation takes over the user</dt><dd>Wave 5 exercises root switching, active drafts, keyboard focus and narrow layouts through Resume/cleanup. No automatic event selects, scrolls, expands or focuses a terminal. Only explicit navigation does.</dd>
+</dl>
+<p>The review targets high-severity data-loss, concurrency and authority mistakes. It is not a requirement for a reviewer to approve every worker step, plan hash, message or compiler slot.</p>
+</details>
+<section id="learning" aria-labelledby="learning-title">
+<h3 id="learning-title">Performance: observe whether the structure improved</h3>
+<p>The historical 26h47m includes waiting and interruption; the almost-200-GB storage complaint is an owner-reported observation, not a measured allocation attributable solely to this cleanup. The post-correction results were faster to arrive, but much source work and checking had already happened. No speedup or causation is claimed.</p>
+<p>For comparable future work, use existing logs/counters to report: time to first worker and source completion; source-complete-to-accepted latency; routine control messages and root wakes; combined verification wall time and bytes; fresh build/runtime instances per integrated artifact; interruption-to-useful-resume time; and owned resources left afterwards. Separate mechanical from semantic work and do not count shutdown/sleep as active work. If no comparable baseline exists, report the observation without manufacturing a percentage.</p>
+<div class="callout"><p><strong>The performance intervention is structural:</strong> eliminate per-tool CLI checks and blocking offline hooks; remove Prepare/Execute round trips; move ACK bookkeeping out of the model; batch useful source work; build the integrated artifact once; recover and clean through the owner. Do not replace those savings with a larger instruction manual, telemetry dashboard or mandatory benchmark threshold.</p></div>
+<p class="evidence">Historical qualifications: <a href="../../docs/retrospectives/2026-10-10-cleanup-orchestration.md#what-happened">retrospective:35–52</a>, <a href="../../docs/retrospectives/2026-10-10-cleanup-orchestration.md#the-owners-correction-provides-the-strongest-comparison">124–135</a>, <a href="../../docs/retrospectives/2026-10-10-cleanup-orchestration.md#how-to-judge-whether-the-redesign-helps">177–181</a>. Measurement scope: <a href="PLAN.md#7-performance-learning-not-another-gate">PLAN.md:142–146</a>.</p>
+<h3>Firstmate: borrow the role, not the bureaucracy</h3>
+<div class="pair">
+<article class="card"><h4>Selective inspiration</h4><ul><li>One liaison, autonomous crews, plain outcomes.</li><li>Disk-backed restart context and a concise recovery digest.</li><li>A non-model watcher handles routine polling and suppresses benign events.</li><li>Slow network checks do not block useful recovery context.</li></ul></article>
+<article class="card"><h4>Explicitly not imported</h4><ul><li>A second exact-plan/grant hierarchy.</li><li>Model acknowledgement of every transport milestone.</li><li>A universal “no mistakes” proof pipeline.</li><li>Per-task recovery/harness engineering unrelated to the changed contract.</li></ul></article>
+</div>
+<p>Sources: <a href="https://github.com/kunchenguid/firstmate">Firstmate repository</a>, <a href="https://github.com/kunchenguid/firstmate/blob/main/docs/architecture.md#event-driven-supervision">event-driven architecture</a>, <a href="https://github.com/kunchenguid/firstmate/blob/main/.agents/skills/session-start-recovery/SKILL.md">startup recovery skill</a>, <a href="https://github.com/kunchenguid/firstmate/blob/main/.agents/skills/project-management/SKILL.md#delivery-posture">project-management delivery posture</a>. This is the selective source-reading assessment recorded in <a href="../../docs/retrospectives/2026-10-10-cleanup-orchestration.md#what-to-borrow-from-firstmateand-what-not-to-assume">retrospective:149–153</a> and <a href="PLAN.md#8-firstmate-borrow-the-role-not-the-bureaucracy">PLAN.md:148–150</a>, not a new runtime evaluation or security audit of Firstmate.</p>
+</section>
+</section>
+</main>
+<footer>
+<p><strong>Delivery boundary:</strong> semantic planning HTML only. Inline CSS, native contents links and disclosures; no JavaScript, external assets, forms, remote runtime or operational controls. Static examples are proposed, not shipped UI. Render/document verification belongs to the parent after handoff.</p>
+<p><a href="#contents-title">Back to contents</a> · <a href="PLAN.md">Implementation plan</a> · <a href="UX.md">Interaction specification</a> · <a href="../../docs/retrospectives/2026-10-10-cleanup-orchestration.md">Retrospective</a></p>
+</footer>
+</div>
+</body>
+</html>
