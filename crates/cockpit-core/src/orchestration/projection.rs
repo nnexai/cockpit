@@ -141,9 +141,69 @@ pub(crate) fn snapshot(
             .collect(),
         RuntimeObservation::Unavailable { .. } => HashMap::new(),
     };
+    let (attention, questions) = project_attention(
+        &runs, &inboxes, &observations, &intents, &run_by_id, clock, now,
+    );
+    let board = project_board(boards, selected_root, &runs, &run_by_id, &intents)?;
+    let mut open_counts: HashMap<&str, u32> = HashMap::new();
+    for run in &runs {
+        if run.stage != RunStage::Closed {
+            *open_counts.entry(run.root_id.as_str()).or_default() += 1;
+        }
+    }
+    let mut attention_counts: HashMap<&str, u32> = HashMap::new();
+    for item in &attention {
+        if let Some(run) = item.run_id.as_deref().and_then(|id| run_by_id.get(id)) {
+            *attention_counts.entry(run.root_id.as_str()).or_default() += 1;
+        }
+    }
+    Ok(OrchestrationSnapshot {
+        session_id: request.session_id.clone(),
+        revision: state.revision,
+        tasks_token,
+        roots: roots
+            .into_iter()
+            .map(|root| RootSummary {
+                root_id: root.run_id.clone(),
+                label: root.label.clone(),
+                kind: root.kind,
+                open_runs: open_counts.get(root.run_id.as_str()).copied().unwrap_or(0),
+                needs_you: attention_counts
+                    .get(root.run_id.as_str())
+                    .copied()
+                    .unwrap_or(0),
+            })
+            .collect(),
+        board,
+        runs: runs.into_iter().cloned().collect(),
+        messages: messages.into_iter().cloned().collect(),
+        questions,
+        subagents: state
+            .subagents
+            .iter()
+            .filter(|agent| run_by_id.contains_key(agent.run_id.as_str()))
+            .cloned()
+            .collect(),
+        intents: intents.into_iter().cloned().collect(),
+        assignment_intents: super::assignments::snapshot_intents(state, &request.session_id),
+        runtime: runtime.0,
+        unmanaged_agents: runtime.1,
+        attention,
+    })
+}
+
+fn project_attention(
+    runs: &[&Run],
+    inboxes: &HashMap<&str, Vec<&Message>>,
+    observations: &HashMap<&str, &RunObservation>,
+    intents: &[&TaskIntent],
+    run_by_id: &HashMap<&str, &Run>,
+    clock: OffsetDateTime,
+    now: &str,
+) -> (Vec<Attention>, Vec<QuestionStatus>) {
     let mut attention = Vec::new();
     let mut questions = Vec::new();
-    for run in &runs {
+    for run in runs {
         let inbox: &[&Message] = inboxes.get(run.run_id.as_str()).map_or(&[], Vec::as_slice);
         let question = question_status(run, inbox);
         derive_attention(
@@ -168,7 +228,7 @@ pub(crate) fn snapshot(
             });
         }
     }
-    for intent in &intents {
+    for intent in intents {
         if intent.state == IntentState::Conflict {
             let since = run_by_id
                 .get(intent.run_id.as_str())
@@ -182,8 +242,18 @@ pub(crate) fn snapshot(
             });
         }
     }
+    (attention, questions)
+}
+
+fn project_board(
+    boards: Vec<TaskBoard>,
+    selected_root: Option<&str>,
+    runs: &[&Run],
+    run_by_id: &HashMap<&str, &Run>,
+    intents: &[&TaskIntent],
+) -> Result<Option<TaskBoard>, InspectionError> {
     let mut current_runs: HashMap<(&str, &str), &Run> = HashMap::new();
-    for run in &runs {
+    for run in runs {
         let Some(task_id) = run.task_id.as_deref() else {
             continue;
         };
@@ -239,51 +309,7 @@ pub(crate) fn snapshot(
             Some(board)
         }
     };
-    let mut open_counts: HashMap<&str, u32> = HashMap::new();
-    for run in &runs {
-        if run.stage != RunStage::Closed {
-            *open_counts.entry(run.root_id.as_str()).or_default() += 1;
-        }
-    }
-    let mut attention_counts: HashMap<&str, u32> = HashMap::new();
-    for item in &attention {
-        if let Some(run) = item.run_id.as_deref().and_then(|id| run_by_id.get(id)) {
-            *attention_counts.entry(run.root_id.as_str()).or_default() += 1;
-        }
-    }
-    Ok(OrchestrationSnapshot {
-        session_id: request.session_id.clone(),
-        revision: state.revision,
-        tasks_token,
-        roots: roots
-            .into_iter()
-            .map(|root| RootSummary {
-                root_id: root.run_id.clone(),
-                label: root.label.clone(),
-                kind: root.kind,
-                open_runs: open_counts.get(root.run_id.as_str()).copied().unwrap_or(0),
-                needs_you: attention_counts
-                    .get(root.run_id.as_str())
-                    .copied()
-                    .unwrap_or(0),
-            })
-            .collect(),
-        board,
-        runs: runs.into_iter().cloned().collect(),
-        messages: messages.into_iter().cloned().collect(),
-        questions,
-        subagents: state
-            .subagents
-            .iter()
-            .filter(|agent| run_by_id.contains_key(agent.run_id.as_str()))
-            .cloned()
-            .collect(),
-        intents: intents.into_iter().cloned().collect(),
-        assignment_intents: super::assignments::snapshot_intents(state, &request.session_id),
-        runtime: runtime.0,
-        unmanaged_agents: runtime.1,
-        attention,
-    })
+    Ok(board)
 }
 
 fn attempt_order(run: &Run) -> (bool, u32, &str, &str) {

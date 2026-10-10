@@ -311,34 +311,14 @@ impl LibraryService {
             .collect::<BTreeMap<_, _>>();
         let present = listed.keys().cloned().collect();
         let missing = pipeline.absent(&members, &present).missing;
-        let mut checked = BTreeMap::new();
-        let mut absent = BTreeSet::new();
-        let mut unverified = false;
-        if !live && !missing.is_empty() {
-            let keys = missing.into_iter().collect::<Vec<_>>();
-            let batch = match pipeline.check_members(self, &follow, &keys, manual).await {
-                Ok(Some(batch)) => batch,
-                Ok(None) => return Ok(()),
-                Err(failure) => {
-                    return self.listing_failed(store, operation, &follow, create, failure);
-                }
-            };
-            checked = batch
-                .rows
-                .into_iter()
-                .map(|row| (row.key.clone(), row))
-                .collect();
-            if batch.complete {
-                absent = pipeline
-                    .absent(
-                        &keys.into_iter().collect(),
-                        &checked.keys().cloned().collect(),
-                    )
-                    .missing;
-            } else {
-                unverified = true;
-            }
-        }
+        let (checked, absent, unverified) = match self
+            .check_accumulated_missing(&pipeline, &follow, missing, live, manual)
+            .await
+        {
+            Ok(Some(checked)) => checked,
+            Ok(None) => return Ok(()),
+            Err(failure) => return self.listing_failed(store, operation, &follow, create, failure),
+        };
         let download = self.attachments_allowed(store, operation, &follow).await?;
         let mut classified = pipeline.classify(
             &follow,
@@ -346,18 +326,7 @@ impl LibraryService {
             download,
             true,
         );
-        for key in absent {
-            let old = pipeline.snapshot.items.get(&issue_item_id(&follow, &key));
-            if old.is_some_and(|old| old.summary.state == LibraryItemState::RemovedAtSource) {
-                continue;
-            }
-            classified.fetch.push(Planned {
-                key: key.into(),
-                row: None,
-                old: old.cloned(),
-                reason: Some(ChangeReason::Confirming),
-            });
-        }
+        Self::append_confirmed_absent(&pipeline, &follow, absent, &mut classified);
         operations::add_total(
             store,
             operation,
@@ -415,6 +384,61 @@ impl LibraryService {
             &pipeline.listing,
             unverified,
         )
+    }
+
+    async fn check_accumulated_missing(
+        &self,
+        pipeline: &JiraFollowPlan,
+        follow: &LibraryFollowSummary,
+        missing: BTreeSet<String>,
+        live: bool,
+        pass: Pass<'_>,
+    ) -> Result<Option<(BTreeMap<String, IssueRow>, BTreeSet<String>, bool)>, InspectionError> {
+        let mut checked = BTreeMap::new();
+        let mut absent = BTreeSet::new();
+        let mut unverified = false;
+        if !live && !missing.is_empty() {
+            let keys = missing.into_iter().collect::<Vec<_>>();
+            let Some(batch) = pipeline.check_members(self, follow, &keys, pass).await? else {
+                return Ok(None);
+            };
+            checked = batch
+                .rows
+                .into_iter()
+                .map(|row| (row.key.clone(), row))
+                .collect();
+            if batch.complete {
+                absent = pipeline
+                    .absent(
+                        &keys.into_iter().collect(),
+                        &checked.keys().cloned().collect(),
+                    )
+                    .missing;
+            } else {
+                unverified = true;
+            }
+        }
+        Ok(Some((checked, absent, unverified)))
+    }
+
+    fn append_confirmed_absent(
+        pipeline: &JiraFollowPlan,
+        follow: &LibraryFollowSummary,
+        absent: BTreeSet<String>,
+        classified: &mut plan::Classified<'_, IssueRow>,
+    ) {
+        for key in absent {
+            let old = pipeline.snapshot.items.get(&issue_item_id(follow, &key));
+            if old.is_some_and(|old| old.summary.state == LibraryItemState::RemovedAtSource) {
+                continue;
+            }
+            classified.fetch.push(Planned {
+                key: key.into(),
+                row: None,
+                old: old.cloned(),
+                reason: Some(ChangeReason::Confirming),
+            });
+        }
     }
 
     async fn attachments_allowed(

@@ -463,6 +463,75 @@ impl CommentsService {
                 "capture root is not the currently verified browsing root",
             ));
         }
+        let document = self
+            .capture_document(session_id, pane_id, capture, evidence)
+            .await?;
+        let truncated = document.truncated;
+        let text = match document.text {
+            Some(text) => text,
+            None => {
+                return Err(InspectionError::new(
+                    if truncated {
+                        "comments_source_truncated"
+                    } else {
+                        "comments_capture_unavailable"
+                    },
+                    "the selected Context document is not available as complete UTF-8 text",
+                ));
+            }
+        };
+        if truncated {
+            return Err(InspectionError::new(
+                "comments_source_truncated",
+                "the selected Context document exceeds its bounded read limit",
+            ));
+        }
+        let anchor = match (capture.start_line, capture.end_line) {
+            (None, None) => CommentAnchor::WholeFile,
+            (Some(start_line), Some(end_line)) => {
+                let selected_lines = capture_lines(&text, start_line, end_line)
+                    .map_err(|message| InspectionError::new("comments_invalid_range", message))?;
+                CommentAnchor::Lines {
+                    start_line,
+                    end_line,
+                    selected_lines,
+                }
+            }
+            _ => {
+                return Err(InspectionError::new(
+                    "comments_invalid_range",
+                    "line capture must provide both bounds or neither",
+                ));
+            }
+        };
+        let absolute_path = Path::new(&evidence.root_path)
+            .join(&document.path)
+            .to_string_lossy()
+            .into_owned();
+        Ok(CommentDraft {
+            draft_id: Uuid::new_v4().to_string(),
+            file_ref: CommentFileRef {
+                review: capture.review.clone(),
+                root_id: document.root_id,
+                path: document.path,
+                absolute_path,
+                revision: document.revision,
+                content_hash: document.content_hash,
+            },
+            anchor,
+            comment_text: comment_text.to_owned(),
+            source_state: CommentSourceState::Current,
+            updated_at: timestamp(),
+        })
+    }
+
+    async fn capture_document(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        capture: &CommentCapture,
+        evidence: &CommentEvidence,
+    ) -> Result<CapturedDocument, InspectionError> {
         let document = if evidence.source_kind == ViewerSourceKind::Review {
             let reference = capture.review.as_ref().ok_or_else(|| {
                 InspectionError::new(
@@ -543,63 +612,7 @@ impl CommentsService {
                 truncated: value.truncated,
             }
         };
-        let truncated = document.truncated;
-        let text = match document.text {
-            Some(text) => text,
-            None => {
-                return Err(InspectionError::new(
-                    if truncated {
-                        "comments_source_truncated"
-                    } else {
-                        "comments_capture_unavailable"
-                    },
-                    "the selected Context document is not available as complete UTF-8 text",
-                ));
-            }
-        };
-        if truncated {
-            return Err(InspectionError::new(
-                "comments_source_truncated",
-                "the selected Context document exceeds its bounded read limit",
-            ));
-        }
-        let anchor = match (capture.start_line, capture.end_line) {
-            (None, None) => CommentAnchor::WholeFile,
-            (Some(start_line), Some(end_line)) => {
-                let selected_lines = capture_lines(&text, start_line, end_line)
-                    .map_err(|message| InspectionError::new("comments_invalid_range", message))?;
-                CommentAnchor::Lines {
-                    start_line,
-                    end_line,
-                    selected_lines,
-                }
-            }
-            _ => {
-                return Err(InspectionError::new(
-                    "comments_invalid_range",
-                    "line capture must provide both bounds or neither",
-                ));
-            }
-        };
-        let absolute_path = Path::new(&evidence.root_path)
-            .join(&document.path)
-            .to_string_lossy()
-            .into_owned();
-        Ok(CommentDraft {
-            draft_id: Uuid::new_v4().to_string(),
-            file_ref: CommentFileRef {
-                review: capture.review.clone(),
-                root_id: document.root_id,
-                path: document.path,
-                absolute_path,
-                revision: document.revision,
-                content_hash: document.content_hash,
-            },
-            anchor,
-            comment_text: comment_text.to_owned(),
-            source_state: CommentSourceState::Current,
-            updated_at: timestamp(),
-        })
+        Ok(document)
     }
 
     async fn refresh_states(&self, batch: &mut CommentBatch, evidence: &CommentEvidence) {

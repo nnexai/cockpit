@@ -543,81 +543,7 @@ pub(crate) fn read_directory(
             ));
         }
     }
-    let mut entries = Vec::new();
-    let mut truncated = false;
-    let mut scanned_entries = 0usize;
-    let read_dir = directory.entries().map_err(|error| {
-        InspectionError::new("context_directory_unavailable", error.to_string())
-    })?;
-    for item in read_dir {
-        if scanned_entries >= MAX_DIRECTORY_SCAN {
-            truncated = true;
-            break;
-        }
-        scanned_entries += 1;
-        let item = match item {
-            Ok(item) => item,
-            Err(error) => {
-                entries.push(ContextEntry {
-                    entry_id: stable_id(&authorized.root.root_id, "<unavailable>"),
-                    name: "<unavailable>".to_owned(),
-                    path: None,
-                    kind: ContextEntryKind::Other,
-                    bytes: None,
-                    revision: String::new(),
-                    refusal: Some(format!("entry became unavailable: {error}")),
-                });
-                continue;
-            }
-        };
-        let name = item.file_name().to_string_lossy().into_owned();
-        if name.contains('\0') {
-            continue;
-        }
-        let child_relative = if relative.as_os_str().is_empty() {
-            PathBuf::from(&name)
-        } else {
-            relative.join(&name)
-        };
-        if reserved_context_path(authorized.root.kind, &child_relative).is_some() {
-            continue;
-        }
-        let entry_id = stable_id(&authorized.root.root_id, &child_relative.to_string_lossy());
-        let metadata = match directory.symlink_metadata(Path::new(&name)) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                entries.push(ContextEntry {
-                    entry_id,
-                    name,
-                    path: None,
-                    kind: ContextEntryKind::Other,
-                    bytes: None,
-                    revision: String::new(),
-                    refusal: Some(format!("entry became unavailable: {error}")),
-                });
-                continue;
-            }
-        };
-        let (kind, path, bytes, refusal) =
-            match reserved_context_path(authorized.root.kind, &child_relative) {
-                Some(message) => (
-                    ContextEntryKind::Other,
-                    None,
-                    None,
-                    Some(message.to_owned()),
-                ),
-                None => classify_entry(&metadata, &child_relative),
-            };
-        entries.push(ContextEntry {
-            entry_id,
-            name,
-            path,
-            kind,
-            bytes,
-            revision: metadata_revision(&metadata),
-            refusal,
-        });
-    }
+    let (mut entries, truncated) = scan_directory_entries(authorized, &directory, &relative)?;
     let after = directory.dir_metadata().map_err(|error| {
         InspectionError::new("context_directory_unavailable", error.to_string())
     })?;
@@ -731,70 +657,18 @@ pub(crate) fn read_document(
             "document continuation offset exceeds the file",
         ));
     }
-    revalidate_root(&authorized.dir, &authorized.root.root_id)?;
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .follow(cap_fs_ext::FollowSymlinks::No)
-        .nonblock(true);
-    let mut file = parent.open_with(&leaf, &options).map_err(|error| {
-        let code = if error.kind() == ErrorKind::WouldBlock || is_symlink_open_error(&error) {
-            "context_special_file_refused"
-        } else if error.kind() == ErrorKind::NotFound {
-            "context_file_missing"
-        } else {
-            "context_file_unavailable"
-        };
-        InspectionError::new(code, format!("cannot open context file: {error}"))
-    })?;
-    let opened = file.metadata().map_err(|error| {
-        InspectionError::new(
-            "context_file_unavailable",
-            format!("cannot stat context file: {error}"),
-        )
-    })?;
-    if !opened.is_file() || opened.file_type().is_symlink() {
-        refuse_document(
-            &mut result,
-            "context_special_file_refused",
-            "file type changed before opening",
-        );
+    let Some(content) = read_document_bytes(
+        authorized,
+        &parent,
+        &leaf,
+        &before,
+        &revision,
+        offset,
+        max_bytes,
+        &mut result,
+    )? else {
         return Ok(result);
-    }
-    if metadata_revision(&opened) != revision {
-        return Err(InspectionError::new(
-            "context_changed_during_read",
-            "context file changed while opening",
-        ));
-    }
-    file.seek(SeekFrom::Start(offset)).map_err(|error| {
-        InspectionError::new(
-            "context_file_unavailable",
-            format!("cannot seek context file: {error}"),
-        )
-    })?;
-    let mut content = Vec::with_capacity(max_bytes.min((before.len() - offset) as usize));
-    (&mut file)
-        .take(max_bytes as u64)
-        .read_to_end(&mut content)
-        .map_err(|error| {
-            InspectionError::new(
-                "context_file_unavailable",
-                format!("cannot read context file: {error}"),
-            )
-        })?;
-    let after = parent.symlink_metadata(&leaf).map_err(|error| {
-        InspectionError::new(
-            "context_changed_during_read",
-            format!("cannot recheck context file: {error}"),
-        )
-    })?;
-    if metadata_revision(&after) != revision {
-        return Err(InspectionError::new(
-            "context_changed_during_read",
-            "context file changed while reading",
-        ));
-    }
+    };
     let valid_bytes = match std::str::from_utf8(&content) {
         Ok(_) => content.len(),
         Err(error) if error.valid_up_to() > 0 && !content.contains(&0) => error.valid_up_to(),
@@ -838,6 +712,166 @@ pub(crate) fn read_document(
     }
     result.text = Some(String::from_utf8(text_bytes.to_vec()).expect("validated UTF-8"));
     Ok(result)
+}
+
+fn scan_directory_entries(
+    authorized: &AuthorizedRoot,
+    directory: &Dir,
+    relative: &Path,
+) -> Result<(Vec<ContextEntry>, bool), InspectionError> {
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    let mut scanned_entries = 0usize;
+    let read_dir = directory.entries().map_err(|error| {
+        InspectionError::new("context_directory_unavailable", error.to_string())
+    })?;
+    for item in read_dir {
+        if scanned_entries >= MAX_DIRECTORY_SCAN {
+            truncated = true;
+            break;
+        }
+        scanned_entries += 1;
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                entries.push(ContextEntry {
+                    entry_id: stable_id(&authorized.root.root_id, "<unavailable>"),
+                    name: "<unavailable>".to_owned(),
+                    path: None,
+                    kind: ContextEntryKind::Other,
+                    bytes: None,
+                    revision: String::new(),
+                    refusal: Some(format!("entry became unavailable: {error}")),
+                });
+                continue;
+            }
+        };
+        let name = item.file_name().to_string_lossy().into_owned();
+        if name.contains('\0') {
+            continue;
+        }
+        let child_relative = if relative.as_os_str().is_empty() {
+            PathBuf::from(&name)
+        } else {
+            relative.join(&name)
+        };
+        if reserved_context_path(authorized.root.kind, &child_relative).is_some() {
+            continue;
+        }
+        let entry_id = stable_id(&authorized.root.root_id, &child_relative.to_string_lossy());
+        let metadata = match directory.symlink_metadata(Path::new(&name)) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                entries.push(ContextEntry {
+                    entry_id,
+                    name,
+                    path: None,
+                    kind: ContextEntryKind::Other,
+                    bytes: None,
+                    revision: String::new(),
+                    refusal: Some(format!("entry became unavailable: {error}")),
+                });
+                continue;
+            }
+        };
+        let (kind, path, bytes, refusal) =
+            match reserved_context_path(authorized.root.kind, &child_relative) {
+                Some(message) => (
+                    ContextEntryKind::Other,
+                    None,
+                    None,
+                    Some(message.to_owned()),
+                ),
+                None => classify_entry(&metadata, &child_relative),
+            };
+        entries.push(ContextEntry {
+            entry_id,
+            name,
+            path,
+            kind,
+            bytes,
+            revision: metadata_revision(&metadata),
+            refusal,
+        });
+    }
+    Ok((entries, truncated))
+}
+
+fn read_document_bytes(
+    authorized: &AuthorizedRoot,
+    parent: &Dir,
+    leaf: &Path,
+    before: &Metadata,
+    revision: &str,
+    offset: u64,
+    max_bytes: usize,
+    result: &mut ContextDocument,
+) -> Result<Option<Vec<u8>>, InspectionError> {
+    revalidate_root(&authorized.dir, &authorized.root.root_id)?;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .follow(cap_fs_ext::FollowSymlinks::No)
+        .nonblock(true);
+    let mut file = parent.open_with(leaf, &options).map_err(|error| {
+        let code = if error.kind() == ErrorKind::WouldBlock || is_symlink_open_error(&error) {
+            "context_special_file_refused"
+        } else if error.kind() == ErrorKind::NotFound {
+            "context_file_missing"
+        } else {
+            "context_file_unavailable"
+        };
+        InspectionError::new(code, format!("cannot open context file: {error}"))
+    })?;
+    let opened = file.metadata().map_err(|error| {
+        InspectionError::new(
+            "context_file_unavailable",
+            format!("cannot stat context file: {error}"),
+        )
+    })?;
+    if !opened.is_file() || opened.file_type().is_symlink() {
+        refuse_document(
+            result,
+            "context_special_file_refused",
+            "file type changed before opening",
+        );
+        return Ok(None);
+    }
+    if metadata_revision(&opened) != revision {
+        return Err(InspectionError::new(
+            "context_changed_during_read",
+            "context file changed while opening",
+        ));
+    }
+    file.seek(SeekFrom::Start(offset)).map_err(|error| {
+        InspectionError::new(
+            "context_file_unavailable",
+            format!("cannot seek context file: {error}"),
+        )
+    })?;
+    let mut content = Vec::with_capacity(max_bytes.min((before.len() - offset) as usize));
+    (&mut file)
+        .take(max_bytes as u64)
+        .read_to_end(&mut content)
+        .map_err(|error| {
+            InspectionError::new(
+                "context_file_unavailable",
+                format!("cannot read context file: {error}"),
+            )
+        })?;
+    let after = parent.symlink_metadata(leaf).map_err(|error| {
+        InspectionError::new(
+            "context_changed_during_read",
+            format!("cannot recheck context file: {error}"),
+        )
+    })?;
+    if metadata_revision(&after) != revision {
+        return Err(InspectionError::new(
+            "context_changed_during_read",
+            "context file changed while reading",
+        ));
+    }
+    Ok(Some(content))
 }
 
 pub(crate) fn find_root(roots: &[ContextRoot], root_id: &str) -> Result<AuthorizedRoot, InspectionError> {

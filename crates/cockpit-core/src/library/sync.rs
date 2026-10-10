@@ -324,6 +324,40 @@ fn schedule(now: i64, duration: i64, identity: &str) -> i64 {
     now.saturating_add(duration)
         .saturating_add(duration / 1000 * spread)
 }
+fn schedule_follow_windows(
+    source: &mut SourceState,
+    follow_id: &str,
+    config: &LibrarySyncConfiguration,
+    now: i64,
+    delta_due: bool,
+    inventory_due: bool,
+) {
+    source.last_started_ms = now;
+    if delta_due {
+        source.next_delta_ms = now.saturating_add(i64::from(config.delta_minutes) * MINUTE);
+        if source.window.is_none() {
+            let upper = (now
+                .saturating_sub(i64::from(config.lag_allowance_minutes) * MINUTE)
+                / MINUTE)
+                * MINUTE;
+            let lower = source
+                .committed_upper_ms
+                .unwrap_or(upper.saturating_sub(i64::from(config.delta_minutes) * MINUTE))
+                .saturating_sub(i64::from(config.overlap_minutes) * MINUTE)
+                .max(0);
+            if lower < upper {
+                source.window = Some((lower, upper));
+            }
+        }
+    }
+    if inventory_due {
+        source.next_inventory_ms = schedule(
+            now,
+            i64::from(config.inventory_hours) * HOUR,
+            follow_id,
+        );
+    }
+}
 fn confirmed(previous: &BTreeMap<String, i64>, id: &str, now: i64) -> bool {
     previous
         .get(id)
@@ -498,34 +532,15 @@ impl LibraryService {
             let delta_due = source_state.next_delta_ms <= now;
             let inventory_due = source_state.next_inventory_ms <= now;
             {
-                let s = state.sources.get_mut(&follow.follow_id).unwrap();
-                s.last_started_ms = now;
-                if delta_due {
-                    s.next_delta_ms = now.saturating_add(i64::from(config.delta_minutes) * MINUTE);
-                    if s.window.is_none() {
-                        let upper = (now
-                            .saturating_sub(i64::from(config.lag_allowance_minutes) * MINUTE)
-                            / MINUTE)
-                            * MINUTE;
-                        let lower = s
-                            .committed_upper_ms
-                            .unwrap_or(
-                                upper.saturating_sub(i64::from(config.delta_minutes) * MINUTE),
-                            )
-                            .saturating_sub(i64::from(config.overlap_minutes) * MINUTE)
-                            .max(0);
-                        if lower < upper {
-                            s.window = Some((lower, upper));
-                        }
-                    }
-                }
-                if inventory_due {
-                    s.next_inventory_ms = schedule(
-                        now,
-                        i64::from(config.inventory_hours) * HOUR,
-                        &follow.follow_id,
-                    );
-                }
+                let source = state.sources.get_mut(&follow.follow_id).unwrap();
+                schedule_follow_windows(
+                    source,
+                    &follow.follow_id,
+                    config,
+                    now,
+                    delta_due,
+                    inventory_due,
+                );
             }
             save(store, &state)?; // crash lease and fixed bounds precede remote work
             let mut failure = None;

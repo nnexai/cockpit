@@ -99,7 +99,6 @@ async function expandQueue() {
 }
 afterEach(async () => { if (reactRoot) await act(async () => reactRoot!.unmount()); reactRoot = null; host?.remove(); vi.restoreAllMocks(); });
 
-// Domain truth assertions stay; incidental UI copy/default wiring assertions are intentionally not migrated.
 describe("Supervisor authority and retained operations", () => {
   it("does not turn a historical binding or ACK into fresh OMP proof", () => {
     const saved = run(), state = snapshot([saved]);
@@ -482,7 +481,7 @@ describe("Supervisor selection, scroll and panel transitions", () => {
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
   it("keeps literal failures on cards but routine technical report text only in details", async () => {
-    const failure = "Compiler rejected migration. No files lost.";
+    const failure = "Compiler rejected operation. No files lost.";
     const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "reported", last_report: { message_id: "failed", kind: "result", outcome: "failed", summary: failure, plan: null, at } });
     worker.result = worker.last_report;
     const fixture = await mount(snapshot([run(), worker], [task({ lane: "review" })]));

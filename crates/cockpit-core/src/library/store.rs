@@ -17,6 +17,8 @@ use std::{
 use uuid::Uuid;
 
 mod inventory;
+mod publication;
+mod recovery;
 use inventory::{
     check_confirmation, conflicts, inventory, owned_inventory, owned_roots, safe_file_path,
     verify_entry,
@@ -675,71 +677,12 @@ impl Store {
         let (target_root, target_name) = self.create_item_parent(&entry.summary.item_path)?;
         sync(&target_root)?;
         let target_name = target_name.to_owned();
-        let mut old = index
-            .items
-            .iter()
-            .find(|e| e.summary.item_id == entry.summary.item_id)
-            .cloned();
-        if index.items.iter().any(|item| {
-            item.summary.item_id != entry.summary.item_id
-                && item.summary.item_path == entry.summary.item_path
-        }) {
-            return Err(error(
-                "library_conflict",
-                "Library destination is already owned by another item",
-            ));
-        }
-        if old.is_none() && exists(&target_root, &target_name)? {
-            return Err(error(
-                "library_conflict",
-                "Library destination is already occupied",
-            ));
-        }
-        if old.as_ref().map(|e| e.summary.revision.as_str()) != previous {
-            return Err(error(
-                "library_conflict",
-                "Library revision changed before publish",
-            ));
-        }
-        let predecessor = if let Some(old) = &old {
-            let snapshot = owned_inventory(&self.item_dir(&old.summary.item_path)?, old)?;
-            check_confirmation(&conflicts(old, &snapshot), confirmed)?;
-            Some(snapshot)
-        } else {
-            None
-        };
-        if old.is_none() && index.items.len() >= self.max_items {
-            return Err(error(
-                "library_full",
-                "Library item limit reached; remove an item before adding another",
-            ));
-        }
-        let mut prospective_index = index.clone();
-        upsert(&mut prospective_index, entry.clone());
-        prospective_index.generation = Uuid::new_v4().to_string();
-        let prospective = serde_json::to_vec_pretty(&prospective_index)
-            .map_err(|e| corrupt(e.to_string()))?;
-        if prospective.len() as u64 > MAX_INDEX {
-            return Err(error(
-                "library_full",
-                "Library index capacity reached; remove an item before adding another",
-            ));
-        }
-        if let Some(previous_entry) = old.as_ref()
-            && previous_entry.summary.item_path != entry.summary.item_path
-        {
-            if index.items.iter().any(|item| {
-                item.summary.item_id != previous_entry.summary.item_id
-                    && item.summary.item_path == entry.summary.item_path
-            }) || exists(&target_root, &target_name)?
-            {
-                return Err(error("library_conflict", "Library destination is already occupied"));
-            }
-            old = Some(self.move_item(&mut index, previous_entry, &entry.summary.item_path)?);
-        }
+        let (old, predecessor) = self.prepare_publication(
+            &mut index, &entry, previous, confirmed, &target_root, &target_name,
+        )?;
         upsert(&mut index, entry.clone());
         index.generation = Uuid::new_v4().to_string();
-        let mut method = if let Some(old) = &old {
+        let method = if let Some(old) = &old {
             if old.summary.kind == LibraryItemKind::FolderCopy {
                 Method::Exchange
             } else {
@@ -749,15 +692,17 @@ impl Store {
             Method::NewTarget
         };
         #[cfg(test)]
-        if old
+        let method = if old
             .as_ref()
             .is_some_and(|entry| entry.summary.kind == LibraryItemKind::FolderCopy)
             && self
                 .force_two_rename
                 .load(std::sync::atomic::Ordering::SeqCst)
         {
-            method = Method::TwoRename;
-        }
+            Method::TwoRename
+        } else {
+            method
+        };
         if let Some(old) = &old {
             if old.summary.kind != LibraryItemKind::FolderCopy {
                 let owned = owned_roots(old);
@@ -798,69 +743,9 @@ impl Store {
         self.write_intent(&intent)?;
         // Once journaled, only recovery owns this stage, including after an I/O failure.
         stage.owned = false;
-        let result = (|| {
-            self.fault("journal")?;
-            if method == Method::Exchange {
-                match rename_special(&self.staging, &stage.name, &target_root, &target_name, true) {
-                    Ok(()) => {}
-                    Err(e) if matches!(e.raw_os_error(), Some(22 | 38 | 95)) => {
-                        method = Method::TwoRename;
-                        intent.method = method;
-                        self.write_intent(&intent)?;
-                    }
-                    Err(e) => return Err(io_error(e)),
-                }
-            }
-            if method == Method::Merge {
-                let target = target_root.open_dir_nofollow(&target_name).map_err(io_error)?;
-                self.publish_owned_entries(&target, &stage.dir, &intent)?;
-                self.fault("entry_published")?;
-            }
-            if method == Method::TwoRename {
-                rename_special(
-                    &target_root,
-                    &target_name,
-                    &self.trash,
-                    &intent.backup,
-                    false,
-                )
-                .map_err(io_error)?;
-                sync(&target_root)?;
-                sync(&self.trash)?;
-                self.fault("old_to_backup")?;
-            }
-            if matches!(method, Method::TwoRename | Method::NewTarget) {
-                match rename_special(
-                    &self.staging,
-                    &stage.name,
-                    &target_root,
-                    &target_name,
-                    false,
-                ) {
-                    Ok(()) => {}
-                    Err(e)
-                        if method == Method::NewTarget
-                            && (e.kind() == io::ErrorKind::AlreadyExists
-                                || e.raw_os_error() == Some(17)) =>
-                    {
-                        self.finish(&intent)?;
-                        return Err(error(
-                            "library_conflict",
-                            "Library destination is already occupied",
-                        ));
-                    }
-                    Err(e) => return Err(io_error(e)),
-                }
-            }
-            self.fault("rename_unsynced")?;
-            sync(&target_root)?;
-            sync(&self.staging)?;
-            self.fault("new_to_target")?;
-            upsert(&mut index, intent.new_entry.as_ref().unwrap().clone());
-            self.commit(&mut index)?;
-            self.fault("index_commit")?;
-            self.finish(&intent)
-        })();
+        let result = self.apply_publication(
+            &stage, &target_root, &target_name, &mut intent, &mut index,
+        );
         if let Err(e) = &result {
             if e.code != "library_test_crash" {
                 self.recover()?;
@@ -1001,164 +886,7 @@ impl Store {
             let intent: Intent = read_json_bounded(&self.journal, &name, MAX_RECORD)
                 .map_err(|e| corrupt(e.message))?;
             validate_intent(&intent, &name)?;
-            let (target_root, target_name) = self.item_parent(&intent.target)?;
-            let target = exists(&target_root, target_name)?;
-            if intent.method == Method::Move {
-                let source = intent.source.as_deref().ok_or_else(|| corrupt("move intent has no source"))?;
-                let (source_root, source_name) = self.item_parent(source)?;
-                let source_exists = exists(&source_root, source_name)?;
-                let expected = intent.move_inventory.as_ref().ok_or_else(|| corrupt("move intent has no inventory"))?;
-                let at_source = source_exists
-                    && source_root.open_dir_nofollow(source_name).ok()
-                        .is_some_and(|dir| inventory(&dir).is_ok_and(|actual| actual == *expected));
-                let at_target = target
-                    && target_root.open_dir_nofollow(target_name).ok()
-                        .is_some_and(|dir| inventory(&dir).is_ok_and(|actual| actual == *expected));
-                if at_source && !target {
-                    self.sync_transition(&intent)?;
-                    self.finish(&intent)?;
-                    continue;
-                }
-                if at_target && !source_exists {
-                    self.sync_transition(&intent)?;
-                    for moved in intent.moved_entries.as_ref().ok_or_else(|| corrupt("move intent has no entries"))? {
-                        upsert(&mut index, moved.clone());
-                    }
-                    self.commit(&mut index)?;
-                    self.finish(&intent)?;
-                    continue;
-                }
-                return Err(corrupt("move journal does not match a recoverable filesystem state"));
-            }
-            let backup = exists(&self.trash, &intent.backup)?;
-            let target_new = intent.new_entry.as_ref().is_some_and(|entry| {
-                target_root
-                    .open_dir_nofollow(target_name)
-                    .ok()
-                    .is_some_and(|dir| verify_entry(&dir, entry).is_ok())
-            });
-            let is_old = |parent: &Dir, name: &str| {
-                intent.predecessor.as_ref().is_some_and(|snapshot| {
-                    intent.old_entry.as_ref().is_some_and(|entry| {
-                        parent
-                            .open_dir_nofollow(name)
-                            .ok()
-                            .is_some_and(|dir| owned_inventory(&dir, entry).is_ok_and(|actual| actual == *snapshot))
-                    })
-                })
-            };
-            let target_old = is_old(&target_root, target_name);
-            let mut forward = false;
-            let mut rollback = false;
-            match intent.method {
-                Method::Merge if target_old && !backup => rollback = true,
-                Method::Merge if target && target_new => forward = true,
-                Method::Merge if target => {
-                    let target_dir = target_root.open_dir_nofollow(target_name).map_err(io_error)?;
-                    let stage = intent.staging.as_ref().unwrap();
-                    let stage_dir = self.staging.open_dir_nofollow(stage).map_err(io_error)?;
-                    self.publish_owned_entries(&target_dir, &stage_dir, &intent)?;
-                    forward = true;
-                }
-                Method::Remove if target && !backup => rollback = target_old,
-                Method::Remove if !target && backup && is_old(&self.trash, &intent.backup) => {
-                    self.sync_transition(&intent)?;
-                    index.items.retain(|e| e.summary.item_id != intent.item_id);
-                    self.commit(&mut index)?;
-                    self.finish(&intent)?;
-                    continue;
-                }
-                Method::RemoveOwned if target => {
-                    let target_dir = target_root.open_dir_nofollow(target_name).map_err(io_error)?;
-                    let backup_dir = open_child(&self.trash, &intent.backup)?;
-                    let old = intent.old_entry.as_ref().unwrap();
-                    for name in owned_roots(old) {
-                        if exists(&target_dir, &name)? && !exists(&backup_dir, &name)? {
-                            rename_special(&target_dir, &name, &backup_dir, &name, false)
-                                .map_err(io_error)?;
-                        }
-                    }
-                    if owned_inventory(&backup_dir, old)? == *intent.predecessor.as_ref().unwrap() {
-                        self.sync_transition(&intent)?;
-                        index.items.retain(|e| e.summary.item_id != intent.item_id);
-                        self.commit(&mut index)?;
-                        self.finish(&intent)?;
-                        self.prune_empty(&intent.target)?;
-                        continue;
-                    }
-                }
-                Method::NewTarget if !target => rollback = true,
-                Method::NewTarget if target_new => forward = true,
-                Method::Exchange if target_new => {
-                    forward = intent
-                        .staging
-                        .as_ref()
-                        .is_some_and(|stage| is_old(&self.staging, stage))
-                }
-                Method::TwoRename if target_new => forward = is_old(&self.trash, &intent.backup),
-                Method::Exchange | Method::TwoRename if target_old && !backup => rollback = true,
-                Method::TwoRename if !target && backup && is_old(&self.trash, &intent.backup) => {
-                    let entry = intent.new_entry.as_ref().unwrap();
-                    let stage = intent.staging.as_ref().unwrap();
-                    let valid = self
-                        .staging
-                        .open_dir_nofollow(stage)
-                        .ok()
-                        .is_some_and(|dir| verify_entry(&dir, entry).is_ok());
-                    if valid {
-                        rename_special(&self.staging, stage, &target_root, target_name, false)
-                            .map_err(io_error)?;
-                        sync(&self.staging)?;
-                        forward = true;
-                    } else {
-                        rename_special(
-                            &self.trash,
-                            &intent.backup,
-                            &target_root,
-                            target_name,
-                            false,
-                        )
-                        .map_err(io_error)?;
-                        sync(&self.trash)?;
-                        rollback = true;
-                    }
-                    sync(&target_root)?;
-                }
-                _ => {}
-            }
-            if forward || rollback {
-                // A prior process may have died immediately after rename, before its fsync.
-                // Sync all rename parents even when recovery only observed the transition.
-                self.sync_transition(&intent)?;
-                if forward {
-                    upsert(&mut index, intent.new_entry.as_ref().unwrap().clone());
-                    self.commit(&mut index)?;
-                } else if let Some(old) = &intent.old_entry {
-                    upsert(&mut index, old.clone());
-                    self.commit(&mut index)?;
-                }
-                self.finish(&intent)?;
-            } else {
-                if let Some(entry) = index
-                    .items
-                    .iter_mut()
-                    .find(|e| e.summary.item_id == intent.item_id)
-                {
-                    entry.summary.state = LibraryItemState::Failed;
-                    entry.summary.diagnostics = vec![ProjectDiagnostic {
-                        code: "library_corrupt".into(),
-                        message:
-                            "Journal does not match a recoverable filesystem state; files retained"
-                                .into(),
-                        path: Some(intent.target.clone()),
-                    }];
-                    self.commit(&mut index)?;
-                } else {
-                    return Err(corrupt(
-                        "unindexed journal target is not recoverable; files retained",
-                    ));
-                }
-            }
+            self.recover_intent(&intent, &mut index)?;
         }
         Ok(())
     }

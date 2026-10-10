@@ -706,52 +706,7 @@ pub fn resolve_gitlab_artifact(
     base: &Url,
     artifact_url: &str,
 ) -> Result<ProjectArtifact, InspectionError> {
-    validate_input(provider_id, "provider_id")?;
-    if artifact_url.is_empty()
-        || artifact_url.len() > 8192
-        || artifact_url.chars().any(char::is_control)
-    {
-        return Err(InspectionError::new(
-            "invalid_artifact_url",
-            "GitLab artifact URL must be a bounded absolute HTTP(S) URL",
-        ));
-    }
-    let raw_path = raw_url_path(artifact_url).ok_or_else(|| {
-        InspectionError::new(
-            "invalid_artifact_url",
-            "GitLab artifact URL must be an absolute HTTP(S) URL",
-        )
-    })?;
-    let raw_lower = raw_path.to_ascii_lowercase();
-    if raw_path.contains('\\')
-        || raw_lower.contains("%2f")
-        || raw_lower.contains("%5c")
-        || raw_lower.contains("%2e")
-    {
-        return Err(InspectionError::new(
-            "invalid_artifact_url",
-            "GitLab artifact URL contains an ambiguous encoded separator or traversal component",
-        ));
-    }
-    let parsed = Url::parse(artifact_url).map_err(|_| {
-        InspectionError::new(
-            "invalid_artifact_url",
-            "GitLab artifact URL must be an absolute HTTP(S) URL",
-        )
-    })?;
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || parsed.path() != raw_path
-    {
-        return Err(InspectionError::new(
-            "invalid_artifact_url",
-            "GitLab artifact URL must be credential-free and preserve a safe raw path",
-        ));
-    }
+    let (parsed, raw_path) = parse_gitlab_artifact_url(provider_id, artifact_url)?;
     if !matches!(base.scheme(), "http" | "https")
         || base.host_str().is_none()
         || !base.username().is_empty()
@@ -852,6 +807,59 @@ pub fn resolve_gitlab_artifact(
         original_url: artifact_url.into(),
         canonical_url: parsed.to_string(),
     })
+}
+
+fn parse_gitlab_artifact_url<'a>(
+    provider_id: &str,
+    artifact_url: &'a str,
+) -> Result<(Url, &'a str), InspectionError> {
+    validate_input(provider_id, "provider_id")?;
+    if artifact_url.is_empty()
+        || artifact_url.len() > 8192
+        || artifact_url.chars().any(char::is_control)
+    {
+        return Err(InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL must be a bounded absolute HTTP(S) URL",
+        ));
+    }
+    let raw_path = raw_url_path(artifact_url).ok_or_else(|| {
+        InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL must be an absolute HTTP(S) URL",
+        )
+    })?;
+    let raw_lower = raw_path.to_ascii_lowercase();
+    if raw_path.contains('\\')
+        || raw_lower.contains("%2f")
+        || raw_lower.contains("%5c")
+        || raw_lower.contains("%2e")
+    {
+        return Err(InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL contains an ambiguous encoded separator or traversal component",
+        ));
+    }
+    let parsed = Url::parse(artifact_url).map_err(|_| {
+        InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL must be an absolute HTTP(S) URL",
+        )
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != raw_path
+    {
+        return Err(InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL must be credential-free and preserve a safe raw path",
+        ));
+    }
+    Ok((parsed, raw_path))
 }
 
 fn raw_url_path(value: &str) -> Option<&str> {

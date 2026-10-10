@@ -146,12 +146,11 @@ fn check_revision(record: &Record, expected: &str) -> Result<(), InspectionError
     Ok(())
 }
 
-pub(super) fn execute(
+fn validate_comment_operation<'a>(
     dir: &Dir,
-    _folder: &Path,
-    op: NotesOperation,
-) -> Result<(bool, NotesResult), InspectionError> {
-    let todo_id = match &op {
+    op: &'a NotesOperation,
+) -> Result<&'a str, InspectionError> {
+    let todo_id = match op {
         NotesOperation::CommentList { todo_id }
         | NotesOperation::CommentGet { todo_id, .. }
         | NotesOperation::CommentAdd { todo_id, .. }
@@ -160,7 +159,7 @@ pub(super) fn execute(
         _ => return Err(fs::error("notes_usage", "Not a comment operation")),
     };
     fs::validate_id(todo_id, 64)?;
-    match &op {
+    match op {
         NotesOperation::CommentGet { comment_id, .. }
         | NotesOperation::CommentUpdate { comment_id, .. }
         | NotesOperation::CommentRemove { comment_id, .. } => {
@@ -173,7 +172,7 @@ pub(super) fn execute(
         }
         _ => {}
     }
-    match &op {
+    match op {
         NotesOperation::CommentAdd { body, author, .. } => {
             validate_body(body)?;
             if let Some(author) = author {
@@ -192,6 +191,77 @@ pub(super) fn execute(
         NotesOperation::CommentUpdate { body, .. } => validate_body(body)?,
         _ => {}
     }
+    Ok(todo_id)
+}
+
+fn add_comment(
+    dir: &Dir,
+    existing_dir: Option<Dir>,
+    existing: &Collection,
+    todo_id: String,
+    body: String,
+    author: Option<String>,
+) -> Result<(bool, NotesResult), InspectionError> {
+    let mut content = format!("---\ncreated: {}\n", fs::now());
+    if let Some(author) = author {
+        // Quoting prevents a label containing '#', ':', or YAML syntax
+        // from becoming metadata structure or losing part of its value.
+        let scalar = serde_json::to_string(&author)
+            .map_err(|error| fs::error("notes_invalid_input", &error.to_string()))?;
+        content.push_str("author: ");
+        content.push_str(&scalar);
+        content.push('\n');
+    }
+    content.push_str("---\n");
+    content.push_str(&body);
+    if content.len() > FILE_MAX
+        || existing.entries >= ENTRY_MAX
+        || existing.bytes + content.len() > AGGREGATE_MAX
+    {
+        return Err(too_large());
+    }
+    if let Some(dir) = &existing_dir {
+        fs::entries(dir, ENTRY_MAX - 1)?;
+    }
+    let destination = match existing_dir {
+        Some(dir) => dir,
+        None => {
+            let comments = fs::child(dir, "comments", true)?;
+            fs::child(&comments, &todo_id, true)?
+        }
+    };
+    let id = Uuid::new_v4().to_string();
+    let name = format!("{id}.md");
+    let base = fs::read(&destination, &name, FILE_MAX)?;
+    if base.revision != "absent" {
+        return Err(fs::error(
+            "notes_conflict",
+            "Generated comment already exists",
+        ));
+    }
+    fs::publish(&destination, &name, &base, &content, FILE_MAX)?;
+    let record = parse(
+        &todo_id,
+        id,
+        NotesDocument {
+            revision: fs::revision(content.as_bytes()),
+            content,
+        },
+    )?;
+    Ok((
+        true,
+        NotesResult::Comment {
+            comment: record.into_comment(),
+        },
+    ))
+}
+
+pub(super) fn execute(
+    dir: &Dir,
+    _folder: &Path,
+    op: NotesOperation,
+) -> Result<(bool, NotesResult), InspectionError> {
+    let todo_id = validate_comment_operation(dir, &op)?;
     let existing_dir = comment_dir(dir, todo_id)?;
     let mut existing = match &existing_dir {
         Some(dir) => collection(dir, todo_id)?,
@@ -226,60 +296,7 @@ pub(super) fn execute(
             todo_id,
             body,
             author,
-        } => {
-            let mut content = format!("---\ncreated: {}\n", fs::now());
-            if let Some(author) = author {
-                // Quoting prevents a label containing '#', ':', or YAML syntax
-                // from becoming metadata structure or losing part of its value.
-                let scalar = serde_json::to_string(&author)
-                    .map_err(|error| fs::error("notes_invalid_input", &error.to_string()))?;
-                content.push_str("author: ");
-                content.push_str(&scalar);
-                content.push('\n');
-            }
-            content.push_str("---\n");
-            content.push_str(&body);
-            if content.len() > FILE_MAX
-                || existing.entries >= ENTRY_MAX
-                || existing.bytes + content.len() > AGGREGATE_MAX
-            {
-                return Err(too_large());
-            }
-            if let Some(dir) = &existing_dir {
-                fs::entries(dir, ENTRY_MAX - 1)?;
-            }
-            let destination = match existing_dir {
-                Some(dir) => dir,
-                None => {
-                    let comments = fs::child(dir, "comments", true)?;
-                    fs::child(&comments, &todo_id, true)?
-                }
-            };
-            let id = Uuid::new_v4().to_string();
-            let name = format!("{id}.md");
-            let base = fs::read(&destination, &name, FILE_MAX)?;
-            if base.revision != "absent" {
-                return Err(fs::error(
-                    "notes_conflict",
-                    "Generated comment already exists",
-                ));
-            }
-            fs::publish(&destination, &name, &base, &content, FILE_MAX)?;
-            let record = parse(
-                &todo_id,
-                id,
-                NotesDocument {
-                    revision: fs::revision(content.as_bytes()),
-                    content,
-                },
-            )?;
-            Ok((
-                true,
-                NotesResult::Comment {
-                    comment: record.into_comment(),
-                },
-            ))
-        }
+        } => add_comment(dir, existing_dir, &existing, todo_id, body, author),
         NotesOperation::CommentUpdate {
             todo_id,
             comment_id,

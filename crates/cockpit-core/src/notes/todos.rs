@@ -693,6 +693,41 @@ enum Change {
     Unboard,
 }
 
+fn remove_todo(
+    dir: &Dir,
+    document: &NotesDocument,
+    item: &Item,
+    mut edits: Vec<(Range<usize>, String)>,
+) -> Result<(bool, NotesResult), InspectionError> {
+    if item.has_children {
+        return Err(fs::error(
+            "notes_todo_has_children",
+            "Cannot remove a todo containing nested tasks",
+        ));
+    }
+    let line_start = document.content[..item.span.start]
+        .rfind('\n')
+        .map_or(0, |i| i + 1);
+    if !document.content[line_start..item.span.start]
+        .trim_matches([' ', '\t'])
+        .is_empty()
+    {
+        return Err(fs::error(
+            "notes_todo_malformed",
+            "Cannot remove a task with an unowned container prefix",
+        ));
+    }
+    edits.push((item.span.clone(), String::new()));
+    let content = splice(&document.content, edits);
+    fs::publish(dir, FILE, document, &content, MAX_FILE)?;
+    Ok((
+        true,
+        NotesResult::TodoRemoved {
+            revision: fs::revision(content.as_bytes()),
+        },
+    ))
+}
+
 fn mutate(
     dir: &Dir,
     document: NotesDocument,
@@ -715,33 +750,7 @@ fn mutate(
     }
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     if matches!(change, Change::Remove) {
-        if item.has_children {
-            return Err(fs::error(
-                "notes_todo_has_children",
-                "Cannot remove a todo containing nested tasks",
-            ));
-        }
-        let line_start = document.content[..item.span.start]
-            .rfind('\n')
-            .map_or(0, |i| i + 1);
-        if !document.content[line_start..item.span.start]
-            .trim_matches([' ', '\t'])
-            .is_empty()
-        {
-            return Err(fs::error(
-                "notes_todo_malformed",
-                "Cannot remove a task with an unowned container prefix",
-            ));
-        }
-        edits.push((item.span.clone(), String::new()));
-        let content = splice(&document.content, edits);
-        fs::publish(dir, FILE, &document, &content, MAX_FILE)?;
-        return Ok((
-            true,
-            NotesResult::TodoRemoved {
-                revision: fs::revision(content.as_bytes()),
-            },
-        ));
+        return remove_todo(dir, &document, item, edits);
     }
     let mut done = item.todo.done;
     // None: leave metadata untouched; Some(None): remove even an invalid lane.

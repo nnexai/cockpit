@@ -476,6 +476,57 @@ fn new_content(
     Ok(content)
 }
 
+fn update_decision(
+    existing_dir: Option<&Dir>,
+    folder: &Path,
+    existing: &mut Collection,
+    decision_id: String,
+    expected_revision: &str,
+    title: Option<String>,
+    body: Option<String>,
+) -> Result<(bool, NotesResult), InspectionError> {
+    let index = find_record(existing, &decision_id)?;
+    let record = existing.records.remove(index);
+    check_revision(&record, expected_revision)?;
+    if record.unterminated {
+        return Err(fs::error(
+            "notes_invalid_input",
+            "Cannot safely edit unterminated front matter",
+        ));
+    }
+    let content = splice_update(&record, title.as_deref(), body.as_deref());
+    if content.len() > FILE_MAX
+        || existing.bytes - record.document.content.len() + content.len() > AGGREGATE_MAX
+    {
+        return Err(too_large());
+    }
+    let changed = content != record.document.content;
+    if changed {
+        fs::publish(
+            existing_dir.expect("existing record directory"),
+            &format!("{decision_id}.md"),
+            &record.document,
+            &content,
+            FILE_MAX,
+        )?;
+    }
+    let mut updated = parse(
+        decision_id,
+        NotesDocument {
+            revision: fs::revision(content.as_bytes()),
+            content,
+        },
+    );
+    updated.summary.replaced_by = record.summary.replaced_by;
+    updated.summary.status = record.summary.status;
+    Ok((
+        changed,
+        NotesResult::Decision {
+            decision: into_decision(updated, folder),
+        },
+    ))
+}
+
 pub(super) fn execute(
     dir: &Dir,
     folder: &Path,
@@ -562,48 +613,15 @@ pub(super) fn execute(
             expected_revision,
             title,
             body,
-        } => {
-            let index = find_record(&existing, &decision_id)?;
-            let record = existing.records.remove(index);
-            check_revision(&record, &expected_revision)?;
-            if record.unterminated {
-                return Err(fs::error(
-                    "notes_invalid_input",
-                    "Cannot safely edit unterminated front matter",
-                ));
-            }
-            let content = splice_update(&record, title.as_deref(), body.as_deref());
-            if content.len() > FILE_MAX
-                || existing.bytes - record.document.content.len() + content.len() > AGGREGATE_MAX
-            {
-                return Err(too_large());
-            }
-            let changed = content != record.document.content;
-            if changed {
-                fs::publish(
-                    existing_dir.as_ref().expect("existing record directory"),
-                    &format!("{decision_id}.md"),
-                    &record.document,
-                    &content,
-                    FILE_MAX,
-                )?;
-            }
-            let mut updated = parse(
-                decision_id,
-                NotesDocument {
-                    revision: fs::revision(content.as_bytes()),
-                    content,
-                },
-            );
-            updated.summary.replaced_by = record.summary.replaced_by;
-            updated.summary.status = record.summary.status;
-            Ok((
-                changed,
-                NotesResult::Decision {
-                    decision: into_decision(updated, folder),
-                },
-            ))
-        }
+        } => update_decision(
+            existing_dir.as_ref(),
+            folder,
+            &mut existing,
+            decision_id,
+            &expected_revision,
+            title,
+            body,
+        ),
         NotesOperation::DecisionCreate {
             title,
             body,

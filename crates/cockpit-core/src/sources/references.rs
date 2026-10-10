@@ -419,6 +419,40 @@ fn failure(code: &str, message: impl Into<String>) -> Classified {
     }
 }
 
+fn pending_references(
+    frontier: &[Node],
+    seen_targets: &mut BTreeSet<ReferenceTarget>,
+    level: u32,
+    result: &mut RelatedResult,
+) -> Vec<Pending> {
+    let mut pending = Vec::new();
+    for (from, node) in frontier.iter().enumerate() {
+        if references_truncated(&node.references) {
+            result.failures.push(RelatedFailure {
+                target: node.label.clone(),
+                from_label: node.label.clone(),
+                depth: level - 1,
+                code: TRUNCATED_CODE.into(),
+                message: "references are incomplete or truncated; some related items may be missing".into(),
+            });
+        }
+        for reference in node
+            .references
+            .iter()
+            .filter(|reference| !is_truncation_marker(reference))
+        {
+            if seen_targets.insert(reference.target.clone()) {
+                pending.push(Pending {
+                    target: reference.target.clone(),
+                    from,
+                    relation: reference.relation.clone(),
+                });
+            }
+        }
+    }
+    pending
+}
+
 impl SourceService {
     /// Breadth-first, level by level, with 8 fetches in flight. Seeds are
     /// marked visited and never fetched. Identity is (provider_id,
@@ -461,103 +495,18 @@ impl SourceService {
             if frontier.is_empty() {
                 break;
             }
-            let mut pending = Vec::new();
-            for (from, node) in frontier.iter().enumerate() {
-                if references_truncated(&node.references) {
-                    result.failures.push(RelatedFailure {
-                        target: node.label.clone(),
-                        from_label: node.label.clone(),
-                        depth: level - 1,
-                        code: TRUNCATED_CODE.into(),
-                        message: "references are incomplete or truncated; some related items may be missing".into(),
-                    });
-                }
-                for reference in node
-                    .references
-                    .iter()
-                    .filter(|reference| !is_truncation_marker(reference))
-                {
-                    if seen_targets.insert(reference.target.clone()) {
-                        pending.push(Pending {
-                            target: reference.target.clone(),
-                            from,
-                            relation: reference.relation.clone(),
-                        });
-                    }
-                }
-            }
+            let pending = pending_references(&frontier, &mut seen_targets, level, &mut result);
             if self.stop_requested(cancel, deadline, &mut result) {
                 break;
             }
-            // Resolve each target to an expected identity and a fetch request.
-            let mut outcomes: Vec<Option<Classified>> = pending
-                .iter()
-                .map(|pending| Some(self.classify(&pending.target)))
-                .collect();
-            let confluence: Vec<usize> = outcomes
-                .iter()
-                .enumerate()
-                .filter(|(_, outcome)| matches!(outcome, Some(Classified::Confluence { .. })))
-                .map(|(index, _)| index)
-                .collect();
-            let mut aborted = false;
-            for chunk in confluence.chunks(FETCHES_IN_FLIGHT) {
-                if self.stop_requested(cancel, deadline, &mut result) {
-                    aborted = true;
-                    break;
-                }
-                let mut set = JoinSet::new();
-                for &index in chunk {
-                    let Some(Classified::Confluence { provider_id, url }) = outcomes[index].take()
-                    else {
-                        continue;
-                    };
-                    let service = self.clone();
-                    set.spawn(super::lane::inherit(async move {
-                        (index, service.resolve_confluence(&provider_id, &url).await)
-                    }));
-                }
-                while let Some(joined) = set.join_next().await {
-                    if let Ok((index, classified)) = joined {
-                        outcomes[index] = Some(classified);
-                    }
-                }
-                for &index in chunk {
-                    if outcomes[index].is_none() {
-                        outcomes[index] = Some(failure(
-                            "source_reference_failed",
-                            "reference resolution did not complete",
-                        ));
-                    }
-                }
-            }
-            if aborted {
+            let Some(mut candidates) = self
+                .resolve_pending(
+                    &pending, &frontier, level, &mut visited, deadline, cancel, &mut result,
+                )
+                .await
+            else {
                 break;
-            }
-            let mut candidates = Vec::new();
-            for (index, pending) in pending.iter().enumerate() {
-                match outcomes[index].take() {
-                    Some(Classified::Ready(prepared)) => {
-                        if visited.insert(source_id(&prepared.expected)) {
-                            candidates.push(Candidate {
-                                prepared,
-                                from: pending.from,
-                                relation: pending.relation.clone(),
-                            });
-                        }
-                    }
-                    Some(Classified::Failed { code, message }) => {
-                        result.failures.push(RelatedFailure {
-                            target: pending.target.display(),
-                            from_label: frontier[pending.from].label.clone(),
-                            depth: level,
-                            code,
-                            message,
-                        });
-                    }
-                    _ => {}
-                }
-            }
+            };
             let room = limits.items.saturating_sub(result.assets.len());
             let items_limited = candidates.len() > room;
             candidates.truncate(room);
@@ -566,32 +515,7 @@ impl SourceService {
                 if self.stop_requested(cancel, deadline, &mut result) {
                     break;
                 }
-                let per_call = self.deadline()
-                    .min(deadline.saturating_duration_since(Instant::now()));
-                let mut set = JoinSet::new();
-                for (slot, candidate) in chunk.iter().enumerate() {
-                    let Ok(provider) = self
-                        .selected_provider(&candidate.prepared.request.provider_id)
-                        .cloned()
-                    else {
-                        continue;
-                    };
-                    let request = candidate.prepared.request.clone();
-                    let expected = candidate.prepared.expected.clone();
-                    set.spawn(super::lane::inherit(async move {
-                        (
-                            slot,
-                            fetch_related(provider, request, expected, per_call).await,
-                        )
-                    }));
-                }
-                let mut fetched: Vec<Option<Result<SourceAsset, InspectionError>>> =
-                    chunk.iter().map(|_| None).collect();
-                while let Some(joined) = set.join_next().await {
-                    if let Ok((slot, outcome)) = joined {
-                        fetched[slot] = Some(outcome);
-                    }
-                }
+                let fetched = self.fetch_related_chunk(chunk, deadline).await;
                 for (candidate, outcome) in chunk.iter().zip(fetched) {
                     let from = &frontier[candidate.from];
                     let target = candidate.prepared.request.artifact_url.clone();
@@ -656,6 +580,123 @@ impl SourceService {
             frontier = next;
         }
         result
+    }
+
+    /// Resolve in bounded batches, then classify in the original reference order.
+    async fn resolve_pending(
+        &self,
+        pending: &[Pending],
+        frontier: &[Node],
+        level: u32,
+        visited: &mut BTreeSet<String>,
+        deadline: Instant,
+        cancel: &AtomicBool,
+        result: &mut RelatedResult,
+    ) -> Option<Vec<Candidate>> {
+        let mut outcomes: Vec<Option<Classified>> = pending
+            .iter()
+            .map(|pending| Some(self.classify(&pending.target)))
+            .collect();
+        let confluence: Vec<usize> = outcomes
+            .iter()
+            .enumerate()
+            .filter(|(_, outcome)| matches!(outcome, Some(Classified::Confluence { .. })))
+            .map(|(index, _)| index)
+            .collect();
+        let mut aborted = false;
+        for chunk in confluence.chunks(FETCHES_IN_FLIGHT) {
+            if self.stop_requested(cancel, deadline, result) {
+                aborted = true;
+                break;
+            }
+            let mut set = JoinSet::new();
+            for &index in chunk {
+                let Some(Classified::Confluence { provider_id, url }) = outcomes[index].take()
+                else {
+                    continue;
+                };
+                let service = self.clone();
+                set.spawn(super::lane::inherit(async move {
+                    (index, service.resolve_confluence(&provider_id, &url).await)
+                }));
+            }
+            while let Some(joined) = set.join_next().await {
+                if let Ok((index, classified)) = joined {
+                    outcomes[index] = Some(classified);
+                }
+            }
+            for &index in chunk {
+                if outcomes[index].is_none() {
+                    outcomes[index] = Some(failure(
+                        "source_reference_failed",
+                        "reference resolution did not complete",
+                    ));
+                }
+            }
+        }
+        if aborted {
+            return None;
+        }
+        let mut candidates = Vec::new();
+        for (index, pending) in pending.iter().enumerate() {
+            match outcomes[index].take() {
+                Some(Classified::Ready(prepared)) => {
+                    if visited.insert(source_id(&prepared.expected)) {
+                        candidates.push(Candidate {
+                            prepared,
+                            from: pending.from,
+                            relation: pending.relation.clone(),
+                        });
+                    }
+                }
+                Some(Classified::Failed { code, message }) => {
+                    result.failures.push(RelatedFailure {
+                        target: pending.target.display(),
+                        from_label: frontier[pending.from].label.clone(),
+                        depth: level,
+                        code,
+                        message,
+                    });
+                }
+                _ => {}
+            }
+        }
+        Some(candidates)
+    }
+
+    /// Join a fetch batch into stable slots, independent of completion order.
+    async fn fetch_related_chunk(
+        &self,
+        chunk: &[Candidate],
+        deadline: Instant,
+    ) -> Vec<Option<Result<SourceAsset, InspectionError>>> {
+        let per_call = self.deadline()
+            .min(deadline.saturating_duration_since(Instant::now()));
+        let mut set = JoinSet::new();
+        for (slot, candidate) in chunk.iter().enumerate() {
+            let Ok(provider) = self
+                .selected_provider(&candidate.prepared.request.provider_id)
+                .cloned()
+            else {
+                continue;
+            };
+            let request = candidate.prepared.request.clone();
+            let expected = candidate.prepared.expected.clone();
+            set.spawn(super::lane::inherit(async move {
+                (
+                    slot,
+                    fetch_related(provider, request, expected, per_call).await,
+                )
+            }));
+        }
+        let mut fetched: Vec<Option<Result<SourceAsset, InspectionError>>> =
+            chunk.iter().map(|_| None).collect();
+        while let Some(joined) = set.join_next().await {
+            if let Ok((slot, outcome)) = joined {
+                fetched[slot] = Some(outcome);
+            }
+        }
+        fetched
     }
 
     /// Records the stop reason when the operation was cancelled or ran out of time.

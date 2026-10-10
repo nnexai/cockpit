@@ -84,40 +84,7 @@ pub(super) fn apply(
                 return Ok(Some(message_result(existing, true)));
             }
             if !stale {
-                match kind {
-                    ReportKind::Ready => {
-                        if !matches!(
-                            state.runs[index].stage,
-                            RunStage::Initializing | RunStage::Ready
-                        ) {
-                            return Err(error(
-                                "invalid_stage",
-                                "Ready requires an initializing or ready run",
-                            ));
-                        }
-                        if plan.as_deref().is_none_or(|plan| plan.trim().is_empty()) {
-                            return Err(error(
-                                "invalid_plan",
-                                "Ready requires a nonempty work plan",
-                            ));
-                        }
-                    }
-                    ReportKind::Result => {
-                        let run = &state.runs[index];
-                        if run.stage != RunStage::Working
-                            && !(run.parent_run_id.is_none() && run.stage == RunStage::Active)
-                        {
-                            return Err(error(
-                                "invalid_stage",
-                                "Result requires a working run or active root",
-                            ));
-                        }
-                        if outcome.is_none() {
-                            return Err(error("invalid_report", "Result requires an outcome"));
-                        }
-                    }
-                    _ => {}
-                }
+                validate_report_stage(&state.runs[index], *kind, plan.as_deref(), outcome.is_some())?;
             }
             let work_plan = if !stale && *kind == ReportKind::Ready {
                 let text = plan.as_ref().expect("validated work plan");
@@ -146,80 +113,144 @@ pub(super) fn apply(
                     escalated_from: escalated,
                 },
             )?;
-            if !stale {
-                if let Some(subagent_id) = &from_subagent_id {
-                    let own = &state.runs[index].run_id;
-                    if let Some(entry) = state
-                        .subagents
-                        .iter_mut()
-                        .find(|entry| entry.run_id == *own && entry.subagent_id == *subagent_id)
-                    {
-                        if entry.summary.as_deref() != Some(report.summary.as_str()) {
-                            entry.summary = Some(report.summary.clone());
-                        }
-                        entry.updated_at = report.at.clone();
-                    }
-                }
-                let run = &mut state.runs[index];
-                // Subagent reports are evidence, not the main run's outcome or progress receipt.
-                if from_subagent_id.is_none() {
-                    run.last_report = Some(report.clone());
-                    match kind {
-                        ReportKind::Ready => {
-                            run.init_receipt = Some(report);
-                            run.work_plan = work_plan;
-                            run.stage = RunStage::Ready;
-                        }
-                        ReportKind::Result => {
-                            run.result = Some(report);
-                            if run.parent_run_id.is_some() {
-                                run.stage = RunStage::Reported;
-                            }
-                        }
-                        _ => {}
-                    }
-                    run.updated_at = now();
-                }
-                if from_subagent_id.is_none()
-                    && matches!(
-                        kind,
-                        ReportKind::Ready | ReportKind::Result | ReportKind::NeedsInput
-                    )
-                    && recipient != state.runs[index].root_id
-                    && state.runs[index].parent_run_id.is_some()
-                {
-                    let root_id = state.runs[index].root_id.clone();
-                    let run_id = state.runs[index].run_id.clone();
-                    let event = match kind {
-                        ReportKind::Ready => "ready",
-                        ReportKind::Result => "result",
-                        _ => "needs_input",
-                    };
-                    let plan_revision = state.runs[index]
-                        .work_plan
-                        .as_ref()
-                        .map(|p| p.plan_revision.as_str());
-                    let text = serde_json::json!({"event":event,"run_id":run_id,"receipt_message_id":message_id,"plan_revision":plan_revision}).to_string();
-                    append(
-                        state,
-                        AppendMessage {
-                            from: ActorRef::Dispatcher,
-                            to_run_id: &root_id,
-                            message_id: &format!("manage-{run_id}-{message_id}"),
-                            kind: MessageKind::Observation,
-                            text: &text,
-                            in_reply_to: None,
-                            report: None,
-                            stale: false,
-                            from_subagent_id: None,
-                            escalated_from: None,
-                        },
-                    )?;
-                }
-            }
+            publish_report_receipt(
+                state,
+                index,
+                stale,
+                *kind,
+                report,
+                work_plan,
+                from_subagent_id.as_deref(),
+                &recipient,
+                message_id,
+            )?;
             result
         }
         _ => return Ok(None),
     };
     Ok(Some(result))
+}
+
+fn validate_report_stage(
+    run: &Run,
+    kind: ReportKind,
+    plan: Option<&str>,
+    outcome_present: bool,
+) -> Result<(), InspectionError> {
+    match kind {
+        ReportKind::Ready => {
+            if !matches!(run.stage, RunStage::Initializing | RunStage::Ready) {
+                return Err(error(
+                    "invalid_stage",
+                    "Ready requires an initializing or ready run",
+                ));
+            }
+            if plan.is_none_or(|plan| plan.trim().is_empty()) {
+                return Err(error(
+                    "invalid_plan",
+                    "Ready requires a nonempty work plan",
+                ));
+            }
+        }
+        ReportKind::Result => {
+            if run.stage != RunStage::Working
+                && !(run.parent_run_id.is_none() && run.stage == RunStage::Active)
+            {
+                return Err(error(
+                    "invalid_stage",
+                    "Result requires a working run or active root",
+                ));
+            }
+            if !outcome_present {
+                return Err(error("invalid_report", "Result requires an outcome"));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn publish_report_receipt(
+    state: &mut OrchestrationState,
+    index: usize,
+    stale: bool,
+    kind: ReportKind,
+    report: Report,
+    work_plan: Option<PlanRecord>,
+    from_subagent_id: Option<&str>,
+    recipient: &str,
+    message_id: &str,
+) -> Result<(), InspectionError> {
+    if !stale {
+        if let Some(subagent_id) = from_subagent_id {
+            let own = &state.runs[index].run_id;
+            if let Some(entry) = state
+                .subagents
+                .iter_mut()
+                .find(|entry| entry.run_id == *own && entry.subagent_id == subagent_id)
+            {
+                if entry.summary.as_deref() != Some(report.summary.as_str()) {
+                    entry.summary = Some(report.summary.clone());
+                }
+                entry.updated_at = report.at.clone();
+            }
+        }
+        let run = &mut state.runs[index];
+        // Subagent reports are evidence, not the main run's outcome or progress receipt.
+        if from_subagent_id.is_none() {
+            run.last_report = Some(report.clone());
+            match kind {
+                ReportKind::Ready => {
+                    run.init_receipt = Some(report);
+                    run.work_plan = work_plan;
+                    run.stage = RunStage::Ready;
+                }
+                ReportKind::Result => {
+                    run.result = Some(report);
+                    if run.parent_run_id.is_some() {
+                        run.stage = RunStage::Reported;
+                    }
+                }
+                _ => {}
+            }
+            run.updated_at = now();
+        }
+        if from_subagent_id.is_none()
+            && matches!(
+                kind,
+                ReportKind::Ready | ReportKind::Result | ReportKind::NeedsInput
+            )
+            && recipient != state.runs[index].root_id
+            && state.runs[index].parent_run_id.is_some()
+        {
+            let root_id = state.runs[index].root_id.clone();
+            let run_id = state.runs[index].run_id.clone();
+            let event = match kind {
+                ReportKind::Ready => "ready",
+                ReportKind::Result => "result",
+                _ => "needs_input",
+            };
+            let plan_revision = state.runs[index]
+                .work_plan
+                .as_ref()
+                .map(|p| p.plan_revision.as_str());
+            let text = serde_json::json!({"event":event,"run_id":run_id,"receipt_message_id":message_id,"plan_revision":plan_revision}).to_string();
+            append(
+                state,
+                AppendMessage {
+                    from: ActorRef::Dispatcher,
+                    to_run_id: &root_id,
+                    message_id: &format!("manage-{run_id}-{message_id}"),
+                    kind: MessageKind::Observation,
+                    text: &text,
+                    in_reply_to: None,
+                    report: None,
+                    stale: false,
+                    from_subagent_id: None,
+                    escalated_from: None,
+                },
+            )?;
+        }
+    }
+    Ok(())
 }

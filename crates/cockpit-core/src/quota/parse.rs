@@ -95,93 +95,7 @@ pub(super) fn omp(bytes: &[u8], now: u64) -> Result<Vec<ProviderRecord>, QuotaEr
                 if limits.len() == 24 {
                     break;
                 }
-                let amount = &input.amount;
-                if credits
-                    && [amount.used, amount.limit, amount.remaining]
-                        .into_iter()
-                        .any(|value| value.is_some_and(|value| !number(value, 1e9)))
-                {
-                    return Err(QuotaErrorCode::Malformed);
-                }
-                let unlimited = credits
-                    && amount.used.is_none()
-                    && amount.limit.is_none()
-                    && amount.remaining.is_none()
-                    && input.notes.iter().any(|note| note == "Unlimited");
-                let fraction = if unlimited {
-                    None
-                } else {
-                    amount
-                        .used_fraction
-                        .or_else(|| {
-                            amount
-                                .used
-                                .zip(amount.limit)
-                                .filter(|(_, total)| *total > 0.0)
-                                .map(|(used, total)| used / total)
-                        })
-                        .or_else(|| {
-                            if credits {
-                                None
-                            } else {
-                                amount.used.map(|used| used / 100.0)
-                            }
-                        })
-                        .or_else(|| amount.remaining_fraction.map(|remaining| 1.0 - remaining))
-                };
-                if fraction.is_some_and(|value| !number(value, 10.0)) {
-                    return Err(QuotaErrorCode::Malformed);
-                }
-                let window = input
-                    .window
-                    .as_ref()
-                    .and_then(|window| normalize_window(window.id.as_deref(), window.duration_ms));
-                let tier =
-                    if credits {
-                        None
-                    } else {
-                        input
-                            .scope
-                            .tier
-                            .as_deref()
-                            .filter(|tier| known_tier(tier))
-                            .or_else(|| {
-                                input.scope.model_id.as_deref().and_then(|model| {
-                                    model.split('-').find(|part| known_tier(part))
-                                })
-                            })
-                            .map(str::to_owned)
-                    };
-                let level = match input.status.as_deref() {
-                    Some("ok") => QuotaLevel::Ok,
-                    Some("warning") => QuotaLevel::Warning,
-                    Some("exhausted") => QuotaLevel::Exhausted,
-                    Some("unknown") => QuotaLevel::Unknown,
-                    _ => level(fraction),
-                };
-                limits.push(QuotaLimit {
-                    id: id(provider, window.as_deref(), limits.len()),
-                    window,
-                    tier,
-                    // OMP Copilot counters are surfaced as credits without rescaling,
-                    // including reports carrying legacy source unit labels.
-                    unit: if credits {
-                        QuotaUnit::Credits
-                    } else {
-                        QuotaUnit::Percent
-                    },
-                    used_fraction: fraction,
-                    used: credits.then_some(amount.used).flatten(),
-                    limit: credits.then_some(amount.limit).flatten(),
-                    remaining: credits.then_some(amount.remaining).flatten(),
-                    unlimited,
-                    level,
-                    resets_at_ms: input
-                        .window
-                        .as_ref()
-                        .and_then(|window| window.resets_at)
-                        .filter(|time| *time <= 9_007_199_254_740_991),
-                });
+                limits.push(normalize_omp_limit(provider, credits, input, limits.len())?);
             }
             if !limits.is_empty() {
                 accounts.push(QuotaAccount {
@@ -228,6 +142,100 @@ pub(super) fn omp(bytes: &[u8], now: u64) -> Result<Vec<ProviderRecord>, QuotaEr
         });
     }
     Ok(output)
+}
+
+fn normalize_omp_limit(
+    provider: QuotaProvider,
+    credits: bool,
+    input: &Limit,
+    slot: usize,
+) -> Result<QuotaLimit, QuotaErrorCode> {
+    let amount = &input.amount;
+    if credits
+        && [amount.used, amount.limit, amount.remaining]
+            .into_iter()
+            .any(|value| value.is_some_and(|value| !number(value, 1e9)))
+    {
+        return Err(QuotaErrorCode::Malformed);
+    }
+    let unlimited = credits
+        && amount.used.is_none()
+        && amount.limit.is_none()
+        && amount.remaining.is_none()
+        && input.notes.iter().any(|note| note == "Unlimited");
+    let fraction = if unlimited {
+        None
+    } else {
+        amount
+            .used_fraction
+            .or_else(|| {
+                amount
+                    .used
+                    .zip(amount.limit)
+                    .filter(|(_, total)| *total > 0.0)
+                    .map(|(used, total)| used / total)
+            })
+            .or_else(|| {
+                if credits {
+                    None
+                } else {
+                    amount.used.map(|used| used / 100.0)
+                }
+            })
+            .or_else(|| amount.remaining_fraction.map(|remaining| 1.0 - remaining))
+    };
+    if fraction.is_some_and(|value| !number(value, 10.0)) {
+        return Err(QuotaErrorCode::Malformed);
+    }
+    let window = input
+        .window
+        .as_ref()
+        .and_then(|window| normalize_window(window.id.as_deref(), window.duration_ms));
+    let tier = if credits {
+        None
+    } else {
+        input
+            .scope
+            .tier
+            .as_deref()
+            .filter(|tier| known_tier(tier))
+            .or_else(|| {
+                input.scope.model_id.as_deref().and_then(|model| {
+                    model.split('-').find(|part| known_tier(part))
+                })
+            })
+            .map(str::to_owned)
+    };
+    let level = match input.status.as_deref() {
+        Some("ok") => QuotaLevel::Ok,
+        Some("warning") => QuotaLevel::Warning,
+        Some("exhausted") => QuotaLevel::Exhausted,
+        Some("unknown") => QuotaLevel::Unknown,
+        _ => level(fraction),
+    };
+    Ok(QuotaLimit {
+        id: id(provider, window.as_deref(), slot),
+        window,
+        tier,
+        // OMP Copilot counters are surfaced as credits without rescaling,
+        // including reports carrying legacy source unit labels.
+        unit: if credits {
+            QuotaUnit::Credits
+        } else {
+            QuotaUnit::Percent
+        },
+        used_fraction: fraction,
+        used: credits.then_some(amount.used).flatten(),
+        limit: credits.then_some(amount.limit).flatten(),
+        remaining: credits.then_some(amount.remaining).flatten(),
+        unlimited,
+        level,
+        resets_at_ms: input
+            .window
+            .as_ref()
+            .and_then(|window| window.resets_at)
+            .filter(|time| *time <= 9_007_199_254_740_991),
+    })
 }
 
 fn number(value: f64, max: f64) -> bool {

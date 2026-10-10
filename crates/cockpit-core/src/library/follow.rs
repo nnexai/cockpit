@@ -332,7 +332,6 @@ impl LibraryService {
             })
             .map(|page| page.page_id.as_str());
         operations::add_total(store, operation, pages.len() as u32)?;
-        let mut cancelled = false;
         let mut pipeline = ConfluenceFollowPlan {
             listing,
             snapshot: Snapshot::read(store, &follow.follow_id)?,
@@ -347,59 +346,10 @@ impl LibraryService {
             },
         );
         let unchanged = classified.unchanged;
-        let space_key = refs::require_space_key(&follow)?.to_owned();
-        let site = site_authority(&self.configuration, &follow.provider_id)?;
-        let work = classified
-            .fetch
-            .into_iter()
-            .map(|planned| {
-                let page = planned.row.as_ref().expect("listed page");
-                FetchWork {
-                    item_id: page_item_id(&follow, &planned.key),
-                    canonical_id: planned.key.to_string(),
-                    label: if page.title.is_empty() {
-                        planned.key.to_string()
-                    } else {
-                        page.title.clone()
-                    },
-                    request: SourceFetchRequest {
-                        provider_id: follow.provider_id.clone(),
-                        artifact_url: confluence_page_url(&site.provider_instance, &planned.key),
-                        authority: site.clone(),
-                    },
-                    container: Some(space_key.clone()),
-                    tag: planned,
-                }
-            })
-            .collect::<Vec<_>>();
-        for batch in work.chunks(FOLLOW_FETCH_CONCURRENCY) {
-            let Some(fetched) = self.fetch_batch(store, operation, &follow, batch).await? else {
-                cancelled = true;
-                break;
-            };
-            let FetchedBatch { results, leases } = fetched;
-            for (job, result) in results {
-                if operations::cancelled(store, operation)? {
-                    cancelled = true;
-                    break;
-                }
-                let planned = &job.tag;
-                self.save_follow_page_result(
-                    store,
-                    operation,
-                    &follow,
-                    planned.row.as_ref().expect("listed page"),
-                    planned.old.clone(),
-                    planned.reason.map(|reason| reason.to_string()),
-                    result,
-                )
-                .await?;
-            }
-            drop(leases);
-            if cancelled {
-                break;
-            }
-        }
+        let work = self.page_fetch_work(&follow, classified.fetch)?;
+        let mut cancelled = self
+            .save_page_batches(store, operation, &follow, &work)
+            .await?;
         operations::unchanged(store, operation, unchanged)?;
         cancelled = cancelled || operations::cancelled(store, operation)?;
         let listing = &pipeline.listing;
@@ -431,6 +381,76 @@ impl LibraryService {
             )?;
         }
         self.commit_follow(store, &follow, &listing.pages, partial, cancelled)
+    }
+
+    fn page_fetch_work<'a>(
+        &self,
+        follow: &LibraryFollowSummary,
+        planned: Vec<plan::Planned<'a, SpacePage>>,
+    ) -> Result<Vec<FetchWork<plan::Planned<'a, SpacePage>>>, InspectionError> {
+        let space_key = refs::require_space_key(follow)?.to_owned();
+        let site = site_authority(&self.configuration, &follow.provider_id)?;
+        Ok(planned
+            .into_iter()
+            .map(|planned| {
+                let page = planned.row.as_ref().expect("listed page");
+                FetchWork {
+                    item_id: page_item_id(follow, &planned.key),
+                    canonical_id: planned.key.to_string(),
+                    label: if page.title.is_empty() {
+                        planned.key.to_string()
+                    } else {
+                        page.title.clone()
+                    },
+                    request: SourceFetchRequest {
+                        provider_id: follow.provider_id.clone(),
+                        artifact_url: confluence_page_url(&site.provider_instance, &planned.key),
+                        authority: site.clone(),
+                    },
+                    container: Some(space_key.clone()),
+                    tag: planned,
+                }
+            })
+            .collect())
+    }
+
+    async fn save_page_batches<'a>(
+        &self,
+        store: &Arc<Store>,
+        operation: &str,
+        follow: &LibraryFollowSummary,
+        work: &[FetchWork<plan::Planned<'a, SpacePage>>],
+    ) -> Result<bool, InspectionError> {
+        let mut cancelled = false;
+        for batch in work.chunks(FOLLOW_FETCH_CONCURRENCY) {
+            let Some(fetched) = self.fetch_batch(store, operation, follow, batch).await? else {
+                cancelled = true;
+                break;
+            };
+            let FetchedBatch { results, leases } = fetched;
+            for (job, result) in results {
+                if operations::cancelled(store, operation)? {
+                    cancelled = true;
+                    break;
+                }
+                let planned = &job.tag;
+                self.save_follow_page_result(
+                    store,
+                    operation,
+                    follow,
+                    planned.row.as_ref().expect("listed page"),
+                    planned.old.clone(),
+                    planned.reason.map(|reason| reason.to_string()),
+                    result,
+                )
+                .await?;
+            }
+            drop(leases);
+            if cancelled {
+                break;
+            }
+        }
+        Ok(cancelled)
     }
 
     /// Fetches `batch` concurrently, each item under its lease. `None` means the

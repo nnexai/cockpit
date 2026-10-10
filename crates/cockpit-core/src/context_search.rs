@@ -188,34 +188,11 @@ fn search_blocking(
             );
             break;
         }
-        let mut names = Vec::new();
-        if Instant::now() >= deadline {
-            truncated = true;
+        let Some(names) =
+            search_directory_names(&directory, deadline, &mut scanned_entries, &mut truncated)?
+        else {
             break;
-        }
-        let entries = directory.entries().map_err(|error| {
-            InspectionError::new("context_search_unavailable", error.to_string())
-        })?;
-        for entry in entries {
-            if Instant::now() >= deadline || scanned_entries >= MAX_SCANNED_ENTRIES {
-                truncated = true;
-                break;
-            }
-            scanned_entries += 1;
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    truncated = true;
-                    continue;
-                }
-            };
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                truncated = true;
-                continue;
-            };
-            names.push(name);
-        }
-        names.sort();
+        };
 
         for name in names {
             if Instant::now() >= deadline || results.len() >= MAX_RESULTS {
@@ -295,18 +272,7 @@ fn search_blocking(
             }
         }
     }
-    if Instant::now() >= deadline {
-        truncated = true;
-    } else {
-        root.revalidate()?;
-        let (after_revision, _) = corpus_revision(&root)?;
-        if after_revision != revision {
-            return Err(InspectionError::new(
-                "context_changed_during_read",
-                "Context root changed while searching",
-            ));
-        }
-    }
+    revalidate_search_corpus(&root, &revision, deadline, &mut truncated)?;
     let next_offset = (truncated && !results.is_empty()).then_some(
         request
             .offset
@@ -325,6 +291,64 @@ fn search_blocking(
         next_offset,
         partial_reason,
     })
+}
+
+fn search_directory_names(
+    directory: &cap_std::fs::Dir,
+    deadline: Instant,
+    scanned_entries: &mut usize,
+    truncated: &mut bool,
+) -> Result<Option<Vec<String>>, InspectionError> {
+    let mut names = Vec::new();
+    if Instant::now() >= deadline {
+        *truncated = true;
+        return Ok(None);
+    }
+    let entries = directory.entries().map_err(|error| {
+        InspectionError::new("context_search_unavailable", error.to_string())
+    })?;
+    for entry in entries {
+        if Instant::now() >= deadline || *scanned_entries >= MAX_SCANNED_ENTRIES {
+            *truncated = true;
+            break;
+        }
+        *scanned_entries += 1;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                *truncated = true;
+                continue;
+            }
+        };
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            *truncated = true;
+            continue;
+        };
+        names.push(name);
+    }
+    names.sort();
+    Ok(Some(names))
+}
+
+fn revalidate_search_corpus(
+    root: &AuthorizedRoot,
+    revision: &str,
+    deadline: Instant,
+    truncated: &mut bool,
+) -> Result<(), InspectionError> {
+    if Instant::now() >= deadline {
+        *truncated = true;
+    } else {
+        root.revalidate()?;
+        let (after_revision, _) = corpus_revision(root)?;
+        if after_revision != revision {
+            return Err(InspectionError::new(
+                "context_changed_during_read",
+                "Context root changed while searching",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn update_corpus_revision(hasher: &mut Sha256, path: &str, revision: &str) {

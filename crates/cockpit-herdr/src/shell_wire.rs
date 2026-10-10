@@ -303,7 +303,7 @@ impl ShellConnection {
                     ));
                 }
                 surface.surface_revision = surface_revision;
-                // Legacy patches carry no popup metadata; full surfaces and deltas do.
+                // Projection patches carry no popup metadata; full surfaces and deltas do.
                 Ok(false)
             }
             Message::Error(message) => {
@@ -1297,7 +1297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delta_popup_continuity_survives_legacy_patch_and_projection_interleave() {
+    async fn delta_popup_continuity_survives_patch_and_projection_interleave() {
         let fixture = DeltaFixture::default();
         let mut connection = connection("boot");
         assert!(

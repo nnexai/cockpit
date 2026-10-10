@@ -22,7 +22,7 @@ function ownerTag(f: WireFailure, type: string): string | undefined {
 }
 const unknownTag = (label: string, otherwise: string) => (f: WireFailure) => f.reason === "unknown_tag" ? `${label}: ${f.tag}` : otherwise;
 const checkedMessage = (messages: Readonly<Record<string, string>>, otherwise: string) => (f: WireFailure) => messages[f.refinement ?? ""] ?? otherwise;
-// Array records remain invalid; only the legacy parser's reporting boundary changes.
+// Array records are invalid; record-boundary failures receive the type-specific label.
 const arrayRecordMessage = (type: string, arrayLabel: string, otherwise: string) => (f: WireFailure) => {
   const failed = f.path[f.path.length - 1];
   return f.reason === "shape" && f.array && failed?.type === type && failed.field === undefined ? arrayLabel : otherwise;

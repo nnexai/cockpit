@@ -88,97 +88,16 @@ pub(super) fn collect_events(
                 stack.pop();
             }
             Event::TaskListMarker(checked) if quote_depth == 0 && code_depth == 0 => {
-                let checkbox_offset = range.end.saturating_sub(2);
-                if checkbox_offset == context.top_checkbox_offset {
-                    if let Some(frame) = stack.last_mut() {
-                        frame.top = true;
-                    }
-                    continue;
-                }
-                if !contains(&context.continuation_range, &range)
-                    || context
-                        .relation_record_range
-                        .as_ref()
-                        .is_some_and(|r| contains(r, &range))
-                {
-                    continue;
-                }
-                let Some(frame) = stack.last() else {
-                    continue;
-                };
-                while line_cursor + 1 < physical.len() && physical[line_cursor].end <= range.start {
-                    line_cursor += 1;
-                }
-                let line_index = line_cursor;
-                let line = &physical[line_index];
-                let checkbox_start = checkbox_offset - 1;
-                u32::try_from(line.start - context.item_range.start)
-                    .map_err(|_| invalid_patch())?;
-                let prefix = &source[line.start..checkbox_start];
-                let indent = prefix.bytes().take_while(|b| *b == b' ').count();
-                let simple_indent = (!prefix.contains('\t')
-                    && valid_list_prefix(&prefix[indent..]))
-                .then_some(indent);
-                let child_indent = simple_indent.map(|_| checkbox_start - line.start);
-                let mut title_start = range.end;
-                while title_start < line.content_end
-                    && matches!(source.as_bytes()[title_start], b' ' | b'\t')
-                {
-                    title_start += 1;
-                }
-                let mut title_end = line.content_end;
-                while title_end > title_start
-                    && matches!(source.as_bytes()[title_end - 1], b' ' | b'\t')
-                {
-                    title_end -= 1;
-                }
-                let parent_index = frame.nearest_node;
-                let depth = parent_index.map_or(0, |i| layout.nodes[i].depth + 1);
-                let ambiguous = !frame.under_top || frame.ordinary_ancestor;
-                let mut node = StepNode {
-                    step_id: None,
-                    parent_index,
-                    depth,
-                    subtree_end_index: layout.nodes.len() + 1,
-                    line: u32::try_from(context.item_line + line_index)
-                        .map_err(|_| invalid_patch())?,
-                    header_range: line.start..line.end,
-                    title_range: title_start..title_end,
-                    checkbox_offset,
-                    marker_range: None,
-                    subtree_range: None,
+                record_task_marker(
+                    source,
+                    context,
+                    physical,
+                    &mut line_cursor,
+                    &mut stack,
+                    layout,
                     checked,
-                    status: if checked {
-                        TaskStepStatus::Done
-                    } else {
-                        TaskStepStatus::Open
-                    },
-                    physical_line: line_index,
-                    title_scalars: 0,
-                    diagnostic: None,
-                    parser_range: frame.range.clone(),
-                    indent: simple_indent,
-                    child_indent,
-                };
-                if ambiguous {
-                    node_diagnostic(
-                        &mut node,
-                        "checkbox has an ordinary or noncanonical list ancestor",
-                    );
-                    layout.hierarchy_invalid = true;
-                }
-                if source.as_bytes().get(checkbox_offset.wrapping_sub(1)) != Some(&b'[')
-                    || source.as_bytes().get(checkbox_offset + 1) != Some(&b']')
-                {
-                    node_diagnostic(&mut node, "checkbox source slot is not safely identified");
-                    layout.hierarchy_invalid = true;
-                }
-                let index = layout.nodes.len();
-                layout.nodes.push(node);
-                stack
-                    .last_mut()
-                    .expect("task marker has an item frame")
-                    .node = Some(index);
+                    range,
+                )?;
             }
             _ => {}
         }
@@ -188,4 +107,108 @@ pub(super) fn collect_events(
         inline_code,
         html_tokens,
     })
+}
+
+fn record_task_marker(
+    source: &str,
+    context: &StepParseContext,
+    physical: &[Line],
+    line_cursor: &mut usize,
+    stack: &mut Vec<Frame>,
+    layout: &mut StepLayout,
+    checked: bool,
+    range: Range<usize>,
+) -> Result<(), InspectionError> {
+    let checkbox_offset = range.end.saturating_sub(2);
+    if checkbox_offset == context.top_checkbox_offset {
+        if let Some(frame) = stack.last_mut() {
+            frame.top = true;
+        }
+        return Ok(());
+    }
+    if !contains(&context.continuation_range, &range)
+        || context
+            .relation_record_range
+            .as_ref()
+            .is_some_and(|r| contains(r, &range))
+    {
+        return Ok(());
+    }
+    let Some(frame) = stack.last() else {
+        return Ok(());
+    };
+    while *line_cursor + 1 < physical.len() && physical[*line_cursor].end <= range.start {
+        *line_cursor += 1;
+    }
+    let line_index = *line_cursor;
+    let line = &physical[line_index];
+    let checkbox_start = checkbox_offset - 1;
+    u32::try_from(line.start - context.item_range.start)
+        .map_err(|_| invalid_patch())?;
+    let prefix = &source[line.start..checkbox_start];
+    let indent = prefix.bytes().take_while(|b| *b == b' ').count();
+    let simple_indent = (!prefix.contains('\t')
+        && valid_list_prefix(&prefix[indent..]))
+    .then_some(indent);
+    let child_indent = simple_indent.map(|_| checkbox_start - line.start);
+    let mut title_start = range.end;
+    while title_start < line.content_end
+        && matches!(source.as_bytes()[title_start], b' ' | b'\t')
+    {
+        title_start += 1;
+    }
+    let mut title_end = line.content_end;
+    while title_end > title_start
+        && matches!(source.as_bytes()[title_end - 1], b' ' | b'\t')
+    {
+        title_end -= 1;
+    }
+    let parent_index = frame.nearest_node;
+    let depth = parent_index.map_or(0, |i| layout.nodes[i].depth + 1);
+    let ambiguous = !frame.under_top || frame.ordinary_ancestor;
+    let mut node = StepNode {
+        step_id: None,
+        parent_index,
+        depth,
+        subtree_end_index: layout.nodes.len() + 1,
+        line: u32::try_from(context.item_line + line_index)
+            .map_err(|_| invalid_patch())?,
+        header_range: line.start..line.end,
+        title_range: title_start..title_end,
+        checkbox_offset,
+        marker_range: None,
+        subtree_range: None,
+        checked,
+        status: if checked {
+            TaskStepStatus::Done
+        } else {
+            TaskStepStatus::Open
+        },
+        physical_line: line_index,
+        title_scalars: 0,
+        diagnostic: None,
+        parser_range: frame.range.clone(),
+        indent: simple_indent,
+        child_indent,
+    };
+    if ambiguous {
+        node_diagnostic(
+            &mut node,
+            "checkbox has an ordinary or noncanonical list ancestor",
+        );
+        layout.hierarchy_invalid = true;
+    }
+    if source.as_bytes().get(checkbox_offset.wrapping_sub(1)) != Some(&b'[')
+        || source.as_bytes().get(checkbox_offset + 1) != Some(&b']')
+    {
+        node_diagnostic(&mut node, "checkbox source slot is not safely identified");
+        layout.hierarchy_invalid = true;
+    }
+    let index = layout.nodes.len();
+    layout.nodes.push(node);
+    stack
+        .last_mut()
+        .expect("task marker has an item frame")
+        .node = Some(index);
+    Ok(())
 }

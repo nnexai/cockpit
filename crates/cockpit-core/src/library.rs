@@ -11,6 +11,7 @@ mod layout;
 mod reader;
 pub(crate) mod store;
 pub mod space;
+mod snapshot;
 mod sync;
 pub use sync::{LibrarySyncRuntime, LibrarySyncTick};
 #[cfg(test)]
@@ -527,79 +528,9 @@ impl LibraryService {
         let worker_store = store.clone();
         operations::spawn(handle, store, id.clone(), operation_lease, async move {
             let _lease = lease;
-            if operations::cancelled(&worker_store, &id)? {
-                return Ok(());
-            }
-            let fetched = service.sources.fetch_assets(fetch).await?;
-            // Re-adding an existing item keeps its stored depth unless the add
-            // refreshes it, so `Keep in Library` never resets the policy.
-            let apply_depth = request.refresh_existing
-                || service.entry(&worker_store, &primary_id)?.is_none();
-            let mut seed = None;
-            if request.reference_depth > 0 {
-                // An add starts with an unknown total; the seed is its first unit.
-                operations::add_total(&worker_store, &id, 1)?;
-            }
-            for mut asset in fetched.assets {
-                if operations::cancelled(&worker_store, &id)? {
-                    break;
-                }
-                let asset_id = item_id(&asset.source);
-                let _linked_lease = if asset_id != primary_id {
-                    Some(worker_store.lease(&asset_id)?)
-                } else {
-                    None
-                };
-                if asset_id == primary_id {
-                    asset.original_url = Some(request.input.clone());
-                    if request.reference_depth > 0 {
-                        seed = Some(ReferenceSeed {
-                            source: asset.source.clone(),
-                            label: asset_label(&asset),
-                            references: asset_references(&service.configuration, &asset),
-                        });
-                    }
-                }
-                let old = service.entry(&worker_store, &asset_id)?;
-                if old.is_some() && !request.refresh_existing && !request.download_attachments {
-                    let saved = old.as_ref().expect("existing item");
-                    if !saved.summary.refs.contains(&LibraryItemRef::Manual) {
-                        worker_store.add_ref(&asset_id, LibraryItemRef::Manual)?;
-                    }
-                    operations::row(
-                        &worker_store,
-                        &id,
-                        old.as_ref().map(|e| &e.summary),
-                        LibraryReportOutcome::Unchanged,
-                        Some("Already saved in Library".into()),
-                    )?;
-                    continue;
-                }
-                service.save_asset_with(&worker_store, &id, asset, old, SaveOptions {
-                    reference: Some(LibraryItemRef::Manual),
-                    download_all: request.download_attachments && asset_id == primary_id,
-                    ..SaveOptions::default()
-                }).await?;
-            }
-            if apply_depth && !operations::cancelled(&worker_store, &id)? {
-                service
-                    .apply_reference_depth(
-                        &worker_store,
-                        &id,
-                        &primary_id,
-                        seed,
-                        request.reference_depth,
-                    )
-                    .await?;
-            }
-            if let Some(target) = &request.target {
-                let saved = operations::get(&worker_store, &id)?.item_ids;
-                if saved.is_empty() && operations::cancelled(&worker_store, &id)? {
-                    return Ok(());
-                }
-                service.select_saved_items(&worker_store, &id, target, &saved).await?;
-            }
-            Ok(())
+            service
+                .run_snapshot_add(&worker_store, &id, fetch, &primary_id, request)
+                .await
         });
         Ok(record)
     }
@@ -997,90 +928,8 @@ impl LibraryService {
         if let Some(old) = &old {
             asset.original_url = old.summary.original_url.clone();
         }
-        let canonical_url = asset.source_url.as_deref().ok_or_else(|| {
-            error(
-                "source_identity_mismatch",
-                "Provider asset has no validated canonical URL",
-            )
-        })?;
-        let is_confluence = self.configuration.providers.iter().any(|provider| {
-            provider.id == asset.source.provider_id
-                && provider.kind == ProviderKind::Confluence
-        });
-        if is_confluence && asset.source.resource_type != "page" {
-            return Err(error(
-                "source_identity_mismatch",
-                "Confluence provider returned a non-page Library asset",
-            ));
-        }
-        let canonical_url = if is_confluence {
-            if !confluence_page_id(&asset.source.canonical_id) {
-                return Err(error(
-                    "source_identity_mismatch",
-                    "Confluence provider asset has an invalid page id",
-                ));
-            }
-            let site = site_authority(&self.configuration, &asset.source.provider_id)?;
-            let canonical = confluence_page_url(&site.provider_instance, &asset.source.canonical_id);
-            let page = ConfluencePage {
-                page_id: asset.source.canonical_id.clone(),
-                space_key: asset
-                    .container
-                    .as_ref()
-                    .map(|container| container.id.clone())
-                    .unwrap_or_default(),
-                title: asset.title.clone(),
-                version: asset.source_revision.as_deref().and_then(|version| version.parse().ok()),
-                source_url: canonical_url.to_owned(),
-                canonical_url: canonical.clone(),
-            };
-            let authority = confluence_instance_authority(
-                &self.configuration,
-                &asset.source.provider_id,
-                &page,
-                &canonical,
-            )?;
-            if asset.source.provider_instance != authority.provider_instance {
-                return Err(error(
-                    "source_identity_mismatch",
-                    "Confluence asset belongs to a different configured site",
-                ));
-            }
-            canonical
-        } else {
-            let canonical = resolve_artifact(&self.configuration, canonical_url)?;
-            if canonical.provider_id != asset.source.provider_id
-                || canonical.kind != asset.source.resource_type
-                || canonical.canonical_id != asset.source.canonical_id
-            {
-                return Err(error(
-                    "source_identity_mismatch",
-                    "Provider canonical URL identifies a different item",
-                ));
-            }
-            self.request(canonical_url, Some(&asset.source.provider_id))?;
-            canonical.canonical_url
-        };
-        let mut entry = asset_entry(&asset, old.as_ref());
-        entry.references = self
-            .is_jira_provider(&asset.source.provider_id)
-            .then(|| asset_references(&self.configuration, &asset));
-        entry.relations_captured = entry.references.is_some();
-        entry.canonical_url = Some(canonical_url);
-        if let Some(row) = issue_row {
-            entry.summary.issue = Some(LibraryIssueMeta {
-                updated: row.updated.clone(),
-                fetched_updated: Some(row.updated.clone()),
-                status: row.status.clone(),
-                issue_type: row.issue_type.clone(),
-                assignee: row.assignee.clone(),
-            });
-        }
-        if old.is_none() {
-            if let Some(reference) = &reference {
-                refs::insert_ref(&mut entry.summary, reference.clone());
-            }
-        }
+        let (mut entry, is_confluence) =
+            self.prepare_snapshot_entry(&asset, old.as_ref(), reference.as_ref(), issue_row)?;
         let index_items = {
             let _lock = store.shared()?;
             store.index()?.items
