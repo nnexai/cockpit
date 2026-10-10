@@ -426,3 +426,84 @@ With no Space checkout to go on, the dialog preselects the repository containing
 ## 2026-09-24: Browser notes are temporary to their page
 
 Unsent browser annotations and notes belong to the page they were drawn on. When a tab shows another document, or the browser is closed and opened again, that page's unsent notes are discarded; navigation already did this (OBS-030) and now reopening and restarting do too, on the server when the new page opens its draft. Drafts of other open tabs are kept, and so is any draft a prepared capture still references. Saved feedback (a capture that was sent or rejected) is separate and is kept until it is delivered or expires. This replaces the earlier rule that a restart must never evict unsent drafts, which left old notes invisible yet counted against the eight-draft limit.
+
+
+## 2026-10-10 documentation cleanup: earlier Supervisor surface provenance
+
+Historical source excerpts, not the current surface inventory or proof of current behavior. Paths and wording below describe their original revision; current owners are in CODE_GUIDE.md and docs/supervisor-surfaces.md.
+
+### Original docs/supervisor-surfaces.md:3-5
+
+This is the review map requested after the Supervisor feature failed basic startup and usability. The provenance boundary is commit `9b52b43` (`Add supervisor orchestration with explicit prepare and execute`). Its exact frontend/native integration file list was checked with `git show --name-status 9b52b43 -- src src-tauri docs integrations scripts`.
+
+The original concept put tasks, agent relationships and incoming questions in readable utility views. The first implementation turned them into a manual orchestration console, with routine approvals and important failures buried among technical receipts. The repaired workflow starts a real OMP supervisor, lets it manage its own workers, and uses the dashboard to explain progress and expose genuine decisions and recovery.
+
+### Original docs/supervisor-surfaces.md:38-79
+
+| # | Surface / where to find it | Shipped behavior or defect | Current repair / review focus | Source |
+|---|---|---|---|---|
+| 1 | Workbench tab-strip header: Supervisor | Opens a separate workarea; adjacent plus creates another start entry. | One consistent Supervisor entry; no unrelated duplicate plus. | [App](../src/app/App.tsx) |
+| 2 | Commands: Show / Start supervisor | Two keyless entries, Start opens configuration. | Consistent Show Supervisor / Start agent actions; same startup flow as workarea. | [Commands registry](../src/app/input/shortcuts.ts), [App](../src/app/App.tsx) |
+| 3 | Opening, hiding and returning from Supervisor | Replaces central workarea while retaining session/selection. | Preserve terminal focus and drafts; Close view is not Close tracking. | [App](../src/app/App.tsx), [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 4 | Local navigation / keyboard | Board/Agents/Activity tabs, local numeric view keys and roving rows. | Tasks arrows move focus only; Graph Up/Down/Home/End rove preorder and Left/Right follow parent/first child. Enter/Space explicitly selects; Show in Tasks/Graph is local reveal. No obsolete numeric-tab shortcuts. | [boardNavigation](../src/app/supervisor/boardNavigation.ts), [SupervisorGraph](../src/app/supervisor/SupervisorGraph.tsx), [reveal](../src/app/supervisor/reveal.ts) |
+| 5 | Root / agent selector | Technical Root chooser shown even for one root. | Named agent context; switcher only when useful; preserve scope and per-agent drafts. | [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 6 | Start supervisor dialog | Location/worktree/isolated-folder setup before reaching an agent. | Start one agent tab in the fresh current Space; optional location/name secondary. | [SupervisorDialogs](../src/app/supervisor/SupervisorDialogs.tsx), [App](../src/app/App.tsx) |
+| 7 | Empty state | Technical start/proposal instructions. | One clear Start agent action; no empty inspector or fake running state. | [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 8 | Startup / agent status | Accepted Herdr launch request could be shown Active before OMP existed. | Starting until actual nonpending OMP and bound integration are proven; useful failure directly visible. | [SupervisorView](../src/app/supervisor/SupervisorView.tsx), [dispatcher](../crates/cockpit-core/src/orchestration/dispatch.rs) |
+| 9 | Create task | Title/body modal writes Markdown but does not assign work. | Bottom Task input and its resize handle removed; give work directly in the agent's terminal. Task editing and follow-up/answer controls remain. | [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 10 | Task assignment success / failure | Saving a task can look like starting work. | Existing pending/conflicting assignments remain visible and recoverable with exact-revision resolution; no composer draft or submit control. Backend assignment remains available. | [useSupervisor](../src/app/supervisor/useSupervisor.ts), [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 11 | Edit task / external Markdown conflict | Captured full task revision and retained description draft. | Write description, not raw continuation; preserve relationship/checklist bytes, keep live ownership and byte/revision safeguards, and expose an explicit readable conflict. | [SupervisorDialogs](../src/app/supervisor/SupervisorDialogs.tsx) |
+| 12 | Propose worker dialog | User selects parent, target, name, prepare brief and supersede procedure. | Supervisor proposes its own workers; remove this required setup procedure from the normal UI. | [SupervisorDialogs](../src/app/supervisor/SupervisorDialogs.tsx) |
+| 13 | Tasks / task list | Five lanes, blocked filter, lane jumps and information split into a rail. | Read-only lanes, stacked narrow disclosures, shared attention badges, worker/provenance context and dim-only filters; canonical state remains authoritative. | [SupervisorTasks](../src/app/supervisor/SupervisorTasks.tsx), [boardNavigation](../src/app/supervisor/boardNavigation.ts), [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 14 | Completed tasks | Accepted disclosure; runtime completion can disagree with reports. | UI Done maps to core `accepted`; only explicit successful Result plus review/acceptance is Completed. External checks remain Marked complete in task file. Graph reports how many completed tasks are hidden. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx), [topology](../src/app/supervisor/topology.ts) |
+| 15 | Unidentified / ambiguous Markdown task | ID assignment and diagnostics. | Preserve authoring repair without presenting raw IDs as the normal workflow. | [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 16 | Selected task / run details | Permanent technical rail containing almost every record. | Optional Overview/Activity/Actions panel; explicit Result before task description, relationship path and local cross-view reveal; collapsed Operator intervention. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 17 | Prepare approval | Exact plan, hash, arm and confirmation buried in detail. | Bound supervisor reviews and authorizes its descendant; no routine user approval. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx), [core authority](../crates/cockpit-core/src/orchestration.rs) |
+| 18 | Execute approval | Another exact-plan approval required after Ready. | Supervisor handles Ready → exact-plan execution; workers cannot approve themselves. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx), [core authority](../crates/cockpit-core/src/orchestration.rs) |
+| 19 | Result review / Accept / Send back | Routine human completion gate in the rail. | Supervisor reviews, accepts or sends back; explicit operator intervention remains secondary. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 20 | Agent forest | Separate Agents tab and long rows tied to shared technical detail. | Visible optional full-workarea Graph with canonical tasks, assigned/delegated workers, unassigned work and internal subagents; relationships distinct from Space location. | [topology](../src/app/supervisor/topology.ts), [graphLayout](../src/app/supervisor/graphLayout.ts), [SupervisorGraph](../src/app/supervisor/SupervisorGraph.tsx) |
+| 21 | Internal OMP subagents | Role/parent/events plus Send/Cancel receipts. | Retain real no-pane children and exact controls in secondary detail; never pretend a turn abort is lifetime cancellation. | [SupervisorView](../src/app/supervisor/SupervisorView.tsx), [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 23 | Activity / Needs you | Separate tab combining attention and technical history. | Shared Decide/Recover/Notice queue and summary counters; supervisor-owned routine gates/questions excluded. Activity is a separate readable record. | [attention](../src/app/supervisor/attention.ts), [SupervisorAttention](../src/app/supervisor/SupervisorAttention.tsx), [SupervisorActivity](../src/app/supervisor/SupervisorActivity.tsx) |
+| 24 | Answer question | Text form in the shared detail rail. | Literal question and answer action together; scoped drafts survive navigation and failed delivery. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 25 | Follow-up / instruction | Text form plus delivery stages among details. | Secondary direct follow-up, durable pull delivery; no terminal typing or implicit ACK. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 26 | Annotations / durable notes | Full annotation list and editor in details. | Secondary human-readable history/note action, not mandatory clutter. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 27 | Activity / grant provenance | Messages, grants and events mixed into Activity. | Readable local-day history and task/run links; supervisor decisions never attributed to the user; stale evidence remains marked. | [SupervisorActivity](../src/app/supervisor/SupervisorActivity.tsx) |
+| 28 | Diagnostics / setup / launch / inbox receipts | IDs, hashes, attempts, endpoints and raw fields always rendered. | Secondary panel preserves exact technical records, canonical-path copy and guarded ID repair; ordinary Activity does not expose bootstrap payloads. | [SupervisorActivity](../src/app/supervisor/SupervisorActivity.tsx), [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 29 | Open agent / worker terminal | Fresh membership and focus acknowledgement required. | Preserve explicit, identity-fenced navigation; no focus change from merely viewing/selecting a task. | [App](../src/app/App.tsx), [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 30 | Failed worker launch | Space/context/agent tabs may exist with no OMP. | Resources are not success; visible task-local failure, actual worker startup proof and recovery. | [SupervisorView](../src/app/supervisor/SupervisorView.tsx), [dispatcher](../crates/cockpit-core/src/orchestration/dispatch.rs) |
+| 31 | Missing supervisor terminal | Navigation unavailable; reconcile/cancel hidden deep in detail. | Visible terminal-gone explanation, guarded restart or Close tracking; preserve tasks/history. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx), [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 32 | Unknown launch / restart | Technical reconciliation, then explicit new-launch warning. | Clear Check status and guarded restart; no automatic duplicate or fake resume. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 33 | Close tracking / cancellation | Durable close plus advisory stop, not proven process termination. | Honest visible action; keep files/Spaces and show surviving descendants, never claim kill/delete. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 34 | Setup / acceptance / assignment conflicts | Recovery controls buried in technical detail. | Visible affected-task explanation and exact-revision resolution; no data-loss rollback. | [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx), [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 35 | Loading / disconnected / stale runtime / errors | Fixed error region and timestamps; important failures can be hidden. | Plain local status and reachable actions; unavailable is not missing; no clipped error text. | [useSupervisor](../src/app/supervisor/useSupervisor.ts), [SupervisorView](../src/app/supervisor/SupervisorView.tsx), [CSS](../src/app/supervisor/supervisor.css) |
+| 36 | Narrow / wide layout and scroll | Permanent 288px rail or narrow bottom dock, complex lane breakpoints. | Shared measured layout chooses Tasks stacking, bounded inline queue or overlay, and optional side/sheet/overlay details. Owning-scrollport reveal preserves independent view/lane offsets. | [useSupervisorLayout](../src/app/supervisor/useSupervisorLayout.ts), [reveal](../src/app/supervisor/reveal.ts), [CSS](../src/app/supervisor/supervisor.css) |
+| 37 | Form / modal / action focus | Modal trap, Escape, delayed terminal autofocus suppression. | Retain safeguards; polling, delayed launch and root changes never steal focus or submit/discard drafts. | [SupervisorDialogs](../src/app/supervisor/SupervisorDialogs.tsx), [App](../src/app/App.tsx), [SupervisorView](../src/app/supervisor/SupervisorView.tsx) |
+| 38 | Browser/native parity | Same UI, separate HTTP and Tauri adapters. | Exercise the actual repaired surface in both transports, including failure and missing terminal. | [browser adapter](../src/client/browser.ts), [native adapter](../src/client/native.ts), [native commands](../src-tauri/src/orchestration.rs) |
+| 39 | Hierarchical checklist in task Overview | Stable nested work rows and leaf-derived progress, separate from acceptance. | Trusted mixed/leaf/subtree check behavior, scoped drafts, explicit subtree previews, safe adoption/overflow/read-only diagnostics and saved-UUID focus. | [SupervisorSteps](../src/app/supervisor/SupervisorSteps.tsx) |
+| 40 | Prerequisite editor and follow-up creation | Durable canonical waits and immutable provenance, not worker parentage. | Separate nonblocking provenance from waits; scoped drafts and full task/document CAS, original-UUID unknown recovery, active-attempt removal-only boundary. | [SupervisorDialogs](../src/app/supervisor/SupervisorDialogs.tsx), [SupervisorActions](../src/app/supervisor/SupervisorActions.tsx) |
+| 41 | Dependencies peer view | Canonical-task DAG with accepted prerequisite context and independent work. | No step nodes or replacement of hierarchy Graph; readable blocked/invalid reasons and local task/details navigation. | [SupervisorDependencies](../src/app/supervisor/SupervisorDependencies.tsx), [dependencyLayout](../src/app/supervisor/dependencyLayout.ts) |
+
+### Original docs/supervisor-surfaces.md:94-94
+
+The feature commit did not modify the existing sidebar component files, `TerminalPane.tsx`, Library panel components, Browser viewer components or global `styles.css`. It did modify `App.tsx`, so workarea visibility, header/Commands entry points and terminal-focus integration still belong in this review. Do not attribute unrelated concurrent browser/runtime edits to this feature or overwrite them during repair.
+
+
+
+## 2026-10-10 documentation cleanup: superseded decision chronology
+
+These source excerpts explain earlier cutovers and rejected migration alternatives; they are not current configuration or store behavior. Current rules are in DECISIONS.md.
+
+### Original DECISIONS.md:127
+
+**Atlassian HTTP cutover (2026-10-06).** This supersedes the Jira CLI, Confluence CLI allowlist/profile and credential-fallback decisions.
+
+### Original DECISIONS.md:139
+
+There is no migration from the flat layout (index schema 1); such Libraries are wiped and re-added. Index schema 2 (nested layout) upgrades to schema 3, then schema 3 upgrades in place to schema 4 through raw-JSON migration: journal references/intents are rewritten before the index schema flip, making migration rerunnable. Schema 4 retains unknown legacy Space references as opaque IDs that protect content from garbage collection unless an exact fresh legacy association maps them to a current Space. Migration is one-way; older binaries reject newer schemas. Wipe-and-re-add was rejected because live Libraries hold Confluence follows.
+
+### Original DECISIONS.md:145
+
+that replaces the old single `follow_id`
+An additive `#[serde(default)] refs` was rejected because an empty default means "unreferenced" and would tombstone every migrated item.
+; migrated data is unaffected because v2 members map to `Follow` only
+

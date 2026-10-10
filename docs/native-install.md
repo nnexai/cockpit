@@ -14,7 +14,9 @@ On macOS, the build uses `bunx tauri build --bundles app` and installs the compl
 
 Both platforms install `cockpit` and `cockpit-cli` launchers under `$XDG_BIN_HOME`, or `~/.local/bin` by default. Updates stage artifacts on their destination filesystems and journal publication and rollback. Individual replacements are atomic; a multi-artifact update is not one atomic filesystem operation. Existing processes are not stopped or restarted.
 
-The installer also receipt-owns `$XDG_DATA_HOME/cockpit/omp/cockpit-orchestration.ts` (under `PREFIX/share/cockpit/omp/` for a prefix install). This is a Cockpit artifact, not a globally registered OMP extension. Supervisor/worker launches pass an explicit per-process `-e` path through Herdr `agent.start`; manually started OMP processes are not reconfigured. Hosts embed the same integration and, by default, materialize it in a private `<state_root>/orchestration/omp/` directory. `COCKPIT_OMP_EXTENSION` or `[orchestration] omp_extension` can select another explicit path. Existing OMP authentication is reused; install does not copy credentials, sign in, or edit OMP settings. A start acknowledgement alone remains pending: the runtime confirms fresh actual OMP evidence and the main SDK-session binding before Active/Launched; working is valid and interactive-ready is not required.
+The installer receipt-owns `$XDG_DATA_HOME/cockpit/omp/cockpit-orchestration.ts` (under `PREFIX/share/cockpit/omp/` for a prefix install). This is a Cockpit artifact, not a globally registered OMP extension. Supervisor/worker launches pass an explicit per-process `-e` path through Herdr `agent.start`; manually started OMP processes are not reconfigured. Hosts embed the same integration and materialize it privately by default; see [configuration](configuration.md) for extension-path overrides.
+
+Existing OMP authentication is reused: install does not copy credentials, sign in or edit OMP settings. A start acknowledgement remains pending until the runtime confirms fresh actual OMP evidence and main SDK-session binding before Active/Launched; working is valid and interactive-ready is not required.
 
 CLI selection uses an explicit `CliProcessRole::Host` or `CliProcessRole::Native`, not the process basename alone. A host may select its own executable. Native selects the paired CLI: the installed GUI named `cockpit` uses sibling `cockpit-cli` and must never launch itself as the CLI. In development, `cockpit-tauri` may use the distinct sibling `cockpit` host when `cockpit-cli` is absent. The installed pair needs no CLI-path override. The bound main SDK uses the launch-selected CLI/configuration for inbox pull/ACK and supervisor actions, rather than an older ambient-PATH installation. This preserves the GUI/CLI process boundary while the authorized supervisor manages descendant worker preparation, execution and successful-result acceptance without routine operator grants.
 
@@ -28,26 +30,11 @@ operations to that owner.
 
 Linux desktop entries and icons are installed under the selected data directory at `applications/dev.cockpit.app.desktop` and `icons/hicolor/256x256/apps/dev.cockpit.app.png`. On macOS, launch the installed app bundle or use the `cockpit` shell launcher. Add the selected `bin` directory to `PATH` if needed.
 
-Subscription limits discover OMP even when a macOS app launch omits its install directory from `PATH`. With no quota override, Cockpit checks `PATH`, then `~/.local/bin`, `~/.bun/bin`, and the Homebrew prefixes `/opt/homebrew/bin`, `/usr/local/bin`, and `/home/linuxbrew/.linuxbrew/bin`. Candidates must be executable files. This does not modify `PATH` or execute shell startup files. For a custom installation, set `[quota] omp_executable = "/absolute/path/to/omp"` in the shared Cockpit TOML; `COCKPIT_OMP_EXECUTABLE` takes precedence. Explicit settings are never replaced by discovery. “OMP usage source not found” means the CLI could not be launched, not that its Copilot usage JSON failed to parse. Restart Cockpit after changing configuration.
+For subscription-limit OMP discovery and executable overrides, see [configuration](configuration.md). “OMP usage source not found” means the CLI could not be launched, not that its Copilot usage JSON failed to parse. Restart Cockpit after changing configuration.
 
 ## Native window settings
 
-The native Tauri window reads optional presentation settings from the same
-shared Cockpit TOML configuration file used by the core services:
-`$XDG_CONFIG_HOME/cockpit/config.toml`, or `~/.config/cockpit/config.toml` when
-`XDG_CONFIG_HOME` is unset.
-
-```toml
-[window]
-scale_factor = 1.0
-decorations = true
-```
-
-`scale_factor` controls the WebView page scale and must be finite and between
-`0.2` and `10.0` (inclusive). `decorations` controls the native title bar and
-borders. Without a `[window]` section, every platform defaults to scale `1.0`
-with decorations enabled. These settings affect the native Tauri client only;
-the browser client ignores them.
+The native Tauri window reads presentation settings from the shared Cockpit TOML. The browser client ignores them. See [configuration](configuration.md) for the `[window]` example, defaults and allowed scale bounds.
 
 For a quicker repeat build, use the Tauri debug profile:
 
@@ -97,29 +84,36 @@ python3 scripts/install-native.py --prefix /tmp/cockpit-native-check --uninstall
 
 Uninstall uses the receipt to remove only owned launchers, desktop files, application artifacts, CLI and bundled OMP extension. macOS receipts include the bundle's files, modes and symlink identities. Updates and uninstall refuse modified artifacts or path substitutions; configuration, runtime orchestration/task records, OMP authentication/settings and unrelated files remain untouched. Verified legacy raw-binary macOS installations migrate through the same journaled transaction rather than an untracked deletion.
 
-## Inline Space browser
+## Tab-local Browser
 
-Open the selected Space's browser from Commands or its context menu. The browser appears beside the Herdr layout. Browser tabs stay inside that split. **Expand browser** switches to a browser-only view and **Restore split** returns to the Herdr layout. **Close browser pane** hides the local browser presentation; **Close browser** closes the owned browser session and keeps its profile and saved feedback.
+The tab-local inline Browser is the production browser surface.
 
-Cockpit attaches to the same named Playwright CLI browser that agents use. The packaged Node helper streams binary JPEG frames from Chromium. Install Node and Playwright CLI before opening a browser. The helper is embedded in the host binary. Configuration can override `[browser]` keys `playwright_cli`, `chromium_executable`, `node_executable`, `browser_helper`, and `playwright_core`. The last value identifies the Playwright-core package paired with the CLI. No second browser is launched for the inline view.
-Browser prerequisites are checked lazily when the browser view is attached, not during
-ordinary terminal startup. Missing or invalid settings name the corresponding
-`COCKPIT_*` variable and `[browser]` key. The diagnostics distinguish a missing
-paired package from an import failure, packaged-helper materialization from a
-helper runtime failure, and unsupported facilities from transient browser state;
-repair the named prerequisite and retry the browser view without restarting Herdr.
+Open Browser for a selected Herdr tab from Commands or that tab's context menu. It is a leaf in that tab's local layout, not a Space-wide sidecar or a separate Chromium instance for the inline view. A fresh Browser leaf closes and cleans the previous association before opening a replacement; incomplete cleanup blocks replacement. Reconnect can attach to the existing live association instead.
 
-On initial attachment, an empty `about:blank` is replaced with a loopback-only
-start page before screencast capture begins, guaranteeing a paintable first
-frame. Non-empty pages and later user navigation are left unchanged.
-The owned Playwright CLI daemon initializes a narrow native user-agent policy before page navigation. It reads the running Chromium's `Browser.getVersion.userAgent` and replaces only the `HeadlessChrome/` token with `Chrome/`; it does not pin a Chrome version. The policy applies to the initial page, CLI-created pages and popups, and embedded child frames including nested cross-site frames, before navigation; it remains with the CLI browser rather than the capture helper, including while the inline view is hidden. Chromium's executable, headless mode, launch/security/viewport settings, and JPEG capture are unchanged. This change does not claim general anti-bot acceptance, video/audio/DRM correctness, or performance parity.
+Hiding Browser or switching away detaches capture and input, but leaves the managed daemon and disposable profile alive. Explicit close stops the owned session; confirmed tab retirement and owner shutdown also clean up owned resources. Only proven association artifacts are removed, after shutdown is confirmed. Uncertain shutdown or cleanup stays visible and retryable: an absent pane is not proof of cleanup.
 
-Close and reopen Browser associations created before this policy so their saved launch configuration contains the daemon hook. Existing associations remain eligible for close and cleanup; they are not silently restarted.
+The profile, annotation drafts, pending captures and feedback are tab-association/current-owner-run work, not a retained archive. Confirmed Browser cleanup discards them. A new exclusive runtime owner stops proven leftover sessions before resetting ephemeral state; observer processes do not perform that reset. Other browser profiles, unrelated files and Herdr sessions are not cleanup targets.
 
-Interact with the browser surface to acquire control; clicking a terminal returns keyboard control through Herdr. Address and annotation editors keep their own keyboard input. Other clients observe until they explicitly take control. Agents can still change the page through Playwright.
+### Prerequisites and streaming
 
-Use Browse, Select, Freehand, Region, or Element in the browser toolbar. Marks have a color and optional inline text; drawing or marking an element opens the inline note editor immediately. **Send annotations** composes the displayed page, marks, and comments as a PNG and delivers it to the active tab's eligible agent without pressing Enter. Failed saves retain the composed image for retry. Saved feedback remains available after closing the browser.
+Install Node and Playwright CLI before opening Browser. Cockpit uses the same named Playwright CLI browser that agents use; the packaged Node helper streams binary JPEG frames from Chromium and is embedded in the host binary. See [configuration](configuration.md) for CLI, Chromium, Node, helper and paired Playwright-core overrides, initial URL and feedback limits.
 
-JPEG streaming has no audio. Browser-local notices report dialogs and unsupported browser facilities. Focused browser verification and an isolated Linux Tauri startup smoke passed on 2026-09-13; full browser/native acceptance, security, performance, and WebKit input/decode parity remain unclaimed.
+Prerequisites are checked lazily on view attachment, not ordinary terminal startup. Missing or invalid settings name the corresponding `COCKPIT_*` variable and `[browser]` key. Diagnostics distinguish a missing paired package from import failure, helper materialization from runtime failure, and unsupported facilities from transient browser state. Repair the named prerequisite and retry the view without restarting Herdr.
 
-The inline browser is the sole production browser path. Legacy extension draft migration is outside this replacement. Existing saved feedback remains readable.
+On initial attachment, an empty `about:blank` is replaced with a loopback-only start page before screencast capture, guaranteeing a paintable first frame. Non-empty pages and later navigation are unchanged.
+
+The owned CLI daemon applies a narrow user-agent policy before navigation: it reads Chromium's `Browser.getVersion.userAgent` and replaces only `HeadlessChrome/` with `Chrome/`, without pinning a version. The hook covers initial pages, CLI-created pages, popups and nested cross-site frames. It belongs to the daemon, so it remains active while the inline view is hidden.
+
+Associations opened without the daemon hook require explicit close and fresh open to acquire the policy. They remain eligible for guarded close/cleanup and are not silently restarted.
+
+Chromium's executable, headless mode, launch/security/viewport settings and JPEG capture are unchanged. This policy does not claim general anti-bot acceptance, video/audio/DRM correctness or performance parity. JPEG streaming has no audio; Browser-local notices report dialogs and unsupported facilities.
+
+### Control and annotations
+
+Interact with the Browser surface to acquire control; clicking a terminal returns keyboard control through Herdr. Address and annotation editors keep their own input. Other clients observe until they explicitly take control; agents can still change the page through Playwright. Input requires current control and presented-frame/document/viewport evidence; stale input is rejected, not replayed.
+
+Use Browse, Select, Freehand, Region or Element in the toolbar. Marks have a color and optional inline text; drawing or marking an element opens the inline note editor immediately. Drafts are page/document-bound. **Send annotations** composes the displayed page, marks and comments as a PNG and pastes feedback to the tab's eligible agent without pressing Enter.
+
+Failed saves retain the composed image for explicit retry during the current run. Pending or unknown delivery receipts require inspection/reconciliation, not automatic replay; a new send after uncertainty requires explicit duplicate-risk acknowledgement. Saved feedback is subject to configured retention and confirmed association cleanup, not preserved after Browser close.
+
+See [CODE_GUIDE](../CODE_GUIDE.md) for lifecycle, cleanup, delivery and stream owners, and the [verification log](verification-log.md) for historical smoke results and their limitations. This installation guide asserts no new browser/native acceptance result.

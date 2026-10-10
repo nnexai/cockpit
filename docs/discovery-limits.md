@@ -1,20 +1,11 @@
 # Repository discovery limits
 
-Cockpit reads `$XDG_CONFIG_HOME/cockpit/config.toml`, defaulting to `~/.config/cockpit/config.toml`. `COCKPIT_CONFIG` selects another file for both native and browser hosts. Restart the host after changing this file.
+See [shared configuration](configuration.md) for the configuration path, environment/invocation precedence, repository-root examples and limit defaults/ranges. Restart the host after changing its configuration.
 
-```toml
-version = 1
-repository_roots = ["/path/to/projects"]
+`catalog_entries` bounds filesystem work across all configured roots together: each directory visited and each entry examined, including files. It is not a repository count or file-size limit. Discovery is breadth-first and recognizes a checkout when its parent is listed, so nearer repositories are found first when the budget runs out. Dependencies and build output can exhaust the budget before deeper repositories are reached. Narrow roots reduce the work; raising the budget allows a larger scan.
 
-[limits]
-catalog_entries = 10000
-catalog_depth = 3
-```
+The configured root is depth zero. `.git` directories and symlink directories are not traversed. `catalog_depth` and the separate `operation_timeout_ms` budget bound traversal.
 
-`catalog_entries` defaults to 16,384 and accepts 1 through 100,000. It bounds filesystem work during repository discovery across all configured roots together. The scan counts each directory visited and each directory entry examined, including files. It is not a repository count or a file-size limit. Discovery is breadth-first and recognizes a checkout as soon as its parent directory is listed, so when the budget runs out, repositories nearer the root have already been found. Dependencies and build output beneath a configured root can still consume the budget before deeper repositories are reached. Narrow repository roots reduce the work; raising the budget allows a larger scan.
-
-`catalog_depth` defaults to 3 and accepts 1 through 32. The configured root is depth zero. `.git` directories and symlink directories are not traversed. Discovery also has a separate `operation_timeout_ms` budget, defaulting to 30,000 milliseconds.
-
-The Files directory listing uses `context_directory_entries`, default 1,000, and `context_tree_depth`, default 32. Document reads use `context_preview_bytes` and `context_preview_lines`. These limits are separate from repository discovery, so increasing a document limit does not remove a repository discovery warning.
+Files listings use `context_directory_entries` and `context_tree_depth`; document reads use `context_preview_bytes` and `context_preview_lines`. These limits are separate from repository discovery, so increasing a document limit does not remove a discovery warning.
 
 Use `cargo run -p cockpit-host --bin cockpit -- configuration` to inspect the effective configuration and the source of its values. Browser hosts also accept `--config` and `--repository-root`; see `cockpit serve --help` for invocation overrides.

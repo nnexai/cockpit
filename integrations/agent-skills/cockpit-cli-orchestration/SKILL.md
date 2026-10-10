@@ -94,7 +94,7 @@ cockpit-cli route resolve --artifact https://gitlab.example/group/repo/-/issues/
 | Needed value | Fresh source |
 | --- | --- |
 | Task/document fence | `task list --json`: `doc_revision`, `tasks[].task.task_revision` |
-| Task revision, stable steps and adoption offsets | `task show --json`: `task.task_revision` and returned step details |
+| Task revision and stable steps | `task show --json`: `task.task_revision` and returned step details |
 | Prepare fence | `run show --json`: `prepare_plan.plan_revision` |
 | Execute fence | `run show --json`: `work_plan.plan_revision` |
 | Current needs-input question and receipt | `run list --json`: `questions[]`, including message ID and `receipt.status` |
@@ -105,9 +105,9 @@ for new tasks and steps; retain them after uncertain submissions. Description
 updates preserve checklist/relationship metadata; raw task body is read-only.
 `task dependencies-set` requires both task and document revisions and replaces
 the complete prerequisite array (omitting `--depends-on` clears it). Relationship
-creation and prerequisite edits belong to the active root. `task steps-adopt`
-uses offsets from the same fenced `task show`; checkbox updates explicitly choose
-`--scope leaf|subtree`. Consult the specific task verb help for its flags.
+creation and prerequisite edits belong to the active root. Checkbox updates
+explicitly choose `--scope leaf|subtree`. Consult the specific task verb help
+for its flags.
 
 `context --current` returns live selected Library/repository paths: read those
 paths in place, do not copy them or create companion folders. Route resolution

@@ -1,173 +1,310 @@
 # Code guide
 
-Herdr owns live sessions, Spaces, tabs, real terminal existence/membership, focus identity and PTYs. Cockpit owns in-memory tab placement and local Files/Review/Browser leaves and widget docks, task setup, durable supervisor task/run orchestration, Context assets, durable Space Notes, local Review snapshots and ephemeral viewer comment batches. An HTTP response arriving later does not make it newer than an ordered stream event.
+Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for current rules and [configuration](docs/configuration.md) for examples/defaults/precedence. This guide owns navigation, short call flows and development recipes. Historical runtime observations belong in [verification-log](docs/verification-log.md). The map below follows current source imports/declarations, not former monolith names.
 
 ## Where to change behavior
 
-| Change | Owner | Useful verification |
-| --- | --- | --- |
-| Public request/response shape | `crates/cockpit-protocol/src/` and its TypeScript exporter | Protocol tests and generated-file check |
-| Session ordering | `src/client/streamOrder.ts`, `src/app/session/sessionStore.ts` | Ordering corpus and reducer tests |
-| Local placement, membership and focus | `src/app/layout/{tabLayoutStore,reconcile,splitTree,solveLayout}.ts`, `TabCanvas.tsx`, `src/app/session/{focusCoordinator,mutationCoordinator}.ts`, `src/app/input/` | Tree/focus/creation transitions, live membership changes and a disposable-runtime smoke |
-| Sidebar presentation, status badges and row navigation | `src/app/sidebar/`, `src/app/sidebar.css` | Herdr ordering, state shapes, roving focus and disposable-session screenshots |
-| Space Git status and upstream actions | `crates/cockpit-core/src/{space_git,space_git_action}.rs`, `src/app/session/{spaceGitStatus,spaceGitActions}.ts`, `src/app/sidebar/SpaceGitAction.tsx` | Real Git upstream/worktree fixtures, dirty/diverged refusal, fetch-map and mirror safety, queued target changes, browser/native row and Commands actions |
-| Subscription limits and shared CLI quota cache | `crates/cockpit-core/src/{quota.rs,quota/}`, `crates/cockpit-protocol/src/quota.rs`, `src/app/limits/`, `src/client/quotaProtocol.ts` | Fake-CLI cache/lease/backoff/privacy tests, scoped parser/model mutations, live authenticated browser/native values and cross-host call counters |
-| Shared keyboard bindings and discoverability | `src/app/input/shortcuts.ts`, `herdrBindings.ts`, `keymap.ts`, `modal.ts` | Regenerate docs with `renderShortcutDocs`, runtime aliases and reload, prefix collisions and literal passthrough |
-| Terminal lifecycle and input | `src/app/TerminalPane.tsx`, `crates/cockpit-herdr/src/terminal_wire.rs` | Lifecycle/race tests and successive runtime frames |
-| Herdr methods, server identity and creation receipts | `crates/cockpit-herdr/src/cli/`, `crates/cockpit-protocol/src/v1.rs` | Adapter fixtures against the supported schema and real split/move receipts |
-| Generic Herdr commands and singleton popup | `crates/cockpit-protocol/src/herdr_shell.rs`, `crates/cockpit-herdr/src/{shell_wire.rs,cli/shell.rs,cli/operations.rs}`, `src/app/{App,ServerPopup}.tsx` | Live advertised invocation, popup program input/closure, unchanged split geometry, disconnected recovery and DOM focus return |
-| Task setup and recovery | `crates/cockpit-core/src/projects.rs`, `project_store.rs`, `project_teardown.rs` | Ownership, idempotency and uncertain-outcome fixtures |
-| Canonical supervisor tasks, prerequisites/provenance, hierarchical checklist, run authority and derived Board/attention | `crates/cockpit-core/src/orchestration.rs`, `orchestration/{store,tasks_md,dependencies,steps,messages,projection,routing}.rs`, `crates/cockpit-protocol/src/orchestration.rs` | Exact-byte description/metadata/checklist preservation and CAS, graph satisfaction, safe overflow/adoption, current-task/native-child authority, explicit reports vs acceptance and fresh dependency gates |
-| Supervisor setup/launch dispatch and owner recovery | `crates/cockpit-core/src/orchestration/{dispatch,herdr}.rs`, `crates/cockpit-herdr/src/cli/orchestration.rs`, `crates/cockpit-host/src/orchestration_runtime.rs` | Disposable real worktree/OMP launch, exact-plan grants, owner restart, uncertain setup/launch reconciliation and no duplicate tab creation |
-| Supervisor browser/native operator transports and agent CLI | `crates/cockpit-host/src/{server/orchestration.rs,cli_orchestration.rs}`, `src-tauri/src/orchestration.rs`, `src/client/orchestrationProtocol.ts` | Equivalent GUI-only operator grants, agent caller identity, fresh observation and cross-host durable revisions |
-| Supervisor Tasks (`SupervisorTasks.tsx`), hierarchy Graph (`SupervisorGraph.tsx`), canonical-task Dependencies (`SupervisorDependencies.tsx`, `dependencies.ts`, `dependencyLayout.ts`), checklist/details/editors (`SupervisorSteps.tsx`, `SupervisorActions.tsx`, `SupervisorDialogs.tsx`), shared attention and measured layout/reveal | `src/app/supervisor/`, `src/app/App.tsx`, `src/app/input/shortcuts.ts` | Behavioral tests for graph/provenance/accepted context, native mixed and subtree checks, safe legacy/overflow diagnostics, scoped drafts/unknown outcomes, delayed saved-row move focus without navigation theft, local reveal versus explicit identity-fenced terminal control; actual surface inventory in `docs/supervisor-surfaces.md` |
-| Per-process OMP integration and native install artifact | `integrations/omp/cockpit-orchestration.ts`, `scripts/install-native.py`, `crates/cockpit-host/src/orchestration_runtime.rs` | Fresh per-tool prepare gate, real internal-subagent telemetry/control, counts-only wake, explicit processed ACK, receipt-owned extension installation and no global OMP mutation |
-| Durable Space Notes, task board and comments | `crates/cockpit-core/src/{notes.rs,notes/}`, `crates/cockpit-protocol/src/notes.rs`, `src/app/notes/` | Real Markdown/CAS fixtures, sibling-byte preservation, concurrent/external edits, orphan retention, boot-scoped attach and disposable browser/native drag/comment/draft recovery |
-| Notes CLI and browser/native transport | `crates/cockpit-host/src/{bin/cockpit/notes.rs,server/notes.rs}`, `src-tauri/src/notes.rs`, `src/client/notesProtocol.ts` | Real standalone CLI without Herdr, origin rejection, equivalent producer DTOs, custom-root copied recipes and real native IPC |
-| Agent CLI help and bundled portable skills | `crates/cockpit-host/src/bin/cockpit.rs`, `bin/cockpit/{notes,skills}.rs`, `cli_orchestration.rs`, `integrations/agent-skills/` | Actual nested help/interpretation smoke, standalone CLI with disposable HOME/project, collision/refusal/concurrent installer behavior |
-| Virtual viewer source binding and path authorization | `crates/cockpit-core/src/{viewer,context}.rs`, `crates/cockpit-protocol/src/viewer.rs`, `src/app/layout/{FilesLeaf,ReviewLeaf}.tsx`, `viewerLifecycle.ts` | Same-tab source checks, stale bindings/root replacement, pluginless Files/Review and source-state retention |
-| Repository discovery cache and setup freshness | `crates/cockpit-core/src/repository_cache.rs`, `projects.rs`, `context.rs` | Mutation-generation invalidation, stale-while-refill, and disposable gateway request counts |
-| Context/Library file index and picker ranking | `crates/cockpit-core/src/context.rs`, `file_index_cache.rs`, `config.rs`, `library/reader.rs`, `src/app/input/fileIndexCache.ts`, `fileNavigation.ts` | Git ignore/symlink/cap fixture, persisted restart smoke, mixed Unicode ranking parity |
-| Library read-path recovery and index cache | `crates/cockpit-core/src/library/store.rs`, `library/space.rs`, `library.rs` | Journal recovery, cross-Store identity invalidation, inherited-descriptor lease release, genuine reader/writer contention and bounded reader latency |
-| Review token streaming and snapshot reuse | `crates/cockpit-core/src/process.rs`, `review.rs`, `src/app/review/ReviewPane.tsx` | Large real-Git fixture, stable review identity, changed-token invalidation, and linear duplicate marking |
-| Library folder capture and direct Space selections | `crates/cockpit-core/src/library/folder.rs`, `library/space.rs` | Source boundaries/limits, durable selection, retention and legacy-file preservation |
-| Provider authority and fetch | `crates/cockpit-core/src/sources.rs` and `crates/cockpit-providers/src/` | Configured-instance and canonical-identity fixtures |
-| Durable Library storage, provider snapshots, reference sets and followed spaces/queries | `crates/cockpit-core/src/library.rs`, `library/{store,refs,follow,jira_follow,space}.rs`, `jira_query.rs`, `crates/cockpit-providers/src/{confluence,jira,jira_wiki}.rs` | Paged enumeration, ancestor/move detection, exclusion/removal safety, schema upgrades, selection retention, listing-failure/empty/truncated never dropping members and tombstone purge |
-| Automatic Jira/Confluence Library synchronization | `crates/cockpit-core/src/library/{sync,sync_tests,sync_safety_tests}.rs`, `sources/lane.rs`, `crates/cockpit-providers/src/site_http/pacing.rs`, `config.rs`, host/native startup | Fixed-window checkpoints, durable retries, budget-resumable inventories, quiet scans, partial binary preservation, publication/removal races, and live Cloud native/browser catch-up |
-| Background Library listing and primary preview freshness | `src/app/library/useLibraryOperation.ts`, `useLibraryOperation.test.tsx`, `LibraryPreview.test.tsx`, `src/app/context/ContextViewer.tsx` | Atomic generation pagination, unchanged-page probes, stale-response cancellation, visible-window catch-up, primary rename/same-path snapshots, and preserved manual refresh/comment semantics |
-| Reference-depth traversal and inclusion state | `crates/cockpit-core/src/sources/references.rs` (extraction, resolution, `collect_related`, caps), `library/related.rs` (saving related items, inclusions, single-import lifecycle), `library/{refs,jira_follow}.rs`, `crates/cockpit-providers/src/jira.rs` (`issue_fields`), `crates/cockpit-protocol/src/library.rs`, `src/app/library/{AddContextDialog,LibraryDetails}.tsx`, `src/client/libraryProtocol.ts` | Fake-provider traversal with cycles and caps, live follow never dropping on incomplete pass, old data reads as depth 0; live Jira/Confluence graph in a disposable Library |
-| Provider tokens and HTTP reads/downloads | `crates/cockpit-core/src/credentials.rs`, `crates/cockpit-secrets/`, `crates/cockpit-providers/src/{site_http,jira,confluence,confluence_storage,jira_attachments}.rs`, `src/app/library/ProviderCredentialsDialog.tsx` | `MemoryVault` service tests, fake HTTP pagination/redirect/downgrade tests, and an isolated `dbus-run-session` gnome-keyring smoke |
-| Library HTTP/native transport | `crates/cockpit-host/src/server/library.rs`, `src-tauri/src/library.rs` | Equivalent browser/native DTOs and owned-runtime smoke |
-| Tea JSON and CLI behavior | `crates/cockpit-providers/src/tea.rs` | Real Tea against a localhost fixture with a fake login |
-| Local diff and frozen sources | `crates/cockpit-core/src/review.rs` | Real Git fixtures; compare index and working files before/after |
-| Comment text and delivery | `crates/cockpit-core/src/comments/` | Exact payload bytes, CAS recovery and acknowledged paste tests |
-| Markdown and media display | `src/app/context/`, `context_media.rs` | Source mapping, hostile input, byte/pixel caps and browser/native rendering |
-| Host request decoding and composition | `crates/cockpit-host/src/server/`, `src-tauri/src/` | Equivalent browser/native DTOs and real native startup |
-| Library view, direct Space selections and Context resources | `src/app/library/`, `src/app/context/ContextViewer.tsx`, `src/app/context/ContextResources.tsx` | Selection and live-repository actions, Library refresh visibility, real-path comments and disposable browser/native smoke |
-| Per-tab Browser lifecycle and pane-state reset | `crates/cockpit-core/src/browser.rs`, `browser/cleanup.rs`, `ephemeral.rs`, `crates/cockpit-host/src/browser_runtime.rs`, `src/app/layout/{BrowserLeaf,BrowserCleanupNotices}.tsx`, `browserLifecycle.ts` | Independent tabs, fresh open, discard-on-close, owner-only startup reset and observer isolation |
-| Agent widget owner, source authority and CLI | `crates/cockpit-protocol/src/widget.rs`, `crates/cockpit-core/src/widget.rs`, `widget/{target,store,preflight,choices}.rs`, `crates/cockpit-host/src/{browser_runtime.rs,bin/cockpit.rs}` | Source/target identity, same-ID replace, Remove/reopen, limits, pull/wait cancellation and owner lifetime |
-| Widget transports, dock and active iframe bridge | `crates/cockpit-host/src/server/widgets.rs`, `src-tauri/src/lib.rs`, `src/client/{widgetProtocol,widgetTransport}.ts`, `src/app/widgets/`, `src/app/layout/TabCanvas.tsx`, `src/app/App.tsx` | Equivalent native/browser content/select/remove streams, stale revision/source rejection, multi-ID dock and DOM focus/shortcut routing |
+### Frontend shell, input and local layout
 
-The core depends on narrow adapter traits. Hosts compose concrete adapters; provider behavior belongs in the provider crate. Keep stable error codes with a useful message at the module owning the failure. Clients decode and match response identities before frontend state accepts them.
+| Change | Current owner |
+| --- | --- |
+| Shell composition | `src/app/App.tsx`; `src/app/shell/Workbench.tsx`; `src/app/shell/WorkbenchContent.tsx` |
+| Session hooks | `src/app/shell/useOrderedSession.ts`; `src/app/shell/useSessionStream.ts`; `src/app/shell/useSessionControl.ts` |
+| Recovery and sidebar state | `src/app/shell/useSessionRecovery.ts`; `src/app/shell/useSidebarState.ts`; `src/app/shell/useWorkbenchUI.ts` |
+| Workbench state/actions/input | `src/app/shell/useWorkbenchState.ts`; `src/app/shell/useWorkbenchActions.ts`; `src/app/shell/useWorkbenchInput.ts` |
+| Workarea and canvas | `src/app/shell/useWorkarea.ts`; `src/app/shell/WorkbenchCanvas.tsx`; `src/app/shell/model.ts` |
+| Viewer/widget/supervisor shell coordination | `src/app/shell/useViewerSources.ts`; `src/app/shell/useWidgetWindowState.ts`; `src/app/shell/useSupervisorNavigation.ts` |
+| Commands and tab strip | `src/app/shell/commands.ts`; `src/app/shell/CommandOverlay.tsx`; `src/app/shell/TabStrip.tsx` |
+| Shell menus | `src/app/shell/ContextMenu.tsx`; `src/app/shell/ResourceContextMenu.tsx` |
+| Shell dialogs/recovery | `src/app/shell/PaneDialogOverlay.tsx`; `src/app/shell/SessionDialogOverlay.tsx`; `src/app/shell/RecoveryPanel.tsx` |
+| Compatibility notice | `src/app/shell/CompatibilityNotice.tsx` |
+| Session ordering/focus/mutation | `src/app/session/sessionStore.ts`; `src/app/session/focusCoordinator.ts`; `src/app/session/mutationCoordinator.ts` |
+| Local layout state and reconciliation | `src/app/layout/tabLayoutStore.ts`; `src/app/layout/reconcile.ts` |
+| Local split geometry and canvas | `src/app/layout/splitTree.ts`; `src/app/layout/solveLayout.ts`; `src/app/layout/TabCanvas.tsx` |
+| Viewer and Browser leaf lifecycle | `src/app/layout/viewerLifecycle.ts`; `src/app/layout/browserLifecycle.ts`; `src/app/layout/LeafHost.tsx` |
+| Virtual leaves | `src/app/layout/FilesLeaf.tsx`; `src/app/layout/ReviewLeaf.tsx`; `src/app/layout/BrowserLeaf.tsx` |
+| Terminal leaf and cleanup notices | `src/app/layout/TerminalLeaf.tsx`; `src/app/layout/BrowserCleanupNotices.tsx` |
+| Sidebar presentation | `src/app/sidebar/`; `src/app/sidebar.css` |
+| Git status/actions | `src/app/session/spaceGitStatus.ts`; `src/app/session/spaceGitActions.ts`; `src/app/sidebar/SpaceGitAction.tsx` |
+| Keyboard registry and runtime aliases | `src/app/input/shortcuts.ts`; `src/app/input/herdrBindings.ts`; `src/app/input/keymap.ts` |
+| Modal/file picker input | `src/app/input/modal.ts`; `src/app/input/fileIndexCache.ts`; `src/app/input/fileNavigation.ts` |
+| Terminal and server popup | `src/app/TerminalPane.tsx`; `src/app/ServerPopup.tsx`; `src/app/terminal/cockpitTerminal.ts` |
+| Terminal attachment/control | `src/app/terminal/useTerminalAttachment.ts`; `src/app/terminal/useTerminalControl.ts`; `src/app/terminal/paneState.ts` |
+| Terminal frame/pointer/resize | `src/app/terminal/useTerminalFrameQueue.ts`; `src/app/terminal/useTerminalPointer.ts`; `src/app/terminal/useTerminalResize.ts` |
+| Terminal input bindings | `src/app/terminal/useXtermInputBindings.ts`; `src/app/terminal/terminalInput.ts`; `src/app/terminal/terminalMouse.ts` |
+| Terminal clipboard/theme | `src/app/terminal/terminalClipboard.ts`; `src/app/terminal/terminalTheme.ts` |
 
-## Supervisor call flow and durable boundaries
+### Browser and source viewer frontend
 
-`orchestration.rs` owns actor/action authorization; CLI resolves fresh Herdr caller evidence and constructs `Actor::Agent`, not an operator or a privilege flag. Browser routes and native commands construct `Actor::Operator` with their origin. Prepare/Execute/Accept also admit the actual main session of a freshly bound, active, top-level Supervisor or Adopted root, only for strict descendant Worker runs. Workers, internal subagents, siblings, ancestors and unrelated roots have no such authority. Prepare/Execute bind the exact reviewed setup/work-plan revision; Accept binds the current exact task revision and an explicit successful Result. Supervisor grants retain `origin=supervisor`, authorizing root and actual OMP-session provenance separately from advanced operator intervention. Widget selections cannot grant authority. The shared protocol exports snapshot/mutate/wait shapes; frontend decoding stays in `orchestrationProtocol.ts`, presentation in `src/app/supervisor/`, with Tasks default, optional full-workarea Graph, shared attention queue and review-first details. Operator intervention and Diagnostics remain secondary rather than a routine approval queue.
+| Change | Current owner |
+| --- | --- |
+| Browser facade/chrome/feedback | `src/app/browser/BrowserPane.tsx`; `src/app/browser/BrowserChrome.tsx`; `src/app/browser/BrowserFeedbackPanel.tsx` |
+| Browser state/navigation | `src/app/browser/useBrowserPaneState.ts`; `src/app/browser/useBrowserNavigation.ts`; `src/app/browser/browserPaneModel.ts` |
+| Browser view stream/commands | `src/app/browser/useBrowserViewStream.ts`; `src/app/browser/useBrowserViewCommand.ts` |
+| Browser input | `src/app/browser/useBrowserInputQueue.ts`; `src/app/browser/useBrowserPageInput.ts`; `src/app/browser/useBrowserPointerInput.ts` |
+| Browser drafts/editor/capture | `src/app/browser/useBrowserDrafts.ts`; `src/app/browser/useBrowserNoteEditor.ts`; `src/app/browser/useBrowserFeedbackCapture.ts` |
+| Browser annotation/rendering | `src/app/browser/AnnotationControls.tsx`; `src/app/browser/browserCanvas.ts`; `src/app/browser/framePresenter.ts` |
+| Browser annotation mutations | `src/app/browser/useBrowserAnnotationMutations.ts` |
+| Browser transforms | `src/app/browser/transform.ts` |
+| Viewer facade and frame | `src/app/context/ContextViewer.tsx`; `src/app/context/ContextViewerFrame.tsx`; `src/app/viewer/ViewerLayout.tsx` |
+| Document and tree loading | `src/app/context/useDocumentLoader.ts`; `src/app/context/useDirectoryTree.ts`; `src/app/context/useFilePicker.ts` |
+| Viewer files/search/links | `src/app/context/useViewerFiles.ts`; `src/app/context/useViewerSearch.ts`; `src/app/context/useDocumentLinks.ts` |
+| Viewer comments/batches | `src/app/context/useViewerComments.ts`; `src/app/context/useCommentBatch.ts` |
+| Document renderer ownership | `src/app/context/DocumentView.tsx`; `src/app/context/MarkdownView.tsx`; `src/app/context/HtmlPreview.tsx` |
+| Diagram/image policy | `src/app/context/MermaidView.tsx`; `src/app/context/SafeImage.tsx`; `src/app/context/markdownPolicy.ts` |
+| Source metadata/mapping | `src/app/context/providerDocument.ts`; `src/app/context/contextSource.ts`; `src/app/context/documentMetadata.ts` |
+| Viewer mapping/state/links | `src/app/context/sourceLines.ts`; `src/app/context/viewerState.ts`; `src/app/context/linkResolver.ts` |
+| Diagram isolation/highlight | `src/app/context/mermaidFrame.ts`; `src/app/viewer/highlight.ts` |
+| Viewer file/tree/search presentation | `src/app/context/ContextDirectoryRows.tsx`; `src/app/context/ContextFilesView.tsx`; `src/app/context/ContextSearch.tsx` |
+| Context resources and comment chrome | `src/app/context/ContextResources.tsx`; `src/app/context/CommentBar.tsx`; `src/app/context/CommentDrafts.tsx` |
+| Comment editor/overview/paste | `src/app/context/CommentEditor.tsx`; `src/app/context/CommentOverview.tsx`; `src/app/context/CommentPasteControls.tsx` |
+| Review facade | `src/app/review/ReviewPane.tsx`; `src/app/review/ReviewViewer.tsx` |
 
-The same bound-root/subtree authority admits `ReconcileRun` and reviewed `RetryLaunch` for descendant Workers. Agent-requested retries require fresh Herdr observation, proof that the recorded native process has exited, and a commit fence over the reviewed launch/process/shell incarnation; a live or suspended original is never duplicated. Explicit missing-process/root recovery and environment retries remain operator-owned. Separately, the Cockpit owner may cancel an unbound failed owned launch tab and retry once per Run, including root startup, under the exact recorded ownership barrier below. Agent CLI recovery uses `run reconcile` / `run retry-launch`, not operator flags.
+### Library and Notes frontend
 
-`tasks_md.rs` owns canonical `<state_root>/orchestration/tasks/<root_id>.md` parsing and byte-preserving splices. Stable `cockpit-task` markers identify items; task/doc SHA-256 revisions are separate from machine revision. `Task.body` is full read-only continuation; `description` editing uses shared protected source spans, while relationship/checklist operations preserve surrounding metadata/prose/neighbor bytes. `dependencies.rs` evaluates the affected prerequisite graph and nonblocking immutable follow-up provenance; `steps.rs` owns stable nested identities, derived leaf progress, atomic subtree operations, managed-tail authoring and safe in-place legacy adoption. Numeric overflow permits bounded safe shrinking/checks; structurally unsafe source stays read-only with unavailable progress. `store.rs` uses `ProjectStore`'s named `.state.lock`, bounded `state.json` and atomic replacement for run/message/subagent/intent records, not a second canonical task store or persisted live runtime observations. TaskAssign uses a recoverable cross-document assignment journal, one stable UUID and one root-inbox task pointer; authoring alone is not completed assignment. `AssignmentIntent` temporarily persists submitted title/description for recovery and is removed once the canonical item and inbox pointer are committed. Assignment and acceptance recovery use exact-byte compare-and-swap checks, preserve external edits and never roll Markdown back to resolve a conflict. External editors do not take the lock; rechecks detect conflicts but leave a recheck-to-rename window. Snapshots are read-only. `projection.rs` derives task states/attention and joins fresh Herdr observations. Herdr idle/done/exited, a successful Result and completed steps must never substitute for authorized canonical acceptance.
+| Change | Current owner |
+| --- | --- |
+| Library facade/toolbars | `src/app/library/LibraryView.tsx`; `src/app/library/LibraryToolbar.tsx`; `src/app/library/LibraryViewerView.tsx` |
+| Library viewer source/operations | `src/app/library/useLibraryViewerController.ts`; `src/app/library/useLibraryViewerSource.ts`; `src/app/library/useLibraryViewerOperations.ts` |
+| Library Space/dialog controllers | `src/app/library/useLibraryViewerSpace.ts`; `src/app/library/LibraryViewerDialogs.tsx`; `src/app/library/useLibraryOperation.ts` |
+| Library tree/focus/rows | `src/app/library/LibraryTree.tsx`; `src/app/library/LibraryTreeFocus.ts`; `src/app/library/LibraryTreeRows.ts` |
+| Library identity/details/shared preview | `src/app/library/LibraryItemHeader.tsx`; `src/app/library/LibraryDetails.tsx`; `src/app/context/DocumentView.tsx` |
+| Library document/state | `src/app/library/LibraryDocumentView.tsx`; `src/app/library/libraryState.ts` |
+| Library status/problems | `src/app/library/StatePill.tsx`; `src/app/library/ProviderMark.tsx`; `src/app/library/LibraryProblems.tsx` |
+| Library confirmations/selection/report | `src/app/library/LibraryConfirmDialog.tsx`; `src/app/library/SpaceContextList.tsx`; `src/app/library/RefreshReport.tsx` |
+| Library token UI | `src/app/library/ProviderCredentialsDialog.tsx`; `src/app/library/useProviderCredentials.tsx` |
+| Library Add flow | `src/app/library/AddContextDialog.tsx`; `src/app/library/AddContextOperation.ts`; `src/app/library/AddContextSource.ts` |
+| Library Add steps/clipboard | `src/app/library/AddContextSourceStep.tsx`; `src/app/library/AddContextOptionsStep.tsx`; `src/app/library/clipboard.ts` |
+| Notes facade/source editor | `src/app/notes/NotesView.tsx`; `src/app/notes/useNotes.ts`; `src/app/notes/MarkdownEditor.tsx` |
+| Notes task title/detail | `src/app/notes/TaskDetail.tsx`; `src/app/notes/TodoTitle.tsx` |
+| Notes Kanban/drop validation | `src/app/notes/Kanban.tsx`; `src/app/notes/notesSensors.ts`; `src/app/notes/boardState.ts` |
 
-Task content authority is centralized in `orchestration.rs`: only the exactly executed current worker main or a genuinely registered live native task child may edit its Working task. Root/operator content paths must check live ownership before granting management access. `TaskDependenciesSet` is the separate root/operator exception: full task/document CAS, strict removal-only of positively parsed edges during an open attempt. Prepare/Execute/dispatch/new-effect authorization and acceptance re-evaluate canonical prerequisites; acceptance recovery does not replay a blocked or unknown external effect. The OMP SDK verifies actual `AgentRegistry` session/type/liveness and main binding, and supplies `process.pid` on every CLI call; telemetry and supplied parent/child labels are not proof.
+### Supervisor frontend
 
-`dispatch.rs` reuses `ProjectService` plan/start/reconcile operation IDs, generations and ownership receipts. It records launch pre-intent, creates a real agent tab with explicit environment, then calls typed `agent.start` with per-process `-e`; it never types a shell command or injects task content via Herdr prompts. Start defaults to a fresh tab in the current Space; Directory and Dedicated targets are secondary options. A start ACK is only pending: Active/Launched requires fresh actual OMP evidence plus the main SDK-session binding. Working OMP is valid; interactive-ready is not mandatory. A worker remains read-only until it reports Ready with an exact work plan and the authorized root reviews/grants Execute; the initialization receipt is retained. The supervisor reviews successful Results and accepts current task revisions without routine operator confirmations, escalating only genuinely missing decisions. Launch ambiguity reconciles endpoint and exact tags/receipts, never automatically creates another tab. Acceptance preserves task/Result/history/files/checkout; reviewed retirement can separately close the owned terminal and an empty owned Space after cooperative OMP exit, not invoke project teardown.
+| Change | Current owner |
+| --- | --- |
+| Supervisor facade/drafts/layout | `src/app/supervisor/SupervisorView.tsx`; `src/app/supervisor/useSupervisorDrafts.ts`; `src/app/supervisor/useSupervisorLayout.ts` |
+| Supervisor live subscription | `src/app/supervisor/useSupervisor.ts` |
+| Supervisor detail/start/archive hooks | `src/app/supervisor/useDetailFocus.ts`; `src/app/supervisor/useStartAgentFlow.ts`; `src/app/supervisor/useArchiveCounts.ts` |
+| Supervisor model/state/types | `src/app/supervisor/supervisorViewModel.ts`; `src/app/supervisor/supervisorViewState.ts`; `src/app/supervisor/supervisorViewTypes.ts` |
+| Supervisor workarea/surface | `src/app/supervisor/supervisorViewWorkarea.tsx`; `src/app/supervisor/supervisorViewSurface.tsx` |
+| Supervisor attention/details | `src/app/supervisor/supervisorViewAttention.tsx`; `src/app/supervisor/supervisorViewDetails.tsx` |
+| Supervisor layout/source actions | `src/app/supervisor/supervisorViewLayoutEffects.ts`; `src/app/supervisor/supervisorViewSourceActions.ts` |
+| Task source form/preview | `src/app/supervisor/taskSourceForm.tsx`; `src/app/supervisor/taskSourcePreview.tsx` |
+| Tasks/Graph/Dependencies | `src/app/supervisor/SupervisorTasks.tsx`; `src/app/supervisor/SupervisorGraph.tsx`; `src/app/supervisor/SupervisorDependencies.tsx` |
+| Checklist facade/focus/mutations | `src/app/supervisor/SupervisorSteps.tsx`; `src/app/supervisor/useStepFocus.ts`; `src/app/supervisor/useStepMutation.ts` |
+| Checklist recovery/text/tree | `src/app/supervisor/useStepRecovery.ts`; `src/app/supervisor/useStepText.ts`; `src/app/supervisor/useStepTree.ts` |
+| Checklist rendering | `src/app/supervisor/stepRecoveryView.tsx`; `src/app/supervisor/stepRowTree.tsx`; `src/app/supervisor/stepTextEditor.tsx` |
+| Checklist interaction/types | `src/app/supervisor/stepViewTypes.ts`; `src/app/supervisor/stepInteractions.ts`; `src/app/supervisor/stepConfirmation.tsx` |
+| Checklist menus | `src/app/supervisor/stepMenu.tsx` |
+| Actions/dialogs/activity | `src/app/supervisor/SupervisorActions.tsx`; `src/app/supervisor/SupervisorDialogs.tsx`; `src/app/supervisor/SupervisorActivity.tsx` |
+| Attention/splitter | `src/app/supervisor/SupervisorAttention.tsx`; `src/app/supervisor/attention.ts`; `src/app/supervisor/PanelSplitter.tsx` |
+| Dependency and graph geometry | `src/app/supervisor/dependencies.ts`; `src/app/supervisor/dependencyLayout.ts`; `src/app/supervisor/graphLayout.ts` |
+| Topology/navigation/retirement | `src/app/supervisor/topology.ts`; `src/app/supervisor/boardNavigation.ts`; `src/app/supervisor/retirementView.ts` |
+| Local reveal versus terminal control | `src/app/supervisor/reveal.ts` |
 
-Worker placement starts with read-only exploration of the explicit project Space, selected context, actual branch/dirty state and other workers' plans. Safe, disjoint work can share its current checkout in separate tabs. `SpaceWorktree` creates an owned linked checkout through the existing project lifecycle, records `project_workspace_id`, and defaults its base to the source checkout's immutable HEAD; an explicit base wins. Fresh Git/configured-repository/Herdr-inventory proof binds that source Space. Worker Open/Create proposals cannot silently duplicate an already-open project Space. A late Ready-plan conflict uses supersession, not retargeting a running process. Read-only `cockpit_context` exposes bounded pages of the source Space's selected existing Library/repository paths during preparation; it does not copy context or edit selections.
+### Core services and persistent owners
 
-For an already Launched run, `ReconcileRun` queues a read-only `LaunchIntent` review while retaining `agent_started`. `dispatch.rs` reviews fresh exact runtime proof; `OrchestrationService::record_launch_review` preserves lifecycle, Ready/Result receipts, grants, location, binding and inbox. Its reviewed fence matches the launch incarnation, location and native binding rather than global revision. After startup deadline plus settle, one automatic recovery per Run uses only the recorded endpoint/Space/tab/pane/terminal: durable reviewed-CAS intent, fresh exclusive-tab preflight, endpoint-pinned original-pane close, fresh old-tab/terminal absence proof, then the existing retry transition. The original owned ephemeral container is reclaimable when no valid current SDK binding remains, including an unbound raw OMP or bootloader; healthy bound OMP is not restarted because a mutable alias is missing. A Dispatcher annotation bounds automatic attempts independently of historical manual `launch_attempt`; uncertain creation/close effects are never replayed. Foreign splits and reused terminals/endpoints are refused; a split racing the effect is not broadly deleted by `tab.close`. For a sole-tab Space, a durable intent first creates a genuine ordinary working terminal with empty managed environment in that exact Space/cwd, then records its `RunLocation` receipt before closing the old launch pane. This preserves the existing Space/Library identity; uncertain working-terminal creation retains the old pane and escalates rather than repeating. No placeholder or agent command is started in the ordinary terminal. Mature reclamation requires OS-proven original-process exit, including contradictory or stale native-session metadata. Retry increments the launch attempt and clears location/binding while preserving canonical tasks, grants, plans, reports and mail; it reuses setup and requires fresh actual OMP/main SDK proof. CloseTracking preserves history and does not imply process/descendant termination.
+| Change | Current owner |
+| --- | --- |
+| Configuration roots/limits | `crates/cockpit-core/src/config.rs`; `crates/cockpit-core/src/config/roots.rs`; `crates/cockpit-core/src/config/limits.rs` |
+| Project facade/defaults/plan | `crates/cockpit-core/src/projects/mod.rs`; `crates/cockpit-core/src/projects/defaults.rs`; `crates/cockpit-core/src/projects/plan.rs` |
+| Project execute/reconcile/teardown | `crates/cockpit-core/src/projects/execute.rs`; `crates/cockpit-core/src/projects/reconcile.rs`; `crates/cockpit-core/src/projects/teardown.rs` |
+| Project store and repository discovery | `crates/cockpit-core/src/project_store.rs`; `crates/cockpit-core/src/repository_cache.rs`; `crates/cockpit-core/src/repositories.rs` |
+| Viewer/context/index | `crates/cockpit-core/src/viewer.rs`; `crates/cockpit-core/src/context.rs`; `crates/cockpit-core/src/file_index_cache.rs` |
+| Context media/search | `crates/cockpit-core/src/context_media.rs`; `crates/cockpit-core/src/context_search.rs` |
+| Review facade/parse/source | `crates/cockpit-core/src/review/mod.rs`; `crates/cockpit-core/src/review/parse.rs`; `crates/cockpit-core/src/review/source.rs` |
+| Review snapshot/cache/Git | `crates/cockpit-core/src/review/snapshot.rs`; `crates/cockpit-core/src/review/cache.rs`; `crates/cockpit-core/src/review/git.rs` |
+| Review safe filesystem/process | `crates/cockpit-core/src/review/safe_fs.rs`; `crates/cockpit-core/src/process.rs` |
+| Browser facade/service/CDP | `crates/cockpit-core/src/browser/mod.rs`; `crates/cockpit-core/src/browser/service.rs`; `crates/cockpit-core/src/browser/cdp.rs` |
+| Browser process/receipt/cleanup | `crates/cockpit-core/src/browser/process.rs`; `crates/cockpit-core/src/browser/receipts.rs`; `crates/cockpit-core/src/browser/cleanup.rs` |
+| Browser delivery/drafts | `crates/cockpit-core/src/browser/delivery.rs`; `crates/cockpit-core/src/browser/drafts.rs`; `crates/cockpit-core/src/browser/drafts/service.rs` |
+| Ephemeral owner reset/feedback | `crates/cockpit-core/src/ephemeral.rs`; `crates/cockpit-core/src/browser_feedback.rs` |
+| Git status/actions | `crates/cockpit-core/src/space_git.rs`; `crates/cockpit-core/src/space_git_action.rs` |
+| Quota cache/services and display | `crates/cockpit-core/src/quota.rs`; `crates/cockpit-core/src/quota/`; `src/app/limits/` |
+| OMP quota parsing | `crates/cockpit-core/src/quota/parse.rs` |
+| Notes durable service/filesystem | `crates/cockpit-core/src/notes.rs`; `crates/cockpit-core/src/notes/registry.rs`; `crates/cockpit-core/src/notes/fs.rs` |
+| Notes records | `crates/cockpit-core/src/notes/todos.rs`; `crates/cockpit-core/src/notes/decisions.rs`; `crates/cockpit-core/src/notes/comments.rs` |
+| Comment delivery | `crates/cockpit-core/src/comments/` |
+| Comment paste batch/payload send checks | `crates/cockpit-core/src/comments/paste.rs`; `crates/cockpit-core/src/comments/paste/send.rs` |
+| Widget facade/target/store | `crates/cockpit-core/src/widget.rs`; `crates/cockpit-core/src/widget/target.rs`; `crates/cockpit-core/src/widget/store.rs` |
+| Widget HTML/choice preflight | `crates/cockpit-core/src/widget/preflight.rs`; `crates/cockpit-core/src/widget/choices.rs`; `src/app/widgets/` |
 
-Execution cancellation is kernel-fenced, not inferred from Herdr's close ACK or layout removal. Before committing a fresh attempt, Cockpit requires the exact recorded launch-shell PID/start/kernel-boot incarnation to be exited, plus any recorded bound native incarnation. A still-running process waits on the existing dispatcher tick without repeating close; missing, changed or unavailable fingerprints retain an actionable unproven outcome. The locked retry commit rechecks this barrier. This proves the original shell cannot execute a previously queued accepted command; it is not a claim of exactly-once external effects or all-descendant termination.
+### Library, sources and providers
 
-Plain `Launched` snapshots remain no-op consumers: an automatic mature review first queues a reviewed-CAS `LaunchIntent`, and only a known original native-process exit makes it eligible. Unbound launches may recover; a stored binding with unavailable/changed kernel-boot evidence cannot be silently classified as exited. Fresh positive bound-main proof stays quiet. Root-requested explicit retry of a never-bound accepted command requires fresh same-endpoint/boot old-pane and terminal absence; expired/cleared Pending metadata alone produces `launch_command_unproven`, not duplicate execution permission.
+| Change | Current owner |
+| --- | --- |
+| Library facade/read/store | `crates/cockpit-core/src/library.rs`; `crates/cockpit-core/src/library/reader.rs`; `crates/cockpit-core/src/library/store.rs` |
+| Library filesystem inventory | `crates/cockpit-core/src/library/store/inventory.rs` |
+| Library snapshot add/refresh helpers | `crates/cockpit-core/src/library/snapshot.rs` |
+| Store publication and current-journal recovery | `crates/cockpit-core/src/library/store/publication.rs`; `crates/cockpit-core/src/library/store/recovery.rs` |
+| Library operations/layout/refs | `crates/cockpit-core/src/library/operations.rs`; `crates/cockpit-core/src/library/layout.rs`; `crates/cockpit-core/src/library/refs.rs` |
+| Library folder capture/Space selections | `crates/cockpit-core/src/library/folder.rs`; `crates/cockpit-core/src/library/folder_io.rs`; `crates/cockpit-core/src/library/space.rs` |
+| Manual follow refresh and background sync | `crates/cockpit-core/src/library/follow.rs`; `crates/cockpit-core/src/library/jira_follow.rs`; `crates/cockpit-core/src/library/sync.rs` |
+| Follow planner facade/discovery/drain | `crates/cockpit-core/src/library/follow_plan/mod.rs`; `crates/cockpit-core/src/library/follow_plan/discover.rs`; `crates/cockpit-core/src/library/follow_plan/drain.rs` |
+| Follow planner provider branches | `crates/cockpit-core/src/library/follow_plan/confluence.rs`; `crates/cockpit-core/src/library/follow_plan/jira.rs` |
+| Follow planner reasons/related/standalone | `crates/cockpit-core/src/library/follow_plan/reason.rs`; `crates/cockpit-core/src/library/follow_plan/related_due.rs`; `crates/cockpit-core/src/library/follow_plan/standalone.rs` |
+| Follow planner cancellation | `crates/cockpit-core/src/library/follow_plan/cancel.rs` |
+| Library related assets and attachment publication | `crates/cockpit-core/src/library/related.rs`; `crates/cockpit-core/src/library/attachments.rs` |
+| Source facade/validation | `crates/cockpit-core/src/sources.rs`; `crates/cockpit-core/src/sources/validation.rs` |
+| Source traversal/pacing/JQL | `crates/cockpit-core/src/sources/references.rs`; `crates/cockpit-core/src/sources/lane.rs`; `crates/cockpit-core/src/jira_query.rs` |
+| Credentials and OS vault | `crates/cockpit-core/src/credentials.rs`; `crates/cockpit-secrets/src/lib.rs` |
+| Provider registration/forge | `crates/cockpit-providers/src/lib.rs`; `crates/cockpit-providers/src/forge/mod.rs`; `crates/cockpit-providers/src/forge/gitlab.rs` |
+| Forge adapters | `crates/cockpit-providers/src/github.rs`; `crates/cockpit-providers/src/gitlab.rs`; `crates/cockpit-providers/src/tea.rs` |
+| Atlassian adapters/storage | `crates/cockpit-providers/src/jira.rs`; `crates/cockpit-providers/src/confluence.rs`; `crates/cockpit-providers/src/confluence_storage.rs` |
+| Jira attachment validation/download | `crates/cockpit-providers/src/jira_attachments.rs`; `crates/cockpit-providers/src/jira_attachments/download.rs` |
+| Shared HTTP/pacing | `crates/cockpit-providers/src/site_http.rs`; `crates/cockpit-providers/src/site_http/pacing.rs` |
+| Jira wiki conversion | `crates/cockpit-providers/src/jira_wiki.rs` |
 
-Mature `/new`-style main SDK-session rollover is recovered in recorded state, not by relaunching OMP: only `RunBindSession` may advance the bound main session when trusted fresh evidence proves the same live PID/start/kernel-boot incarnation and exact endpoint/Space/tab/pane/terminal. Ordinary reports, subagents, moved/reused terminals and contradictory native evidence cannot use this exception. Lifecycle, grants and launch attempt remain unchanged. A once-per-new-main Dispatcher Instruction tells the restored root/worker to inspect existing durable tasks/plans/grants/receipts and resume without repeating completed external writes or replaying preparation as a new job. A durable cancellation revokes that exact launch incarnation and temporarily excludes late binding, CancelRun, RetryLaunch and ReconcileRun until the bounded effect settles.
+### Orchestration service, CLI and OMP integration
 
-`orchestration/escalation.rs` appends deduplicated Dispatcher failure observations to the managing root in the same atomic save as terminal dispatch failures. Eligible unbound launches are not escalated while Cockpit's bounded owned-tab cancellation/retry is pending. Only exhausted, unsafe or unproven automatic recovery reaches the root/operator, with exact attempts, bounded typed errors, honest external-effect uncertainty and supported next actions. Root startup follows the same cancellation policy; unsafe or failed root recovery remains operator-owned. Recovery notices require a prior failure of that incarnation. The supervisor responds to failed automatic recovery, not routine transient startup; genuinely ambiguous destructive recovery needs the user.
+| Change | Current owner |
+| --- | --- |
+| Service/caller identity | `crates/cockpit-core/src/orchestration.rs`; `crates/cockpit-core/src/orchestration/caller.rs`; `crates/cockpit-core/src/orchestration/agent.rs` |
+| Canonical tasks/store/assignment | `crates/cockpit-core/src/orchestration/tasks_md.rs`; `crates/cockpit-core/src/orchestration/store.rs`; `crates/cockpit-core/src/orchestration/assignments.rs` |
+| Prerequisites/checklist parsing | `crates/cockpit-core/src/orchestration/dependencies.rs`; `crates/cockpit-core/src/orchestration/steps.rs`; `crates/cockpit-core/src/orchestration/steps/parser.rs` |
+| Checklist marker layout and operation planning | `crates/cockpit-core/src/orchestration/steps/layout.rs`; `crates/cockpit-core/src/orchestration/steps/planning.rs` |
+| Action dispatcher/mutation facade/tasks/runs | `crates/cockpit-core/src/orchestration/mutate/mod.rs`; `crates/cockpit-core/src/orchestration/mutate/tasks.rs`; `crates/cockpit-core/src/orchestration/mutate/runs.rs` |
+| Grant and reviewed-plan commits | `crates/cockpit-core/src/orchestration/mutate/grants.rs`; `crates/cockpit-core/src/orchestration/mutate/reviewed.rs` |
+| Mutation intents/dispatch/retirement | `crates/cockpit-core/src/orchestration/mutate/intents.rs`; `crates/cockpit-core/src/orchestration/mutate/dispatch_records.rs`; `crates/cockpit-core/src/orchestration/mutate/retirement.rs` |
+| Dispatcher/Herdr/escalation | `crates/cockpit-core/src/orchestration/dispatch.rs`; `crates/cockpit-core/src/orchestration/herdr.rs`; `crates/cockpit-core/src/orchestration/escalation.rs` |
+| Messages/inbox/reports | `crates/cockpit-core/src/orchestration/messages.rs`; `crates/cockpit-core/src/orchestration/messages/inbox.rs`; `crates/cockpit-core/src/orchestration/messages/report.rs` |
+| Subagent delivery/projection/routing | `crates/cockpit-core/src/orchestration/messages/subagent_control.rs`; `crates/cockpit-core/src/orchestration/projection.rs`; `crates/cockpit-core/src/orchestration/routing.rs` |
+| Retirement policy/effects | `crates/cockpit-core/src/orchestration/retirement.rs`; `crates/cockpit-core/src/orchestration/retire.rs` |
+| Runtime owner and Herdr launch | `crates/cockpit-host/src/orchestration_runtime.rs`; `crates/cockpit-herdr/src/cli/orchestration.rs` |
+| Agent CLI facade/args/caller | `crates/cockpit-host/src/cli_orchestration/mod.rs`; `crates/cockpit-host/src/cli_orchestration/args.rs`; `crates/cockpit-host/src/cli_orchestration/caller.rs` |
+| Agent CLI context/wait/output | `crates/cockpit-host/src/cli_orchestration/context.rs`; `crates/cockpit-host/src/cli_orchestration/wait.rs`; `crates/cockpit-host/src/cli_orchestration/output.rs` |
+| Agent CLI retirement | `crates/cockpit-host/src/cli_orchestration/retirement.rs` |
+| CLI binary/Notes/skills | `crates/cockpit-host/src/bin/cockpit.rs`; `crates/cockpit-host/src/bin/cockpit/notes.rs`; `crates/cockpit-host/src/bin/cockpit/skills.rs` |
+| CLI endpoint resolution/portable guides | `crates/cockpit-host/src/bin/cockpit/endpoint.rs`; `integrations/agent-skills/` |
+| OMP extension entry/identity/tools | `integrations/omp/extension.ts`; `integrations/omp/identity.ts`; `integrations/omp/tools.ts` |
+| OMP control loop/wake/CLI | `integrations/omp/controlLoop.ts`; `integrations/omp/wake.ts`; `integrations/omp/cliCall.ts` |
+| OMP retirement and bundle generation | `integrations/omp/retirement.ts`; `integrations/omp/bundle.ts`; `integrations/omp/cockpit-orchestration.ts` |
+| Receipt-owned native installer | `scripts/install-native.py` |
 
-`OrchestrationRuntime::start_owner` runs dispatch only for the private runtime owner; per-run leases fence concurrent effects. Orchestration lives outside the ephemeral browser/comment/review reset and survives owner restart. The runtime materializes the embedded extension privately under `orchestration/omp/` unless overridden by `COCKPIT_OMP_EXTENSION` or `[orchestration] omp_extension`; installer receipts separately own the distributed extension artifact. Neither path mutates global OMP settings/authentication.
+### Protocol, clients and host adapters
 
-Worker retirement is a durable, independently displayed outcome. Fresh acceptance/authority, launch incarnation, native process, original shell and current Herdr membership fence every stop/close effect. Native editor drafts and busy/child work defer cooperative shutdown; incomplete/conflicting identity, changed foreground ownership or unavailable observations retain resources. Unknown outcomes require reconciliation, not an automatic repeat. Preserve unrelated panes/Spaces, task/Result/history and filesystem content. The original shell fingerprint is ownership evidence, **not idle proof**; an unchanged-shell busy builtin may be ended by eventual closure of its owned pane. Do not describe all foreground work as protected.
+| Change | Current owner |
+| --- | --- |
+| Rust wire domains and exporter entry | `crates/cockpit-protocol/src/lib.rs`; `crates/cockpit-protocol/src/typescript.rs` |
+| Rust descriptor parsing | `crates/cockpit-protocol/src/typescript/wire_model.rs`; `crates/cockpit-protocol/src/typescript/wire_model_attrs.rs`; `crates/cockpit-protocol/src/typescript/wire_model_source.rs` |
+| Descriptor-derived validators | `crates/cockpit-protocol/src/typescript/validators.rs`; `crates/cockpit-protocol/src/typescript/validators_index.rs`; `crates/cockpit-protocol/src/typescript/validate_runtime.ts` |
+| Exporter CLI/generated TypeScript | `crates/cockpit-protocol/src/bin/export-typescript.rs`; `src/protocol/generated/v1.ts`; `src/protocol/generated/validate/` |
+| Typed requests and transport contract | `src/client/CockpitClient.ts`; `src/client/operations.ts`; `src/client/wire.ts` |
+| Client policy and transport adapters | `src/client/clientPolicy.ts`; `src/client/browser.ts`; `src/client/native.ts` |
+| Shared browser decoder and ordered streams | `src/client/browserViewDecoder.ts`; `src/client/streamOrder.ts`; `src/client/widgetTransport.ts` |
+| Client domain decoders | `src/client/orchestrationProtocol.ts`; `src/client/libraryProtocol.ts`; `src/client/credentialProtocol.ts` |
+| Client Notes/widget/quota decoders | `src/client/notesProtocol.ts`; `src/client/widgetProtocol.ts`; `src/client/quotaProtocol.ts` |
+| Client Context/media/search decoders | `src/client/contextProtocol.ts`; `src/client/contextMediaProtocol.ts`; `src/client/contextSearchProtocol.ts` |
+| Client review/comments decoders | `src/client/reviewProtocol.ts`; `src/client/commentProtocol.ts`; `src/client/commentPasteProtocol.ts` |
+| Client project/teardown decoders | `src/client/projectProtocol.ts`; `src/client/projectTeardownProtocol.ts` |
+| Shared operation declaration/registry | `crates/cockpit-host/src/transport/operations.rs`; `crates/cockpit-host/src/transport/registry.rs` |
+| Shared typed session/project/viewer handlers | `crates/cockpit-host/src/transport/operations/session.rs`; `crates/cockpit-host/src/transport/operations/projects.rs`; `crates/cockpit-host/src/transport/operations/viewer.rs` |
+| Shared typed library/credentials/Notes handlers | `crates/cockpit-host/src/transport/operations/library.rs`; `crates/cockpit-host/src/transport/operations/credentials.rs`; `crates/cockpit-host/src/transport/operations/notes.rs` |
+| Shared typed orchestration/review/Context handlers | `crates/cockpit-host/src/transport/operations/orchestration.rs`; `crates/cockpit-host/src/transport/operations/review.rs`; `crates/cockpit-host/src/transport/operations/context.rs` |
+| Shared typed Browser/comment/widget handlers | `crates/cockpit-host/src/transport/operations/browser.rs`; `crates/cockpit-host/src/transport/operations/comments.rs`; `crates/cockpit-host/src/transport/operations/widgets.rs` |
+| HTTP route adapter | `crates/cockpit-host/src/server.rs`; `crates/cockpit-host/src/server/operations.rs` |
+| HTTP origin/input/errors/limits | `crates/cockpit-host/src/transport/guard.rs`; `crates/cockpit-host/src/transport/http_input.rs`; `crates/cockpit-host/src/transport/error.rs` |
+| Transport bounds/native input | `crates/cockpit-host/src/transport/limits.rs`; `crates/cockpit-host/src/transport/native_input.rs` |
+| Shared host shutdown policy | `crates/cockpit-host/src/transport/shutdown.rs` |
+| Session reducer/pump and HTTP socket | `crates/cockpit-host/src/transport/session_stream.rs`; `crates/cockpit-host/src/server/session_socket.rs` |
+| Terminal stream and widget HTTP stream | `crates/cockpit-host/src/transport/terminal.rs`; `crates/cockpit-host/src/server/widgets.rs` |
+| Browser binary frame/relay | `crates/cockpit-host/src/transport/browser_frame.rs`; `crates/cockpit-host/src/transport/browser_relay.rs`; `crates/cockpit-host/src/browser_view.rs` |
+| Native command/startup facade | `src-tauri/src/lib.rs`; `src-tauri/src/commands.rs`; `src-tauri/src/startup.rs` |
+| Native streams/clipboard/window lifecycle | `src-tauri/src/streams.rs`; `src-tauri/src/clipboard.rs`; `src-tauri/src/main.rs` |
+| Browser owner/helper process | `crates/cockpit-host/src/browser_runtime.rs`; `crates/cockpit-host/src/browser_helper.rs` |
+| Chromium capture and page UA policy | `browser-runtime/browser-helper.mjs`; `browser-runtime/browser-user-agent.cjs` |
+| Herdr adapters and terminal/shell wire | `crates/cockpit-herdr/src/cli/`; `crates/cockpit-herdr/src/terminal_wire.rs`; `crates/cockpit-herdr/src/shell_wire.rs` |
+| Herdr command implementation | `crates/cockpit-herdr/src/cli/shell.rs`; `crates/cockpit-herdr/src/cli/operations.rs` |
 
-`cli_orchestration.rs::wait_next` caps idle runtime reobservation at three seconds, with durable changes waking early. `OrchestrationService::wait` reads durable revision/task-token changes on notification or a one-second cross-process poll, without requesting a live Herdr snapshot on each poll. Mounted `useSupervisor.ts` requests `timeout_ms: 5000` and then refreshes live runtime even when revision/token is unchanged; confirmed mutations refresh immediately rather than waiting for that interval. These are wait/poll bounds, not latency guarantees or CPU savings. Existing packaged-native evidence records roughly five-second runtime-only updates and a 108-ms post-Answer snapshot. The planned causal ABBA CPU comparison was not run after the user's manual-test override; observed CPU values alone establish no improvement.
+### Protocol domain declarations and renderers
 
-Caller checks obtain fresh Herdr evidence against the original endpoint, terminal membership and native identity; no TTL/global observation cache replaces the pre/core/post fences. Timed-out empty reads perform a fresh authority fence outside the read budget and never acknowledge mail. Source-only instrumented A/B runs over matched approximately 181-second windows reduced `session.snapshot` requests from 1,236 to 214 (82.7%) for one actual main and from 2,487 to 418 (83.2%) with an actual native child. These are request-count observations, not demonstrated CPU savings; the uninstrumented comparison and final SDK522 runtime branch were not run after the user stopped automated verification.
+| Change | Current owner |
+| --- | --- |
+| browser wire declaration/rendering | `crates/cockpit-protocol/src/browser.rs`; `crates/cockpit-protocol/src/typescript/browser.rs` |
+| browser_feedback wire declaration/rendering | `crates/cockpit-protocol/src/browser_feedback.rs`; `crates/cockpit-protocol/src/typescript/browser_feedback.rs` |
+| browser_view wire declaration/rendering | `crates/cockpit-protocol/src/browser_view.rs`; `crates/cockpit-protocol/src/typescript/browser_view.rs` |
+| comment_paste wire declaration/rendering | `crates/cockpit-protocol/src/comment_paste.rs`; `crates/cockpit-protocol/src/typescript/comment_paste.rs` |
+| comments wire declaration/rendering | `crates/cockpit-protocol/src/comments.rs`; `crates/cockpit-protocol/src/typescript/comments.rs` |
+| context wire declaration/rendering | `crates/cockpit-protocol/src/context.rs`; `crates/cockpit-protocol/src/typescript/context.rs` |
+| context_media wire declaration/rendering | `crates/cockpit-protocol/src/context_media.rs`; `crates/cockpit-protocol/src/typescript/context_media.rs` |
+| context_search wire declaration/rendering | `crates/cockpit-protocol/src/context_search.rs`; `crates/cockpit-protocol/src/typescript/context_search.rs` |
+| credentials wire declaration/rendering | `crates/cockpit-protocol/src/credentials.rs`; `crates/cockpit-protocol/src/typescript/credentials.rs` |
+| herdr_shell wire declaration/rendering | `crates/cockpit-protocol/src/herdr_shell.rs`; `crates/cockpit-protocol/src/typescript/herdr_shell.rs` |
+| library wire declaration/rendering | `crates/cockpit-protocol/src/library.rs`; `crates/cockpit-protocol/src/typescript/library.rs` |
+| notes wire declaration/rendering | `crates/cockpit-protocol/src/notes.rs`; `crates/cockpit-protocol/src/typescript/notes.rs` |
+| orchestration wire declaration/rendering | `crates/cockpit-protocol/src/orchestration.rs`; `crates/cockpit-protocol/src/typescript/orchestration.rs` |
+| project_defaults wire declaration/rendering | `crates/cockpit-protocol/src/project_defaults.rs`; `crates/cockpit-protocol/src/typescript/project_defaults.rs` |
+| project_teardown wire declaration/rendering | `crates/cockpit-protocol/src/project_teardown.rs`; `crates/cockpit-protocol/src/typescript/project_teardown.rs` |
+| projects wire declaration/rendering | `crates/cockpit-protocol/src/projects.rs`; `crates/cockpit-protocol/src/typescript/projects.rs` |
+| quota wire declaration/rendering | `crates/cockpit-protocol/src/quota.rs`; `crates/cockpit-protocol/src/typescript/quota.rs` |
+| review wire declaration/rendering | `crates/cockpit-protocol/src/review.rs`; `crates/cockpit-protocol/src/typescript/review.rs` |
+| sources wire declaration/rendering | `crates/cockpit-protocol/src/sources.rs`; `crates/cockpit-protocol/src/typescript/sources.rs` |
+| v1 wire declaration/rendering | `crates/cockpit-protocol/src/v1.rs`; `crates/cockpit-protocol/src/typescript/v1.rs` |
+| viewer wire declaration/rendering | `crates/cockpit-protocol/src/viewer.rs`; `crates/cockpit-protocol/src/typescript/viewer.rs` |
+| widget wire declaration/rendering | `crates/cockpit-protocol/src/widget.rs`; `crates/cockpit-protocol/src/typescript/widget.rs` |
 
-The OMP extension binds actual main/subagent session identity, checks fresh authorization before every tool, and blocks mutating tools, shell/eval and delegation during read-only preparation. This is same-UID accident prevention, not an OS sandbox. Idle inbox wakes use non-steering `aside` to start a turn; busy wakes coalesce as `followUp`. Both contain counts and a pull instruction only. `cockpit_inbox`/`cockpit-cli inbox list` pulls untrusted bodies; explicit ACK follows processing, not wake or read. `messages.rs` retains sender keys, sequence/delivery stages and report provenance. Internal subagent Send targets the actual native registry session with external Cockpit `deliverIrcMessage`, not parent impersonation or terminal/callback steering. Cancel uses `AgentRegistry.global()` and awaited `finalizeSubagentLifecycle`/disposal, including owned background work; a turn-only `ctx.abort()` is insufficient. Durable applied/failed receipts follow native delivery/terminal disposal. Do not claim exactly-once external effects from delivery deduplication.
+### Style ownership
 
-Question linkage is shared across core, protocol, generated TypeScript, CLI and the OMP SDK. Send an Answer with `--in-reply-to QUESTION_MESSAGE_ID` in the CLI or `in_reply_to` in `cockpit_message`; it must name the destination Run's current main NeedsInput report, not an inbox sequence or another Run's question. Non-Answer links and new stale-question Answers are rejected; exact accepted retries retain the same message ID, text and link. Nullable links preserve old message history without resolving a current question. `messages.rs` validates linkage under the store lock and `projection.rs` produces authoritative `snapshot.questions` with `receipt.status` values `unresolved`, `answer_delivered` and `answer_acknowledged`. Frontend consumers use that projection rather than inferring an answer from unrelated Read/ACK counts. Read still means delivered; ACK awaits a fresh main report and does not prove work resumed.
+| Change | Current owner |
+| --- | --- |
+| Ordered style facade and retained viewer/sidebar | `src/app/styles.css`; `src/app/viewer.css`; `src/app/sidebar.css` |
+| Shared tokens/shell/tabs | `src/app/styles/tokens.css`; `src/app/styles/shell.css`; `src/app/styles/tabs.css` |
+| Terminal/overlays | `src/app/styles/terminal.css`; `src/app/styles/overlays.css` |
+| Feature styles | `src/app/browser/browser.css`; `src/app/context/context.css`; `src/app/context/comments.css` |
+| Library/layout/Notes styles | `src/app/library/library.css`; `src/app/layout/tabCanvas.css`; `src/app/notes/notes.css` |
+| Project/review/limits styles | `src/app/projects/setup.css`; `src/app/projects/taskSetup.css`; `src/app/review/review.css` |
+| Shared errors/limits/file navigation | `src/app/errorSlot.css`; `src/app/limits/limits.css`; `src/app/input/fileNavigation.css` |
 
-Permanent typed `caller_mismatch` revocation stops/disposes the extension's observer instead of retrying that revoked caller indefinitely; it does not force-stop native OMP or close its pane. Keep cancellation/CloseTracking distinct from native subagent disposal and reviewed Worker retirement. Final revocation-branch and owner-recovery runtime verification is not claimed: the user stopped further automated loops and will test the final binary manually.
+## Short call flows
 
-Startup observation is not revocation. An exact bound main in an unverified launch receives retryable `caller_not_ready` while Herdr has not yet attested OMP; all run-attempt, endpoint, location, native-session and process fences still apply. Fresh absent-to-matching native-session/OMP observations also require a new caller snapshot rather than silently accepting changed evidence. Mature missing attestation and accepted-worker retirement remain strict. The extension silently backs off during startup, cancels superseded binding attempts, and stops its watcher on `caller_mismatch`, `session_mismatch` or `attempt_stale`. Disposable real OMP verification exercised a delayed instruction, worker Ready/Execute/Result/Accept and idle supervisor report delivery, including separate Stored/Woken/Read/Acked receipts and supervisor-origin grants.
+### Requests, streams and native composition
 
-Herdr agent names are optional, mutable display aliases, not launch identity. Verification joins the pinned endpoint/Space/tab/pane/terminal receipt to nonpending actual OMP and the bound main's native session, or its exact live foreground process incarnation when native-session observation is unavailable. A contradictory receipt/native identity still fails closed. Healthy nameless launches reconcile read-only without renaming, restarting agents or creating tabs. Disposable before/after proof preserved the same native PID, session, terminal and launch attempt, advanced Preparing/Unknown to Active/Launched, and observed startup-brief and later-instruction ACKs. First verified root launches refresh generated supervisor guidance; Worker task briefs and historical Launched reviews remain unchanged.
+Rust DTOs → descriptor-derived domain renderers/validators → generated TypeScript → `src/client/operations.ts` argument/response mapping → browser HTTP or native invoke adapter → shared typed host handler → core service → identity-checked response. Host registry and stable typed errors are shared; adapters retain their transport origin, serialization, lifecycle and cancellation responsibilities.
 
-October 2026 runtime proof recovered a real exit-42 launch on the same canonical Worker Run: the original shell and pane disappeared before the replacement OMP executed, the launch attempt advanced, and the actual supervisor issued Prepare/Execute and consumed the successful Result. A sole-tab Space kept its ID and nonempty selected Library context via the recorded ordinary working-terminal receipt. A trusted native `/new` also rebound the same PID/start/boot and unchanged pane to its new main session and ACKed the generic recovery instruction, without another launch. Packaged native startup and late-mail ACK were verified independently. Deployment of the name-independent repair advanced the default-session supervisor to Active and all three existing workers to Ready with preparation ACKs, preserving their native processes and launch attempts.
+Four stream methods remain transport-local: `subscribeSession`, `openTerminal`, `subscribeWidgets` and `openBrowserView`. `src/client/browserViewDecoder.ts` shares browser event/frame identity and ordering decode only; release, cancellation and lifecycle stay in `src/client/browser.ts` and `src/client/native.ts`. Session reducer/pump, terminal streams and bounded Browser relay have separate host owners in the map above.
 
-Already-stopped observers inside running OMP processes are not revived by restarting Cockpit. For an idle agent with an empty composer, exit OMP gracefully, then use Check status / Restart agent in Cockpit; the UI reconciles the old launch before requesting a new launch attempt. Do not close tracking or create a replacement task. Disposable OMP 18.8.3 recovery verified that explicit ReconcileRun followed by RetryLaunch keeps the same root, preserves canonical task bytes and accepted Worker records, and delivers pending mail to a fresh native binding. Direct RetryLaunch while the dispatch is still Launched is rejected. OMP's `/reload-plugins` is not an extension-session rebind and is not a verified recovery path.
+### Supervisor tasks, execution and messages
 
-Default bound-supervisor guidance prefers `cockpit_inbox operation=list` followed by explicit `operation=ack` after processing; ACK is an inbox receipt, never launch readiness or result acceptance. The extension routes through the launch-selected `COCKPIT_CLI_PATH` and configuration with fresh main-session identity; do not replace this with an unqualified ambient-PATH CLI command that may invoke an old installation. CLI selection takes explicit `CliProcessRole::Host` or `CliProcessRole::Native`: Host may use itself; Native must select the sibling `cockpit-cli` when the installed GUI is named `cockpit`, never that GUI executable. Debug `cockpit-tauri` may fall back to the distinct sibling `cockpit` host. The installed pair requires no override. Direct CLI inbox operations remain supported with the correct binary/configuration and native caller evidence.
+OMP tool/agent CLI → fresh endpoint/location/native caller evidence → `Actor::Agent` → core caller/action authorization → canonical Markdown/store mutation → derived snapshot/inbox → shared host operation → frontend decoder → Supervisor hooks. Browser/native operator requests enter with their own operator origin. Main/subagent provenance is not a privilege flag.
 
-Workers discover selected context with `cockpit-cli context --current` and read returned Library/repository paths directly. No orchestration/setup/teardown path creates or manages companion folders.
+Ready records an exact work plan, not permission to work. Execute binds that plan through `crates/cockpit-core/src/orchestration/mutate/grants.rs` after supervisor review; successful Result review and current-task acceptance are separate transitions. [DECISIONS](DECISIONS.md) owns strict-descendant root authority, prerequisites, launch/process fences, reconciliation, rollover, retirement and no-replay rules. [supervisor-surfaces](docs/supervisor-surfaces.md) maps operator surfaces.
 
-Herdr-addressed agent CLI commands (`widget`, `context`, `browser`, `notes`, and orchestration) share `crates/cockpit-host/src/bin/cockpit/endpoint.rs`. Explicit session/socket selectors take precedence; otherwise launch `COCKPIT_SESSION_ID` stays paired with the pane's `HERDR_SOCKET_PATH`, followed by native Herdr inheritance. Socket layout identifies `herdr.sock` as `default` and `sessions/<name>/herdr.sock` as the named session. An explicit session never borrows an inherited socket belonging to another session, and a stale selected socket is an error, not permission to fall back. These commands honor `--config`, then `COCKPIT_CONFIG_PATH`, then `COCKPIT_CONFIG` and the normal configuration default; GUI/`serve` discovery is unchanged.
+`crates/cockpit-host/src/cli_orchestration/wait.rs` bounds idle runtime reobservation at three seconds; core durable waits use notifications/one-second cross-process polls. Mounted `src/app/supervisor/useSupervisor.ts` uses a five-second wait then refreshes runtime; mutations refresh immediately. These are bounds, not latency or CPU claims. Inbox wakes carry counts; pull bodies, process them, then explicitly ACK. Answers name the current main question ID.
 
-## Herdr command projection and popup transport
+Already-stopped OMP observers are not revived by restarting Cockpit. See [DECISIONS](DECISIONS.md) for explicit reconcile-before-retry and restart limits; `/reload-plugins` is not an extension-session rebind. This navigation is not authorization to manipulate a persistent session or its drafts/processes.
 
-`SessionSnapshotResponse.herdr_shell` carries status, configured prefix chords, advertised command IDs/binding aliases/action descriptions and the singleton popup terminal/size hints. `shell_wire.rs` reads the generation-1 client-shell snapshot/full surface and negotiates the optional frozen Herdr 0.9.3 `endpoint.surface-delta.v1` codec. Peer and boot identity must agree with the inspected server; delta base projection/surface revisions and dimensions must match retained metadata. Cell payloads are validated but not retained, using reusable bounded decoding scratch. Popup patches require an existing popup with the same terminal ID and actual grid dimensions (not size preferences); replacement updates authorize new or resized popup grids. Metadata without the corresponding popup cell update is rejected before state advances. The adapter retains the last popup through disconnects and publishes projection invalidations through the existing session stream. Unsupported mandatory codecs/generation report `shell_unsupported`; connection, timeout, malformed and identity errors remain visible rather than synthesizing a usable manifest.
+### Library follow refresh, sources and token storage
 
-`herdrBindings.ts` derives direct/prefix alias matching and shortcut labels from that projection; `keymap.ts` applies advertised-command precedence and reserved literal double-prefix passthrough. Cockpit's `Ctrl+B` stays independent of any different configured Herdr prefix. When Herdr shares `Ctrl+B`, custom prefix aliases shadow colliding Cockpit actions; direct aliases shadow matching viewer chords. Text editors/local dialogs keep their keys. Keep `shortcuts.ts` and its generated documentation block static: document runtime custom bindings in prose outside the block, and do not manufacture plugin-specific registry entries.
+Library refresh request → shared typed handler → `LibraryService` → `crates/cockpit-core/src/library/follow.rs` and its `crates/cockpit-core/src/library/follow_plan/mod.rs` planner, or Jira manual refresh in `crates/cockpit-core/src/library/jira_follow.rs` → provider discovery/read → source validation → journaled store publication/ref merge → listing generation → Library controller/preview. Background scheduling is separately owned by `crates/cockpit-core/src/library/sync.rs`.
 
-`ResourceMutationRequest::CommandInvoke` maps to Herdr `command.invoke`. Before sending, the adapter rechecks the current advertisement and Space/tab/pane membership; `command_not_available` and `command_target_invalid` are explicit failures. Invoke against confirmed Herdr focus, not a viewer's local DOM selection, and never automatically replay an uncertain command result. Browser HTTP/WebSocket and native Tauri IPC/channels use the same `CockpitClient` session, mutation and terminal contract and the same core/adapter implementation.
+Filesystem inventory is `crates/cockpit-core/src/library/store/inventory.rs`; fetched asset validation is `crates/cockpit-core/src/sources/validation.rs`. Source traversal fetches; Library owns persistence/inclusion reasons. Setup passes validated results into project start and can reuse committed IDs during recovery. Viewer Context composes Library through its builder, avoiding a ProjectService cycle.
 
-`ServerPopup` reuses `TerminalPane` with `target_kind: "popup"`; attach revalidates the current live popup ID (`popup_not_open` on mismatch). Center it over `.workarea-content` using server cell/percentage hints. Do not add it to the split tree, detach/reflow the painted underlay, or request Herdr focus. Keep the underlay inert and underlying terminal input gated, including pending popup invocation. While live, Esc/Enter/Tab/prefix keys go to the program without local close or workbench routing. Server closure restores DOM focus to an available opener or selected-tab chrome. Stale state retains a disconnected popup with disabled input and retry.
+Token entry → `src/app/library/ProviderCredentialsDialog.tsx` → typed credential operation → `crates/cockpit-core/src/credentials.rs` → `crates/cockpit-secrets/src/lib.rs` → the running user's Linux Secret Service vault. [configuration](docs/configuration.md#provider-token-storage-and-entry-points) lists actual singular item/menu entries and plural Commands entry, authentication defaults, timeout/cache and macOS-unverified status. [DECISIONS](DECISIONS.md) owns credential/redirect/attachment/publication safety.
 
-The shell subscription currently advertises `surface_active: true` at 120×40 cells. Obtaining popup metadata this way can resize unattached panes or a concurrently visible Herdr TUI; this accepted API constraint must not be described as passive observation. Direct control attachments retain Cockpit panes' fitted PTY dimensions, and Cockpit split rectangles are unaffected.
+### Terminal, popup, local layout and viewers
 
-## Trusted widget call flow
+Herdr snapshot/stream → session ordering → authoritative membership/focus reconciliation → run-local split tree → stable `src/app/layout/TabCanvas.tsx` leaves → control-attached terminal hooks. Herdr owns membership and real focus; Cockpit owns painted placement. Files/Review start from a same-tab real source terminal, pin viewer/binding/root identity and keep per-source frontend state rather than retargeting on `cd` or source closure.
 
-`cockpit widget show --id plan-picker --file plan-picker.html` copies bounded no-follow regular-file bytes (or `--stdin`/`--choices-file`), hashes them and forwards a `WidgetShowRequest` through `BrowserRuntime::connect` to the already running private owner. `WidgetService` preflights HTML/choices, resolves fresh Herdr source and destination in `widget/target.rs`, and retains bodies, revisions, selections and user tombstones only in `widget/store.rs` memory. A contextual Herdr invocation resolves its current real pane even for another explicit destination. Outside Herdr require `--pane`, `--tab` or `--space`, `--herdr-session` and `--herdr-socket`; an external explicit destination is not an agent source. Source identity gates subsequent replace/close/list/selection, rather than treating an ID or file path as authority.
+Herdr client-shell projection → runtime shortcut aliases → confirmed-focus command invocation → singleton popup metadata → `src/app/ServerPopup.tsx` reusing terminal attachment. Decoder provenance, input gating, disconnected retention, focus return and the active 120×40 shell-subscription resize caveat are specified in [DECISIONS](DECISIONS.md), not inferred from local layout geometry.
 
-The owner emits ordered widget summaries; `server/widgets.rs` and native commands/channels in `src-tauri/src/lib.rs` adapt the same owner content/select/remove/event operations. `widgetTransport.ts` and `widgetProtocol.ts` validate wire identities before `widgetStore.ts` reconciles its tab-local dock through `TabCanvas`. Multiple IDs share a dock; same key replaces, user Remove tombstones until explicitly requested `--reopen`, and confirmed tab/final-terminal retirement removes the dock. Publication does not change source/tab focus. Only user removal of a dock owning DOM focus returns it; agent/retired/snapshot removal does not.
+### Browser and trusted widgets
 
-`WidgetDock.tsx` fetches revision-bound content, including a nullable full retained selection response. `WidgetFrame.tsx` mounts `widgetDocument.ts` as `srcDoc` with `sandbox="allow-scripts"` only. Author scripts/events and ordinary HTTP(S) resources remain active; preflight strips base/http-equiv overrides and the injected CSP excludes host IPC schemes, nested frames, workers, objects and form submission. Parent frame policy restricts document navigation. This opaque iframe with key/revision/source/nonce checks narrows ambient host privilege, not CPU/memory/network/process exposure: busy JavaScript may freeze native Cockpit, but Herdr terminal processes remain independent. Do not route widgets through Browser Chromium capture/streaming or introduce a second webview.
+Tab Browser action → core tab association/service → private owner runtime → supervised Node/CDP helper attached to the CLI-managed Chromium session → bounded relay → transport-local stream → shared decoder → Browser hooks/frame presenter. `browser-runtime/browser-user-agent.cjs` owns the narrow running-version HeadlessChrome substitution policy; it is not general anti-bot/media parity. Fresh-open/default URL and prerequisites are in [configuration](docs/configuration.md); lifetime/reset/cleanup/delivery guards are in [DECISIONS](DECISIONS.md).
 
-The widget prelude corrects fragment-only self-frame anchor activation to `about:srcdoc#…`: `srcdoc` otherwise inherits the embedding document's base URL, and a bare `#…` can navigate to Cockpit instead of scrolling within the widget. A capture listener handles nested/dynamic anchors without cancelling the click, so native fragment navigation and author `preventDefault()` still apply. It does not rewrite external/document links, modified clicks, downloads or other targets, or change CSP/sandbox/bridge authority.
+Widget CLI show → bounded file/stdin/choices preflight → fresh source/target authorization → owner-memory widget store → ordered summaries/content/selection streams → tab dock → opaque script-only iframe bridge → validated retained selection. Widgets do not use Chromium capture. Limits, source/revision/nonce checks, fragment anchors, focus, tombstones and selection uncertainty remain in [DECISIONS](DECISIONS.md).
 
-For example, `<button onclick="cockpit.select({plan: 'small'})">Choose small plan</button>` sends page JSON through the incarnation-bound bridge, `widgetStore.selectPage`, the shared transport and owner validation. Raw and canonical selection JSON must each fit 16 KiB UTF-8; UI submission is capped at four per second. HTML caps are 1 MiB per widget/64 MiB aggregate owner, live count is eight per tab, and owner/transport snapshot metadata is bounded to 8 MiB. Keep these protocol bounds aligned across preflight, owner, adapters and frontend.
+### Durable Notes and portable guides
 
-`cockpit widget selection --id plan-picker --wait` pulls retained JSON immediately or waits for selection; default wait is 300 s (`--timeout` 1–3600 s). CLI emits `status` and decoded `value`, not a command. Handle none/timeout/dismissed/retired, validate application-specific shape/allowed values and never execute or interpolate the value into shell commands or instructions. Replacement retains selection unless `--clear-selection`; reopen clears it. `cockpit.selection`/`cockpit.hasSelection` are mount/replacement state, not live subscriptions. The dedicated bounded shortcut bridge feeds Cockpit/configured Herdr prefixes and custom bindings through `App.tsx`'s existing workbench router, never synthetic keydown, paste, chat or terminal bytes.
+Notes request → Origin-checked HTTP or native shared operation (standalone CLI calls core directly) → target authorization/registry → bounded durable Markdown/CAS publication → Notes response decoder → UUID-pinned hooks/drafts → editor or task detail. Opaque change tokens are not CAS revisions. [configuration](docs/configuration.md#durable-space-notes) owns root/UUID recipes; [DECISIONS](DECISIONS.md) owns external-editor limits, read-before-retry, CodeMirror caret/focus and real dnd-kit listener/drop semantics.
 
-## Durable Notes call flow
+Use `cockpit-cli notes <area> --help` for payload/revision sources and `cockpit-cli task|run|inbox|subagent|route --help` for caller/lifecycle contracts. `cockpit-cli skills list` discovers portable guides; `cockpit-cli skills show NAME` reads without installation. Installation targeting, collision/refusal, serialized writes and same-UID race limits remain in [DECISIONS](DECISIONS.md).
 
-`NotesRequest { target, operation }` in `cockpit-protocol/src/notes.rs` is the shared contract. `NotesService` in `cockpit-core/src/notes.rs` owns target authorization and durable content; `notes/{registry,fs,todos,decisions,comments}.rs` own bindings, bounded filesystem publication and Markdown records. `cockpit notes` delegates directly to that service. HTTP `POST /api/v1/notes` checks Origin before dispatch; native `cockpit_notes_execute` uses the same request/response and is registered in the build manifest and capabilities. `notesProtocol.ts` checks shapes and response identities; opaque change tokens are not CAS revisions. Regenerate `src/protocol/generated/v1.ts` after Rust contract changes.
+## Development and verification recipes
 
-`App.tsx` opens the local Notes workarea; `NotesView.tsx` owns the four views, explicit create/attach, catalog recovery and read-before-retry acknowledgement. `useNotes.ts` owns pinned operations, source refresh, mutation outcomes and UUID-scoped drafts. `MarkdownEditor.tsx` preserves source editor state and renders a safe GFM preview. `TaskDetail.tsx` owns durable thread edits, conflicts, confirmed deletion and external-append scroll behavior. `TodoTitle.tsx` sizes editable titles to their full content on value and width changes without inner scrolling or stealing selection; Kanban lanes retain their own scrolling.
+`bun run browser` builds and serves the browser app at `http://127.0.0.1:4173`; append flags such as `--herdr-session my-session`. `bun run tauri:dev` starts native development. Native installation is a separate action documented in [native-install](docs/native-install.md).
 
-The shared Notes source editor uses CodeMirror's dark theme, Cockpit-token Markdown highlighting, a 2px light caret and explicit focused/unfocused selection fills. `notes.css` disables caret blinking under `prefers-reduced-motion`; the existing editor focus ring, source/preview state, drafts and save shortcuts remain unchanged.
-
-`notes.css` owns Notes presentation; layout and wording polish preserve focus/navigation, UUID identity, source order, drafts, CAS and write-recovery guards. The shared problem slot is an in-flow band below the panels, zero-height when empty, keeping Save, Comment and recovery controls unobscured.
-
-`Kanban.tsx` uses the pinned dnd-kit sensors through `notesSensors.ts`; do not remove real listener cancellation or replace it with a boolean guard. Capture keyboard lane intent before the deferred document listener and collision render, then let `boardState.ts` reject stale identity/revision, absent membership, outside targets and same-column no-ops. Pointer drops remain collision-owned. Neither path writes ranks or reorders `todos.md`. Only the Notes live status announces the intended/confirmed result.
-
-Configure `notes_root` in Cockpit TOML or `COCKPIT_NOTES_ROOT` in the environment, using a persistent location outside worktrees, the Library and ephemeral pane-state roots. The default Linux location is `$XDG_DATA_HOME/cockpit/notes`, with `$HOME/.local/share` as the unset-XDG fallback. The UI's POSIX command examples pin both this root and the UUID, escaping shell-sensitive paths. In an uninstalled checkout, use `target/debug/cockpit` instead of the installed `cockpit-cli` name:
-
-```sh
-cockpit-cli notes --current target
-cockpit-cli notes --current target --create
-cockpit-cli notes --current target --attach UUID
-
-# Resolve once; use the returned UUID and the same configured root thereafter.
-COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID scratchpad read
-COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID todo list
-COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID kanban list
-COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID decision list
-COCKPIT_NOTES_ROOT='/persistent/cockpit/notes' cockpit-cli notes --notes UUID comment list --todo TODO_ID
-```
-
-Use `--id ID --expected-revision REVISION` for adopted task mutations, or `--ref 'L<n>@sha256:…'` for an unadopted/ambiguous source task. Whole Scratchpad, decision and comment edits use their read revision. Root/Space operations do not authorize arbitrary content paths. Pinned content operations work without Herdr; `--current` still needs a real current pane. Unknown outcomes must be re-read, never blindly replayed. Filesystem CAS protects participating Cockpit writers, not external editors that ignore advisory locks.
-
-Use `cockpit-cli notes <area> --help` for payload restrictions and exact revision sources; `task|run|inbox|subagent|route --help` describes orchestration caller and lifecycle contracts. `cockpit-cli skills list` discovers the embedded portable guides, and `skills show NAME` reads one without installation. Explicit `skills install --home` writes under exactly `$HOME/.agent/skills`; `--project` uses exactly `./.agents/skills`. Equal content is a no-op; differing content requires explicit `--replace`. Symlinked or foreign-owned descendants and nonregular final files are refused. Installers serialize per skill and revalidate held identities; unrelated same-UID writers can still race the final replacement check, so this is not filesystem-wide CAS. Exit 20 requires inspecting saved results without blindly repeating replacement.
-
-## Development loop
-
-Run `bun run browser` to build the frontend and serve the browser app at `http://127.0.0.1:4173`. Extra server flags can be appended, for example `bun run browser --herdr-session my-session`. Run `bun run tauri:dev` for the native app.
-
-The main Tauri webview disables native drag/drop interception (`dragDropEnabled: false`) so tab sorting receives HTML `dragover`/`drop` events. Keep tab drops in the shared frontend; enabling Tauri's native file-drop handler can intercept them on macOS. Cockpit does not consume native file-drop events.
-
-On Linux, the main GTK window is marked app-paintable before it is shown: the opaque WebKit webview already paints the content, so GTK's additional content-background fill is redundant. This does not disable decorations, scratch buffering, GPU acceleration or rendering cadence. Re-evaluate this flag before introducing a transparent main webview. Native CPU comparisons must preserve window geometry/scale and prove both terminal delivery and xterm render cadence; occlusion or fewer rendered frames is not an optimization.
-
-For a focused frontend change, run `bun run typecheck` and `bun run test -- <affected-test-file>`. For a Rust change, run the affected package/test filter. At an integration boundary:
+For focused frontend changes use `bun run typecheck` and `bun run test -- <affected-test-file>`; for Rust use the affected package/test filter. At an integration boundary:
 
 ```sh
 cargo run -q -p cockpit-protocol --bin export-typescript -- --write src/protocol/generated/v1.ts
@@ -178,157 +315,73 @@ cargo check -p cockpit-tauri
 bun run build
 ```
 
-Use the repository's Rust toolchain and pinned Bun dependencies. Run `cargo fmt --check` on the final Rust scope. Regenerate TypeScript from Rust DTOs; never maintain a second handwritten wire schema. Runtime failures need a reproduction through the user action and its authoritative result, not only a mocked success response.
+Use the repository Rust toolchain and pinned Bun dependencies, with `cargo fmt --check` on final Rust scope. Generate TypeScript from Rust DTOs, never a second handwritten schema. Runtime failures need a reproduction through the actual user action and authoritative result, not just a mocked success. Native drag/drop, Linux app-paintable and frame-cadence constraints are in [DECISIONS](DECISIONS.md).
 
-Pacing boundary tests use explicit `BackgroundPolicy` values rather than inheriting scheduler defaults. Learned server spacing constrains both lanes and must never relax a stricter configured background interval. Cancellation tests fill only the configured in-flight capacity and bound permit-acquisition waits so a regression fails instead of hanging the suite. Run `cargo test -p cockpit-providers site_http::pacing::tests:: -- --test-threads=1` for the focused scenarios.
+For focused HTTP pacing scenarios use `cargo test -p cockpit-providers site_http::pacing::tests:: -- --test-threads=1`. Tests specify `BackgroundPolicy`, fill only configured in-flight capacity and bound acquisition waits. Learned spacing cannot relax stricter background policy; see [DECISIONS](DECISIONS.md).
 
-## Disposable runtime acceptance
+### Disposable UI smoke
 
-Create a uniquely named Herdr session with isolated XDG config/state, a fixture repository and a resource ledger. `scripts/verify/resource_guard.py` checks executable, session, socket and ownership before fixture Herdr commands run. Never automate the default session or use the user's manual gateway. Browser and Tauri must point to the same owned session and configuration. Preserve evidence before stopping only recorded processes.
+Use the owned disposable fixture recipe, never the default session or manual gateway:
 
-
-## Local provider configuration
-
-Every provider declares `kind` (`github`, `gitlab`, `gitea`, `jira` or `confluence`); neither the provider id nor an executable basename selects its adapter. GitHub, GitLab and Gitea require a CLI `executable` and retain their external CLI login; Gitea can name an existing Tea `login`. Jira and Confluence use Cockpit's GET-only HTTP client and require a token stored in the OS vault. They reject `executable` and `login`: remove those fields when migrating an existing configuration. Cockpit performs no remote writes.
-
-For example, in a task-specific Cockpit TOML configuration:
-
-```toml
-[[providers]]
-id = "jira"
-kind = "jira"
-base_url = "https://nnexai.atlassian.net"     # deployment defaults to cloud
-
-[[providers]]
-id = "confluence"
-kind = "confluence"
-base_url = "https://nnexai.atlassian.net/wiki"
-
-[[providers]]
-id = "wiki-dc"
-kind = "confluence"
-base_url = "https://confluence.example.com/confluence"  # defaults to data_center
-
-[[providers]]
-id = "gitlab"
-kind = "gitlab"
-base_url = "https://gitlab.com"
-executable = "glab"
-
-[[providers]]
-id = "github"
-kind = "github"
-base_url = "https://github.com"
-executable = "gh"
-
-[[providers]]
-id = "my-forge"
-kind = "gitea"
-base_url = "https://forge.example/gitea"
-executable = "tea"
-login = "my-existing-tea-login"
+```sh
+python3 scripts/verify/ui_polish_runtime.py start <root>
+# Point browser/native clients at the reported owned session and configuration.
+# Preserve evidence before stopping only the fixture's recorded resources.
+python3 scripts/verify/ui_polish_runtime.py stop <root>
 ```
 
-`deployment` applies only to Jira and Confluence: use `cloud` or `data_center` explicitly to override the default. Without it, a host ending in `.atlassian.net` (case-insensitive) resolves to Cloud; other hosts resolve to Data Center. Authentication kind does not select deployment. Confluence Cloud requires base path exactly `/wiki`; Data Center keeps a configured context path such as `/confluence` or `/jira`. The loader records `kind` and the resolved deployment's `toml`/`default` origins. No Jira initialization file or Confluence profile is used. This is a clean configuration cutover: existing providers need `kind`, and the user's configuration is not automatically rewritten.
+`scripts/verify/ui_polish_runtime.py` creates isolated runtime resources; `scripts/verify/resource_guard.py` checks executable/session/socket/ownership before Herdr commands. Both clients must address the same owned fixture. These are future-verification commands, not a claim that this documentation change exercised the product.
 
-Page links must belong to the configured instance. Confluence imports preserve page identity, version, ancestors, labels, editor display names and attachment metadata; `body.storage` is converted to Markdown locally for both deployments. An explicit refresh can change Markdown compared with historical CLI output; follow refresh skips unchanged versions, so it does not mass-rewrite pages. Attachment metadata stays not downloaded by default. Explicit Jira/Confluence page/issue or follow downloads use the shared HTTP transport and ID-based private no-follow staging with per-file and aggregate byte budgets, safe stored names and atomic publication; partial files are removed on failure. `Remove downloaded` deletes stored binaries only. Selected context reads these files directly from the Library. PNG/JPEG preview is supported; PDF has no active renderer and SVG/HTML are never executed. Jira lists bounded `fields.attachment[]` metadata; malformed or beyond-256 entries produce a `source_attachments_partial` diagnostic.
+### Changed-scope quality
 
-Provider authority is resolved against the selected configured provider instance; forge owner/repository identity comes from the artifact's canonical identifier, and Jira authority comes from the configured site. API-returned canonical URLs are checked against that authority. A checkout's primary repository origin does not constrain Library imports. Jira and Confluence never fall back to CLI credentials: a missing stored token fails with `source_credential_required`, an unavailable vault with `credential_vault_unavailable`. Forge tokens/logins remain owned by their CLIs. An unavailable adapter or unsupported artifact returns an explicit failure.
+`bun run quality:probe` inspects pinned providers; `bun run quality:report --base <review-base>` reports staged/unstaged/untracked scope; `bun run quality:gate --base <review-base> --strict` applies the strict gate. Missing providers are inconclusive (exit 2), never a pass. Ignored reports are under `quality/reports/`; [quality/README.md](quality/README.md) owns inputs, baseline and exception rules.
 
-## Provider tokens
+Manual source-targeted mutation is opt-in: `bun run quality:mutation -- rust|ts --file <source>`. Ordinary tests, the gate and CI never invoke it. Stage only owned paths and inspect the staged diff before committing; installation, publication and user-session changes are separate actions. Authoritative capability, canonical-source and exact-preview paste boundaries remain in [DECISIONS](DECISIONS.md).
 
-Jira and Confluence accept a token stored in the OS vault (Linux Secret Service; the macOS Keychain backend is compiled but unverified). In the Library, open the token dialog from `Provider tokens…` in the toolbar `⋯` menu, the command palette (`Library: Provider tokens…`), or an item header's `⋯` menu (Jira and Confluence items); or from `Provider token…` on a provider row, in the Add dialog's sign-in failure, or in a Jira item's attachments panel. A Jira issue whose files need a token but has none also says so on its header's state line, with the same entry point. Choose `Personal access token (Bearer)` (Data Center) or `Email and API token (Basic)` (Cloud), paste the token and save; it can be replaced or removed but never read back, and the dialog shows only `Token stored` and its kind. One item exists per provider id and `base_url`, so editing `base_url` makes an old token not apply. glab, gh and tea report `unsupported`.
+### Scenario selection by changed contract
 
-New token forms default to Basic for resolved `deployment = "cloud"` and Bearer for `data_center`, including explicit deployment overrides; both remain selectable, and replacement forms retain the stored kind. A colon in the Basic email is rejected with a specific inline message before submission, without clearing the entered token. Closing a Library dialog returns focus to its opener, or the nearest surviving ancestor if the opener disappeared (for example, after storing a token from the attachments header). Jira attachment headers make no download-state claim until the token status has loaded.
+These are verification recipes, not exercised results. Select affected checks and a real affected-path smoke; [verification-log](docs/verification-log.md) preserves prior observations and limitations.
 
-The token is the only Jira/Confluence credential. Cockpit sends its Basic or Bearer `Authorization` header only to the configured origin; no token is injected into a Jira/Confluence child process, because none is spawned. Missing tokens show `No token stored`, and vault failures show `Keyring unavailable`; removing a token prevents reads until one is stored again. Vault calls time out at 20 s and values are cached per process, so edits made in Seahorse/KWallet appear after a restart.
-
-The shared GET-only client uses Jira Cloud REST v3 (enhanced-search token paging), Jira Data Center REST v2 (offset paging), Confluence Cloud v2 under `/wiki` and Data Center REST v1 under its context path. JSON follows only same-origin redirects and validates the final on-site path; downloads may follow cross-origin media redirects without Authorization. Both cap redirects at three and refuse HTTPS-to-HTTP downgrades. JSON continuation URLs are never requested directly: the adapter validates the endpoint and rebuilds the request from its paging token/offset.
-
-Live verification (2026-10-06): the internal adapters read Jira Cloud and Confluence Cloud through stored Basic tokens in a private Linux keyring and disposable Library. Exercised issue/comments import and refresh, JQL follow and refresh, cross-provider references, page metadata/storage conversion (including a 700,692-byte storage page), spaces enumeration, and Confluence attachment download, 32×32 PNG preview and removal. A clean Confluence space follow imported all 66 readable pages; refresh reported 66 unchanged with no partial/failed results. Clearing either token blocked new reads while existing items remained; fixture files/logs contained no raw token or Basic credential. The native host type-checked but this cutover was not exercised in a native window. Live Data Center behavior (including Jira Bearer PAT), a live Jira attachment download, and macOS Keychain remain unverified; local HTTP fixtures cover Cloud/Data Center contracts.
-
-Jira attachment metadata from `rest/api/2/attachment/{id}` must identify the requested attachment: a supplied `id` must match exactly, including when the content link names the requested id. Data Center responses may omit `id`; only then can a same-site link below the configured base path establish identity through `/secure/attachment/{id}/…` (with a file path) or `/rest/api/{version}/attachment/content/{id}` (with no extra path suffix). Null, malformed and mismatched supplied ids are rejected rather than treated as missing. This does not change redirect, credential, byte-budget or private no-follow staging rules.
-
-The global Context Library is rooted at `library_root` (TOML or `COCKPIT_LIBRARY_ROOT`; default `$XDG_DATA_HOME/cockpit/library`, falling back to `~/.local/share/cockpit/library`). For example:
-
-```toml
-library_root = "/data/cockpit/library"
-
-[limits]
-library_max_items = 20000
-```
-
-Jira and Confluence synchronization is enabled by default while the native app or `cockpit serve` runs. Optional `[library_sync]` overrides are separate from `[limits]`; existing page/item limits are never raised automatically:
-
-```toml
-[library_sync]
-enabled = true
-delta_minutes = 60
-lag_allowance_minutes = 5
-overlap_minutes = 30
-inventory_hours = 24
-audit_days = 7
-related_hours = 24
-background_min_interval_seconds = 10
-background_in_flight = 1
-hourly_request_cap = 300
-```
-
-The coordinator wakes once a minute after a one-minute startup delay; nominal source schedules coalesce overdue work. It uses Jira epoch-millisecond `[lower, upper)` JQL and fixed Confluence `lastmodified` CQL windows. Because Confluence does not reliably expose the authenticated user's CQL timezone, its candidate envelope is rounded outward to minutes and widened by UTC ±14 hours; it is a safe discovery superset, not an exact timestamp filter. Equal page revisions/hierarchy skip body reads, with daily inventories as the membership/hierarchy backstop.
-
-Durable state is in `.cockpit/sync/state.json`. A committed upper boundary means complete discovery and persisted candidates, not successful publication of every body. Failed candidates retry independently; incomplete enumeration never advances the boundary or authorizes removal. Standalone metadata inventories checkpoint complete chunks and adapt to remaining origin budget, so a large cohort resumes rather than replaying its prefix. Accumulation retains tracked issues outside the original query. Labels, attachments and Jira bodies also receive rolling audits; attachment metadata remains not downloaded unless explicitly opted in. Jira project-key moves keep the existing key identity/refusal behavior; numeric-ID migration is not implemented.
-
-Mounted visible listings use one first-page generation check roughly every sixty seconds. Unchanged generations keep the same listing object and do not fetch the remaining pages; changed generations reuse that first page and atomically replace the complete listing. The global preview preserves a selected primary item through title/path changes and rereads same-path changed snapshots; unrelated generations do not reread its body. Manual events still refresh replacement bytes even when the indexed source revision is unchanged.
-
-Live synchronization verification (2026-10-06): a disposable 68-item Library with overlapping live/accumulate Jira follows and a 67-page Confluence follow used stored Basic credentials and an accelerated one-minute delta/zero-lag policy. Actual changed-since discovery updated marked Jira and Confluence snapshots without provider Refresh. Quiet scans advanced all three checkpoints without changing index or Markdown bytes/mtimes. A native auxiliary audit discovered the first attachment and labels without changing page version or downloading binaries; queued label-only work survived normal native shutdown, remained idle for seventy seconds while closed, and was drained by a restarted browser host. A browser primary preview survived an automatic owned-path rename; both browser and native previews then observed a same-path body update while remaining selected. Data Center pagination/window contracts are fixture-tested, not live-verified.
-
-The Library root must be absolute, contain no `..`, and must not overlap Cockpit-owned state, legacy companion, or worktree roots. Limits are bounded. Spaces select Library items and additional configured local repository paths, not copies or pinned versions. Context reads live Library content; explicit folder capture remains separate. Global Confluence follow refresh enumerates every readable page across top-level trees; Cloud folders are ancestor-only nodes. It fetches new pages and pages whose version, title or ancestor chain changed. Moves are directory renames (`library/layout.rs` derives placements; `library/store.rs` journals publication and moves). Removals require complete enumeration and individual confirmation; partial results, failures and cancellation never infer absence. Attachments are excluded by default; explicit downloads stage exact requested files and publish into the Library. PDF is not rendered; SVG/HTML are never active.
-Every Library item carries a `refs` set (`library/refs.rs`: `Manual`, `Follow`, `Space{space_context_id}`); change membership through the locked index mutation, never by overwriting it with a caller's stale summary. Selections and their retaining refs change atomically. `Store::open` upgrades legacy index schema 2 to 3, then 3 to 4, rewriting journal refs before the index schema flip. Unknown legacy Space refs retain opaque IDs to prevent GC loss; exact legacy associations migrate to selections without touching companion files. Upgrades are idempotent and one-way; use disposable data or a copy of a real Library. An item without refs is tombstoned (`purge_after`) and swept after add/refresh (`TOMBSTONE_GRACE_MS`, 14 days for live-follow drops; edited Library items are kept). Jira query follows live in `library/jira_follow.rs`, with pure JQL helpers in `jira_query.rs` and `list_issues` in the provider. Listing uses pooled Jira HTTP reads, Cloud enhanced-search token paging or Data Center offset paging, fixed epoch-millisecond `updated` windows and the configured `library_space_pages` bound. Follows are global Library collections, not Space-copy state. Add classification remains in `AddContextDialog.tsx` and `libraryState.ts`.
-
-Library and item leases own independent advisory-lock descriptions and explicitly unlock on Drop. Closing a `File` alone is insufficient: a forked pre-exec child can retain the inherited open description and prolong a released reservation. Keep lock inodes stable; never unlink them as cleanup. Dropping one shared lease must not release another independent live reader or a replacement writer's reservation.
-
-Reference depth is one `reference_depth` on `LibraryAddRequest` (0 to `MAX_REFERENCE_DEPTH` = 5), the stored item/follow field, and `included_by` inclusion reasons; there is no boolean or same-repository crawl left. `SourceService::collect_related` in `sources/references.rs` only fetches: it extracts references (`asset_references`), resolves each under a configured provider instance, deduplicates by canonical identity, and stops at the `TraversalBudget` caps (`Single` 32 items/8 MiB/60 s, `Query` 100/16 MiB/180 s). Persistence stays in `LibraryService` (`library/related.rs`): save related items under item leases, write reasons through `mutate_index`, and let `refs::remove_ref` strip a follow's reason with its ref. Never drop or untag on an incomplete pass, and never save over a seed. New reference sources are a provider frontmatter field or an extraction rule plus a resolution rule in `references.rs`; keep Confluence page adds and space follows at depth 0.
-Markdown links resolve within the authorized Library or checkout root; source URLs open Library items. Library/viewer actions copy Library-relative or absolute paths. New context terminals receive `COCKPIT_LIBRARY_ROOT`. From an originating Herdr terminal, run `cockpit context --current` (optionally `--config PATH`) and read its selected `items[].path`, `checkout_path` and `repository_paths` directly. Explicit targeting uses `--herdr-session ID --herdr-socket PATH --space ID`. The command is read-only; it does not retrofit environment variables into existing terminals. Keep writable task notes in the separate Space Notes store, not the Cockpit-managed Library.
-
-Library tree structure lives in `libraryState.ts` (`libraryTree` groups by provider id and instance; `nestUnderParents` nests Jira subtasks) and `LibraryTree.tsx` (rows, roving tab stop, keys). Jira subtask nesting needs the listing to project `parent_item_id` from stored references (`jira_parent_projection` in `crates/cockpit-core/src/library.rs`).
-
-Library presentation lives in `src/app/library/`: `LibraryItemHeader` groups page identity and actions (tile, eyebrow and title on the left, `Refresh`, the Space action, `⋯` and Details at the right edge of the title row; the item's facts as one quiet line, then one state line), `LibraryDetails` discloses source/local metadata, and `StatePill`/`ProviderMark` supply shared status and source indicators. `libraryState.ts` accepts stored epoch-millisecond and ISO timestamps for display. The tree beside an item is resized by `TreeSplitter` (`src/app/viewer/ViewerLayout.tsx`): while dragging it writes the width straight to the layout once per frame and never re-renders React, so a tree of thousands of rows stays smooth; it measures the width the grid actually gave the list (a narrow viewer caps a stored width at 60%) only at drag start and on arrow keys. The Library launcher sits between Browser and Commands in the tab strip; shortcut hints come from `src/app/input/shortcuts.ts`.
-
-Setup passes `Arc<LibraryService>` and validated fetch results through `ProjectService::start`; `resume` passes the Library dependency without retaining provider results. `LibraryService::with_herdr` authorizes fresh Space selections without a ProjectService dependency. Viewer Context holds LibraryService through its builder; both hosts compose an acyclic graph. Pre-start validation fetches without persistence. `add_fetched_and_select` commits validated assets to the Library and selects their IDs; recovery can reuse saved IDs without provider refetch. It creates no companion, copy manifest or retry journal. `SourceService` has no disk cache or persisted import/list/refresh routes, and legacy `<state_root>/sources` contents remain untouched.
-
-## Boundaries worth preserving
-
-- Keep application mouse/terminal capability claims tied to the supported Herdr runtime. An unavailable capability is inconclusive.
-- Keep source views canonical. Rendered Markdown and diagrams map back to physical source lines; HTML, SVG and remote assets do not execute in the host.
-- Keep Files/Review independent of addon TUIs. Existing addon panes are ordinary terminals, not renderer replacements; run-local comment batches retain immutable source identity.
-- Paste only after the exact preview and target have been revalidated. An ambiguous dispatch requires receipt reconciliation, not an automatic retry.
-- Use path-limited staging and inspect the staged diff before committing. Live installation, publication and user-session changes are separate actions.
-
-## Changed-scope quality gate
-
-Run `bun run quality:probe` to inspect the pinned metric tools, then `bun run quality:report --base <review-base>` for the current staged, unstaged and untracked scope. `bun run quality:gate --base <review-base> --strict` applies the strict gate. Reports are ignored local artifacts under `quality/reports/`. Missing metric providers produce an inconclusive result (exit 2); they never count as passing coverage or complexity. See `quality/README.md` for provider inputs, baseline review and exception rules.
-
-For manual, source-targeted mutation reports only, use `bun run quality:mutation -- rust|ts --file <source>`; see the opt-in workflow and side-effect warnings in `quality/README.md`. Mutation testing is never invoked by ordinary tests, the gate, or CI.
-
-## Inline browser implementation
-
-`browser-runtime/browser-helper.mjs` attaches to the tab's CLI-managed Chromium session and owns CDP input, metadata, inspection, and binary frames. `crates/cockpit-host/src/browser_helper.rs` supervises it. `browser_runtime.rs` routes requests through the single runtime owner; `browser_view.rs` provides web routes and bounded binary relay, and native commands use the same runtime. Core `BrowserTarget` selects a tab, or resolves a real pane to its tab; association keys include endpoint identity, session and tab, never Space-only identity.
-
-`src/app/browser/` owns presentation, input mapping, annotations, and PNG composition through `CockpitClient`. Rust protocol DTOs in `crates/cockpit-protocol/src/{browser,browser_view}.rs` generate the shared frontend contract. `src/app/layout/BrowserLeaf.tsx` integrates one Browser leaf per tab with layout lifecycle; core browser draft, feedback and delivery modules own current-run persisted data. Hiding a leaf releases view/capture resources, not its browser session.
-
-Leaf creation uses `BrowserAction::OpenFresh`: stop/clean a surviving session before starting at `[browser] default_url` or `COCKPIT_BROWSER_DEFAULT_URL`, validated at load and defaulting to `about:blank`. An existing leaf's Reconnect and CLI `Open` retain attach/new-page semantics. Close, tab/final-terminal retirement and owning-runtime shutdown confirm the process stopped before removing only derived, no-follow, identity-proven profile/workspace/config artifacts and that association's drafts, pending captures, feedback and delivery receipts. Cookie/login/site storage is disposable; failures remain visible/retryable. No saved-work close guard or detached recovery surface remains.
-`browser-runtime/browser-user-agent.cjs` is the owned `browser.initPage` policy materialized with each CLI association. It derives the user agent from that running browser's `Browser.getVersion.userAgent` and changes only `HeadlessChrome/` to `Chrome/`, before the initial page, CLI-created pages/popups, and embedded child frames including nested cross-site frames navigate. The daemon owns its lifetime independently of the capture helper/view. It does not pin a version or alter the executable, headless mode, launch/security/viewport settings, or JPEG capture; it makes no general anti-bot, media/DRM, or performance-parity claim.
-
-`BrowserRuntime::start` invokes `ephemeral::reset_owner_state` only after acquiring the exclusive `browser/owner.lock`, before binding `owner.sock` or constructing Review/comments services. It confirms shutdown of derived leftover CLI sessions, clears `browser/` except the owner lock/socket, and clears `comments/` and `review/`. Deletion is no-follow and same-device; preserve the lock inode and fail closed on uncertain shutdown. An observer joining the existing owner clears nothing. Library, vault, configuration, project-operation state and real Herdr processes are outside this reset.
-
-`BrowserWorkScope` has only live `Tab` work. `BrowserCleanupStatus` exposes current-run failures, presented by `BrowserCleanupNotices.tsx`; saved-tab/legacy archive DTOs, routes, commands and recovery panels are removed. Current-run drafts/captures keep their target, document, viewport and ownership checks, and ambiguous deliveries still require reconciliation rather than automatic replay.
-
-CLI addressing is `cockpit browser open|status|close|feedback --herdr-session <session> --herdr-socket <socket> --tab <tab-id>`, or `--current` inside the caller's Herdr pane. Feedback and exact-ID acknowledgement address current tab work only; detached `--legacy` and obsolete `--space` addressing are removed.
-
-## Tab layout and viewer cutover
-
-`tabLayoutStore.ts` holds run-local state above the workbench, keyed by session/server instance/tab. `reconcile.ts` consumes authoritative live membership and changed focus, not Herdr rectangles. `splitTree.ts` owns first-load balanced grids, local split/swap/edge placement and prune rules; `solveLayout.ts` computes local bounds and nested minimums. `TabCanvas.tsx` keeps leaf DOM identity stable across movement, while divider styles update live and weights commit on release. Do not persist layouts or reintroduce Herdr resize/swap/zoom operations. Local fitting of a painted terminal still resizes its control-attached PTY.
-
-Every painted terminal attaches control-only. Input remains gated separately by DOM focus, confirmed Herdr focus and owned control. Hidden tabs, zoom-hidden leaves and the Library detach terminal renderers without stopping processes. Viewer selection sends no Herdr focus request; only a changed external focus selects a real terminal. A repeated snapshot must not steal selection. Cockpit-created terminals are attributed by the validated creation receipt and placed beside the acted-on leaf; unrelated terminals insert at the right edge. Confirmed final-terminal/tab loss releases viewers and retires Browser, discarding its association work.
-
-Files/Review call `ViewerService` with a real same-tab source terminal, then authorize by `viewer_id`/`binding_id` and the pinned selected root. A source close or `cd` must not retarget the context; each request still checks fresh tab/Space/endpoint, binding and filesystem identity. Source switches retain per-source frontend view state during the run. No plugin launch, process-based renderer detection or terminal-view toggle remains. Comments use tagged viewer owners and retain source authorization; owner startup clears their store. `review.rs` uses versioned viewer-bound snapshot/file cache names and prunes recognized pre-viewer names without decoding obsolete payloads; current-format corruption remains an error.
+| Contract | Useful scenarios |
+| --- | --- |
+| Public protocol | Protocol tests and generated-file check |
+| Session ordering | Ordering corpus and reducer tests |
+| Placement/membership/focus | Tree/focus/creation transitions, live membership changes and disposable-runtime smoke |
+| Sidebar | Herdr ordering, state shapes, roving focus and disposable-session screenshots |
+| Git actions | Real Git upstream/worktree fixtures, dirty/diverged refusal, fetch-map/mirror safety, queued target changes, browser/native row and Commands actions |
+| Subscription limits | Fake-CLI cache/lease/backoff/privacy, scoped parser/model mutations, authenticated browser/native values and cross-host call counters |
+| Keyboard | Shortcut-doc generation, runtime aliases/reload, prefix collisions and literal passthrough |
+| Terminal | Lifecycle/race tests and successive runtime frames |
+| Herdr schema/receipts | Supported-schema adapter fixtures and real split/move receipts |
+| Herdr command/popup | Live advertised invocation, program input/closure, unchanged split geometry, disconnected recovery and DOM focus return |
+| Project setup/recovery | Ownership, idempotency and uncertain outcomes |
+| Canonical tasks | Exact-byte description/metadata/checklist CAS, graph satisfaction, safe overflow, current-task/native-child authority, reports versus acceptance and fresh dependency gates |
+| Dispatch/owner restart | Disposable real worktree/OMP launch, exact-plan grants, owner restart, uncertain setup/launch reconciliation and no duplicate tab creation |
+| Supervisor transports/CLI | Equivalent operator grants, bound-supervisor descendant grants, agent caller identity, fresh observation and cross-host durable revisions |
+| Supervisor UI | Graph/provenance/accepted context, mixed/subtree checks, external-source/overflow diagnostics, scoped drafts/unknown outcomes, delayed saved-row focus without navigation theft, local reveal versus identity-fenced terminal control; see `docs/supervisor-surfaces.md` |
+| OMP/install | Fresh per-tool prepare gate, native subagent telemetry/control, counts-only wake, explicit processed ACK, receipt-owned installation and no global OMP mutation |
+| Notes | Real Markdown/CAS, sibling bytes, concurrent/external edits, orphans, boot-scoped attach and disposable browser/native drag/comment/draft recovery |
+| Notes transports/CLI | Standalone CLI without Herdr, Origin rejection, equivalent DTOs, custom-root copied recipes and real native IPC |
+| CLI/skills | Nested help/interpretation, standalone CLI with disposable HOME/project, collision/refusal/concurrent installer behavior |
+| Viewer authorization | Same-tab source, stale binding/root replacement, pluginless Files/Review and source-state retention |
+| Repository cache | Mutation-generation invalidation, stale-while-refill and disposable gateway request counts |
+| File index/ranking | Git ignore/symlink/caps, persisted restart and mixed Unicode ranking parity |
+| Library read/recovery | Journal recovery, cross-Store identity invalidation, inherited-descriptor lease release, real reader/writer contention and bounded reader latency |
+| Review streaming | Large real-Git fixture, stable identity, changed-token invalidation and linear duplicate marking |
+| Folder/Space selection | Source boundaries/limits, durable selection, retention and unknown-file safety |
+| Provider fetch | Configured-instance and canonical-identity fixtures |
+| Library collections | Paging, ancestor/move detection, exclusion/removal safety, strict schema/journal recovery, selection retention, failed/empty/truncated listing never dropping members and tombstone purge |
+| Library automatic sync | Fixed windows, retries, resumable inventory budgets, quiet scans, partial binaries, publication/removal races and live Cloud browser/native catch-up |
+| Library listing/preview | Atomic generations, unchanged-page probes, stale cancellation, visible-window catch-up, rename/same-path snapshots and manual refresh/comments |
+| Reference depth | Provider traversal cycles/caps, incomplete follow pass retaining members, explicit depth-zero inputs and live Jira/Confluence graph in a disposable Library |
+| Vault/HTTP downloads | MemoryVault service tests, HTTP paging/redirect/downgrade fixtures and isolated `dbus-run-session` gnome-keyring smoke |
+| Library transports | Equivalent browser/native DTOs and owned-runtime smoke |
+| Tea CLI | Real Tea against a localhost fixture with fake login |
+| Diff/frozen sources | Real Git fixtures; compare index/working files before and after |
+| Comments | Exact payload bytes, CAS recovery and acknowledged paste |
+| Markdown/media | Source mapping, hostile input, byte/pixel caps and browser/native rendering |
+| Host composition | Equivalent DTOs and real native startup |
+| Library UI | Selection/live-repository actions, refresh visibility, real-path comments and disposable browser/native smoke |
+| Browser lifecycle | Independent tabs, fresh open, discard-on-close, owner-only startup reset and observer isolation |
+| Widget owner/CLI | Source/target identity, same-ID replace, Remove/reopen, limits, pull/wait cancellation and owner lifetime |
+| Widget transport/dock | Native/browser content/select/remove streams, stale revision/source rejection, multi-ID dock and DOM focus/shortcut routing |
