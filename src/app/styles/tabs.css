@@ -1,0 +1,231 @@
+.tab-toolbar {
+  display: flex;
+  min-width: 0;
+  min-height: var(--tab-strip-height);
+  flex: 0 0 var(--tab-strip-height);
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome-bg);
+}
+
+.tab-toolbar .tab-strip {
+  min-width: 0;
+  height: var(--tab-strip-height);
+  min-height: 0;
+  flex: 1 1 auto;
+  /* The toolbar hairline sits below the strip. */
+  margin-bottom: -1px;
+  padding-bottom: 1px;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.tab-item:not(.is-selected):hover {
+  background: var(--surface-hover);
+}
+
+.tab-item.is-selected {
+  background: var(--select-fill);
+  box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge);
+}
+
+.tab-item .tab-button {
+  min-width: 40px;
+  flex: 0 1 auto;
+  border-bottom: 0;
+}
+
+.tab-item.drop-before,
+.tab-item.drop-after {
+  position: relative;
+}
+
+.tab-item.drop-before::before,
+.tab-item.drop-after::after {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+}
+
+.tab-item.drop-before::before {
+  left: -1px;
+}
+
+.tab-item.drop-after::after {
+  right: -1px;
+}
+
+.tab-drag-status {
+  flex: 0 1 auto;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-rename {
+  width: calc(100% - 14px);
+  height: 25px;
+  margin: 2px 7px;
+  padding: 2px 6px;
+  border: 1px solid var(--focus-strong);
+  border-radius: var(--radius-small);
+  background: var(--app-bg);
+  color: var(--text-primary);
+}
+
+.tab-add {
+  display: grid;
+  width: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.tab-add:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.tab-strip {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  min-height: var(--tab-strip-height);
+  flex: 0 0 var(--tab-strip-height);
+  align-items: stretch;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  padding-left: 0;
+  border-bottom-color: var(--border);
+  background: var(--chrome-bg);
+}
+
+.tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-item {
+  position: relative;
+  display: flex;
+  min-width: 40px;
+  max-width: 220px;
+  height: 100%;
+  align-items: center;
+}
+
+.tab-button {
+  display: flex;
+  width: auto;
+  min-width: 40px;
+  max-width: 220px;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-control);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tab-item.is-selected .tab-button {
+  color: var(--text-primary);
+}
+
+.tab-button .n {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-label {
+  flex: 1;
+  max-width: 220px;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-strip-action:hover,
+.tab-strip-action:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.tab-strip-action:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.tab-strip .inline-rename {
+  width: 112px;
+  margin: 2px 4px;
+}
+
+/* The shared top-bar icon button: sidebar toggle, browser, Library. 28x28 with 6px margins fills the 41px bar. */
+.tab-icon-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; margin: 6px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); cursor: pointer; }
+
+.tab-icon-button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+
+.tab-icon-button:disabled { cursor: default; opacity: 0.5; }
+
+.tab-icon-button .ui-icon { width: var(--icon-size); height: var(--icon-size); flex-basis: var(--icon-size); }
+
+.tab-strip-action .ui-icon { width: 13px; height: 13px; flex-basis: 13px; }
+
+.tab-strip-action {
+  min-width: 0;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--font-size-2xs);
+  border-left: 0;
+  height: 30px;
+  align-self: center;
+  border-radius: var(--radius-control);
+}
+
+/* Top-bar action cluster (Library design §5.3, §5.7): [browser] [Library] [Commands] after one rule, all 28 px in the 41 px bar. */
+.tab-strip-actions {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  background: var(--chrome-bg);
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 6px;
+}
+
+.tab-strip-actions .tab-icon-button { align-self: stretch; height: auto; margin: 0; border-radius: 0; }
+
+.tab-strip-separator { flex: 0 0 1px; width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
+
+/* Pressed = the surface is showing: the shared selection fill, an accent icon and the top-bar edge (top), so it is never colour alone. */
+.tab-icon-button[aria-pressed="true"]:not(:disabled) { background: var(--select-fill); color: var(--accent); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); }
+
+.tab-icon-button:focus-visible,
+.tab-strip-action:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
+
+.tab-strip-actions .tab-strip-action { height: 28px; margin-left: 6px; padding: 0 10px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); font-size: var(--font-size-control); font-weight: 500; }
+
+.tab-strip-actions .tab-strip-action:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text-primary); }
+
+.tab-strip-actions .tab-strip-action[aria-pressed="true"]:not(:disabled) { background: var(--select-fill); color: var(--accent); border-color: var(--border-strong); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); }

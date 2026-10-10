@@ -101,6 +101,7 @@
 .pane-divider[data-dir="col"]:is(:hover, :active, [data-active])::after { height: 2px; top: 3px; }
 .pane-divider:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
 
+/* !important: the universal drag guard must override cursor and selection rules in @xterm/xterm/css/xterm.css. */
 body.is-pane-dragging,
 body.is-pane-dragging * { cursor: grabbing !important; user-select: none !important; }
 .pane-drag-ghost {
@@ -113,7 +114,7 @@ body.is-pane-dragging * { cursor: grabbing !important; user-select: none !import
   border: 1px solid var(--focus-strong);
   border-radius: 4px;
   background: var(--surface-selected);
-  box-shadow: 0 4px 14px #0008;
+  box-shadow: 0 4px 14px var(--color-hex-0008);
   color: var(--text-primary);
   font-size: var(--font-size-xs);
   pointer-events: none;

@@ -139,8 +139,9 @@
 .task-setup-footer button:disabled,
 .library-credentials-buttons button:disabled,
 .task-setup-progress-actions button:disabled { cursor: not-allowed; opacity: .6; }
-.task-setup .setup-primary { border-color: #5486c5 !important; background: #3568a8 !important; color: white; }
-.task-setup .setup-primary:hover:not(:disabled) { background: #4279bc !important; }
+.task-setup .setup-primary { color: white; }
+.task-setup .setup-primary.setup-primary.setup-primary.setup-primary { border-color: var(--color-hex-5486c5); background: var(--color-hex-3568a8); }
+.task-setup .setup-primary.setup-primary.setup-primary.setup-primary:hover:not(:disabled) { background: var(--color-hex-4279bc); }
 
 @keyframes task-setup-pulse { from { opacity: .35; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {

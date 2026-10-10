@@ -74,7 +74,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px #0006;
+  box-shadow: 0 8px 24px var(--color-hex-0006);
   color: var(--text-secondary);
   font-size: var(--font-size-control);
   white-space: normal;

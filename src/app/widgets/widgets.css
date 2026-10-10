@@ -1,4 +1,3 @@
-:root { --pane-kind-widget: #cba6f7; }
 .pane-kind-badge[data-kind="widget"] { background: var(--pane-kind-widget); }
 .widget-dot { display: inline-block; width: 6px; height: 6px; flex: 0 0 6px; border-radius: var(--radius-pill); background: var(--pane-kind-widget); margin-left: 4px; }
 .widget-dock[data-input-blocked] { pointer-events: none; }

@@ -20,7 +20,6 @@
   flex: 0 0 auto;
 }
 
-.context-breadcrumb,
 .context-document-header code,
 .context-tree-meta,
 .context-document-header span {
@@ -29,22 +28,10 @@
   white-space: nowrap;
 }
 
-.context-breadcrumb {
-  max-width: 42%;
-  font-weight: 600;
-}
 
-.context-readonly-badge {
-  padding: 1px 5px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  color: var(--text-secondary);
-  text-transform: uppercase;
-}
 
 .context-toolbar-spacer { flex: 1; }
 .context-toolbar button,
-.context-mode-switch button,
 .context-notice button,
 .context-empty-message button {
   min-height: 28px;
@@ -56,7 +43,6 @@
   cursor: pointer;
 }
 .context-toolbar button:hover,
-.context-mode-switch button:hover,
 .context-notice button:hover,
 .context-empty-message button:hover { background: var(--surface-hover); }
 .context-root-select select {
@@ -80,26 +66,6 @@
   border-right: 1px solid var(--border);
   background: var(--sidebar-bg);
 }
-.context-tree-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-raised);
-  display: flex;
-  min-height: 38px;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 0 13px;
-  border-bottom: 0;
-  background: var(--sidebar-bg);
-  color: var(--text-secondary);
-  font-weight: 600;
-  letter-spacing: .08em;
-
-  gap: 8px;
-
-  font-size: var(--font-size-2xs);
-}
-.context-tree-header span { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; letter-spacing: 0; }
 .context-tree-row {
   display: flex;
   width: 100%;
@@ -124,11 +90,9 @@
 .context-tree-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-tree-meta { max-width: 45%; color: var(--text-muted); }
 .context-tree-refusal { padding: 0 8px 4px 38px; color: var(--blocked); }
-.context-tree-status,
-.context-tree-diagnostics { padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--working); }
-.context-tree-error { padding: 8px 12px; color: var(--text-secondary); }
+.context-tree-status { padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--working); }
 .context-tree-status.is-empty { color: var(--text-muted); }
-.context-tree-error { color: var(--blocked); }
+.context-tree-error { padding: 8px 12px; color: var(--blocked); }
 
 .context-document { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
 .context-document-header {
@@ -150,26 +114,14 @@
 .context-document-header code { min-width: 0; flex: 1; color: var(--text-primary); }
 .context-document-header strong { min-width: 0; overflow: hidden; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .context-document-facts { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 6px; overflow: hidden; }
-.context-document-facts .context-source-chip { flex: 0 0 auto; color: var(--text-primary); }
 .context-state-warning { color: var(--warning); }
-.context-mode-switch { display: flex; gap: 4px; padding-block-start: 6px; background: var(--terminal-bg); }
-.context-mode-switch button { min-height: 26px; border-bottom-color: transparent; border-radius: var(--radius-control) var(--radius-control) 0 0; color: var(--text-secondary); }
-.context-mode-switch button.is-selected { border-color: var(--border); border-top-color: transparent; background: var(--select-fill); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); color: var(--text-primary); }
 .context-source-scroll,
 .context-markdown-scroll { min-height: 0; flex: 1; overflow: auto; }
 .context-source-lines { min-width: max-content; padding: 8px 0 24px; }
-.context-source-line { display: grid; width: 100%; border: 0; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .context-source-line:hover { background: var(--surface-hover); }
 .context-source-line.is-selected { background: var(--surface-selected); }
 .context-line-number { color: var(--text-muted); text-align: right; user-select: none; }
 .context-line-text { white-space: pre; font: inherit; }
-.context-frontmatter { margin-block: 12px 0; max-width: 88ch; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
-.context-frontmatter summary { padding: 6px 8px; color: var(--text-secondary); cursor: pointer; }
-.context-frontmatter .context-source-scroll { max-height: 220px; border-top: 1px solid var(--border); }
-.context-frontmatter .context-source-lines { padding-bottom: 8px; }
-.context-markdown-body { width: 100%; box-sizing: border-box; padding-block: 0 30px; color: #c4cfdd;
-  max-width: 828px;
-}
 .context-markdown-body h1,
 .context-markdown-body h2,
 .context-markdown-body h3,
@@ -182,7 +134,6 @@
 .context-markdown-body blockquote { margin: 8px 0; }
 .context-markdown-body blockquote { padding-left: 12px; border-left: 2px solid var(--border-strong); color: var(--text-secondary); }
 .context-markdown-body a { color: var(--accent); }
-.context-markdown-body pre { overflow: auto; padding-block: 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
 .context-markdown-body code { font-family: var(--viewer-source-font); font-size: .93em; }
 .context-markdown-body :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, pre)[data-source-start] { cursor: pointer; }
 .context-markdown-body :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, pre)[data-source-start]:hover { background: color-mix(in srgb, var(--surface-hover) 70%, transparent); }
@@ -198,7 +149,6 @@
 .provider-comment-permalink { margin-left: auto; color: var(--text-muted); font-size: var(--font-size-2xs); }
 .context-markdown-body .provider-comment-permalink a { color: var(--text-muted); text-decoration: none; }
 .context-markdown-body .provider-comment-permalink a:hover { color: var(--accent); text-decoration: underline; }
-.context-media-refusal { display: inline-block; padding: 2px 6px; border: 1px solid var(--border-strong); color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--font-size-control); }
 .context-html-preview { display: block; width: 100%; min-height: 0; flex: 1; border: 0; background: var(--terminal-bg); }
 .context-empty { display: grid; min-height: 100%; place-items: center; padding: 24px; color: var(--text-secondary); }
 .context-empty-message { display: flex; max-width: 320px; flex-direction: column; align-items: center; gap: 8px; font-size: var(--font-size-sm); text-align: center; }
@@ -241,7 +191,6 @@
 .context-raster-preview { overflow: auto; padding: 12px; }
 .context-mermaid { margin: 8px 0; border: 1px solid var(--border); padding: 8px; }
 
-.context-mermaid-caption { display: block; font-size: var(--font-size-2xs); color: var(--text-muted); }
 .context-resources {
   position: absolute;
   inset: 0;
@@ -311,8 +260,6 @@
   border-bottom: 1px solid var(--border);
   font-size: var(--font-size-2xs);
 }
-.space-context-summary { min-width: 0; overflow: hidden; color: var(--text-secondary); text-overflow: ellipsis; white-space: nowrap; }
-.space-context-summary strong { color: var(--text-primary); font-weight: 500; }
 .space-context-offline { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .space-context > .context-resource-error { flex: 0 0 auto; margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--border); }
 .context-resource-list { min-height: 0; margin: 0; padding: 0; list-style: none; font-size: var(--font-size-2xs); }

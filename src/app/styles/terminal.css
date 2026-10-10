@@ -1,0 +1,229 @@
+.pane-title,
+.tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-host {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.terminal-host .xterm .xterm-viewport {
+  background-color: transparent;
+  scrollbar-width: none;
+}
+
+.terminal-host .xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.terminal-overlay {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--blocked);
+  background: var(--surface);
+  color: var(--blocked);
+  font-size: var(--font-size-sm);
+}
+
+.terminal-overlay span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-overlay code {
+  font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
+  font-size: var(--font-size-xs);
+}
+
+.terminal-status {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: var(--z-floating-top);
+  display: inline-flex;
+  min-width: 16px;
+  min-height: 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--working);
+  font-size: var(--font-size-xs);
+  pointer-events: auto;
+}
+
+.terminal-status-error {
+  color: var(--blocked);
+}
+
+.terminal-status-retry {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  line-height: 16px;
+}
+
+.terminal-context-menu {
+  position: fixed;
+  z-index: var(--z-dropdown-top);
+  display: grid;
+  min-width: 96px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 36%);
+}
+
+.terminal-context-menu button {
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.terminal-context-menu button kbd {
+  color: var(--text-muted);
+  font: var(--font-size-2xs) ui-monospace, monospace;
+}
+
+.terminal-context-menu button:hover,
+.terminal-context-menu button:focus-visible {
+  background: var(--surface-hover);
+}
+
+.terminal-context-menu button:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.pane-canvas {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  margin: 12px;
+  overflow: hidden;
+  background: var(--terminal-bg);
+}
+
+.pane-view {
+  position: absolute;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  background: var(--terminal-bg);
+}
+
+.pane-view:hover {
+  border-color: var(--border-strong);
+}
+
+.pane-view.is-selected {
+  z-index: var(--z-raised);
+  border-color: var(--select-edge);
+}
+
+.pane-header {
+  display: flex;
+  min-width: 0;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 6px;
+  overflow: visible;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.pane-view.is-selected .pane-header {
+  color: var(--text-primary);
+  box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge);
+}
+
+.pane-title {
+  flex: 0 1 auto;
+  font-weight: 500;
+}
+
+.focus-label {
+  font-size: var(--font-size-sm);
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--focus-strong);
+}
+
+.terminal-surface pre {
+  min-width: 100%;
+  margin: 0;
+  padding-bottom: 30px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
+  font-size: var(--font-size-base);
+  font-weight: 400;
+  line-height: var(--line-height-normal);
+}
+
+/* !important: The universal resize guard must override xterm text selection (@xterm/xterm/css/xterm.css). */
+body.is-resizing-panes,
+body.is-resizing-panes * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.terminal-surface {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: auto;
+  color: var(--terminal-fg);
+  padding: 0;
+}
+
+.terminal-host .xterm {
+  width: 100%;
+  height: 100%;
+  padding: 5px 7px;
+}
+
+.pane-subtitle { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 400; }

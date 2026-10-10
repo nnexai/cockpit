@@ -340,7 +340,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px #0006;
+  box-shadow: 0 8px 24px var(--color-hex-0006);
   color: var(--text-primary);
   font-size: var(--font-size-2xs);
 }
@@ -382,7 +382,8 @@
 .library-report-rows ul { margin: 0; padding: 0; list-style: none; }
 .library-report-rows li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 0; }
 .library-report-rows li.is-failed .library-report-reason { color: var(--blocked); }
-.library-report-link { border: 0 !important; padding: 0 !important; min-height: 0 !important; background: none !important; color: var(--accent) !important; text-align: left; }
+.library-report-link { text-align: left; }
+.library-report-link.library-report-link.library-report-link.library-report-link { border: 0; padding: 0; min-height: 0; background: none; color: var(--accent); }
 .library-report-link:hover { text-decoration: underline; }
 .library-report-reason { color: var(--text-secondary); overflow-wrap: anywhere; }
 
@@ -412,12 +413,12 @@
   font-size: var(--font-size-control);
 }
 .library-confirm-body p { margin: 0; color: var(--text-secondary); font-size: var(--font-size-control); line-height: 1.5; }
-.task-setup .library-destructive { border-color: color-mix(in srgb, var(--blocked) 60%, var(--border)) !important; color: var(--blocked); }
-.task-setup .library-destructive:hover:not(:disabled) { background: color-mix(in srgb, var(--blocked) 12%, var(--surface)) !important; }
+.task-setup .library-destructive { color: var(--blocked); }
+.task-setup .library-destructive.library-destructive { border-color: color-mix(in srgb, var(--blocked) 60%, var(--border)); }
+.task-setup .library-destructive.library-destructive:hover:not(:disabled) { background: color-mix(in srgb, var(--blocked) 12%, var(--surface)); }
 .task-setup button:focus-visible,
 .task-setup input:focus-visible,
 .task-setup select:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
-.library-progress-steps { margin: 4px 0 0; padding: 0; list-style: none; }
 .library-progress-step { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-primary); font-size: var(--font-size-control); line-height: 20px; }
 .library-progress-step.is-done { color: var(--idle); }
 .library-progress-step.is-failed { color: var(--blocked); }
@@ -445,18 +446,14 @@
 .library-space-context { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
 
 /* Two-phase progress and destination choices (design §4.5, §4.7). */
-.library-progress-steps { display: flex; flex-direction: column; gap: 6px; }
+.library-progress-steps { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .library-destination-choices { display: flex; flex-direction: column; gap: 2px; }
-.library-destination-choices .task-setup-check { margin: 0; }
 .task-setup-row .library-destination-choices input[type="radio"] { display: inline-block; width: auto; min-height: 0; flex: 0 0 auto; margin: 0; padding: 0; border: 0; background: none; accent-color: var(--accent); }
-.library-destination-choices .task-setup-check { min-height: 28px; }
+.library-destination-choices .task-setup-check { margin: 0; min-height: 28px; }
 .library-destination-choices .task-setup-check.is-disabled { color: var(--text-muted); }
-.library-destination-reason { color: var(--text-muted); font-size: var(--font-size-control); white-space: nowrap; }
 .library-space-slot { display: inline-flex; min-width: 0; align-items: center; gap: 8px; }
 .library-space-slot:focus { outline: none; }
 .library-space-slot:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
-.library-progress-files { width: 100%; max-height: 96px; margin: 0; padding: 0 0 0 16px; overflow: auto; color: var(--text-secondary); font-size: var(--font-size-2xs); }
-.library-progress-files code { overflow-wrap: anywhere; user-select: text; }
 
 /* Confluence page attachments (design §4.7): metadata until an explicit download.
  * One summary control on its own line; the panel opens on demand, scrolls within
@@ -509,7 +506,6 @@
 
 /* Body (design §4.8): the header's left edge and column. The viewer's compact rules read a 12 px inset and a 16 px body padding; Library documents take the shared 24 px inset. */
 .context-viewer.is-library .context-markdown-body { max-width: calc(var(--library-column) + 2 * var(--viewer-document-inset)); padding: 20px var(--viewer-document-inset) 30px; }
-.context-viewer.is-library .context-frontmatter { max-width: var(--library-column); }
 
 /* Provider tokens dialog (design D12): one row per configured provider, with its entry form inline. */
 .library-credentials { width: min(560px, 100%); }

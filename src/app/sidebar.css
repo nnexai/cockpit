@@ -349,12 +349,11 @@
 
 .space-tree-row.is-pending .resource-select { cursor: progress; }
 .resource-select[aria-disabled="true"] { cursor: default; }
-.space-tree-child .resource-select { padding-left: 0; }
 
 /* Selection is a full-row underlay; inline actions are siblings, never nested buttons. */
 .space-tree-row .resource-select { position: absolute; inset: 0; width: 100%; z-index: 1; }
 .space-tree-parent .resource-select { width: calc(100% - 40px); }
-.space-tree-child .resource-select { left: var(--sb-conn); width: calc(100% - var(--sb-conn)); }
+.space-tree-child .resource-select { padding-left: 0; left: var(--sb-conn); width: calc(100% - var(--sb-conn)); }
 .space-row-content {
   position: relative;
   z-index: 2;
