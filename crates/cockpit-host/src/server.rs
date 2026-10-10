@@ -8,70 +8,47 @@ use std::{
 };
 
 #[path = "browser_view.rs"]
-pub mod browser_view;
-use crate::browser_runtime::BrowserRuntime;
+mod browser_view;
 use crate::OrchestrationRuntime;
+use crate::browser_runtime::BrowserRuntime;
+use crate::transport::{
+    error::{OperationError, Rejection, StatusPolicy},
+    guard::{valid_resource_id, valid_session_id},
+    limits::TERMINAL_COMMAND_BYTES,
+    shutdown::{HostShutdown, ShutdownPolicy},
+    terminal::decimal_sequence,
+};
 use axum::{
-    Extension, Json, Router,
+    Extension, Router,
     body::Body,
     extract::{
-        DefaultBodyLimit, Path as AxumPath, Query, State,
-        rejection::JsonRejection,
+        Path as AxumPath, Query, State,
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
     http::{
-        HeaderMap, Method, Request, StatusCode, Uri,
+        HeaderMap, Request, StatusCode, Uri,
         header::{HOST, ORIGIN},
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{any, get},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use cockpit_core::{
-    CockpitService, InspectionError, SessionChange, SessionSubscription, TerminalSession,
-};
-use cockpit_protocol::{
-    browser::{
-        BrowserCleanupRetryRequest, BrowserFeedbackAckRequest, BrowserFeedbackImageRequest,
-        BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserRequest,
-    },
-    quota::QuotaStatusRequest,
-    v1::{
-        ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
-        SessionSnapshotResponse, SessionStreamMessage, SpaceGitActionRequest, TerminalCommand, TerminalMode,
-        TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
-        TerminalTargetKind,
-    },
+use cockpit_core::{CockpitService, TerminalSession};
+use cockpit_protocol::v1::{
+    TerminalCommand, TerminalMode, TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState,
+    TerminalStreamMessage, TerminalTargetKind,
 };
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use tokio::net::TcpListener;
 use tower_http::services::{ServeDir, ServeFile};
-const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
 
-mod comments;
-mod context;
-mod context_media;
-mod credentials;
-mod notes;
-mod projects;
-mod orchestration;
-mod review;
-mod library;
-mod viewer;
+mod operations;
+mod session_socket;
 mod widgets;
 
-// The enclosing guard verifies the exact bound Host and Origin.
-async fn require_origin(request: Request<Body>, next: Next) -> Response {
-    if request.method() != Method::GET && !request.headers().contains_key(ORIGIN) {
-        return bad_request(
-            "request_origin_required",
-            "Filesystem requests require the gateway Origin",
-        );
-    }
-    next.run(request).await
-}
+use session_socket::session_events;
 
 /// Configuration for the foreground HTTP gateway.
 #[derive(Clone)]
@@ -180,71 +157,14 @@ fn build_router_with_validated_root(
             async move { Ok::<_, Infallible>(static_not_found(request.uri(), index).await) }
         }));
 
-    Router::new()
-        .route("/api/v1/status", get(status))
-        .route("/api/v1/quota", get(quota_status))
-        .route(
-            "/api/v1/browser/action",
-            post(browser_action).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route("/api/v1/browser/cleanup", get(browser_cleanup_status))
-        .route(
-            "/api/v1/browser/cleanup/retry",
-            post(browser_cleanup_retry).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route(
-            "/api/v1/browser/feedback",
-            post(browser_feedback).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route(
-            "/api/v1/browser/feedback/ack",
-            post(browser_feedback_ack).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route(
-            "/api/v1/browser/feedback/image",
-            post(browser_feedback_image).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route(
-            "/api/v1/browser/feedback/send",
-            post(browser_feedback_send).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
-        .route("/api/v1/sessions", get(sessions))
-        .route(
-            "/api/v1/sessions/{session_id}/snapshot",
-            get(session_snapshot),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/space-git",
-            get(space_git_status),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/space-git/actions",
-            post(space_git_action)
-                .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
-                .layer(middleware::from_fn(require_origin)),
-        )
-        .route("/api/v1/sessions/{session_id}/focus", post(focus))
-        .route(
-            "/api/v1/sessions/{session_id}/mutations",
-            post(mutate).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
-        )
+    operations::operation_routes()
         .route("/api/v1/sessions/{session_id}/events", get(session_events))
         .route(
             "/api/v1/sessions/{session_id}/panes/{pane_id}/terminal",
             get(terminal_ws),
         )
-        .merge(comments::routes())
-        .merge(review::routes())
-        .merge(context_media::routes())
-        .merge(projects::routes())
-        .merge(context::routes())
-        .merge(viewer::routes())
-        .merge(library::routes())
-        .merge(notes::routes())
-        .merge(credentials::routes())
         .merge(browser_view::routes())
         .merge(widgets::routes())
-        .merge(orchestration::routes())
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(static_service)
@@ -263,25 +183,14 @@ fn build_router_with_validated_root(
         ))
 }
 
-/// Short alias for callers that prefer the conventional router constructor name.
-pub fn router(
-    service: CockpitService,
-    static_dir: impl AsRef<Path>,
-    expected_authority: SocketAddr,
-) -> Result<Router, ServerError> {
-    build_router(service, static_dir, expected_authority)
-}
-
 async fn enforce_authority(request: Request<Body>, next: Next, allowed: bool) -> Response {
     if !allowed {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                code: "invalid_request_authority".to_owned(),
-                message: "Request authority is not allowed".to_owned(),
-            }),
+        return OperationError::with_rejection(
+            Rejection::Forbidden,
+            "invalid_request_authority",
+            "Request authority is not allowed",
         )
-            .into_response();
+        .into_response(StatusPolicy::Service);
     }
     next.run(request).await
 }
@@ -311,217 +220,6 @@ fn authority_headers_match(
         }
     }
 }
-async fn status(State(service): State<CockpitService>) -> impl IntoResponse {
-    Json(service.status().await)
-}
-
-async fn quota_status(
-    State(service): State<CockpitService>,
-    Query(request): Query<QuotaStatusRequest>,
-) -> Response {
-    match service.quota() {
-        Ok(quota) => Json(quota.status(request).await).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_action(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request(
-            "browser_runtime_unavailable",
-            "Browser runtime is not configured",
-        );
-    };
-    match runtime.execute(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-async fn browser_feedback(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserFeedbackRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request(
-            "browser_runtime_unavailable",
-            "Browser runtime is not configured",
-        );
-    };
-    match runtime.feedback(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_feedback_ack(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserFeedbackAckRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request(
-            "browser_runtime_unavailable",
-            "Browser runtime is not configured",
-        );
-    };
-    match runtime.acknowledge_feedback(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_feedback_image(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserFeedbackImageRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request(
-            "browser_runtime_unavailable",
-            "Browser runtime is not configured",
-        );
-    };
-    match runtime.feedback_image(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_feedback_send(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserFeedbackSendRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request(
-            "browser_runtime_unavailable",
-            "Browser runtime is not configured",
-        );
-    };
-    match runtime.send_feedback(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_cleanup_status(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
-    };
-    match runtime.cleanup_status().await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn browser_cleanup_retry(
-    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
-    Json(request): Json<BrowserCleanupRetryRequest>,
-) -> Response {
-    let Some(runtime) = runtime else {
-        return bad_request("browser_runtime_unavailable", "Browser runtime is not configured");
-    };
-    match runtime.retry_cleanup(request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn sessions(State(service): State<CockpitService>) -> Response {
-    match service.sessions().await {
-        Ok(sessions) => Json(sessions).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn session_snapshot(
-    State(service): State<CockpitService>,
-    AxumPath(session_id): AxumPath<String>,
-) -> Response {
-    if !valid_session_id(&session_id) {
-        return bad_request("invalid_session_id", "Invalid session id");
-    }
-    match service.session_snapshot(&session_id).await {
-        Ok(snapshot) => Json(snapshot).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn space_git_status(
-    State(service): State<CockpitService>,
-    AxumPath(session_id): AxumPath<String>,
-) -> Response {
-    if !valid_session_id(&session_id) {
-        return bad_request("invalid_session_id", "Invalid session id");
-    }
-    match service.space_git_status(&session_id).await {
-        Ok(status) => Json(status).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn space_git_action(
-    State(service): State<CockpitService>,
-    AxumPath(session_id): AxumPath<String>,
-    body: Result<Json<SpaceGitActionRequest>, JsonRejection>,
-) -> Response {
-    if !valid_session_id(&session_id) {
-        return bad_request("invalid_session_id", "Invalid session id");
-    }
-    let request = match body {
-        Ok(Json(request)) => request,
-        Err(error) => {
-            let status = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
-                StatusCode::PAYLOAD_TOO_LARGE
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            return (
-                status,
-                Json(ErrorResponse {
-                    code: "invalid_space_git_action".to_owned(),
-                    message: "Expected a bounded JSON Space Git action request with valid fields".to_owned(),
-                }),
-            )
-                .into_response();
-        }
-    };
-    match service.space_git_action(&session_id, &request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn focus(
-    State(service): State<CockpitService>,
-    AxumPath(session_id): AxumPath<String>,
-    Json(request): Json<FocusRequest>,
-) -> Response {
-    if !valid_session_id(&session_id) || !valid_resource_id(&request.target_id) {
-        return bad_request("invalid_focus_target", "Invalid focus target");
-    }
-    match service.focus(&session_id, &request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-
-async fn mutate(
-    State(service): State<CockpitService>,
-    AxumPath(session_id): AxumPath<String>,
-    Json(request): Json<ResourceMutationRequest>,
-) -> Response {
-    if !valid_session_id(&session_id) {
-        return bad_request("invalid_session_id", "Invalid session id");
-    }
-    match service.mutate(&session_id, &request).await {
-        Ok(response) => Json::<ResourceMutationResponse>(response).into_response(),
-        Err(error) => inspection_error(error),
-    }
-}
-const MAX_TERMINAL_COMMAND_BYTES: usize = 96 * 1024;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TerminalQuery {
@@ -535,18 +233,6 @@ struct TerminalQuery {
     cell_height_px: u32,
 }
 
-async fn session_events(
-    ws: WebSocketUpgrade,
-    State(service): State<CockpitService>,
-    AxumPath(session_id): AxumPath<String>,
-) -> Response {
-    if !valid_session_id(&session_id) {
-        return bad_request("invalid_session_id", "Invalid session id");
-    }
-    ws.on_upgrade(move |socket| run_session_socket(socket, service, session_id))
-        .into_response()
-}
-
 async fn terminal_ws(
     ws: WebSocketUpgrade,
     State(service): State<CockpitService>,
@@ -554,10 +240,15 @@ async fn terminal_ws(
     Query(query): Query<TerminalQuery>,
 ) -> Response {
     if !valid_session_id(&session_id) || !valid_resource_id(&pane_id) {
-        return bad_request("invalid_terminal_target", "Invalid terminal target");
+        return OperationError::rejected("invalid_terminal_target", "Invalid terminal target")
+            .into_response(StatusPolicy::Service);
     }
     if !valid_dimensions(query.cols, query.rows) {
-        return bad_request("invalid_terminal_dimensions", "Invalid terminal dimensions");
+        return OperationError::rejected(
+            "invalid_terminal_dimensions",
+            "Invalid terminal dimensions",
+        )
+        .into_response(StatusPolicy::Service);
     }
     let request = TerminalOpenRequest {
         session_id,
@@ -572,76 +263,20 @@ async fn terminal_ws(
     };
     let session = match service.open_terminal(&request).await {
         Ok(session) => session,
-        Err(error) => return inspection_error(error),
+        Err(error) => return OperationError::from(error).into_response(StatusPolicy::Service),
     };
-    ws.max_message_size(MAX_TERMINAL_COMMAND_BYTES)
+    ws.max_message_size(TERMINAL_COMMAND_BYTES)
         .on_upgrade(move |socket| run_terminal_socket(socket, session, request))
         .into_response()
-}
-
-fn valid_session_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 96
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn valid_resource_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_'))
 }
 
 fn valid_dimensions(cols: u16, rows: u16) -> bool {
     cols > 0 && rows > 0
 }
 
-fn inspection_error(error: InspectionError) -> Response {
-    let status = if error.code.starts_with("invalid_") {
-        StatusCode::BAD_REQUEST
-    } else if error.code == "focus_conflict"
-        || error.code == "terminal_ownership_conflict"
-        || error.code == "stale_generation"
-        || error.code == "space_git_target_changed"
-        || error.code == "space_git_action_ineligible"
-        || error.code == "space_git_action_in_progress"
-    {
-        StatusCode::CONFLICT
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
-    (
-        status,
-        Json(ErrorResponse {
-            code: error.code,
-            message: error.message,
-        }),
-    )
-        .into_response()
-}
-
-fn bad_request(code: &str, message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ErrorResponse {
-            code: code.to_owned(),
-            message: message.to_owned(),
-        }),
-    )
-        .into_response()
-}
-
-async fn api_not_found() -> impl IntoResponse {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ErrorResponse {
-            code: "not_found".to_owned(),
-            message: "API route not found".to_owned(),
-        }),
-    )
+async fn api_not_found() -> Response {
+    OperationError::with_rejection(Rejection::NotFound, "not_found", "API route not found")
+        .into_response(StatusPolicy::Service)
 }
 
 async fn static_not_found(uri: &Uri, index: PathBuf) -> Response {
@@ -677,310 +312,6 @@ async fn send_json<T: serde::Serialize>(socket: &mut WebSocket, value: &T) -> bo
     socket.send(Message::Text(text.into())).await.is_ok()
 }
 
-async fn send_session(
-    socket: &mut WebSocket,
-    generation: &mut u32,
-    sequence: &mut u32,
-    message: SessionStreamMessage,
-) -> bool {
-    if *sequence == 0 {
-        return false;
-    }
-    if !send_json(socket, &message).await {
-        return false;
-    }
-    if *sequence == u32::MAX {
-        *generation = match generation.checked_add(1) {
-            Some(value) => value,
-            None => return false,
-        };
-        *sequence = 1;
-    } else {
-        *sequence += 1;
-    }
-    true
-}
-
-fn session_snapshot_message(
-    snapshot: SessionSnapshotResponse,
-    generation: u32,
-    sequence: u32,
-) -> SessionStreamMessage {
-    SessionStreamMessage::Snapshot {
-        session_id: snapshot.session_id.clone(),
-        generation,
-        sequence,
-        snapshot,
-    }
-}
-
-async fn run_session_socket(mut socket: WebSocket, service: CockpitService, session_id: String) {
-    let mut generation = 1u32;
-    let mut sequence = 1u32;
-    let mut retry = 0u32;
-
-    loop {
-        let snapshot = tokio::select! {
-            result = service.session_snapshot(&session_id) => result,
-            incoming = socket.recv() => {
-                if client_closed(incoming, &mut socket).await { return; }
-                continue;
-            }
-        };
-        let snapshot = match snapshot {
-            Ok(snapshot) if snapshot.session_id == session_id => snapshot,
-            Ok(_) => {
-                if !send_session_failure(
-                    &mut socket,
-                    &session_id,
-                    &mut generation,
-                    &mut sequence,
-                    true,
-                    "session_snapshot_mismatch",
-                    "Session snapshot unavailable",
-                )
-                .await
-                {
-                    return;
-                }
-                if !reconnect_wait(&mut socket, &mut generation, &mut sequence, &mut retry).await {
-                    return;
-                }
-                continue;
-            }
-            Err(error) => {
-                if !send_session_failure(
-                    &mut socket,
-                    &session_id,
-                    &mut generation,
-                    &mut sequence,
-                    true,
-                    &error.code,
-                    &error.message,
-                )
-                .await
-                {
-                    return;
-                }
-                if !reconnect_wait(&mut socket, &mut generation, &mut sequence, &mut retry).await {
-                    return;
-                }
-                continue;
-            }
-        };
-        let snapshot_message = session_snapshot_message(snapshot.clone(), generation, sequence);
-        if !send_session(
-            &mut socket,
-            &mut generation,
-            &mut sequence,
-            snapshot_message,
-        )
-        .await
-        {
-            return;
-        }
-
-        let subscription = tokio::select! {
-            result = service.subscribe_session(&session_id, &snapshot) => result,
-            incoming = socket.recv() => {
-                if client_closed(incoming, &mut socket).await { return; }
-                continue;
-            }
-        };
-        let SessionSubscription { mut messages } = match subscription {
-            Ok(subscription) => subscription,
-            Err(error) => {
-                if !send_session_failure(
-                    &mut socket,
-                    &session_id,
-                    &mut generation,
-                    &mut sequence,
-                    true,
-                    &error.code,
-                    &error.message,
-                )
-                .await
-                {
-                    return;
-                }
-                if !reconnect_wait(&mut socket, &mut generation, &mut sequence, &mut retry).await {
-                    return;
-                }
-                continue;
-            }
-        };
-        // The adapter's successful subscription establishes the live event
-        // boundary. Re-read after that boundary so events buffered meanwhile
-        // are ordered after an authoritative post-subscription snapshot.
-        let post_subscription_snapshot = match service.session_snapshot(&session_id).await {
-            Ok(snapshot) if snapshot.session_id == session_id => snapshot,
-            Ok(_) => {
-                if !send_session_failure(
-                    &mut socket,
-                    &session_id,
-                    &mut generation,
-                    &mut sequence,
-                    true,
-                    "session_snapshot_mismatch",
-                    "Session snapshot unavailable",
-                )
-                .await
-                {
-                    return;
-                }
-                if !reconnect_wait(&mut socket, &mut generation, &mut sequence, &mut retry).await {
-                    return;
-                }
-                continue;
-            }
-            Err(error) => {
-                if !send_session_failure(
-                    &mut socket,
-                    &session_id,
-                    &mut generation,
-                    &mut sequence,
-                    true,
-                    &error.code,
-                    &error.message,
-                )
-                .await
-                {
-                    return;
-                }
-                if !reconnect_wait(&mut socket, &mut generation, &mut sequence, &mut retry).await {
-                    return;
-                }
-                continue;
-            }
-        };
-        let snapshot_message =
-            session_snapshot_message(post_subscription_snapshot, generation, sequence);
-        if !send_session(
-            &mut socket,
-            &mut generation,
-            &mut sequence,
-            snapshot_message,
-        )
-        .await
-        {
-            return;
-        }
-
-        loop {
-            tokio::select! {
-                incoming = socket.recv() => {
-                    if client_closed(incoming, &mut socket).await { return; }
-                }
-                change = messages.recv() => {
-                    match change {
-                        Some(SessionChange::Changed) => {
-                            match service.session_snapshot(&session_id).await {
-                                Ok(snapshot) if snapshot.session_id == session_id => {
-                                    let snapshot_message =
-                                        session_snapshot_message(snapshot, generation, sequence);
-                                    if !send_session(
-                                        &mut socket,
-                                        &mut generation,
-                                        &mut sequence,
-                                        snapshot_message,
-                                    )
-                                    .await
-                                    {
-                                        return;
-                                    }
-                                }
-                                Ok(_) => {
-                                    if !send_session_failure(&mut socket, &session_id, &mut generation, &mut sequence, true, "session_snapshot_mismatch", "Session snapshot unavailable").await { return; }
-                                    break;
-                                }
-                                Err(error) => {
-                                    if !send_session_failure(&mut socket, &session_id, &mut generation, &mut sequence, true, &error.code, &error.message).await { return; }
-                                    break;
-                                }
-                            }
-                        }
-                        Some(SessionChange::Stale { code, message }) => {
-                            if !send_session_failure(&mut socket, &session_id, &mut generation, &mut sequence, true, &code, &message).await { return; }
-                            break;
-                        }
-                        Some(SessionChange::Disconnected { code, message }) => {
-                            if !send_session_failure(&mut socket, &session_id, &mut generation, &mut sequence, false, &code, &message).await { return; }
-                            break;
-                        }
-                        None => {
-                            if !send_session_failure(&mut socket, &session_id, &mut generation, &mut sequence, false, "subscription_closed", "Session stream disconnected").await { return; }
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if !reconnect_wait(&mut socket, &mut generation, &mut sequence, &mut retry).await {
-            return;
-        }
-    }
-}
-
-async fn send_session_failure(
-    socket: &mut WebSocket,
-    session_id: &str,
-    generation: &mut u32,
-    sequence: &mut u32,
-    stale: bool,
-    code: &str,
-    message: &str,
-) -> bool {
-    let message = if stale {
-        SessionStreamMessage::Stale {
-            session_id: session_id.to_owned(),
-            generation: *generation,
-            sequence: *sequence,
-            code: code.to_owned(),
-            message: message.to_owned(),
-        }
-    } else {
-        SessionStreamMessage::Disconnected {
-            session_id: session_id.to_owned(),
-            generation: *generation,
-            sequence: *sequence,
-            code: code.to_owned(),
-            message: message.to_owned(),
-        }
-    };
-    send_session(socket, generation, sequence, message).await
-}
-
-async fn reconnect_wait(
-    socket: &mut WebSocket,
-    generation: &mut u32,
-    sequence: &mut u32,
-    retry: &mut u32,
-) -> bool {
-    let Some(next_generation) = generation.checked_add(1) else {
-        return false;
-    };
-    *generation = next_generation;
-    *sequence = 1;
-    let delay = Duration::from_millis(25u64.saturating_mul(1u64 << (*retry).min(5)));
-    *retry = retry.saturating_add(1);
-    tokio::select! {
-        _ = tokio::time::sleep(delay) => true,
-        incoming = socket.recv() => !client_closed(incoming, socket).await,
-    }
-}
-
-async fn client_closed(
-    incoming: Option<Result<Message, axum::Error>>,
-    socket: &mut WebSocket,
-) -> bool {
-    match incoming {
-        None | Some(Err(_)) => true,
-        Some(Ok(Message::Close(_))) => true,
-        Some(Ok(Message::Ping(payload))) => socket.send(Message::Pong(payload)).await.is_err(),
-        Some(Ok(_)) => false,
-    }
-}
-
 async fn run_terminal_socket(
     mut socket: WebSocket,
     session: TerminalSession,
@@ -1002,7 +333,7 @@ async fn run_terminal_socket(
                         if socket.send(Message::Pong(payload)).await.is_err() { break; }
                     }
                     Some(Ok(Message::Text(text))) => {
-                        if text.len() > MAX_TERMINAL_COMMAND_BYTES {
+                        if text.len() > TERMINAL_COMMAND_BYTES {
                             let _ = send_terminal_error(&mut socket, &request, &stream_id, "terminal_message_too_large", "Terminal command is too large").await;
                             let _ = socket.send(Message::Close(Some(CloseFrame { code: 1009, reason: "terminal command is too large".into() }))).await;
                             break;
@@ -1095,13 +426,6 @@ async fn run_terminal_socket(
     .await;
 }
 
-fn decimal_sequence(value: &str) -> Option<u64> {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    value.parse().ok()
-}
-
 async fn send_terminal_error(
     socket: &mut WebSocket,
     request: &TerminalOpenRequest,
@@ -1145,23 +469,16 @@ pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
     );
     println!("listening http://{actual}");
     std::io::stdout().flush().map_err(ServerError::Serve)?;
-    let shutdown_orchestration = orchestration_runtime.clone();
+    let shutdown = HostShutdown::new(orchestration_runtime, projects, browser_runtime);
+    let graceful_shutdown = shutdown.clone();
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
-            if let Some(runtime) = shutdown_orchestration {
-                runtime.shutdown().await;
-            }
-            if let Some(projects) = projects {
-                projects.shutdown().await;
-            }
-            if let Some(runtime) = browser_runtime {
-                let _ = runtime.shutdown().await;
-            }
+            graceful_shutdown.run(ShutdownPolicy::Gateway).await;
         })
         .await
         .map_err(ServerError::Serve);
-    if let Some(runtime) = orchestration_runtime { runtime.shutdown().await; }
+    shutdown.orchestration().await;
     result
 }
 

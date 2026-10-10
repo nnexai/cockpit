@@ -807,21 +807,18 @@ dependencies = [
 name = "cockpit-tauri"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
  "cockpit-core",
  "cockpit-herdr",
  "cockpit-host",
  "cockpit-protocol",
  "cockpit-providers",
  "cockpit-secrets",
- "futures-util",
  "gtk",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tokio",
- "tokio-tungstenite",
  "uuid",
 ]
 

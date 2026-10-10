@@ -5,11 +5,12 @@
 //! consume the same status operation.
 
 pub mod browser_runtime;
-pub mod server;
 pub mod orchestration_runtime;
+pub mod server;
+pub mod transport;
 
 pub use browser_runtime::BrowserRuntime;
 pub use orchestration_runtime::OrchestrationRuntime;
 pub use server::{
-    ServerConfig, ServerError, build_router, router, serve, validate_bind, validate_static_root,
+    ServerConfig, ServerError, build_router, serve, validate_bind, validate_static_root,
 };

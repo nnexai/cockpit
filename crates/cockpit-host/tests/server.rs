@@ -13,9 +13,8 @@ use cockpit_protocol::{
     },
     v1::{
         AgentSummary, CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
-        PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
-        SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceSummary,
-        TabSummary, TerminalOpenRequest,
+        PaneSummary, ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
+        SessionSnapshotResponse, SessionSummary, SpaceSummary, TabSummary, TerminalOpenRequest,
     },
 };
 use std::{
@@ -270,31 +269,30 @@ async fn request(addr: std::net::SocketAddr, path: &str) -> (u16, String) {
     (status, body)
 }
 
-
 fn project_configuration(root: &std::path::Path) -> ProjectConfiguration {
     ProjectConfiguration {
-    repository_roots: vec![],
-    branch_template: "{name}".to_owned(),
-    checkout_template: "{name}".to_owned(),
-    limits: ProjectLimits {
-        catalog_depth: 3,
-        catalog_entries: 100,
-        git_timeout_ms: 1000,
-        git_output_bytes: 1024,
-        operation_timeout_ms: 1000,
-        context_preview_bytes: 1024,
-        context_preview_lines: 100,
-        context_directory_entries: 100,
-        context_tree_depth: 8,
-        library_folder_files: 512,
-        library_folder_bytes: 32 * 1024 * 1024,
-        library_file_bytes: 4 * 1024 * 1024,
-        library_space_pages: 200,
-        library_attachment_bytes: 25 * 1024 * 1024,
-        library_item_attachment_bytes: 100 * 1024 * 1024,
-        library_max_items: 1000,
-    },
-    ..ProjectConfiguration::for_tests(root)
+        repository_roots: vec![],
+        branch_template: "{name}".to_owned(),
+        checkout_template: "{name}".to_owned(),
+        limits: ProjectLimits {
+            catalog_depth: 3,
+            catalog_entries: 100,
+            git_timeout_ms: 1000,
+            git_output_bytes: 1024,
+            operation_timeout_ms: 1000,
+            context_preview_bytes: 1024,
+            context_preview_lines: 100,
+            context_directory_entries: 100,
+            context_tree_depth: 8,
+            library_folder_files: 512,
+            library_folder_bytes: 32 * 1024 * 1024,
+            library_file_bytes: 4 * 1024 * 1024,
+            library_space_pages: 200,
+            library_attachment_bytes: 25 * 1024 * 1024,
+            library_item_attachment_bytes: 100 * 1024 * 1024,
+            library_max_items: 1000,
+        },
+        ..ProjectConfiguration::for_tests(root)
     }
 }
 
@@ -336,7 +334,9 @@ async fn library_routes_are_session_independent_and_reject_unknown_add_fields() 
                 .header("host", authority.to_string())
                 .header("origin", format!("http://{authority}"))
                 .header("content-type", "application/json")
-                .body(axum::body::Body::from(r#"{"input":"https://example.test/item","unexpected":true}"#))
+                .body(axum::body::Body::from(
+                    r#"{"input":"https://example.test/item","unexpected":true}"#,
+                ))
                 .expect("add request"),
         )
         .await
@@ -356,19 +356,23 @@ async fn library_refresh_route_accepts_all_scope() {
     let root = fixture_root();
     let authority = test_authority();
     let router = build_router(service_with_library(&root), &root, authority).expect("router");
-    let response = router.oneshot(
-        Request::builder()
-            .method("POST")
-            .uri("/api/v1/library/refresh")
-            .header("host", authority.to_string())
-            .header("origin", format!("http://{authority}"))
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(r#"{"scope":"all"}"#))
-            .expect("refresh request"),
-    ).await.expect("refresh response");
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/library/refresh")
+                .header("host", authority.to_string())
+                .header("origin", format!("http://{authority}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(r#"{"scope":"all"}"#))
+                .expect("refresh request"),
+        )
+        .await
+        .expect("refresh response");
     assert_eq!(response.status(), 200);
     let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-        .await.expect("refresh operation body");
+        .await
+        .expect("refresh operation body");
     let operation: serde_json::Value = serde_json::from_slice(&bytes).expect("refresh operation");
     assert!(operation["operation_id"].as_str().is_some());
     assert_eq!(operation["kind"], "refresh");
@@ -384,33 +388,45 @@ async fn library_attachment_route_requires_origin_and_rejects_invalid_request_id
         "item_id": "item-1",
         "attachment_ids": [],
         "action": "download"
-    }).to_string();
-    let response = router.clone().oneshot(
-        Request::builder()
-            .method("POST")
-            .uri("/api/v1/library/attachments")
-            .header("host", authority.to_string())
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(body.clone()))
-            .expect("request"),
-    ).await.expect("response");
+    })
+    .to_string();
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/library/attachments")
+                .header("host", authority.to_string())
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.clone()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
     assert_eq!(response.status(), 400);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("origin error body");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("origin error body");
     let error: serde_json::Value = serde_json::from_slice(&body).expect("origin error JSON");
     assert_eq!(error["code"], "request_origin_required");
 
-    let response = router.oneshot(
-        Request::builder()
-            .method("POST")
-            .uri("/api/v1/library/attachments")
-            .header("host", authority.to_string())
-            .header("origin", format!("http://{authority}"))
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(body))
-            .expect("request"),
-    ).await.expect("response");
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/library/attachments")
+                .header("host", authority.to_string())
+                .header("origin", format!("http://{authority}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
     assert_eq!(response.status(), 400);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
     let error: serde_json::Value = serde_json::from_slice(&body).expect("error JSON");
     assert_eq!(error["code"], "invalid_library_request");
     std::fs::remove_dir_all(root).expect("cleanup");
@@ -424,29 +440,70 @@ async fn space_library_routes_require_origin_shape_and_live_authority() {
     let target = serde_json::json!({"session_id": "session", "space_id": "space"});
     for (route, body) in [
         ("list", serde_json::json!({"target": target})),
-        ("add", serde_json::json!({"target": target, "item_ids": ["source:one"]})),
-        ("remove", serde_json::json!({"target": target, "item_ids": ["source:one"]})),
-        ("repositories", serde_json::json!({"target": target, "repository_paths": []})),
+        (
+            "add",
+            serde_json::json!({"target": target, "item_ids": ["source:one"]}),
+        ),
+        (
+            "remove",
+            serde_json::json!({"target": target, "item_ids": ["source:one"]}),
+        ),
+        (
+            "repositories",
+            serde_json::json!({"target": target, "repository_paths": []}),
+        ),
     ] {
         let path = format!("/api/v1/library/space/{route}");
-        let response = router.clone().oneshot(Request::builder()
-            .method("POST").uri(&path).header("host", authority.to_string())
-            .header("origin", "http://untrusted.test").header("content-type", "application/json")
-            .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("host", authority.to_string())
+                    .header("origin", "http://untrusted.test")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), 403);
         let mut invalid = body.clone();
         invalid["target"]["space_id"] = serde_json::json!("../invalid");
-        let response = router.clone().oneshot(Request::builder()
-            .method("POST").uri(&path).header("host", authority.to_string())
-            .header("origin", format!("http://{authority}")).header("content-type", "application/json")
-            .body(axum::body::Body::from(invalid.to_string())).unwrap()).await.unwrap();
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("host", authority.to_string())
+                    .header("origin", format!("http://{authority}"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(invalid.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), 400);
-        let response = router.clone().oneshot(Request::builder()
-            .method("POST").uri(&path).header("host", authority.to_string())
-            .header("origin", format!("http://{authority}")).header("content-type", "application/json")
-            .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("host", authority.to_string())
+                    .header("origin", format!("http://{authority}"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), 503);
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
         let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(error["code"], "space_context_unavailable");
     }
@@ -462,29 +519,67 @@ async fn space_selections_reject_old_copy_shapes_and_bounded_requests() {
     let router = build_router(service_with_library(&root), &root, authority).unwrap();
     let target = serde_json::json!({"session_id": "session", "space_id": "space"});
     for (route, body) in [
-        ("add", serde_json::json!({"target": target, "item_ids": [], "follow_ids": []})),
-        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": []})),
-        ("add", serde_json::json!({"target": target, "item_ids": vec!["item"; 5001]})),
-        ("remove", serde_json::json!({"target": target, "item_ids": vec!["item"; 5001]})),
-        ("repositories", serde_json::json!({"target": target, "repository_paths": vec!["/repo"; 65]})),
-        ("repositories", serde_json::json!({"target": target, "repository_paths": [], "unexpected": true})),
+        (
+            "add",
+            serde_json::json!({"target": target, "item_ids": [], "follow_ids": []}),
+        ),
+        (
+            "remove",
+            serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": []}),
+        ),
+        (
+            "add",
+            serde_json::json!({"target": target, "item_ids": vec!["item"; 5001]}),
+        ),
+        (
+            "remove",
+            serde_json::json!({"target": target, "item_ids": vec!["item"; 5001]}),
+        ),
+        (
+            "repositories",
+            serde_json::json!({"target": target, "repository_paths": vec!["/repo"; 65]}),
+        ),
+        (
+            "repositories",
+            serde_json::json!({"target": target, "repository_paths": [], "unexpected": true}),
+        ),
     ] {
-        let response = router.clone().oneshot(Request::builder()
-            .method("POST").uri(format!("/api/v1/library/space/{route}"))
-            .header("host", authority.to_string()).header("origin", format!("http://{authority}"))
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/library/space/{route}"))
+                    .header("host", authority.to_string())
+                    .header("origin", format!("http://{authority}"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), 400, "{route}: {body}");
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
         let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(error["code"], "invalid_library_request");
     }
     for route in ["update", "attempts/dismiss"] {
-        let response = router.clone().oneshot(Request::builder()
-            .method("POST").uri(format!("/api/v1/library/space/{route}"))
-            .header("host", authority.to_string()).header("origin", format!("http://{authority}"))
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from("{}")).unwrap()).await.unwrap();
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/library/space/{route}"))
+                    .header("host", authority.to_string())
+                    .header("origin", format!("http://{authority}"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), 404);
     }
     assert!(!root.join("companions").exists());
@@ -509,19 +604,44 @@ async fn confluence_space_browse_route_requires_origin_bounded_request_and_confi
     let trusted = format!("http://{authority}");
     let response = router
         .clone()
-        .oneshot(post("http://untrusted.test".into(), serde_json::json!({"provider_id": "confluence"})))
+        .oneshot(post(
+            "http://untrusted.test".into(),
+            serde_json::json!({"provider_id": "confluence"}),
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), 403);
     for (body, status, code) in [
-        (serde_json::json!({"provider_id": "confluence", "unexpected": true}), 400, "invalid_library_request"),
-        (serde_json::json!({"provider_id": ""}), 400, "invalid_library_request"),
-        (serde_json::json!({"provider_id": "x".repeat(129)}), 400, "invalid_library_request"),
-        (serde_json::json!({"provider_id": "confluence"}), 503, "source_provider_unsupported"),
+        (
+            serde_json::json!({"provider_id": "confluence", "unexpected": true}),
+            400,
+            "invalid_library_request",
+        ),
+        (
+            serde_json::json!({"provider_id": ""}),
+            400,
+            "invalid_library_request",
+        ),
+        (
+            serde_json::json!({"provider_id": "x".repeat(129)}),
+            400,
+            "invalid_library_request",
+        ),
+        (
+            serde_json::json!({"provider_id": "confluence"}),
+            503,
+            "source_provider_unsupported",
+        ),
     ] {
-        let response = router.clone().oneshot(post(trusted.clone(), body.clone())).await.unwrap();
+        let response = router
+            .clone()
+            .oneshot(post(trusted.clone(), body.clone()))
+            .await
+            .unwrap();
         assert_eq!(response.status(), status, "{body}");
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
         let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(error["code"], code, "{body}");
     }
@@ -714,19 +834,38 @@ async fn space_git_action_route_reports_not_run_guards_and_conflicts() {
     let mut gone = valid.clone();
     gone["space_id"] = serde_json::json!("gone");
     for (service, body, status, code) in [
-        (live_service(Ok(snapshot())), valid.clone(), 409, "space_git_action_ineligible"),
-        (live_service(Ok(snapshot())), gone, 409, "space_git_target_changed"),
+        (
+            live_service(Ok(snapshot())),
+            valid.clone(),
+            409,
+            "space_git_action_ineligible",
+        ),
+        (
+            live_service(Ok(snapshot())),
+            gone,
+            409,
+            "space_git_target_changed",
+        ),
         (service(), valid, 503, "space_git_not_run"),
     ] {
-        let response = build_router(service, &root, authority).unwrap()
-            .oneshot(Request::builder().method("POST").uri(route)
-                .header("host", authority.to_string())
-                .header("origin", format!("http://{authority}"))
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(body.to_string())).unwrap())
-            .await.unwrap();
+        let response = build_router(service, &root, authority)
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(route)
+                    .header("host", authority.to_string())
+                    .header("origin", format!("http://{authority}"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), status);
-        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(error["code"], code);
     }
@@ -751,19 +890,48 @@ async fn space_git_action_route_bounds_requests_and_requires_trusted_origin() {
     let trusted = format!("http://{authority}");
     for (origin, body, status, code) in [
         (None, valid.to_string(), 400, "request_origin_required"),
-        (Some("http://untrusted.test"), valid.to_string(), 403, "invalid_request_authority"),
-        (Some(trusted.as_str()), unknown.to_string(), 400, "invalid_space_git_action"),
-        (Some(trusted.as_str()), r#"{"action":"pull"}"#.to_owned(), 400, "invalid_space_git_action"),
-        (Some(trusted.as_str()), oversized.to_string(), 413, "invalid_space_git_action"),
+        (
+            Some("http://untrusted.test"),
+            valid.to_string(),
+            403,
+            "invalid_request_authority",
+        ),
+        (
+            Some(trusted.as_str()),
+            unknown.to_string(),
+            400,
+            "invalid_space_git_action",
+        ),
+        (
+            Some(trusted.as_str()),
+            r#"{"action":"pull"}"#.to_owned(),
+            400,
+            "invalid_space_git_action",
+        ),
+        (
+            Some(trusted.as_str()),
+            oversized.to_string(),
+            413,
+            "invalid_space_git_action",
+        ),
     ] {
-        let mut request = Request::builder().method("POST").uri(route)
-            .header("host", authority.to_string()).header("content-type", "application/json");
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(route)
+            .header("host", authority.to_string())
+            .header("content-type", "application/json");
         if let Some(origin) = origin {
             request = request.header("origin", origin);
         }
-        let response = router.clone().oneshot(request.body(axum::body::Body::from(body)).unwrap()).await.unwrap();
+        let response = router
+            .clone()
+            .oneshot(request.body(axum::body::Body::from(body)).unwrap())
+            .await
+            .unwrap();
         assert_eq!(response.status(), status);
-        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(error["code"], code);
     }
@@ -1028,11 +1196,8 @@ fn credential_service(root: &std::path::Path) -> (CockpitService, Arc<MemoryVaul
         deployment: Some(ProviderDeployment::Cloud),
     }];
     let vault = Arc::new(MemoryVault::new());
-    let credentials = ProviderCredentials::new(
-        &config,
-        vault.clone(),
-        cockpit_providers::credential_kinds,
-    );
+    let credentials =
+        ProviderCredentials::new(&config, vault.clone(), cockpit_providers::credential_kinds);
     (service().with_credentials(Arc::new(credentials)), vault)
 }
 
@@ -1061,7 +1226,10 @@ async fn credential_call(
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
-    (status, String::from_utf8(bytes.to_vec()).expect("UTF-8 body"))
+    (
+        status,
+        String::from_utf8(bytes.to_vec()).expect("UTF-8 body"),
+    )
 }
 
 #[tokio::test]
@@ -1079,7 +1247,8 @@ async fn provider_credentials_are_write_only_over_http() {
     assert_eq!(listed["providers"][0]["provider_id"], "jira");
     assert_eq!(listed["providers"][0]["state"], "not_stored");
 
-    let set = serde_json::json!({"provider_id": "jira", "kind": "bearer", "token": CREDENTIAL_TOKEN});
+    let set =
+        serde_json::json!({"provider_id": "jira", "kind": "bearer", "token": CREDENTIAL_TOKEN});
     let (status, body) = credential_call(
         &router,
         "POST",
@@ -1124,13 +1293,17 @@ async fn provider_credential_mutations_require_the_gateway_origin() {
     let authority = test_authority();
     let (service, vault) = credential_service(&root);
     let router = build_router(service, &root, authority).expect("router");
-    let set = serde_json::json!({"provider_id": "jira", "kind": "bearer", "token": CREDENTIAL_TOKEN})
-        .to_string();
+    let set =
+        serde_json::json!({"provider_id": "jira", "kind": "bearer", "token": CREDENTIAL_TOKEN})
+            .to_string();
     let path = "/api/v1/provider-credentials/set";
 
     let (status, body) =
         credential_call(&router, "POST", path, None, set.clone().into_bytes()).await;
-    assert_eq!((status, body.contains("request_origin_required")), (400, true));
+    assert_eq!(
+        (status, body.contains("request_origin_required")),
+        (400, true)
+    );
     assert!(!body.contains(CREDENTIAL_TOKEN));
 
     let (status, body) = credential_call(
@@ -1141,7 +1314,10 @@ async fn provider_credential_mutations_require_the_gateway_origin() {
         set.into_bytes(),
     )
     .await;
-    assert_eq!((status, body.contains("invalid_request_authority")), (403, true));
+    assert_eq!(
+        (status, body.contains("invalid_request_authority")),
+        (403, true)
+    );
     assert!(!body.contains(CREDENTIAL_TOKEN));
 
     let clear = serde_json::json!({"provider_id": "jira"}).to_string();
@@ -1174,7 +1350,9 @@ async fn provider_credential_set_rejections_are_generic_and_never_echo_the_body(
     .to_string();
     let bodies = [
         oversized,
-        format!(r#"{{"provider_id":"jira","kind":"bearer","token":"{CREDENTIAL_TOKEN}","unexpected":true}}"#),
+        format!(
+            r#"{{"provider_id":"jira","kind":"bearer","token":"{CREDENTIAL_TOKEN}","unexpected":true}}"#
+        ),
         format!(r#"{{"provider_id":"jira","kind":"digest","token":"{CREDENTIAL_TOKEN}"}}"#),
         format!(r#"{{"provider_id":"jira","kind":"bearer","token":"{CREDENTIAL_TOKEN}""#),
         format!(r#"{{"provider_id":"jira","kind":"basic","token":"{CREDENTIAL_TOKEN}"}}"#),
@@ -1215,7 +1393,10 @@ async fn provider_credential_routes_fail_closed_without_composed_credentials() {
     let router = build_router(service(), &root, authority).expect("router");
     let (status, body) =
         credential_call(&router, "GET", "/api/v1/provider-credentials", None, vec![]).await;
-    assert_eq!((status, body.contains("credentials_unavailable")), (503, true));
+    assert_eq!(
+        (status, body.contains("credentials_unavailable")),
+        (503, true)
+    );
     let (status, body) = credential_call(
         &router,
         "POST",
@@ -1225,7 +1406,126 @@ async fn provider_credential_routes_fail_closed_without_composed_credentials() {
             .into_bytes(),
     )
     .await;
-    assert_eq!((status, body.contains("credentials_unavailable")), (503, true));
+    assert_eq!(
+        (status, body.contains("credentials_unavailable")),
+        (503, true)
+    );
     assert!(!body.contains(CREDENTIAL_TOKEN));
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn origin_rejection_precedes_wrong_method_only_on_registered_protected_paths() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let origin = format!("http://{authority}");
+    let router = build_router(service(), &root, authority).expect("router");
+    for path in [
+        "/api/v1/notes",
+        "/api/v1/provider-credentials/set",
+        "/api/v1/widgets/content",
+        "/api/v1/sessions/session/space-git/actions",
+    ] {
+        for with_origin in [false, true] {
+            let mut request = Request::builder()
+                .method("DELETE")
+                .uri(path)
+                .header("host", authority.to_string());
+            if with_origin {
+                request = request.header("origin", &origin);
+            }
+            let response = router
+                .clone()
+                .oneshot(request.body(axum::body::Body::empty()).expect("request"))
+                .await
+                .expect("response");
+            assert_eq!(
+                response.status(),
+                if with_origin { 405 } else { 400 },
+                "{path}"
+            );
+            if !with_origin {
+                let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                    .await
+                    .expect("error body");
+                let error: serde_json::Value = serde_json::from_slice(&bytes).expect("error JSON");
+                assert_eq!(error["code"], "request_origin_required", "{path}");
+            }
+        }
+    }
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/unregistered")
+                .header("host", authority.to_string())
+                .body(axum::body::Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), 404);
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("not found body");
+    let error: serde_json::Value = serde_json::from_slice(&bytes).expect("error JSON");
+    assert_eq!(error["code"], "not_found");
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn operation_inputs_preserve_path_body_and_runtime_rejection_precedence() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service(), &root, authority).expect("router");
+    let oversized_widget = " ".repeat(8 * 1024);
+    for (path, body, code) in [
+        ("/api/v1/widgets/content", "{", Some("widget_no_owner")),
+        (
+            "/api/v1/widgets/select",
+            oversized_widget.as_str(),
+            Some("widget_no_owner"),
+        ),
+        (
+            "/api/v1/sessions/bad%3Aid/orchestration/mutations",
+            "{",
+            Some("invalid_session_id"),
+        ),
+        (
+            "/api/v1/sessions/session/orchestration/mutations",
+            "{",
+            Some("invalid_orchestration_request"),
+        ),
+        ("/api/v1/notes", "{", Some("notes_usage")),
+        ("/api/v1/browser/action", "{", None),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("host", authority.to_string())
+                    .header("origin", format!("http://{authority}"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_owned()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), 400, "{path}");
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("error body");
+        if let Some(code) = code {
+            let error: serde_json::Value = serde_json::from_slice(&bytes).expect("error JSON");
+            assert_eq!(error["code"], code, "{path}");
+        } else {
+            // The browser row retains Axum's default JSON rejection, not the
+            // later missing-runtime error or a mapped domain rejection.
+            assert!(serde_json::from_slice::<serde_json::Value>(&bytes).is_err());
+            assert!(!String::from_utf8_lossy(&bytes).contains("browser_runtime_unavailable"));
+        }
+    }
     std::fs::remove_dir_all(root).expect("cleanup");
 }
