@@ -1,133 +1,20 @@
-import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
-import {
-  matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest,
-  parseOrchestrationMutationRequest, parseOrchestrationMutationResponse,
-  parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
-} from "./orchestrationProtocol";
-import {
-  matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest,
-  parseWidgetRemoveResponse, parseWidgetSelectRequest, parseWidgetSelectResponse,
-} from "./widgetProtocol";
-import { widgetAbortable, widgetEventCursor, widgetReports } from "./widgetTransport";
+import { widgetEventCursor, widgetReports } from "./widgetTransport";
 import type { WidgetEventHandler, WidgetStream } from "./CockpitClient";
-import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
-import {
-  matchLibraryAttachmentsOperation, matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
-  parseLibraryAddRequest, parseLibraryAttachmentRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
-  parseLibraryDocumentRequest, parseLibraryFileIndex, parseLibraryFileIndexRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest, parseLibraryResolveRequest, parseLibraryResolution,
-  parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest, parseLibraryReplaceRequest,
-  parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
-  parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
-  parseSpaceAddRequest, matchSpaceOperation, parseSpaceRepositoriesRequest, parseSpaceRemoveRequest,
-} from "./libraryProtocol";
-import { parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
-import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
-import {
-  matchContextResponse, parseContextDirectory, parseContextFileIndex,
-  parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
-  parseContextFileIndexRequest, parseViewerSourceOptions, matchViewerSourceOptions, parseViewerOpenRequest, parseViewerContext, matchViewerContext,
-} from "./contextProtocol";
-import {
-  matchContextInvalidationResponse, matchContextSearchResponse,
-  parseContextInvalidationRequest, parseContextInvalidationResponse,
-  parseContextSearchRequest, parseContextSearchResponse,
-} from "./contextSearchProtocol";
-import {
-  matchCommentAttachment, matchCommentBatch, matchCommentPreview,
-  parseCommentBatch, parseCommentBatchList, parseCommentBatchRequest, parseCommentMutation,
-  parseCommentPreview, parseCommentPreviewRequest, parseCommentRemove, parseCommentScope,
-  parseCommentUpsert,
-} from "./commentProtocol";
-import {
-  matchProviderCredential, parseProviderCredentialClearRequest, parseProviderCredentialSetRequest,
-  parseProviderCredentialStatus, parseProviderCredentialStatusList,
-} from "./credentialProtocol";
-import { parseQuotaStatusResponse } from "./quotaProtocol";
-import {
-  matchProjectSession, parseProjectConfiguration, parseRepositoryList,
-  parseWorkspaceDefaults, parseWorkspaceDefaultsRequest,
-  parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
-  parseWorkspaceReconcileRequest,
-  parseWorkspaceSetupRequest, validateProjectOperationId,
-} from "./projectProtocol";
-import {
-  matchWorkspaceTeardownPreview, matchWorkspaceTeardownResult,
-  parseWorkspaceTeardownExecuteRequest, parseWorkspaceTeardownPreview,
-  parseWorkspaceTeardownPreviewRequest, parseWorkspaceTeardownRecoveryList,
-  parseWorkspaceTeardownResult,
-} from "./projectTeardownProtocol";
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type {
-  FocusRequest,
-  FocusResponse,
-  ResourceMutationRequest,
-  ResourceMutationResponse,
-  SessionListResponse,
-  SessionSnapshotResponse,
-  SpaceGitStatusResponse,
-  SpaceGitActionRequest,
-  SpaceGitActionResponse,
-  SessionStreamMessage,
-  StatusResponse,
-  QuotaStatusRequest,
-  QuotaStatusResponse,
-  TerminalCommand,
-  TerminalOpenRequest,
-  TerminalStreamMessage,
+  SessionStreamMessage, TerminalCommand, TerminalOpenRequest, TerminalStreamMessage,
 } from "../protocol/generated/v1";
 import { transitionSessionStream, type StreamOrderCursor } from "./streamOrder";
 import {
-  CockpitClientError,
-  matchBrowserViewCommandResponse,
-  matchBrowserViewEvent,
-  parseBrowserViewCommandRequest,
-  parseBrowserDraftRecoveryRequest,
-  parseBrowserViewCommandOutcome,
-  parseBrowserViewCommandResponse,
-  parseBrowserViewEvent,
-  parseBrowserViewFrameDescriptor,
-  parseBrowserViewOpenRequest,
-  parseBrowserViewSnapshot,
-  parseBrowserFeedbackAck,
-  parseBrowserFeedbackAckRequest,
-  parseBrowserFeedbackImage,
-  parseBrowserFeedbackImageRequest,
-  parseBrowserFeedbackLookup,
-  parseBrowserFeedbackRequest,
-  parseBrowserFeedbackSendRequest,
-  parseBrowserFeedbackSendResponse,
-  parseBrowserRequest,
-  parseBrowserResponse,
-  parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest,
-  parseErrorEnvelope,
-  parseFocusRequest,
-  parseFocusResponse,
-  parseResourceMutationRequest,
-  parseResourceMutationResponse,
-  parseSessionListResponse,
-  parseSessionSnapshotResponse,
-  parseSpaceGitStatusResponse,
-  matchSpaceGitActionResponse,
-  parseSessionStreamMessage,
-  parseStatusResponse,
-  parseTerminalCommand,
-  parseTerminalOpenRequest,
-  parseTerminalStreamMessage,
-  validateSessionId,
-  validateResourceId,
-  type BrowserViewCommandRequest,
-  type BrowserViewEvent,
-  type BrowserViewFrameDescriptor,
-  type BrowserViewFramePacket,
-  type BrowserViewOpenRequest,
-  type BrowserViewSnapshot,
-  type BrowserViewStream,
-  type BrowserDraftRecoveryRequest,
-  type BrowserViewCommandOutcome,
-  type ClosableStream,
-  type CockpitClient,
-  type TerminalStream,
+  CockpitClientError, matchBrowserViewCommandResponse, parseBrowserViewCommandRequest,
+  parseBrowserViewFrameDescriptor, parseBrowserViewOpenRequest, parseBrowserViewSnapshot, parseErrorEnvelope,
+  parseSessionStreamMessage, parseTerminalCommand, parseTerminalOpenRequest, parseTerminalStreamMessage,
+  validateSessionId, type BrowserViewCommandRequest, type BrowserViewEvent, type BrowserViewFrameDescriptor,
+  type BrowserViewFramePacket, type BrowserViewOpenRequest, type BrowserViewSnapshot, type BrowserViewStream,
+  type ClosableStream, type CockpitClient, type TerminalStream,
 } from "./CockpitClient";
+import { bindOperations } from "./operations";
+import { browserViewDecoder } from "./browserViewDecoder";
 
 export type NativeInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 export interface NativeChannel<T> { onmessage: (message: T) => void; }
@@ -159,19 +46,6 @@ function parseNativeBrowserViewOpen(value: unknown): NativeBrowserViewOpenRespon
   const body = value as Record<string, unknown>;
   if (!("snapshot" in body) || !("first_frame" in body)) throw new CockpitClientError("malformed_response", "Native browser view open response is incomplete");
   return { snapshot: parseBrowserViewSnapshot(body.snapshot), first_frame: parseBrowserViewFrameDescriptor(body.first_frame) };
-}
-function nativeBinaryFrame(value: unknown, expectedLength: number): ArrayBuffer {
-  let bytes: Uint8Array;
-  if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
-  else if (value instanceof Uint8Array) bytes = value;
-  else throw new CockpitClientError("malformed_response", "Native browser frame payload is not binary");
-  if (bytes.byteLength === 0 || bytes.byteLength > 6 * 1024 * 1024 || bytes.byteLength !== expectedLength
-    || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
-    throw new CockpitClientError("malformed_response", "Native browser frame payload is invalid");
-  }
-  if (value instanceof ArrayBuffer) return value;
-  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer) return bytes.buffer;
-  return bytes.slice().buffer;
 }
 
 interface NativeBrowserViewSubscription {
@@ -220,8 +94,7 @@ function nativeBrowserViewSubscription(
     let streamId: string | undefined;
     let socket: WebSocket | undefined;
     let pendingFrame: { descriptor: BrowserViewFrameDescriptor; sequence: number } | undefined;
-    let targetId = openedView.snapshot.displayed_target_id ?? undefined;
-    let lastFrameSequence = 0;
+    const decoder = browserViewDecoder(openedView.snapshot, "native", onEvent, onFrame);
     let cancellationRequested = false;
     let ready = false;
     const cancel = (id: string) => {
@@ -268,20 +141,13 @@ function nativeBrowserViewSubscription(
       const pending = pendingFrame;
       if (!pending) throw new CockpitClientError("malformed_response", "Native browser frame payload has no descriptor");
       pendingFrame = undefined;
-      const jpeg = nativeBinaryFrame(raw, pending.descriptor.jpeg_length);
-      lastFrameSequence = pending.sequence;
       let delivered = false;
       const release = (kind: "ack" | "discard") => {
         if (delivered || closed) return;
         delivered = true;
         releaseFrame(pending.sequence, kind);
       };
-      try {
-        onFrame({ descriptor: pending.descriptor, jpeg, ack: () => release("ack"), discard: () => release("discard") });
-      } catch (cause) {
-        release("discard");
-        throw new CockpitClientError("transport_error", "Native browser frame handler failed", { cause });
-      }
+      decoder.nativeFrame(raw, pending.descriptor, release);
     };
     const message = (raw: unknown) => {
       if (closed) return;
@@ -327,18 +193,11 @@ function nativeBrowserViewSubscription(
           throw new CockpitClientError("stream_error", typeof body.message === "string" ? body.message : "Native browser view stream failed", { operationCode: typeof body.code === "string" ? body.code : undefined });
         }
         if (body.kind === "event") {
-          const event = matchBrowserViewEvent(parseBrowserViewEvent(body.event), identity);
-          if (event.type === "attached") targetId = event.snapshot.displayed_target_id ?? undefined;
-          else if (event.type === "targets_changed") targetId = event.displayed_target_id ?? undefined;
-          else if (event.type === "document_changed") targetId = event.document?.target_id;
-          onEvent(event);
+          decoder.event(body.event);
           return;
         }
         if (body.kind === "frame") {
-          const descriptor = parseBrowserViewFrameDescriptor(body.descriptor);
-          if (targetId !== undefined && descriptor.target_id !== targetId) throw new CockpitClientError("malformed_response", "Native browser frame target identity does not match");
-          if (descriptor.stream_epoch !== identity.stream_epoch) throw new CockpitClientError("malformed_response", "Native browser frame stream identity does not match");
-          if (descriptor.frame_sequence <= lastFrameSequence) throw new CockpitClientError("malformed_response", "Native browser frame sequence is out of order");
+          const descriptor = decoder.nativeDescriptor(body.descriptor);
           pendingFrame = { descriptor, sequence: descriptor.frame_sequence };
           return;
         }
@@ -689,464 +548,9 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
 
 export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channelFactory: NativeChannelFactory = defaultChannel): CockpitClient {
   return {
-    async orchestrationSnapshot(value) {
-      const request = parseOrchestrationSnapshotRequest(value);
-      return invokeAndParse(invoke, "orchestration_snapshot", { request }, "orchestration snapshot", response => matchOrchestrationSnapshot(response, request));
-    },
-    async orchestrationMutate(value) {
-      const request = parseOrchestrationMutationRequest(value);
-      return invokeAndParse(invoke, "orchestration_mutate", { request }, "orchestration mutation", parseOrchestrationMutationResponse);
-    },
-    async orchestrationWait(value) {
-      const request = parseOrchestrationWaitRequest(value);
-      return invokeAndParse(invoke, "orchestration_wait", { request }, "orchestration wait", parseOrchestrationWaitResponse);
-    },
-    projectConfiguration() { return invokeAndParse(invoke, "cockpit_project_configuration", undefined, "project configuration", parseProjectConfiguration); },
-    providerCredentials() { return invokeAndParse(invoke, "cockpit_provider_credentials", undefined, "provider credentials", parseProviderCredentialStatusList); },
-    async setProviderCredential(value) {
-      const request = parseProviderCredentialSetRequest(value);
-      return matchProviderCredential(await invokeAndParse(invoke, "cockpit_provider_credential_set", { request }, "provider credential", parseProviderCredentialStatus), request);
-    },
-    async clearProviderCredential(value) {
-      const request = parseProviderCredentialClearRequest(value);
-      return matchProviderCredential(await invokeAndParse(invoke, "cockpit_provider_credential_clear", { request }, "provider credential", parseProviderCredentialStatus), request);
-    },
-    repositories() { return invokeAndParse(invoke, "cockpit_repositories", undefined, "repositories", parseRepositoryList); },
-    resolveWorkspaceDefaults(value) {
-      const request = parseWorkspaceDefaultsRequest(value);
-      return invokeAndParse(invoke, "cockpit_resolve_workspace_defaults", { request }, "workspace defaults", parseWorkspaceDefaults);
-    },
-    async planWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseWorkspaceSetupRequest(value);
-      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_plan", { sessionId, request }, "workspace plan", parseWorkspaceSetupPlan), sessionId);
-    },
-    async startWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseWorkspaceOperationRequest(value);
-      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_start", { sessionId, request }, "workspace start", parseWorkspaceOperation), sessionId, request.operation_id);
-    },
-    async workspaceOperation(sessionId, operationId) {
-      validateSessionId(sessionId);
-      validateProjectOperationId(operationId);
-      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_operation", { sessionId, operationId }, "workspace operation", parseWorkspaceOperation), sessionId, operationId);
-    },
-    async resumeWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseWorkspaceOperationRequest(value);
-      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_resume", { sessionId, request }, "workspace resume", parseWorkspaceOperation), sessionId, request.operation_id);
-    },
-    async cancelWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseWorkspaceOperationRequest(value);
-      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_cancel", { sessionId, request }, "workspace cancellation", parseWorkspaceOperation), sessionId, request.operation_id);
-    },
-    async reconcileWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseWorkspaceReconcileRequest(value);
-      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_reconcile", { sessionId, request }, "workspace reconciliation", parseWorkspaceOperation), sessionId, request.operation_id);
-    },
-    async workspaceTeardownPreview(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseWorkspaceTeardownPreviewRequest(value);
-      return matchWorkspaceTeardownPreview(await invokeAndParse(invoke, "cockpit_workspace_teardown_preview", { sessionId, request }, "workspace teardown preview", parseWorkspaceTeardownPreview), request);
-    },
-    async workspaceTeardownExecute(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseWorkspaceTeardownExecuteRequest(value);
-      return matchWorkspaceTeardownResult(await invokeAndParse(invoke, "cockpit_workspace_teardown_execute", { sessionId, request }, "workspace teardown execution", parseWorkspaceTeardownResult), request);
-    },
-    async workspaceTeardownRecoveries(sessionId) {
-      validateSessionId(sessionId);
-      return invokeAndParse(invoke, "cockpit_workspace_teardown_recoveries", { sessionId }, "workspace teardown recoveries", parseWorkspaceTeardownRecoveryList);
-    },
-    async viewerSources(sessionId, paneId, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
-      const value = await invokeAndParse(invoke, "cockpit_viewer_sources", { sessionId, paneId }, "viewer sources", parseViewerSourceOptions);
-      signal?.throwIfAborted();
-      return matchViewerSourceOptions(value, sessionId, paneId);
-    },
-    async viewerOpen(sessionId, value) {
-      validateSessionId(sessionId);
-      const request = parseViewerOpenRequest(value);
-      return matchViewerContext(await invokeAndParse(invoke, "cockpit_viewer_open", { sessionId, request }, "viewer open", parseViewerContext), sessionId, request);
-    },
-    async viewerRelease(sessionId, viewerId) {
-      validateSessionId(sessionId); validateResourceId(viewerId);
-      await invokeAndParse(invoke, "cockpit_viewer_release", { sessionId, viewerId }, "viewer release", (value) => {
-        if (value !== null) throw new CockpitClientError("malformed_response", "Viewer release response is malformed");
-      });
-    },
-    async contextDirectory(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseContextDirectoryRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_directory", { sessionId, viewerId, request }, "Context directory", parseContextDirectory);
-      signal?.throwIfAborted();
-      return matchContextResponse(response, request);
-    },
-    async contextFileIndex(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseContextFileIndexRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_file_index", { sessionId, viewerId, request }, "Context file index", parseContextFileIndex);
-      signal?.throwIfAborted();
-      if (response.binding_id !== request.binding_id || response.root_id !== request.root_id) throw new CockpitClientError("malformed_response", "Context file index belongs to another root");
-      return response;
-    },
-    async contextDocument(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseContextDocumentRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_document", { sessionId, viewerId, request }, "Context document", parseContextDocument);
-      signal?.throwIfAborted();
-      return matchContextResponse(response, request);
-    },
-    async reviewSnapshot(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(viewerId); signal?.throwIfAborted();
-      const parsed = parseReviewSnapshotRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_review_snapshot", { sessionId, viewerId, request: parsed }, "Review snapshot", parseReviewSnapshot);
-      signal?.throwIfAborted(); return matchReviewSnapshot(response, sessionId, viewerId, parsed);
-    },
-    async reviewFile(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(viewerId); signal?.throwIfAborted();
-      const parsed = parseReviewFileRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_review_file", { sessionId, viewerId, request: parsed }, "Review file", parseReviewFile);
-      signal?.throwIfAborted(); return matchReviewFile(response, sessionId, viewerId, parsed);
-    },
-    async contextSearch(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseContextSearchRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_search", { sessionId, viewerId, request }, "Context search", parseContextSearchResponse);
-      signal?.throwIfAborted();
-      return matchContextSearchResponse(response, request);
-    },
-    async contextInvalidate(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseContextInvalidationRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_invalidate", { sessionId, viewerId, request }, "Context invalidation", parseContextInvalidationResponse);
-      signal?.throwIfAborted();
-      return matchContextInvalidationResponse(response, request);
-    },
-    async contextMedia(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(viewerId);
-      const body = parseContextMediaRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_media", { sessionId, viewerId, request: body }, "Context image", parseContextMedia);
-      signal?.throwIfAborted();
-      return matchContextMedia(response, body);
-    },
-    async libraryListing(offset) {
-      if (offset !== undefined && offset !== null && (!Number.isInteger(offset) || offset < 0 || offset > 0xffffffff)) throw new CockpitClientError("malformed_response", "Invalid Library listing offset");
-      return invokeAndParse(invoke, "cockpit_library_listing", offset == null ? undefined : { offset }, "Library listing", parseLibraryListing);
-    },
-    async libraryResolve(value) {
-      const request = parseLibraryResolveRequest(value);
-      return invokeAndParse(invoke, "cockpit_library_resolve", { request }, "Library resolve", parseLibraryResolution);
-    },
-    async libraryConfluenceSpaces(value) {
-      const request = parseLibraryConfluenceSpacesRequest(value);
-      return invokeAndParse(invoke, "cockpit_library_confluence_spaces", { request }, "Confluence spaces", (response) => parseLibraryConfluenceSpaces(response, request));
-    },
-    async libraryAdd(value) {
-      const request = parseLibraryAddRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_add", { request }, "Library add", parseLibraryOperation);
-      return request.target ? matchSpaceOperation(response, request.target) : response;
-    },
-    async libraryAttachments(value) {
-      const request = parseLibraryAttachmentRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_attachments", { request }, "Library attachments", parseLibraryOperation);
-      return matchLibraryAttachmentsOperation(response, request);
-    },
-    async libraryRefresh(value) {
-      const request = parseLibraryRefreshRequest(value);
-      return invokeAndParse(invoke, "cockpit_library_refresh", { request }, "Library refresh", parseLibraryOperation);
-    },
-    async libraryOperation(operationId) {
-      const id = parseLibraryOperationId(operationId);
-      return matchLibraryOperation(await invokeAndParse(invoke, "cockpit_library_operation", { operationId: id }, "Library operation", parseLibraryOperation), id);
-    },
-    async libraryOperationCancel(operationId) {
-      const id = parseLibraryOperationId(operationId);
-      return matchLibraryOperation(await invokeAndParse(invoke, "cockpit_library_operation_cancel", { operationId: id }, "Library operation cancellation", parseLibraryOperation), id);
-    },
-    async libraryReplace(value) {
-      const request = parseLibraryReplaceRequest(value);
-      return invokeAndParse(invoke, "cockpit_library_replace", { request }, "Library replace", parseLibraryOperation);
-    },
-    async libraryRemove(value) {
-      const request = parseLibraryRemoveRequest(value);
-      return invokeAndParse(invoke, "cockpit_library_remove", { request }, "Library remove", parseLibraryListing);
-    },
-    async libraryDirectory(value, signal) {
-      signal?.throwIfAborted();
-      const request = parseLibraryDirectoryRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_directory", { request }, "Library directory", parseLibraryDirectory);
-      signal?.throwIfAborted();
-      return matchLibraryDirectory(response, request);
-    },
-    async libraryFileIndex(value, signal) {
-      signal?.throwIfAborted();
-      const request = parseLibraryFileIndexRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_file_index", { request }, "Library file index", parseLibraryFileIndex);
-      signal?.throwIfAborted();
-      return response;
-    },
-    async libraryDocument(value, signal) {
-      signal?.throwIfAborted();
-      const request = parseLibraryDocumentRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_document", { request }, "Library document", parseLibraryDocument);
-      signal?.throwIfAborted();
-      return matchLibraryDocument(response, request);
-    },
-    async libraryMedia(value, signal) {
-      signal?.throwIfAborted();
-      const request = parseLibraryMediaRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_media", { request }, "Library media", parseLibraryMedia);
-      signal?.throwIfAborted();
-      return matchLibraryMedia(response, request);
-    },
-    async notes(value, signal) {
-      signal?.throwIfAborted();
-      const request = parseNotesRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_notes_execute", { request }, "Notes", parseNotesResponse);
-      signal?.throwIfAborted();
-      return matchNotesResponse(response, request);
-    },
-    async librarySpaceList(value, signal) {
-      signal?.throwIfAborted();
-      const request = parseSpaceContextRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_space_list", { request }, "Space context", parseSpaceContextListing);
-      signal?.throwIfAborted();
-      return matchSpaceContextListing(response, request);
-    },
-    async librarySpaceAdd(value) {
-      const request = parseSpaceAddRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_space_add", { request }, "Space add", parseLibraryOperation);
-      return matchSpaceOperation(response, request.target);
-    },
-    async librarySpaceRepositories(value) {
-      const request = parseSpaceRepositoriesRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_space_repositories", { request }, "Space repositories", parseSpaceContextListing);
-      return matchSpaceContextListing(response, request);
-    },
-    async librarySpaceRemove(value) {
-      const request = parseSpaceRemoveRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_library_space_remove", { request }, "Space removal", parseSpaceContextListing);
-      return matchSpaceContextListing(response, request);
-    },
-    async commentBatches(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseCommentScope(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_list", { sessionId, viewerId, request }, "comment batches", parseCommentBatchList);
-      signal?.throwIfAborted();
-      matchCommentAttachment(response.attachment, sessionId, request);
-      return response;
-    },
-    async commentBatch(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseCommentBatchRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_batch", { sessionId, viewerId, request }, "comment batch", parseCommentBatch);
-      signal?.throwIfAborted();
-      return matchCommentBatch(response, sessionId, request.scope, request.batch_id);
-    },
-    async commentUpsert(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseCommentUpsert(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_upsert", { sessionId, viewerId, request }, "comment upsert", parseCommentBatch);
-      signal?.throwIfAborted();
-      return matchCommentBatch(response, sessionId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
-    },
-    async commentRemove(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseCommentRemove(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_remove", { sessionId, viewerId, request }, "comment remove", parseCommentBatch);
-      signal?.throwIfAborted();
-      return matchCommentBatch(response, sessionId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
-    },
-    async commentDiscard(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseCommentMutation(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_discard", { sessionId, viewerId, request }, "comment discard", parseCommentBatchList);
-      signal?.throwIfAborted();
-      matchCommentAttachment(response.attachment, sessionId, request.scope);
-      return response;
-    },    async commentAttach(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseCommentMutation(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_attach", { sessionId, viewerId, request }, "comment attach", parseCommentBatch);
-      signal?.throwIfAborted();
-      return matchCommentBatch(response, sessionId, request.scope, request.batch_id, request.expected_generation, true);
-    },
-    async commentPastePrepare(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(viewerId);
-      const parsed = parseCommentPastePrepareRequest(value);
-      signal?.throwIfAborted();
-      const response = await invokeAndParse(invoke, "cockpit_comments_paste_prepare", { sessionId, viewerId, request: parsed }, "comment paste prepare", parseCommentPastePrepare);
-      signal?.throwIfAborted();
-      return matchPastePrepare(response, sessionId, parsed);
-    },
-    async commentPasteSend(sessionId, viewerId, value) {
-      validateSessionId(sessionId); validateResourceId(viewerId);
-      const parsed = parseCommentPasteSendRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_paste_send", { sessionId, viewerId, request: parsed }, "comment paste send", parseCommentPasteReceipt);
-      return matchPasteReceipt(response, parsed);
-    },
-    async commentPasteMarkPasted(sessionId, viewerId, value) {
-      validateSessionId(sessionId); validateResourceId(viewerId);
-      const parsed = parseCommentPasteMarkPastedRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_paste_mark_pasted", { sessionId, viewerId, request: parsed }, "comment paste resolution", parseCommentPasteReceipt);
-      return matchMarkedReceipt(response, parsed);
-    },
-    async commentPreview(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted();
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const request = parseCommentPreviewRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_comments_preview", { sessionId, viewerId, request }, "comment preview", parseCommentPreview);
-      signal?.throwIfAborted();
-      return matchCommentPreview(response, request.batch);
-    },
-    browserCleanupStatus() {
-      return invokeAndParse(invoke, "cockpit_browser_cleanup_status", undefined, "browser cleanup", parseBrowserCleanupStatus);
-    },
-    browserCleanupRetry(value) {
-      const request = parseBrowserCleanupRetryRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_cleanup_retry", { request }, "browser cleanup retry", parseBrowserCleanupStatus);
-    },
-    browserAction(value) {
-      const request = parseBrowserRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_action", { request }, "browser action", parseBrowserResponse);
-    },
-    async browserFeedback(value) {
-      const request = parseBrowserFeedbackRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_feedback", { request }, "browser feedback", parseBrowserFeedbackLookup);
-    },
-    async browserDraftRecovery(value: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome> {
-      const request = parseBrowserDraftRecoveryRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_draft_recovery", { request }, "browser draft recovery", parseBrowserViewCommandOutcome);
-    },
-    async acknowledgeBrowserFeedback(value) {
-      const request = parseBrowserFeedbackAckRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_feedback_ack", { request }, "browser feedback acknowledgement", parseBrowserFeedbackAck);
-    },
-    async browserFeedbackImage(value) {
-      const request = parseBrowserFeedbackImageRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_feedback_image", { request }, "browser feedback image", parseBrowserFeedbackImage);
-    },
-    async sendBrowserFeedback(value) {
-      const request = parseBrowserFeedbackSendRequest(value);
-      return invokeAndParse(invoke, "cockpit_browser_feedback_send", { request }, "browser feedback send", parseBrowserFeedbackSendResponse);
-    },
-    status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
-    quotaStatus(request: QuotaStatusRequest, signal?: AbortSignal): Promise<QuotaStatusResponse> {
-      try { signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-      return invokeAndParse(invoke, "cockpit_quota_status", { request: { agents_working: request.agents_working } }, "subscription quota", parseQuotaStatusResponse).then((value) => {
-        signal?.throwIfAborted();
-        return value;
-      });
-    },
-    sessions(): Promise<SessionListResponse> { return invokeAndParse(invoke, "cockpit_sessions", undefined, "sessions", parseSessionListResponse); },
-    spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse> {
-      try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-      return invokeAndParse(invoke, "cockpit_space_git_status", { sessionId }, "Space Git status", parseSpaceGitStatusResponse).then((value) => {
-        signal?.throwIfAborted();
-        if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space Git status belongs to another session");
-        return value;
-      });
-    },
-    spaceGitAction(sessionId: string, actionRequest: SpaceGitActionRequest): Promise<SpaceGitActionResponse> {
-      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-      const submitted = { ...actionRequest };
-      return invokeAndParse(invoke, "cockpit_space_git_action", { sessionId, request: submitted }, "Space Git action",
-        (value) => matchSpaceGitActionResponse(value, sessionId, submitted));
-    },
-    sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<SessionSnapshotResponse> {
-      try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-      const pending = invokeAndParse(invoke, "cockpit_session_snapshot", { sessionId }, "session snapshot", parseSessionSnapshotResponse).then((value) => {
-        signal?.throwIfAborted();
-        if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Session snapshot belongs to another session");
-        return value;
-      });
-      if (!signal) return pending;
-      return new Promise<SessionSnapshotResponse>((resolve, reject) => {
-        const abort = () => reject(signal.reason);
-        signal.addEventListener("abort", abort, { once: true });
-        void pending.then((value) => {
-          signal.removeEventListener("abort", abort);
-          resolve(value);
-        }, (error: unknown) => {
-          signal.removeEventListener("abort", abort);
-          reject(error);
-        });
-        if (signal.aborted) abort();
-      });
-    },
-    focus(sessionId: string, request: FocusRequest): Promise<FocusResponse> {
-      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-      let parsed: FocusRequest;
-      try { parsed = parseFocusRequest(request); } catch (error) { return Promise.reject(error); }
-      return invokeAndParse(invoke, "cockpit_focus", { sessionId, request: parsed }, "focus", parseFocusResponse).then((value) => {
-        if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Focus response belongs to another session");
-        return value;
-      });
-    },
-    mutate(sessionId: string, mutationRequest: ResourceMutationRequest): Promise<ResourceMutationResponse> {
-      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-      let parsed: ResourceMutationRequest;
-      try { parsed = parseResourceMutationRequest(mutationRequest); } catch (error) { return Promise.reject(error); }
-      return invokeAndParse(
-        invoke,
-        "cockpit_mutate",
-        { sessionId, request: parsed },
-        "mutation",
-        parseResourceMutationResponse,
-      ).then((value) => {
-        if (value.session_id !== sessionId || value.snapshot.session_id !== sessionId) {
-          throw new CockpitClientError("malformed_response", "Mutation response belongs to another session");
-        }
-        return value;
-      });
-    },
+    ...bindOperations("native", (operation) => invokeAndParse(invoke, operation.tauri.command, operation.tauri.args(), operation.operation, operation.parse)),
     subscribeWidgets(onEvent, onError, signal) {
       return nativeWidgetSubscription(channelFactory, invoke, onEvent, onError, signal);
-    },
-    widgetContent(value, signal) {
-      return widgetAbortable(async () => {
-        const parsed = parseWidgetContentRequest(value);
-        return invokeAndParse(invoke, "cockpit_widget_content", { request: parsed }, "widget content",
-          (body) => matchWidgetContent(body, parsed));
-      }, signal);
-    },
-    widgetRemove(value, signal) {
-      return widgetAbortable(async () => {
-        const parsed = parseWidgetRemoveRequest(value);
-        return invokeAndParse(invoke, "cockpit_widget_remove", { request: parsed }, "widget remove", parseWidgetRemoveResponse);
-      }, signal);
-    },
-    widgetSelect(value, signal) {
-      return widgetAbortable(async () => {
-        const parsed = parseWidgetSelectRequest(value);
-        return invokeAndParse(invoke, "cockpit_widget_select", { request: parsed }, "widget select", parseWidgetSelectResponse);
-      }, signal);
     },
     subscribeSession(sessionId, onMessage, onError, signal) { return sessionSubscription(channelFactory, invoke, sessionId, onMessage, onError, signal); },
     openTerminal(request, onMessage, onError, signal) { return terminalSubscription(channelFactory, invoke, request, onMessage, onError, signal); },

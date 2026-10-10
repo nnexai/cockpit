@@ -1,132 +1,19 @@
-import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
-import {
-  matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest,
-  parseOrchestrationMutationRequest, parseOrchestrationMutationResponse,
-  parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
-} from "./orchestrationProtocol";
-import {
-  matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest,
-  parseWidgetRemoveResponse, parseWidgetSelectRequest, parseWidgetSelectResponse,
-} from "./widgetProtocol";
 import { widgetEventCursor, widgetReports } from "./widgetTransport";
 import type { WidgetEventHandler, WidgetStream } from "./CockpitClient";
-import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import {
-  matchLibraryAttachmentsOperation, matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
-  parseLibraryAddRequest, parseLibraryAttachmentRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
-  parseLibraryDocumentRequest, parseLibraryFileIndex, parseLibraryFileIndexRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest, parseLibraryResolveRequest, parseLibraryResolution,
-  parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest, parseLibraryReplaceRequest,
-  parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
-  parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
-  parseSpaceAddRequest, matchSpaceOperation, parseSpaceRepositoriesRequest, parseSpaceRemoveRequest,
-} from "./libraryProtocol";
-import { parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
-import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
-import {
-  matchContextResponse, parseContextDirectory, parseContextFileIndex,
-  parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
-  parseContextFileIndexRequest, parseViewerSourceOptions, matchViewerSourceOptions, parseViewerOpenRequest, parseViewerContext, matchViewerContext,
-} from "./contextProtocol";
-import {
-  matchContextInvalidationResponse, matchContextSearchResponse,
-  parseContextInvalidationRequest, parseContextInvalidationResponse,
-  parseContextSearchRequest, parseContextSearchResponse,
-} from "./contextSearchProtocol";
-import {
-  matchCommentAttachment, matchCommentBatch, matchCommentPreview,
-  parseCommentBatch, parseCommentBatchList, parseCommentBatchRequest, parseCommentMutation,
-  parseCommentPreview, parseCommentPreviewRequest, parseCommentRemove, parseCommentScope,
-  parseCommentUpsert,
-} from "./commentProtocol";
-import {
-  matchProviderCredential, parseProviderCredentialClearRequest, parseProviderCredentialSetRequest,
-  parseProviderCredentialStatus, parseProviderCredentialStatusList,
-} from "./credentialProtocol";
-import { parseQuotaStatusResponse } from "./quotaProtocol";
-import {
-  matchProjectSession, parseProjectConfiguration, parseRepositoryList,
-  parseWorkspaceDefaults, parseWorkspaceDefaultsRequest,
-  parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
-  parseWorkspaceReconcileRequest,
-  parseWorkspaceSetupRequest, validateProjectOperationId,
-} from "./projectProtocol";
-import {
-  matchWorkspaceTeardownPreview, matchWorkspaceTeardownResult,
-  parseWorkspaceTeardownExecuteRequest, parseWorkspaceTeardownPreview,
-  parseWorkspaceTeardownPreviewRequest, parseWorkspaceTeardownRecoveryList,
-  parseWorkspaceTeardownResult,
-} from "./projectTeardownProtocol";
-import {
-  CockpitClientError,
-  matchBrowserViewCommandResponse,
-  matchBrowserViewEvent,
-  parseBrowserViewCommandRequest,
-  parseBrowserDraftRecoveryRequest,
-  parseBrowserViewCommandOutcome,
-  parseBrowserViewCommandResponse,
-  parseBrowserViewEvent,
-  parseBrowserViewFrameDescriptor,
-  parseBrowserViewOpenRequest,
-  parseBrowserViewSnapshot,
-  parseBrowserFeedbackAck,
-  parseBrowserFeedbackAckRequest,
-  parseBrowserFeedbackImage,
-  parseBrowserFeedbackImageRequest,
-  parseBrowserFeedbackLookup,
-  parseBrowserFeedbackRequest,
-  parseBrowserFeedbackSendRequest,
-  parseBrowserFeedbackSendResponse,
-  parseBrowserRequest,
-  parseBrowserResponse,
-  parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest,
-  parseErrorEnvelope,
-  parseFocusRequest,
-  parseFocusResponse,
-  parseResourceMutationRequest,
-  parseResourceMutationResponse,
-  parseSessionListResponse,
-  parseSessionSnapshotResponse,
-  parseSpaceGitStatusResponse,
-  matchSpaceGitActionResponse,
-  parseSessionStreamMessage,
-  parseStatusResponse,
-  parseTerminalOpenRequest,
-  parseTerminalStreamMessage,
-  parseTerminalCommand,
-  validateSessionId,
-  validateResourceId,
-  type BrowserViewFramePacket,
-  type BrowserViewOpenRequest,
-  type BrowserViewStream,
-  type BrowserDraftRecoveryRequest,
-  type BrowserViewCommandOutcome,
-  type BrowserViewSnapshot,
-  type ClosableStream,
-  type CockpitClient,
-  type TerminalStream,
+  CockpitClientError, matchBrowserViewCommandResponse, parseBrowserViewCommandRequest,
+  parseBrowserViewFrameDescriptor, parseBrowserViewOpenRequest, parseBrowserViewSnapshot, parseErrorEnvelope,
+  parseSessionStreamMessage, parseTerminalOpenRequest, parseTerminalStreamMessage, parseTerminalCommand,
+  validateSessionId, type BrowserViewFramePacket, type BrowserViewOpenRequest, type BrowserViewStream,
+  type BrowserViewSnapshot, type ClosableStream, type CockpitClient, type TerminalStream,
 } from "./CockpitClient";
 import type {
-  BrowserViewCommandRequest,
-  BrowserViewEvent,
-  BrowserViewFrameDescriptor,
-  FocusRequest,
-  FocusResponse,
-  ResourceMutationRequest,
-  ResourceMutationResponse,
-  SessionListResponse,
-  SessionSnapshotResponse,
-  SpaceGitStatusResponse,
-  SpaceGitActionRequest,
-  SpaceGitActionResponse,
-  SessionStreamMessage,
-  StatusResponse,
-  QuotaStatusRequest,
-  QuotaStatusResponse,
-  TerminalCommand,
-  TerminalOpenRequest,
-  TerminalStreamMessage,
+  BrowserViewCommandRequest, BrowserViewEvent, BrowserViewFrameDescriptor, SessionStreamMessage,
+  TerminalCommand, TerminalOpenRequest, TerminalStreamMessage,
 } from "../protocol/generated/v1";
 import { transitionSessionStream, type StreamOrderCursor } from "./streamOrder";
+import { bindOperations } from "./operations";
+import { browserViewDecoder, type BrowserFrameEnvelope, type BrowserFrameRelease } from "./browserViewDecoder";
 
 export type BrowserFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -284,64 +171,12 @@ function parseBrowserViewOpenResponse(value: unknown): BrowserViewOpenResponse {
   };
 }
 
-interface BrowserFrameEnvelope {
-  readonly data: ArrayBuffer;
-  readonly frameSequence: number;
-}
 
-function parseBrowserFrameEnvelope(data: unknown, streamEpoch: number): BrowserFrameEnvelope {
-  if (!(data instanceof ArrayBuffer)) throw new CockpitClientError("malformed_response", "Browser frame is not binary");
-  if (data.byteLength < 96 || data.byteLength > 96 + 6 * 1024 * 1024) throw new CockpitClientError("malformed_response", "Browser frame exceeds bounds");
-  const view = new DataView(data);
-  const jpegLength = view.getUint32(80, false);
-  if (view.getUint32(0, false) !== 0x49424656 || view.getUint16(4, false) !== 2 || view.getUint16(6, false) !== 96 || view.getBigUint64(8, false) !== BigInt(streamEpoch) || jpegLength === 0 || data.byteLength !== 96 + jpegLength) {
-    throw new CockpitClientError("malformed_response", "Browser frame envelope is invalid");
-  }
-  const jpeg = new Uint8Array(data, 96, 2);
-  if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) throw new CockpitClientError("malformed_response", "Browser frame payload is not JPEG");
-  return { data, frameSequence: Number(view.getBigUint64(16, false)) };
-}
-
-function parseBrowserFrame(frame: BrowserFrameEnvelope, targetId: string): { descriptor: BrowserViewFrameDescriptor; jpeg: ArrayBuffer } {
-  if (targetId.length === 0) throw new CockpitClientError("malformed_response", "Browser frame target identity is unavailable");
-  const { data } = frame;
-  const view = new DataView(data);
-  const jpegLength = view.getUint32(80, false);
-  const descriptor = parseBrowserViewFrameDescriptor({
-    target_id: targetId,
-    stream_epoch: Number(view.getBigUint64(8, false)),
-    frame_sequence: frame.frameSequence,
-    document_generation: Number(view.getBigUint64(24, false)),
-    viewport_revision: Number(view.getBigUint64(32, false)),
-    image_width: view.getUint32(40, false),
-    image_height: view.getUint32(44, false),
-    viewport_css_width: view.getFloat32(48, false),
-    viewport_css_height: view.getFloat32(52, false),
-    viewport_offset_x: view.getFloat32(56, false),
-    viewport_offset_y: view.getFloat32(60, false),
-    scroll_x: view.getFloat32(64, false),
-    scroll_y: view.getFloat32(68, false),
-    capture_timestamp_micros: Number(view.getBigUint64(72, false)),
-    jpeg_length: jpegLength,
-  });
-  return { descriptor, jpeg: data.slice(96) };
-}
-
-type BrowserFrameRelease = (kind: "ack" | "discard") => void;
 interface PendingBrowserFrame {
   readonly envelope: BrowserFrameEnvelope;
   readonly release: BrowserFrameRelease;
 }
 
-function browserFramePacket(frame: PendingBrowserFrame, targetId: string): BrowserViewFramePacket {
-  const parsedFrame = parseBrowserFrame(frame.envelope, targetId);
-  return {
-    descriptor: parsedFrame.descriptor,
-    jpeg: parsedFrame.jpeg,
-    ack: () => frame.release("ack"),
-    discard: () => frame.release("discard"),
-  };
-}
 
 function openBrowserViewStream(
   request: BrowserFetch,
@@ -379,8 +214,7 @@ function openBrowserViewStream(
     let eventSocket: BrowserWebSocket; let frameSocket: BrowserWebSocket;
     let closed = false; let closing = false; let settled = false; let openCount = 0;
     let abort: () => void = () => undefined;
-    let targetId = opened.snapshot.displayed_target_id ?? "";
-    let metadataAttached = false;
+    const decoder = browserViewDecoder(opened.snapshot, "browser", onEvent, onFrame);
     // Keep one raw frame until the attached snapshot establishes its target identity.
     let pendingFrame: PendingBrowserFrame | null = null;
     const settlePending = () => {
@@ -409,30 +243,21 @@ function openBrowserViewStream(
         catch (cause) { fail(new CockpitClientError("transport_error", `Could not ${kind} browser frame`, { cause })); }
       };
     };
-    const deliverFrame = (frame: PendingBrowserFrame) => {
-      let packet: BrowserViewFramePacket;
-      try { packet = browserFramePacket(frame, targetId); }
-      catch (error) { frame.release("discard"); throw error; }
-      try { onFrame(packet); }
-      catch (cause) {
-        frame.release("discard");
-        throw new CockpitClientError("transport_error", "Browser view frame handler failed", { cause });
-      }
-    };
+    const deliverFrame = (frame: PendingBrowserFrame) => decoder.browserFrame(frame.envelope, frame.release);
     const flushPending = () => {
       const pending = pendingFrame;
       pendingFrame = null;
       if (!pending) return;
-      if (closed || !metadataAttached) { pending.release("discard"); return; }
+      if (closed || !decoder.attached) { pending.release("discard"); return; }
       try { deliverFrame(pending); }
       catch (error) { fail(error instanceof CockpitClientError ? error : new CockpitClientError("transport_error", "Browser view frame handler failed", { cause: error })); }
     };
     const packet = (data: unknown) => {
       if (closed) return;
       try {
-        const envelope = parseBrowserFrameEnvelope(data, identity.stream_epoch);
+        const envelope = decoder.envelope(data);
         const frame: PendingBrowserFrame = { envelope, release: makeRelease(envelope.frameSequence) };
-        if (!metadataAttached) {
+        if (!decoder.attached) {
           const superseded = pendingFrame;
           pendingFrame = null;
           superseded?.release("discard");
@@ -480,18 +305,7 @@ function openBrowserViewStream(
         return;
       }
       try {
-        const parsedEvent = matchBrowserViewEvent(parseBrowserViewEvent(JSON.parse(event.data)), identity);
-        if (parsedEvent.type === "attached") {
-          if (metadataAttached) return;
-          targetId = parsedEvent.snapshot.displayed_target_id ?? "";
-          metadataAttached = true;
-          onEvent(parsedEvent);
-          flushPending();
-        } else if (metadataAttached) {
-          if (parsedEvent.type === "targets_changed") targetId = parsedEvent.displayed_target_id ?? "";
-          else if (parsedEvent.type === "document_changed") targetId = parsedEvent.document?.target_id ?? "";
-          onEvent(parsedEvent);
-        }
+        if (decoder.event(JSON.parse(event.data))) flushPending();
       } catch (error) {
         fail(error instanceof CockpitClientError ? error : new CockpitClientError("malformed_response", "Browser view metadata is malformed", { cause: error }));
       }
@@ -731,514 +545,22 @@ export function createBrowserClient(
   webSocketFactory: BrowserWebSocketFactory = defaultWebSocket,
 ): CockpitClient {
   return {
-    async orchestrationSnapshot(value) {
-      const body = parseOrchestrationSnapshotRequest(value);
-      const query = body.root_id === null ? "" : `?root_id=${encodeURIComponent(body.root_id)}`;
-      return getJson(request, `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration${query}`, "orchestration snapshot", response => matchOrchestrationSnapshot(response, body));
-    },
-    async orchestrationMutate(value) {
-      const body = parseOrchestrationMutationRequest(value);
-      return getJson(request, `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/mutations`, "orchestration mutation", parseOrchestrationMutationResponse, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    },
-    async orchestrationWait(value) {
-      const body = parseOrchestrationWaitRequest(value);
-      return getJson(request, "/api/v1/orchestration/wait", "orchestration wait", parseOrchestrationWaitResponse, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    },
-    projectConfiguration() { return getJson(request, "/api/v1/project/configuration", "project configuration", parseProjectConfiguration); },
-    providerCredentials() { return getJson(request, "/api/v1/provider-credentials", "provider credentials", parseProviderCredentialStatusList); },
-    async setProviderCredential(value) {
-      const body = parseProviderCredentialSetRequest(value);
-      return matchProviderCredential(await getJson(request, "/api/v1/provider-credentials/set", "provider credential", parseProviderCredentialStatus, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), body);
-    },
-    async clearProviderCredential(value) {
-      const body = parseProviderCredentialClearRequest(value);
-      return matchProviderCredential(await getJson(request, "/api/v1/provider-credentials/clear", "provider credential", parseProviderCredentialStatus, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), body);
-    },
-    repositories() { return getJson(request, "/api/v1/project/repositories", "repositories", parseRepositoryList); },
-    async resolveWorkspaceDefaults(value) {
-      const body = parseWorkspaceDefaultsRequest(value);
-      return getJson(request, "/api/v1/project/defaults", "workspace defaults", parseWorkspaceDefaults, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async planWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseWorkspaceSetupRequest(value);
-      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-plans`, "workspace plan", parseWorkspaceSetupPlan, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), sessionId);
-    },
-    async startWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseWorkspaceOperationRequest(value);
-      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations`, "workspace start", parseWorkspaceOperation, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), sessionId, body.operation_id);
-    },
-    async workspaceOperation(sessionId, operationId) {
-      validateSessionId(sessionId);
-      validateProjectOperationId(operationId);
-      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/${encodeURIComponent(operationId)}`, "workspace operation", parseWorkspaceOperation), sessionId, operationId);
-    },
-    async resumeWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseWorkspaceOperationRequest(value);
-      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/resume`, "workspace resume", parseWorkspaceOperation, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), sessionId, body.operation_id);
-    },
-    async cancelWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseWorkspaceOperationRequest(value);
-      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/cancel`, "workspace cancellation", parseWorkspaceOperation, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), sessionId, body.operation_id);
-    },
-    async reconcileWorkspace(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseWorkspaceReconcileRequest(value);
-      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/reconcile`, "workspace reconciliation", parseWorkspaceOperation, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), sessionId, body.operation_id);
-    },
-    async workspaceTeardownPreview(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseWorkspaceTeardownPreviewRequest(value);
-      return matchWorkspaceTeardownPreview(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-teardown/preview`, "workspace teardown preview", parseWorkspaceTeardownPreview, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), body);
-    },
-    async workspaceTeardownExecute(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseWorkspaceTeardownExecuteRequest(value);
-      return matchWorkspaceTeardownResult(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-teardown/execute`, "workspace teardown execution", parseWorkspaceTeardownResult, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), body);
-    },
-    async workspaceTeardownRecoveries(sessionId) {
-      validateSessionId(sessionId);
-      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-teardown/recoveries`, "workspace teardown recoveries", parseWorkspaceTeardownRecoveryList);
-    },
-    async viewerSources(sessionId, paneId, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
-      const value = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/viewer-sources`, "viewer sources", parseViewerSourceOptions, { signal });
-      signal?.throwIfAborted();
-      return matchViewerSourceOptions(value, sessionId, paneId);
-    },
-    async viewerOpen(sessionId, value) {
-      validateSessionId(sessionId);
-      const body = parseViewerOpenRequest(value);
-      return matchViewerContext(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/open`, "viewer open", parseViewerContext, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }), sessionId, body);
-    },
-    async viewerRelease(sessionId, viewerId) {
-      validateSessionId(sessionId); validateResourceId(viewerId);
-      await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/release`, "viewer release", (value) => {
-        if (value !== null) throw new CockpitClientError("malformed_response", "Viewer release response is malformed");
-      }, { method: "POST" });
-    },
-    async contextDirectory(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseContextDirectoryRequest(value);
-      return matchContextResponse(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/directory`, "Context directory", parseContextDirectory, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
-      }), body);
-    },
-    async contextFileIndex(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseContextFileIndexRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/files`, "Context file index", parseContextFileIndex, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
-      });
-      signal?.throwIfAborted();
-      if (response.binding_id !== body.binding_id || response.root_id !== body.root_id) throw new CockpitClientError("malformed_response", "Context file index belongs to another root");
-      return response;
-    },
-    async contextDocument(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseContextDocumentRequest(value);
-      return matchContextResponse(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/document`, "Context document", parseContextDocument, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
-      }), body);
-    },
-    async reviewSnapshot(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(viewerId); signal?.throwIfAborted();
-      const parsed = parseReviewSnapshotRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/review/snapshot`, "Review snapshot", parseReviewSnapshot, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
-      signal?.throwIfAborted(); return matchReviewSnapshot(response, sessionId, viewerId, parsed);
-    },
-    async reviewFile(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(viewerId); signal?.throwIfAborted();
-      const parsed = parseReviewFileRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/review/file`, "Review file", parseReviewFile, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
-      signal?.throwIfAborted(); return matchReviewFile(response, sessionId, viewerId, parsed);
-    },
-    async contextSearch(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseContextSearchRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/search`, "Context search", parseContextSearchResponse, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
-      });
-      return matchContextSearchResponse(response, body);
-    },
-    async contextInvalidate(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseContextInvalidationRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/invalidate`, "Context invalidation", parseContextInvalidationResponse, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
-      });
-      return matchContextInvalidationResponse(response, body);
-    },
-    async contextMedia(sessionId, viewerId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(viewerId);
-      const body = parseContextMediaRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/context/media`, "Context image", parseContextMedia, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      return matchContextMedia(response, body);
-    },
-    async libraryListing(offset) {
-      if (offset !== undefined && offset !== null && (!Number.isInteger(offset) || offset < 0 || offset > 0xffffffff)) throw new CockpitClientError("malformed_response", "Invalid Library listing offset");
-      const query = offset == null ? "" : `?offset=${offset}`;
-      return getJson(request, `/api/v1/library${query}`, "Library listing", parseLibraryListing);
-    },
-    async libraryResolve(value) {
-      const body = parseLibraryResolveRequest(value);
-      return getJson(request, "/api/v1/library/resolve", "Library resolve", parseLibraryResolution, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async libraryConfluenceSpaces(value) {
-      const body = parseLibraryConfluenceSpacesRequest(value);
-      return getJson(request, "/api/v1/library/confluence/spaces", "Confluence spaces", (response) => parseLibraryConfluenceSpaces(response, body), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async libraryAdd(value) {
-      const body = parseLibraryAddRequest(value);
-      const response = await getJson(request, "/api/v1/library/add", "Library add", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      return body.target ? matchSpaceOperation(response, body.target) : response;
-    },
-    async libraryAttachments(value) {
-      const body = parseLibraryAttachmentRequest(value);
-      const response = await getJson(request, "/api/v1/library/attachments", "Library attachments", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      return matchLibraryAttachmentsOperation(response, body);
-    },
-    async libraryRefresh(value) {
-      const body = parseLibraryRefreshRequest(value);
-      return getJson(request, "/api/v1/library/refresh", "Library refresh", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async libraryOperation(operationId) {
-      const id = parseLibraryOperationId(operationId);
-      return matchLibraryOperation(await getJson(request, `/api/v1/library/operations/${encodeURIComponent(id)}`, "Library operation", parseLibraryOperation), id);
-    },
-    async libraryOperationCancel(operationId) {
-      const id = parseLibraryOperationId(operationId);
-      return matchLibraryOperation(await getJson(request, `/api/v1/library/operations/${encodeURIComponent(id)}/cancel`, "Library operation cancellation", parseLibraryOperation, { method: "POST" }), id);
-    },
-    async libraryReplace(value) {
-      const body = parseLibraryReplaceRequest(value);
-      return getJson(request, "/api/v1/library/replace", "Library replace", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async libraryRemove(value) {
-      const body = parseLibraryRemoveRequest(value);
-      return getJson(request, "/api/v1/library/remove", "Library remove", parseLibraryListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async libraryDirectory(value, signal) {
-      signal?.throwIfAborted();
-      const body = parseLibraryDirectoryRequest(value);
-      const response = await getJson(request, "/api/v1/library/directory", "Library directory", parseLibraryDirectory, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      signal?.throwIfAborted();
-      return matchLibraryDirectory(response, body);
-    },
-    async libraryFileIndex(value, signal) {
-      signal?.throwIfAborted();
-      const body = parseLibraryFileIndexRequest(value);
-      const response = await getJson(request, "/api/v1/library/files", "Library file index", parseLibraryFileIndex, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
-      });
-      signal?.throwIfAborted();
-      return response;
-    },
-    async libraryDocument(value, signal) {
-      signal?.throwIfAborted();
-      const body = parseLibraryDocumentRequest(value);
-      const response = await getJson(request, "/api/v1/library/document", "Library document", parseLibraryDocument, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      signal?.throwIfAborted();
-      return matchLibraryDocument(response, body);
-    },
-    async libraryMedia(value, signal) {
-      signal?.throwIfAborted();
-      const body = parseLibraryMediaRequest(value);
-      const response = await getJson(request, "/api/v1/library/media", "Library media", parseLibraryMedia, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      signal?.throwIfAborted();
-      return matchLibraryMedia(response, body);
-    },
-    async notes(value, signal) {
-      signal?.throwIfAborted();
-      const body = parseNotesRequest(value);
-      const response = await getJson(request, "/api/v1/notes", "Notes", parseNotesResponse, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
-      });
-      signal?.throwIfAborted();
-      return matchNotesResponse(response, body);
-    },
-    async librarySpaceList(value, signal) {
-      signal?.throwIfAborted();
-      const body = parseSpaceContextRequest(value);
-      const response = await getJson(request, "/api/v1/library/space/list", "Space context", parseSpaceContextListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      signal?.throwIfAborted();
-      return matchSpaceContextListing(response, body);
-    },
-    async librarySpaceAdd(value) {
-      const body = parseSpaceAddRequest(value);
-      const response = await getJson(request, "/api/v1/library/space/add", "Space add", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      return matchSpaceOperation(response, body.target);
-    },
-    async librarySpaceRepositories(value) {
-      const body = parseSpaceRepositoriesRequest(value);
-      const response = await getJson(request, "/api/v1/library/space/repositories", "Space repositories", parseSpaceContextListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      return matchSpaceContextListing(response, body);
-    },
-    async librarySpaceRemove(value) {
-      const body = parseSpaceRemoveRequest(value);
-      const response = await getJson(request, "/api/v1/library/space/remove", "Space removal", parseSpaceContextListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      return matchSpaceContextListing(response, body);
-    },
-    async commentBatches(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseCommentScope(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/list`, "comment batches", parseCommentBatchList, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-      matchCommentAttachment(response.attachment, sessionId, body);
-      return response;
-    },
-    async commentBatch(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseCommentBatchRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/batch`, "comment batch", parseCommentBatch, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-      return matchCommentBatch(response, sessionId, body.scope, body.batch_id);
-    },
-    async commentUpsert(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseCommentUpsert(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/upsert`, "comment upsert", parseCommentBatch, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-      return matchCommentBatch(response, sessionId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
-    },
-    async commentRemove(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseCommentRemove(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/remove`, "comment remove", parseCommentBatch, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-      return matchCommentBatch(response, sessionId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
-    },
-    async commentDiscard(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseCommentMutation(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/discard`, "comment discard", parseCommentBatchList, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-      matchCommentAttachment(response.attachment, sessionId, body.scope);
-      return response;
-    },    async commentAttach(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseCommentMutation(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/attach`, "comment attach", parseCommentBatch, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-      return matchCommentBatch(response, sessionId, body.scope, body.batch_id, body.expected_generation, true);
-    },
-    async commentPastePrepare(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId); validateResourceId(viewerId);
-      const parsed = parseCommentPastePrepareRequest(value);
-      signal?.throwIfAborted();
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/paste-prepare`, "comment paste prepare", parseCommentPastePrepare, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
-      signal?.throwIfAborted();
-      return matchPastePrepare(response, sessionId, parsed);
-    },
-    async commentPasteSend(sessionId, viewerId, value) {
-      validateSessionId(sessionId); validateResourceId(viewerId);
-      const parsed = parseCommentPasteSendRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/paste-send`, "comment paste send", parseCommentPasteReceipt, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed) });
-      return matchPasteReceipt(response, parsed);
-    },
-    async commentPasteMarkPasted(sessionId, viewerId, value) {
-      validateSessionId(sessionId); validateResourceId(viewerId);
-      const parsed = parseCommentPasteMarkPastedRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/paste-mark-pasted`, "comment paste resolution", parseCommentPasteReceipt, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed) });
-      return matchMarkedReceipt(response, parsed);
-    },
-    async commentPreview(sessionId, viewerId, value, signal) {
-      validateSessionId(sessionId);
-      validateResourceId(viewerId);
-      const body = parseCommentPreviewRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/viewers/${encodeURIComponent(viewerId)}/comments/preview`, "comment preview", parseCommentPreview, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-      return matchCommentPreview(response, body.batch);
-    },
-    browserCleanupStatus() {
-      return getJson(request, "/api/v1/browser/cleanup", "browser cleanup", parseBrowserCleanupStatus);
-    },
-    async browserCleanupRetry(value) {
-      const body = parseBrowserCleanupRetryRequest(value);
-      return getJson(request, "/api/v1/browser/cleanup/retry", "browser cleanup retry", parseBrowserCleanupStatus, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    },
-    async browserAction(value) {
-      const body = parseBrowserRequest(value);
-      return getJson(request, "/api/v1/browser/action", "browser action", parseBrowserResponse, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    },
-    async browserFeedback(value) {
-      const body = parseBrowserFeedbackRequest(value);
-      return getJson(request, "/api/v1/browser/feedback", "browser feedback", parseBrowserFeedbackLookup, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    },
-    async browserDraftRecovery(value: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome> {
-      const body = parseBrowserDraftRecoveryRequest(value);
-      return getJson(request, "/api/v1/browser/drafts/recovery", "browser draft recovery", parseBrowserViewCommandOutcome, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    },
-    async acknowledgeBrowserFeedback(value) {
-      const body = parseBrowserFeedbackAckRequest(value);
-      return getJson(request, "/api/v1/browser/feedback/ack", "browser feedback acknowledgement", parseBrowserFeedbackAck, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    },
-    async browserFeedbackImage(value) {
-      const body = parseBrowserFeedbackImageRequest(value);
-      return getJson(request, "/api/v1/browser/feedback/image", "browser feedback image", parseBrowserFeedbackImage, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    },
-    async sendBrowserFeedback(value) {
-      const body = parseBrowserFeedbackSendRequest(value);
-      return getJson(request, "/api/v1/browser/feedback/send", "browser feedback send", parseBrowserFeedbackSendResponse, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    },
-    status(): Promise<StatusResponse> { return getJson(request, "/api/v1/status", "status", parseStatusResponse); },
-    quotaStatus(quotaRequest: QuotaStatusRequest, signal?: AbortSignal): Promise<QuotaStatusResponse> {
-      try { signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-      return getJson(request, `/api/v1/quota?agents_working=${quotaRequest.agents_working ? "true" : "false"}`, "subscription quota", parseQuotaStatusResponse, { signal }).then((value) => {
-        signal?.throwIfAborted();
-        return value;
-      });
-    },
-    sessions(): Promise<SessionListResponse> { return getJson(request, "/api/v1/sessions", "sessions", parseSessionListResponse); },
-    sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<SessionSnapshotResponse> {
-      try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot`, "session snapshot", parseSessionSnapshotResponse, { signal }).then((value) => {
-        signal?.throwIfAborted();
-        if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Session snapshot belongs to another session");
-        return value;
-      });
-    },
-    spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse> {
-      try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-git`, "Space Git status", parseSpaceGitStatusResponse, { signal }).then((value) => {
-        if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space Git status belongs to another session");
-        return value;
-      });
-    },
-    spaceGitAction(sessionId: string, actionRequest: SpaceGitActionRequest): Promise<SpaceGitActionResponse> {
-      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-      const submitted = { ...actionRequest };
-      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-git/actions`, "Space Git action",
-        (value) => matchSpaceGitActionResponse(value, sessionId, submitted), {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(submitted),
-        });
-    },
-    focus(sessionId: string, focusRequest: FocusRequest): Promise<FocusResponse> {
-      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-      let parsed: FocusRequest;
-      try { parsed = parseFocusRequest(focusRequest); } catch (error) { return Promise.reject(error); }
-      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/focus`, "focus", parseFocusResponse, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(parsed),
-      }).then((value) => {
-        if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Focus response belongs to another session");
-        return value;
-      });
-    },
-    mutate(sessionId: string, mutationRequest: ResourceMutationRequest): Promise<ResourceMutationResponse> {
-      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-      let parsed: ResourceMutationRequest;
-      try { parsed = parseResourceMutationRequest(mutationRequest); } catch (error) { return Promise.reject(error); }
-      return getJson(
-        request,
-        `/api/v1/sessions/${encodeURIComponent(sessionId)}/mutations`,
-        "mutation",
-        parseResourceMutationResponse,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(parsed),
-        },
-      ).then((value) => {
-        if (value.session_id !== sessionId || value.snapshot.session_id !== sessionId) {
-          throw new CockpitClientError("malformed_response", "Mutation response belongs to another session");
+    ...bindOperations("browser", (operation) => {
+      const http = operation.http;
+      const path = http.route();
+      let init: RequestInit | undefined;
+      if (http.method === "POST") {
+        init = { method: http.method };
+        if (http.json) {
+          init.headers = { [http.contentTypeHeader ?? "Content-Type"]: "application/json" };
+          init.body = JSON.stringify(http.json());
         }
-        return value;
-      });
-    },
+      }
+      if (http.signal) { init ??= {}; init.signal = http.signal(); }
+      return getJson(request, path, operation.operation, operation.parse, init);
+    }),
     subscribeWidgets(onEvent, onError, signal) {
       return openWidgetStream(webSocketFactory, onEvent, onError, signal);
-    },
-    async widgetContent(value, signal) {
-      const parsed = parseWidgetContentRequest(value);
-      return getJson(request, "/api/v1/widgets/content", "widget content",
-        (body) => matchWidgetContent(body, parsed),
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
-    },
-    async widgetRemove(value, signal) {
-      const parsed = parseWidgetRemoveRequest(value);
-      return getJson(request, "/api/v1/widgets/remove", "widget remove", parseWidgetRemoveResponse,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
-    },
-    async widgetSelect(value, signal) {
-      const parsed = parseWidgetSelectRequest(value);
-      return getJson(request, "/api/v1/widgets/select", "widget select", parseWidgetSelectResponse,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
     },
     subscribeSession(sessionId, onMessage, onError, signal) { return openSessionStream(webSocketFactory, sessionId, onMessage, onError, signal); },
     openTerminal(requestValue, onMessage, onError, signal) { return openTerminalStream(webSocketFactory, requestValue, onMessage, onError, signal); },
