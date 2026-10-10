@@ -3,6 +3,7 @@ mod mutate;
 mod assignments;
 mod dependencies;
 mod steps;
+pub mod caller;
 pub mod dispatch;
 pub mod herdr;
 mod escalation;
@@ -683,7 +684,7 @@ pub(crate) fn management_target(
         || agent.agent_kind != Some(AgentKind::Main)
         || agent.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp)
         || !session_matches(root, agent)
-        || !caller_matches(root, agent)
+        || !caller::run_location_matches(root, agent)
         || root.bound_omp_session.as_deref().is_none_or(str::is_empty)
         || worker.kind != RunKind::Worker
         || worker.root_id != root.run_id
@@ -886,7 +887,7 @@ fn resolve(
     ] {
         validate_identity(value)?;
     }
-    let location_matches = |run: &Run| caller_matches(run, caller)
+    let location_matches = |run: &Run| caller::run_location_matches(run, caller)
         || (binding && same_process_main_rollover(run, caller));
     if let Some((id, attempt)) = &caller.env_run {
         let index = run_index(state, id)?;
@@ -951,39 +952,6 @@ fn same_process_main_rollover(run: &Run, caller: &AgentCaller) -> bool {
         && location.terminal_id == caller.terminal_id
 }
 
-fn caller_matches(run: &Run, caller: &AgentCaller) -> bool {
-    let Some(location) = &run.location else {
-        return false;
-    };
-    if location.endpoint_identity != caller.endpoint_identity
-        || location.session_id != caller.session_id
-        || !optional_available(&location.boot_id, &caller.boot_id)
-        || !optional_fence(&location.terminal_id, &caller.terminal_id)
-        || !optional_available(&location.native_session_id, &caller.native_session_id)
-    {
-        return false;
-    }
-    if location.pane_id == caller.pane_id {
-        return true;
-    }
-    // Herdr may change pane IDs when moving the same terminal across Spaces.
-    // Preserve a run only with stable terminal and bound native-session evidence.
-    location
-        .terminal_id
-        .as_ref()
-        .is_some_and(|id| caller.terminal_id.as_ref() == Some(id))
-        && run.bound_omp_session.as_ref().is_some_and(|session| {
-            caller
-                .native_session_id
-                .as_ref()
-                .is_none_or(|native| native == session)
-                && if caller.agent_kind == Some(AgentKind::Subagent) {
-                    caller.main_omp_session_id.as_ref() == Some(session)
-                } else {
-                    caller.omp_session_id.as_ref() == Some(session)
-                }
-        })
-}
 fn optional_fence(expected: &Option<String>, actual: &Option<String>) -> bool {
     expected.as_ref().is_none_or(|e| actual.as_ref() == Some(e))
 }

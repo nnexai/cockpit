@@ -237,7 +237,7 @@ pub(super) fn active_task_root<'a>(
 /// The host CLI supplies fresh native process evidence, never action JSON.
 pub(super) fn native_task_caller(run: &Run, agent: &AgentCaller) -> bool {
     agent.actual_agent_kind.as_ref() == Some(&NativeAgentKind::Omp)
-        && caller_matches(run, agent) && session_matches(run, agent)
+        && caller::run_location_matches(run, agent) && session_matches(run, agent)
         && run.bound_omp_session.as_deref().is_some_and(|session| !session.is_empty())
         && run.bound_omp_process.as_ref().is_some_and(|process| {
             process.kernel_boot_id.as_deref().is_some_and(|boot| !boot.is_empty())

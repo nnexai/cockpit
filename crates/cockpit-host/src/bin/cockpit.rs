@@ -33,7 +33,7 @@ use cockpit_host::{
     server::{ServerConfig, serve},
 };
 
-#[path = "../cli_orchestration.rs"]
+#[path = "../cli_orchestration/mod.rs"]
 mod cli_orchestration;
 
 const ROOT_HELP: &str = "Agent workflows:
