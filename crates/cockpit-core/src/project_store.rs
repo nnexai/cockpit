@@ -95,6 +95,13 @@ pub struct ExecutionLease {
     _file: File,
 }
 
+impl Drop for ExecutionLease {
+    fn drop(&mut self) {
+        // Forked children may briefly retain the descriptor before exec.
+        let _ = fs2::FileExt::unlock(&self._file);
+    }
+}
+
 /// Small file-backed journal for setup operations and teardown receipts.
 ///
 /// The state directory is opened once and all record access is descriptor

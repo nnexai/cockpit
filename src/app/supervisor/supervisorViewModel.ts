@@ -7,7 +7,9 @@ import { GRAPH_GEOMETRY } from "./graphLayout";
 import { panelBounds, panelPlacement, type PanelKind, type SupervisorLayout } from "./useSupervisorLayout";
 import type { SupervisorViewInputs, SupervisorViewModel, SupervisorViewPanel } from "./supervisorViewTypes";
 
-export function useSupervisorViewModel(context: SupervisorViewInputs): SupervisorViewModel {
+export function useSupervisorViewModel(context: Pick<SupervisorViewInputs,
+  "snapshot" | "rootId" | "connected" | "runtimeLive" | "session" | "scope" | "hoverSpace" | "sessionId" | "draftStorageWarning" | "projectRootMissing"
+>): SupervisorViewModel {
   const { snapshot, rootId, connected, runtimeLive, session, scope, hoverSpace, sessionId, draftStorageWarning, projectRootMissing } = context;
   const root = !projectRootMissing ? snapshot?.runs.find(run => run.run_id === (rootId ?? snapshot.board?.root_id) && run.run_id === run.root_id && (run.stage !== "closed" || rootId === run.run_id)) ?? null : null;
   const openRoots = snapshot?.roots.filter(summary => snapshot.runs.some(run => run.run_id === summary.root_id && run.stage !== "closed")) ?? [];

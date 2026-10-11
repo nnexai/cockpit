@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { CockpitClient } from "../../client/CockpitClient";
-import type { OrchestrationSnapshot, Run, SessionSnapshotResponse } from "../../protocol/generated/v1";
+import type { SupervisorViewProps } from "./supervisorViewTypes";
 import { useSupervisorDrafts } from "./useSupervisorDrafts";
 import { useSupervisor } from "./useSupervisor";
 import { useSupervisorLayout } from "./useSupervisorLayout";
@@ -15,10 +14,7 @@ import { useSupervisorViewRevealLayout, useSupervisorViewQueueLayout } from "./s
 import { SupervisorViewSurface } from "./supervisorViewSurface";
 import "./supervisor.css";
 
-export function SupervisorView({ client, sessionId, session, runtimeLive, active, startToken, startIntent, navigationError, onClose, onTerminal, onModalChange }: {
-  client: CockpitClient; sessionId: string; session: SessionSnapshotResponse | null; runtimeLive: boolean; active: boolean; startToken: number; startIntent?: "reuse_or_resume" | "another";
-  navigationError: string | null; onClose(): void; onTerminal(run: Run, snapshot: OrchestrationSnapshot): Promise<void>; onModalChange(open: boolean): void;
-}) {
+export function SupervisorView({ client, sessionId, session, runtimeLive, active, startToken, startIntent, navigationError, onClose, onTerminal, onModalChange }: SupervisorViewProps) {
   const [rootId, updateRootId] = useState<string | null>(null);
   const [projectRootMissing, setProjectRootMissing] = useState(false);
   const rootSelectionVersion = useRef(0);
@@ -38,16 +34,17 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   const focus = useDetailFocus();
   const startState = useStartAgentFlowState(sessionId, drafts.lifecycle, changed);
   const layout = useSupervisorLayout(focus.workareaRef);
-  const inputs = {
-    client, sessionId, session, runtimeLive, active, startToken, startIntent, navigationError, onClose, onTerminal, onModalChange,
-    rootId, setRootId, projectRootMissing, scope, changed, lifecycleDrafts: drafts.lifecycle, draftStorageWarning: drafts.storageWarning,
-    ...supervisor, ...state, ...focus, ...startState,
-  };
   const modalVisible = !!state.dialog && active && !!supervisor.snapshot;
   useEffect(() => { onModalChange(modalVisible); return () => onModalChange(false); }, [modalVisible, onModalChange]);
-  useStartAgentSessionReset(inputs);
+  useStartAgentSessionReset({
+    lastSession: startState.lastSession, sessionId, setRootId, setDialog: state.setDialog,
+    setTerminalError: state.setTerminalError, setNotice: state.setNotice, setAttentionOpen: state.setAttentionOpen,
+  });
   useEffect(() => { scope.view.detailTrail = []; changed(); }, [sessionId, rootId]);
-  const model = useSupervisorViewModel(inputs);
+  const model = useSupervisorViewModel({
+    snapshot: supervisor.snapshot, rootId, connected: supervisor.connected, runtimeLive, session, scope,
+    hoverSpace: state.hoverSpace, sessionId, draftStorageWarning: drafts.storageWarning, projectRootMissing,
+  });
   const { snapshot } = supervisor;
   useEffect(() => {
     const workspaceId = runtimeLive ? session?.focused_space_id : null;
@@ -64,22 +61,91 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
     }).catch(cause => { if (!cancelled) state.setNotice(cause instanceof Error ? cause.message : "This project's supervisor could not be identified. Your terminals are unchanged."); });
     return () => { cancelled = true; };
   }, [active, client, sessionId, session?.focused_space_id, runtimeLive, supervisor.connected, snapshot?.state_store_id]);
-  const panel = supervisorViewPanel({ ...inputs, ...model, layout });
-  const navigation = useSupervisorViewNavigation({ ...inputs, ...model, ...panel });
-  const workarea = { ...inputs, ...model, ...panel, ...navigation };
+  const panel = supervisorViewPanel({
+    scope, attentionOpen: state.attentionOpen, graphViewportHeight: state.graphViewportHeight,
+    detailOpen: model.detailOpen, mode: model.mode, layout,
+  });
+  const navigation = useSupervisorViewNavigation({
+    scope, layout, tasks: model.tasks, rootRef: focus.rootRef, graphRef: focus.graphRef, laneRefs: focus.laneRefs,
+    selectedNode: model.selectedNode, mode: model.mode, bottomInset: panel.bottomInset,
+    attentionOpen: state.attentionOpen, setAttentionOpen: state.setAttentionOpen,
+    counterInvoker: focus.counterInvoker, panelInvoker: focus.panelInvoker, changed, detailInvoker: focus.detailInvoker,
+    detailOpen: model.detailOpen, onClose, setDetailSection: state.setDetailSection,
+    revealIntent: focus.revealIntent, explicitFocus: focus.explicitFocus, detailTask: model.detailTask,
+    setFocusNotice: state.setFocusNotice, model: model.model, observe: model.observe,
+  });
   // Keep layout and passive effects in their original relative order.
-  useSupervisorViewRevealLayout(workarea);
-  useSupervisorViewOpeningFocus(workarea);
-  const startFlow = useStartAgentFlow(workarea);
-  const sourceActions = useSupervisorViewSourceActions(workarea);
-  const attention = useSupervisorViewAttention(workarea);
-  const context = { ...workarea, ...startFlow, ...sourceActions, ...attention };
-  useSupervisorViewQuestionFocus(context);
-  useSupervisorViewDialogFocus(context);
-  useSupervisorViewSelectionFocus(context);
-  useSupervisorViewOverlayFocus(context);
-  const archiveCounts = useArchiveCounts(context);
-  const queue = supervisorViewQueueRows(context);
-  useSupervisorViewQueueLayout({ ...context, ...queue });
-  return <SupervisorViewSurface view={{ ...context, ...queue, archiveCounts }} />;
+  useSupervisorViewRevealLayout({
+    root: model.root, active, mode: model.mode, graphRef: focus.graphRef, listRef: navigation.listRef, scope, layout,
+    laneRefs: focus.laneRefs, revealSelection: navigation.revealSelection, revealIntent: focus.revealIntent,
+    saveOffsets: navigation.saveOffsets, workareaRef: focus.workareaRef, setGraphViewportHeight: state.setGraphViewportHeight,
+    rootId, detailOpen: model.detailOpen, bounds: panel.bounds, placement: panel.placement,
+  });
+  useSupervisorViewOpeningFocus({
+    active, snapshot, initialRootSnapshot: state.initialRootSnapshot, opened: state.opened, dialog: state.dialog,
+    placement: panel.placement, panelKind: panel.panelKind, rootRef: focus.rootRef,
+    focusTaskOrStart: navigation.focusTaskOrStart, root: model.root, rootId, focusedTask: focus.focusedTask,
+    taskIds: navigation.taskIds, mode: model.mode, lastTaskIds: focus.lastTaskIds, scope,
+    hasRetainedDraft: model.hasRetainedDraft, changed, focusRow: navigation.focusRow, setFocusNotice: state.setFocusNotice,
+    tasks: model.tasks, createdSelection: focus.createdSelection, selectedAgent: model.selectedAgent,
+    detailSubagent: model.detailSubagent, selectedNode: model.selectedNode, previousGraph: focus.previousGraph,
+    model: model.model, retainedDraftTaskId: model.retainedDraftTaskId, rowElement: navigation.rowElement,
+  });
+  const startFlow = useStartAgentFlow({
+    snapshot, connected: supervisor.connected, busy: supervisor.busy, startLock: startState.startLock,
+    startUnknown: startState.startUnknown, rootState: model.rootState, destination: model.destination,
+    setDialog: state.setDialog, startFocus: focus.startFocus, setStartPending: startState.setStartPending,
+    setNotice: state.setNotice, mutateResult: supervisor.mutateResult, captureMutationScope: supervisor.captureMutationScope,
+    setRootId, setStartUnknown: startState.setStartUnknown, startToken, startIntent, seenStart: startState.seenStart,
+    active, root: model.root, focusTaskOrStart: navigation.focusTaskOrStart, runtimeLive,
+    resumeOperations: startState.resumeOperations, startDraft: startState.startDraft, changed, sessionId,
+  });
+  const sourceActions = useSupervisorViewSourceActions({
+    snapshot, live: model.live, busy: supervisor.busy, setTerminalError: state.setTerminalError,
+    onTerminal, connected: supervisor.connected, runtimeLive, refresh: supervisor.refresh,
+    mutateResult: supervisor.mutateResult, root: model.root, scope, sessionId, setDialog: state.setDialog,
+  });
+  const attention = useSupervisorViewAttention({
+    snapshot, root: model.root, startUnknown: startState.startUnknown, terminalError: state.terminalError,
+    navigationError, error: supervisor.error, connected: supervisor.connected, orphanedWorkers: model.orphanedWorkers,
+    rootRuns: model.rootRuns, runtimeLive, tasks: model.tasks, rootState: model.rootState, scope,
+  });
+  useSupervisorViewQuestionFocus({
+    active, questionHadFocus: focus.questionHadFocus, decide: attention.decide, attentionOpen: state.attentionOpen,
+    setAttentionOpen: state.setAttentionOpen, focusTaskOrStart: navigation.focusTaskOrStart,
+  });
+  useSupervisorViewDialogFocus({
+    returnFocusIntent: focus.returnFocusIntent, dialog: state.dialog, rootRef: focus.rootRef, active, mode: model.mode,
+  });
+  useSupervisorViewSelectionFocus({
+    scope, tasks: model.tasks, changed, snapshot, createdSelection: focus.createdSelection, active,
+    dialog: state.dialog, sessionId, root: model.root, revealSelection: navigation.revealSelection, mode: model.mode,
+  });
+  useSupervisorViewOverlayFocus({
+    explicitFocus: focus.explicitFocus, active, placement: panel.placement, panelKind: panel.panelKind, rootRef: focus.rootRef,
+  });
+  const archiveCounts = useArchiveCounts({
+    client, sessionId, rootId, active, scope, snapshot, closedRoots: model.closedRoots,
+  });
+  const queue = supervisorViewQueueRows({
+    attention: attention.attention, snapshot, tasks: model.tasks, question: attention.question, answer: attention.answer,
+    root: model.root, changed, busy: supervisor.busy, live: model.live, rootState: model.rootState,
+    mutateResult: supervisor.mutateResult, captureMutationScope: supervisor.captureMutationScope,
+    connected: supervisor.connected, refresh: supervisor.refresh, setRootId, setNotice: state.setNotice, runtimeLive,
+    editPrerequisites: sourceActions.editPrerequisites, switchView: navigation.switchView, showItem: navigation.showItem,
+    attentionOpen: state.attentionOpen, setAttentionOpen: state.setAttentionOpen, select: navigation.select,
+    startPending: startState.startPending, start: startFlow.start, navigate: sourceActions.navigate, restart: startFlow.restart,
+    scope, mode: model.mode, rootRuns: model.rootRuns, model: model.model, selectedNode: model.selectedNode,
+    selectedTask: model.selectedTask, detailRun: model.detailRun, detailSubagent: model.detailSubagent, detailTask: model.detailTask,
+  });
+  useSupervisorViewQueueLayout({
+    workareaRef: focus.workareaRef, rootRef: focus.rootRef, layout, setInlineQueueCap: state.setInlineQueueCap,
+    mode: model.mode, rootId, rows: queue.rows, banner: model.banner, active,
+  });
+  return <SupervisorViewSurface view={{
+    client, sessionId, session, runtimeLive, active, startToken, startIntent, navigationError, onClose, onTerminal, onModalChange,
+    rootId, setRootId, projectRootMissing, scope, changed, lifecycleDrafts: drafts.lifecycle, draftStorageWarning: drafts.storageWarning,
+    ...supervisor, ...state, ...focus, ...startState, ...model, ...panel, ...navigation, ...startFlow, ...sourceActions, ...attention,
+    ...queue, archiveCounts,
+  }} />;
 }

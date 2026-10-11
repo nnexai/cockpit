@@ -331,21 +331,7 @@ impl OrchestrationService {
         &self, actor: &Actor, request: &OrchestrationMutationRequest,
     ) -> Result<Option<OrchestrationMutationResponse>, InspectionError> {
         use store::DurableOperationKind;
-        let (operation_id, kind) = match &request.action {
-            OrchestrationAction::SupervisorStart { operation_id, .. } => (operation_id, DurableOperationKind::SupervisorStart),
-            OrchestrationAction::RunResume { operation_id, .. } => (operation_id, DurableOperationKind::RunResume),
-            OrchestrationAction::RunAttach { operation_id, .. } => (operation_id, DurableOperationKind::RunAttach),
-            OrchestrationAction::JobChildRegister { operation_id, .. } => (operation_id, DurableOperationKind::JobChildRegister),
-            OrchestrationAction::WorkerStart { operation_id, .. } => (operation_id, DurableOperationKind::WorkerStart),
-            OrchestrationAction::TaskScopeUpdate { operation_id, .. } => (operation_id, DurableOperationKind::TaskScopeUpdate),
-            OrchestrationAction::IntegrationRecord { record } => (&record.operation_id, DurableOperationKind::IntegrationRecord),
-            OrchestrationAction::Report { message_id, .. } => (message_id, DurableOperationKind::Report),
-            OrchestrationAction::MessageSend { message_id, .. } => (message_id, DurableOperationKind::MessageSend),
-            OrchestrationAction::ResourceRequest { request } => (&request.operation_id, DurableOperationKind::ResourceRequest),
-            OrchestrationAction::ResourceRegister { request } => (&request.operation_id, DurableOperationKind::ResourceRegister),
-            OrchestrationAction::CleanupFinish { request } => (&request.operation_id, DurableOperationKind::CleanupFinish),
-            _ => return Ok(None),
-        };
+        let Some((operation_id, kind)) = durable_operation(&request.action) else { return Ok(None) };
         validate_identity(&request.session_id)?;
         if let Some(revision) = request.expected_revision { safe_counter(revision)?; }
         if let Actor::Agent(agent) = actor {
@@ -358,7 +344,7 @@ impl OrchestrationService {
         if let Some(response) = committed_result_replay(self, &locked, &mut state, actor, request)? {
             return Ok(Some(response));
         }
-        if !state.operations.iter().any(|r| r.operation_id == *operation_id) { return Ok(None); }
+        if !state.operations.iter().any(|r| r.operation_id == operation_id) { return Ok(None); }
         let Admission { caller, .. } = admit(&mut state, actor, request)?;
         match &request.action {
             OrchestrationAction::SupervisorStart { .. } => { operator(actor)?; }
@@ -463,12 +449,7 @@ impl OrchestrationService {
         if request
             .expected_revision
             .is_some_and(|revision| revision != state.revision)
-            && !matches!(request.action, OrchestrationAction::SupervisorStart { .. }
-                | OrchestrationAction::RunResume { .. } | OrchestrationAction::RunAttach { .. }
-                | OrchestrationAction::JobChildRegister { .. } | OrchestrationAction::WorkerStart { .. }
-                | OrchestrationAction::TaskScopeUpdate { .. } | OrchestrationAction::Report { .. }
-                | OrchestrationAction::MessageSend { .. } | OrchestrationAction::IntegrationRecord { .. }
-                | OrchestrationAction::ResourceRequest { .. })
+            && !allows_stale_machine_revision(&request.action)
         {
             return Err(error(
                 "orchestration_revision_conflict",
@@ -498,10 +479,11 @@ impl OrchestrationService {
             }
         }
         let Admission { caller, stale, location_changed } = admit(&mut state, actor, &request)?;
-        let semantic_operation = match &request.action {
-            OrchestrationAction::Report { message_id, .. } => Some((message_id.clone(), store::DurableOperationKind::Report)),
-            OrchestrationAction::MessageSend { message_id, .. } => Some((message_id.clone(), store::DurableOperationKind::MessageSend)),
-            _ => None,
+        let semantic_operation = if matches!(request.action,
+            OrchestrationAction::Report { .. } | OrchestrationAction::MessageSend { .. }) {
+            durable_operation(&request.action)
+        } else {
+            None
         };
         if let Some((operation_id, kind)) = &semantic_operation {
             let ctx = MutationCtx { service: self, locked: &locked, state: &mut state,
@@ -534,7 +516,7 @@ impl OrchestrationService {
                 };
                 let mut ctx = MutationCtx { service: self, locked: &locked, state: &mut state,
                     actor, caller, session_id: &request.session_id, resolved };
-                mutate::resume::record(&mut ctx, operation_id, kind, &request.action, root_id, result.clone(), Vec::new())?;
+                mutate::resume::record(&mut ctx, operation_id.to_owned(), kind, &request.action, root_id, result.clone(), Vec::new())?;
             }
             let revision = locked.save(&mut state)?;
             self.revision.send_replace(revision);
@@ -785,12 +767,17 @@ pub(crate) fn has_current_binding(state: &OrchestrationState, run: &Run) -> bool
                 && attach.attachment.launch_mode == attachment.launch_mode))
 }
 
-/// Stable project-root preference shared with the host's read-only lookup.
-pub fn preferred_project_root(runs: &[Run], session_id: &str, project_key: &str, selected: Option<&str>) -> Option<usize> {
-    let eligible = |run: &Run| run.session_id == session_id && run.parent_run_id.is_none()
+/// Exact eligibility shared by project-root preference and host candidate listing.
+pub fn is_project_root_candidate(run: &Run, session_id: &str, project_key: &str) -> bool {
+    run.session_id == session_id && run.parent_run_id.is_none()
         && run.root_id == run.run_id && run.stage != RunStage::Closed
         && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
-        && run.project.as_ref().is_some_and(|p| p.key == project_key);
+        && run.project.as_ref().is_some_and(|p| p.key == project_key)
+}
+
+/// Stable project-root preference shared with the host's read-only lookup.
+pub fn preferred_project_root(runs: &[Run], session_id: &str, project_key: &str, selected: Option<&str>) -> Option<usize> {
+    let eligible = |run: &Run| is_project_root_candidate(run, session_id, project_key);
     if let Some(selected) = selected {
         if let Some(index) = runs.iter().position(|r| r.run_id == selected && eligible(r)) { return Some(index); }
     }
@@ -1022,6 +1009,35 @@ fn validate_original_source(
         }
     }
     Ok(())
+}
+
+fn durable_operation(action: &OrchestrationAction) -> Option<(&str, store::DurableOperationKind)> {
+    use store::DurableOperationKind;
+    let operation = match action {
+        OrchestrationAction::SupervisorStart { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::SupervisorStart),
+        OrchestrationAction::RunResume { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::RunResume),
+        OrchestrationAction::RunAttach { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::RunAttach),
+        OrchestrationAction::JobChildRegister { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::JobChildRegister),
+        OrchestrationAction::WorkerStart { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::WorkerStart),
+        OrchestrationAction::TaskScopeUpdate { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskScopeUpdate),
+        OrchestrationAction::IntegrationRecord { record } => (record.operation_id.as_str(), DurableOperationKind::IntegrationRecord),
+        OrchestrationAction::Report { message_id, .. } => (message_id.as_str(), DurableOperationKind::Report),
+        OrchestrationAction::MessageSend { message_id, .. } => (message_id.as_str(), DurableOperationKind::MessageSend),
+        OrchestrationAction::ResourceRequest { request } => (request.operation_id.as_str(), DurableOperationKind::ResourceRequest),
+        OrchestrationAction::ResourceRegister { request } => (request.operation_id.as_str(), DurableOperationKind::ResourceRegister),
+        OrchestrationAction::CleanupFinish { request } => (request.operation_id.as_str(), DurableOperationKind::CleanupFinish),
+        _ => return None,
+    };
+    Some(operation)
+}
+
+fn allows_stale_machine_revision(action: &OrchestrationAction) -> bool {
+    matches!(action, OrchestrationAction::SupervisorStart { .. }
+        | OrchestrationAction::RunResume { .. } | OrchestrationAction::RunAttach { .. }
+        | OrchestrationAction::JobChildRegister { .. } | OrchestrationAction::WorkerStart { .. }
+        | OrchestrationAction::TaskScopeUpdate { .. } | OrchestrationAction::Report { .. }
+        | OrchestrationAction::MessageSend { .. } | OrchestrationAction::IntegrationRecord { .. }
+        | OrchestrationAction::ResourceRequest { .. })
 }
 
 fn committed_result_replay(

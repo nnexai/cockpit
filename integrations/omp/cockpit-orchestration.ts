@@ -247,42 +247,12 @@ function executablePath(path, cwd) {
   const relative = path.split("/").map(encodeURIComponent).join("/");
   return Bun.fileURLToPath(new URL(relative, Bun.pathToFileURL(`${cwd}/`)));
 }
-function createCli(pi, runId) {
-  const launchHint = process.env.COCKPIT_CLI_PATH;
-  const config = process.env.COCKPIT_CONFIG_PATH;
-  const session = process.env.COCKPIT_SESSION_ID;
-  const socket = process.env.COCKPIT_HERDR_SOCKET || process.env.HERDR_SOCKET_PATH;
-  const cacheScope = JSON.stringify([runId, config ?? null]);
+function createCliSelector(pi, launchHint) {
   let path = launchHint || "cockpit-cli";
   let hintIdentity;
   let hintRetired = false;
   let installationDirectory = launchHint?.startsWith("/") ? new URL(".", Bun.pathToFileURL(launchHint)) : undefined;
   const compatibility = new Map;
-  const attachmentId = process.env.COCKPIT_ATTACHMENT_ID;
-  const epoch = Number(process.env.COCKPIT_ATTACHMENT_EPOCH);
-  const attachments = new Map;
-  const children = new Map;
-  let lastPrompt;
-  let connected = false;
-  let persistedSession = "";
-  const prompt = (ctx) => {
-    if (!lastPrompt) {
-      for (const entry of ctx.sessionManager.getEntries()) {
-        const e = entry;
-        const saved = e.data?.binding;
-        if (e.type === "custom" && e.customType === PROMPT_ENTRY && e.data?.scope === cacheScope && saved?.run_id === runId && typeof saved.root_id === "string" && (saved.parent_run_id === null || typeof saved.parent_run_id === "string") && ["supervisor", "adopted", "worker"].includes(saved.kind) && typeof saved.brief === "string" && (saved.space_id === null || typeof saved.space_id === "string") && (saved.session_id === undefined || typeof saved.session_id === "string") && (saved.project_space_id === undefined || saved.project_space_id === null || typeof saved.project_space_id === "string")) {
-          lastPrompt = saved;
-          persistedSession = ctx.sessionManager.getSessionId();
-        }
-      }
-    }
-    if (lastPrompt && persistedSession !== ctx.sessionManager.getSessionId()) {
-      pi.appendEntry(PROMPT_ENTRY, { scope: cacheScope, binding: lastPrompt });
-      persistedSession = ctx.sessionManager.getSessionId();
-      connected = false;
-    }
-    return lastPrompt ? { ...lastPrompt, cached: !connected } : undefined;
-  };
   const select = async (ctx, signal) => {
     const candidates = [];
     const searchPaths = (process.env.PATH ?? "").split(":").filter(Boolean);
@@ -361,6 +331,89 @@ function createCli(pi, runId) {
     }
     throw mismatch ?? new Error("Cockpit host CLI is unavailable; local work can continue while the current installation reconnects.");
   };
+  return {
+    get path() {
+      return path;
+    },
+    select,
+    async matchesCurrentIdentity(selected) {
+      if (await executableIdentity(selected) !== compatibility.get(selected)?.identity) {
+        compatibility.delete(selected);
+        return false;
+      }
+      return true;
+    },
+    async failedCall(selected, error) {
+      if (!(error instanceof CockpitCliError))
+        compatibility.delete(selected);
+      if (!await executableIdentity(selected))
+        hintRetired ||= selected === launchHint;
+    }
+  };
+}
+function createPromptCache(pi, runId, cacheScope) {
+  let lastPrompt;
+  let connected = false;
+  let persistedSession = "";
+  const prompt = (ctx) => {
+    if (!lastPrompt) {
+      for (const entry of ctx.sessionManager.getEntries()) {
+        const e = entry;
+        const saved = e.data?.binding;
+        if (e.type === "custom" && e.customType === PROMPT_ENTRY && e.data?.scope === cacheScope && saved?.run_id === runId && typeof saved.root_id === "string" && (saved.parent_run_id === null || typeof saved.parent_run_id === "string") && ["supervisor", "adopted", "worker"].includes(saved.kind) && typeof saved.brief === "string" && (saved.space_id === null || typeof saved.space_id === "string") && (saved.session_id === undefined || typeof saved.session_id === "string") && (saved.project_space_id === undefined || saved.project_space_id === null || typeof saved.project_space_id === "string")) {
+          lastPrompt = saved;
+          persistedSession = ctx.sessionManager.getSessionId();
+        }
+      }
+    }
+    if (lastPrompt && persistedSession !== ctx.sessionManager.getSessionId()) {
+      pi.appendEntry(PROMPT_ENTRY, { scope: cacheScope, binding: lastPrompt });
+      persistedSession = ctx.sessionManager.getSessionId();
+      connected = false;
+    }
+    return lastPrompt ? { ...lastPrompt, cached: !connected } : undefined;
+  };
+  const remember = (fresh, nativeSession) => {
+    const binding = {
+      run_id: fresh.run_id,
+      root_id: fresh.root_id,
+      parent_run_id: fresh.parent_run_id,
+      kind: fresh.kind,
+      space_id: fresh.attachment?.location?.workspace_id ?? null,
+      session_id: fresh.session_id,
+      project_space_id: fresh.setup?.project_workspace_id ?? fresh.attachment?.location?.workspace_id ?? null,
+      brief: fresh.brief,
+      cached: true,
+      ...fresh.task_id !== undefined ? { task_id: fresh.task_id } : {},
+      ...fresh.checkout_claim_id !== undefined ? { checkout_claim_id: fresh.checkout_claim_id } : {}
+    };
+    if (typeof binding.root_id === "string" && typeof binding.brief === "string" && JSON.stringify(lastPrompt) !== JSON.stringify(binding)) {
+      lastPrompt = binding;
+      pi.appendEntry(PROMPT_ENTRY, { scope: cacheScope, binding });
+      persistedSession = nativeSession;
+    }
+  };
+  return {
+    prompt,
+    remember,
+    setConnected(value) {
+      connected = value;
+    }
+  };
+}
+function createCli(pi, runId) {
+  const launchHint = process.env.COCKPIT_CLI_PATH;
+  const config = process.env.COCKPIT_CONFIG_PATH;
+  const session = process.env.COCKPIT_SESSION_ID;
+  const socket = process.env.COCKPIT_HERDR_SOCKET || process.env.HERDR_SOCKET_PATH;
+  const cacheScope = JSON.stringify([runId, config ?? null]);
+  const selector = createCliSelector(pi, launchHint);
+  const attachmentId = process.env.COCKPIT_ATTACHMENT_ID;
+  const epoch = Number(process.env.COCKPIT_ATTACHMENT_EPOCH);
+  const attachments = new Map;
+  const children = new Map;
+  const promptCache = createPromptCache(pi, runId, cacheScope);
+  const prompt = promptCache.prompt;
   const routing = [];
   if (config)
     routing.push("--config", config);
@@ -373,17 +426,16 @@ function createCli(pi, runId) {
     const identity = callerIdentity(pi, runId, ctx);
     let selected;
     try {
-      selected = await select(ctx, signal);
+      selected = await selector.select(ctx, signal);
     } catch (error) {
-      connected = false;
+      promptCache.setConnected(false);
       throw error;
     }
     const active = async () => {
       if (signal?.aborted || ctx.sessionManager.getSessionId() !== nativeSession)
         throw new Error("Cockpit call superseded.");
       callerIdentity(pi, runId, ctx);
-      if (await executableIdentity(selected) !== compatibility.get(selected)?.identity) {
-        compatibility.delete(selected);
+      if (!await selector.matchesCurrentIdentity(selected)) {
         throw new Error("Cockpit CLI changed during the call; reconnect with the current compatible installation.");
       }
       if (signal?.aborted || ctx.sessionManager.getSessionId() !== nativeSession)
@@ -441,11 +493,8 @@ function createCli(pi, runId) {
     try {
       return parseCliResponse(credentialFile ? await pi.exec("/usr/bin/env", [`COCKPIT_JOB_CREDENTIAL_FILE=${credentialFile}`, selected, ...command], { signal, timeout, cwd: ctx.cwd }) : await pi.exec(selected, command, { signal, timeout, cwd: ctx.cwd }));
     } catch (error) {
-      connected = false;
-      if (!(error instanceof CockpitCliError))
-        compatibility.delete(selected);
-      if (!await executableIdentity(selected))
-        hintRetired ||= selected === launchHint;
+      promptCache.setConnected(false);
+      await selector.failedCall(selected, error);
       throw error;
     }
   };
@@ -604,7 +653,7 @@ function createCli(pi, runId) {
       if (ctx.sessionManager.getSessionId() !== nativeSession || ctx.agent.id !== childId) {
         throw new Error("The captured terminal child identity changed.");
       }
-      const selected = await select(ctx);
+      const selected = await selector.select(ctx);
       const command = [
         "subagent",
         "control-done",
@@ -628,35 +677,18 @@ function createCli(pi, runId) {
       if (signal?.aborted || ctx.sessionManager.getSessionId() !== nativeSession)
         throw new Error("Cockpit refresh superseded.");
       if (ctx.agent.kind === "main") {
-        const binding = {
-          run_id: fresh.run_id,
-          root_id: fresh.root_id,
-          parent_run_id: fresh.parent_run_id,
-          kind: fresh.kind,
-          space_id: fresh.attachment?.location?.workspace_id ?? null,
-          session_id: fresh.session_id,
-          project_space_id: fresh.setup?.project_workspace_id ?? fresh.attachment?.location?.workspace_id ?? null,
-          brief: fresh.brief,
-          cached: true,
-          ...fresh.task_id !== undefined ? { task_id: fresh.task_id } : {},
-          ...fresh.checkout_claim_id !== undefined ? { checkout_claim_id: fresh.checkout_claim_id } : {}
-        };
-        if (typeof binding.root_id === "string" && typeof binding.brief === "string" && JSON.stringify(lastPrompt) !== JSON.stringify(binding)) {
-          lastPrompt = binding;
-          pi.appendEntry(PROMPT_ENTRY, { scope: cacheScope, binding });
-          persistedSession = nativeSession;
-        }
+        promptCache.remember(fresh, nativeSession);
       }
-      connected = true;
+      promptCache.setConnected(true);
       return fresh;
     } catch (error) {
-      connected = false;
+      promptCache.setConnected(false);
       throw error;
     }
   };
   return {
     get path() {
-      return path;
+      return selector.path;
     },
     call,
     semantic,

@@ -3,9 +3,15 @@ import { taskLanes } from "./boardNavigation";
 import { writeOffset } from "./reveal";
 import type { SupervisorViewInputs, SupervisorViewModel, SupervisorViewNavigation, SupervisorViewPanel } from "./supervisorViewTypes";
 
-type LayoutContext = SupervisorViewInputs & SupervisorViewModel & SupervisorViewNavigation & SupervisorViewPanel;
+type RevealLayoutInputs = Pick<SupervisorViewInputs,
+  "active" | "graphRef" | "scope" | "laneRefs" | "revealIntent" | "workareaRef" | "setGraphViewportHeight" | "rootId"
+> & Pick<SupervisorViewModel, "root" | "mode" | "detailOpen">
+  & Pick<SupervisorViewNavigation, "listRef" | "revealSelection" | "saveOffsets">
+  & Pick<SupervisorViewPanel, "layout" | "bounds" | "placement">;
+type QueueLayoutInputs = Pick<SupervisorViewInputs, "workareaRef" | "rootRef" | "setInlineQueueCap" | "rootId" | "active">
+  & Pick<SupervisorViewModel, "mode" | "banner"> & Pick<SupervisorViewPanel, "layout"> & { rows: readonly unknown[] };
 
-export function useSupervisorViewRevealLayout(context: LayoutContext) {
+export function useSupervisorViewRevealLayout(context: RevealLayoutInputs) {
   const { root, active, mode, graphRef, listRef, scope, layout, laneRefs, revealSelection, revealIntent, saveOffsets, workareaRef, setGraphViewportHeight, rootId, detailOpen, bounds, placement } = context;
   useLayoutEffect(() => {
     if (!root || !active) return;
@@ -36,7 +42,7 @@ export function useSupervisorViewRevealLayout(context: LayoutContext) {
   useLayoutEffect(() => { if (detailOpen && mode !== "tasks") revealSelection(false, true); }, [layout.width, layout.height, bounds?.value, placement]);
 }
 
-export function useSupervisorViewQueueLayout(context: LayoutContext & { rows: readonly unknown[] }) {
+export function useSupervisorViewQueueLayout(context: QueueLayoutInputs) {
   const { workareaRef, rootRef, layout, setInlineQueueCap, mode, rootId, rows, banner, active } = context;
   useLayoutEffect(() => {
     const workarea = workareaRef.current, view = rootRef.current;

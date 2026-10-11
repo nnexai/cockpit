@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Run } from "../../protocol/generated/v1";
 import type { SupervisorLifecycleDrafts } from "./useSupervisorDrafts";
-import type { SupervisorViewInputs, SupervisorViewModel, StartAgentFlowState, SupervisorViewActions } from "./supervisorViewTypes";
+import type { SupervisorViewInputs, SupervisorViewModel, SupervisorViewNavigation, StartAgentFlowState, SupervisorViewActions } from "./supervisorViewTypes";
 
 export function useStartAgentFlowState(sessionId: string, lifecycle: SupervisorLifecycleDrafts, changed: () => void): StartAgentFlowState {
   const [startPending, setStartPending] = useState(false);
@@ -19,7 +19,7 @@ export function useStartAgentFlowState(sessionId: string, lifecycle: SupervisorL
   return { startPending, setStartPending, startUnknown: lifecycle.startUnknown, setStartUnknown, startLock, resumeOperations, startDraft, lastSession, seenStart };
 }
 
-export function useStartAgentSessionReset(context: SupervisorViewInputs) {
+export function useStartAgentSessionReset(context: Pick<SupervisorViewInputs, "lastSession" | "sessionId" | "setRootId" | "setDialog" | "setTerminalError" | "setNotice" | "setAttentionOpen">) {
   const { lastSession, sessionId, setRootId, setDialog, setTerminalError, setNotice, setAttentionOpen } = context;
   useEffect(() => {
     if (lastSession.current === sessionId) return;
@@ -27,7 +27,9 @@ export function useStartAgentSessionReset(context: SupervisorViewInputs) {
   }, [sessionId]);
 }
 
-export function useStartAgentFlow(context: SupervisorViewInputs & SupervisorViewModel & { focusTaskOrStart(): void }): Pick<SupervisorViewActions, "started" | "start" | "restart"> {
+export function useStartAgentFlow(context: Pick<SupervisorViewInputs,
+  "snapshot" | "connected" | "busy" | "startLock" | "startUnknown" | "setDialog" | "startFocus" | "setStartPending" | "setNotice" | "mutateResult" | "captureMutationScope" | "setRootId" | "setStartUnknown" | "startToken" | "startIntent" | "seenStart" | "active" | "runtimeLive" | "resumeOperations" | "startDraft" | "changed" | "sessionId"
+> & Pick<SupervisorViewModel, "rootState" | "destination" | "root"> & Pick<SupervisorViewNavigation, "focusTaskOrStart">): Pick<SupervisorViewActions, "started" | "start" | "restart"> {
   const { snapshot, connected, busy, startLock, startUnknown, rootState, destination, setDialog, startFocus, setStartPending, setNotice, mutateResult, captureMutationScope, setRootId, setStartUnknown, startToken, startIntent, seenStart, active, root, focusTaskOrStart, runtimeLive, resumeOperations, startDraft, changed, sessionId } = context;
   const fresh = snapshot?.session_id === sessionId && connected && runtimeLive && snapshot.runtime.status === "fresh";
   const started = (runId: string) => { delete startDraft.current.operation; delete startDraft.current.requestScope; changed(); if (startFocus.current) startFocus.current.runId = runId; setRootId(runId); setStartUnknown(false); };

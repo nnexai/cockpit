@@ -172,6 +172,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Subagent delivery/projection/routing | `crates/cockpit-core/src/orchestration/messages/subagent_control.rs`; `crates/cockpit-core/src/orchestration/projection.rs`; `crates/cockpit-core/src/orchestration/routing.rs` |
 | Cleanup/resources/terminal effects | `crates/cockpit-core/src/orchestration/cleanup.rs`; `crates/cockpit-core/src/orchestration/fixture_resources.rs`; `crates/cockpit-core/src/orchestration/resource_queue.rs`; `crates/cockpit-core/src/orchestration/retire.rs` |
 | Runtime owner and Herdr launch | `crates/cockpit-host/src/orchestration_runtime.rs`; `crates/cockpit-herdr/src/cli/orchestration.rs` |
+| Orchestration contract tests | `crates/cockpit-core/src/orchestration/service_tests.rs` (shared fixture); `crates/cockpit-core/src/orchestration/service_tests/` (domain suites); core `orchestration/{dispatch,messages,credentials,cleanup}/tests.rs`; `crates/cockpit-host/src/orchestration_runtime/tests.rs` |
 | Agent CLI facade/args/caller | `crates/cockpit-host/src/cli_orchestration/mod.rs`; `crates/cockpit-host/src/cli_orchestration/args.rs`; `crates/cockpit-host/src/cli_orchestration/caller.rs` |
 | Agent CLI context/wait/output | `crates/cockpit-host/src/cli_orchestration/context.rs`; `crates/cockpit-host/src/cli_orchestration/wait.rs`; `crates/cockpit-host/src/cli_orchestration/output.rs` |
 | Agent CLI retirement | `crates/cockpit-host/src/cli_orchestration/retirement.rs` |

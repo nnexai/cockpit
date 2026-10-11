@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type { ClosedTaskCount } from "./SupervisorActivity";
 import type { SupervisorViewInputs, SupervisorViewModel } from "./supervisorViewTypes";
 
-export function useArchiveCounts(context: Pick<SupervisorViewInputs, "client" | "sessionId" | "rootId" | "active" | "scope" | "snapshot"> & Pick<SupervisorViewModel, "closedRoots">) {
+type ArchiveCountInputs = Pick<SupervisorViewInputs, "client" | "sessionId" | "rootId" | "active" | "scope" | "snapshot"> & Pick<SupervisorViewModel, "closedRoots">;
+
+export function useArchiveCounts(context: ArchiveCountInputs) {
   const { client, sessionId, rootId, active, scope, snapshot, closedRoots } = context;
   const [archiveCounts, setArchiveCounts] = useState<ReadonlyMap<string, ClosedTaskCount>>(new Map());
   const archiveGeneration = useRef(0);

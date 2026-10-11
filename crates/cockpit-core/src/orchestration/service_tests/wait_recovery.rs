@@ -1,0 +1,466 @@
+use super::*;
+
+fn wait_request(fixture: &Fixture, timeout_ms: u32) -> OrchestrationWaitRequest {
+    OrchestrationWaitRequest {
+        after_revision: fixture.state().revision,
+        after_tasks_token: fixture.service.store.tasks_token().unwrap(),
+        timeout_ms,
+    }
+}
+
+// Polling once establishes a deterministic pending-read barrier without letting
+// Tokio auto-advance the paused clock. The real wait registers its own wakers.
+async fn poll_wait_once<F: Future>(
+    mut future: std::pin::Pin<&mut F>,
+) -> std::task::Poll<F::Output> {
+    std::future::poll_fn(|cx| std::task::Poll::Ready(future.as_mut().poll(cx))).await
+}
+
+fn completed_wait(
+    result: std::task::Poll<Result<OrchestrationWaitResponse, InspectionError>>,
+) -> OrchestrationWaitResponse {
+    match result {
+        std::task::Poll::Ready(response) => response.unwrap(),
+        std::task::Poll::Pending => panic!("Expected the consumer wait to complete"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_already_changed_revision_or_tasks_token_returns_at_zero_timeout() {
+    let fixture = Fixture::new();
+    let before = wait_request(&fixture, 0);
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Already available");
+    let current = wait_request(&fixture, 0);
+    let requests = [
+        OrchestrationWaitRequest {
+            after_tasks_token: current.after_tasks_token.clone(),
+            ..before
+        },
+        OrchestrationWaitRequest {
+            after_revision: current.after_revision,
+            after_tasks_token: "older-task-token".into(),
+            timeout_ms: 0,
+        },
+    ];
+    let started = tokio::time::Instant::now();
+    for request in requests {
+        let mut waiting = Box::pin(fixture.service.wait(&request));
+        let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+        assert!(response.changed);
+        assert_eq!(response.revision, current.after_revision);
+        assert_eq!(response.tasks_token, current.after_tasks_token);
+    }
+    assert_eq!(tokio::time::Instant::now(), started);
+    assert_eq!(fixture.task(&root, &task.task_id).title, "Already available");
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_zero_timeout_without_change_returns_current_cursor() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let request = wait_request(&fixture, 0);
+    let started = tokio::time::Instant::now();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(!response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_eq!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(tokio::time::Instant::now(), started);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_watched_task_change_wakes_without_advancing_time() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let request = wait_request(&fixture, 3_000);
+    let started = tokio::time::Instant::now();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+
+    let task = fixture.create_task(&root, "Delivered by the watched service");
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(response.changed);
+    assert_eq!(response.revision, fixture.state().revision);
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    assert_eq!(tokio::time::Instant::now(), started);
+    assert_eq!(
+        fixture.task(&root, &task.task_id).title,
+        "Delivered by the watched service"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_external_service_revision_is_visible_within_wait_budget() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let external = OrchestrationService::open(&fixture.configuration).unwrap();
+    let request = wait_request(&fixture, 3_000);
+    let before = fixture.state_bytes();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+
+    let (new_root, attempt) = run_result(
+        external
+            .mutate_resolved(
+                &Actor::Operator(OperatorOrigin::Browser),
+                OrchestrationMutationRequest {
+                    session_id: SESSION.into(),
+                    expected_revision: Some(request.after_revision),
+                    action: OrchestrationAction::SupervisorStart {
+                        operation_id: id(),
+                        mode: SupervisorStartMode::Another,
+                        selected_root_id: None,
+                        expected_project_key: Some(fixture.project().key),
+                        target: Some(target()),
+                        label: Some("External service supervisor".into()),
+                    },
+                },
+                &ResolvedMutationInput { project: Some(fixture.project()), ..ResolvedMutationInput::default() },
+            )
+            .unwrap(),
+    );
+    let committed = fixture.state_bytes();
+    assert_ne!(committed, before, "external machine mutation must persist a revision");
+    // This service has no notification from the external writer.
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(1_000)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(response.changed);
+    assert_eq!(response.revision, fixture.state().revision);
+    assert!(response.revision > request.after_revision);
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    let delivered = fixture.run(&new_root);
+    assert_eq!(delivered.run_id, new_root);
+    assert_eq!(delivered.attempt, attempt);
+    assert_eq!(delivered.kind, RunKind::Supervisor);
+    assert_eq!(delivered.root_id, new_root);
+    assert!(delivered.parent_run_id.is_none());
+    assert_eq!(delivered.label, "External service supervisor");
+    assert_eq!(fixture.state_bytes(), committed, "wait must not write machine state");
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_external_markdown_replacement_delivers_task_without_revision_change() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Original task title");
+    let request = wait_request(&fixture, 3_000);
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+
+    let path = fixture.service.base().join("tasks").join(format!("{root}.md"));
+    let replacement = path.with_extension("replacement");
+    let document = std::fs::read_to_string(&path).unwrap();
+    let updated = document.replace("Original task title", "Externally revised task title");
+    assert_ne!(updated, document);
+    std::fs::write(&replacement, updated).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    assert_eq!(fixture.state().revision, request.after_revision);
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+
+    tokio::time::advance(Duration::from_millis(1_500)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_ne!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    assert_eq!(
+        fixture.task(&root, &task.task_id).title,
+        "Externally revised task title"
+    );
+    assert_eq!(fixture.task(&root, &task.task_id).body, task.body);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_short_timeout_returns_unchanged_at_the_requested_deadline() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let request = wait_request(&fixture, 20);
+    let started = tokio::time::Instant::now();
+    let before = fixture.state_bytes();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(19)).await;
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(!response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_eq!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(tokio::time::Instant::now() - started, Duration::from_millis(20));
+    assert_eq!(fixture.state_bytes(), before);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_oversized_timeout_is_clipped_to_the_protocol_maximum() {
+    let fixture = Fixture::new();
+    let request = wait_request(&fixture, u32::MAX);
+    let started = tokio::time::Instant::now();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(29_999)).await;
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(!response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_eq!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(tokio::time::Instant::now() - started, Duration::from_secs(30));
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_cancellation_preserves_state_and_next_wait_rediscovers_change() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let original = fixture.create_task(&root, "Existing task");
+    let request = wait_request(&fixture, 3_000);
+    let started = tokio::time::Instant::now();
+    let before = fixture.state_bytes();
+    let before_task = fixture.task(&root, &original.task_id);
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    drop(waiting);
+    assert_eq!(fixture.state_bytes(), before);
+    assert_eq!(
+        fixture.task(&root, &original.task_id).task_revision,
+        before_task.task_revision
+    );
+
+    let arrived = fixture.create_task(&root, "Arrived after cancellation");
+    let mut next_wait = Box::pin(fixture.service.wait(&request));
+    let response = completed_wait(poll_wait_once(next_wait.as_mut()).await);
+    assert!(response.changed);
+    assert_eq!(response.revision, fixture.state().revision);
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    assert_eq!(tokio::time::Instant::now(), started);
+    assert_eq!(
+        fixture.task(&root, &arrived.task_id).title,
+        "Arrived after cancellation"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_subscription_edges_do_not_lose_back_to_back_changes() {
+    for mutate_before_first_poll in [true, false] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let request = wait_request(&fixture, 3_000);
+        let started = tokio::time::Instant::now();
+        let mut waiting = Box::pin(fixture.service.wait(&request));
+        if !mutate_before_first_poll {
+            assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+        }
+        // Cover both a commit before subscription and retained notifications
+        // after the first unchanged read, before the consumer is polled again.
+        let first = fixture.create_task(&root, "First edge arrival");
+        let second = fixture.create_task(&root, "Second edge arrival");
+        let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+        assert!(response.changed);
+        assert_eq!(response.revision, fixture.state().revision);
+        assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+        assert_eq!(tokio::time::Instant::now(), started);
+        assert_eq!(fixture.task(&root, &first.task_id).title, "First edge arrival");
+        assert_eq!(fixture.task(&root, &second.task_id).title, "Second edge arrival");
+    }
+}
+
+#[test]
+fn recovery_without_pending_intents_does_not_notify_subscribers() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let receiver = fixture.service.subscribe();
+    let before = fixture.state_bytes();
+    for _ in 0..3 {
+        fixture.service.recover_intents().unwrap();
+        assert!(!receiver.has_changed().unwrap());
+        assert_eq!(fixture.state_bytes(), before);
+    }
+}
+
+#[test]
+fn recovery_observes_external_revision_once() {
+    let fixture = Fixture::new();
+    let external = OrchestrationService::open(&fixture.configuration).unwrap();
+    let mut receiver = external.subscribe();
+    let initial_revision = *receiver.borrow();
+    fixture.root();
+    let revision = fixture.state().revision;
+    assert!(revision > initial_revision);
+    assert!(!receiver.has_changed().unwrap());
+    let before = fixture.state_bytes();
+
+    external.recover_intents().unwrap();
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(*receiver.borrow_and_update(), revision);
+    assert_eq!(fixture.state_bytes(), before);
+    external.recover_intents().unwrap();
+    assert!(!receiver.has_changed().unwrap());
+    assert_eq!(fixture.state_bytes(), before);
+}
+
+#[test]
+fn recovery_publishes_assignment_changes_before_later_recovery_error() {
+    let fixture = Fixture::new();
+    let roots = [fixture.root(), fixture.root()];
+    let task_ids = [id(), id()];
+    let paths = roots
+        .each_ref()
+        .map(|root| fixture.service.base().join("tasks").join(format!("{root}.md")));
+    for index in 0..2 {
+        // A directory in place of Markdown deterministically interrupts the
+        // public assignment after its pending journal has been saved.
+        std::fs::create_dir(&paths[index]).unwrap();
+        assert!(
+            fixture
+                .apply(
+                    &Actor::Operator(OperatorOrigin::Browser),
+                    OrchestrationAction::TaskAssign {
+                        root_id: roots[index].clone(),
+                        task_id: task_ids[index].clone(),
+                        title: format!("Interrupted assignment {index}"),
+                        description: "Durable recovery notification".into(),
+                    },
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(fixture.state().assignment_intents.len(), 2);
+    std::fs::remove_dir(&paths[0]).unwrap();
+    let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+    let mut receiver = reopened.subscribe();
+    let initial_revision = *receiver.borrow();
+
+    assert!(reopened.recover_intents().is_err());
+    let state = fixture.state();
+    assert!(state.revision > initial_revision);
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(*receiver.borrow_and_update(), state.revision);
+    assert_eq!(state.assignment_intents.len(), 1);
+    assert_eq!(state.assignment_intents[0].task_id, task_ids[1]);
+    assert_eq!(fixture.task(&roots[0], &task_ids[0]).title, "Interrupted assignment 0");
+    assert!(state.messages.iter().any(|message| {
+        message.message_id == format!("assign-{}", task_ids[0])
+    }));
+
+    // The remaining I/O error alone is not a change and must not self-notify.
+    let before = fixture.state_bytes();
+    assert!(reopened.recover_intents().is_err());
+    assert!(!receiver.has_changed().unwrap());
+    assert_eq!(fixture.state_bytes(), before);
+
+    std::fs::remove_dir(&paths[1]).unwrap();
+    reopened.recover_intents().unwrap();
+    let state = fixture.state();
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(*receiver.borrow_and_update(), state.revision);
+    assert!(state.assignment_intents.is_empty());
+    assert_eq!(fixture.task(&roots[1], &task_ids[1]).title, "Interrupted assignment 1");
+    reopened.recover_intents().unwrap();
+    assert!(!receiver.has_changed().unwrap());
+}
+
+#[test]
+fn recovery_conflicts_on_changed_task_even_when_externally_checked() {
+    for already_checked in [false, true] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let (task, run_id, actor) = fixture.working(&root);
+        fixture.apply(&actor, fixture.successful_result(&actor))
+            .unwrap();
+        let intent_id = fixture.pending_intent(&root, &task, &run_id);
+        // A canonical external edit may race a durable acceptance intent; the
+        // content API correctly refuses that intent rather than providing a bypass.
+        let edited = {
+            let locked = fixture.service.store.lock().unwrap();
+            locked.tasks(&root).unwrap().update(&task.task_id, &task.task_revision,
+                Some("Changed while acceptance was interrupted"), None).unwrap()
+        };
+        assert_ne!(edited.task_revision, task.task_revision);
+        if already_checked {
+            let locked = fixture.service.store.lock().unwrap();
+            locked
+                .tasks(&root)
+                .unwrap()
+                .check(&task.task_id, &edited.task_revision, true)
+                .unwrap();
+        }
+        let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+        let mut receiver = reopened.subscribe();
+        reopened.recover_intents().unwrap();
+        let state = reopened.store.lock().unwrap().read().unwrap();
+        let run = &state.runs[run_index(&state, &run_id).unwrap()];
+        assert_eq!(run.stage, RunStage::Reported);
+        assert!(run.close_reason.is_none());
+        assert_eq!(state.task_intents.len(), 1);
+        assert_eq!(state.task_intents[0].intent_id, intent_id);
+        assert_eq!(state.task_intents[0].state, IntentState::Conflict);
+        assert_eq!(
+            state.task_intents[0].expected_task_revision,
+            task.task_revision
+        );
+        assert_eq!(fixture.task(&root, &task.task_id).checked, already_checked);
+        assert!(receiver.has_changed().unwrap());
+        assert_eq!(*receiver.borrow_and_update(), state.revision);
+        let recovered_revision = state.revision;
+        reopened.recover_intents().unwrap();
+        assert_eq!(
+            reopened.store.lock().unwrap().read().unwrap().revision,
+            recovered_revision
+        );
+        assert!(!receiver.has_changed().unwrap());
+    }
+}
+
+#[test]
+fn recovery_applies_unchanged_pending_acceptance_once() {
+    for check_phase in 0..3 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let (task, run_id, actor) = fixture.working(&root);
+        // Pending from unchecked Markdown, crash after writing the exact check,
+        // or acceptance explicitly requested on the already checked item.
+        if check_phase == 2 {
+            fixture
+                .service
+                .store
+                .lock()
+                .unwrap()
+                .tasks(&root)
+                .unwrap()
+                .check(&task.task_id, &task.task_revision, true)
+                .unwrap();
+            fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
+            fixture.pending_intent(&root, &fixture.task(&root, &task.task_id), &run_id);
+        } else {
+            fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
+            fixture.pending_intent(&root, &task, &run_id);
+            if check_phase == 1 {
+                fixture
+                    .service
+                    .store
+                    .lock()
+                    .unwrap()
+                    .tasks(&root)
+                    .unwrap()
+                    .check(&task.task_id, &task.task_revision, true)
+                    .unwrap();
+            }
+        }
+        let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
+        let mut receiver = reopened.subscribe();
+        reopened.recover_intents().unwrap();
+        assert!(fixture.task(&root, &task.task_id).checked);
+        assert_eq!(
+            fixture.run(&run_id).close_reason,
+            Some(CloseReason::Accepted)
+        );
+        assert!(fixture.state().task_intents.is_empty());
+        let revision = fixture.state().revision;
+        assert!(receiver.has_changed().unwrap());
+        assert_eq!(*receiver.borrow_and_update(), revision);
+        reopened.recover_intents().unwrap();
+        assert_eq!(fixture.state().revision, revision);
+        assert!(!receiver.has_changed().unwrap());
+    }
+}

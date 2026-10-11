@@ -3,7 +3,7 @@ import { useRovingList } from "../sidebar/useRovingList";
 import { taskLanes, visibleTaskIds } from "./boardNavigation";
 import { isCovered, readOffset, revealNearest } from "./reveal";
 import type { AttentionTier } from "./attention";
-import type { DetailFocus, SupervisorViewContext, SupervisorViewInputs, SupervisorViewModel, SupervisorViewNavigation, SupervisorViewPanel, SupervisorViewAttention } from "./supervisorViewTypes";
+import type { DetailFocus, SupervisorViewInputs, SupervisorViewModel, SupervisorViewNavigation, SupervisorViewPanel, SupervisorViewAttention } from "./supervisorViewTypes";
 import type { TaskLane } from "../../protocol/generated/v1";
 import type { ScopeDrafts } from "./useSupervisorDrafts";
 
@@ -29,7 +29,10 @@ export function useDetailFocus(): DetailFocus {
   const previousGraph = useRef<{ scope: ScopeDrafts; ids: readonly string[] } | null>(null);
   return { detailInvoker, panelInvoker, counterInvoker, returnFocusIntent, rootRef, workareaRef, graphRef, laneRefs, focusedTask, focusedGraph, focusWithinDetail, questionHadFocus, startFocus, createdSelection, lastTaskIds, revealIntent, explicitFocus, previousGraph };
 }
-export function useSupervisorViewNavigation(context: SupervisorViewInputs & SupervisorViewModel & SupervisorViewPanel): SupervisorViewNavigation {
+export function useSupervisorViewNavigation(context: Pick<SupervisorViewInputs,
+  "scope" | "rootRef" | "graphRef" | "laneRefs" | "attentionOpen" | "setAttentionOpen" | "counterInvoker" | "panelInvoker" | "changed" | "detailInvoker" | "onClose" | "setDetailSection" | "revealIntent" | "explicitFocus" | "setFocusNotice"
+> & Pick<SupervisorViewModel, "tasks" | "selectedNode" | "mode" | "detailOpen" | "detailTask" | "model" | "observe">
+  & Pick<SupervisorViewPanel, "layout" | "bottomInset">): SupervisorViewNavigation {
   const { scope, layout, tasks, rootRef, graphRef, laneRefs, selectedNode, mode, bottomInset, attentionOpen, setAttentionOpen, counterInvoker, panelInvoker, changed, detailInvoker, detailOpen, onClose, setDetailSection, revealIntent, explicitFocus, detailTask, setFocusNotice, model, observe } = context;
   const navOptions = { arrangement: layout.narrow ? "stacked" as const : "lanes" as const, completedOpen: scope.disclosures.completed, collapsedLanes: scope.view.collapsedLanes };
   const taskIds = visibleTaskIds(tasks, navOptions);
@@ -119,7 +122,11 @@ export function useSupervisorViewNavigation(context: SupervisorViewInputs & Supe
   };
   return { navOptions, taskIds, listRef, listProps, tabIndexFor, focusRow, rowElement, selectedVisibleId, revealSelection, focusTaskOrStart, saveOffsets, closeAttention, closePanel, closeDetail, escapeLayer, select, navigateRelation, switchView, dimFor, showItem, openPanel };
 }
-export function useSupervisorViewOpeningFocus(context: SupervisorViewInputs & SupervisorViewModel & SupervisorViewNavigation & SupervisorViewPanel) {
+export function useSupervisorViewOpeningFocus(context: Pick<SupervisorViewInputs,
+  "active" | "snapshot" | "initialRootSnapshot" | "opened" | "dialog" | "rootRef" | "rootId" | "focusedTask" | "lastTaskIds" | "scope" | "changed" | "setFocusNotice" | "createdSelection" | "previousGraph"
+> & Pick<SupervisorViewModel, "root" | "mode" | "hasRetainedDraft" | "tasks" | "selectedAgent" | "detailSubagent" | "selectedNode" | "model" | "retainedDraftTaskId">
+  & Pick<SupervisorViewNavigation, "focusTaskOrStart" | "taskIds" | "focusRow" | "rowElement">
+  & Pick<SupervisorViewPanel, "placement" | "panelKind">) {
   const { active, snapshot, initialRootSnapshot, opened, dialog, placement, panelKind, rootRef, focusTaskOrStart, root, rootId, focusedTask, taskIds, mode, lastTaskIds, scope, hasRetainedDraft, changed, focusRow, setFocusNotice, tasks, createdSelection, selectedAgent, detailSubagent, selectedNode, previousGraph, model, retainedDraftTaskId, rowElement } = context;
   const lastDocumentFocus = useRef<Element | null>(document.activeElement);
   useEffect(() => {
@@ -171,7 +178,8 @@ export function useSupervisorViewOpeningFocus(context: SupervisorViewInputs & Su
   }, [snapshot, active, mode]);
 }
 
-export function useSupervisorViewQuestionFocus(context: SupervisorViewInputs & SupervisorViewAttention & Pick<SupervisorViewNavigation, "focusTaskOrStart">) {
+export function useSupervisorViewQuestionFocus(context: Pick<SupervisorViewInputs, "active" | "questionHadFocus" | "attentionOpen" | "setAttentionOpen">
+  & Pick<SupervisorViewAttention, "decide"> & Pick<SupervisorViewNavigation, "focusTaskOrStart">) {
   const { active, questionHadFocus, decide, attentionOpen, setAttentionOpen, focusTaskOrStart } = context;
   useEffect(() => {
     if (!active || !questionHadFocus.current || decide) return;
@@ -181,7 +189,7 @@ export function useSupervisorViewQuestionFocus(context: SupervisorViewInputs & S
   }, [active, decide]);
 }
 
-export function useSupervisorViewDialogFocus(context: SupervisorViewInputs & Pick<SupervisorViewModel, "mode">) {
+export function useSupervisorViewDialogFocus(context: Pick<SupervisorViewInputs, "returnFocusIntent" | "dialog" | "rootRef" | "active"> & Pick<SupervisorViewModel, "mode">) {
   const { returnFocusIntent, dialog, rootRef, active, mode } = context;
   useLayoutEffect(() => {
     const intent = returnFocusIntent.current;
@@ -210,7 +218,8 @@ export function useSupervisorViewDialogFocus(context: SupervisorViewInputs & Pic
   });
 }
 
-export function useSupervisorViewSelectionFocus(context: SupervisorViewContext) {
+export function useSupervisorViewSelectionFocus(context: Pick<SupervisorViewInputs, "scope" | "changed" | "snapshot" | "createdSelection" | "active" | "dialog" | "sessionId">
+  & Pick<SupervisorViewModel, "tasks" | "root" | "mode"> & Pick<SupervisorViewNavigation, "revealSelection">) {
   const { scope, tasks, changed, snapshot, createdSelection, active, dialog, sessionId, root, revealSelection, mode } = context;
   useEffect(() => {
     const next = scope.view.detailTrail.filter(id => tasks.some(task => task.task.task_id === id));
@@ -224,7 +233,7 @@ export function useSupervisorViewSelectionFocus(context: SupervisorViewContext) 
   }, [snapshot, active, dialog, mode]);
 }
 
-export function useSupervisorViewOverlayFocus(context: SupervisorViewInputs & SupervisorViewPanel) {
+export function useSupervisorViewOverlayFocus(context: Pick<SupervisorViewInputs, "explicitFocus" | "active" | "rootRef"> & Pick<SupervisorViewPanel, "placement" | "panelKind">) {
   const { explicitFocus, active, placement, panelKind, rootRef } = context;
   useLayoutEffect(() => {
     if (explicitFocus.current) { explicitFocus.current = false; return; }

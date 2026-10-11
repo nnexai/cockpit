@@ -7,7 +7,7 @@ import type { StripChip } from "./SupervisorTasks";
 import { nodeFacts, nodeSelection, pathNodes } from "./topology";
 import { cleanupForRun, cleanupView } from "./retirementView";
 import { dependentCount } from "./dependencies";
-import type { SupervisorViewInputs, SupervisorViewModel, SupervisorViewContext, SupervisorViewAttention, SupervisorViewQueue } from "./supervisorViewTypes";
+import type { SupervisorViewInputs, SupervisorViewModel, SupervisorViewNavigation, SupervisorViewActions, SupervisorViewAttention, SupervisorViewQueue } from "./supervisorViewTypes";
 
 const ATTENTION_PROBLEM: Record<AttentionKind, string> = {
   needs_input: "Needs your answer",
@@ -21,7 +21,9 @@ const ATTENTION_PROBLEM: Record<AttentionKind, string> = {
   retirement_unconfirmed: "Worker retirement unconfirmed",
 };
 
-export function useSupervisorViewAttention(context: SupervisorViewInputs & SupervisorViewModel): SupervisorViewAttention {
+export function useSupervisorViewAttention(context: Pick<SupervisorViewInputs,
+  "snapshot" | "startUnknown" | "terminalError" | "navigationError" | "error" | "connected" | "runtimeLive" | "scope"
+> & Pick<SupervisorViewModel, "root" | "orphanedWorkers" | "rootRuns" | "tasks" | "rootState">): SupervisorViewAttention {
   const { snapshot, root, startUnknown, terminalError, navigationError, error, connected, orphanedWorkers, rootRuns, runtimeLive, tasks, rootState, scope } = context;
   const assignmentIntents = snapshot?.assignment_intents.filter(intent => intent.root_id === root?.run_id) ?? [];
   const local: LocalCondition[] = [];
@@ -54,7 +56,12 @@ export function useSupervisorViewAttention(context: SupervisorViewInputs & Super
   return { attention, decide, rootReceiptLabel, question, answer };
 }
 
-export function supervisorViewQueueRows(context: SupervisorViewContext): SupervisorViewQueue {
+export function supervisorViewQueueRows(context: Pick<SupervisorViewInputs,
+  "snapshot" | "changed" | "busy" | "mutateResult" | "captureMutationScope" | "connected" | "refresh" | "setRootId" | "setNotice" | "runtimeLive" | "attentionOpen" | "setAttentionOpen" | "startPending" | "scope"
+> & Pick<SupervisorViewModel, "tasks" | "root" | "live" | "rootState" | "mode" | "rootRuns" | "model" | "selectedNode" | "selectedTask" | "detailRun" | "detailSubagent" | "detailTask">
+  & Pick<SupervisorViewNavigation, "switchView" | "showItem" | "select">
+  & Pick<SupervisorViewActions, "editPrerequisites" | "start" | "navigate" | "restart">
+  & Pick<SupervisorViewAttention, "attention" | "question" | "answer">): SupervisorViewQueue {
   const { attention, snapshot, tasks, question, answer, root, changed, busy, live, rootState, mutateResult, captureMutationScope, connected, refresh, setRootId, setNotice, runtimeLive, editPrerequisites, switchView, showItem, attentionOpen, setAttentionOpen, select, startPending, start, navigate, restart, scope, mode, rootRuns, model, selectedNode, selectedTask, detailRun, detailSubagent, detailTask } = context;
   const rows: QueueRowView[] = attention?.items.map(item => {
     const run = snapshot!.runs.find(run => run.run_id === item.runId);

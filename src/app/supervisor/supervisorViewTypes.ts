@@ -56,6 +56,7 @@ export type SupervisorViewProps = {
   client: CockpitClient; sessionId: string; session: SessionSnapshotResponse | null; runtimeLive: boolean; active: boolean; startToken: number; startIntent?: "reuse_or_resume" | "another";
   navigationError: string | null; onClose(): void; onTerminal(run: Run, snapshot: OrchestrationSnapshot): Promise<void>; onModalChange(open: boolean): void;
 };
+// Field-type vocabulary for explicit hook inputs; hooks select only the fields they consume.
 export type SupervisorViewInputs = SupervisorViewProps & SupervisorService & SupervisorViewState & DetailFocus & StartAgentFlowState & {
   rootId: string | null; setRootId: Setter<string | null>; projectRootMissing: boolean; scope: ScopeDrafts; changed(): void; lifecycleDrafts: SupervisorLifecycleDrafts;
   draftStorageWarning: string | null;
@@ -99,5 +100,6 @@ export type SupervisorViewQueue = {
   rows: QueueRowView[]; expandedId: string | null; path: PathRowView[]; tier: AttentionTier | null | undefined;
   owned: SupervisorOwned | null | undefined; stateSentence: string; chips: StripChip[];
 };
+// The broad flat context is render-only, shared by the existing surface and detail renderers.
 export type SupervisorViewContext = SupervisorViewInputs & SupervisorViewModel & SupervisorViewPanel & SupervisorViewNavigation & SupervisorViewAttention & SupervisorViewActions;
 export type SupervisorViewRenderContext = SupervisorViewContext & SupervisorViewQueue & { archiveCounts: ReadonlyMap<string, ClosedTaskCount> };

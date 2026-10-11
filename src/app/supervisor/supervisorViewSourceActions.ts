@@ -1,7 +1,9 @@
 import type { Run, TaskView } from "../../protocol/generated/v1";
 import type { SupervisorViewInputs, SupervisorViewModel, SupervisorViewActions } from "./supervisorViewTypes";
 
-export function useSupervisorViewSourceActions(context: SupervisorViewInputs & SupervisorViewModel): Omit<SupervisorViewActions, "started" | "start" | "restart"> {
+export function useSupervisorViewSourceActions(context: Pick<SupervisorViewInputs,
+  "snapshot" | "busy" | "setTerminalError" | "onTerminal" | "connected" | "runtimeLive" | "refresh" | "mutateResult" | "scope" | "sessionId" | "setDialog"
+> & Pick<SupervisorViewModel, "live" | "root">): Omit<SupervisorViewActions, "started" | "start" | "restart"> {
   const { snapshot, live, busy, setTerminalError, onTerminal, connected, runtimeLive, refresh, mutateResult, root, scope, sessionId, setDialog } = context;
   const navigate = async (run: Run) => {
     if (!snapshot || !live || busy) return;

@@ -141,7 +141,6 @@ describe("canonical task mutation serialization", () => {
     expect(taskArgs(params)).toEqual(["task", "create", "--task-id", task_id, "--title", "Follow-up",
       "--description", "Prose\nonly", "--doc-revision", "document", "--source-revision", "source-item",
       "--follow-up-of", "source", "--depends-on", "prerequisite"]);
-    expect(taskArgs(params)).toEqual(taskArgs(params));
     expect(() => taskArgs({ ...params, task_id: undefined })).toThrow("task_id");
     expect(() => taskArgs({ ...params, expected_doc_revision: undefined })).toThrow("expected_doc_revision");
     expect(() => taskArgs({ ...params, source_revision: undefined })).toThrow("source_revision");
@@ -230,7 +229,6 @@ describe("one-start project placement and scoped recovery arguments", () => {
       "--space-worktree", "project-space", "--brief", start.brief, "--cleanup-policy", "owned-when-safe",
       "--label", "Worker", "--branch", "feature", "--base", "main"];
     expect(workerStartArgs(params)).toEqual(expected);
-    expect(workerStartArgs(params)).toEqual(expected);
     for (const [target, flag] of [
       ["space", "--space"], ["space_worktree", "--space-worktree"], ["repository", "--repository"], ["path", "--path"],
     ] as const) expect(workerStartArgs({ ...start, target })).toEqual([
@@ -292,7 +290,6 @@ describe("same-actor Working scope serialization", () => {
       .toEqual([...expected, "--title", "Refined", "--description", ""]);
     expect(scopeUpdateArgs({ ...scope, description: "" })).toEqual([...expected, "--description", ""]);
     expect(scopeUpdateArgs({ ...scope, title: "Refined" })).toEqual([...expected, "--title", "Refined"]);
-    expect(scopeUpdateArgs({ ...scope, description: "" })).toEqual(scopeUpdateArgs({ ...scope, description: "" }));
   });
 
   it("requires exact identity/revision fields and a real title or description edit", () => {
