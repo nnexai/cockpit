@@ -644,11 +644,17 @@ impl ProjectService {
                 )
                 .await?;
             verify_worktree_result(&created, plan)?;
-            self.merge_worktree_receipt(
+            let result = self.merge_worktree_receipt(
                 id,
                 &created,
                 plan.mode == WorkspaceSetupMode::Create && !created.already_open,
-            )?
+            )?;
+            if !created.already_open {
+                // Capture only this observed creation. Recovery must never grant
+                // ownership to a path that merely happens to exist later.
+                self.capture_owned_creation(id, &created).await?;
+            }
+            result
         };
         Ok(result)
     }

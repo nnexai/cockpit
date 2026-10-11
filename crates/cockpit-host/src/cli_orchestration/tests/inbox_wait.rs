@@ -5,6 +5,7 @@ use cockpit_protocol::orchestration::{
     DeliveryStage, MessageKind, OperatorOrigin, OrchestrationAction, OrchestrationMutationRequest,
     ReportKind, ReportOutcome, SubagentOp, SubagentStatus,
 };
+use cockpit_protocol::projects::ProjectConfiguration;
 
 use super::super::wait::{ControlPayload, inbox_counts, next_snapshot, pending_controls};
 use super::{
@@ -279,7 +280,7 @@ async fn caller_identity_and_membership_fail_before_any_durable_mutation() {
 #[tokio::test]
 async fn postcommit_replacement_reports_uncertainty_and_preserves_committed_write() {
     let fixture = SocketFixture::new().await;
-    let (ready, respond) = fixture.gate(1); // mutation's distinct postcheck
+    let (ready, respond) = fixture.gate(2); // precheck and adoption observation precede postcheck
     let context = fixture.context.clone();
     let mutation = tokio::spawn(async move {
         context
@@ -310,7 +311,7 @@ async fn postchecked_snapshot_rejects_identity_replaced_during_core_observation(
     let fixture = SocketFixture::new().await;
     fixture.adopt().await;
     let (ready, respond) = fixture.gate(1); // core runtime, after the precheck
-    let context = fixture.context.clone();
+    let context = fixture.job_context().clone();
     let read = tokio::spawn(async move { context.snapshot(None).await });
     ready.await.unwrap();
     let original = fixture.payload.lock().clone();
@@ -324,12 +325,12 @@ async fn postchecked_snapshot_rejects_identity_replaced_during_core_observation(
 async fn durable_change_before_wait_registration_is_delivered_without_lost_wake() {
     let fixture = SocketFixture::new().await;
     let run = fixture.adopt().await;
-    let initial = fixture.context.snapshot(None).await.unwrap();
+    let initial = fixture.job_context().snapshot(None).await.unwrap();
     assert!(!inbox_counts(&initial.messages, &run, 0).pending);
     // Commit between the consumer's empty observation and service subscription.
     fixture.send(&run, "edge-arrival");
     let next = next_snapshot(
-        &fixture.context,
+        &fixture.job_context(),
         &initial,
         tokio::time::Instant::now() + Duration::from_secs(10),
     )
@@ -341,7 +342,7 @@ async fn durable_change_before_wait_registration_is_delivered_without_lost_wake(
     assert_eq!(counts.through_seq, next.messages[0].seq);
     assert_eq!(next.messages[0].text, "edge-arrival");
     assert_eq!(next.messages[0].stage, DeliveryStage::Stored);
-    assert_eq!(fixture.context.own_run(&next).unwrap().run_id, run);
+    assert_eq!(fixture.job_context().own_run(&next).unwrap().run_id, run);
 }
 
 #[tokio::test]
@@ -349,8 +350,7 @@ async fn pending_inbox_and_controls_are_visible_in_first_completed_snapshot() {
     let fixture = SocketFixture::new().await;
     let run = fixture.adopt().await;
     for kind in [ReportKind::NeedsInput, ReportKind::Result] {
-        fixture
-            .context
+        fixture.job_context()
             .mutate(OrchestrationAction::Report {
                 message_id: format!("pending-{kind:?}"),
                 kind,
@@ -358,12 +358,19 @@ async fn pending_inbox_and_controls_are_visible_in_first_completed_snapshot() {
                 summary: format!("Pending {kind:?}"),
                 plan: None,
                 to_run_id: None,
+                source_output: (kind == ReportKind::Result).then(|| cockpit_protocol::orchestration::SourceOutput::NonCode {
+                    result_message_id: format!("pending-{kind:?}"),
+                    task_revision: "fixture-root-scope".into(),
+                    artifacts: vec![],
+                    focused_checks: vec![],
+                }),
+                original_task_revision: None,
+                original_claim_id: None,
             })
             .await
             .unwrap();
     }
-    fixture
-        .context
+    fixture.job_context()
         .mutate(OrchestrationAction::SubagentUpdate {
             subagent_id: "child".into(),
             parent_subagent_id: None,
@@ -379,7 +386,7 @@ async fn pending_inbox_and_controls_are_visible_in_first_completed_snapshot() {
         subagent_id: "child".into(),
         op: SubagentOp::Cancel,
     });
-    let snapshot = fixture.context.snapshot(None).await.unwrap();
+    let snapshot = fixture.job_context().snapshot(None).await.unwrap();
     let before = fixture.bytes();
     assert!(inbox_counts(&snapshot.messages, &run, 0).pending);
     assert!(snapshot.messages.iter().any(|message| {
@@ -412,8 +419,7 @@ async fn deadline_cancels_each_read_phase_and_arrivals_remain_durable_for_next_c
     for phase in 0..3 {
         let fixture = SocketFixture::new().await;
         let run = fixture.adopt().await;
-        fixture
-            .context
+        fixture.job_context()
             .mutate(OrchestrationAction::SubagentUpdate {
                 subagent_id: "child".into(),
                 parent_subagent_id: None,
@@ -424,10 +430,9 @@ async fn deadline_cancels_each_read_phase_and_arrivals_remain_durable_for_next_c
             })
             .await
             .unwrap();
-        let initial = fixture.context.snapshot(None).await.unwrap();
+        let initial = fixture.job_context().snapshot(None).await.unwrap();
         // A durable change makes service.wait finish immediately; isolate read cancellation.
-        fixture
-            .context
+        fixture.job_context()
             .mutate(OrchestrationAction::Annotate {
                 run_id: run.clone(),
                 text: "Wake without inbox payload".into(),
@@ -435,7 +440,7 @@ async fn deadline_cancels_each_read_phase_and_arrivals_remain_durable_for_next_c
             .await
             .unwrap();
         let (ready, blocked) = fixture.gate(phase);
-        let context = fixture.context.clone();
+        let context = fixture.job_context().clone();
         tokio::time::pause();
         let read = tokio::spawn(async move {
             next_snapshot(
@@ -458,7 +463,7 @@ async fn deadline_cancels_each_read_phase_and_arrivals_remain_durable_for_next_c
         assert!(read.await.unwrap().unwrap().is_none());
         drop(blocked);
         assert_eq!(fixture.bytes(), committed);
-        let next = fixture.context.snapshot(None).await.unwrap();
+        let next = fixture.job_context().snapshot(None).await.unwrap();
         assert!(inbox_counts(&next.messages, &run, 0).pending);
         assert_eq!(
             next.messages
@@ -479,9 +484,8 @@ async fn timeout_empty_fence_propagates_replacement_and_unavailable_endpoint() {
     for unavailable in [false, true] {
         let fixture = SocketFixture::new().await;
         let run = fixture.adopt().await;
-        let initial = fixture.context.snapshot(None).await.unwrap();
-        fixture
-            .context
+        let initial = fixture.job_context().snapshot(None).await.unwrap();
+        fixture.job_context()
             .mutate(OrchestrationAction::Annotate {
                 run_id: run,
                 text: "Wake".into(),
@@ -491,7 +495,7 @@ async fn timeout_empty_fence_propagates_replacement_and_unavailable_endpoint() {
         let committed = fixture.bytes();
         let (ready, blocked) = fixture.gate(0);
         let (fence_ready, fence) = fixture.gate(0);
-        let context = fixture.context.clone();
+        let context = fixture.job_context().clone();
         tokio::time::pause();
         let read = tokio::spawn(async move {
             next_snapshot(
@@ -530,16 +534,16 @@ async fn caller_supplied_zero_and_short_wait_budgets_return_only_fenced_empty() 
     for budget in [Duration::ZERO, Duration::from_millis(20)] {
         let fixture = SocketFixture::new().await;
         let run = fixture.adopt().await;
-        let initial = fixture.context.snapshot(None).await.unwrap();
+        let initial = fixture.job_context().snapshot(None).await.unwrap();
         let before = fixture.bytes();
         let deadline = tokio::time::Instant::now() + budget;
         tokio::time::pause();
-        let context = fixture.context.clone();
+        let context = fixture.job_context().clone();
         let read = tokio::spawn(async move { next_snapshot(&context, &initial, deadline).await });
         tokio::time::advance(budget + Duration::from_millis(1)).await;
         tokio::time::resume();
         assert!(read.await.unwrap().unwrap().is_none());
-        let snapshot = fixture.context.snapshot(None).await.unwrap();
+        let snapshot = fixture.job_context().snapshot(None).await.unwrap();
         assert!(!inbox_counts(&snapshot.messages, &run, 0).pending);
         assert!(
             pending_controls(&snapshot.messages, &run, "child")
@@ -555,11 +559,11 @@ async fn caller_supplied_zero_and_short_wait_budgets_return_only_fenced_empty() 
 async fn aborting_wait_observation_never_mutates_or_acknowledges_durable_state() {
     let fixture = SocketFixture::new().await;
     let run = fixture.adopt().await;
-    let initial = fixture.context.snapshot(None).await.unwrap();
+    let initial = fixture.job_context().snapshot(None).await.unwrap();
     fixture.send(&run, "unacked");
     let before = fixture.bytes();
     let (ready, blocked) = fixture.gate(0);
-    let context = fixture.context.clone();
+    let context = fixture.job_context().clone();
     let read = tokio::spawn(async move {
         next_snapshot(
             &context,
@@ -573,7 +577,7 @@ async fn aborting_wait_observation_never_mutates_or_acknowledges_durable_state()
     assert!(read.await.unwrap_err().is_cancelled());
     drop(blocked);
     assert_eq!(fixture.bytes(), before);
-    let next = fixture.context.snapshot(None).await.unwrap();
+    let next = fixture.job_context().snapshot(None).await.unwrap();
     assert!(inbox_counts(&next.messages, &run, 0).pending);
     assert_eq!(next.messages[0].stage, DeliveryStage::Stored);
 }
@@ -582,9 +586,10 @@ async fn aborting_wait_observation_never_mutates_or_acknowledges_durable_state()
 async fn watched_change_interrupts_registered_host_wait_without_timer_advance() {
     let fixture = SocketFixture::new().await;
     let run = fixture.adopt().await;
-    let initial = fixture.context.snapshot(None).await.unwrap();
+    let initial = fixture.job_context().snapshot(None).await.unwrap();
+    let context = fixture.job_context();
     let mut waiting = Box::pin(next_snapshot(
-        &fixture.context,
+        &context,
         &initial,
         tokio::time::Instant::now() + Duration::from_secs(10),
     ));
@@ -603,10 +608,11 @@ async fn watched_change_interrupts_registered_host_wait_without_timer_advance() 
 async fn external_durable_change_is_observed_by_host_wait_and_not_acknowledged() {
     let fixture = SocketFixture::new().await;
     let run = fixture.adopt().await;
-    let initial = fixture.context.snapshot(None).await.unwrap();
+    let initial = fixture.job_context().snapshot(None).await.unwrap();
     let external = OrchestrationService::open(&fixture.configuration).unwrap();
+    let context = fixture.job_context();
     let mut waiting = Box::pin(next_snapshot(
-        &fixture.context,
+        &context,
         &initial,
         tokio::time::Instant::now() + Duration::from_secs(10),
     ));
@@ -626,6 +632,8 @@ async fn external_durable_change_is_observed_by_host_wait_and_not_acknowledged()
                     kind: MessageKind::Instruction,
                     text: "External arrival".into(),
                     in_reply_to: None,
+                    original_task_revision: None,
+                    original_claim_id: None,
                 },
             },
         )
@@ -656,8 +664,7 @@ async fn same_socket_endpoint_process_replacement_invalidates_before_mutation() 
     .unwrap();
     let child = EndpointChild::start(&fixture.root);
     let before = fixture.bytes();
-    let error = fixture
-        .context
+    let error = fixture.job_context()
         .mutate(OrchestrationAction::Annotate {
             run_id: run,
             text: "Must not commit".into(),
@@ -667,4 +674,191 @@ async fn same_socket_endpoint_process_replacement_invalidates_before_mutation() 
     assert_eq!(error.code, "caller_mismatch");
     assert_eq!(fixture.bytes(), before);
     drop(child);
+}
+
+#[tokio::test]
+async fn routine_job_credentials_work_without_any_physical_endpoint() {
+    use super::super::context::Context;
+    let fixture = SocketFixture::new().await;
+    let root_id = fixture.adopt().await;
+    let bound = fixture.job_context();
+    let context = Context {
+        service: OrchestrationService::open(&fixture.configuration).unwrap(),
+        adapter: bound.adapter.clone(),
+        session: bound.session.clone(),
+        actor: bound.actor.clone(),
+        evidence: None,
+        configuration: fixture.configuration.clone(),
+        retirement: false,
+        child_registration: false,
+    };
+    fixture.server.abort();
+    while !fixture.server.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    std::fs::remove_file(fixture.root.join("herdr.sock")).unwrap();
+    fixture.send(&root_id, "routine credential mail without Herdr");
+    let snapshot = context.snapshot(None).await.unwrap();
+    assert_eq!(context.own_run(&snapshot).unwrap().run_id, root_id);
+    assert!(inbox_counts(&snapshot.messages, &root_id, 0).pending);
+    context.mutate(OrchestrationAction::InboxPull {
+        after_seq: 0,
+        limit: 20,
+    }).await.unwrap();
+
+    let mut foreign = snapshot.clone();
+    foreign.runs.retain(|run| run.run_id != root_id);
+    assert_eq!(context.own_run(&foreign).unwrap_err().code, "caller_mismatch");
+
+    let Actor::Agent(caller) = context.actor.as_ref().unwrap() else {
+        panic!("expected credential-backed caller");
+    };
+    let mut declared_child = caller.clone();
+    declared_child.agent_kind = Some(cockpit_protocol::orchestration::AgentKind::Subagent);
+    declared_child.subagent_id = Some("child".into());
+    let provenance = declared_child.provenance.as_mut().unwrap();
+    provenance.agent_kind = declared_child.agent_kind;
+    provenance.child_id = declared_child.subagent_id.clone();
+    let parent_credential_child = Context {
+        service: OrchestrationService::open(&fixture.configuration).unwrap(),
+        adapter: context.adapter.clone(),
+        session: context.session.clone(),
+        actor: Some(Actor::Agent(declared_child)),
+        evidence: bound.evidence.clone(),
+        configuration: fixture.configuration.clone(),
+        retirement: false,
+        child_registration: false,
+    };
+    let committed = fixture.bytes();
+    assert_eq!(
+        parent_credential_child.snapshot(None).await.unwrap_err().code,
+        "actor_forbidden",
+        "a root credential cannot authorize routine child reads",
+    );
+    assert_eq!(
+        parent_credential_child.mutate(OrchestrationAction::InboxPull {
+            after_seq: 0,
+            limit: 20,
+        }).await.unwrap_err().code,
+        "actor_forbidden",
+    );
+    assert_eq!(fixture.bytes(), committed, "child context cannot borrow parent authority");
+    let replacements: &[fn(&mut cockpit_core::orchestration::AgentCaller)] = &[
+        |caller| caller.auth.credential_id = "00000000-0000-4000-8000-000000000099".into(),
+        |caller| caller.auth.secret = cockpit_core::orchestration::SecretBytes::new([8; 32]),
+        |caller| caller.auth.attachment_epoch += 1,
+    ];
+    for replace in replacements {
+        let mut forged = caller.clone();
+        replace(&mut forged);
+        let rejected = Context {
+            service: OrchestrationService::open(&fixture.configuration).unwrap(),
+            adapter: context.adapter.clone(),
+            session: context.session.clone(),
+            actor: Some(Actor::Agent(forged)),
+            evidence: bound.evidence.clone(),
+            configuration: fixture.configuration.clone(),
+            retirement: false,
+            child_registration: false,
+        };
+        let committed = fixture.bytes();
+        assert_eq!(rejected.snapshot(None).await.unwrap_err().code, "job_unauthorized");
+        assert_eq!(rejected.mutate(OrchestrationAction::InboxPull {
+            after_seq: 0,
+            limit: 20,
+        }).await.unwrap_err().code, "job_unauthorized");
+        assert_eq!(fixture.bytes(), committed, "invalid credentials cannot write");
+    }
+
+    let mut wrong_role: serde_json::Value =
+        serde_json::from_slice(&fixture.bytes().unwrap()).unwrap();
+    let credential = wrong_role["credentials"].as_array_mut().unwrap().iter_mut()
+        .find(|record| record["credential_id"] == caller.auth.credential_id).unwrap();
+    credential["role"] = serde_json::json!("worker");
+    let temporary = context.service.base().join("wrong-role.next");
+    std::fs::write(&temporary, serde_json::to_vec(&wrong_role).unwrap()).unwrap();
+    std::fs::rename(temporary, context.service.base().join("state.json")).unwrap();
+    let committed = fixture.bytes();
+    assert_eq!(bound.snapshot(None).await.unwrap_err().code, "job_unauthorized");
+    assert_eq!(bound.mutate(OrchestrationAction::InboxPull {
+        after_seq: 0,
+        limit: 20,
+    }).await.unwrap_err().code, "job_unauthorized");
+    assert_eq!(fixture.bytes(), committed, "wrong durable role cannot write");
+
+    let other_configuration = ProjectConfiguration::for_tests(&fixture.root.join("other-store"));
+    let other_store = Context {
+        service: OrchestrationService::open(&other_configuration).unwrap(),
+        adapter: context.adapter.clone(),
+        session: context.session.clone(),
+        actor: context.actor.clone(),
+        evidence: bound.evidence.clone(),
+        configuration: other_configuration,
+        retirement: false,
+        child_registration: false,
+    };
+    assert_eq!(other_store.snapshot(None).await.unwrap_err().code, "job_unauthorized");
+    assert_eq!(other_store.mutate(OrchestrationAction::InboxPull {
+        after_seq: 0,
+        limit: 20,
+    }).await.unwrap_err().code, "job_unauthorized");
+}
+
+#[tokio::test]
+async fn committed_attach_replays_before_any_physical_endpoint_read_after_restart() {
+    use super::super::context::Context;
+    use cockpit_protocol::orchestration::OrchestrationActionResult;
+    let fixture = SocketFixture::new().await;
+    fixture.adopt().await;
+    let context = fixture.job_context();
+    let Actor::Agent(caller) = context.actor.as_ref().unwrap() else {
+        panic!("expected credential-backed main caller");
+    };
+    let action = OrchestrationAction::RunAttach {
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        attachment_id: caller.auth.attachment_id.clone(),
+        expected_attachment_epoch: caller.auth.attachment_epoch,
+        main_session_id: caller.omp_session_id.clone().unwrap(),
+    };
+    let first = context.mutate(action.clone()).await.unwrap();
+    let OrchestrationActionResult::RunAttached { attach: first_attach } = first.result else {
+        panic!("expected actual attachment receipt");
+    };
+    assert!(!first_attach.duplicate);
+    let committed = fixture.bytes();
+    fixture.server.abort();
+    while !fixture.server.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    std::fs::remove_file(fixture.root.join("herdr.sock")).unwrap();
+    let restarted = Context {
+        service: OrchestrationService::open(&fixture.configuration).unwrap(),
+        adapter: context.adapter.clone(),
+        session: context.session.clone(),
+        actor: context.actor.clone(),
+        evidence: context.evidence.clone(),
+        configuration: fixture.configuration.clone(),
+        retirement: false,
+        child_registration: false,
+    };
+    let replay = restarted.mutate(action.clone()).await.unwrap();
+    let OrchestrationActionResult::RunAttached { attach: replay_attach } = replay.result else {
+        panic!("expected replayed attachment receipt");
+    };
+    assert!(replay_attach.duplicate);
+    assert_eq!(replay_attach.run_id, first_attach.run_id);
+    assert_eq!(replay_attach.attachment.attachment_id, first_attach.attachment.attachment_id);
+    assert_eq!(replay_attach.attachment.epoch, first_attach.attachment.epoch);
+    assert_eq!(fixture.bytes(), committed, "replay cannot write or reattach");
+    let mut changed = action;
+    let OrchestrationAction::RunAttach { main_session_id, .. } = &mut changed else {
+        unreachable!();
+    };
+    *main_session_id = "different-native-session".into();
+    assert_eq!(
+        restarted.mutate(changed).await.unwrap_err().code,
+        "operation_conflict",
+        "changed payload must conflict before accessing the unavailable endpoint",
+    );
+    assert_eq!(fixture.bytes(), committed, "conflicting replay cannot write");
 }

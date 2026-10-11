@@ -3,25 +3,27 @@ use super::store::LockedStore;
 
 pub(super) mod tasks;
 pub(super) mod runs;
+pub(super) mod resume;
 pub(super) mod grants;
 pub(super) mod retirement;
 pub(super) mod intents;
 pub(super) mod reviewed;
 mod dispatch_records;
+pub(super) mod integration;
 
 /// The mutation's existing lock and caller admission, borrowed by each handler.
 /// Timestamps stay at their original call sites rather than being cached here.
-pub(super) struct MutationCtx<'a> {
-    pub(super) service: &'a OrchestrationService,
-    pub(super) locked: &'a LockedStore<'a>,
-    pub(super) state: &'a mut OrchestrationState,
-    pub(super) actor: &'a Actor,
-    pub(super) caller: Option<usize>,
-    pub(super) session_id: &'a str,
-    pub(super) reviewed: Option<&'a Run>,
+pub(in crate::orchestration) struct MutationCtx<'a> {
+    pub(in crate::orchestration) service: &'a OrchestrationService,
+    pub(in crate::orchestration) locked: &'a LockedStore<'a>,
+    pub(in crate::orchestration) state: &'a mut OrchestrationState,
+    pub(in crate::orchestration) actor: &'a Actor,
+    pub(in crate::orchestration) caller: Option<usize>,
+    pub(in crate::orchestration) session_id: &'a str,
+    pub(in crate::orchestration) resolved: Option<&'a ResolvedMutationInput>,
 }
 
-pub(super) enum Applied {
+pub(in crate::orchestration) enum Applied {
     Machine(OrchestrationActionResult),
     Document(OrchestrationActionResult),
     Published(OrchestrationMutationResponse),
@@ -82,27 +84,31 @@ pub(super) fn apply(
             }),
         OrchestrationAction::TasksAssignIds { root_id, expected_doc_revision } =>
             tasks::assign_ids(ctx, root_id, expected_doc_revision),
-        OrchestrationAction::SupervisorStart { target, label } =>
-            runs::supervisor_start(ctx, target, label),
+        action @ OrchestrationAction::SupervisorStart { .. } =>
+            runs::supervisor_start(ctx, action),
+        action @ OrchestrationAction::RunResume { .. } =>
+            resume::resume(ctx, action),
+        action @ OrchestrationAction::RunAttach { .. } =>
+            resume::attach(ctx, action),
+        action @ OrchestrationAction::JobChildRegister { .. } =>
+            resume::register_child(ctx, action),
         OrchestrationAction::RunAdopt { label } => runs::adopt(ctx, label),
-        OrchestrationAction::RunBindSession { omp_session_id } =>
-            runs::bind_session(ctx, omp_session_id),
         OrchestrationAction::RetirementNativeReceipt { retirement_id, outcome } =>
             retirement::native_receipt(ctx, retirement_id, outcome),
-        OrchestrationAction::RunPropose {
-            task_id, parent_run_id, label, target, prepare_brief, supersedes_run_id,
-        } => runs::propose(ctx, task_id, parent_run_id, label, target,
-            prepare_brief, supersedes_run_id),
-        OrchestrationAction::GrantPrepare { run_id, plan_revision } =>
-            grants::prepare(ctx, run_id, plan_revision),
-        OrchestrationAction::GrantExecute { run_id, plan_revision, note } =>
-            grants::execute(ctx, run_id, plan_revision, note),
+        action @ OrchestrationAction::WorkerStart { .. } => runs::worker_start(ctx, action),
+        action @ OrchestrationAction::TaskScopeUpdate { .. } => tasks::scope_update(ctx, action),
+        action @ OrchestrationAction::IntegrationRecord { .. } => integration::apply(ctx, action),
+        action @ (OrchestrationAction::ResourceRequest { .. }
+            | OrchestrationAction::ResourceRelease { .. }
+            | OrchestrationAction::ResourceBuildRegister { .. }) =>
+            super::resource_queue::apply(ctx, action),
+        action @ (OrchestrationAction::ResourceRegister { .. } | OrchestrationAction::CleanupFinish { .. }) =>
+            super::cleanup::apply(ctx, action),
         OrchestrationAction::Accept { run_id, expected_task_revision } =>
             intents::accept(ctx, run_id, expected_task_revision),
         OrchestrationAction::SendBack { run_id, text } =>
             grants::send_back(ctx, run_id, text),
         OrchestrationAction::CancelRun { run_id } => runs::cancel(ctx, run_id),
-        OrchestrationAction::RetryLaunch { run_id } => runs::retry_launch(ctx, run_id),
         OrchestrationAction::ReconcileRun { run_id, recovery } =>
             runs::reconcile(ctx, run_id, recovery),
         OrchestrationAction::IntentResolve { intent_id, apply } =>

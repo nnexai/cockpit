@@ -8,6 +8,7 @@ import { TIER_LABEL, type AttentionTier } from "./attention";
 import { edgePath, GRAPH_GEOMETRY } from "./graphLayout";
 import { revealNearest } from "./reveal";
 import { chainIds, firstChild, nodeFacts, nodeId, type SupervisorGraphModel, type TopologyNode } from "./topology";
+import { keptTaskCount } from "./retirementView";
 
 export type SupervisorGraphProps = {
   model: SupervisorGraphModel;
@@ -38,6 +39,7 @@ export function SupervisorGraph({ model, snapshot, live, connected, runtimeLive,
   }, [model, selectedNodeId, highlightedRunId]);
   const roving = useRovingList({ rowIds: model.layout.order, selectedId: selectedNodeId });
   const connectedCount = model.nodes.filter(node => node.kind !== "subagent" && node.run && observations.get(node.run.run_id)?.presence === "present" && observations.get(node.run.run_id)?.actual_omp).length;
+  const kept = keptTaskCount(snapshot, snapshot.board?.tasks ?? []);
   const onGraphKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const id = (event.target as HTMLElement).dataset.rowId;
     if (id === undefined || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent.isComposing) return;
@@ -70,7 +72,7 @@ export function SupervisorGraph({ model, snapshot, live, connected, runtimeLive,
       <h2 id={headingId} title="Up/Down moves through nodes, Left/Right along the chain">
         Agents · {fresh ? `${connectedCount} connected` : "unobserved"} · {model.counts.subagents} subagents · {model.counts.tasks} tasks
       </h2>
-      {model.hiddenCompletedTasks > 0 ? <span className="supervisor-graph-hidden-completed">{model.hiddenCompletedTasks} completed tasks hidden</span> : null}
+      {model.hiddenCompletedTasks > 0 ? <span className="supervisor-graph-hidden-completed">{model.hiddenCompletedTasks} completed tasks hidden{kept ? ` · ${kept} kept` : ""}</span> : null}
       <label className="supervisor-graph-subagents"><input type="checkbox" checked={showSubagents} onChange={event => onShowSubagents(event.target.checked)} />Subagents</label>
     </div>
     {model.counts.workers === 0 && model.counts.supervisors > 0 ? <p className="supervisor-graph-empty">No worker agents yet</p> : null}

@@ -30,17 +30,16 @@ function Action({ action, className = "" }: { action: QueueAction; className?: s
 }
 
 export function SupervisorSummary({ rootLabel, stateLabel, stateGlyph, observedLine, banner, counts, queueMode, onCounter, shortcut }: SupervisorSummaryProps) {
-  const total = counts.decide + counts.recover + counts.notice;
   return <section className="supervisor-summary" aria-label="Supervisor status" data-queue-mode={queueMode}>
     <div className="supervisor-summary-line">
       <span className="supervisor-summary-state"><StateGlyph shape={stateGlyph} /><strong>{rootLabel}</strong><span>{stateLabel}</span></span>
       <span className="supervisor-summary-observed">{observedLine}</span>
-      <div className="supervisor-summary-counts" aria-live="polite" aria-atomic="true">
+      <div className="supervisor-summary-counts">
         {TIERS.filter(tier => counts[tier] > 0).map(tier => <button key={tier} type="button" className={`supervisor-summary-counter is-${tier}`} onClick={event => onCounter(tier, event.currentTarget)}><StateGlyph shape={GLYPHS[tier]} />{counts[tier]} {COUNTER_WORDS[tier]}</button>)}
       </div>
-      {total === 0 && shortcut ? <Action action={shortcut} className="supervisor-summary-shortcut" /> : null}
+      {shortcut ? <Action action={shortcut} className="supervisor-summary-shortcut" /> : null}
     </div>
-    {banner ? <div className="supervisor-summary-banner" role="status">{banner}</div> : null}
+    {banner ? <div className="supervisor-summary-banner">{banner}</div> : null}
   </section>;
 }
 

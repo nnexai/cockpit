@@ -2,6 +2,7 @@ import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./not
 import {
   matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest, parseOrchestrationMutationRequest, 
   parseOrchestrationMutationResponse, parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
+  parseProjectRootLookupRequest, parseProjectRootLookupResponse,
 } from "./orchestrationProtocol";
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest, parseWidgetRemoveResponse, 
@@ -107,6 +108,17 @@ const operations: OperationTable = {
         http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration${query}` },
         tauri: { command: "orchestration_snapshot", args: () => ({ request: body }) },
         parse: response => matchOrchestrationSnapshot(response, body),
+      };
+    },
+  },
+  orchestrationProjectRootLookup: {
+    encode(_backend, value) {
+      const body = parseProjectRootLookupRequest(value);
+      return {
+        operation: "orchestration project root lookup",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/project-roots`, json: () => body },
+        tauri: { command: "orchestration_project_root_lookup", args: () => ({ request: body }) },
+        parse: parseProjectRootLookupResponse,
       };
     },
   },

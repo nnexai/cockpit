@@ -19,19 +19,19 @@ impl OrchestrationService {
                 && current.run_id == current.root_id && current.task_id.is_none()
                 && current.run_id == expected.run_id && current.root_id == expected.root_id
                 && current.session_id == expected.session_id && current.attempt == expected.attempt
-                && current.bound_omp_session == expected.bound_omp_session
-                && current.bound_omp_process == expected.bound_omp_process
-                && same_launch_location(current.location.as_ref(), expected.location.as_ref()));
+                && current.attachment.as_ref().and_then(|a| a.main_session_id.as_ref()) == expected.attachment.as_ref().and_then(|a| a.main_session_id.as_ref())
+                && current.attachment.as_ref().and_then(|a| a.process.as_ref()) == expected.attachment.as_ref().and_then(|a| a.process.as_ref())
+                && same_launch_location(current.attachment.as_ref().and_then(|a| a.location.as_ref()), expected.attachment.as_ref().and_then(|a| a.location.as_ref())));
         }
         if !same_launch_incarnation(current, expected)
-            || current.bound_omp_process != expected.bound_omp_process || current.stage != expected.stage {
+            || current.attachment.as_ref().and_then(|a| a.process.as_ref()) != expected.attachment.as_ref().and_then(|a| a.process.as_ref()) || current.stage != expected.stage {
             return Ok(false);
         }
         if matches!(current.kind, RunKind::Supervisor | RunKind::Adopted) {
             return Ok(current.parent_run_id.is_none() && current.root_id == current.run_id
-                && current.task_id.is_none() && matches!(current.stage, RunStage::Preparing | RunStage::Active));
+                && current.task_id.is_none() && matches!(current.stage, RunStage::Queued | RunStage::Starting | RunStage::Active));
         }
-        if !matches!(current.stage, RunStage::Preparing | RunStage::Initializing | RunStage::Ready | RunStage::Working) {
+        if !matches!(current.stage, RunStage::Queued | RunStage::Starting | RunStage::Working) {
             return Ok(false);
         }
         let Some(task_id) = &current.task_id else { return Ok(false) };
@@ -47,6 +47,10 @@ impl OrchestrationService {
                 "task_not_found" | "task_id_duplicate" | "task_checked" | "intent_conflict") => return Ok(false),
             Err(failure) => return Err(failure),
         };
+        if current.stage != RunStage::Working
+            && current.task_revision_at_start.as_deref() != Some(task.task_revision.as_str()) {
+            return Ok(false);
+        }
         Ok(matches!(dependencies::DependencyGraph::new(&document.tasks).evaluate(task).state,
             TaskDependencyState::None | TaskDependencyState::Satisfied))
     }
@@ -62,34 +66,27 @@ impl OrchestrationService {
         if state.runs[index].stage == RunStage::Closed {
             return Err(error("invalid_stage", "Closed run cannot dispatch"));
         }
-        let mut setup_notice = None;
+        if matches!(&update, DispatchUpdate::SetupPlanned { .. }) {
+            let run = &state.runs[index];
+            if !matches!(run.stage, RunStage::Queued | RunStage::Starting) || run.setup.is_some() {
+                return Err(error("invalid_stage", "Only an unplanned queued start may record setup"));
+            }
+            if run.kind == RunKind::Worker {
+                let document = locked.tasks(&run.root_id)?;
+                super::tasks::task_transition_target(&state, run, &document)?;
+                let task = mutable_task(&state, &run.root_id, run.task_id.as_deref().expect("task guarded"), &document)?;
+                if run.task_revision_at_start.as_deref() != Some(task.task_revision.as_str()) {
+                    return Err(error("task_revision_changed", "Canonical task changed before setup"));
+                }
+            }
+        }
         {
             let run = &mut state.runs[index];
             match update {
-                DispatchUpdate::SetupPlanned {
-                    setup,
-                    prepare_plan,
-                } => {
-                    bounded(&prepare_plan.text, 16 * 1024)?;
+                DispatchUpdate::SetupPlanned { setup } => {
                     run.setup = Some(setup);
-                    run.prepare_plan = Some(prepare_plan);
-                    if run.kind == RunKind::Worker {
-                        setup_notice = Some((
-                            run.root_id.clone(),
-                            run.run_id.clone(),
-                            run.prepare_plan
-                                .as_ref()
-                                .expect("stored plan")
-                                .plan_revision
-                                .clone(),
-                        ));
-                        run.stage = RunStage::AwaitingPrepare;
-                    }
-                    run.dispatch = Some(dispatch(if run.kind == RunKind::Worker {
-                        DispatchStep::Planning
-                    } else {
-                        DispatchStep::SetupPending
-                    }));
+                    run.stage = RunStage::Starting;
+                    run.dispatch = Some(dispatch(DispatchStep::SetupPending));
                 }
                 DispatchUpdate::PlanFailed { error } => {
                     let mut d = dispatch(DispatchStep::PlanFailed);
@@ -131,7 +128,12 @@ impl OrchestrationService {
                     launch_attempt,
                     endpoint_identity,
                 } => {
-                    run.launch_shell_identity = None;
+                    let attachment = run.attachment.as_mut().ok_or_else(|| error("attachment_missing", "Launch has no reserved attachment"))?;
+                    attachment.shell = None;
+                    attachment.launch_attempt = launch_attempt;
+                    attachment.state = AttachmentState::Connecting;
+                    attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+                    attachment.updated_at = now();
                     let d = run
                         .dispatch
                         .get_or_insert_with(|| dispatch(DispatchStep::LaunchIntent));
@@ -157,19 +159,96 @@ impl OrchestrationService {
                             "Tab receipt does not match persisted launch intent",
                         ));
                     }
-                    run.location = Some(location);
-                    run.launch_shell_identity = launch_shell_identity;
+                    let attachment = run.attachment.as_mut().ok_or_else(|| error("attachment_missing", "Tab receipt has no reserved attachment"))?;
+                    attachment.machine_id = launch_shell_identity.as_ref().and_then(|shell| crate::process_identity::verified_machine_id(&shell.process));
+                    attachment.location = Some(location);
+                    attachment.shell = launch_shell_identity;
+                    attachment.updated_at = now();
                 }
             }
             run.updated_at = now();
-        }
-        if let Some((root_id, worker_id, revision)) = setup_notice {
-            let text = serde_json::json!({"event":"setup_ready","run_id":worker_id,"plan_revision":revision}).to_string();
-            messages::append(&mut state, messages::AppendMessage { from: ActorRef::Dispatcher, to_run_id: &root_id, message_id: &format!("setup-ready-{worker_id}-{revision}"), kind: MessageKind::Observation, text: &text, in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })?;
         }
         escalation::failure(&mut state, index)?;
         let revision = locked.save(&mut state)?;
         self.revision.send_replace(revision);
         Ok(revision)
+    }
+
+    /// Resolve the checkout before this transaction, then reserve its writer and
+    /// publish an immutable epoch credential before any external tab effect.
+    pub(crate) fn reserve_dispatch_launch(
+        &self,
+        expected: &Run,
+        project: ProjectIdentity,
+        checkout: CheckoutIdentity,
+        base_commit: Option<String>,
+    ) -> Result<(Run, std::path::PathBuf), InspectionError> {
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        project_identity::revalidate_checkout(&checkout)?;
+        let index = run_index(&state, &expected.run_id)?;
+        if state.runs[index].stage == RunStage::Closed
+            || !same_launch_incarnation(&state.runs[index], expected)
+            || state.runs[index].attachment.as_ref().is_some_and(|a| a.process.is_some() || a.main_session_id.is_some()) {
+            return Err(error("attachment_conflict", "Run changed before writer reservation"));
+        }
+        if let Some(saved) = &state.runs[index].checkout
+            && saved != &checkout {
+            return Err(error("checkout_identity_changed", "Saved physical checkout no longer matches"));
+        }
+        if let Some(saved) = &state.runs[index].project
+            && saved.key != project.key {
+            return Err(error("project_identity_changed", "Saved project no longer matches"));
+        }
+        if state.runs[index].stage != RunStage::Starting {
+            return Err(error("invalid_stage", "Only a starting run may reserve a launch"));
+        }
+        if state.runs[index].kind == RunKind::Worker {
+            let run = &state.runs[index];
+            let document = locked.tasks(&run.root_id)?;
+            super::tasks::task_transition_target(&state, run, &document)?;
+            let task = mutable_task(&state, &run.root_id, run.task_id.as_deref().expect("task guarded"), &document)?;
+            if run.task_revision_at_start.as_deref() != Some(task.task_revision.as_str()) {
+                return Err(error("task_revision_changed", "Canonical task changed before launch"));
+            }
+        }
+        if state.runs[index].attachment.is_none() {
+            state.runs[index].attachment = Some(ExecutionAttachment {
+                attachment_id: Uuid::new_v4().to_string(), epoch: 1, state: AttachmentState::Reserved,
+                location: None, main_session_id: None, process: None, shell: None,
+                machine_id: None, launch_mode: None, launch_attempt: 0, updated_at: now(),
+            });
+        }
+        let run = &state.runs[index];
+        let attachment = run.attachment.as_ref().expect("reserved");
+        if matches!(attachment.state, AttachmentState::Revoked | AttachmentState::Quiescing) {
+            return Err(error("attachment_conflict", "Attachment cannot launch while quiescing or revoked"));
+        }
+        let reference = claims::AttachmentReference { run_id: run.run_id.clone(), attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch };
+        let role = if run.kind == RunKind::Worker { JobRole::Worker } else { JobRole::Root };
+        let operation_id = attachment.attachment_id.clone();
+        if role == JobRole::Worker {
+            claims::reserve_claim(&mut state, &checkout, &reference, &operation_id)?;
+        }
+        state.runs[index].project = Some(project);
+        state.runs[index].checkout = Some(checkout);
+        let setup = state.runs[index].setup.as_mut()
+            .ok_or_else(|| error("setup_missing", "Launch has no actual setup receipt"))?;
+        if setup.base_commit.is_none() {
+            setup.base_commit = base_commit;
+        }
+        let existing = state.credentials.iter().find(|c| c.run_id == reference.run_id
+            && c.attachment_id == reference.attachment_id && c.attachment_epoch == reference.attachment_epoch
+            && c.role == role && c.subject_child_id.is_none() && c.state == credentials::CredentialState::Active);
+        let credential_file = if let Some(record) = existing {
+            credentials::credential_path(self.base(), record)?
+        } else {
+            let (record, path) = credentials::stage_credential(self.base(), &state.runs[index], role, None)?;
+            state.credentials.push(record);
+            path
+        };
+        let revision = locked.save(&mut state)?;
+        self.revision.send_replace(revision);
+        Ok((state.runs[index].clone(), credential_file))
     }
 }

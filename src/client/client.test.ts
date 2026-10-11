@@ -28,7 +28,7 @@ import {
 } from "./streamOrder";
 import { parseViewerContext, parseViewerSourceOptions, parseViewerOpenRequest, matchViewerContext } from "./contextProtocol";
 import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
-import type { NotesRequest, NotesResponse, NotesOperation, NotesTodo, NotesDecision, NotesComment, NotesTargetInfo, ProjectConfiguration } from "../protocol/generated/v1";
+import type { ExecutionAttachment, OrchestrationSnapshot, Run, NotesRequest, NotesResponse, NotesOperation, NotesTodo, NotesDecision, NotesComment, NotesTargetInfo, ProjectConfiguration } from "../protocol/generated/v1";
 
 const snapshot: CockpitSessionSnapshot = {
   session_id: "session-1",
@@ -88,6 +88,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     orchestrationSnapshot: vi.fn(async () => { throw new Error("Unexpected orchestration snapshot in terminal fixture"); }),
     orchestrationMutate: vi.fn(async () => { throw new Error("Unexpected orchestration mutation in terminal fixture"); }),
     orchestrationWait: vi.fn(async () => { throw new Error("Unexpected orchestration wait in terminal fixture"); }),
+    orchestrationProjectRootLookup: vi.fn(async () => { throw new Error("Unexpected project root lookup in terminal fixture"); }),
     quotaStatus: vi.fn(async () => { throw new CockpitClientError("http_error", "Subscription quota is not configured in this fixture", { status: 503, operationCode: "quota_unavailable" }); }),
     subscribeWidgets: vi.fn(async () => { throw new Error("Unexpected widget subscription in terminal fixture"); }),
     widgetContent: vi.fn(async () => { throw new Error("Unexpected widget content in terminal fixture"); }),
@@ -1376,5 +1377,42 @@ describe("Notes decoder and transport security boundaries", () => {
         await expect(client.projectConfiguration()).rejects.toMatchObject({ code: "malformed_response" });
       }
     }
+  });
+});
+
+describe("Orchestration attachment transport cutover", () => {
+  it.each(["browser", "native"] as const)("decodes one nullable physical attachment without public credentials (%s)", async transport => {
+    const at = "2026-10-10T12:00:00Z";
+    const attachment: ExecutionAttachment = {
+      attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "disconnected", launch_mode: null,
+      location: { boot_id: null, terminal_id: null, native_session_id: null, endpoint_identity: "endpoint", session_id: "session-1", workspace_id: "space-1", tab_id: "tab-1", pane_id: "pane-1", launch_tag: "legacy-launch" },
+      main_session_id: null, process: null, shell: null, machine_id: null, launch_attempt: 0, updated_at: at,
+    };
+    const run: Run = {
+      session_id: "session-1", brief: "", run_id: "root", root_id: "root", parent_run_id: null,
+      kind: "adopted", label: "Saved supervisor", task_id: null, attempt: 1, task_revision_at_start: null,
+      stage: "active", close_reason: null, dispatch: null, target: null, setup: null,
+      cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" }, annotations: [],
+      project: null, checkout: null, attachment, checkout_claim_id: null, resume: null, retirement: null,
+      created_at: at, updated_at: at,
+    };
+    const saved: OrchestrationSnapshot = {
+      state_store_id: "a".repeat(64), cleanup: [], restoration: { reattached: 0, total_attachments: 1, cleanup_pending: 0 },
+      session_id: "session-1", revision: 1, tasks_token: "a".repeat(64), roots: [], board: null, runs: [run],
+      messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      runtime: { status: "unavailable", error: { code: "offline", message: "Observation unavailable" } },
+    };
+    let payload: unknown = saved;
+    const client = transport === "browser" ? createBrowserClient(vi.fn(async () => jsonResponse(payload))) : createNativeClient(vi.fn(async () => payload));
+    const request = { session_id: "session-1", root_id: null };
+    const decoded = await client.orchestrationSnapshot(request);
+    expect(decoded.runs[0]!.attachment).toEqual(attachment);
+    expect(decoded.runtime.status).toBe("unavailable");
+    for (const extra of [{ location: attachment.location }, { bound_omp_session: "old-mirror" }, { credential: "private" }]) {
+      payload = { ...saved, runs: [{ ...run, ...extra }] };
+      await expect(client.orchestrationSnapshot(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    payload = { ...saved, runs: [{ ...run, attachment: { ...attachment, secret: "private" } }] };
+    await expect(client.orchestrationSnapshot(request)).rejects.toMatchObject({ code: "malformed_response" });
   });
 });

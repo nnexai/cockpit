@@ -7,7 +7,7 @@ import { activityRows, ClosedTracking, SupervisorActivity, SupervisorDiagnostics
 
 const at = "2026-10-07T12:00:00Z";
 function run(overrides: Partial<Run> = {}): Run {
-  return { session_id: "session", prepare_brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_propose: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null, annotations: [], location: null, bound_omp_session: "native", bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at, ...overrides };
+  return { session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" }, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: null, main_session_id: "native", process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
 }
 function task(): TaskView {
   return { task: { task_id: "task-a", title: "Improve search", body: "Keep existing behavior.", description: "Keep existing behavior.", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "task-revision", diagnostic: null }, lane: "working", current_run_id: "worker", dependencies: { state: "none", unmet: [], problems: [] } };
@@ -16,7 +16,7 @@ function message(overrides: Partial<Message> = {}): Message {
   return { message_id: "message", to_run_id: "root", seq: 1, from: { type: "dispatcher" }, kind: "instruction", text: "Inspect search behavior", in_reply_to: null, report: null, stale: false, escalated_from: null, from_subagent_id: null, stage: "stored", woken_omp_session: null, created_at: at, acked_at: null, ...overrides };
 }
 function snapshot(runs: Run[] = [run()]): OrchestrationSnapshot {
-  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => run.run_id === run.root_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: { root_id: "root", path: "/state/tasks.md", doc_revision: "document-revision", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs, messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => ({ run_id: run.run_id, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at })) } };
+  return { session_id: "session", state_store_id: "store", revision: 1, tasks_token: "tasks", roots: runs.filter(run => run.run_id === run.root_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: { root_id: "root", path: "/state/tasks.md", doc_revision: "document-revision", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs, messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => ({ run_id: run.run_id, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at })) } };
 }
 let host: HTMLDivElement;
 let root: Root | null = null;
@@ -37,23 +37,24 @@ afterEach(async () => {
 
 describe("Supervisor readable activity boundaries", () => {
   it("keeps technical bootstrap and receipt identities out of readable records without hiding them from Diagnostics", async () => {
-    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working", grants: [{ grant_id: "grant", scope: "execute", plan_revision: "plan-secret", origin: "supervisor", supervisor_run_id: "root", omp_session_id: "session-secret", granted_at: at }] });
+    const worker = run({ kind: "worker", run_id: "worker", label: "Search agent", parent_run_id: "root", task_id: "task-a", stage: "working" });
     worker.annotations = ["Acceptance requested for Result ", "Accepted Result at exact task revision ", "Recovered acceptance of Result "].map(prefix => ({ at, by: { type: "run", run_id: "root" }, text: `${prefix}result-secret at revision-secret; session-secret` }));
     const state = snapshot([run(), worker]);
     state.messages = [
-      ...(["supervisor_brief", "prepare_brief", "work_brief"] as const).map((kind, index) => message({ message_id: kind, kind, seq: index + 1, text: "BOOTSTRAP-SECRET", to_run_id: "worker" })),
+      ...(["supervisor_brief", "work_brief"] as const).map((kind, index) => message({ message_id: kind, kind, seq: index + 1, text: "BOOTSTRAP-SECRET", to_run_id: "worker" })),
       message({ message_id: "assign-task-a", text: "ASSIGNMENT-SECRET", to_run_id: "root" }),
       message({ message_id: "observation", kind: "observation", text: "OBSERVATION-SECRET", to_run_id: "worker" }),
+      message({ message_id: "initialized", kind: "report", to_run_id: "worker", report: { message_id: "initialized", kind: "initialized", outcome: null, summary: "INITIALIZATION-SECRET", plan: "INITIALIZATION-PLAN-SECRET", source_output: null, at } }),
     ];
     await render(<SupervisorActivity rows={activityRows(state, state.runs, [task()])} onLink={() => undefined} />);
     const activity = host.textContent!;
-    for (const secret of ["BOOTSTRAP-SECRET", "ASSIGNMENT-SECRET", "OBSERVATION-SECRET", "plan-secret", "result-secret", "revision-secret", "session-secret"]) expect(activity).not.toContain(secret);
-    expect(activity).toContain("Execution authorized · Project supervisor");
-    expect(activity).not.toContain("authorized · You");
+    for (const secret of ["BOOTSTRAP-SECRET", "ASSIGNMENT-SECRET", "OBSERVATION-SECRET", "INITIALIZATION-SECRET", "INITIALIZATION-PLAN-SECRET", "result-secret", "revision-secret", "session-secret"]) expect(activity).not.toContain(secret);
+    expect(activity).not.toContain("authorized");
+    expect(activity).toContain("Initialization reported by Search agent");
     expect(activity).toContain("Result review note for Search agent");
     await render(<SupervisorDiagnostics snapshot={state} rootRuns={state.runs} busy={false} connected onIdentify={() => undefined} onCopyPath={() => undefined} />);
     const records = host.querySelector(".supervisor-diagnostics-records")!;
-    for (const secret of ["BOOTSTRAP-SECRET", "ASSIGNMENT-SECRET", "OBSERVATION-SECRET", "plan-secret", "result-secret", "revision-secret", "session-secret"]) expect(records.textContent).toContain(secret);
+    for (const secret of ["BOOTSTRAP-SECRET", "ASSIGNMENT-SECRET", "OBSERVATION-SECRET", "INITIALIZATION-SECRET", "INITIALIZATION-PLAN-SECRET", "result-secret", "revision-secret", "session-secret"]) expect(records.textContent).toContain(secret);
     expect(host.querySelector(".supervisor-diagnostics-summary")!.compareDocumentPosition(records) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -65,7 +66,7 @@ describe("Supervisor readable activity boundaries", () => {
     const yesterday = new Date(2026, 9, 6, 23, 55).toISOString();
     state.messages = [
       message({ message_id: "assign-task-a", created_at: today }),
-      message({ message_id: "worker-report", to_run_id: "worker", kind: "report", report: { message_id: "worker-report", kind: "progress", outcome: null, summary: "Search indexed", plan: null, at: today }, created_at: today, stale: true }),
+      message({ message_id: "worker-report", to_run_id: "worker", kind: "report", report: { message_id: "worker-report", kind: "progress", outcome: null, summary: "Search indexed", plan: null, source_output: null, at: today }, created_at: today, stale: true }),
       message({ message_id: "root-note", created_at: yesterday }),
       message({ message_id: "other-note", to_run_id: "other", text: "Outside this root", created_at: today }),
     ];

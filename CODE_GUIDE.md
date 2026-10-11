@@ -165,12 +165,12 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Prerequisites/checklist parsing | `crates/cockpit-core/src/orchestration/dependencies.rs`; `crates/cockpit-core/src/orchestration/steps.rs`; `crates/cockpit-core/src/orchestration/steps/parser.rs` |
 | Checklist marker layout and operation planning | `crates/cockpit-core/src/orchestration/steps/layout.rs`; `crates/cockpit-core/src/orchestration/steps/planning.rs` |
 | Action dispatcher/mutation facade/tasks/runs | `crates/cockpit-core/src/orchestration/mutate/mod.rs`; `crates/cockpit-core/src/orchestration/mutate/tasks.rs`; `crates/cockpit-core/src/orchestration/mutate/runs.rs` |
-| Grant and reviewed-plan commits | `crates/cockpit-core/src/orchestration/mutate/grants.rs`; `crates/cockpit-core/src/orchestration/mutate/reviewed.rs` |
-| Mutation intents/dispatch/retirement | `crates/cockpit-core/src/orchestration/mutate/intents.rs`; `crates/cockpit-core/src/orchestration/mutate/dispatch_records.rs`; `crates/cockpit-core/src/orchestration/mutate/retirement.rs` |
+| Role credentials/same-worker scope | `crates/cockpit-core/src/orchestration/credentials.rs`; `crates/cockpit-core/src/orchestration/scope_intents.rs`; `crates/cockpit-core/src/orchestration/mutate/tasks.rs` |
+| Source acceptance/integration/send-back | `crates/cockpit-core/src/orchestration/mutate/intents.rs`; `crates/cockpit-core/src/orchestration/mutate/integration.rs`; `crates/cockpit-core/src/orchestration/mutate/grants.rs` (send-back) |
 | Dispatcher/Herdr/escalation | `crates/cockpit-core/src/orchestration/dispatch.rs`; `crates/cockpit-core/src/orchestration/herdr.rs`; `crates/cockpit-core/src/orchestration/escalation.rs` |
 | Messages/inbox/reports | `crates/cockpit-core/src/orchestration/messages.rs`; `crates/cockpit-core/src/orchestration/messages/inbox.rs`; `crates/cockpit-core/src/orchestration/messages/report.rs` |
 | Subagent delivery/projection/routing | `crates/cockpit-core/src/orchestration/messages/subagent_control.rs`; `crates/cockpit-core/src/orchestration/projection.rs`; `crates/cockpit-core/src/orchestration/routing.rs` |
-| Retirement policy/effects | `crates/cockpit-core/src/orchestration/retirement.rs`; `crates/cockpit-core/src/orchestration/retire.rs` |
+| Cleanup/resources/terminal effects | `crates/cockpit-core/src/orchestration/cleanup.rs`; `crates/cockpit-core/src/orchestration/fixture_resources.rs`; `crates/cockpit-core/src/orchestration/resource_queue.rs`; `crates/cockpit-core/src/orchestration/retire.rs` |
 | Runtime owner and Herdr launch | `crates/cockpit-host/src/orchestration_runtime.rs`; `crates/cockpit-herdr/src/cli/orchestration.rs` |
 | Agent CLI facade/args/caller | `crates/cockpit-host/src/cli_orchestration/mod.rs`; `crates/cockpit-host/src/cli_orchestration/args.rs`; `crates/cockpit-host/src/cli_orchestration/caller.rs` |
 | Agent CLI context/wait/output | `crates/cockpit-host/src/cli_orchestration/context.rs`; `crates/cockpit-host/src/cli_orchestration/wait.rs`; `crates/cockpit-host/src/cli_orchestration/output.rs` |
@@ -268,11 +268,11 @@ Four stream methods remain transport-local: `subscribeSession`, `openTerminal`, 
 
 OMP tool/agent CLI → fresh endpoint/location/native caller evidence → `Actor::Agent` → core caller/action authorization → canonical Markdown/store mutation → derived snapshot/inbox → shared host operation → frontend decoder → Supervisor hooks. Browser/native operator requests enter with their own operator origin. Main/subagent provenance is not a privilege flag.
 
-Ready records an exact work plan, not permission to work. Execute binds that plan through `crates/cockpit-core/src/orchestration/mutate/grants.rs` after supervisor review; successful Result review and current-task acceptance are separate transitions. [DECISIONS](DECISIONS.md) owns strict-descendant root authority, prerequisites, launch/process fences, reconciliation, rollover, retirement and no-replay rules. [supervisor-surfaces](docs/supervisor-surfaces.md) maps operator surfaces.
+One WorkerStart fences canonical task/document revisions and delegates autonomous implementation, native children and affected checks. Initialized is diagnostic only. A Working scope change uses dual CAS and one durable instruction to the same worker; self-refinement does not send mail. A succeeded Result ties SourceOutput to its exact result ID and current canonical task revision. Acceptance, target Integration and per-resource Cleanup remain independent. [DECISIONS](DECISIONS.md) owns role/attachment authority, dependencies, operation/effect journals, reattachment and held-unknown cleanup limits. [supervisor-surfaces](docs/supervisor-surfaces.md) maps operator surfaces.
 
-`crates/cockpit-host/src/cli_orchestration/wait.rs` bounds idle runtime reobservation at three seconds; core durable waits use notifications/one-second cross-process polls. Mounted `src/app/supervisor/useSupervisor.ts` uses a five-second wait then refreshes runtime; mutations refresh immediately. These are bounds, not latency or CPU claims. Inbox wakes carry counts; pull bodies, process them, then explicitly ACK. Answers name the current main question ID.
+`crates/cockpit-host/src/cli_orchestration/wait.rs` bounds idle runtime reobservation at three seconds; core durable waits use notifications/one-second cross-process polls. Mounted `src/app/supervisor/useSupervisor.ts` uses a five-second wait then refreshes runtime; mutations refresh immediately. These are bounds, not latency or CPU claims. Inbox wakes carry counts; the OMP extension captures bodies durably before automatic transport ACK and the model pulls retained bodies. Advanced raw CLI consumers must capture before explicitly ACKing; ACK never answers a question. Answers name the current main question ID.
 
-Already-stopped OMP observers are not revived by restarting Cockpit. See [DECISIONS](DECISIONS.md) for explicit reconcile-before-retry and restart limits; `/reload-plugins` is not an extension-session rebind. This navigation is not authorization to manipulate a persistent session or its drafts/processes.
+Start reuses/reattaches the existing root before a new launch; Another is explicit. Unknown same-boot consumers do not justify replacement. Already-stopped OMP observers are not revived merely by restarting Cockpit; `/reload-plugins` is not proven extension-session rebinding. This navigation is not authorization to manipulate a persistent session or its drafts/processes.
 
 ### Library follow refresh, sources and token storage
 
@@ -355,11 +355,11 @@ These are verification recipes, not exercised results. Select affected checks an
 | Herdr schema/receipts | Supported-schema adapter fixtures and real split/move receipts |
 | Herdr command/popup | Live advertised invocation, program input/closure, unchanged split geometry, disconnected recovery and DOM focus return |
 | Project setup/recovery | Ownership, idempotency and uncertain outcomes |
-| Canonical tasks | Exact-byte description/metadata/checklist CAS, graph satisfaction, safe overflow, current-task/native-child authority, reports versus acceptance and fresh dependency gates |
-| Dispatch/owner restart | Disposable real worktree/OMP launch, exact-plan grants, owner restart, uncertain setup/launch reconciliation and no duplicate tab creation |
-| Supervisor transports/CLI | Equivalent operator grants, bound-supervisor descendant grants, agent caller identity, fresh observation and cross-host durable revisions |
+| Canonical tasks | Exact-byte description/metadata/checklist CAS, graph satisfaction, safe overflow, current-task/native-child authority, dual-CAS same-worker scope instruction, launch versus current source scope and source acceptance fences |
+| Dispatch/owner restart | Disposable real worktree/OMP WorkerStart, private role/attachment proof, principal/operation replay, reattach-first Start, explicit Another, uncertain-effect reconciliation and no duplicate writer |
+| Supervisor transports/CLI | Equivalent operator/root subtree authority, narrowed worker/child credentials, fresh attachment/observation and cross-host durable revisions |
 | Supervisor UI | Graph/provenance/accepted context, mixed/subtree checks, external-source/overflow diagnostics, scoped drafts/unknown outcomes, delayed saved-row focus without navigation theft, local reveal versus identity-fenced terminal control; see `docs/supervisor-surfaces.md` |
-| OMP/install | Fresh per-tool prepare gate, native subagent telemetry/control, counts-only wake, explicit processed ACK, receipt-owned installation and no global OMP mutation |
+| OMP/install | Ordinary offline/local tools, synchronous child Bash credential narrowing, native subagent telemetry/control, counts-only wake, local durable capture before automatic ACK, receipt-owned installation and no global OMP mutation |
 | Notes | Real Markdown/CAS, sibling bytes, concurrent/external edits, orphans, boot-scoped attach and disposable browser/native drag/comment/draft recovery |
 | Notes transports/CLI | Standalone CLI without Herdr, Origin rejection, equivalent DTOs, custom-root copied recipes and real native IPC |
 | CLI/skills | Nested help/interpretation, standalone CLI with disposable HOME/project, collision/refusal/concurrent installer behavior |

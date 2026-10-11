@@ -154,23 +154,7 @@ impl BrowserService {
         let Some(receipt) = read_json::<BrowserReceipt>(&self.tab_association_path(key))? else {
             return Ok(None);
         };
-        if receipt.association_key != key
-            || association_key(
-                &receipt.endpoint_identity,
-                &receipt.session_id,
-                &receipt.tab_id,
-            ) != key
-            || receipt.playwright_session != format!("cockpit-{key}")
-            || Path::new(&receipt.working_directory) != self.root.join("workspaces").join(key)
-            || Path::new(&receipt.profile_path) != self.root.join("profiles").join(key)
-            || Path::new(&receipt.config_path)
-                != self.root.join("configs").join(format!("{key}.json"))
-        {
-            return Err(InspectionError::new(
-                "browser_state_corrupt",
-                "Browser receipt does not match its association",
-            ));
-        }
+        validate_receipt(&self.root, key, &receipt)?;
         Ok(Some(receipt))
     }
     pub(super) fn load_all(&self) -> Result<Vec<BrowserReceipt>, InspectionError> {
@@ -251,6 +235,77 @@ impl BrowserService {
         }
         Ok(values)
     }
+}
+
+pub(super) fn optional_state_dir(
+    path: &Path,
+) -> Result<Option<cap_std::fs::Dir>, InspectionError> {
+    match crate::project_store::open_dir_nofollow_absolute(path) {
+        Ok(directory) => {
+            directory.entries().map_err(|error| {
+                InspectionError::new("browser_state_unavailable", error.to_string())
+            })?;
+            Ok(Some(directory))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(InspectionError::new("browser_state_unavailable", error.to_string())),
+    }
+}
+
+fn validate_receipt(
+    root: &Path,
+    key: &str,
+    receipt: &BrowserReceipt,
+) -> Result<(), InspectionError> {
+    if key.len() != 24
+        || !key.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || receipt.association_key != key
+        || association_key(&receipt.endpoint_identity, &receipt.session_id, &receipt.tab_id) != key
+        || receipt.playwright_session != format!("cockpit-{key}")
+        || Path::new(&receipt.working_directory) != root.join("workspaces").join(key)
+        || Path::new(&receipt.profile_path) != root.join("profiles").join(key)
+        || Path::new(&receipt.config_path) != root.join("configs").join(format!("{key}.json"))
+    {
+        return Err(InspectionError::new(
+            "browser_state_corrupt",
+            "Browser receipt does not match its association",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn saved_receipts(root: &Path) -> Result<Vec<BrowserReceipt>, InspectionError> {
+    let Some(directory) = optional_state_dir(&root.join("tab-associations"))? else {
+        return Ok(Vec::new());
+    };
+    let mut receipts = Vec::new();
+    for (index, entry) in directory.entries()
+        .map_err(|error| InspectionError::new("browser_state_unavailable", error.to_string()))?
+        .enumerate()
+    {
+        if index >= MAX_ASSOCIATIONS {
+            return Err(InspectionError::new("browser_state_limit", "Too many browser associations"));
+        }
+        let entry = entry
+            .map_err(|error| InspectionError::new("browser_state_unavailable", error.to_string()))?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or_else(|| {
+            InspectionError::new("browser_state_corrupt", "Invalid browser receipt filename")
+        })?;
+        let key = name.strip_suffix(".json").ok_or_else(|| {
+            InspectionError::new("browser_state_corrupt", "Unclassifiable browser association")
+        })?;
+        let receipt: BrowserReceipt =
+            crate::project_store::read_json_bounded(&directory, name, MAX_RECEIPT_BYTES)?;
+        validate_receipt(root, key, &receipt)?;
+        if [&receipt.endpoint_identity, &receipt.session_id, &receipt.space_id, &receipt.tab_id]
+            .iter().any(|value| value.is_empty() || value.chars().any(char::is_control))
+        {
+            return Err(InspectionError::new("browser_state_corrupt", "Unclassifiable browser identity"));
+        }
+        receipts.push(receipt);
+    }
+    Ok(receipts)
 }
 
 pub(super) fn association_key(endpoint_identity: &str, session_id: &str, tab_id: &str) -> String {

@@ -2,8 +2,8 @@ use cockpit_protocol::orchestration::*;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Actor, AppendMessage, OrchestrationState, agent, actor_ref, append,
-    authenticated_child_session, error, is_ancestor, main_session, now, run_index,
+    Actor, AuthorizedJob, JobRole, AppendMessage, OrchestrationState, agent, actor_ref, append,
+    AgentCaller, authenticated_child_session, error, is_ancestor, native_control_context, now, run_index,
     text_bound,
 };
 use crate::InspectionError;
@@ -18,7 +18,7 @@ struct ControlEnvelope {
 pub(super) fn apply(
     state: &mut OrchestrationState,
     actor: &Actor,
-    caller: Option<usize>,
+    caller: Option<&AuthorizedJob>,
     action: &OrchestrationAction,
 ) -> Result<Option<OrchestrationActionResult>, InspectionError> {
     let result = match action {
@@ -50,7 +50,7 @@ pub(super) fn apply(
 fn update(
     state: &mut OrchestrationState,
     actor: &Actor,
-    caller: Option<usize>,
+    caller: Option<&AuthorizedJob>,
     subagent_id: &str,
     parent_subagent_id: &Option<String>,
     role: &Option<String>,
@@ -59,6 +59,7 @@ fn update(
     summary: &Option<String>,
 ) -> Result<OrchestrationActionResult, InspectionError> {
     let (agent, index) = agent(actor, caller)?;
+    let job = caller.expect("admitted agent");
     if subagent_id.is_empty() {
         return Err(error("invalid_subagent", "Subagent id is required"));
     }
@@ -69,18 +70,15 @@ fn update(
     if let Some(summary) = summary {
         text_bound(summary)?;
     }
-    let child_binding = match agent.agent_kind {
-        Some(AgentKind::Main) => {
-            main_session(agent, &state.runs[index])?;
-            None
-        }
-        Some(AgentKind::Subagent) if agent.subagent_id.as_deref() == Some(subagent_id) => {
-            Some(authenticated_child_session(agent, &state.runs[index])?)
+    let child_binding = match job.role {
+        JobRole::Root | JobRole::Worker => None,
+        JobRole::Child if job.subject_child_id.as_deref() == Some(subagent_id) => {
+            authenticated_child_session(state, agent, job)?
         }
         _ => {
             return Err(error(
                 "actor_forbidden",
-                "A subagent may update only its own telemetry",
+                "A child credential may update only its own telemetry",
             ));
         }
     };
@@ -111,6 +109,27 @@ fn update(
         .subagents
         .iter()
         .position(|entry| entry.run_id == *own && entry.subagent_id == subagent_id);
+    if job.role == JobRole::Child && existing.is_none() {
+        return Err(error("subagent_not_found", "Child telemetry requires an existing registered subject"));
+    }
+    if let Some(existing) = existing {
+        let entry = &state.subagents[existing];
+        if status == SubagentStatus::Running
+            && (entry.status == SubagentStatus::Cancelled
+                || entry.last_control.as_ref().is_some_and(|control| {
+                    control.stage == ControlStage::Applied && matches!(control.op, SubagentOp::Cancel)
+                }))
+        {
+            return Err(error("invalid_stage", "A cancelled native child cannot be resurrected by telemetry"));
+        }
+        if job.role == JobRole::Child && status == SubagentStatus::Cancelled {
+            let control = entry.last_control.as_ref()
+                .filter(|control| control.stage == ControlStage::Applied)
+                .ok_or_else(|| error("subagent_control_conflict", "Cancelled telemetry requires its own applied Cancel receipt"))?;
+            terminal_cancel_receipt(state, agent, job, entry, control.seq)?;
+            return Ok(OrchestrationActionResult::Done);
+        }
+    }
     // Explicit child progress takes precedence over an assignment/reminder
     // carried by lifecycle telemetry, including when telemetry arrives later.
     let effective_summary =
@@ -127,6 +146,18 @@ fn update(
         } else {
             None
         };
+    if let Some(index) = existing {
+        let entry = &state.subagents[index];
+        if entry.parent_subagent_id == *parent_subagent_id
+            && entry.role == *role
+            && entry.label == label
+            && entry.status == status
+            && child_binding.is_none_or(|session| entry.bound_omp_session.as_deref() == Some(session))
+            && effective_summary.is_none_or(|summary| entry.summary.as_deref() == Some(summary))
+        {
+            return Ok(OrchestrationActionResult::Done);
+        }
+    }
     let at = now();
     if let Some(index) = existing {
         let entry = &mut state.subagents[index];
@@ -163,14 +194,19 @@ fn update(
 fn enqueue(
     state: &mut OrchestrationState,
     actor: &Actor,
-    caller: Option<usize>,
+    caller: Option<&AuthorizedJob>,
     run_id: &str,
     subagent_id: &str,
     op: &SubagentOp,
 ) -> Result<OrchestrationActionResult, InspectionError> {
     run_index(state, run_id)?;
     if let Actor::Agent(_) = actor {
-        let (_, index) = agent(actor, caller)?;
+        let (agent, index) = agent(actor, caller)?;
+        let job = caller.expect("admitted agent");
+        if job.role != JobRole::Root {
+            return Err(error("actor_forbidden", "Only the root job may request descendant controls"));
+        }
+        native_control_context(state, agent, job)?;
         if !is_ancestor(state, &state.runs[index].run_id, run_id) {
             return Err(error(
                 "not_ancestor",
@@ -202,7 +238,7 @@ fn enqueue(
         op: op.clone(),
     })
     .map_err(|failure| error("invalid_subagent_control", failure.to_string()))?;
-    let from = actor_ref(actor, caller, state);
+    let from = actor_ref(actor, caller.map(|job| job.run_index), state);
     let result = append(
         state,
         AppendMessage {
@@ -233,12 +269,13 @@ fn enqueue(
 fn complete(
     state: &mut OrchestrationState,
     actor: &Actor,
-    caller: Option<usize>,
+    caller: Option<&AuthorizedJob>,
     seq: u64,
     applied: bool,
     control_error: &Option<String>,
 ) -> Result<OrchestrationActionResult, InspectionError> {
     let (agent, index) = agent(actor, caller)?;
+    let job = caller.expect("admitted agent");
     if let Some(failure) = control_error {
         text_bound(failure)?;
     }
@@ -260,10 +297,9 @@ fn complete(
     let envelope: ControlEnvelope =
         serde_json::from_str(&state.messages[message_index].text)
             .map_err(|failure| error("invalid_subagent_control", failure.to_string()))?;
-    match agent.agent_kind {
-        Some(AgentKind::Main) => main_session(agent, &state.runs[index])?,
-        Some(AgentKind::Subagent)
-            if agent.subagent_id.as_deref() == Some(&envelope.subagent_id) => {}
+    match job.role {
+        JobRole::Root | JobRole::Worker => {}
+        JobRole::Child if job.subject_child_id.as_deref() == Some(&envelope.subagent_id) => {}
         _ => {
             return Err(error(
                 "actor_forbidden",
@@ -281,6 +317,20 @@ fn complete(
                 "The targeted subagent no longer exists",
             )
         })?;
+    let entry = &state.subagents[subagent_index];
+    if job.role == JobRole::Child && matches!(envelope.op, SubagentOp::Cancel) {
+        // A disposed Registry child may only finish its pinned durable Cancel.
+        // This acknowledges an already-requested effect; it authorizes no effect.
+        if state.messages[message_index].stale {
+            return Err(error("subagent_control_not_found", "The durable Cancel intent is stale"));
+        }
+        terminal_cancel_binding(state, agent, job, entry, seq)?;
+    } else {
+        if job.role == JobRole::Child && entry.status != SubagentStatus::Running {
+            return Err(error("invalid_stage", "Only a running registered child may complete nonterminal controls"));
+        }
+        native_control_context(state, agent, job)?;
+    }
     let stage = if applied {
         ControlStage::Applied
     } else {
@@ -304,6 +354,9 @@ fn complete(
         message.acked_at = Some(at.clone());
     }
     let entry = &mut state.subagents[subagent_index];
+    if applied && matches!(envelope.op, SubagentOp::Cancel) {
+        entry.status = SubagentStatus::Cancelled;
+    }
     // Older completions must not overwrite the receipt for a newer control.
     if entry
         .last_control
@@ -320,4 +373,50 @@ fn complete(
     }
     entry.updated_at = at;
     Ok(OrchestrationActionResult::Done)
+}
+
+fn terminal_cancel_binding(
+    state: &OrchestrationState,
+    agent: &AgentCaller,
+    job: &AuthorizedJob,
+    entry: &Subagent,
+    seq: u64,
+) -> Result<(), InspectionError> {
+    if job.role != JobRole::Child
+        || entry.run_id != state.runs[job.run_index].run_id
+        || job.subject_child_id.as_deref() != Some(entry.subagent_id.as_str())
+    {
+        return Err(error("actor_forbidden", "A terminal receipt requires its own registered child subject"));
+    }
+    if entry.bound_omp_session.as_deref().is_none_or(str::is_empty)
+        || agent.omp_session_id != entry.bound_omp_session
+    {
+        return Err(error("session_mismatch", "A terminal receipt must name its registered child session"));
+    }
+    if entry.last_control.as_ref().is_none_or(|control| {
+        control.seq != seq || !matches!(control.op, SubagentOp::Cancel)
+    }) {
+        return Err(error("subagent_control_conflict", "A terminal receipt must match the exact current Cancel intent"));
+    }
+    Ok(())
+}
+
+fn terminal_cancel_receipt(
+    state: &OrchestrationState,
+    agent: &AgentCaller,
+    job: &AuthorizedJob,
+    entry: &Subagent,
+    seq: u64,
+) -> Result<(), InspectionError> {
+    terminal_cancel_binding(state, agent, job, entry, seq)?;
+    let message = state.messages.iter().find(|message| {
+        message.to_run_id == entry.run_id && message.seq == seq
+            && message.kind == MessageKind::SubagentControl && !message.stale
+    }).ok_or_else(|| error("subagent_control_not_found", "The durable Cancel message is missing"))?;
+    let envelope: ControlEnvelope = serde_json::from_str(&message.text)
+        .map_err(|failure| error("invalid_subagent_control", failure.to_string()))?;
+    if envelope.subagent_id != entry.subagent_id || !matches!(envelope.op, SubagentOp::Cancel) {
+        return Err(error("subagent_control_conflict", "The durable control payload does not match its Cancel receipt"));
+    }
+    Ok(())
 }

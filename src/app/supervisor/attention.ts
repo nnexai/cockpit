@@ -1,4 +1,5 @@
 import type { AttentionKind, OrchestrationSnapshot, Run, TaskView } from "../../protocol/generated/v1";
+import { cleanupForRun, cleanupView } from "./retirementView";
 
 export type AttentionTier = "decide" | "recover" | "notice";
 export const TIER_ORDER: Readonly<Record<AttentionTier, number>> = { decide: 0, recover: 1, notice: 2 };
@@ -16,7 +17,8 @@ export type LocalCondition =
   | { kind: "assignment"; taskId: string; state: "pending" | "conflict" }
   | { kind: "relation_diagnostic"; taskId: string; cause: string }
   | { kind: "dependency_regression"; taskId: string }
-  | { kind: "unidentified_items"; count: number };
+  | { kind: "unidentified_items"; count: number }
+  | { kind: "cleanup"; runId: string; taskId: string | null; state: "kept" | "stalled" | "unknown"; message: string };
 
 export type AttentionSource =
   | { origin: "core"; kind: AttentionKind; messageSeq: number | null; since: string }
@@ -31,7 +33,7 @@ export type AttentionItem = {
   sources: readonly [AttentionSource, ...AttentionSource[]];
   since: string | null;
 };
-export type SupervisorOwned = { kind: "awaits_prepare" | "awaits_execute" | "to_accept" | "needs_input"; runId: string; taskId: string | null; since: string };
+export type SupervisorOwned = { kind: "to_accept" | "needs_input"; runId: string; taskId: string | null; since: string };
 export type AttentionModel = {
   items: readonly AttentionItem[];
   counts: Readonly<Record<AttentionTier, number>>;
@@ -47,9 +49,10 @@ export type AttentionModel = {
 export function coreTier(kind: AttentionKind, run: Run | undefined): AttentionTier | "supervisor" {
   switch (kind) {
     case "needs_input": return run && run.run_id === run.root_id ? "decide" : "supervisor";
-    case "awaits_prepare": case "awaits_execute": case "to_accept": return "supervisor";
-    case "runtime_blocked": case "dispatch_unknown": case "exited_without_report": case "retirement_unconfirmed": return "recover";
-    case "idle_without_report": case "brief_unread": case "plan_changed": case "intent_conflict": return "notice";
+    case "to_accept": case "brief_unread": return "supervisor";
+    case "runtime_blocked": return run?.resume?.phase === "blocked" && run.resume.cause?.class === "decision" ? "decide" : "recover";
+    case "dispatch_unknown": case "exited_without_report": case "retirement_unconfirmed": return "recover";
+    case "idle_without_report": case "intent_conflict": return "notice";
   }
 }
 
@@ -57,14 +60,16 @@ const LOCAL_TIER: Record<LocalCondition["kind"], AttentionTier> = {
   start_unknown: "recover", terminal_error: "recover", navigation_error: "recover", change_unconfirmed: "recover",
   orphaned_worker: "recover", agent_status: "recover", assignment: "notice", unidentified_items: "notice", notice: "notice", root_failed_report: "notice",
   relation_diagnostic: "notice", dependency_regression: "notice",
+  cleanup: "notice",
 };
 const PRECEDENCE: Record<AttentionKind | LocalCondition["kind"], number> = {
-  needs_input: 0, awaits_prepare: 0, awaits_execute: 0, to_accept: 0,
+  needs_input: 0, to_accept: 0,
   retirement_unconfirmed: 0, exited_without_report: 1, dispatch_unknown: 2, runtime_blocked: 3, orphaned_worker: 4, agent_status: 5,
   start_unknown: 6, terminal_error: 7, navigation_error: 8, change_unconfirmed: 9,
-  intent_conflict: 0, assignment: 1, idle_without_report: 2, brief_unread: 3, plan_changed: 4,
+  intent_conflict: 0, assignment: 1, idle_without_report: 2, brief_unread: 3,
   relation_diagnostic: 1, dependency_regression: 2,
   root_failed_report: 5, unidentified_items: 6, notice: 7,
+  cleanup: 0,
 };
 const emptyCounts = (): Record<AttentionTier, number> => ({ decide: 0, recover: 0, notice: 0 });
 const sourceKind = (source: AttentionSource) => source.origin === "core" ? source.kind : source.condition.kind;
@@ -92,7 +97,7 @@ export function deriveAttention({ snapshot, rootId, local }: { snapshot: Orchest
     const tier = coreTier(entry.kind, run);
     const taskId = entry.task_id ?? run.task_id;
     if (tier === "supervisor") {
-      if (entry.kind === "awaits_prepare" || entry.kind === "awaits_execute" || entry.kind === "to_accept" || entry.kind === "needs_input") {
+      if (entry.kind === "to_accept" || entry.kind === "needs_input") {
         supervisorOwned.push({ kind: entry.kind, runId: run.run_id, taskId, since: entry.since });
       }
       continue;
@@ -101,6 +106,16 @@ export function deriveAttention({ snapshot, rootId, local }: { snapshot: Orchest
     const subject: AttentionSubject = entry.kind === "intent_conflict" && taskId !== null ? { kind: "task", taskId } : { kind: "run", runId: run.run_id };
     add(tier, subject, run.run_id, taskId, { origin: "core", kind: entry.kind, messageSeq: entry.message_seq, since: entry.since });
   }
+  for (const run of snapshot.runs) {
+    if (run.root_id !== rootId || run.stage !== "closed") continue;
+    const summary = cleanupForRun(snapshot, run.run_id);
+    const cleanup = cleanupView(summary);
+    if (!summary || !cleanup?.tier) continue;
+    const state = summary.items.some(item => item.cleanup.state === "unknown") ? "unknown"
+      : summary.items.some(item => item.cleanup.state === "kept") ? "kept" : "stalled";
+    const condition: LocalCondition = { kind: "cleanup", runId: run.run_id, taskId: run.task_id, state, message: cleanup.detail };
+    add(cleanup.tier, { kind: "run", runId: run.run_id }, run.run_id, run.task_id, { origin: "local", condition });
+  }
   for (const condition of local) {
     const runId = "runId" in condition ? condition.runId : null;
     const run = runId === null ? undefined : runs.get(runId);
@@ -108,7 +123,9 @@ export function deriveAttention({ snapshot, rootId, local }: { snapshot: Orchest
     if (condition.kind === "agent_status" && coreRecover.has(condition.runId)) continue;
     const taskId = "taskId" in condition ? condition.taskId : run?.task_id ?? null;
     const subject: AttentionSubject = runId !== null ? { kind: "run", runId } : taskId !== null ? { kind: "task", taskId } : { kind: "workarea" };
-    add(LOCAL_TIER[condition.kind], subject, runId, taskId, { origin: "local", condition });
+    const tier = condition.kind === "cleanup" && condition.state === "unknown" ? "recover"
+      : condition.kind === "agent_status" && run?.resume?.phase === "blocked" && run.resume.cause?.class === "decision" ? "decide" : LOCAL_TIER[condition.kind];
+    add(tier, subject, runId, taskId, { origin: "local", condition });
   }
   const items = [...grouped.values()].map(item => ({ ...item, sources: [...item.sources].sort((a, b) => PRECEDENCE[sourceKind(a)] - PRECEDENCE[sourceKind(b)]) as [AttentionSource, ...AttentionSource[]] }))
     .sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier] || compareSince(a.since, b.since) || a.id.localeCompare(b.id));
@@ -136,7 +153,7 @@ export function deriveAttention({ snapshot, rootId, local }: { snapshot: Orchest
     ownedForRun: id => supervisorOwned.find(item => item.runId === id) ?? null };
 }
 
-/** Root selector counts queue subjects, not supervisor-owned preparation, execution or review. */
+/** Root selector counts user-facing queue subjects, not supervisor-owned review or worker questions. */
 export function rootAttentionSummary(snapshot: OrchestrationSnapshot, rootId: string): Record<AttentionTier, number> {
   return { ...deriveAttention({ snapshot, rootId, local: [] }).counts };
 }

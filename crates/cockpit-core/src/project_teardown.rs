@@ -11,6 +11,173 @@ use crate::InspectionError;
 use crate::project_store::{TeardownReceipt, TeardownReceiptState};
 
 pub const REMOVE_WORKTREE_CONFIRMATION: &str = "REMOVE WORKTREE";
+pub(crate) fn validate_creation_receipt(
+    receipt: &crate::project_store::OwnedCreationReceipt,
+    operation: &WorkspaceOperation,
+) -> Result<(), InspectionError> {
+    use cockpit_protocol::orchestration::OwnedResourceIdentity;
+    let conflict = || InspectionError::new("association_conflict", "owned creation receipt differs from its creating operation");
+    if receipt.operation_id != operation.operation_id
+        || receipt.operation_id != operation.plan.operation_id
+        || receipt.resources.is_empty()
+    {
+        return Err(conflict());
+    }
+    let mut kinds = 0u8;
+    for resource in &receipt.resources {
+        let kind = match resource {
+            OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } => {
+                let repository = operation.plan.repository.as_ref().ok_or_else(conflict)?;
+                let mut owned = operation.owned_resources.iter().filter(|r| r.kind == "worktree");
+                let owned = match (owned.next(), owned.next()) {
+                    (Some(owned), None) if owned.created_by_operation => owned,
+                    _ => return Err(conflict()),
+                };
+                if operation.plan.ownership != WorkspaceCheckoutOwnership::OwnedWorktree
+                    || owned.path != identity.checkout_path
+                    || identity.creation_operation_id != receipt.operation_id
+                    || identity.checkout_path != operation.plan.checkout_path
+                    || identity.repository_root != repository.root
+                    || identity.common_dir != repository.common_dir
+                    || identity.repository_key != repository.common_dir
+                    || identity.branch_ref.as_deref().is_some_and(|b| !b.starts_with("refs/heads/"))
+                    || identity.branch_ref.as_deref().and_then(|b| b.strip_prefix("refs/heads/")) != operation.plan.branch.as_deref()
+                {
+                    return Err(conflict());
+                }
+                if matches!(resource, OwnedResourceIdentity::Worktree { .. }) { 1 } else {
+                    if identity.branch_ref.is_none() { return Err(conflict()); }
+                    2
+                }
+            }
+            OwnedResourceIdentity::Space { identity } => {
+                if identity.creation_operation_id != receipt.operation_id
+                    || operation.workspace_id.as_deref() != Some(identity.workspace_id.as_str())
+                    || identity.session_id != operation.session_id
+                    || identity.session_id != operation.plan.session_id
+                    || identity.endpoint_identity != operation.plan.endpoint_identity
+                    || identity.checkout_path != operation.plan.checkout_path
+                {
+                    return Err(conflict());
+                }
+                4
+            }
+            _ => return Err(conflict()),
+        };
+        if kinds & kind != 0 { return Err(conflict()); }
+        kinds |= kind;
+    }
+    let worktree = receipt.resources.iter().find_map(|r| match r {
+        OwnedResourceIdentity::Worktree { identity } => Some(identity), _ => None,
+    });
+    let branch = receipt.resources.iter().find_map(|r| match r {
+        OwnedResourceIdentity::Branch { identity } => Some(identity), _ => None,
+    });
+    if branch.is_some() && branch != worktree { return Err(conflict()); }
+    Ok(())
+}
+pub(crate) fn owned_run_identity(
+    resource: &cockpit_protocol::orchestration::OwnedResourceRecord,
+    run: &cockpit_protocol::orchestration::Run,
+) -> Result<(), InspectionError> {
+    use cockpit_protocol::orchestration::{CleanupAuthority, OwnedResourceIdentity, ResourceOwnership};
+    let operation_id = match &resource.identity {
+        OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } => &identity.creation_operation_id,
+        OwnedResourceIdentity::Space { identity } => &identity.creation_operation_id,
+        _ => return Err(InspectionError::new("unsupported_resource", "not a project resource")),
+    };
+    if resource.run_id != run.run_id || resource.root_id != run.root_id
+        || resource.ownership != ResourceOwnership::Owned
+        || resource.authority != CleanupAuthority::OwnedWhenSafe
+        || resource.creation_operation_id.as_deref() != Some(operation_id.as_str())
+        || run.setup.as_ref().and_then(|s| s.operation_id.as_deref()) != Some(operation_id.as_str())
+    {
+        return Err(InspectionError::new("ownership_unproven", "cleanup requires the exact owned creating run and standing authority"));
+    }
+    Ok(())
+}
+
+pub(crate) fn integrated_owned_head<'a>(
+    identity: &'a cockpit_protocol::orchestration::OwnedGitIdentity,
+    run: &'a cockpit_protocol::orchestration::Run,
+) -> Result<&'a str, InspectionError> {
+    use cockpit_protocol::orchestration::{CloseReason, Integration, IntegrationMethod, RunStage, SourceOutput};
+    if let (Integration::NotApplicable { result_message_id, .. }, Some(source @ SourceOutput::NonCode {
+        result_message_id: source_result, ..
+    })) = (&run.integration, &run.source_output) {
+        if run.stage != RunStage::Closed || run.close_reason != Some(CloseReason::Accepted)
+            || result_message_id != source_result
+            || run.result.as_ref().is_none_or(|result| result.message_id != *source_result
+                || result.outcome != Some(cockpit_protocol::orchestration::ReportOutcome::Succeeded)
+                || result.source_output.as_ref() != Some(source))
+        {
+            return Err(InspectionError::new("integration_unverified", "non-code exemption does not cover this exact accepted Result"));
+        }
+        // Non-code has no Git output to integrate. Only the unchanged creation
+        // tip is eligible; status checks still retain untracked artifacts.
+        return Ok(&identity.creation_tip);
+    }
+    let Integration::Integrated { accepted_result_message_id, accepted_task_revision, source,
+        target_repository_key, method, mappings, verified_at, .. } = &run.integration else {
+        return Err(InspectionError::new("waiting_integration", "accepted Git output has not been validated as integrated"));
+    };
+    let SourceOutput::Code { repository_key, checkout_key, head_commit, commits,
+        result_message_id, task_revision, .. } = source else {
+        return Err(InspectionError::new("integration_unverified", "Git cleanup needs a validated code integration record"));
+    };
+    if run.stage != RunStage::Closed || run.close_reason != Some(CloseReason::Accepted)
+        || verified_at.is_empty()
+        || repository_key != &identity.repository_key || target_repository_key != repository_key
+        || checkout_key != &identity.checkout_key
+        || run.source_output.as_ref() != Some(source)
+        || run.result.as_ref().map(|r| r.message_id.as_str()) != Some(result_message_id.as_str())
+        || accepted_result_message_id != result_message_id || accepted_task_revision != task_revision
+    {
+        return Err(InspectionError::new("integration_unverified", "validated integration does not cover this exact accepted checkout output"));
+    }
+    if matches!(method, IntegrationMethod::PatchEquivalent | IntegrationMethod::RecordedAdaptation)
+        && (mappings.is_empty() || mappings.iter().flat_map(|m| &m.source_commits).ne(commits.iter()))
+    {
+        return Err(InspectionError::new("integration_unverified", "adapted integration requires the validated complete source mapping"));
+    }
+    Ok(head_commit)
+}
+
+pub(crate) fn owned_consumers_quiescent(
+    resource: &cockpit_protocol::orchestration::OwnedResourceRecord,
+    run: &cockpit_protocol::orchestration::Run,
+) -> Result<(), InspectionError> {
+    if !resource.consumers.is_empty() {
+        return Err(InspectionError::new("resource_consumers", "registered consumers still retain this resource"));
+    }
+    let retirement = run.retirement.as_ref().ok_or_else(|| {
+        InspectionError::new("consumer_proof_missing", "no independently sealed consumer-drain receipt")
+    })?;
+    if retirement.quiescent_stop_at.as_deref().is_none_or(str::is_empty) {
+        return Err(InspectionError::new("consumer_proof_missing", "root or shell disappearance is not exhaustive consumer quiescence"));
+    }
+    let identity = retirement.identity.as_ref().ok_or_else(|| {
+        InspectionError::new("consumer_proof_missing", "sealed drain lacks pinned process identity")
+    })?;
+    let root_pid = i32::try_from(identity.process.pid).map_err(|_| {
+        InspectionError::new("consumer_proof_stale", "root PID cannot be observed by the process identity adapter")
+    })?;
+    let shell_pid = i32::try_from(identity.shell.process.pid).map_err(|_| {
+        InspectionError::new("consumer_proof_stale", "shell PID cannot be observed by the process identity adapter")
+    })?;
+    let boot = crate::process_identity::kernel_boot_id();
+    if !matches!((identity.process.kernel_boot_id.as_deref(), boot.as_deref()),
+        (Some(expected), Some(actual)) if !expected.is_empty() && expected == actual)
+        || identity.shell.process.kernel_boot_id.as_deref() != boot.as_deref()
+        || crate::process_identity::incarnation_running(root_pid, identity.process.start_ticks).unwrap_or(true)
+        || crate::process_identity::incarnation_running(shell_pid, identity.shell.process.start_ticks).unwrap_or(true)
+    {
+        return Err(InspectionError::new("consumer_proof_stale", "sealed drain no longer has fresh same-boot process absence"));
+    }
+    Ok(())
+}
+
+
 
 /// Fresh adapter evidence needed to preview a teardown. This deliberately
 /// carries only provenance and Git status: the integration owner must obtain
@@ -420,6 +587,89 @@ mod tests {
             updated_at: "0".to_owned(),
         }
     }
+    fn git_identity() -> cockpit_protocol::orchestration::OwnedGitIdentity {
+        cockpit_protocol::orchestration::OwnedGitIdentity {
+            creation_operation_id: "operation".into(), machine_id: "machine".into(),
+            repository_key: "/repository/.git".into(), repository_root: "/repository".into(),
+            repository_device: "1".into(), repository_inode: "2".into(),
+            common_dir: "/repository/.git".into(), common_device: "1".into(), common_inode: "3".into(),
+            checkout_path: "/worktrees/task".into(), checkout_device: "1".into(), checkout_inode: "4".into(),
+            checkout_key: "checkout".into(), branch_ref: Some("refs/heads/task".into()),
+            creation_tip: "a".repeat(40),
+        }
+    }
+
+    #[test]
+    fn owned_receipt_rejects_same_path_conflicting_provenance_and_borrowed_creation() {
+        use cockpit_protocol::orchestration::OwnedResourceIdentity;
+        let identity = git_identity();
+        let mut branch = identity.clone();
+        branch.checkout_inode = "999".into();
+        let mut receipt = crate::project_store::OwnedCreationReceipt {
+            operation_id: "operation".into(), resources: vec![
+                OwnedResourceIdentity::Worktree { identity: identity.clone() },
+                OwnedResourceIdentity::Branch { identity: branch },
+            ], git_capture_error: None,
+        };
+        assert!(validate_creation_receipt(&receipt, &operation(true)).is_err());
+        receipt.resources = vec![OwnedResourceIdentity::Worktree { identity }];
+        assert!(validate_creation_receipt(&receipt, &operation(false)).is_err());
+        assert!(validate_creation_receipt(&receipt, &operation(true)).is_ok());
+        receipt.resources.push(receipt.resources[0].clone());
+        assert!(validate_creation_receipt(&receipt, &operation(true)).is_err());
+    }
+
+    #[test]
+    fn accepted_git_cleanup_checks_code_mapping_and_noncode_exemption() {
+        use cockpit_protocol::orchestration::{Integration, IntegrationMethod, IntegrationMapping, Run, SourceOutput};
+        let identity = git_identity();
+        let source = SourceOutput::Code {
+            repository_key: identity.repository_key.clone(), checkout_key: identity.checkout_key.clone(),
+            base_commit: identity.creation_tip.clone(), head_commit: "b".repeat(40), commits: vec!["b".repeat(40)],
+            task_revision: "task-revision".into(), result_message_id: "result".into(), focused_checks: vec![],
+        };
+        let mut run: Run = serde_json::from_value(serde_json::json!({
+            "session_id":"session","brief":"work","run_id":"run","kind":"worker","label":"worker",
+            "root_id":"root","parent_run_id":null,"task_id":null,"attempt":1,"task_revision_at_start":null,
+            "stage":"closed","close_reason":"accepted","dispatch":null,"target":null,"setup":null,
+            "cleanup_policy":null,"last_report":null,"result":{"message_id":"result","kind":"result","outcome":"succeeded",
+                "summary":"accepted","plan":null,"source_output":source,"at":"0"},
+            "source_output":source,"integration":{"state":"pending"},"annotations":[],"project":null,
+            "checkout":null,"attachment":null,"checkout_claim_id":null,"resume":null,"retirement":null,
+            "created_at":"0","updated_at":"0"
+        })).expect("closed accepted run");
+        assert!(integrated_owned_head(&identity, &run).is_err());
+        run.integration = Integration::Integrated {
+            operation_id:"integration".into(), accepted_result_message_id:"result".into(),
+            accepted_task_revision:"task-revision".into(), source:source.clone(),
+            target_repository_key:identity.repository_key.clone(), target_ref:"refs/heads/main".into(),
+            target_commit:"c".repeat(40), method:IntegrationMethod::RecordedAdaptation,
+            mappings:vec![], checks:vec![], integrator_run_id:"integrator".into(), verified_at:"verified".into(),
+        };
+        assert!(integrated_owned_head(&identity, &run).is_err());
+        if let Integration::Integrated { mappings, .. } = &mut run.integration {
+            mappings.push(IntegrationMapping {
+                source_commits:vec!["b".repeat(40)], target_commits:vec!["c".repeat(40)],
+                source_paths:vec!["source.rs".into()], target_paths:vec!["target.rs".into()], explanation:Some("validated adaptation".into()),
+            });
+        }
+        assert_eq!(integrated_owned_head(&identity, &run).unwrap(), "b".repeat(40));
+        if let Integration::Integrated { verified_at, .. } = &mut run.integration { verified_at.clear(); }
+        assert!(integrated_owned_head(&identity, &run).is_err());
+        // The exemption does not apply to code output.
+        run.integration = Integration::NotApplicable { reason: "non-code deliverable".into(), result_message_id: "result".into() };
+        assert!(integrated_owned_head(&identity, &run).is_err());
+        let noncode = SourceOutput::NonCode { result_message_id: "result".into(), task_revision: "task-revision".into(),
+            artifacts: vec!["untracked-deliverable.md".into()], focused_checks: vec![] };
+        run.source_output = Some(noncode.clone());
+        run.result.as_mut().unwrap().source_output = Some(noncode);
+        assert_eq!(integrated_owned_head(&identity, &run).unwrap(), identity.creation_tip);
+        if let Integration::NotApplicable { result_message_id, .. } = &mut run.integration {
+            *result_message_id = "different-result".into();
+        }
+        assert!(integrated_owned_head(&identity, &run).is_err());
+    }
+
 
     #[test]
     fn owned_clean_linked_worktree_requires_confirmation() {

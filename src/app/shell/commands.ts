@@ -6,6 +6,7 @@ import { gitActionReason, gitTargetDetail, type GitActionState } from "../sessio
 import type { Space } from "../sidebar/spaceTree";
 import { widgetKey } from "../widgets/widgetStore";
 import type { WorkbenchView } from "./model";
+import type { SupervisorStartIntent } from "./useWorkarea";
 
 export type CommandGroup = "Navigate" | "Space" | "Tab" | "Pane" | "Browser" | "Library" | "Herdr";
 export type CommandAction = { id: string; label: string; icon?: UiIconName; shortcut?: string; group: CommandGroup; primary?: boolean; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
@@ -58,7 +59,7 @@ export interface CommandInput {
   run: {
     herdr(command: HerdrCommand): void;
     prefix(command: PrefixCommand): void;
-    supervisor(start: boolean): void;
+    supervisor(startIntent?: SupervisorStartIntent): void;
     git(spaceId: string, action: SpaceGitAction): void;
     recovery(): void;
     toggleNotes(): void;
@@ -84,8 +85,9 @@ export function buildCommands(input: CommandInput): CommandAction[] {
       id: `herdr:${command.command_id}`, label: command.description ? command.description.charAt(0).toUpperCase() + command.description.slice(1) : "Custom command", icon: command.action === "popup" ? "more" : command.action === "plugin_action" ? "file" : "terminal", shortcut: herdrCommandShortcut(command, herdr.prefixes), group: "Herdr",
       disabled: Boolean(herdr.reason || herdr.popupOpen), reason: herdr.reason, run: () => run.herdr(command),
     })),
-    { id: "show-supervisor", label: shortcutEntry("show-supervisor").label, primary: shortcutEntry("show-supervisor").primary, group: "Navigate", run: () => run.supervisor(false) },
-    { id: "start-supervisor", label: shortcutEntry("start-supervisor").label, primary: shortcutEntry("start-supervisor").primary, group: "Navigate", run: () => run.supervisor(true) },
+    { id: "show-supervisor", label: shortcutEntry("show-supervisor").label, primary: shortcutEntry("show-supervisor").primary, group: "Navigate", run: () => run.supervisor() },
+    { id: "start-supervisor", label: shortcutEntry("start-supervisor").label, primary: shortcutEntry("start-supervisor").primary, group: "Navigate", run: () => run.supervisor("reuse_or_resume") },
+    { id: "start-another-supervisor", label: shortcutEntry("start-another-supervisor").label, group: "Navigate", run: () => run.supervisor("another") },
     ...SHORTCUTS.filter(entry => entry.palette === undefined).flatMap((entry): CommandAction[] => {
       if (!entry.prefix) {
         const handler = local[entry.id as LocalShortcutId];

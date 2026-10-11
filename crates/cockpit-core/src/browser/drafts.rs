@@ -120,6 +120,93 @@ pub struct BrowserDraftStore {
     mutation: Mutex<()>,
 }
 
+pub(super) fn space_has_saved_state(
+    browser_root: &Path,
+    receipts: &[super::receipts::BrowserReceipt],
+    endpoint: &str,
+    session_id: &str,
+    space_id: &str,
+) -> Result<bool, InspectionError> {
+    let Some(dir) = super::receipts::optional_state_dir(&browser_root.join("drafts"))? else {
+        return Ok(false);
+    };
+    let mut associations = Vec::new();
+    let mut contexts = Vec::new();
+    for (index, entry) in dir.entries()
+        .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?
+        .enumerate()
+    {
+        if index >= MAX_ENTRIES {
+            return Err(InspectionError::new("browser_draft_bounded", "Too many draft records"));
+        }
+        let entry = entry
+            .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or_else(|| {
+            InspectionError::new("browser_draft_corrupt", "Unclassifiable draft filename")
+        })?;
+        if let Some(id) = name.strip_prefix("draft-").and_then(|v| v.strip_suffix(".json")) {
+            validate_uuid(id, "draft ID")?;
+            let draft: StoredDraft = read_json_bounded(&dir, name, MAX_DRAFT_BYTES)?;
+            validate_stored_draft(id, &draft)?;
+            associations.push(draft.identity.association_key);
+        } else if let Some(key) = name.strip_prefix("pending-").and_then(|v| v.strip_suffix(".json")) {
+            let pending: StoredPendingCapture = read_json_bounded(&dir, name, MAX_PENDING_BYTES)?;
+            validate_pending(&pending)?;
+            if key != pending.association_key {
+                return Err(InspectionError::new("browser_draft_pending", "Pending filename mismatch"));
+            }
+            contexts.push(pending.context);
+        } else if let Some(key) = name.strip_prefix("preparation-").and_then(|v| v.strip_suffix(".json")) {
+            let prepared: StoredCapturePreparation =
+                read_json_bounded(&dir, name, MAX_PREPARATION_BYTES)?;
+            validate_preparation(&prepared)?;
+            if key != prepared.association_key {
+                return Err(InspectionError::new("browser_draft_capture", "Preparation filename mismatch"));
+            }
+            contexts.push(prepared.context);
+        } else {
+            return Err(InspectionError::new("browser_draft_corrupt", "Unclassifiable draft record"));
+        }
+    }
+    let mut protects = false;
+    for context in &contexts {
+        if [&context.session_id, &context.space_id].iter()
+            .any(|id| id.is_empty() || id.len() > 512 || id.chars().any(char::is_control))
+            || contexts.iter().any(|other| {
+                other.association_key == context.association_key
+                    && (other.session_id != context.session_id || other.space_id != context.space_id)
+            })
+        {
+            return Err(InspectionError::new("browser_draft_context", "Unclassifiable capture context"));
+        }
+        if let Some(receipt) = receipts.iter()
+            .find(|receipt| receipt.association_key == context.association_key)
+        {
+            if receipt.session_id != context.session_id || receipt.space_id != context.space_id {
+                return Err(InspectionError::new("browser_draft_context", "Capture association mismatch"));
+            }
+            protects |= receipt.endpoint_identity == endpoint
+                && receipt.session_id == session_id && receipt.space_id == space_id;
+        } else {
+            // Saved contexts have no endpoint. A matching Space is conservative
+            // protection, never evidence that a same-Space capture is absent.
+            protects |= context.session_id == session_id && context.space_id == space_id;
+        }
+    }
+    for key in associations {
+        if let Some(receipt) = receipts.iter().find(|receipt| receipt.association_key == key) {
+            protects |= receipt.endpoint_identity == endpoint
+                && receipt.session_id == session_id && receipt.space_id == space_id;
+        } else if !contexts.iter().any(|context| context.association_key == key) {
+            return Err(InspectionError::new(
+                "browser_draft_context", "Orphan draft has no attributable receipt or capture context",
+            ));
+        }
+    }
+    Ok(protects)
+}
+
 impl BrowserDraftStore {
     pub fn new(
         state_root: PathBuf,
@@ -1537,6 +1624,80 @@ mod tests {
             consumed_annotation_ids: Vec::new(),
             tombstoned: false,
         }
+    }
+
+    #[test]
+    fn readonly_saved_state_attributes_drafts_to_saved_capture_context() {
+        let (store, root) = test_store();
+        let key = "0123456789abcdef01234567";
+        let incarnation = Uuid::new_v4().to_string();
+        let draft_id = Uuid::new_v4().to_string();
+        let mut stored = draft(&identity(key, &incarnation, "target", 1), draft_id.clone());
+        stored.tombstoned = true;
+        store.write_draft(&stored).unwrap();
+        assert!(crate::browser::space_has_saved_state(&root, "boot", "session", "space").is_err());
+        let context = BrowserCaptureContext {
+            association_key: key.into(),
+            session_id: "session".into(),
+            space_id: "space".into(),
+            space_label: "Space".into(),
+            playwright_session: format!("cockpit-{key}"),
+            working_directory: root.join("browser/workspaces").join(key).to_str().unwrap().into(),
+            invocation: "test".into(),
+            browser_instance: incarnation.clone(),
+            inline_provenance: None,
+        };
+        let prepared = StoredCapturePreparation {
+            format_version: FORMAT_VERSION,
+            association_key: key.into(),
+            browser_incarnation: incarnation.clone(),
+            capture_id: Uuid::new_v4().to_string(),
+            draft_id: draft_id.clone(),
+            draft_revision: 1,
+            annotation_ids: Vec::new(),
+            original_annotation_digests: Vec::new(),
+            context: context.clone(),
+        };
+        let name = preparation_name(key);
+        atomic_write_json(&store.dir().unwrap(), &name, &prepared).unwrap();
+        let before = std::fs::read(store.root.join(&name)).unwrap();
+        assert!(crate::browser::space_has_saved_state(&root, "boot", "session", "space").unwrap());
+        assert!(!crate::browser::space_has_saved_state(&root, "boot", "other", "space").unwrap());
+        assert!(!crate::browser::space_has_saved_state(&root, "boot", "session", "other").unwrap());
+        assert_eq!(std::fs::read(store.root.join(&name)).unwrap(), before);
+        store.remove_preparation(key).unwrap();
+        let pending = StoredPendingCapture {
+            format_version: FORMAT_VERSION,
+            association_key: key.into(),
+            browser_incarnation: incarnation.clone(),
+            draft_id,
+            draft_revision: 1,
+            annotation_ids: Vec::new(),
+            original_annotation_digests: Vec::new(),
+            context,
+            submission: BrowserCaptureSubmission {
+                association_key: key.into(),
+                browser_instance: incarnation,
+                capture_id: prepared.capture_id,
+                page: BrowserPageEvidence {
+                    url: "https://example.test".into(), title: "Example".into(),
+                    tab_id: None, document_id: "document".into(), captured_at: "now".into(),
+                    viewport: BrowserViewport {
+                        width: 800.0, height: 600.0, scroll_x: 0.0, scroll_y: 0.0,
+                        device_pixel_ratio: 1.0, visual_scale: 1.0,
+                    },
+                    image_width: 800, image_height: 600,
+                },
+                annotations: Vec::new(),
+                png_base64: "retry pixels".into(),
+            },
+            last_error: Some("save failed".into()),
+        };
+        store.write_pending(&pending).unwrap();
+        assert!(crate::browser::space_has_saved_state(&root, "boot", "session", "space").unwrap());
+        store.remove_pending(key).unwrap();
+        assert!(crate::browser::space_has_saved_state(&root, "boot", "session", "space").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

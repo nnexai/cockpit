@@ -2,14 +2,14 @@
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Grant, OrchestrationActionResult, OrchestrationSnapshot, Report, RetirementState, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
-import { AgentRecovery, agentState, ObservedEvidence, ProgressTrail, ProvenancePair, SupervisorActions, taskStatus, TextAction, type Mutation } from "./SupervisorActions";
+import type { CleanupResourceSummary, OrchestrationActionResult, OrchestrationSnapshot, Report, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
+import { AgentRecovery, agentState, CleanupFinishAction, finishCleanup, ObservedEvidence, ProgressTrail, ProvenancePair, RunDiagnostics, SupervisorActions, taskStatus, TextAction, type Mutation } from "./SupervisorActions";
 import { messageDraft, newScopeDrafts, newTextDraft } from "./useSupervisorDrafts";
-import { retirementView } from "./retirementView";
 
 const at = "2026-10-06T12:00:00Z";
+const mutationScope = { stateStoreId: "store", sessionId: "session", rootId: "root", expectedRevision: null };
 function run(overrides: Partial<Run> = {}): Run {
-  return { session_id: "session", prepare_brief: "Guidance", run_id: "worker", kind: "worker", label: "Search agent", root_id: "root", parent_run_id: "root", task_id: "task-a", attempt: 1, task_revision_at_propose: "proposed-revision", stage: "working", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null, annotations: [], location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, bound_omp_session: "native", bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at, ...overrides };
+  return { source_output: null, integration: { state: "pending" }, session_id: "session", brief: "Guidance", run_id: "worker", kind: "worker", label: "Search agent", root_id: "root", parent_run_id: "root", task_id: "task-a", attempt: 1, task_revision_at_start: "start-revision", stage: "working", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: "owned_when_safe", last_report: null, result: null, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, main_session_id: "native", process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
 }
 function task(overrides: Partial<TaskView> = {}): TaskView {
   return { task: { task_id: "task-a", title: "Improve search", body: "Improve search\nKeep existing behavior.", description: "Improve search\nKeep existing behavior.", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "exact-current-revision", diagnostic: null }, lane: "working", current_run_id: "worker", dependencies: { state: "none", unmet: [], problems: [] }, ...overrides };
@@ -19,16 +19,9 @@ function observation(runId: string, overrides: Partial<RunObservation> = {}): Ru
 }
 function snapshot(worker = run()): OrchestrationSnapshot {
   const root = run({ run_id: "root", kind: "supervisor", label: "Supervisor", parent_run_id: null, task_id: null, stage: "active" });
-  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 2, needs_you: 0 }], board: { root_id: "root", path: "/state/root.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs: [root, worker], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("root"), observation(worker.run_id)] } };
+  return { state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "tasks", roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 2, needs_you: 0 }], board: { root_id: "root", path: "/state/root.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs: [root, worker], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("root"), observation(worker.run_id)] } };
 }
-const result: Report = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Exact result\nwith a second line.", plan: null, at };
-function retiredWorker(state: RetirementState): Run {
-  const worker = run({ stage: "closed", close_reason: "accepted", result });
-  const process = { pid: 4242, start_ticks: 12345, kernel_boot_id: "kernel-boot" };
-  worker.bound_omp_process = process;
-  worker.retirement = { retirement_id: "retirement", trigger: "accept", result_message_id: result.message_id, task_revision: "exact-current-revision", identity: { run_attempt: 1, launch_attempt: 1, launch_tag: "tag", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", herdr_boot_id: "boot", omp_session_id: "native", process, shell: { process: { pid: 4343, start_ticks: 54321, kernel_boot_id: "fictional-shell-boot" }, executable_device: "7", executable_inode: "9001", argv_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }, state, created_at: at, updated_at: at };
-  return worker;
-}
+const result: Report = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Exact result\nwith a second line.", plan: null, source_output: null, at };
 function subagent(overrides: Partial<Subagent> = {}): Subagent {
   return { run_id: "worker", subagent_id: "scout", parent_subagent_id: null, role: "Read-only scout", label: "Scout", status: "running", summary: "Inspected search", last_control: null, bound_omp_session: null, updated_at: at, ...overrides };
 }
@@ -50,7 +43,7 @@ function reason(button: HTMLButtonElement): string | null {
 }
 function props(overrides: Partial<ComponentProps<typeof SupervisorActions>> = {}): ComponentProps<typeof SupervisorActions> {
   const worker = run();
-  return { snapshot: snapshot(worker), run: worker, task: task(), section: "actions", stateBlock: { sentence: "Supervisor is reviewing this result", tierLabel: null, waitingSince: at }, path: [], crossView: null, acceptanceConflict: false, scope: newScopeDrafts(), changed: vi.fn(), busy: false, live: true, mutateResult: vi.fn<Mutation>(async () => null), onTerminal: vi.fn(), onEditTask: vi.fn(), onCancelSubagent: vi.fn(), onCloseTracking: vi.fn(), ...overrides };
+  return { snapshot: snapshot(worker), run: worker, task: task(), section: "actions", stateBlock: { sentence: "Supervisor is reviewing this result", tierLabel: null, waitingSince: at }, path: [], crossView: null, acceptanceConflict: false, scope: newScopeDrafts(), changed: vi.fn(), busy: false, live: true, mutateResult: vi.fn<Mutation>(async () => null), captureRequestScope: () => mutationScope, onTerminal: vi.fn(), onEditTask: vi.fn(), onCancelSubagent: vi.fn(), onCloseTracking: vi.fn(), ...overrides };
 }
 async function openOperator() {
   await act(async () => { const details = host.querySelector<HTMLDetailsElement>(".supervisor-operator")!; details.open = true; details.dispatchEvent(new Event("toggle")); });
@@ -85,7 +78,7 @@ describe("Supervisor detail authority and retained operations", () => {
   it.each(["stored", "woken", "read", "acked"] as const)("shows only recorded sent/ack times and preserves the actual question in detail (%s)", async stage => {
     const sentAt = "2026-10-06T12:01:00Z";
     const ackedAt = "2026-10-06T12:02:00Z";
-    const worker = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which fixture should I use?", plan: null, at } });
+    const worker = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which fixture should I use?", plan: null, source_output: null, at } });
     const state = snapshot(worker);
     const answer = { sender: { type: "operator" as const }, message_id: "answer", seq: 1, stage, created_at: sentAt, acked_at: stage === "acked" ? ackedAt : null };
     state.questions = [{ run_id: worker.run_id, question_message_id: "question", asked_at: at, receipt: stage === "acked" ? { status: "answer_acknowledged", answer } : { status: "answer_delivered", answer } }];
@@ -179,44 +172,81 @@ describe("Supervisor detail authority and retained operations", () => {
     expect([...host.querySelectorAll("button")].some(item => item.textContent === "Accept explicit result")).toBe(false);
   });
 
-  it("disarms stale exact plans, requires re-review and never turns a collapsed disclosure into authorization", async () => {
-    const plan = { plan_revision: "plan-a", text: "First exact plan", created_at: at };
-    const worker = run({ stage: "awaiting_prepare", prepare_plan: plan });
-    const state = props({ run: worker, snapshot: snapshot(worker) });
+  it.each(["unknown", "conflict", "pending"] as const)("keeps the original working follow-up action and CAS across %s, changed scope and navigation", async outcome => {
+    const mutation = vi.fn<Mutation>().mockImplementationOnce(async action => {
+      if (action.action !== "task_scope_update") throw new Error("Expected scope update");
+      return outcome === "unknown" ? null : { result: "task_scope_updated", update: { operation_id: action.operation_id, state: outcome, task_revision: null, doc_revision: null, instruction_message_id: null, duplicate: false } };
+    }).mockImplementationOnce(async action => {
+      if (action.action !== "task_scope_update") throw new Error("Expected scope update");
+      return { result: "task_scope_updated", update: { operation_id: action.operation_id, state: "applied", task_revision: "updated", doc_revision: "updated-doc", instruction_message_id: "one-instruction", duplicate: true } };
+    });
+    let state = props({ mutateResult: mutation });
+    const draft = messageDraft(state.scope, "followup:worker");
+    draft.text = "Also preserve keyboard focus.\nUse the existing worker.";
+    state.changed = () => root!.render(<SupervisorActions {...state} />);
     await render(<SupervisorActions {...state} />);
-    await openOperator();
-    await click(button("Override prepare…"));
-    await act(async () => { const details = host.querySelector<HTMLDetailsElement>(".supervisor-operator")!; details.open = false; details.dispatchEvent(new Event("toggle")); });
-    expect(host.querySelector<HTMLDetailsElement>(".supervisor-operator")!.open).toBe(true);
-    const changed = { ...worker, prepare_plan: { ...plan, plan_revision: "plan-b", text: "Changed exact plan" } };
-    await render(<SupervisorActions {...state} run={changed} />);
-    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Confirm prepare override")).toBe(false);
-    await click(button("Reviewed current plan"));
-    expect(state.mutateResult).not.toHaveBeenCalled();
-    await click(button("Override prepare…"));
-    await act(async () => { button("Confirm prepare override").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Confirm prepare override")).toBe(false);
-    await click(button("Override prepare…"));
-    await click(button("Confirm prepare override"));
-    expect(state.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "grant_prepare", run_id: "worker", plan_revision: "plan-b" });
-    await render(<SupervisorActions {...state} run={{ ...worker, stage: "working" }} />);
-    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Override prepare…")).toBe(false);
+    await click(button("Send follow-up"));
+    const first = mutation.mock.calls[0][0];
+    expect(first).toEqual({ action: "task_scope_update", operation_id: expect.any(String), root_id: "root", task_id: "task-a", run_id: "worker", expected_task_revision: "exact-current-revision", expected_doc_revision: "doc", title: null, description: `Improve search\nKeep existing behavior.\n\n${draft.text}` });
+    expect(draft.operation?.action).toBe(first);
+    expect(draft.text).toBe("Also preserve keyboard focus.\nUse the existing worker.");
+    expect(draft.notice).toBeNull();
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.readOnly).toBe(true);
+    state = { ...state, section: "overview", live: false };
+    await render(<SupervisorActions {...state} />);
+    expect(mutation).toHaveBeenCalledOnce();
+    state = { ...state, section: "actions", task: task({ task: { ...task().task, description: "Changed externally", task_revision: "changed-revision" } }), snapshot: { ...state.snapshot, board: { ...state.snapshot.board!, doc_revision: "changed-doc" } } };
+    await render(<SupervisorActions {...state} />);
+    expect(button("Retry same action").disabled).toBe(true);
+    await click(button("Retry same action"));
+    expect(mutation).toHaveBeenCalledOnce();
+    state = { ...state, live: true };
+    await render(<SupervisorActions {...state} />);
+    expect(mutation).toHaveBeenCalledOnce();
+    await click(button("Retry same action"));
+    expect(mutation.mock.calls[1][0]).toBe(first);
+    expect(draft.operation).toBeNull();
+    expect(draft.text).toBe("");
+    expect(draft.notice).toBe("Update sent · task description updated");
+    expect(mutation.mock.calls.every(([action]) => action.action === "task_scope_update")).toBe(true);
   });
 
-  it("requires deliberate execute authorization for the exact work plan and preserves the optional note", async () => {
-    const worker = run({ stage: "ready", work_plan: { plan_revision: "exact-execute", text: "Run the scoped work", created_at: at } });
-    const mutation = vi.fn<Mutation>(async () => ({ result: "done" }));
-    const state = props({ run: worker, mutateResult: mutation });
-    messageDraft(state.scope, "execute-note:worker").text = "Keep the existing resources";
+  it("requires the current editable canonical scope for a working follow-up without removing message sends elsewhere", async () => {
+    const state = props();
+    messageDraft(state.scope, "followup:worker").text = "Refine the existing task";
+    for (const override of [{ task: null }, { task: task({ current_run_id: "other-worker" }) }, { taskWriteUnconfirmed: true }, { task: task({ task: { ...task().task, description_editable: false } }) }]) {
+      await render(<SupervisorActions {...state} {...override} />);
+      expect(button("Send follow-up").disabled).toBe(true);
+      expect(reason(button("Send follow-up"))).toBeTruthy();
+      await click(button("Send follow-up"));
+    }
+    expect(state.mutateResult).not.toHaveBeenCalled();
+    const rootRun = state.snapshot.runs[0];
+    messageDraft(state.scope, "followup:root").text = "Answer the current question";
+    await render(<SupervisorActions {...state} run={rootRun} task={null} />);
+    await click(button("Send follow-up"));
+    expect(state.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "message_send", message_id: expect.any(String), to_run_id: "root", kind: "instruction", text: "Answer the current question", in_reply_to: null }, mutationScope);
+  });
+
+  it("shows only report-supplied advisory plans and Initialized evidence, never permission controls", async () => {
+    const worker = run({ last_report: { ...result, kind: "initialized", summary: "Loaded the task context", plan: "Advisory sequence" } });
+    const state = props({ run: worker, snapshot: snapshot(worker), section: "activity" });
     await render(<SupervisorActions {...state} />);
-    await openOperator();
-    await click(button("Override execute…"));
-    expect(mutation).not.toHaveBeenCalled();
-    await click(button("Keep supervisor decision"));
-    expect(mutation).not.toHaveBeenCalled();
-    await click(button("Override execute…"));
-    await click(button("Confirm execute override"));
-    expect(mutation).toHaveBeenCalledExactlyOnceWith({ action: "grant_execute", run_id: "worker", plan_revision: "exact-execute", note: "Keep the existing resources" });
+    const activity = host.querySelectorAll(".supervisor-detail-section")[1];
+    expect(activity.textContent).toContain("Advisory plan");
+    expect(activity.textContent).toContain("Advisory sequence");
+    expect(activity.textContent).toContain("Initialized");
+    expect(activity.textContent).toContain("Loaded the task context");
+    expect(host.textContent).not.toContain("Operator plan override");
+    expect(state.mutateResult).not.toHaveBeenCalled();
+    await render(<SupervisorActions {...state} run={run()} />);
+    expect(host.querySelectorAll(".supervisor-detail-section")[1].textContent).not.toContain("Advisory plan");
+    const diagnostics = snapshot(worker);
+    diagnostics.messages = [{ message_id: "initialized-report", to_run_id: "root", seq: 1, from: { type: "run", run_id: "worker" }, kind: "report", text: worker.last_report!.summary, in_reply_to: null, report: worker.last_report, stale: false, escalated_from: null, from_subagent_id: null, stage: "stored", woken_omp_session: null, created_at: at, acked_at: null }];
+    await render(<RunDiagnostics run={worker} snapshot={diagnostics} />);
+    expect(host.querySelector("summary")!.textContent).toContain("Initialized");
+    expect(host.textContent).toContain("Run, binding and setup");
+    expect(host.textContent).not.toContain("exact plans");
   });
 
   it("opens result review on a conflict transition without changing the task or terminal", async () => {
@@ -363,95 +393,142 @@ describe("Supervisor detail authority and retained operations", () => {
   });
 });
 
-describe("accepted retirement detail transitions", () => {
-  it("keeps accepted work Completed while receipt states do not claim native exit or grant live controls", async () => {
-    const checked = task({ task: { ...task().task, checked: true }, lane: "accepted" });
-    const worker = retiredWorker({ state: "native_stop_offered", offered_at: at });
-    const state = props({ run: worker, task: checked, snapshot: snapshot(worker), section: "overview" });
-    for (const retirement of [
-      { state: "native_stop_offered", offered_at: at },
-      { state: "native_stop_requested", at },
-      { state: "native_stopped", at, evidence: "exited_after_shutdown_request" },
-      { state: "retired", at, terminal: "closed_by_cockpit" },
-    ] satisfies RetirementState[]) {
-      worker.retirement!.state = retirement;
-      await render(<SupervisorActions {...state} />);
-      const status = agentState(state.snapshot, worker, true, true);
-      expect(status.kind).toBe("closed");
-      expect(status.terminal).toBe(false);
-      expect(status.restartable).toBe(false);
-      expect(status.verified).toBe(false);
-      expect(taskStatus(checked, worker, state.snapshot)).toBe("Completed");
-      const block = host.querySelector(".supervisor-state-block")!;
-      if (retirement.state === "native_stop_offered" || retirement.state === "native_stop_requested") {
-        expect(block.textContent).not.toMatch(/worker stopped|worker retired/);
-        expect(retirementView(worker)?.nativeStopped).toBe(false);
-      } else expect(retirementView(worker)?.nativeStopped).toBe(true);
-      expect([...host.querySelectorAll("button")].some(item => ["Open terminal", "Restart agent…", "Accept explicit result", "Close agent tracking…"].includes(item.textContent ?? ""))).toBe(false);
-    }
-    expect(state.mutateResult).not.toHaveBeenCalled();
-    expect(state.onTerminal).not.toHaveBeenCalled();
-  });
-
-  it("renders retained retirement as informational Notice without new approval or retry actions", async () => {
-    const worker = retiredWorker({ state: "retained", at, reason: "shared_tab", native_stopped: false });
+describe("independent Outcome and optional Cleanup actions", () => {
+  function keptResource(kind: CleanupResourceSummary["kind"]): CleanupResourceSummary {
+    return { resource_id: kind, kind, ownership: "owned", cleanup: { operation_id: null, state: "kept", reason: { class: "user_work", code: "dirty", message: "uncommitted changes" }, effects: [], updated_at: at } };
+  }
+  it("renders a labeled independent resource list without promoting acceptance to integration", async () => {
+    const worker = run({ stage: "closed", close_reason: "accepted", result });
     const state = props({ run: worker, task: task({ task: { ...task().task, checked: true }, lane: "accepted" }), snapshot: snapshot(worker), section: "overview" });
+    state.snapshot.cleanup = [{ run_id: worker.run_id, items: [keptResource("worktree"), { ...keptResource("worker_terminal"), cleanup: { ...keptResource("worker_terminal").cleanup, state: "removed", reason: null } }], kept_count: 1, removed_count: 1, unknown_count: 0, waiting_count: 0 }];
     await render(<SupervisorActions {...state} />);
-    const block = host.querySelector(".supervisor-state-block")!;
-    expect(block.querySelector(".supervisor-attention-badge")?.textContent).toBe("Notice");
-    expect(block.textContent).toContain("Native stop is not confirmed");
-    expect(block.querySelector("button")).toBeNull();
-    worker.retirement!.state = { state: "retained", at, reason: "shared_tab", native_stopped: true };
-    await render(<SupervisorActions {...state} />);
-    expect(block.textContent).toContain("worker stopped · terminal kept");
-    expect(block.textContent).not.toContain("Native stop is not confirmed");
-    expect(block.querySelector("button")).toBeNull();
+    const overview = host.querySelectorAll(".supervisor-detail-section")[0];
+    expect(overview.querySelector('[aria-label="Outcome"]')?.textContent).toContain("Source complete");
+    expect(overview.querySelector('[aria-label="Outcome"]')?.textContent).toContain("Waiting for integration");
+    expect(overview.querySelector('ul[aria-label="Cleanup"]')?.textContent).toContain("Task worktree · Kept — uncommitted changes");
+    expect(overview.querySelector('ul[aria-label="Cleanup"]')?.textContent).toContain("Worker terminal · Removed");
+    expect(taskStatus(state.task!, worker, state.snapshot)).toBe("Done · Source complete");
+    expect(overview.querySelector('[role="alert"]')).toBeNull();
     expect(state.mutateResult).not.toHaveBeenCalled();
+    expect(state.scope.disclosures.completed).toBe(false);
+    expect(host.querySelector("summary")?.textContent).toBe("Advanced");
   });
-
-  it("keeps phase-specific uncertainty as saved evidence without enabling a recovery launch", async () => {
-    const worker = retiredWorker({ state: "unknown", at, phase: "native_stop", detail: "Claimed exit and retry permission" });
-    const state = props({ run: worker, snapshot: snapshot(worker), section: "overview" });
-    await render(<SupervisorActions {...state} />);
-    expect(host.querySelector(".supervisor-state-block")?.textContent).toContain("stop not confirmed");
-    expect(retirementView(worker)?.nativeStopped).toBe(false);
-    worker.retirement!.state = { state: "unknown", at, phase: "terminal_close", detail: "Retry closure automatically" };
-    await render(<SupervisorActions {...state} />);
-    const block = host.querySelector(".supervisor-state-block")!;
-    expect(block.textContent).toContain("terminal close not confirmed");
-    expect(block.textContent).toContain("will not retry");
-    expect(block.textContent).not.toContain("Retry closure automatically");
-    expect(retirementView(worker)?.nativeStopped).toBe(true);
-    expect([...host.querySelectorAll("button")].some(item => item.textContent?.includes("Restart") || item.textContent?.includes("Retry"))).toBe(false);
-    expect(state.mutateResult).not.toHaveBeenCalled();
+  it.each(["unknown", "pending", "conflict"] as const)("retains original cleanup UUID/action/request scope through %s and remount", async outcome => {
+    const scope = newScopeDrafts(), changed = vi.fn();
+    const originalScope = { stateStoreId: "store", sessionId: "session", rootId: "root", expectedRevision: 10 };
+    const captureRequestScope = vi.fn(() => originalScope);
+    const mutation = vi.fn<Mutation>().mockImplementationOnce(async action => {
+      if (action.action !== "cleanup_finish") throw new Error("Expected cleanup");
+      return outcome === "conflict" ? null : outcome === "pending" ? { result: "done" } : { result: "cleanup_finished", cleanup: { operation_id: action.request.operation_id, items: [], removed_count: 0, kept_count: 0, unknown_count: 1, waiting_count: 0, duplicate: false } };
+    }).mockImplementationOnce(async action => {
+      if (action.action !== "cleanup_finish") throw new Error("Expected cleanup");
+      return { result: "cleanup_finished", cleanup: { operation_id: action.request.operation_id, items: [], removed_count: 1, kept_count: 0, unknown_count: 0, waiting_count: 0, duplicate: true } };
+    });
+    const input = { rootId: "root", runId: "worker", scope, changed, busy: false, live: true, mutateResult: mutation, captureRequestScope };
+    await render(<CleanupFinishAction {...input} />);
+    const finish = button("Finish cleanup"); await act(async () => { finish.focus(); finish.click(); });
+    const submitted = messageDraft(scope, "cleanup:root:worker").operation;
+    expect(submitted?.action).toEqual({ action: "cleanup_finish", request: { operation_id: submitted!.id, root_id: "root", run_id: "worker" } });
+    expect(submitted?.requestScope).toBe(originalScope);
+    expect(document.activeElement).toBe(finish);
+    await render(<div />); await render(<CleanupFinishAction {...input} captureRequestScope={() => ({ ...originalScope, expectedRevision: 999 })} />);
+    expect(mutation).toHaveBeenCalledOnce();
+    await click(button("Retry same cleanup"));
+    expect(mutation.mock.calls[1]).toEqual(mutation.mock.calls[0]);
+    expect(messageDraft(scope, "cleanup:root:worker").operation).toBeNull();
+    expect(messageDraft(scope, "cleanup:root:worker").notice).toBe("Cleanup finished");
+    expect(captureRequestScope).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledTimes(4);
   });
-
-  it("preserves legacy and cancelled Tracking closed without taking a surviving pane as control authority", () => {
-    const worker = retiredWorker({ state: "native_stopped", at, evidence: "already_exited" });
-    const state = snapshot(worker);
-    for (const legacy of [{ ...worker, retirement: null }, { ...worker, close_reason: "cancelled" as const }]) {
-      const status = agentState(state, legacy, true, true);
-      expect(status.label).toBe("Tracking closed");
-      expect(status.detail).toContain("not guaranteed to have stopped");
-      expect(status.kind).toBe("closed");
-      expect(status.terminal).toBe(false);
-      expect(status.restartable).toBe(false);
-      expect(retirementView(legacy)).toBeNull();
-    }
+  it("locks the shared cleanup operation across Overview, Routine and queue while pending", async () => {
+    const scope = newScopeDrafts();
+    let resolve!: (result: OrchestrationActionResult | null) => void;
+    const promise = new Promise<OrchestrationActionResult | null>(accept => { resolve = accept; });
+    const mutation = vi.fn<Mutation>(() => promise);
+    const input = { rootId: "root", runId: "worker", scope, changed: vi.fn(), mutateResult: mutation, captureRequestScope: () => mutationScope };
+    const first = finishCleanup(input);
+    await finishCleanup(input);
+    expect(mutation).toHaveBeenCalledOnce();
+    expect(scope.messages.get("cleanup:root:worker")?.operation).not.toBeNull();
+    resolve(null); await first;
+    expect(scope.messages.get("cleanup:root:worker")?.operation).not.toBeNull();
+  });
+  it("clears a confirmed safe wait so the next explicit Finish cleanup reevaluates current subtree resources", async () => {
+    const scope = newScopeDrafts(), onNotice = vi.fn();
+    const mutation = vi.fn<Mutation>(async action => {
+      if (action.action !== "cleanup_finish") throw new Error("Expected cleanup");
+      return { result: "cleanup_finished", cleanup: { operation_id: action.request.operation_id, items: [], removed_count: 1, kept_count: 0, unknown_count: 0, waiting_count: 1, duplicate: false } };
+    });
+    const input = { rootId: "root", runId: "worker", scope, changed: vi.fn(), mutateResult: mutation, captureRequestScope: () => mutationScope, onNotice };
+    await finishCleanup(input);
+    expect(scope.messages.get("cleanup:root:worker")?.operation).toBeNull();
+    expect(scope.messages.get("cleanup:root:worker")?.notice).toContain("Cleanup waiting");
+    expect(onNotice).toHaveBeenCalledOnce();
+    await finishCleanup(input);
+    expect(mutation.mock.calls[1]?.[0]).not.toEqual(mutation.mock.calls[0]?.[0]);
+    expect(mutation.mock.calls.every(([action]) => action.action === "cleanup_finish" && action.request.run_id === "worker")).toBe(true);
+  });
+  it("targets the selected task subtree, not every root resource, when only descendants need cleanup", async () => {
+    const parent = run({ run_id: "parent-task", task_id: "parent-task-id", stage: "closed", close_reason: "accepted", result });
+    const child = run({ run_id: "child-worker", parent_run_id: parent.run_id, stage: "closed", close_reason: "accepted", result });
+    const mutation = vi.fn<Mutation>(async () => null);
+    const state = props({ run: parent, task: null, snapshot: snapshot(parent), section: "overview", mutateResult: mutation });
+    state.snapshot.runs.push(child);
+    state.snapshot.cleanup = [{ run_id: child.run_id, items: [keptResource("worktree")], kept_count: 1, removed_count: 0, unknown_count: 0, waiting_count: 0 }];
+    await render(<SupervisorActions {...state} />);
+    await click(button("Finish cleanup"));
+    expect(state.mutateResult).toHaveBeenCalledWith({ action: "cleanup_finish", request: { operation_id: expect.any(String), root_id: "root", run_id: "parent-task" } }, mutationScope);
+    expect(state.scope.messages.get("cleanup:root:parent-task")?.operation?.action).toEqual(mutation.mock.calls[0]?.[0]);
+  });
+  it("does not send cleanup without fresh scope or reconstruct a retained request from newer scope", async () => {
+    const scope = newScopeDrafts(), mutateResult = vi.fn<Mutation>(async () => null);
+    await finishCleanup({ rootId: "root", runId: "worker", scope, changed: vi.fn(), mutateResult, captureRequestScope: () => null });
+    expect(mutateResult).not.toHaveBeenCalled();
+    const draft = messageDraft(scope, "cleanup:root:worker");
+    const operation = { id: "original", text: "", action: { action: "cleanup_finish" as const, request: { operation_id: "original", root_id: "root", run_id: "worker" } } };
+    draft.operation = operation;
+    const captureRequestScope = vi.fn(() => mutationScope);
+    await finishCleanup({ rootId: "root", runId: "worker", scope, changed: vi.fn(), mutateResult, captureRequestScope });
+    expect(mutateResult).not.toHaveBeenCalled();
+    expect(captureRequestScope).not.toHaveBeenCalled();
+    expect(draft.operation).toBe(operation);
+  });
+  it("keeps form text and does not submit when fresh request scope cannot be captured", async () => {
+    const draft = newTextDraft(); draft.text = "Keep this answer";
+    const submit = vi.fn<ComponentProps<typeof TextAction>["submit"]>(async () => null);
+    await render(<TextAction label="Answer" submitLabel="Send answer" draft={draft} changed={vi.fn()} busy={false} submit={submit} success="Answer sent" captureRequestScope={() => null} createAction={(text, message_id) => ({ action: "message_send", message_id, to_run_id: "root", kind: "answer", text, in_reply_to: "question" })} />);
+    await click(button("Send answer"));
+    expect(submit).not.toHaveBeenCalled();
+    expect(draft.text).toBe("Keep this answer");
+    expect(draft.operation).toBeNull();
   });
 });
 
 describe("Supervisor evidence and recovery boundaries", () => {
-  it("derives completed progress only from grants, explicit reports and canonical acceptance", async () => {
-    const grant: Grant = { grant_id: "prepare", scope: "prepare", plan_revision: "plan", origin: "supervisor", supervisor_run_id: "root", omp_session_id: "native", granted_at: at };
-    const worker = run({ grants: [grant], work_plan: { plan_revision: "work", text: "Work", created_at: at }, result });
+  it("uses queued and starting stages while requiring genuine live connection, not Initialized or an advisory plan", () => {
+    const queued = run({ stage: "queued", dispatch: null, attachment: null });
+    expect(agentState(snapshot(queued), queued, true, true).label).toBe("Worker queued");
+    const starting = run({ stage: "starting", dispatch: { ...run().dispatch!, step: "launch_pending" }, attachment: null });
+    expect(agentState(snapshot(starting), starting, true, true).label).toBe("Starting…");
+    expect(taskStatus(task({ lane: "starting" }), starting, snapshot(starting))).toBe("Starting");
+    const worker = run({ last_report: { ...result, kind: "initialized", plan: "Suggested sequence" } });
+    const savedReportOnly = snapshot(worker);
+    if (savedReportOnly.runtime.status !== "fresh") throw new Error("Expected fresh runtime");
+    savedReportOnly.runtime.runs[1].actual_omp = false;
+    expect(agentState(savedReportOnly, worker, true, true).verified).toBe(false);
+    expect(agentState(snapshot(worker), worker, true, true).verified).toBe(true);
+    expect(agentState(snapshot(worker), worker, false, true).verified).toBe(false);
+  });
+
+  it("derives progress from start and attachment records, explicit reports and canonical acceptance", async () => {
+    const worker = run({ result });
     const checked = task({ task: { ...task().task, checked: true }, lane: "accepted" });
     await render(<ProgressTrail run={worker} task={checked} snapshot={snapshot(worker)} />);
-    expect([...host.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Assigned", "Prepared · by supervisor", "Executing", "Result reported · succeeded"]);
-    await render(<ProgressTrail run={{ ...worker, stage: "closed", close_reason: "accepted", grants: [{ ...grant, origin: "native" }] }} task={checked} snapshot={snapshot(worker)} />);
-    expect([...host.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Assigned", "Prepared · by you (operator)", "Executing", "Result reported · succeeded", "Accepted"]);
+    expect([...host.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Assigned", "Started", "Source complete"]);
+    await render(<ProgressTrail run={{ ...worker, stage: "closed", close_reason: "accepted" }} task={checked} snapshot={snapshot(worker)} />);
+    expect([...host.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Assigned", "Started", "Source complete", "Done"]);
     await render(<ProgressTrail run={{ ...worker, stage: "closed", close_reason: "accepted" }} task={task()} snapshot={snapshot(worker)} />);
-    expect([...host.querySelectorAll("li")].some(item => item.textContent === "Accepted")).toBe(false);
+    expect([...host.querySelectorAll("li")].some(item => item.textContent === "Done")).toBe(false);
   });
 
   it("does not turn offline or unavailable observation into missing or a successful runtime result", async () => {
@@ -470,58 +547,28 @@ describe("Supervisor evidence and recovery boundaries", () => {
     expect(host.textContent).toBe("");
   });
 
-  it("orders safe recovery ahead of restart and keeps healthy terminal navigation free of closure", async () => {
-    const worker = run();
+  it("resumes a saved worker directly without check-status, setup or restart permission ladder", async () => {
+    const worker = run({ dispatch: null, attachment: null });
     const state = snapshot(worker);
-    const callbacks = { onCheck: vi.fn(), onRestart: vi.fn(), onCloseTracking: vi.fn(), onTerminal: vi.fn() };
-    const cases: { worker: Run; observed: RunObservation; live: boolean; primary: string }[] = [
-      { worker, observed: observation("worker", { presence: "missing", actual_omp: false, pane_id: null }), live: true, primary: "Check status" },
-      { worker, observed: observation("worker", { presence: "endpoint_changed", actual_omp: false }), live: true, primary: "Check status" },
-      { worker, observed: observation("worker"), live: false, primary: "Check connection" },
-      { worker: { ...worker, dispatch: { ...worker.dispatch!, step: "setup_unknown" } }, observed: observation("worker", { actual_omp: false }), live: true, primary: "Recover setup…" },
-      { worker: { ...worker, dispatch: { ...worker.dispatch!, step: "plan_failed", error: { code: "setup", message: "Failed setup" } } }, observed: observation("worker", { actual_omp: false }), live: true, primary: "Retry setup" },
-    ];
-    for (const item of cases) {
-      for (const callback of Object.values(callbacks)) callback.mockClear();
-      state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [item.observed] };
-      const status = agentState(state, item.worker, item.live, item.live);
-      await render(<AgentRecovery run={item.worker} state={status} busy={false} connected={item.live} runtimeLive={item.live} {...callbacks} />);
-      expect(host.querySelector("button")!.textContent).toBe(item.primary);
-      expect(host.querySelector("button")!.classList.contains("supervisor-primary")).toBe(true);
-      await click(host.querySelector<HTMLButtonElement>("button")!);
-      if (["setup_unknown", "plan_failed"].includes(item.worker.dispatch?.step ?? "")) {
-        expect(callbacks.onRestart).toHaveBeenCalledOnce();
-        expect(callbacks.onCheck).not.toHaveBeenCalled();
-      } else {
-        expect(callbacks.onCheck).toHaveBeenCalledOnce();
-        expect(callbacks.onRestart).not.toHaveBeenCalled();
-      }
-      expect(callbacks.onTerminal).not.toHaveBeenCalled();
-      expect(callbacks.onCloseTracking).not.toHaveBeenCalled();
-    }
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("worker")] };
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("worker", { presence: "missing", actual_omp: false, pane_id: null })] };
+    const callbacks = { onRestart: vi.fn(), onTerminal: vi.fn() };
     await render(<AgentRecovery run={worker} state={agentState(state, worker, true, true)} busy={false} connected runtimeLive {...callbacks} />);
-    expect([...host.querySelectorAll("button")].map(item => item.textContent)).toEqual(["Open terminal"]);
-    await click(button("Open terminal"));
-    expect(callbacks.onTerminal).toHaveBeenCalledOnce();
-    expect(callbacks.onCloseTracking).not.toHaveBeenCalled();
+    const resume = button("Resume"); await act(async () => { resume.focus(); resume.click(); });
+    expect(callbacks.onRestart).toHaveBeenCalledOnce();
+    expect(callbacks.onTerminal).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(resume);
+    expect([...host.querySelectorAll("button")].map(item => item.textContent)).toEqual(["Resume"]);
   });
-
-  it("keeps disabled restart focusable but prevents its handler from launching anything", async () => {
-    const worker = run();
-    const state = snapshot(worker);
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("worker", { actual_omp: false, presence: "unobserved", pane_id: null })] };
-    const onRestart = vi.fn();
-    await render(<AgentRecovery run={worker} state={agentState(state, worker, true, true)} busy={false} connected runtimeLive onCheck={vi.fn()} onRestart={onRestart} onCloseTracking={vi.fn()} onTerminal={vi.fn()} />);
-    const restart = button("Restart agent…");
-    expect(restart.disabled).toBe(false);
-    expect(restart.getAttribute("aria-disabled")).toBe("true");
-    expect(reason(restart)).toContain("May open another terminal");
-    expect(reason(restart)).toContain("Check status first");
-    await click(restart);
+  it("keeps unavailable or endpoint-changed Resume focusable but rejects activation", async () => {
+    const worker = run(), state = snapshot(worker), onRestart = vi.fn();
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("worker", { presence: "endpoint_changed", actual_omp: false })] };
+    for (const connected of [true, false]) {
+      await render(<AgentRecovery run={worker} state={agentState(state, worker, connected, true)} busy={false} connected={connected} runtimeLive onRestart={onRestart} onTerminal={vi.fn()} />);
+      const resume = button("Resume");
+      expect(resume.disabled).toBe(false); expect(resume.getAttribute("aria-disabled")).toBe("true");
+      expect(reason(resume)).toContain("fresh matching agent identity");
+      await click(resume);
+    }
     expect(onRestart).not.toHaveBeenCalled();
-    const fresh = snapshot(worker);
-    await render(<AgentRecovery run={worker} state={agentState(fresh, worker, true, true)} busy={false} connected={false} runtimeLive onCheck={vi.fn()} onRestart={onRestart} onCloseTracking={vi.fn()} onTerminal={vi.fn()} />);
-    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Open terminal")).toBe(false);
   });
 });

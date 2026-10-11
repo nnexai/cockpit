@@ -1,10 +1,12 @@
 use super::*;
+use super::claims::AttachmentReference;
 use std::path::PathBuf;
 
 const SESSION: &str = "isolated-service-test";
 
 struct Fixture {
     root: PathBuf,
+    project: ProjectIdentity,
     configuration: ProjectConfiguration,
     service: OrchestrationService,
 }
@@ -13,6 +15,9 @@ impl Fixture {
     fn new() -> Self {
         let root =
             std::env::temp_dir().join(format!("cockpit-orchestration-service-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (mut project, _) = project_identity::resolve_owned_directory(&root).unwrap();
+        project.source_workspace_id = Some("test-space".into());
         let configuration = ProjectConfiguration {
             repository_roots: vec![],
             branch_template: "test/{task}".into(),
@@ -40,6 +45,7 @@ impl Fixture {
         let service = OrchestrationService::open(&configuration).unwrap();
         Self {
             root,
+            project,
             configuration,
             service,
         }
@@ -73,12 +79,16 @@ impl Fixture {
         action: OrchestrationAction,
     ) -> Result<OrchestrationMutationResponse, InspectionError> {
         let expected_revision = matches!(actor, Actor::Operator(_)).then(|| self.state().revision);
-        self.service.mutate(
+        self.service.mutate_resolved(
             actor,
             OrchestrationMutationRequest {
                 session_id: SESSION.into(),
                 expected_revision,
                 action,
+            },
+            &ResolvedMutationInput {
+                project: Some(self.project()),
+                ..ResolvedMutationInput::default()
             },
         )
     }
@@ -88,16 +98,147 @@ impl Fixture {
             .unwrap()
     }
 
-    fn root(&self) -> String {
-        run_result(self.operator(OrchestrationAction::SupervisorStart {
-            target: Some(target()),
-            label: Some("Test supervisor".into()),
-        }))
-        .0
+    fn project(&self) -> ProjectIdentity {
+        self.project.clone()
     }
 
+    fn root(&self) -> String {
+        let response = self.operator(OrchestrationAction::SupervisorStart {
+            operation_id: id(),
+            mode: SupervisorStartMode::Another,
+            target: Some(target()),
+            label: Some("Test supervisor".into()),
+            selected_root_id: None,
+            expected_project_key: Some(self.project().key),
+        });
+        match response.result {
+            OrchestrationActionResult::SupervisorStarted { start } => start.root_id,
+            other => panic!("Expected supervisor start, got {other:?}"),
+        }
+    }
+
+    fn auth(&self, run_id: &str, role: JobRole, child: Option<&str>) -> JobAuth {
+        let locked = self.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let index = run_index(&state, run_id).unwrap();
+        if state.runs[index].kind == RunKind::Worker
+            && state.runs[index].checkout_claim_id.is_none()
+        {
+            let attachment = state.runs[index].attachment.as_ref().unwrap();
+            let holder = AttachmentReference {
+                run_id: run_id.into(),
+                attachment_id: attachment.attachment_id.clone(),
+                attachment_epoch: attachment.epoch,
+            };
+            let path = self.root.join("checkouts").join(run_id);
+            std::fs::create_dir_all(&path).unwrap();
+            let (_, checkout) = project_identity::resolve_owned_directory(&path).unwrap();
+            claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
+        }
+        let (credential, path) =
+            credentials::stage_credential(self.service.base(), &state.runs[index], role, child).unwrap();
+        state.credentials.push(credential);
+        locked.save(&mut state).unwrap();
+        credentials::read_job_auth(&path).unwrap()
+    }
+
+    fn child_actor(&self, parent: &Actor, run_id: &str, child_id: &str) -> Actor {
+        let mut child = parent.clone();
+        let caller = caller_mut(&mut child);
+        caller.auth = self.auth(run_id, JobRole::Child, Some(child_id));
+        caller.agent_kind = Some(AgentKind::Subagent);
+        caller.subagent_id = Some(child_id.into());
+        caller.omp_session_id = Some(format!("{child_id}-native"));
+        caller.provenance = Some(CallerProvenance {
+            agent_kind: caller.agent_kind,
+            child_id: caller.subagent_id.clone(),
+            main_session_id: caller.main_omp_session_id.clone(),
+            native_session_id: caller.omp_session_id.clone(),
+            process: caller.process.clone(),
+        });
+        child
+    }
+
+    fn attach_observed(&self, actor: &Actor, run_id: &str) {
+        let Actor::Agent(caller) = actor else { unreachable!() };
+        let mut attachment = self.run(run_id).attachment.unwrap();
+        let location = attachment.location.as_mut().unwrap();
+        location.workspace_id = caller.workspace_id.clone();
+        location.tab_id = caller.tab_id.clone();
+        location.pane_id = caller.pane_id.clone();
+        location.native_session_id = caller.native_session_id.clone();
+        attachment.process = caller.process.clone();
+        attachment.state = AttachmentState::Connected;
+        self.service.mutate_resolved(actor, OrchestrationMutationRequest {
+            session_id: SESSION.into(), expected_revision: None,
+            action: OrchestrationAction::RunAttach {
+                operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
+                expected_attachment_epoch: caller.auth.attachment_epoch,
+                main_session_id: caller.omp_session_id.clone().unwrap(),
+            },
+        }, &ResolvedMutationInput {
+            attachment_observation: Some(attachment), ..ResolvedMutationInput::default()
+        }).unwrap();
+    }
+
+    fn resume_observed(&self, run_id: &str, observed: ExecutionAttachment) -> RunResumeResult {
+        let response = self.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+            OrchestrationMutationRequest {
+                session_id: SESSION.into(), expected_revision: Some(self.state().revision),
+                action: OrchestrationAction::RunResume {
+                    run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: Some(observed.epoch),
+                    mode: ResumeMode::ReattachOrRestart, decision_id: None,
+                },
+            }, &ResolvedMutationInput {
+                attachment_observation: Some(observed), ..ResolvedMutationInput::default()
+            }).unwrap();
+        let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
+        resume
+    }
+
+    fn resume_action(&self, run_id: &str) -> OrchestrationAction {
+        OrchestrationAction::RunResume {
+            run_id: run_id.into(), operation_id: id(),
+            expected_attachment_epoch: self.run(run_id).attachment.as_ref().map(|attachment| attachment.epoch),
+            mode: ResumeMode::ReattachOrRestart, decision_id: None,
+        }
+    }
+
+    fn resume_exited(&self, actor: &Actor, run_id: &str) -> OrchestrationMutationResponse {
+        let run = self.run(run_id);
+        let attachment = run.attachment.as_ref().unwrap();
+        let claim = self.state().checkout_claims.into_iter()
+            .find(|claim| run.checkout_claim_id.as_ref() == Some(&claim.claim_id));
+        let (claim_revision, checkout) = match claim {
+            Some(claim) => (claim.revision, Some(claim.checkout)),
+            None => {
+                assert_ne!(run.kind, RunKind::Worker);
+                (0, None)
+            }
+        };
+        let proof = claims::WriterExitProof {
+            incarnation: AttachmentReference {
+                run_id: run_id.into(), attachment_id: attachment.attachment_id.clone(),
+                attachment_epoch: attachment.epoch,
+            },
+            claim_revision, checkout,
+            machine_id: attachment.machine_id.clone().unwrap(),
+            previous_kernel_boot_id: attachment.process.as_ref()
+                .or_else(|| attachment.shell.as_ref().map(|shell| &shell.process))
+                .unwrap().kernel_boot_id.clone().unwrap(),
+            observed_kernel_boot_id: "kernel-two".into(), all_consumers_absent: true,
+        };
+        self.service.mutate_resolved(actor, OrchestrationMutationRequest {
+            session_id: SESSION.into(),
+            expected_revision: matches!(actor, Actor::Operator(_)).then(|| self.state().revision),
+            action: OrchestrationAction::RunResume {
+                run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: Some(attachment.epoch),
+                mode: ResumeMode::ReattachOrRestart, decision_id: None,
+            },
+        }, &ResolvedMutationInput { writer_exit_proof: Some(proof), ..ResolvedMutationInput::default() }).unwrap()
+    }
     fn create_task(&self, root_id: &str, title: &str) -> Task {
-        if self.run(root_id).stage == RunStage::Preparing {
+        if self.run(root_id).stage == RunStage::Starting {
             self.launch_and_bind(root_id);
         }
         task_result(self.operator(OrchestrationAction::TaskCreate {
@@ -112,50 +253,45 @@ impl Fixture {
         }))
     }
 
-    fn propose(&self, parent: &str, task: &Task, supersedes: Option<&str>) -> String {
-        run_result(self.operator(proposal(parent, task, supersedes))).0
+    fn start(&self, parent: &str, task: &Task) -> String {
+        let root = self.run(parent).root_id;
+        let run_id = run_result(self.operator(self.start_action(&root, task))).0;
+        if parent != root {
+            // Persisted ancestry remains meaningful for retention and delivery;
+            // current WorkerStart always creates a direct child of the root.
+            self.seed_run(&run_id, |run| run.parent_run_id = Some(parent.into()));
+        }
+        run_id
     }
 
-    fn plan(&self, run_id: &str) -> PlanRecord {
-        let text = format!("Initialize isolated workspace for {run_id}; do not execute yet");
-        let plan = PlanRecord {
-            plan_revision: plan_revision(&text).unwrap(),
-            text,
-            created_at: now(),
-        };
-        self.service
-            .record_dispatch(
-                run_id,
-                DispatchUpdate::SetupPlanned {
-                    setup: SetupSummary {
-                        operation_id: None,
-                        generation: None,
-                        workspace_id: Some("test-space".into()),
-                        checkout_path: self.root.join("checkout").to_string_lossy().into_owned(),
-                        repository_id: None,
-                        branch: None,
-                        base: None,
-                        ownership: None,
-                        effects: vec!["Open isolated existing Space".into()],
-                        warnings: Vec::new(),
-                        project_workspace_id: None,
-                    },
-                    prepare_plan: plan.clone(),
-                },
-            )
-            .unwrap();
-        plan
+    fn start_action(&self, root: &str, task: &Task) -> OrchestrationAction {
+        OrchestrationAction::WorkerStart {
+            operation_id: id(),
+            root_id: root.into(),
+            task_id: task.task_id.clone(),
+            expected_task_revision: task.task_revision.clone(),
+            expected_doc_revision: task_document_revision(self, root),
+            target: target(),
+            label: None,
+            brief: "Implement the canonical task and report evidence".into(),
+            cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+        }
     }
 
-    fn prepare(&self, run_id: &str) -> PlanRecord {
-        let plan = self.plan(run_id);
-        self.operator(OrchestrationAction::GrantPrepare {
-            run_id: run_id.into(),
-            plan_revision: plan.plan_revision.clone(),
-        });
-        plan
+    fn setup(&self, run_id: &str) {
+        self.service.record_dispatch(run_id, DispatchUpdate::SetupPlanned {
+            setup: SetupSummary {
+                operation_id: None, generation: None, workspace_id: Some("test-space".into()),
+                checkout_path: if self.run(run_id).kind == RunKind::Worker {
+                    self.root.join("checkouts").join(run_id).to_string_lossy().into_owned()
+                } else { self.root.to_string_lossy().into_owned() },
+                repository_id: None, branch: None, base: None, ownership: None,
+                base_commit: None,
+                effects: vec!["Open isolated existing Space".into()], warnings: Vec::new(),
+                project_workspace_id: None,
+            },
+        }).unwrap();
     }
-
     fn launch_and_bind(&self, run_id: &str) -> Actor {
         let actor = self.launch_tab(run_id);
         self.service
@@ -166,9 +302,7 @@ impl Fixture {
         };
         self.apply(
             &actor,
-            OrchestrationAction::RunBindSession {
-                omp_session_id: caller.omp_session_id.clone().unwrap(),
-            },
+            OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
         )
         .unwrap();
         self.service
@@ -216,7 +350,10 @@ impl Fixture {
                 },
             )
             .unwrap();
+        self.seed_run(run_id, |run| run.attachment.as_mut().unwrap().machine_id = Some(self.project.machine_id.clone()));
         Actor::Agent(AgentCaller {
+            auth: self.auth(run_id, if run.kind == RunKind::Worker { JobRole::Worker } else { JobRole::Root }, None),
+            provenance: None,
             endpoint_identity: location.endpoint_identity,
             session_id: SESSION.into(),
             workspace_id: location.workspace_id,
@@ -229,7 +366,7 @@ impl Fixture {
             omp_session_id: Some(native.clone()),
             main_omp_session_id: Some(native.clone()),
             agent_kind: Some(AgentKind::Main),
-            actual_agent_kind: Some("omp".into()),
+            actual_agent_kind: Some(NativeAgentKind::Omp),
             subagent_id: None,
             process: Some(NativeProcessIdentity {
                 pid: 42,
@@ -239,30 +376,38 @@ impl Fixture {
         })
     }
 
-    fn ready(&self, actor: &Actor) -> OrchestrationMutationResponse {
-        self.apply(
-            actor,
-            report(
-                ReportKind::Ready,
-                None,
-                Some("Implement the task, then report evidence"),
-            ),
-        )
-        .unwrap()
+
+    fn successful_result(&self, actor: &Actor) -> OrchestrationAction {
+        let Actor::Agent(caller) = actor else { panic!("Result requires a job actor") };
+        let credential = self.state().credentials.into_iter()
+            .find(|credential| credential.credential_id == caller.auth.credential_id).unwrap();
+        let run = self.run(&credential.run_id);
+        let task_revision = run.task_id.as_ref()
+            .map(|task_id| self.task(&run.root_id, task_id).task_revision)
+            .unwrap_or_else(|| "coordinator-output".into());
+        assert!(run.checkout.as_ref().is_none_or(|checkout| checkout.git.is_none()),
+            "Synthetic consumer fixtures must not manufacture code provenance");
+        let mut action = report(ReportKind::Result, Some(ReportOutcome::Succeeded), None);
+        if let OrchestrationAction::Report { message_id, source_output, .. } = &mut action {
+            *source_output = Some(SourceOutput::NonCode {
+                result_message_id: message_id.clone(), task_revision,
+                artifacts: Vec::new(), focused_checks: Vec::new(),
+            });
+        }
+        action
+    }
+    fn initialized(&self, actor: &Actor) -> OrchestrationMutationResponse {
+        self.apply(actor, report(ReportKind::Initialized, None,
+            Some("Implement the task, then report evidence"))).unwrap()
     }
 
     fn working(&self, parent_run_id: &str) -> (Task, String, Actor) {
         let root_id = self.run(parent_run_id).root_id;
         let task = self.create_task(&root_id, "Worker task");
-        let run_id = self.propose(parent_run_id, &task, None);
-        self.prepare(&run_id);
+        let run_id = self.start(parent_run_id, &task);
+        self.setup(&run_id);
         let actor = self.launch_and_bind(&run_id);
-        self.ready(&actor);
-        self.operator(OrchestrationAction::GrantExecute {
-            run_id: run_id.clone(),
-            plan_revision: self.run(&run_id).work_plan.unwrap().plan_revision,
-            note: None,
-        });
+        self.initialized(&actor);
         (task, run_id, actor)
     }
 
@@ -281,7 +426,7 @@ impl Fixture {
             run_id: run_id.into(),
             expected_task_revision: task.task_revision.clone(),
             state: IntentState::Pending,
-            origin: Some(GrantOrigin::Browser),
+            origin: Some(DecisionOrigin::Browser),
             supervisor_run_id: None,
             omp_session_id: None,
             result_message_id: Some(result_message_id),
@@ -302,42 +447,16 @@ impl Fixture {
         locked.save(&mut state).unwrap();
     }
 
-    fn queue_review(&self, run_id: &str) -> Run {
-        self.operator(OrchestrationAction::ReconcileRun {
-            run_id: run_id.into(),
-            recovery: None,
-        });
-        let run = self.run(run_id);
-        assert_eq!(
-            run.dispatch.as_ref().unwrap().step,
-            DispatchStep::LaunchIntent
-        );
-        assert!(run.dispatch.as_ref().unwrap().agent_started);
-        run
+    fn seed_state(&self, change: impl FnOnce(&mut OrchestrationState)) {
+        let locked = self.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        change(&mut state);
+        locked.save(&mut state).unwrap();
     }
 
-    fn assert_stale_review(&self, reviewed: &Run) {
-        for step in [
-            DispatchStep::Launched,
-            DispatchStep::LaunchUnknown,
-            DispatchStep::NeedsReview,
-        ] {
-            let revision = self.state().revision;
-            let bytes = self.state_bytes();
-            let receiver = self.service.revision.subscribe();
-            assert_eq!(
-                self.service
-                    .record_launch_review(reviewed, step, Some(review_error()))
-                    .unwrap(),
-                revision
-            );
-            assert_eq!(self.state_bytes(), bytes, "Stale {step:?} must not save");
-            assert!(
-                !receiver.has_changed().unwrap(),
-                "Stale proof must not notify"
-            );
-        }
-    }
+    
+
+    
 }
 
 impl Drop for Fixture {
@@ -352,16 +471,6 @@ fn target() -> DispatchTarget {
     }
 }
 
-fn proposal(parent: &str, task: &Task, supersedes: Option<&str>) -> OrchestrationAction {
-    OrchestrationAction::RunPropose {
-        task_id: task.task_id.clone(),
-        parent_run_id: Some(parent.into()),
-        label: None,
-        target: target(),
-        prepare_brief: "Inspect and initialize only; wait for Execute".into(),
-        supersedes_run_id: supersedes.map(str::to_owned),
-    }
-}
 
 fn report(
     kind: ReportKind,
@@ -374,13 +483,18 @@ fn report(
         outcome,
         summary: "Explicit worker evidence".into(),
         plan: plan.map(str::to_owned),
+        source_output: None,
         to_run_id: None,
+        original_task_revision: None,
+        original_claim_id: None,
     }
 }
 
 fn run_result(response: OrchestrationMutationResponse) -> (String, u32) {
     match response.result {
         OrchestrationActionResult::Run { run_id, attempt } => (run_id, attempt),
+        OrchestrationActionResult::WorkerStarted { start } => (start.run_id, start.attempt),
+        OrchestrationActionResult::SupervisorStarted { start } => (start.root_id, 1),
         other => panic!("Expected a run result, got {other:?}"),
     }
 }
@@ -396,6 +510,15 @@ fn caller_mut(actor: &mut Actor) -> &mut AgentCaller {
     match actor {
         Actor::Agent(caller) => caller,
         _ => panic!("Expected an agent actor"),
+    }
+}
+
+fn live_process() -> NativeProcessIdentity {
+    let pid = std::process::id();
+    NativeProcessIdentity {
+        pid,
+        start_ticks: crate::process_identity::start_identity(i32::try_from(pid).unwrap()).unwrap(),
+        kernel_boot_id: crate::process_identity::kernel_boot_id(),
     }
 }
 
@@ -425,7 +548,7 @@ fn machine_revision_cas_rejects_stale_service_and_preserves_durable_state() {
         "orchestration_revision_conflict",
     );
     assert_eq!(fixture.state().revision, committed);
-    assert_eq!(fixture.run(&root).stage, RunStage::Preparing);
+    assert_eq!(fixture.run(&root).stage, RunStage::Starting);
     let response = other
         .mutate(
             &Actor::Operator(OperatorOrigin::Native),
@@ -567,193 +690,53 @@ fn canonical_task_mutations_are_authorized_only_in_the_agents_own_root() {
 }
 
 #[test]
-fn explicit_supersede_cannot_replace_a_sibling_subtree() {
+fn worker_start_replays_without_new_writer_and_fences_changed_payload() {
     let fixture = Fixture::new();
     let root = fixture.root();
-    let (_, branch, actor) = fixture.working(&root);
-    let sibling_task = fixture.create_task(&root, "Sibling task");
-    let sibling = fixture.propose(&root, &sibling_task, None);
-    let before = fixture.state();
-    assert_code(
-        fixture.apply(&actor, proposal(&branch, &sibling_task, Some(&sibling))),
-        "not_ancestor",
-    );
-    assert_eq!(fixture.state().revision, before.revision);
-    assert_eq!(fixture.state().runs.len(), before.runs.len());
-    assert_eq!(fixture.run(&sibling).stage, RunStage::Proposed);
-    assert!(fixture.run(&sibling).close_reason.is_none());
-    assert!(
-        fixture
-            .state()
-            .messages
-            .iter()
-            .all(|message| message.kind != MessageKind::CancelRequest)
-    );
-}
-
-#[test]
-fn supersede_is_deferred_until_exact_prepare_grant() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let (task, old, _) = fixture.working(&root);
-    assert_code(
-        fixture.apply(
-            &Actor::Operator(OperatorOrigin::Browser),
-            proposal(&root, &task, None),
-        ),
-        "task_has_active_run",
-    );
-    let replacement = fixture.propose(&root, &task, Some(&old));
-    assert_eq!(fixture.run(&replacement).attempt, 2);
-    assert_eq!(
-        fixture.run(&replacement).supersedes_run_id.as_deref(),
-        Some(old.as_str())
-    );
-    assert_eq!(fixture.run(&old).stage, RunStage::Working);
-    let plan = fixture.plan(&replacement);
-    assert_eq!(fixture.run(&old).stage, RunStage::Working);
-    assert_code(
-        fixture.apply(
-            &Actor::Operator(OperatorOrigin::Browser),
-            OrchestrationAction::GrantPrepare {
-                run_id: replacement.clone(),
-                plan_revision: plan_revision(&"another plan").unwrap(),
-            },
-        ),
-        "plan_changed",
-    );
-    assert_eq!(fixture.run(&old).stage, RunStage::Working);
-    fixture.operator(OrchestrationAction::GrantPrepare {
-        run_id: replacement.clone(),
-        plan_revision: plan.plan_revision,
-    });
-    assert_eq!(fixture.run(&old).stage, RunStage::Closed);
-    assert_eq!(
-        fixture.run(&old).close_reason,
-        Some(CloseReason::Superseded)
-    );
-    assert_eq!(fixture.run(&replacement).stage, RunStage::Preparing);
-    let cancellations: Vec<_> = fixture
-        .state()
-        .messages
-        .into_iter()
-        .filter(|message| message.kind == MessageKind::CancelRequest && message.to_run_id == old)
-        .collect();
-    assert_eq!(cancellations.len(), 1);
-    assert!(cancellations[0].text.contains(&replacement));
-    assert!(!fixture.task(&root, &task.task_id).checked);
-}
-
-#[test]
-fn prepare_and_execute_require_separate_exact_grants_and_keep_initialization_receipt() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let task = fixture.create_task(&root, "Exact grants");
-    let run_id = fixture.propose(&root, &task, None);
-    let prepare = fixture.plan(&run_id);
-    let root_actor = fixture.launch_and_bind(&root);
-    let mut denied_actor = root_actor.clone();
-    caller_mut(&mut denied_actor).actual_agent_kind = Some("shell".into());
+    let task = fixture.create_task(&root, "Single start");
+    let action = fixture.start_action(&root, &task);
+    let first = fixture.operator(action.clone());
+    let OrchestrationActionResult::WorkerStarted { start } = first.result else { unreachable!() };
+    assert!(!start.duplicate);
+    let run = fixture.run(&start.run_id);
+    assert_eq!(run.task_revision_at_start.as_deref(), Some(task.task_revision.as_str()));
+    assert_eq!(run.cleanup_policy, Some(WorkerCleanupPolicy::OwnedWhenSafe));
+    assert_eq!(run.attachment.as_ref().unwrap().epoch, 1);
     let bytes = fixture.state_bytes();
-    assert_code(
-        fixture.apply(
-            &denied_actor,
-            OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: prepare.plan_revision.clone(),
-            },
-        ),
-        "actor_forbidden",
-    );
+    let replay = fixture.operator(action.clone());
+    let OrchestrationActionResult::WorkerStarted { start: replay } = replay.result else { unreachable!() };
+    assert!(replay.duplicate);
+    assert_eq!(replay.run_id, start.run_id);
     assert_eq!(fixture.state_bytes(), bytes);
-    assert_code(
-        fixture.apply(
-            &Actor::Operator(OperatorOrigin::Browser),
-            OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: plan_revision(&"Changed initialization").unwrap(),
-            },
-        ),
-        "plan_changed",
-    );
-    assert_eq!(fixture.run(&run_id).stage, RunStage::AwaitingPrepare);
-    assert!(fixture.run(&run_id).grants.is_empty());
-    fixture.operator(OrchestrationAction::GrantPrepare {
-        run_id: run_id.clone(),
-        plan_revision: prepare.plan_revision.clone(),
-    });
-    assert_eq!(fixture.run(&run_id).stage, RunStage::Preparing);
-    assert_code(
-        fixture.apply(
-            &Actor::Operator(OperatorOrigin::Browser),
-            OrchestrationAction::GrantExecute {
-                run_id: run_id.clone(),
-                plan_revision: prepare.plan_revision.clone(),
-                note: None,
-            },
-        ),
-        "invalid_stage",
-    );
+    let mut changed = action;
+    let OrchestrationAction::WorkerStart { brief, .. } = &mut changed else { unreachable!() };
+    *brief = "A different operation payload".into();
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), changed), "operation_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
+        fixture.start_action(&root, &task)), "task_has_active_run");
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
+fn attachment_not_initialized_report_starts_work_and_plans_are_advisory() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "One start");
+    let run_id = fixture.start(&root, &task);
+    fixture.setup(&run_id);
     let actor = fixture.launch_and_bind(&run_id);
-    fixture.ready(&actor);
-    let ready = fixture.run(&run_id);
-    let init = serde_json::to_value(ready.init_receipt.as_ref().unwrap()).unwrap();
-    let work_plan = ready.work_plan.unwrap();
-    assert_ne!(prepare.plan_revision, work_plan.plan_revision);
-    assert_eq!(
-        work_plan.plan_revision,
-        plan_revision(&work_plan.text).unwrap()
-    );
-    assert_code(
-        fixture.apply(
-            &actor,
-            OrchestrationAction::GrantExecute {
-                run_id: run_id.clone(),
-                plan_revision: work_plan.plan_revision.clone(),
-                note: None,
-            },
-        ),
-        "actor_forbidden",
-    );
-    assert_code(
-        fixture.apply(
-            &Actor::Operator(OperatorOrigin::Browser),
-            OrchestrationAction::GrantExecute {
-                run_id: run_id.clone(),
-                plan_revision: prepare.plan_revision.clone(),
-                note: None,
-            },
-        ),
-        "plan_changed",
-    );
-    assert_eq!(fixture.run(&run_id).stage, RunStage::Ready);
-    assert_eq!(fixture.run(&run_id).grants.len(), 1);
-    fixture.operator(OrchestrationAction::GrantExecute {
-        run_id: run_id.clone(),
-        plan_revision: work_plan.plan_revision.clone(),
-        note: Some("Reviewed by operator".into()),
-    });
-    let working = fixture.run(&run_id);
-    assert_eq!(working.stage, RunStage::Working);
-    assert_eq!(
-        serde_json::to_value(working.init_receipt.as_ref().unwrap()).unwrap(),
-        init
-    );
-    assert_eq!(working.grants.len(), 2);
-    assert_eq!(working.grants[0].scope, GrantScope::Prepare);
-    assert_eq!(working.grants[0].plan_revision, prepare.plan_revision);
-    assert_eq!(working.grants[1].scope, GrantScope::Execute);
-    assert_eq!(working.grants[1].plan_revision, work_plan.plan_revision);
-    assert_ne!(working.grants[0].grant_id, working.grants[1].grant_id);
-    let briefs: Vec<_> = fixture
-        .state()
-        .messages
-        .into_iter()
-        .filter(|message| message.to_run_id == run_id && message.kind == MessageKind::WorkBrief)
-        .collect();
-    assert_eq!(briefs.len(), 1);
-    assert!(briefs[0].text.starts_with(&work_plan.text));
-    assert!(briefs[0].text.contains("Reviewed by operator"));
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
+    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
+    fixture.initialized(&actor);
+    let run = fixture.run(&run_id);
+    assert_eq!(run.stage, RunStage::Working);
+    assert_eq!(run.last_report.as_ref().unwrap().kind, ReportKind::Initialized);
+    assert_eq!(run.last_report.as_ref().unwrap().plan.as_deref(),
+        Some("Implement the task, then report evidence"));
+    fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Reported);
+    assert!(!fixture.task(&root, &task.task_id).checked);
 }
 
 #[test]
@@ -761,12 +744,7 @@ fn successful_result_does_not_check_task_until_operator_accepts_exact_task_revis
     let fixture = Fixture::new();
     let root = fixture.root();
     let (task, run_id, actor) = fixture.working(&root);
-    let init = serde_json::to_value(fixture.run(&run_id).init_receipt).unwrap();
-    fixture
-        .apply(
-            &actor,
-            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-        )
+    fixture.apply(&actor, fixture.successful_result(&actor))
         .unwrap();
     assert_eq!(fixture.run(&run_id).stage, RunStage::Reported);
     assert!(!fixture.task(&root, &task.task_id).checked);
@@ -799,6 +777,17 @@ fn successful_result_does_not_check_task_until_operator_accepts_exact_task_revis
         "task_revision_conflict",
     );
     assert!(!fixture.task(&root, &task.task_id).checked);
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
+        OrchestrationAction::Accept {
+            run_id: run_id.clone(), expected_task_revision: edited.task_revision.clone(),
+        }), "source_output_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture.operator(OrchestrationAction::SendBack {
+        run_id: run_id.clone(), text: "Review the updated canonical criteria".into(),
+    });
+    fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
+    assert_ne!(edited.task_revision, fixture.run(&run_id).task_revision_at_start.unwrap());
     fixture.operator(OrchestrationAction::Accept {
         run_id: run_id.clone(),
         expected_task_revision: edited.task_revision,
@@ -807,7 +796,6 @@ fn successful_result_does_not_check_task_until_operator_accepts_exact_task_revis
     let accepted = fixture.run(&run_id);
     assert_eq!(accepted.stage, RunStage::Closed);
     assert_eq!(accepted.close_reason, Some(CloseReason::Accepted));
-    assert_eq!(serde_json::to_value(accepted.init_receipt).unwrap(), init);
     assert_eq!(
         accepted.result.unwrap().outcome,
         Some(ReportOutcome::Succeeded)
@@ -963,16 +951,21 @@ async fn wait_external_service_revision_is_visible_within_wait_budget() {
 
     let (new_root, attempt) = run_result(
         external
-            .mutate(
+            .mutate_resolved(
                 &Actor::Operator(OperatorOrigin::Browser),
                 OrchestrationMutationRequest {
                     session_id: SESSION.into(),
                     expected_revision: Some(request.after_revision),
                     action: OrchestrationAction::SupervisorStart {
+                        operation_id: id(),
+                        mode: SupervisorStartMode::Another,
+                        selected_root_id: None,
+                        expected_project_key: Some(fixture.project().key),
                         target: Some(target()),
                         label: Some("External service supervisor".into()),
                     },
                 },
+                &ResolvedMutationInput { project: Some(fixture.project()), ..ResolvedMutationInput::default() },
             )
             .unwrap(),
     );
@@ -1222,11 +1215,7 @@ fn recovery_conflicts_on_changed_task_even_when_externally_checked() {
         let fixture = Fixture::new();
         let root = fixture.root();
         let (task, run_id, actor) = fixture.working(&root);
-        fixture
-            .apply(
-                &actor,
-                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-            )
+        fixture.apply(&actor, fixture.successful_result(&actor))
             .unwrap();
         let intent_id = fixture.pending_intent(&root, &task, &run_id);
         // A canonical external edit may race a durable acceptance intent; the
@@ -1278,12 +1267,6 @@ fn recovery_applies_unchanged_pending_acceptance_once() {
         let fixture = Fixture::new();
         let root = fixture.root();
         let (task, run_id, actor) = fixture.working(&root);
-        fixture
-            .apply(
-                &actor,
-                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-            )
-            .unwrap();
         // Pending from unchecked Markdown, crash after writing the exact check,
         // or acceptance explicitly requested on the already checked item.
         if check_phase == 2 {
@@ -1296,8 +1279,10 @@ fn recovery_applies_unchanged_pending_acceptance_once() {
                 .unwrap()
                 .check(&task.task_id, &task.task_revision, true)
                 .unwrap();
+            fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
             fixture.pending_intent(&root, &fixture.task(&root, &task.task_id), &run_id);
         } else {
+            fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
             fixture.pending_intent(&root, &task, &run_id);
             if check_phase == 1 {
                 fixture
@@ -1330,190 +1315,99 @@ fn recovery_applies_unchanged_pending_acceptance_once() {
 }
 
 #[test]
-fn stale_incarnation_reports_remain_evidence_without_changing_live_stage() {
+fn invalid_credentials_never_publish_initialized_or_result_evidence() {
     let fixture = Fixture::new();
     let root = fixture.root();
-    let task = fixture.create_task(&root, "Incarnation fences");
-    let run_id = fixture.propose(&root, &task, None);
-    fixture.prepare(&run_id);
-    let actor = fixture.launch_and_bind(&run_id);
-    let mut stale_callers = Vec::new();
-    for fence in 0..6 {
-        let mut stale = actor.clone();
-        let caller = caller_mut(&mut stale);
-        match fence {
-            0 => caller.env_run.as_mut().unwrap().1 += 1,
-            1 => caller.boot_id = Some("restarted-boot".into()),
-            2 => caller.endpoint_identity = "replaced-endpoint".into(),
-            3 => caller.terminal_id = Some("restarted-terminal".into()),
-            4 => caller.native_session_id = Some("other-native".into()),
-            5 => {
-                caller.omp_session_id = Some("other-main".into());
-                caller.main_omp_session_id = Some("other-main".into());
-            }
-            _ => unreachable!(),
-        }
-        stale_callers.push(stale);
-    }
-    for stale in &stale_callers {
-        let response = fixture
-            .apply(
-                stale,
-                report(ReportKind::Ready, None, Some("Stale work plan")),
-            )
-            .unwrap();
-        assert!(matches!(
-            response.result,
-            OrchestrationActionResult::Message { stale: true, .. }
-        ));
-        let run = fixture.run(&run_id);
-        assert_eq!(run.stage, RunStage::Initializing);
-        assert!(run.init_receipt.is_none());
-        assert!(run.work_plan.is_none());
-        assert!(run.last_report.is_none());
-    }
-    fixture.ready(&actor);
-    let init = serde_json::to_value(fixture.run(&run_id).init_receipt).unwrap();
-    fixture.operator(OrchestrationAction::GrantExecute {
-        run_id: run_id.clone(),
-        plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision,
-        note: None,
-    });
-    for stale in &stale_callers {
-        let response = fixture
-            .apply(
-                stale,
-                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-            )
-            .unwrap();
-        assert!(matches!(
-            response.result,
-            OrchestrationActionResult::Message { stale: true, .. }
-        ));
-        let run = fixture.run(&run_id);
-        assert_eq!(run.stage, RunStage::Working);
-        assert!(run.result.is_none());
-        assert_eq!(serde_json::to_value(run.init_receipt).unwrap(), init);
-    }
-    assert!(!fixture.task(&root, &task.task_id).checked);
-    let evidence: Vec<_> = fixture
-        .state()
-        .messages
-        .into_iter()
-        .filter(|message| message.stale)
-        .collect();
-    assert_eq!(evidence.len(), stale_callers.len() * 2);
-    assert!(
-        evidence
-            .iter()
-            .all(|message| message.to_run_id == root && message.report.is_some())
-    );
-}
-
-#[test]
-fn same_terminal_and_bound_native_move_preserves_identity_but_restart_does_not() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let actor = fixture.launch_and_bind(&root);
-    let original = fixture.run(&root);
-    let mut moved = actor.clone();
-    let caller = caller_mut(&mut moved);
-    caller.workspace_id = "moved-space".into();
-    caller.tab_id = "moved-tab".into();
-    caller.pane_id = "moved-pane".into();
-    caller.env_run = None;
-    fixture
-        .apply(
-            &moved,
-            OrchestrationAction::Annotate {
-                run_id: root.clone(),
-                text: "After move".into(),
-            },
-        )
-        .unwrap();
-    let after = fixture.run(&root);
-    assert_eq!(after.run_id, original.run_id);
-    assert_eq!(after.attempt, original.attempt);
-    assert_eq!(after.stage, RunStage::Active);
-    assert_eq!(after.bound_omp_session, original.bound_omp_session);
-    let location = after.location.unwrap();
-    assert_eq!(location.workspace_id, "moved-space");
-    assert_eq!(location.tab_id, "moved-tab");
-    assert_eq!(location.pane_id, "moved-pane");
-    assert_eq!(fixture.state().runs.len(), 1);
-    assert!(matches!(&after.annotations[0].by, ActorRef::Run { run_id } if run_id == &root));
-    caller_mut(&mut moved).env_run = Some((root.clone(), original.attempt));
+    let (task, run_id, actor) = fixture.working(&root);
+    let foreign = fixture.root();
+    let foreign_actor = fixture.launch_and_bind(&foreign);
+    let Actor::Agent(foreign_caller) = foreign_actor else { unreachable!() };
     for fence in 0..4 {
-        let mut restarted = moved.clone();
-        let caller = caller_mut(&mut restarted);
+        let mut denied = actor.clone();
+        let caller = caller_mut(&mut denied);
         match fence {
-            0 => caller.boot_id = Some("boot-two".into()),
-            1 => caller.terminal_id = Some("terminal-two".into()),
-            2 => caller.endpoint_identity = "endpoint-two".into(),
-            3 => {
-                caller.native_session_id = Some("native-two".into());
-                caller.omp_session_id = Some("native-two".into());
-                caller.main_omp_session_id = Some("native-two".into());
-            }
+            0 => caller.auth.credential_id = id(),
+            1 => caller.auth.secret = foreign_caller.auth.secret.clone(),
+            2 => caller.auth.attachment_id = id(),
+            3 => caller.auth.attachment_epoch += 1,
             _ => unreachable!(),
         }
-        let revision = fixture.state().revision;
-        assert_code(
-            fixture.apply(
-                &restarted,
-                OrchestrationAction::Annotate {
-                    run_id: root.clone(),
-                    text: "Must not mutate the old run".into(),
-                },
-            ),
-            "caller_mismatch",
-        );
-        assert_eq!(fixture.state().revision, revision);
-        assert_eq!(fixture.run(&root).annotations.len(), 1);
-        assert_eq!(
-            fixture.run(&root).bound_omp_session,
-            original.bound_omp_session
-        );
+        for action in [
+            report(ReportKind::Initialized, None, Some("Invalid diagnostic")),
+            fixture.successful_result(&actor),
+        ] {
+            let before = fixture.state_bytes();
+            assert!(fixture.apply(&denied, action).is_err());
+            assert_eq!(fixture.state_bytes(), before);
+        }
     }
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
+    assert!(fixture.run(&run_id).result.is_none());
+    assert!(!fixture.task(&root, &task.task_id).checked);
 }
 
 #[test]
-fn moved_caller_uses_bound_omp_context_when_herdr_optional_ids_are_unavailable() {
+fn offline_ordinary_updates_use_credentials_without_physical_provenance() {
     let fixture = Fixture::new();
     let root = fixture.root();
-    let actor = fixture.launch_and_bind(&root);
-    let mut moved = actor.clone();
-    let caller = caller_mut(&mut moved);
-    caller.workspace_id = "moved-space".into();
-    caller.tab_id = "moved-tab".into();
-    caller.pane_id = "moved-pane".into();
+    let (task, run_id, mut actor) = fixture.working(&root);
+    let before = fixture.run(&run_id);
+    let caller = caller_mut(&mut actor);
+    caller.provenance = None;
+    caller.endpoint_identity = "unreachable-endpoint".into();
+    caller.workspace_id.clear();
+    caller.tab_id.clear();
+    caller.pane_id.clear();
     caller.boot_id = None;
+    caller.terminal_id = None;
     caller.native_session_id = None;
     caller.env_run = None;
-    fixture
-        .apply(
-            &moved,
-            OrchestrationAction::Annotate {
-                run_id: root.clone(),
-                text: "Native OMP evidence remains bound".into(),
-            },
-        )
-        .unwrap();
-    assert_eq!(fixture.run(&root).location.unwrap().pane_id, "moved-pane");
-    let mut missing_actual_session = moved.clone();
-    caller_mut(&mut missing_actual_session).omp_session_id = None;
-    assert!(
-        fixture
-            .apply(
-                &missing_actual_session,
-                OrchestrationAction::Annotate {
-                    run_id: root,
-                    text: "Cannot act without actual bound session".into(),
-                }
-            )
-            .is_err()
-    );
+    caller.omp_session_id = None;
+    caller.main_omp_session_id = None;
+    caller.agent_kind = None;
+    caller.actual_agent_kind = None;
+    caller.process = None;
+    let edited = task_result(fixture.apply(&actor, OrchestrationAction::TaskUpdate {
+        root_id: root.clone(), task_id: task.task_id.clone(),
+        expected_task_revision: task.task_revision,
+        title: None, description: Some("Offline durable job edit".into()),
+    }).unwrap());
+    assert_eq!(edited.description, "Offline durable job edit");
+    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
+    let after = fixture.run(&run_id);
+    assert_eq!(after.attachment.as_ref().unwrap().epoch, before.attachment.as_ref().unwrap().epoch);
+    assert_eq!(after.checkout_claim_id, before.checkout_claim_id);
+    assert_eq!(serde_json::to_value(after.attachment).unwrap(), serde_json::to_value(before.attachment).unwrap());
 }
+
+#[test]
+fn conversation_rollover_does_not_replace_epoch_credentials_or_checkout_claim() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, run_id, mut actor) = fixture.working(&root);
+    let before = fixture.run(&run_id);
+    let caller = caller_mut(&mut actor);
+    let credential_id = caller.auth.credential_id.clone();
+    caller.omp_session_id = Some("rolled-over-main".into());
+    caller.main_omp_session_id = caller.omp_session_id.clone();
+    let action = OrchestrationAction::RunAttach {
+        operation_id: id(),
+        attachment_id: caller.auth.attachment_id.clone(),
+        expected_attachment_epoch: caller.auth.attachment_epoch,
+        main_session_id: "rolled-over-main".into(),
+    };
+    fixture.apply(&actor, action).unwrap();
+    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
+    let after = fixture.run(&run_id);
+    let attachment = after.attachment.as_ref().unwrap();
+    assert_eq!(attachment.epoch, before.attachment.as_ref().unwrap().epoch);
+    assert_eq!(attachment.attachment_id, before.attachment.as_ref().unwrap().attachment_id);
+    assert_eq!(attachment.main_session_id.as_deref(), Some("rolled-over-main"));
+    assert_eq!(after.checkout_claim_id, before.checkout_claim_id);
+    assert!(fixture.state().credentials.iter().any(|record| record.credential_id == credential_id
+        && record.state == credentials::CredentialState::Active));
+}
+
 
 fn review_error() -> ErrorResponse {
     ErrorResponse {
@@ -1522,748 +1416,106 @@ fn review_error() -> ErrorResponse {
     }
 }
 
-// Compare every durable field, allowing only the documented review writes.
+// Review preserves current authority, incarnation, and worker evidence.
 fn assert_review_fields_only(before: &Run, after: &Run) {
-    let mut expected = serde_json::to_value(before).unwrap();
-    let actual = serde_json::to_value(after).unwrap();
-    expected["updated_at"] = actual["updated_at"].clone();
-    for field in ["step", "error", "updated_at"] {
-        expected["dispatch"][field] = actual["dispatch"][field].clone();
-    }
-    assert_eq!(actual, expected);
+    assert_eq!(after.run_id, before.run_id);
+    assert_eq!(after.root_id, before.root_id);
+    assert_eq!(after.task_id, before.task_id);
+    assert_eq!(after.attempt, before.attempt);
+    assert_eq!(after.stage, before.stage);
+    assert_eq!(after.close_reason, before.close_reason);
+    assert_eq!(after.brief, before.brief);
+    assert_eq!(after.task_revision_at_start, before.task_revision_at_start);
+    assert_eq!(after.cleanup_policy, before.cleanup_policy);
+    assert_eq!(after.checkout_claim_id, before.checkout_claim_id);
+    assert_eq!(serde_json::to_value(&after.attachment).unwrap(), serde_json::to_value(&before.attachment).unwrap());
+    assert_eq!(serde_json::to_value(&after.setup).unwrap(), serde_json::to_value(&before.setup).unwrap());
+    assert_eq!(serde_json::to_value(&after.last_report).unwrap(), serde_json::to_value(&before.last_report).unwrap());
+    assert_eq!(serde_json::to_value(&after.result).unwrap(), serde_json::to_value(&before.result).unwrap());
+    assert_eq!(after.source_output, before.source_output);
+    assert_eq!(after.integration, before.integration);
+    let (Some(before), Some(after)) = (&before.dispatch, &after.dispatch) else {
+        assert_eq!(after.dispatch.is_some(), before.dispatch.is_some());
+        return;
+    };
+    assert_eq!(after.launch_tag, before.launch_tag);
+    assert_eq!(after.endpoint_identity, before.endpoint_identity);
+    assert_eq!(after.launch_attempt, before.launch_attempt);
+    assert_eq!(after.agent_started, before.agent_started);
 }
 
-fn commit_review(
-    fixture: &Fixture,
-    reviewed: &Run,
-    step: DispatchStep,
-    error: Option<ErrorResponse>,
-) {
-    let before = fixture.state();
-    let revision = fixture
-        .service
-        .record_launch_review(reviewed, step, error.clone())
-        .unwrap();
-    let after = fixture.state();
-    assert_eq!(revision, before.revision + 1);
-    assert_eq!(after.revision, revision);
-    let index = run_index(&before, &reviewed.run_id).unwrap();
-    assert_review_fields_only(&before.runs[index], &after.runs[index]);
-    assert_eq!(after.runs[index].dispatch.as_ref().unwrap().step, step);
-    assert_eq!(
-        serde_json::to_value(&after.runs[index].dispatch.as_ref().unwrap().error).unwrap(),
-        serde_json::to_value(error).unwrap()
-    );
-    let mut expected = serde_json::to_value(before).unwrap();
-    let actual = serde_json::to_value(after).unwrap();
-    expected["revision"] = actual["revision"].clone();
-    expected["runs"][index] = actual["runs"][index].clone();
-    let before_messages = expected["messages"].as_array().unwrap();
-    let after_messages = actual["messages"].as_array().unwrap();
-    assert_eq!(&after_messages[..before_messages.len()], before_messages);
-    for message in after_messages.iter().skip(before_messages.len()) {
-        let body: serde_json::Value = serde_json::from_str(message["text"].as_str().unwrap()).unwrap();
-        assert!(matches!(body["event"].as_str(), Some("dispatch_failure" | "dispatch_recovered")));
-        assert_eq!(body["run_id"], reviewed.run_id);
-        assert_eq!(message["to_run_id"], reviewed.root_id);
-    }
-    expected["messages"] = actual["messages"].clone();
-    assert_eq!(
-        actual, expected,
-        "Review must preserve other runs and existing inbox records"
-    );
-}
 
-fn advance_worker(fixture: &Fixture, run_id: &str, actor: &Actor, stage: RunStage) {
-    if matches!(
-        stage,
-        RunStage::Ready | RunStage::Working | RunStage::Reported
-    ) {
-        fixture.ready(actor);
-    }
-    if matches!(stage, RunStage::Working | RunStage::Reported) {
-        fixture.operator(OrchestrationAction::GrantExecute {
-            run_id: run_id.into(),
-            plan_revision: fixture.run(run_id).work_plan.unwrap().plan_revision,
-            note: Some("Exact reviewed execution grant".into()),
-        });
-    }
+
+fn advance_worker(fixture: &Fixture, _run_id: &str, actor: &Actor, stage: RunStage) {
+    fixture.initialized(actor);
     if stage == RunStage::Reported {
-        fixture
-            .apply(
-                actor,
-                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-            )
+        fixture.apply(actor, fixture.successful_result(actor))
             .unwrap();
     }
 }
 
-fn launched_case(fixture: &Fixture, stage: RunStage) -> (String, Actor) {
-    let root = fixture.root();
-    if stage == RunStage::Active {
-        fixture.plan(&root);
-        let actor = fixture.launch_and_bind(&root);
-        fixture
-            .apply(
-                &actor,
-                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-            )
-            .unwrap();
-        (root, actor)
-    } else {
-        let task = fixture.create_task(&root, "Review preserves canonical task");
-        let run_id = fixture.propose(&root, &task, None);
-        fixture.prepare(&run_id);
-        let actor = fixture.launch_and_bind(&run_id);
-        advance_worker(fixture, &run_id, &actor, stage);
-        (run_id, actor)
-    }
-}
-
 #[test]
-fn launched_reconcile_preserves_lifecycle_receipts_grants_setup_identity_and_inbox() {
-    for stage in [
-        RunStage::Active,
-        RunStage::Initializing,
-        RunStage::Ready,
-        RunStage::Working,
-        RunStage::Reported,
-    ] {
-        for outcome in [
-            DispatchStep::Launched,
-            DispatchStep::LaunchUnknown,
-            DispatchStep::NeedsReview,
-        ] {
-            let fixture = Fixture::new();
-            let (run_id, actor) = launched_case(&fixture, stage);
-            fixture
-                .apply(
-                    &actor,
-                    OrchestrationAction::Annotate {
-                        run_id: run_id.clone(),
-                        text: "Retained review annotation".into(),
-                    },
-                )
-                .unwrap();
-            fixture.operator(OrchestrationAction::MessageSend {
-                message_id: id(),
-                to_run_id: run_id.clone(),
-                kind: MessageKind::Instruction,
-                text: "Retained unread instruction".into(),
-                in_reply_to: None,
-            });
-            let before = fixture.run(&run_id);
-            let messages = serde_json::to_value(fixture.state().messages).unwrap();
-            let reviewed = fixture.queue_review(&run_id);
-            assert_eq!(reviewed.stage, stage);
-            assert_review_fields_only(&before, &reviewed);
-            assert_eq!(
-                serde_json::to_value(fixture.state().messages).unwrap(),
-                messages
-            );
-            let error = (outcome != DispatchStep::Launched).then(review_error);
-            commit_review(&fixture, &reviewed, outcome, error);
-            assert_review_fields_only(&before, &fixture.run(&run_id));
-            let retained = fixture.state().messages.into_iter().filter(|message| {
-                !message.message_id.starts_with("dispatch-failure:")
-                    && !message.message_id.starts_with("dispatch-recovered:")
-            }).collect::<Vec<_>>();
-            assert_eq!(serde_json::to_value(retained).unwrap(), messages);
-            fixture.assert_stale_review(&reviewed);
-            if outcome != DispatchStep::Launched {
-                let uncertain = fixture.run(&run_id);
-                let queued_again = fixture.queue_review(&run_id);
-                assert_review_fields_only(&uncertain, &queued_again);
-                assert!(queued_again.dispatch.unwrap().agent_started);
-            }
-            let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
-            // Drop the shared named-lock guard before reading through the other service.
-            let reopened_state = {
-                let locked = reopened.store.lock().unwrap();
-                locked.read().unwrap()
-            };
-            assert_eq!(
-                serde_json::to_value(reopened_state).unwrap(),
-                serde_json::to_value(fixture.state()).unwrap()
-            );
-        }
-    }
-}
-
-#[test]
-fn launched_reconcile_rejects_setup_recovery_and_closed_without_save_and_bad_marker_fails_closed() {
+fn healthy_physical_review_retains_missing_extension_until_actual_run_attach() {
     let fixture = Fixture::new();
-    let (run_id, _) = launched_case(&fixture, RunStage::Active);
-    for recovery in [
-        cockpit_protocol::projects::WorkspaceRecoveryAction::AcceptExistingWorktree,
-        cockpit_protocol::projects::WorkspaceRecoveryAction::RetryEnvironment,
-    ] {
-        let bytes = fixture.state_bytes();
-        assert_code(
-            fixture.apply(
-                &Actor::Operator(OperatorOrigin::Browser),
-                OrchestrationAction::ReconcileRun {
-                    run_id: run_id.clone(),
-                    recovery: Some(recovery),
-                },
-            ),
-            "invalid_stage",
-        );
-        assert_eq!(fixture.state_bytes(), bytes);
-    }
+    let run_id = fixture.root();
+    fixture.setup(&run_id);
+    let actor = fixture.launch_tab(&run_id);
+    fixture.service.record_launch_pending(&fixture.run(&run_id)).unwrap();
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    // Host-observed main provenance exists before the extension commits RunAttach.
     fixture.seed_run(&run_id, |run| {
-        run.dispatch.as_mut().unwrap().agent_started = false;
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.main_session_id = caller.omp_session_id.clone();
+        attachment.process = caller.process.clone();
     });
-    let before = fixture.run(&run_id);
+    let attachment = fixture.run(&run_id).attachment.unwrap();
+    fixture.service.record_launch_verified(&fixture.run(&run_id)).unwrap();
+    let retained = fixture.run(&run_id);
+    assert_eq!(retained.stage, RunStage::Starting);
+    let current = retained.attachment.as_ref().unwrap();
+    assert_eq!(current.attachment_id, attachment.attachment_id);
+    assert_eq!(current.epoch, attachment.epoch);
+    assert_eq!(current.process, attachment.process);
+    assert_eq!(current.state, AttachmentState::Disconnected);
+    assert_eq!(retained.dispatch.as_ref().unwrap().error.as_ref().unwrap().code, "current_extension_unavailable");
+    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&run_id));
     let messages = serde_json::to_value(fixture.state().messages).unwrap();
-    fixture.operator(OrchestrationAction::ReconcileRun {
-        run_id: run_id.clone(),
-        recovery: None,
-    });
-    let after = fixture.run(&run_id);
-    assert_eq!(
-        after.dispatch.as_ref().unwrap().step,
-        DispatchStep::NeedsReview
-    );
-    assert_eq!(
-        after
-            .dispatch
-            .as_ref()
-            .unwrap()
-            .error
-            .as_ref()
-            .unwrap()
-            .code,
-        "launch_receipt_inconsistent"
-    );
-    assert!(!after.dispatch.as_ref().unwrap().agent_started);
-    assert_review_fields_only(&before, &after);
-    assert_eq!(
-        serde_json::to_value(fixture.state().messages).unwrap(),
-        messages
-    );
-    fixture.operator(OrchestrationAction::CancelRun {
-        run_id: run_id.clone(),
-    });
-    for step in [
-        DispatchStep::Launched,
-        DispatchStep::LaunchUnknown,
-        DispatchStep::NeedsReview,
-    ] {
-        fixture.seed_run(&run_id, |run| run.dispatch.as_mut().unwrap().step = step);
-        let bytes = fixture.state_bytes();
-        assert_code(
-            fixture.apply(
-                &Actor::Operator(OperatorOrigin::Browser),
-                OrchestrationAction::ReconcileRun {
-                    run_id: run_id.clone(),
-                    recovery: None,
-                },
-            ),
-            "invalid_stage",
-        );
-        assert_eq!(fixture.state_bytes(), bytes);
-    }
-}
-
-#[test]
-fn launch_review_accepts_only_terminal_outcomes_on_current_proven_queue() {
-    let fixture = Fixture::new();
-    let (run_id, _) = launched_case(&fixture, RunStage::Active);
-    fixture.assert_stale_review(&fixture.run(&run_id));
-    let reviewed = fixture.queue_review(&run_id);
-    for step in [
-        DispatchStep::Planning,
-        DispatchStep::PlanFailed,
-        DispatchStep::SetupPending,
-        DispatchStep::SetupRunning,
-        DispatchStep::SetupUnknown,
-        DispatchStep::LaunchIntent,
-    ] {
-        let bytes = fixture.state_bytes();
-        assert!(
-            fixture
-                .service
-                .record_launch_review(&reviewed, step, None)
-                .is_err()
-        );
-        assert_eq!(fixture.state_bytes(), bytes);
-    }
-    let mut unproven = reviewed.clone();
-    unproven.dispatch.as_mut().unwrap().agent_started = false;
-    fixture.assert_stale_review(&unproven);
-    commit_review(&fixture, &reviewed, DispatchStep::Launched, None);
-}
-
-#[test]
-fn launch_review_lifecycle_races_preserve_current_ready_execute_worker_and_active_root_results() {
-    for race in 0..4 {
-        let fixture = Fixture::new();
-        let stage = match race {
-            0 => RunStage::Initializing,
-            1 => RunStage::Ready,
-            2 => RunStage::Working,
-            _ => RunStage::Active,
-        };
-        let (run_id, actor) = launched_case(&fixture, stage);
-        let reviewed = fixture.queue_review(&run_id);
-        match race {
-            0 => {
-                fixture.ready(&actor);
-            }
-            1 => {
-                fixture.operator(OrchestrationAction::GrantExecute {
-                    run_id: run_id.clone(),
-                    plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision,
-                    note: Some("Granted while runtime proof was outstanding".into()),
-                });
-            }
-            _ => {
-                fixture
-                    .apply(
-                        &actor,
-                        report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-                    )
-                    .unwrap();
-            }
-        }
-        let current = fixture.run(&run_id);
-        assert_eq!(
-            current.stage,
-            [
-                RunStage::Ready,
-                RunStage::Working,
-                RunStage::Reported,
-                RunStage::Active
-            ][race]
-        );
-        if race == 3 {
-            assert_ne!(
-                current.result.as_ref().unwrap().message_id,
-                reviewed.result.as_ref().unwrap().message_id
-            );
-        }
-        commit_review(&fixture, &reviewed, DispatchStep::Launched, None);
-        assert_review_fields_only(&current, &fixture.run(&run_id));
-    }
-}
-
-#[test]
-fn late_launch_review_is_discarded_after_cancel_accept_reconcile_retry_bind_or_move() {
-    for race in 0..6 {
-        let fixture = Fixture::new();
-        let stage = if race == 1 {
-            RunStage::Reported
-        } else {
-            RunStage::Active
-        };
-        let (run_id, actor) = launched_case(&fixture, stage);
-        if race == 4 {
-            // Model a proven launch whose extension bind has not committed yet.
-            fixture.seed_run(&run_id, |run| run.bound_omp_session = None);
-        }
-        fixture.queue_review(&run_id);
-        if race == 2 {
-            // A persisted older request token makes replacement deterministic,
-            // without sleeping or relying on clock resolution.
-            fixture.seed_run(&run_id, |run| {
-                run.dispatch.as_mut().unwrap().updated_at = "2000-01-01T00:00:00Z".into();
-            });
-        }
-        let reviewed = fixture.run(&run_id);
-        match race {
-            0 => {
-                fixture.operator(OrchestrationAction::CancelRun {
-                    run_id: run_id.clone(),
-                });
-            }
-            1 => {
-                let run = fixture.run(&run_id);
-                let task = fixture.task(&run.root_id, run.task_id.as_deref().unwrap());
-                fixture.operator(OrchestrationAction::Accept {
-                    run_id: run_id.clone(),
-                    expected_task_revision: task.task_revision,
-                });
-            }
-            2 => {
-                let newer = fixture.queue_review(&run_id);
-                assert_ne!(
-                    newer.dispatch.as_ref().unwrap().updated_at,
-                    reviewed.dispatch.as_ref().unwrap().updated_at
-                );
-            }
-            3 => {
-                commit_review(
-                    &fixture,
-                    &reviewed,
-                    DispatchStep::NeedsReview,
-                    Some(review_error()),
-                );
-                fixture.operator(OrchestrationAction::RetryLaunch {
-                    run_id: run_id.clone(),
-                });
-            }
-            4 => {
-                let Actor::Agent(caller) = &actor else {
-                    unreachable!();
-                };
-                fixture
-                    .apply(
-                        &actor,
-                        OrchestrationAction::RunBindSession {
-                            omp_session_id: caller.omp_session_id.clone().unwrap(),
-                        },
-                    )
-                    .unwrap();
-            }
-            5 => {
-                let mut moved = actor.clone();
-                let caller = caller_mut(&mut moved);
-                caller.workspace_id = "relocated-space".into();
-                caller.tab_id = "relocated-tab".into();
-                caller.pane_id = "relocated-pane".into();
-                fixture
-                    .apply(
-                        &moved,
-                        OrchestrationAction::Annotate {
-                            run_id: run_id.clone(),
-                            text: "Actual same-terminal relocation while review waits".into(),
-                        },
-                    )
-                    .unwrap();
-                assert_eq!(
-                    fixture.run(&run_id).location.unwrap().pane_id,
-                    "relocated-pane"
-                );
-            }
-            _ => unreachable!(),
-        }
-        fixture.assert_stale_review(&reviewed);
-    }
-}
-
-#[test]
-fn launch_review_guards_every_incarnation_request_and_location_field() {
-    let fixture = Fixture::new();
-    let (run_id, _) = launched_case(&fixture, RunStage::Active);
-    let reviewed = fixture.queue_review(&run_id);
-    // Alter the captured proof, not the durable queue: each mismatch independently
-    // must discard proof without depending on a second changed guard.
-    for fence in 0..21 {
-        let mut stale = reviewed.clone();
-        match fence {
-            0 => stale.run_id = id(),
-            1 => stale.session_id = "other-session".into(),
-            2 => stale.root_id = id(),
-            3 => stale.attempt += 1,
-            4 => stale.dispatch.as_mut().unwrap().launch_attempt += 1,
-            5 => stale.dispatch.as_mut().unwrap().launch_tag = Some("other-tag".into()),
-            6 => stale.dispatch.as_mut().unwrap().endpoint_identity = Some("other-endpoint".into()),
-            7 => stale.dispatch.as_mut().unwrap().agent_started = false,
-            8 => stale.dispatch.as_mut().unwrap().step = DispatchStep::Launched,
-            9 => stale.dispatch.as_mut().unwrap().updated_at = "obsolete-request-token".into(),
-            10 => stale.bound_omp_session = Some("other-binding".into()),
-            11 => stale.location = None,
-            12 => stale.location.as_mut().unwrap().boot_id = Some("other-boot".into()),
-            13 => stale.location.as_mut().unwrap().terminal_id = Some("other-terminal".into()),
-            14 => stale.location.as_mut().unwrap().native_session_id = Some("other-native".into()),
-            15 => stale.location.as_mut().unwrap().endpoint_identity = "other-endpoint".into(),
-            16 => stale.location.as_mut().unwrap().session_id = "other-session".into(),
-            17 => stale.location.as_mut().unwrap().workspace_id = "other-space".into(),
-            18 => stale.location.as_mut().unwrap().tab_id = "other-tab".into(),
-            19 => stale.location.as_mut().unwrap().pane_id = "other-pane".into(),
-            20 => stale.location.as_mut().unwrap().launch_tag = "other-tag".into(),
-            _ => unreachable!(),
-        }
-        fixture.assert_stale_review(&stale);
-    }
-    let mut missing_dispatch = reviewed.clone();
-    missing_dispatch.dispatch = None;
-    fixture.assert_stale_review(&missing_dispatch);
-    fixture.seed_run(&run_id, |run| {
-        run.dispatch.as_mut().unwrap().agent_started = false
-    });
-    fixture.assert_stale_review(&reviewed);
-}
-
-#[test]
-fn busy_inbox_and_unrelated_revisions_do_not_starve_launch_review() {
-    let fixture = Fixture::new();
-    let (run_id, actor) = launched_case(&fixture, RunStage::Active);
-    let reviewed = fixture.queue_review(&run_id);
-    let other = fixture.root();
-    for index in 0..3 {
-        fixture.operator(OrchestrationAction::MessageSend {
-            message_id: id(),
-            to_run_id: run_id.clone(),
-            kind: MessageKind::Instruction,
-            text: format!("Inbox traffic while reviewing {index}"),
-            in_reply_to: None,
-        });
-        fixture.operator(OrchestrationAction::Annotate {
-            run_id: other.clone(),
-            text: format!("Unrelated durable revision {index}"),
-        });
-    }
-    fixture
-        .apply(
-            &actor,
-            OrchestrationAction::InboxPull {
-                after_seq: 0,
-                limit: 100,
-            },
-        )
-        .unwrap();
-    assert!(
-        fixture
-            .state()
-            .messages
-            .iter()
-            .any(|message| { message.to_run_id == run_id && message.stage == DeliveryStage::Read })
-    );
-    let current = fixture.run(&run_id);
-    commit_review(&fixture, &reviewed, DispatchStep::Launched, None);
-    assert_review_fields_only(&current, &fixture.run(&run_id));
-}
-
-#[test]
-fn uncertain_review_requires_explicit_retry_and_retains_setup_receipts_grants_and_unacked_inbox() {
-    for outcome in [DispatchStep::LaunchUnknown, DispatchStep::NeedsReview] {
-        let fixture = Fixture::new();
-        let (run_id, old_actor) = launched_case(&fixture, RunStage::Reported);
-        fixture.seed_run(&run_id, |run| {
-            let setup = run.setup.as_mut().unwrap();
-            setup.operation_id = Some("retained-completed-setup".into());
-            setup.generation = Some(3);
-            setup.repository_id = Some("retained-repository".into());
-            setup.branch = Some("retained-checkout-branch".into());
-            setup.base = Some("retained-base-revision".into());
-            setup.warnings.push("Retained setup warning".into());
-        });
-        fixture.operator(OrchestrationAction::MessageSend {
-            message_id: id(),
-            to_run_id: run_id.clone(),
-            kind: MessageKind::Instruction,
-            text: "Replay this original unread instruction after explicit retry".into(),
-            in_reply_to: None,
-        });
-        for queued in [false, true] {
-            if queued {
-                fixture.queue_review(&run_id);
-            }
-            let bytes = fixture.state_bytes();
-            assert_code(
-                fixture.apply(
-                    &Actor::Operator(OperatorOrigin::Browser),
-                    OrchestrationAction::RetryLaunch {
-                        run_id: run_id.clone(),
-                    },
-                ),
-                "invalid_stage",
-            );
-            assert_eq!(fixture.state_bytes(), bytes);
-        }
-        let reviewed = fixture.run(&run_id);
-        commit_review(&fixture, &reviewed, outcome, Some(review_error()));
-        let bytes = fixture.state_bytes();
-        assert_code(
-            fixture.apply(
-                &Actor::Operator(OperatorOrigin::Browser),
-                OrchestrationAction::RetryLaunch {
-                    run_id: run_id.clone(),
-                },
-            ),
-            "invalid_stage",
-        );
-        assert_eq!(
-            fixture.state_bytes(),
-            bytes,
-            "Unreviewed Result must survive uncertain startup"
-        );
-        fixture.operator(OrchestrationAction::SendBack {
-            run_id: run_id.clone(),
-            text: "Reviewed Result; explicitly initialize a new launch before further work".into(),
-        });
-        let original = fixture.run(&run_id);
-        let messages = serde_json::to_value(fixture.state().messages).unwrap();
-        fixture.operator(OrchestrationAction::RetryLaunch {
-            run_id: run_id.clone(),
-        });
-        let retried = fixture.run(&run_id);
-        assert_eq!(retried.stage, RunStage::Preparing);
-        assert!(retried.location.is_none());
-        assert!(retried.bound_omp_session.is_none());
-        assert!(original.bound_omp_process.is_some());
-        assert!(original.launch_shell_identity.is_some());
-        assert!(retried.bound_omp_process.is_none());
-        assert!(retried.launch_shell_identity.is_none());
-        // Only accepted Closed runs obtain retirement authority; Closed runs
-        // cannot retry. A permitted uncertain-launch retry has none.
-        assert!(retried.retirement.is_none());
-        let dispatch = retried.dispatch.as_ref().unwrap();
-        assert_eq!(dispatch.step, DispatchStep::SetupPending);
-        assert_eq!(
-            dispatch.launch_attempt,
-            original.dispatch.as_ref().unwrap().launch_attempt + 1
-        );
-        assert!(!dispatch.agent_started);
-        assert!(dispatch.launch_tag.is_none());
-        assert!(dispatch.endpoint_identity.is_none());
-        assert_eq!(retried.task_id, original.task_id);
-        assert_eq!(retried.prepare_brief, original.prepare_brief);
-        assert_eq!(
-            serde_json::to_value(&retried.setup).unwrap(),
-            serde_json::to_value(&original.setup).unwrap()
-        );
-        assert_eq!(
-            serde_json::to_value(&retried.grants).unwrap(),
-            serde_json::to_value(&original.grants).unwrap()
-        );
-        assert_eq!(
-            serde_json::to_value(&retried.work_plan).unwrap(),
-            serde_json::to_value(&original.work_plan).unwrap()
-        );
-        let mut expected_messages: Vec<Message> = serde_json::from_value(messages.clone()).unwrap();
-        for message in expected_messages.iter_mut().filter(|message| {
-            message.to_run_id == run_id
-                && matches!(
-                    message.kind,
-                    MessageKind::WorkBrief
-                        | MessageKind::PrepareBrief
-                        | MessageKind::SupervisorBrief
-                )
-        }) {
-            message.stale = true;
-        }
-        assert_eq!(
-            serde_json::to_value(fixture.state().messages).unwrap(),
-            serde_json::to_value(&expected_messages).unwrap()
-        );
-        fixture.assert_stale_review(&reviewed);
-        let new_actor = fixture.launch_and_bind(&run_id);
-        let settled = fixture.run(&run_id);
-        assert_eq!(settled.stage, RunStage::Initializing);
-        let bytes = fixture.state_bytes();
-        assert_code(
-            fixture.apply(
-                &Actor::Operator(OperatorOrigin::Browser),
-                OrchestrationAction::GrantExecute {
-                    run_id: run_id.clone(),
-                    plan_revision: original.work_plan.as_ref().unwrap().plan_revision.clone(),
-                    note: None,
-                },
-            ),
-            "invalid_stage",
-        );
-        assert_eq!(
-            fixture.state_bytes(),
-            bytes,
-            "Historical execute grants must not resume work"
-        );
-        assert_ne!(settled.bound_omp_session, original.bound_omp_session);
-        assert_eq!(settled.attempt, original.attempt);
-        assert_eq!(settled.root_id, original.root_id);
-        assert_eq!(
-            serde_json::to_value(&settled.setup).unwrap(),
-            serde_json::to_value(&original.setup).unwrap()
-        );
-        let bytes = fixture.state_bytes();
-        assert_code(
-            fixture.apply(
-                &old_actor,
-                OrchestrationAction::Annotate {
-                    run_id: run_id.clone(),
-                    text: "Old session must not mutate the retry".into(),
-                },
-            ),
-            "caller_mismatch",
-        );
-        assert_eq!(fixture.state_bytes(), bytes);
-        let bytes = fixture.state_bytes();
-        assert_code(
-            fixture.apply(&old_actor, OrchestrationAction::InboxAck { through_seq: 1 }),
-            "caller_mismatch",
-        );
-        assert_eq!(fixture.state_bytes(), bytes);
-        let prior_messages = fixture.state().messages;
-        let response = fixture
-            .apply(
-                &old_actor,
-                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-            )
-            .unwrap();
-        assert!(matches!(
-            response.result,
-            OrchestrationActionResult::Message { stale: true, .. }
-        ));
-        let evidence = fixture.state().messages;
-        assert_eq!(evidence.len(), prior_messages.len() + 1);
-        assert_eq!(
-            serde_json::to_value(&evidence[..prior_messages.len()]).unwrap(),
-            serde_json::to_value(&prior_messages).unwrap()
-        );
-        let appended = evidence.last().unwrap();
-        assert!(appended.stale);
-        assert_eq!(appended.to_run_id, original.root_id);
-        assert_eq!(appended.kind, MessageKind::Report);
-        assert_eq!(appended.report.as_ref().unwrap().kind, ReportKind::Result);
-        assert_eq!(
-            serde_json::to_value(fixture.run(&run_id)).unwrap(),
-            serde_json::to_value(&settled).unwrap()
-        );
-        let response = fixture
-            .apply(
-                &new_actor,
-                OrchestrationAction::InboxPull {
-                    after_seq: 0,
-                    limit: 100,
-                },
-            )
-            .unwrap();
-        let OrchestrationActionResult::Inbox {
-            messages: pulled, ..
-        } = response.result
-        else {
-            panic!("Expected the new bound session to pull the retained inbox");
-        };
-        let original_messages: Vec<Message> = serde_json::from_value(messages).unwrap();
-        for old in original_messages
-            .iter()
-            .filter(|message| message.to_run_id == run_id)
-        {
-            let current = pulled
-                .iter()
-                .find(|message| message.message_id == old.message_id)
-                .unwrap();
-            assert_eq!(current.seq, old.seq);
-            assert_eq!(current.text, old.text);
-            if matches!(
-                old.kind,
-                MessageKind::WorkBrief | MessageKind::PrepareBrief | MessageKind::SupervisorBrief
-            ) {
-                assert!(
-                    current.stale,
-                    "Old launch briefs are history, not executable mail"
-                );
-            } else {
-                assert_eq!(current.stale, old.stale);
-            }
-            assert_eq!(current.stage, DeliveryStage::Read);
-            assert!(current.acked_at.is_none());
-        }
-        assert!(
-            !fixture
-                .task(&original.root_id, original.task_id.as_deref().unwrap())
-                .checked
-        );
-    }
+    fixture.service.record_launch_verified(&retained).unwrap();
+    let observed_again = fixture.run(&run_id);
+    let current = observed_again.attachment.as_ref().unwrap();
+    assert_eq!(observed_again.stage, RunStage::Starting);
+    assert_eq!(current.state, AttachmentState::Disconnected);
+    assert_eq!(current.attachment_id, attachment.attachment_id);
+    assert_eq!(current.epoch, attachment.epoch);
+    assert_eq!(current.process, attachment.process);
+    assert_eq!(current.shell, attachment.shell);
+    assert_eq!(observed_again.dispatch.as_ref().unwrap().launch_attempt,
+        retained.dispatch.as_ref().unwrap().launch_attempt);
+    assert_eq!(observed_again.dispatch.as_ref().unwrap().launch_tag,
+        retained.dispatch.as_ref().unwrap().launch_tag);
+    assert_eq!(observed_again.dispatch.as_ref().unwrap().error.as_ref().unwrap().code,
+        "current_extension_unavailable");
+    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&run_id));
+    assert_eq!(serde_json::to_value(fixture.state().messages).unwrap(), messages);
+    fixture.apply(&actor, OrchestrationAction::RunAttach {
+        operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
+        expected_attachment_epoch: caller.auth.attachment_epoch,
+        main_session_id: caller.omp_session_id.clone().unwrap(),
+    }).unwrap();
+    let reattached = fixture.run(&run_id);
+    assert_eq!(reattached.stage, RunStage::Active);
+    assert_eq!(reattached.attachment.as_ref().unwrap().state, AttachmentState::Connected);
+    assert_eq!(reattached.attachment.as_ref().unwrap().attachment_id, attachment.attachment_id);
+    assert_eq!(reattached.attachment.as_ref().unwrap().epoch, attachment.epoch);
+    assert!(reattached.dispatch.as_ref().unwrap().error.is_none());
+    assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&run_id));
+    assert_eq!(fixture.state().messages.iter().filter(|message|
+        message.to_run_id == run_id && message.kind == MessageKind::SupervisorBrief).count(), 1);
 }
 
 #[test]
 fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_no_write() {
     for stage in [
-        RunStage::Initializing,
-        RunStage::Ready,
         RunStage::Working,
         RunStage::Reported,
         RunStage::Active,
@@ -2271,12 +1523,12 @@ fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_
         let fixture = Fixture::new();
         let root = fixture.root();
         let run_id = if stage == RunStage::Active {
-            fixture.plan(&root);
+            fixture.setup(&root);
             root
         } else {
             let task = fixture.create_task(&root, "Fast same-launch progress");
-            let run_id = fixture.propose(&root, &task, None);
-            fixture.prepare(&run_id);
+            let run_id = fixture.start(&root, &task);
+            fixture.setup(&run_id);
             run_id
         };
         let actor = fixture.launch_tab(&run_id);
@@ -2290,28 +1542,20 @@ fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_
         fixture
             .apply(
                 &actor,
-                OrchestrationAction::RunBindSession {
-                    omp_session_id: caller.omp_session_id.clone().unwrap(),
-                },
+                OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
             )
             .unwrap();
         let reviewed = fixture.run(&run_id);
-        // Model lifecycle advancement during the runtime proof read. Keep the
-        // captured Preparing incarnation, and exercise Ready/Execute/Result
-        // through actual service mutations rather than forging their receipts.
+        // Model same-incarnation report progress while runtime proof is read.
         fixture.seed_run(&run_id, |run| {
             run.stage = if stage == RunStage::Active {
                 RunStage::Active
             } else {
-                RunStage::Initializing
+                RunStage::Working
             };
         });
         if stage == RunStage::Active {
-            fixture
-                .apply(
-                    &actor,
-                    report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-                )
+            fixture.apply(&actor, fixture.successful_result(&actor))
                 .unwrap();
         } else {
             advance_worker(&fixture, &run_id, &actor, stage);
@@ -2326,11 +1570,19 @@ fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_
         );
         let after = fixture.run(&run_id);
         assert_eq!(after.stage, stage);
-        let mut expected = serde_json::to_value(&before).unwrap();
-        let actual = serde_json::to_value(&after).unwrap();
-        expected["updated_at"] = actual["updated_at"].clone();
-        expected["dispatch"] = actual["dispatch"].clone();
-        assert_eq!(actual, expected);
+        assert_eq!(after.task_id, before.task_id);
+        assert_eq!(after.root_id, before.root_id);
+        assert_eq!(after.attempt, before.attempt);
+        assert_eq!(after.checkout_claim_id, before.checkout_claim_id);
+        assert_eq!(serde_json::to_value(&after.setup).unwrap(), serde_json::to_value(&before.setup).unwrap());
+        assert_eq!(serde_json::to_value(&after.result).unwrap(), serde_json::to_value(&before.result).unwrap());
+        let before_attachment = before.attachment.as_ref().unwrap();
+        let after_attachment = after.attachment.as_ref().unwrap();
+        assert_eq!(after_attachment.attachment_id, before_attachment.attachment_id);
+        assert_eq!(after_attachment.epoch, before_attachment.epoch);
+        assert_eq!(after_attachment.process, before_attachment.process);
+        assert_eq!(after_attachment.main_session_id, before_attachment.main_session_id);
+        assert_eq!(after_attachment.state, AttachmentState::Connected);
         assert!(after.dispatch.as_ref().unwrap().agent_started);
         assert_eq!(
             after.dispatch.as_ref().unwrap().step,
@@ -2339,35 +1591,24 @@ fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_
         let kind = if stage == RunStage::Active {
             MessageKind::SupervisorBrief
         } else {
-            MessageKind::PrepareBrief
+            MessageKind::WorkBrief
         };
         let messages = fixture.state().messages;
-        let new_briefs: Vec<_> = messages
-            .iter()
-            .filter(|message| message.to_run_id == run_id && message.kind == kind)
-            .collect();
-        assert_eq!(new_briefs.len(), 1);
         let retained: Vec<_> = messages
             .into_iter()
             .filter(|message| !(message.to_run_id == run_id && message.kind == kind))
             .collect();
         assert_eq!(serde_json::to_value(retained).unwrap(), original_messages);
-        // Even while a review is queued, a repeated proven start cannot bypass
-        // runtime proof or reissue/reinitialize launch work.
-        for queued in [false, true] {
-            if queued {
-                fixture.queue_review(&run_id);
-            }
-            let revision = fixture.state().revision;
-            let bytes = fixture.state_bytes();
-            let receiver = fixture.service.revision.subscribe();
-            assert_eq!(
-                fixture.service.record_launch_verified(&reviewed).unwrap(),
-                revision
-            );
-            assert_eq!(fixture.state_bytes(), bytes);
-            assert!(!receiver.has_changed().unwrap());
-        }
+        // Repeated physical proof never reissues or reinitializes launch work.
+        let revision = fixture.state().revision;
+        let bytes = fixture.state_bytes();
+        let receiver = fixture.service.revision.subscribe();
+        assert_eq!(
+            fixture.service.record_launch_verified(&reviewed).unwrap(),
+            revision
+        );
+        assert_eq!(fixture.state_bytes(), bytes);
+        assert!(!receiver.has_changed().unwrap());
     }
 }
 
@@ -2402,16 +1643,16 @@ fn pending_launch_ack_and_independent_bind_do_not_promote_root_or_worker() {
         let root = fixture.root();
         let run_id = if worker {
             let task = fixture.create_task(&root, "Pending initialization");
-            let run_id = fixture.propose(&root, &task, None);
-            fixture.prepare(&run_id);
+            let run_id = fixture.start(&root, &task);
+            fixture.setup(&run_id);
             run_id
         } else {
             root
         };
         let actor = fixture.launch_tab(&run_id);
         let unbound = fixture.run(&run_id);
-        assert_eq!(unbound.stage, RunStage::Preparing);
-        assert!(unbound.bound_omp_session.is_none());
+        assert_eq!(unbound.stage, RunStage::Starting);
+        assert!(unbound.attachment.as_ref().unwrap().main_session_id.is_none());
         assert_proof_discarded(&fixture, &unbound);
         let Actor::Agent(caller) = &actor else {
             unreachable!()
@@ -2419,12 +1660,10 @@ fn pending_launch_ack_and_independent_bind_do_not_promote_root_or_worker() {
         fixture
             .apply(
                 &actor,
-                OrchestrationAction::RunBindSession {
-                    omp_session_id: caller.omp_session_id.clone().unwrap(),
-                },
+                OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
             )
             .unwrap();
-        assert_eq!(fixture.run(&run_id).stage, RunStage::Preparing);
+        assert_eq!(fixture.run(&run_id).stage, RunStage::Starting);
         let revision = fixture.state().revision;
         // SDK binding can win the race with accepted agent.start ACK. The old
         // unbound request may record Pending, but is never sufficient proof.
@@ -2438,13 +1677,13 @@ fn pending_launch_ack_and_independent_bind_do_not_promote_root_or_worker() {
             DispatchStep::LaunchPending
         );
         assert!(!pending.dispatch.as_ref().unwrap().agent_started);
-        assert_eq!(pending.stage, RunStage::Preparing);
-        assert_eq!(pending.bound_omp_session, caller.omp_session_id);
+        assert_eq!(pending.stage, RunStage::Starting);
+        assert_eq!(pending.attachment.as_ref().unwrap().main_session_id, caller.omp_session_id);
         assert!(fixture.state().messages.iter().all(|message| {
             message.to_run_id != run_id
                 || !matches!(
                     message.kind,
-                    MessageKind::SupervisorBrief | MessageKind::PrepareBrief
+                    MessageKind::SupervisorBrief | MessageKind::WorkBrief
                 )
         }));
         assert_proof_discarded(&fixture, &unbound);
@@ -2455,7 +1694,7 @@ fn pending_launch_ack_and_independent_bind_do_not_promote_root_or_worker() {
         assert_eq!(
             proven.stage,
             if worker {
-                RunStage::Initializing
+                RunStage::Working
             } else {
                 RunStage::Active
             }
@@ -2466,7 +1705,7 @@ fn pending_launch_ack_and_independent_bind_do_not_promote_root_or_worker() {
             DispatchStep::Launched
         );
         let kind = if worker {
-            MessageKind::PrepareBrief
+            MessageKind::WorkBrief
         } else {
             MessageKind::SupervisorBrief
         };
@@ -2476,15 +1715,7 @@ fn pending_launch_ack_and_independent_bind_do_not_promote_root_or_worker() {
             .filter(|message| message.to_run_id == run_id && message.kind == kind)
             .collect();
         assert_eq!(briefs.len(), 1);
-        assert_eq!(
-            briefs[0].message_id,
-            format!(
-                "brief:{run_id}:launch-{}-{}:launch",
-                proven.attempt,
-                proven.dispatch.as_ref().unwrap().launch_attempt,
-            )
-        );
-        assert_eq!(briefs[0].text, proven.prepare_brief);
+        assert_eq!(briefs[0].text, proven.brief);
         assert_proof_discarded(&fixture, &proven);
     }
 }
@@ -2494,8 +1725,8 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let task = fixture.create_task(&root, "Exact launch proof");
-    let run_id = fixture.propose(&root, &task, None);
-    fixture.prepare(&run_id);
+    let run_id = fixture.start(&root, &task);
+    fixture.setup(&run_id);
     let actor = fixture.launch_tab(&run_id);
     fixture
         .service
@@ -2507,9 +1738,7 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
     fixture
         .apply(
             &actor,
-            OrchestrationAction::RunBindSession {
-                omp_session_id: caller.omp_session_id.clone().unwrap(),
-            },
+            OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
         )
         .unwrap();
     let reviewed = fixture.run(&run_id);
@@ -2526,21 +1755,21 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
                 stale.dispatch.as_mut().unwrap().endpoint_identity =
                     Some("different-endpoint".into())
             }
-            7 => stale.bound_omp_session = None,
-            8 => stale.bound_omp_session = Some(String::new()),
-            9 => stale.bound_omp_session = Some("other-native-main".into()),
-            10 => stale.location = None,
-            11 => stale.location.as_mut().unwrap().boot_id = Some("different-boot".into()),
-            12 => stale.location.as_mut().unwrap().terminal_id = Some("different-terminal".into()),
+            7 => stale.attachment.as_mut().unwrap().main_session_id = None,
+            8 => stale.attachment.as_mut().unwrap().main_session_id = Some(String::new()),
+            9 => stale.attachment.as_mut().unwrap().main_session_id = Some("other-native-main".into()),
+            10 => stale.attachment.as_mut().unwrap().location = None,
+            11 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().boot_id = Some("different-boot".into()),
+            12 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().terminal_id = Some("different-terminal".into()),
             13 => {
-                stale.location.as_mut().unwrap().native_session_id = Some("different-native".into())
+                stale.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id = Some("different-native".into())
             }
-            14 => stale.location.as_mut().unwrap().endpoint_identity = "different-endpoint".into(),
-            15 => stale.location.as_mut().unwrap().session_id = "different-session".into(),
-            16 => stale.location.as_mut().unwrap().workspace_id = "different-space".into(),
-            17 => stale.location.as_mut().unwrap().tab_id = "different-tab".into(),
-            18 => stale.location.as_mut().unwrap().pane_id = "different-pane".into(),
-            19 => stale.location.as_mut().unwrap().launch_tag = "different-tag".into(),
+            14 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().endpoint_identity = "different-endpoint".into(),
+            15 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().session_id = "different-session".into(),
+            16 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().workspace_id = "different-space".into(),
+            17 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().tab_id = "different-tab".into(),
+            18 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().pane_id = "different-pane".into(),
+            19 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().launch_tag = "different-tag".into(),
             _ => unreachable!(),
         }
         assert_proof_discarded(&fixture, &stale);
@@ -2550,16 +1779,16 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
         fixture.seed_run(&run_id, |run| {
             *run = reviewed.clone();
             match fence {
-                0 => run.bound_omp_session = Some(String::new()),
+                0 => run.attachment.as_mut().unwrap().main_session_id = Some(String::new()),
                 1 => {
-                    run.location.as_mut().unwrap().native_session_id =
+                    run.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id =
                         Some("conflicting-native".into())
                 }
-                2 => run.location.as_mut().unwrap().launch_tag.clear(),
+                2 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().launch_tag.clear(),
                 3 => {
                     run.dispatch.as_mut().unwrap().endpoint_identity = Some("wrong-endpoint".into())
                 }
-                4 => run.location.as_mut().unwrap().session_id = "wrong-session".into(),
+                4 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().session_id = "wrong-session".into(),
                 _ => unreachable!(),
             }
         });
@@ -2568,13 +1797,13 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
     fixture.seed_run(&run_id, |run| {
         *run = reviewed;
         // Herdr's optional native ID is not a required launch gate.
-        run.location.as_mut().unwrap().native_session_id = None;
+        run.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id = None;
     });
     fixture
         .service
         .record_launch_verified(&fixture.run(&run_id))
         .unwrap();
-    assert_eq!(fixture.run(&run_id).stage, RunStage::Initializing);
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
 }
 
 #[test]
@@ -2594,9 +1823,7 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
             fixture
                 .apply(
                     &actor,
-                    OrchestrationAction::RunBindSession {
-                        omp_session_id: caller.omp_session_id.clone().unwrap(),
-                    },
+                    OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
                 )
                 .unwrap();
         }
@@ -2618,9 +1845,7 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
                         },
                     )
                     .unwrap();
-                fixture.operator(OrchestrationAction::RetryLaunch {
-                    run_id: root.clone(),
-                });
+                fixture.resume_exited(&Actor::Operator(OperatorOrigin::Browser), &root);
                 assert_eq!(
                     fixture.run(&root).dispatch.unwrap().launch_attempt,
                     reviewed.dispatch.as_ref().unwrap().launch_attempt + 1
@@ -2630,9 +1855,7 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
                 fixture
                     .apply(
                         &actor,
-                        OrchestrationAction::RunBindSession {
-                            omp_session_id: caller.omp_session_id.clone().unwrap(),
-                        },
+                        OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
                     )
                     .unwrap();
             }
@@ -2642,15 +1865,7 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
                 moved_caller.workspace_id = "moved-space".into();
                 moved_caller.tab_id = "moved-tab".into();
                 moved_caller.pane_id = "moved-pane".into();
-                fixture
-                    .apply(
-                        &moved,
-                        OrchestrationAction::Annotate {
-                            run_id: root.clone(),
-                            text: "Same terminal moved while proof waits".into(),
-                        },
-                    )
-                    .unwrap();
+                fixture.attach_observed(&moved, &root);
             }
             _ => unreachable!(),
         }
@@ -2673,13 +1888,10 @@ fn linked_answer_retries_preserve_committed_receipts_after_new_question_and_rech
     let (_, run_id, worker) = fixture.working(&root);
     fixture.apply(&worker, report(ReportKind::NeedsInput, None, None)).unwrap();
     let q1 = fixture.run(&run_id).last_report.unwrap().message_id;
-    let answer = OrchestrationAction::MessageSend {
-        message_id: id(),
-        to_run_id: run_id.clone(),
-        kind: MessageKind::Answer,
-        text: "Use the approved choice".into(),
-        in_reply_to: Some(q1.clone()),
-    };
+    let answer = OrchestrationAction::MessageSend { message_id: id(),
+    to_run_id: run_id.clone(),
+    kind: MessageKind::Answer,
+    text: "Use the approved choice".into(), in_reply_to: Some(q1.clone()), original_task_revision: None, original_claim_id: None };
     let first = fixture.apply(&supervisor, answer.clone()).unwrap();
     let OrchestrationActionResult::Message { seq: first_seq, duplicate: false, .. } = first.result else {
         panic!("expected newly committed answer");
@@ -2704,88 +1916,27 @@ fn linked_answer_retries_preserve_committed_receipts_after_new_question_and_rech
             *in_reply_to = link;
         }
         let bytes = fixture.state_bytes();
-        assert_code(fixture.apply(&supervisor, changed), "message_id_conflict");
+        assert!(fixture.apply(&supervisor, changed).is_err());
         assert_eq!(fixture.state_bytes(), bytes);
     }
     let mut obsolete = supervisor.clone();
-    caller_mut(&mut obsolete).omp_session_id = Some("obsolete-main".into());
+    caller_mut(&mut obsolete).auth.attachment_epoch += 1;
     let bytes = fixture.state_bytes();
-    assert_code(fixture.apply(&obsolete, answer), "session_mismatch");
+    assert_code(fixture.apply(&obsolete, answer), "job_unauthorized");
     assert_eq!(fixture.state_bytes(), bytes);
 }
 
 #[test]
-fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cancel() {
+fn bound_top_root_starts_answers_sends_back_accepts_and_cancels() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let supervisor = fixture.launch_and_bind(&root);
-    let task = fixture.create_task(&root, "User chat task requires no new operator grant");
-    let run_id = fixture.propose(&root, &task, None);
-    let prepare = fixture.plan(&run_id);
-    let bytes = fixture.state_bytes();
-    assert_code(
-        fixture.apply(
-            &supervisor,
-            OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: plan_revision(&"Unreviewed setup").unwrap(),
-            },
-        ),
-        "plan_changed",
-    );
-    assert_eq!(fixture.state_bytes(), bytes);
-    fixture
-        .apply(
-            &supervisor,
-            OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: prepare.plan_revision.clone(),
-            },
-        )
-        .unwrap();
+    let task = fixture.create_task(&root, "Root-managed worker");
+    let run_id = run_result(fixture.apply(&supervisor, fixture.start_action(&root, &task)).unwrap()).0;
+    fixture.setup(&run_id);
     let worker = fixture.launch_and_bind(&run_id);
-    fixture.ready(&worker);
-    let ready = fixture.run(&run_id);
-    let work_plan = ready.work_plan.as_ref().unwrap();
-    let bytes = fixture.state_bytes();
-    assert_code(
-        fixture.apply(
-            &supervisor,
-            OrchestrationAction::GrantExecute {
-                run_id: run_id.clone(),
-                plan_revision: prepare.plan_revision.clone(),
-                note: None,
-            },
-        ),
-        "plan_changed",
-    );
-    assert_eq!(fixture.state_bytes(), bytes);
-    fixture
-        .apply(
-            &supervisor,
-            OrchestrationAction::GrantExecute {
-                run_id: run_id.clone(),
-                plan_revision: work_plan.plan_revision.clone(),
-                note: Some("Exact Ready receipt reviewed by the root".into()),
-            },
-        )
-        .unwrap();
-    let working = fixture.run(&run_id);
-    assert_eq!(
-        serde_json::to_value(&working.init_receipt).unwrap(),
-        serde_json::to_value(&ready.init_receipt).unwrap()
-    );
-    let native = fixture.run(&root).bound_omp_session.unwrap();
-    assert_eq!(working.grants.len(), 2);
-    for grant in &working.grants {
-        assert_eq!(grant.origin, GrantOrigin::Supervisor);
-        assert_eq!(grant.supervisor_run_id.as_deref(), Some(root.as_str()));
-        assert_eq!(grant.omp_session_id.as_deref(), Some(native.as_str()));
-    }
-    assert_eq!(working.grants[0].scope, GrantScope::Prepare);
-    assert_eq!(working.grants[0].plan_revision, prepare.plan_revision);
-    assert_eq!(working.grants[1].scope, GrantScope::Execute);
-    assert_eq!(working.grants[1].plan_revision, work_plan.plan_revision);
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
+    let native = fixture.run(&root).attachment.unwrap().main_session_id.unwrap();
     fixture
         .apply(&worker, report(ReportKind::NeedsInput, None, None))
         .unwrap();
@@ -2794,13 +1945,10 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
     fixture
         .apply(
             &supervisor,
-            OrchestrationAction::MessageSend {
-                message_id: answer_id.clone(),
-                to_run_id: run_id.clone(),
-                kind: MessageKind::Answer,
-                text: "Use the established task scope; no additional decision is missing".into(),
-                in_reply_to: Some(question_id.clone()),
-            },
+            OrchestrationAction::MessageSend { message_id: answer_id.clone(),
+            to_run_id: run_id.clone(),
+            kind: MessageKind::Answer,
+            text: "Use the established task scope; no additional decision is missing".into(), in_reply_to: Some(question_id.clone()), original_task_revision: None, original_claim_id: None },
         )
         .unwrap();
     let answer = fixture
@@ -2812,11 +1960,7 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
     assert_agent_decision(&answer, &root);
     assert_eq!(answer.in_reply_to.as_deref(), Some(question_id.as_str()));
     assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
-    fixture
-        .apply(
-            &worker,
-            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-        )
+    fixture.apply(&worker, fixture.successful_result(&worker))
         .unwrap();
     assert!(!fixture.task(&root, &task.task_id).checked);
     fixture
@@ -2849,16 +1993,11 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
     let state = fixture.state();
     let run = state.runs.iter().find(|run| run.run_id == run_id).unwrap();
     let inbox = state.messages.iter().filter(|message| message.to_run_id == run_id).collect::<Vec<_>>();
-    let question = projection::question_status(run, &inbox).unwrap();
+    let question = projection::question_status(run, &inbox, &state.messages).unwrap();
     assert_eq!(question.question_message_id, sendback_question);
     assert!(matches!(question.receipt, QuestionReceipt::Unresolved));
-    fixture
-        .apply(
-            &worker,
-            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-        )
+    fixture.apply(&worker, fixture.successful_result(&worker))
         .unwrap();
-    let result_id = fixture.run(&run_id).result.unwrap().message_id;
     let edited = task_result(
         fixture
             .apply(
@@ -2885,6 +2024,15 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
         "task_revision_conflict",
     );
     assert_eq!(fixture.state_bytes(), bytes);
+    assert_code(fixture.apply(&supervisor, OrchestrationAction::Accept {
+        run_id: run_id.clone(), expected_task_revision: edited.task_revision.clone(),
+    }), "source_output_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture.apply(&supervisor, OrchestrationAction::SendBack {
+        run_id: run_id.clone(), text: "Report output for the updated canonical scope".into(),
+    }).unwrap();
+    fixture.apply(&worker, fixture.successful_result(&worker)).unwrap();
+    let result_id = fixture.run(&run_id).result.unwrap().message_id;
     fixture
         .apply(
             &supervisor,
@@ -2914,7 +2062,7 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
     }));
     let (cancel_task, cancelled, _) = fixture.working(&root);
     let (_, survivor, _) = fixture.working(&cancelled);
-    let survivor_before = serde_json::to_value(fixture.run(&survivor)).unwrap();
+    let survivor_before = fixture.run(&survivor);
     fixture
         .apply(
             &supervisor,
@@ -2928,10 +2076,7 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
         Some(CloseReason::Cancelled)
     );
     assert!(!fixture.task(&root, &cancel_task.task_id).checked);
-    assert_eq!(
-        serde_json::to_value(fixture.run(&survivor)).unwrap(),
-        survivor_before
-    );
+    assert_review_fields_only(&survivor_before, &fixture.run(&survivor));
     let cancel = fixture
         .state()
         .messages
@@ -2941,59 +2086,23 @@ fn bound_top_root_manages_exact_prepare_execute_answer_sendback_accept_and_cance
         })
         .unwrap();
     assert_agent_decision(&cancel, &root);
-    assert!(cancel.text.contains("Tracking is closed"));
-    assert!(
-        cancel
-            .text
-            .contains("does not guarantee process termination")
-    );
 }
 
 #[test]
-fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_root() {
-    for operation in 0..8 {
+fn management_requires_root_credentials_not_worker_child_or_forged_identity() {
+    for operation in [0, 2, 3, 4, 5, 6] {
         let fixture = Fixture::new();
         let root = fixture.root();
         let supervisor = fixture.launch_and_bind(&root);
         let task = fixture.create_task(&root, "Authority boundary");
-        let run_id = fixture.propose(&root, &task, None);
-        let prepare = fixture.plan(&run_id);
-        let worker = if operation == 0 {
-            None
-        } else {
-            fixture.operator(OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: prepare.plan_revision.clone(),
-            });
-            let actor = fixture.launch_and_bind(&run_id);
-            fixture.ready(&actor);
-            if operation != 1 {
-                fixture.operator(OrchestrationAction::GrantExecute {
-                    run_id: run_id.clone(),
-                    plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision,
-                    note: None,
-                });
-            }
-            if matches!(operation, 2 | 3) {
-                fixture
-                    .apply(
-                        &actor,
-                        report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-                    )
-                    .unwrap();
-            }
-            Some(actor)
-        };
+        let run_id = fixture.start(&root, &task);
+        fixture.setup(&run_id);
+        let worker = fixture.launch_and_bind(&run_id);
+        if matches!(operation, 2 | 3) {
+            fixture.apply(&worker, fixture.successful_result(&worker)).unwrap();
+        }
         let action = match operation {
-            0 => OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: prepare.plan_revision,
-            },
-            1 => OrchestrationAction::GrantExecute {
-                run_id: run_id.clone(),
-                plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision,
-                note: None,
-            },
+            0 => fixture.start_action(&root, &fixture.create_task(&root, "Denied start")),
             2 => OrchestrationAction::Accept {
                 run_id: run_id.clone(),
                 expected_task_revision: task.task_revision,
@@ -3005,19 +2114,13 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
             4 => OrchestrationAction::CancelRun {
                 run_id: run_id.clone(),
             },
-            5 => OrchestrationAction::MessageSend {
-                message_id: id(),
-                to_run_id: run_id.clone(),
-                kind: MessageKind::Answer,
-                text: "Answer".into(),
-                in_reply_to: None,
-            },
+            5 => OrchestrationAction::MessageSend { message_id: id(),
+            to_run_id: run_id.clone(),
+            kind: MessageKind::Answer,
+            text: "Answer".into(), in_reply_to: None, original_task_revision: None, original_claim_id: None },
             6 => OrchestrationAction::ReconcileRun {
                 run_id: run_id.clone(),
                 recovery: None,
-            },
-            7 => OrchestrationAction::RetryLaunch {
-                run_id: run_id.clone(),
             },
             _ => unreachable!(),
         };
@@ -3027,50 +2130,33 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
         let mut inherited_env = branch_actor.clone();
         caller_mut(&mut inherited_env).env_run = Some((root.clone(), 1));
         let mut denied = vec![outsider, branch_actor.clone(), inherited_env];
-        if let Some(worker) = worker {
-            denied.push(worker);
-        }
-        for fence in 0..10 {
+        denied.push(worker);
+        for fence in 0..3 {
             let mut actor = supervisor.clone();
             let caller = caller_mut(&mut actor);
             match fence {
-                0 => caller.actual_agent_kind = None,
-                1 => caller.actual_agent_kind = Some("shell".into()),
-                2 => caller.actual_agent_kind = Some("OMP".into()),
-                3 => caller.agent_kind = None,
-                4 => {
-                    caller.agent_kind = Some(AgentKind::Subagent);
-                    caller.subagent_id = Some("internal-child".into());
-                    caller.omp_session_id = Some("internal-child-native".into());
-                }
-                5 => caller.omp_session_id = Some("obsolete-main".into()),
-                6 => caller.native_session_id = Some("other-occupant".into()),
-                7 => caller.endpoint_identity = "other-endpoint".into(),
-                8 => caller.terminal_id = Some("new-terminal".into()),
-                9 => caller.env_run.as_mut().unwrap().1 += 1,
+                0 => caller.auth.credential_id = id(),
+                1 => caller.auth.attachment_id = id(),
+                2 => caller.auth.attachment_epoch += 1,
                 _ => unreachable!(),
             }
             denied.push(actor);
         }
-        let mut branch_subagent = branch_actor;
+        let mut branch_subagent = fixture.child_actor(&branch_actor, &branch_id, "worker-child");
+        // Physical claims of being main cannot enlarge this narrowed child credential.
         let caller = caller_mut(&mut branch_subagent);
-        caller.agent_kind = Some(AgentKind::Subagent);
-        caller.subagent_id = Some("worker-child".into());
-        caller.omp_session_id = Some("worker-child-native".into());
+        caller.agent_kind = Some(AgentKind::Main);
+        caller.subagent_id = None;
+        caller.env_run = Some((root.clone(), 1));
+        caller.provenance = None;
         denied.push(branch_subagent);
         for actor in denied {
             let bytes = fixture.state_bytes();
-            let failure = if operation == 7 {
-                fixture.service.mutate_reviewed(&actor, OrchestrationMutationRequest {
-                    session_id: SESSION.into(), expected_revision: None, action: action.clone(),
-                }, &fixture.run(&run_id))
-            } else {
-                fixture.apply(&actor, action.clone())
-            }.unwrap_err();
+            let failure = fixture.apply(&actor, action.clone()).unwrap_err();
             assert!(
                 matches!(
                     failure.code.as_str(),
-                    "actor_forbidden" | "caller_mismatch" | "session_mismatch" | "attempt_stale"
+                    "actor_forbidden" | "caller_mismatch" | "session_mismatch" | "attempt_stale" | "job_unauthorized"
                 ),
                 "Operation {operation} unexpectedly failed outside authority fences: {failure:?}"
             );
@@ -3086,23 +2172,17 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
                 *run = valid_root.clone();
                 match fence {
                     0 => run.kind = RunKind::Worker,
-                    1 => run.stage = RunStage::Preparing,
+                    1 => run.stage = RunStage::Starting,
                     2 => run.stage = RunStage::Closed,
                     3 => run.parent_run_id = Some(branch_id.clone()),
                     4 => run.root_id = other_root.clone(),
-                    5 => run.bound_omp_session = None,
-                    6 => run.bound_omp_session = Some(String::new()),
+                    5 => run.attachment.as_mut().unwrap().epoch += 1,
+                    6 => run.attachment.as_mut().unwrap().state = AttachmentState::Revoked,
                     _ => unreachable!(),
                 }
             });
             let bytes = fixture.state_bytes();
-            let denied = if operation == 7 {
-                fixture.service.mutate_reviewed(&supervisor, OrchestrationMutationRequest {
-                    session_id: SESSION.into(), expected_revision: None, action: action.clone(),
-                }, &fixture.run(&run_id))
-            } else {
-                fixture.apply(&supervisor, action.clone())
-            };
+            let denied = fixture.apply(&supervisor, action.clone());
             assert!(denied.is_err());
             assert_eq!(
                 fixture.state_bytes(),
@@ -3114,7 +2194,7 @@ fn management_never_inherits_authority_from_worker_subagent_stale_or_non_omp_roo
 }
 
 #[test]
-fn supervisor_recovers_only_strict_descendants_with_review() {
+fn supervisor_recovers_only_strict_descendants() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let supervisor = fixture.launch_and_bind(&root);
@@ -3135,30 +2215,12 @@ fn supervisor_recovers_only_strict_descendants_with_review() {
         );
         assert_eq!(fixture.state_bytes(), bytes);
     }
-    fixture.apply(&supervisor, OrchestrationAction::ReconcileRun {
-        run_id: nested.clone(), recovery: None,
-    }).unwrap();
-    let reconciled = fixture.run(&nested);
-    let annotation = reconciled.annotations.last().unwrap();
-    assert!(matches!(&annotation.by, ActorRef::Run { run_id } if run_id == &root));
-    assert!(annotation.text.contains("Supervisor"));
-    assert!(annotation.text.contains(&reconciled.root_id));
-    fixture.service.record_launch_review(&reconciled, DispatchStep::NeedsReview, Some(review_error())).unwrap();
-    let bytes = fixture.state_bytes();
-    assert_code(fixture.apply(&supervisor, OrchestrationAction::RetryLaunch {
-        run_id: nested.clone(),
-    }), "retry_preflight_required");
-    assert_eq!(fixture.state_bytes(), bytes);
     let reviewed = fixture.run(&nested);
-    fixture.seed_run(&nested, |run| run.bound_omp_process.as_mut().unwrap().start_ticks += 1);
-    let bytes = fixture.state_bytes();
-    assert_code(fixture.service.mutate_reviewed(&supervisor, OrchestrationMutationRequest {
-        session_id: SESSION.into(), expected_revision: None,
-        action: OrchestrationAction::RetryLaunch { run_id: nested.clone() },
-    }, &reviewed), "attempt_stale");
-    assert_eq!(fixture.state_bytes(), bytes);
-    let reviewed = fixture.run(&nested);
-    let preserved = serde_json::to_value(&reviewed).unwrap();
+    let blocked = fixture.apply(&supervisor, fixture.resume_action(&nested)).unwrap();
+    let OrchestrationActionResult::RunResumed { resume } = blocked.result else { unreachable!() };
+    assert_eq!(resume.resume.phase, ResumePhase::Blocked);
+    assert_eq!(fixture.run(&nested).attachment.as_ref().unwrap().epoch,
+        reviewed.attachment.as_ref().unwrap().epoch);
     for target in [&root, &other_root, &outsider, &branch] {
         let actor = if target == &branch { &branch_actor } else { &supervisor };
         for operation in 0..2 {
@@ -3166,13 +2228,14 @@ fn supervisor_recovers_only_strict_descendants_with_review() {
             let result = if operation == 0 {
                 fixture.apply(actor, OrchestrationAction::ReconcileRun { run_id: target.clone(), recovery: None })
             } else {
-                fixture.service.mutate_reviewed(actor, OrchestrationMutationRequest {
-                    session_id: SESSION.into(), expected_revision: None,
-                    action: OrchestrationAction::RetryLaunch { run_id: target.clone() },
-                }, &fixture.run(target))
+                fixture.apply(actor, fixture.resume_action(target))
             };
-            assert_code(result, "actor_forbidden");
-            assert_eq!(fixture.state_bytes(), bytes);
+            if operation == 1 && (target == &root || target == &branch) {
+                assert!(matches!(result.unwrap().result, OrchestrationActionResult::RunResumed { .. }));
+            } else {
+                assert_code(result, "actor_forbidden");
+                assert_eq!(fixture.state_bytes(), bytes);
+            }
         }
     }
     let bytes = fixture.state_bytes();
@@ -3180,19 +2243,17 @@ fn supervisor_recovers_only_strict_descendants_with_review() {
         run_id: nested.clone(), recovery: Some(cockpit_protocol::projects::WorkspaceRecoveryAction::RetryEnvironment),
     }), "actor_forbidden");
     assert_eq!(fixture.state_bytes(), bytes);
-    fixture.service.mutate_reviewed(&supervisor, OrchestrationMutationRequest {
-        session_id: SESSION.into(), expected_revision: Some(fixture.state().revision),
-        action: OrchestrationAction::RetryLaunch { run_id: nested.clone() },
-    }, &reviewed).unwrap();
+    fixture.resume_exited(&supervisor, &nested);
     let retried = fixture.run(&nested);
     assert_eq!(retried.dispatch.as_ref().unwrap().launch_attempt, reviewed.dispatch.as_ref().unwrap().launch_attempt + 1);
-    assert_eq!(retried.stage, RunStage::Preparing);
-    assert!(retried.location.is_none());
-    let current = serde_json::to_value(&retried).unwrap();
-    for field in ["task_id", "root_id", "setup", "grants", "work_plan", "last_report", "result"] {
-        assert_eq!(current[field], preserved[field]);
-    }
-    assert!(retried.annotations.last().unwrap().text.contains("Supervisor"));
+    assert_eq!(retried.stage, RunStage::Starting);
+    assert!(retried.attachment.as_ref().unwrap().location.is_none());
+    assert_eq!(retried.task_id, reviewed.task_id);
+    assert_eq!(retried.root_id, reviewed.root_id);
+    assert_eq!(retried.brief, reviewed.brief);
+    assert_eq!(serde_json::to_value(&retried.setup).unwrap(), serde_json::to_value(&reviewed.setup).unwrap());
+    assert_eq!(serde_json::to_value(&retried.result).unwrap(), serde_json::to_value(&reviewed.result).unwrap());
+    assert_eq!(fixture.state().operations.last().unwrap().actor_run_id.as_deref(), Some(root.as_str()));
     fixture.seed_run(&nested, |run| run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending);
     let bytes = fixture.state_bytes();
     assert_code(fixture.apply(&supervisor, OrchestrationAction::ReconcileRun {
@@ -3211,13 +2272,10 @@ fn supervisor_recovers_only_strict_descendants_with_review() {
     assert_code(
         fixture.apply(
             &supervisor,
-            OrchestrationAction::MessageSend {
-                message_id: id(),
-                to_run_id: nested,
-                kind: MessageKind::Answer,
-                text: "Too late".into(),
-                in_reply_to: None,
-            },
+            OrchestrationAction::MessageSend { message_id: id(),
+            to_run_id: nested,
+            kind: MessageKind::Answer,
+            text: "Too late".into(), in_reply_to: None, original_task_revision: None, original_claim_id: None },
         ),
         "actor_forbidden",
     );
@@ -3237,23 +2295,27 @@ fn explicitly_adopted_actual_main_root_has_management_authority() {
     caller.native_session_id = Some("adopted-native".into());
     caller.omp_session_id = Some("adopted-native".into());
     caller.main_omp_session_id = Some("adopted-native".into());
-    let mut shell = actor.clone();
-    caller_mut(&mut shell).actual_agent_kind = Some("shell".into());
+    caller.process = Some(live_process());
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    let bootstrap = BootstrapCaller {
+        endpoint_identity: caller.endpoint_identity.clone(), session_id: caller.session_id.clone(),
+        workspace_id: caller.workspace_id.clone(), tab_id: caller.tab_id.clone(), pane_id: caller.pane_id.clone(),
+        boot_id: caller.boot_id.clone(), terminal_id: caller.terminal_id.clone(),
+        native_session_id: caller.native_session_id.clone(), omp_session_id: caller.omp_session_id.clone(),
+        agent_kind: caller.agent_kind, actual_agent_kind: caller.actual_agent_kind.clone(), process: caller.process.clone(),
+    };
+    let mut shell = bootstrap.clone();
+    shell.actual_agent_kind = Some(NativeAgentKind::Other("shell".into()));
     let bytes = fixture.state_bytes();
-    assert_code(
-        fixture.apply(
-            &shell,
-            OrchestrationAction::RunAdopt {
-                label: "Not OMP".into(),
-            },
-        ),
-        "report_requires_main",
-    );
+    assert!(fixture.apply(
+        &Actor::Bootstrap(shell),
+        OrchestrationAction::RunAdopt { label: "Not OMP".into() },
+    ).is_err());
     assert_eq!(fixture.state_bytes(), bytes);
     let root = run_result(
         fixture
             .apply(
-                &actor,
+                &Actor::Bootstrap(bootstrap),
                 OrchestrationAction::RunAdopt {
                     label: "Actual main explicitly adopted".into(),
                 },
@@ -3261,24 +2323,24 @@ fn explicitly_adopted_actual_main_root_has_management_authority() {
             .unwrap(),
     )
     .0;
+    assert_eq!(fixture.run(&root).attachment.as_ref().unwrap().state, AttachmentState::Connecting);
+    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
     caller_mut(&mut actor).env_run = Some((root.clone(), 1));
+    caller_mut(&mut actor).auth = fixture.auth(&root, JobRole::Root, None);
+    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root),
+        "Adoption and staged credentials alone do not prove a current loaded extension");
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    fixture.apply(&actor, OrchestrationAction::RunAttach {
+        operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
+        expected_attachment_epoch: caller.auth.attachment_epoch,
+        main_session_id: caller.omp_session_id.clone().unwrap(),
+    }).unwrap();
+    assert_eq!(fixture.run(&root).attachment.as_ref().unwrap().state, AttachmentState::Connected);
+    assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
     assert_eq!(fixture.run(&root).kind, RunKind::Adopted);
     let task = fixture.create_task(&root, "Adopted root task");
-    let run_id = fixture.propose(&root, &task, None);
-    let plan = fixture.plan(&run_id);
-    fixture
-        .apply(
-            &actor,
-            OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: plan.plan_revision,
-            },
-        )
-        .unwrap();
-    let grant = fixture.run(&run_id).grants.remove(0);
-    assert_eq!(grant.origin, GrantOrigin::Supervisor);
-    assert_eq!(grant.supervisor_run_id.as_deref(), Some(root.as_str()));
-    assert_eq!(grant.omp_session_id.as_deref(), Some("adopted-native"));
+    let run_id = run_result(fixture.apply(&actor, fixture.start_action(&root, &task)).unwrap()).0;
+    assert_eq!(fixture.run(&run_id).parent_run_id.as_deref(), Some(root.as_str()));
     let edited = task_result(fixture.apply(&actor, OrchestrationAction::TaskUpdate {
         root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision,
         title: None, description: Some("Adopted native root owns canonical content".into()),
@@ -3298,14 +2360,10 @@ fn acceptance_recovery_cannot_substitute_a_new_result_for_the_reviewed_receipt()
     let root = fixture.root();
     let supervisor = fixture.launch_and_bind(&root);
     let (task, run_id, worker) = fixture.working(&root);
-    fixture
-        .apply(
-            &worker,
-            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-        )
+    fixture.apply(&worker, fixture.successful_result(&worker))
         .unwrap();
     let reviewed_result = fixture.run(&run_id).result.unwrap().message_id;
-    let supervisor_native = fixture.run(&root).bound_omp_session;
+    let supervisor_native = fixture.run(&root).attachment.unwrap().main_session_id;
     let intent_id = fixture.pending_intent(&root, &task, &run_id);
     {
         let locked = fixture.service.store.lock().unwrap();
@@ -3315,7 +2373,7 @@ fn acceptance_recovery_cannot_substitute_a_new_result_for_the_reviewed_receipt()
             .iter_mut()
             .find(|intent| intent.intent_id == intent_id)
             .unwrap();
-        intent.origin = Some(GrantOrigin::Supervisor);
+        intent.origin = Some(DecisionOrigin::Supervisor);
         intent.supervisor_run_id = Some(root.clone());
         intent.omp_session_id = supervisor_native;
         intent.result_message_id = Some(reviewed_result);
@@ -3352,27 +2410,13 @@ fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
     let root = fixture.root();
     let (_, parent, parent_actor) = fixture.working(&root);
     let (_, child, child_actor) = fixture.working(&parent);
-    fixture
-        .apply(
-            &parent_actor,
-            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-        )
+    fixture.apply(&parent_actor, fixture.successful_result(&parent_actor))
         .unwrap();
     let parent_before = fixture.run(&parent);
-    let parent_init = serde_json::to_value(parent_before.init_receipt.as_ref().unwrap()).unwrap();
-    let parent_plan = serde_json::to_value(parent_before.work_plan.as_ref().unwrap()).unwrap();
     let parent_result = serde_json::to_value(parent_before.result.as_ref().unwrap()).unwrap();
     let assert_parent_receipts = || {
         let after = fixture.run(&parent);
         assert_eq!(after.stage, RunStage::Reported);
-        assert_eq!(
-            serde_json::to_value(after.init_receipt.as_ref().unwrap()).unwrap(),
-            parent_init
-        );
-        assert_eq!(
-            serde_json::to_value(after.work_plan.as_ref().unwrap()).unwrap(),
-            parent_plan
-        );
         assert_eq!(
             serde_json::to_value(after.result.as_ref().unwrap()).unwrap(),
             parent_result
@@ -3382,9 +2426,6 @@ fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
             parent_result
         );
     };
-    let child_before = fixture.run(&child);
-    let child_init = serde_json::to_value(child_before.init_receipt.as_ref().unwrap()).unwrap();
-    let child_plan = serde_json::to_value(child_before.work_plan.as_ref().unwrap()).unwrap();
     let mut report_ids = Vec::new();
     for (kind, summary, outcome) in [
         (ReportKind::Progress, "Child completed its first step", None),
@@ -3401,7 +2442,14 @@ fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
                     outcome,
                     summary: summary.into(),
                     plan: None,
+                    source_output: (kind == ReportKind::Result).then(|| SourceOutput::NonCode {
+                        result_message_id: message_id.clone(),
+                        task_revision: fixture.task(&root, fixture.run(&child).task_id.as_deref().unwrap()).task_revision,
+                        artifacts: Vec::new(), focused_checks: Vec::new(),
+                    }),
                     to_run_id: None,
+                    original_task_revision: None,
+                    original_claim_id: None,
                 },
             )
             .unwrap();
@@ -3422,14 +2470,6 @@ fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
         assert_eq!(receipt.summary, summary);
         assert_eq!(receipt.outcome, outcome);
         let child_after = fixture.run(&child);
-        assert_eq!(
-            serde_json::to_value(child_after.init_receipt.as_ref().unwrap()).unwrap(),
-            child_init
-        );
-        assert_eq!(
-            serde_json::to_value(child_after.work_plan.as_ref().unwrap()).unwrap(),
-            child_plan
-        );
         assert_eq!(child_after.last_report.as_ref().unwrap().message_id, message_id);
         if kind == ReportKind::Result {
             assert_eq!(child_after.stage, RunStage::Reported);
@@ -3479,71 +2519,22 @@ fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
 }
 
 #[test]
-fn nested_setup_ready_result_and_question_pointers_wake_root_once_without_forwarding_subagent_evidence()
- {
+fn nested_reports_and_question_pointers_wake_root_once_without_forwarding_subagent_evidence() {
     let fixture = Fixture::new();
     let root = fixture.root();
-    let supervisor = fixture.launch_and_bind(&root);
     let (_, branch, _) = fixture.working(&root);
     let task = fixture.create_task(&root, "Nested managed worker");
-    let run_id = fixture.propose(&branch, &task, None);
-    let prepare = fixture.plan(&run_id);
-    let setup = fixture.run(&run_id).setup.unwrap();
-    fixture
-        .service
-        .record_dispatch(
-            &run_id,
-            DispatchUpdate::SetupPlanned {
-                setup,
-                prepare_plan: prepare.clone(),
-            },
-        )
-        .unwrap();
-    let notice_id = format!("setup-ready-{run_id}-{}", prepare.plan_revision);
-    let messages = fixture.state().messages;
-    let notices: Vec<_> = messages
-        .iter()
-        .filter(|message| message.message_id == notice_id)
-        .collect();
-    assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].to_run_id, root);
-    let pointer: serde_json::Value = serde_json::from_str(&notices[0].text).unwrap();
-    assert_eq!(
-        pointer,
-        serde_json::json!({
-            "event": "setup_ready", "run_id": run_id, "plan_revision": prepare.plan_revision,
-        })
-    );
-    fixture
-        .apply(
-            &supervisor,
-            OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: prepare.plan_revision,
-            },
-        )
-        .unwrap();
+    let run_id = fixture.start(&branch, &task);
+    fixture.setup(&run_id);
     let worker = fixture.launch_and_bind(&run_id);
-    let ready = report(ReportKind::Ready, None, Some("Nested exact work plan"));
+    let initialized = report(ReportKind::Initialized, None, Some("Advisory work plan"));
     let needs_input = report(ReportKind::NeedsInput, None, None);
-    let result = report(ReportKind::Result, Some(ReportOutcome::Succeeded), None);
+    let result = fixture.successful_result(&worker);
     for (event, action) in [
-        ("ready", ready),
+        ("initialized", initialized),
         ("needs_input", needs_input),
         ("result", result),
     ] {
-        if event == "needs_input" {
-            fixture
-                .apply(
-                    &supervisor,
-                    OrchestrationAction::GrantExecute {
-                        run_id: run_id.clone(),
-                        plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision,
-                        note: None,
-                    },
-                )
-                .unwrap();
-        }
         let OrchestrationAction::Report { message_id, .. } = &action else {
             unreachable!()
         };
@@ -3570,26 +2561,29 @@ fn nested_setup_ready_result_and_question_pointers_wake_root_once_without_forwar
             pointer,
             serde_json::json!({
                 "event": event, "run_id": run_id, "receipt_message_id": message_id,
-                "plan_revision": fixture.run(&run_id).work_plan.unwrap().plan_revision,
             })
         );
         assert!(!pointers[0].text.contains("Evidence from isolated worker"));
     }
-    let original = serde_json::to_value(fixture.run(&run_id)).unwrap();
-    let mut subagent = worker.clone();
-    let caller = caller_mut(&mut subagent);
-    caller.agent_kind = Some(AgentKind::Subagent);
-    caller.subagent_id = Some("internal-evidence".into());
-    caller.omp_session_id = Some("internal-evidence-native".into());
+    fixture.apply(&worker, OrchestrationAction::SubagentUpdate {
+        subagent_id: "internal-evidence".into(), parent_subagent_id: None, role: Some("task".into()),
+        label: "Registered child evidence".into(), status: SubagentStatus::Running, summary: None,
+    }).unwrap();
+    let original = fixture.run(&run_id);
+    let subagent = fixture.child_actor(&worker, &run_id, "internal-evidence");
     let mut stale = worker;
-    caller_mut(&mut stale).omp_session_id = Some("obsolete-native-main".into());
-    for actor in [&subagent, &stale] {
+    caller_mut(&mut stale).auth.attachment_epoch += 1;
+    for (index, actor) in [&subagent, &stale].into_iter().enumerate() {
         let action = report(ReportKind::NeedsInput, None, None);
         let OrchestrationAction::Report { message_id, .. } = &action else {
             unreachable!()
         };
         let pointer_id = format!("manage-{run_id}-{message_id}");
-        fixture.apply(actor, action).unwrap();
+        if index == 1 {
+            assert_code(fixture.apply(actor, action), "job_unauthorized");
+        } else {
+            fixture.apply(actor, action).unwrap();
+        }
         assert!(
             fixture
                 .state()
@@ -3597,10 +2591,7 @@ fn nested_setup_ready_result_and_question_pointers_wake_root_once_without_forwar
                 .iter()
                 .all(|message| message.message_id != pointer_id)
         );
-        assert_eq!(
-            serde_json::to_value(fixture.run(&run_id)).unwrap(),
-            original
-        );
+        assert_review_fields_only(&original, &fixture.run(&run_id));
     }
     // Direct-root reports already wake the root; no duplicate Observation.
     let (_, direct, direct_worker) = fixture.working(&root);
@@ -3626,23 +2617,17 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
     fixture.launch_and_bind(&root);
     let (task, child, worker) = fixture.working(&root);
     let (_, nested, _) = fixture.working(&child);
-    let child_before = serde_json::to_value(fixture.run(&child)).unwrap();
-    let nested_before = serde_json::to_value(fixture.run(&nested)).unwrap();
+    let child_before = fixture.run(&child);
+    let nested_before = fixture.run(&nested);
     fixture.operator(OrchestrationAction::CancelRun {
         run_id: root.clone(),
     });
     assert_eq!(fixture.run(&root).stage, RunStage::Closed);
-    assert_eq!(
-        serde_json::to_value(fixture.run(&child)).unwrap(),
-        child_before
-    );
-    assert_eq!(
-        serde_json::to_value(fixture.run(&nested)).unwrap(),
-        nested_before
-    );
+    assert_review_fields_only(&child_before, &fixture.run(&child));
+    assert_review_fields_only(&nested_before, &fixture.run(&nested));
     assert!(!fixture.task(&root, &task.task_id).checked);
     let child_run = fixture.run(&child);
-    let location = child_run.location.as_ref().unwrap();
+    let location = child_run.attachment.as_ref().unwrap().location.as_ref().unwrap();
     let board = {
         let locked = fixture.service.store.lock().unwrap();
         let document = locked.tasks(&root).unwrap();
@@ -3701,6 +2686,7 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
             }],
         }),
         &now(),
+        "fixture-store",
     )
     .unwrap();
     let current_task = snapshot
@@ -3733,11 +2719,7 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
         observed.actual_omp,
         "Closing tracking is not process termination"
     );
-    fixture
-        .apply(
-            &worker,
-            report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-        )
+    fixture.apply(&worker, fixture.successful_result(&worker))
         .unwrap();
     assert_eq!(fixture.run(&child).stage, RunStage::Reported);
     let receipt = fixture.run(&child).result.unwrap().message_id;
@@ -3896,123 +2878,31 @@ fn public_task_assignment_is_idempotent_operator_only_and_resolves_current_task_
 }
 
 #[test]
-fn supervisor_management_honors_explicit_machine_cas_without_requiring_new_consent() {
+fn supervisor_worker_start_uses_canonical_fences_and_replays_before_machine_cas() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let supervisor = fixture.launch_and_bind(&root);
-    let task = fixture.create_task(&root, "CAS reviewed setup");
-    let run_id = fixture.propose(&root, &task, None);
-    let plan = fixture.plan(&run_id);
+    let task = fixture.create_task(&root, "CAS worker start");
+    let action = fixture.start_action(&root, &task);
     let reviewed_revision = fixture.state().revision;
     fixture.operator(OrchestrationAction::Annotate {
-        run_id: root.clone(),
-        text: "Concurrent unrelated machine history".into(),
+        run_id: root.clone(), text: "Concurrent unrelated machine history".into(),
     });
-    assert_ne!(
-        fixture.state().revision,
-        reviewed_revision,
-        "Concurrent machine history must invalidate an explicit machine CAS"
-    );
+    let request = OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: Some(reviewed_revision), action,
+    };
+    let first = fixture.service.mutate(&supervisor, request.clone()).unwrap();
+    let OrchestrationActionResult::WorkerStarted { start } = first.result else { unreachable!() };
+    assert!(!start.duplicate);
+    assert_eq!(fixture.run(&start.run_id).parent_run_id.as_deref(), Some(root.as_str()));
     let bytes = fixture.state_bytes();
-    assert_code(
-        fixture.service.mutate(
-            &supervisor,
-            OrchestrationMutationRequest {
-                session_id: SESSION.into(),
-                expected_revision: Some(reviewed_revision),
-                action: OrchestrationAction::GrantPrepare {
-                    run_id: run_id.clone(),
-                    plan_revision: plan.plan_revision.clone(),
-                },
-            },
-        ),
-        "orchestration_revision_conflict",
-    );
+    let replay = fixture.service.mutate(&supervisor, request).unwrap();
+    let OrchestrationActionResult::WorkerStarted { start: replay } = replay.result else { unreachable!() };
+    assert!(replay.duplicate);
+    assert_eq!(replay.run_id, start.run_id);
     assert_eq!(fixture.state_bytes(), bytes);
-    fixture
-        .apply(
-            &supervisor,
-            OrchestrationAction::GrantPrepare {
-                run_id: run_id.clone(),
-                plan_revision: plan.plan_revision,
-            },
-        )
-        .unwrap();
-    assert_eq!(fixture.run(&run_id).stage, RunStage::Preparing);
-    assert_eq!(
-        fixture.run(&run_id).grants[0].origin,
-        GrantOrigin::Supervisor
-    );
 }
 
-#[test]
-fn reviewed_retry_fences_post_read_cancel_move_binding_stage_and_incarnation() {
-    for race in 0..6 {
-        let fixture = Fixture::new();
-        let (run_id, actor) = launched_case(&fixture, RunStage::Working);
-        let queued = fixture.queue_review(&run_id);
-        commit_review(
-            &fixture,
-            &queued,
-            DispatchStep::NeedsReview,
-            Some(review_error()),
-        );
-        let reviewed = fixture.service.run_for_review(SESSION, &run_id).unwrap();
-        match race {
-            0 => {
-                fixture.operator(OrchestrationAction::CancelRun {
-                    run_id: run_id.clone(),
-                });
-            }
-            1 => {
-                let mut moved = actor.clone();
-                let caller = caller_mut(&mut moved);
-                caller.workspace_id = "post-read-space".into();
-                caller.tab_id = "post-read-tab".into();
-                caller.pane_id = "post-read-pane".into();
-                fixture
-                    .apply(
-                        &moved,
-                        OrchestrationAction::Annotate {
-                            run_id: run_id.clone(),
-                            text: "Post-read terminal move".into(),
-                        },
-                    )
-                    .unwrap();
-            }
-            2 => fixture.seed_run(&run_id, |run| {
-                run.bound_omp_session = Some("post-read-main".into())
-            }),
-            3 => {
-                fixture
-                    .apply(
-                        &actor,
-                        report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-                    )
-                    .unwrap();
-            }
-            4 => fixture.seed_run(&run_id, |run| {
-                run.dispatch.as_mut().unwrap().launch_attempt += 1
-            }),
-            5 => fixture.seed_run(&run_id, |run| run.task_id = Some(id())),
-            _ => unreachable!(),
-        }
-        let bytes = fixture.state_bytes();
-        assert_code(
-            fixture.service.mutate_reviewed(
-                &Actor::Operator(OperatorOrigin::Browser),
-                OrchestrationMutationRequest {
-                    session_id: SESSION.into(),
-                    expected_revision: Some(fixture.state().revision),
-                    action: OrchestrationAction::RetryLaunch { run_id },
-                },
-                &reviewed,
-            ),
-            "attempt_stale",
-        );
-        assert_eq!(fixture.state_bytes(), bytes);
-    }
-}
 
 #[test]
 fn abandoning_conflicted_assignment_preserves_authoritative_markdown_even_after_root_closure() {
@@ -4080,11 +2970,7 @@ fn acceptance_intent_recovery_cannot_accept_cancelled_restarted_failed_or_other_
         let fixture = Fixture::new();
         let root = fixture.root();
         let (task, run_id, actor) = fixture.working(&root);
-        fixture
-            .apply(
-                &actor,
-                report(ReportKind::Result, Some(ReportOutcome::Succeeded), None),
-            )
+        fixture.apply(&actor, fixture.successful_result(&actor))
             .unwrap();
         let intent_id = fixture.pending_intent(&root, &task, &run_id);
         fixture.seed_run(&run_id, |run| match race {
@@ -4093,8 +2979,8 @@ fn acceptance_intent_recovery_cannot_accept_cancelled_restarted_failed_or_other_
                 run.close_reason = Some(CloseReason::Cancelled);
             }
             1 => {
-                run.stage = RunStage::Preparing;
-                run.bound_omp_session = None;
+                run.stage = RunStage::Starting;
+                run.attachment.as_mut().unwrap().main_session_id = None;
                 run.dispatch.as_mut().unwrap().launch_attempt += 1;
             }
             2 => run.result.as_mut().unwrap().outcome = Some(ReportOutcome::Failed),
@@ -4104,10 +2990,10 @@ fn acceptance_intent_recovery_cannot_accept_cancelled_restarted_failed_or_other_
             6 => run.stage = RunStage::Working,
             _ => unreachable!(),
         });
-        let before = serde_json::to_value(fixture.run(&run_id)).unwrap();
+        let before = fixture.run(&run_id);
         let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
         reopened.recover_intents().unwrap();
-        assert_eq!(serde_json::to_value(fixture.run(&run_id)).unwrap(), before);
+        assert_review_fields_only(&before, &fixture.run(&run_id));
         assert!(!fixture.task(&root, &task.task_id).checked);
         let state = fixture.state();
         assert_eq!(state.task_intents.len(), 1);
@@ -4130,7 +3016,7 @@ fn dispatch_failure_wakes_root_once_with_typed_next_steps() {
     let root = fixture.root();
     let supervisor = fixture.launch_and_bind(&root);
     let task = fixture.create_task(&root, "Recover planning");
-    let worker = fixture.propose(&root, &task, None);
+    let worker = fixture.start(&root, &task);
     let failure = || DispatchUpdate::PlanFailed { error: ErrorResponse {
         code: "endpoint_unavailable".into(), message: "Herdr endpoint is unavailable".into(),
     }};
@@ -4164,7 +3050,11 @@ fn dispatch_failure_wakes_root_once_with_typed_next_steps() {
         let locked = reopened.store.lock().unwrap();
         locked.read().unwrap()
     };
-    assert_eq!(serde_json::to_value(reopened_state).unwrap(), serde_json::to_value(fixture.state()).unwrap());
+    assert_eq!(reopened_state.revision, fixture.state().revision);
+    assert_review_fields_only(&fixture.run(&worker),
+        &reopened_state.runs[run_index(&reopened_state, &worker).unwrap()]);
+    assert_eq!(serde_json::to_value(reopened_state.messages).unwrap(),
+        serde_json::to_value(fixture.state().messages).unwrap());
 }
 
 #[test]
@@ -4173,8 +3063,8 @@ fn launch_review_failure_classifies_effect_and_operator_cases() {
         let fixture = Fixture::new();
         let root = fixture.root();
         let task = fixture.create_task(&root, "Classified recovery");
-        let worker = fixture.propose(&root, &task, None);
-        fixture.prepare(&worker);
+        let worker = fixture.start(&root, &task);
+        fixture.setup(&worker);
         if matches!(case, 0 | 1 | 5 | 6) {
             fixture.launch_and_bind(&worker);
         }
@@ -4186,7 +3076,7 @@ fn launch_review_failure_classifies_effect_and_operator_cases() {
                 setup.operation_id = Some("uncertain-operation".into());
                 setup.workspace_id = None;
             }
-            if case == 1 { run.bound_omp_process = None; }
+            if case == 1 { run.attachment.as_mut().unwrap().process = None; }
             if case == 5 { run.stage = RunStage::Reported; }
             if case == 6 { run.stage = RunStage::Closed; }
         });
@@ -4211,23 +3101,15 @@ fn launch_review_failure_classifies_effect_and_operator_cases() {
         }
         assert_eq!(events.len(), 1);
         let body: serde_json::Value = serde_json::from_str(&events[0].text).unwrap();
-        let (effect, next) = match case {
-            0 => ("unknown", serde_json::json!(["show", "reconcile", "retry_launch"])),
-            1 => ("unknown", serde_json::json!(["show", "reconcile", "operator"])),
-            2 => ("unknown", serde_json::json!(["show", "operator"])),
-            3 => ("unknown", serde_json::json!(["show", "reconcile_accept_existing_worktree", "operator"])),
-            4 => ("none", serde_json::json!(["show", "retry_launch"])),
-            _ => unreachable!(),
-        };
+        let effect = if case == 4 { "none" } else { "unknown" };
         assert_eq!(body["effect"], effect);
-        assert_eq!(body["next"], next);
         assert_eq!(body["operator_reason"].is_string(), matches!(case, 1..=3));
         assert!(body["error"]["message"].as_str().unwrap().len() <= 1024);
     }
 }
 
 fn observed_root_pane(fixture: &Fixture, root: &str) -> herdr::RuntimePane {
-    let location = fixture.run(root).location.unwrap();
+    let location = fixture.run(root).attachment.unwrap().location.unwrap();
     herdr::RuntimePane {
         workspace_id: location.workspace_id,
         workspace_label: "Project".into(),
@@ -4251,8 +3133,8 @@ fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
         let fixture = Fixture::new();
         let root = fixture.root();
         let task = fixture.create_task(&root, "Automatic proof before escalation");
-        let worker = fixture.propose(&root, &task, None);
-        fixture.prepare(&worker);
+        let worker = fixture.start(&root, &task);
+        fixture.setup(&worker);
         fixture.service.record_dispatch(&worker, DispatchUpdate::LaunchIntent {
             launch_tag: format!("launch-{worker}-1"), launch_attempt: 1, endpoint_identity: "endpoint-one".into(),
         }).unwrap();
@@ -4282,7 +3164,6 @@ fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
             let body: serde_json::Value = serde_json::from_str(&events[0].text).unwrap();
             assert_eq!(body["automatic"], "exhausted");
             assert_eq!(body["effect"], "unknown");
-            assert_eq!(body["next"], serde_json::json!(["show", "retry_launch"]));
             let bytes = fixture.state_bytes();
             fixture.service.record_observation(&runtime, SESSION).unwrap();
             assert_eq!(fixture.state_bytes(), bytes);
@@ -4297,9 +3178,7 @@ fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
         // A late actual-main bind and proof resolves this same launch incarnation.
         let actor = fixture.launch_tab(&worker);
         let Actor::Agent(caller) = &actor else { unreachable!() };
-        fixture.apply(&actor, OrchestrationAction::RunBindSession {
-            omp_session_id: caller.omp_session_id.clone().unwrap(),
-        }).unwrap();
+        fixture.apply(&actor, OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() }).unwrap();
         let reviewed = fixture.run(&worker);
         fixture.service.record_launch_verified(&reviewed).unwrap();
         let notices = dispatch_events(&fixture, &root, "dispatch_recovered");
@@ -4308,11 +3187,6 @@ fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
         fixture.service.record_launch_verified(&fixture.run(&worker)).unwrap();
         assert_eq!(fixture.state_bytes(), bytes);
         assert_eq!(dispatch_events(&fixture, &root, "dispatch_recovered").len(), usize::from(exhausted));
-        if exhausted {
-            let queued = fixture.queue_review(&worker);
-            fixture.service.record_launch_review(&queued, DispatchStep::Launched, None).unwrap();
-            assert_eq!(dispatch_events(&fixture, &root, "dispatch_recovered").len(), 1);
-        }
     }
 }
 
@@ -4321,34 +3195,23 @@ fn supervisor_recovery_preserves_machine_cas_and_automatic_launch_ownership() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let supervisor = fixture.launch_and_bind(&root);
-    let (_, worker, _) = fixture.working(&root);
-    let queued = fixture.queue_review(&worker);
-    fixture.service.record_launch_review(&queued, DispatchStep::NeedsReview, Some(review_error())).unwrap();
-    let reviewed = fixture.run(&worker);
+    let task = fixture.create_task(&root, "Uncertain setup recovery");
+    let worker = fixture.start(&root, &task);
+    fixture.setup(&worker);
+    fixture.service.record_dispatch(&worker, DispatchUpdate::Step {
+        step: DispatchStep::SetupUnknown, error: Some(review_error()),
+    }).unwrap();
     let revision = fixture.state().revision;
     fixture.operator(OrchestrationAction::Annotate { run_id: root.clone(), text: "Unrelated newer history".into() });
     for action in [
         OrchestrationAction::ReconcileRun { run_id: worker.clone(), recovery: None },
-        OrchestrationAction::RetryLaunch { run_id: worker.clone() },
     ] {
         let request = OrchestrationMutationRequest { session_id: SESSION.into(), expected_revision: Some(revision), action };
         let bytes = fixture.state_bytes();
-        let result = if matches!(&request.action, OrchestrationAction::RetryLaunch { .. }) {
-            fixture.service.mutate_reviewed(&supervisor, request, &reviewed)
-        } else {
-            fixture.service.mutate(&supervisor, request)
-        };
+        let result = fixture.service.mutate(&supervisor, request);
         assert_code(result, "orchestration_revision_conflict");
         assert_eq!(fixture.state_bytes(), bytes);
     }
-    fixture.seed_run(&worker, |run| run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending);
-    let reviewed = fixture.run(&worker);
-    let bytes = fixture.state_bytes();
-    assert_code(fixture.service.mutate_reviewed(&supervisor, OrchestrationMutationRequest {
-        session_id: SESSION.into(), expected_revision: None,
-        action: OrchestrationAction::RetryLaunch { run_id: worker.clone() },
-    }, &reviewed), "invalid_stage");
-    assert_eq!(fixture.state_bytes(), bytes);
     fixture.seed_run(&worker, |run| {
         run.dispatch.as_mut().unwrap().step = DispatchStep::SetupUnknown;
         run.dispatch.as_mut().unwrap().launch_tag = None;
@@ -4363,7 +3226,6 @@ fn supervisor_recovery_preserves_machine_cas_and_automatic_launch_ownership() {
     assert_eq!(recovery.dispatch.as_ref().unwrap().step, DispatchStep::SetupUnknown);
     assert_eq!(recovery.dispatch.as_ref().unwrap().recovery,
         Some(cockpit_protocol::projects::WorkspaceRecoveryAction::AcceptExistingWorktree));
-    assert!(recovery.annotations.last().unwrap().text.contains("Supervisor"));
 }
 
 #[test]
@@ -4372,8 +3234,8 @@ fn old_unknown_launch_with_fresh_bound_omp_proof_stays_quiet_before_reconcile() 
         let fixture = Fixture::new();
         let root = fixture.root();
         let task = fixture.create_task(&root, "Recover an old launch outcome");
-        let worker = fixture.propose(&root, &task, None);
-        fixture.prepare(&worker);
+        let worker = fixture.start(&root, &task);
+        fixture.setup(&worker);
         fixture.launch_and_bind(&worker);
         fixture.seed_run(&worker, |run| {
             let dispatch = run.dispatch.as_mut().unwrap();
@@ -4385,7 +3247,7 @@ fn old_unknown_launch_with_fresh_bound_omp_proof_stays_quiet_before_reconcile() 
             dispatch.updated_at = (time::OffsetDateTime::now_utc() - time::Duration::hours(2))
                 .format(&time::format_description::well_known::Rfc3339).unwrap();
         });
-        let location = fixture.run(&worker).location.unwrap();
+        let location = fixture.run(&worker).attachment.unwrap().location.unwrap();
         let runtime = herdr::RuntimeView {
             endpoint_identity: location.endpoint_identity.clone(), boot_id: location.boot_id.clone(),
             workspaces: Vec::new(),
@@ -4440,13 +3302,10 @@ fn related_task(fixture: &Fixture, root: &str, edges: &[String], follow: Option<
 }
 
 fn execute_task(fixture: &Fixture, root: &str, task: &Task) -> (String, Actor) {
-    let run_id = fixture.propose(root, task, None);
-    fixture.prepare(&run_id);
+    let run_id = fixture.start(root, task);
+    fixture.setup(&run_id);
     let actor = fixture.launch_and_bind(&run_id);
-    fixture.ready(&actor);
-    fixture.operator(OrchestrationAction::GrantExecute {
-        run_id: run_id.clone(), plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision, note: None,
-    });
+    fixture.initialized(&actor);
     (run_id, actor)
 }
 
@@ -4506,30 +3365,24 @@ fn all_content_actions_require_the_current_executed_task_owner_not_generic_root_
     }).unwrap());
     assert_eq!(own.description, "Executed own-task prose");
     let original = fixture.run(&worker);
-    for missing in 0..5 {
+    for missing in 0..3 {
         fixture.seed_run(&worker, |run| {
             *run = original.clone();
             match missing {
-                0 => run.init_receipt = None,
-                1 => run.grants.retain(|grant| grant.scope != GrantScope::Execute),
-                2 => run.work_plan.as_mut().unwrap().plan_revision = "different-work-plan".into(),
-                3 => run.bound_omp_process = None,
-                _ => run.init_receipt.as_mut().unwrap().plan = Some("Unreviewed initialization".into()),
+                0 => run.checkout_claim_id = None,
+                1 => run.task_id = Some(sibling.task_id.clone()),
+                _ => run.attachment.as_mut().unwrap().epoch += 1,
             }
         });
         let bytes = std::fs::read(&path).unwrap();
-        assert_code(fixture.apply(&actor, content_actions(&root, &own).remove(0)), "actor_forbidden");
+        assert!(fixture.apply(&actor, content_actions(&root, &own).remove(0)).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        for manager in [&root_actor, &operator] {
-            assert_code(fixture.apply(manager, content_actions(&root, &own).remove(0)), "actor_forbidden");
-            assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        }
     }
-    for stage in [RunStage::Preparing, RunStage::Ready, RunStage::Reported, RunStage::Closed] {
+    for stage in [RunStage::Starting, RunStage::Reported, RunStage::Closed] {
         fixture.seed_run(&worker, |run| { *run = original.clone(); run.stage = stage; });
         let bytes = std::fs::read(&path).unwrap();
         assert_code(fixture.apply(&actor, content_actions(&root, &own).remove(0)),
-            if stage == RunStage::Closed { "attempt_stale" } else { "actor_forbidden" });
+            if stage == RunStage::Closed { "job_unauthorized" } else { "actor_forbidden" });
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
     fixture.seed_run(&worker, |run| { *run = original; run.stage = RunStage::Reported; });
@@ -4551,7 +3404,7 @@ fn all_content_actions_require_the_current_executed_task_owner_not_generic_root_
 }
 
 #[test]
-fn child_content_authority_requires_self_authenticated_binding_not_parent_telemetry() {
+fn child_content_authority_requires_scoped_credentials_and_current_running_subject() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let (task, worker, parent) = fixture.working(&root);
@@ -4562,46 +3415,48 @@ fn child_content_authority_requires_self_authenticated_binding_not_parent_teleme
     }).unwrap());
     let update = OrchestrationAction::SubagentUpdate {
         subagent_id: "actual-child".into(), parent_subagent_id: None, role: Some("task".into()),
-        label: "Parent telemetry cannot mint a native binding".into(), status: SubagentStatus::Running, summary: None,
+        label: "Parent telemetry is not a child credential".into(), status: SubagentStatus::Running, summary: None,
     };
-    fixture.apply(&parent, update.clone()).unwrap();
-    assert!(fixture.state().subagents[0].bound_omp_session.is_none());
-    let mut child = parent.clone();
-    let caller = caller_mut(&mut child);
-    caller.agent_kind = Some(AgentKind::Subagent);
-    caller.subagent_id = Some("actual-child".into());
-    caller.omp_session_id = Some("actual-child-session".into());
     let check = |task: &Task| OrchestrationAction::TaskStepSetChecked {
         root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(),
         step_id: step_id.clone(), checked: true, scope: TaskStepScope::Leaf,
     };
+    let mut child = fixture.child_actor(&parent, &worker, "actual-child");
     assert_code(fixture.apply(&child, check(&task)), "actor_forbidden");
-    fixture.apply(&child, update.clone()).unwrap();
-    assert_eq!(fixture.state().subagents[0].bound_omp_session.as_deref(), Some("actual-child-session"));
     fixture.apply(&parent, update.clone()).unwrap();
-    assert_eq!(fixture.state().subagents[0].bound_omp_session.as_deref(), Some("actual-child-session"));
+    assert!(fixture.state().subagents[0].bound_omp_session.is_none());
+    // A credential authorizes its subject even offline; optional physical context
+    // neither narrows ordinary admission nor impersonates another registry child.
+    let caller = caller_mut(&mut child);
+    caller.provenance = None;
+    caller.omp_session_id = None;
+    caller.process = None;
+    caller.agent_kind = Some(AgentKind::Main);
+    caller.subagent_id = Some("not-the-credential-subject".into());
     let checked = task_result(fixture.apply(&child, check(&task)).unwrap());
     assert_eq!(checked.step_progress.as_ref().map(|progress| (progress.done, progress.total)), Some((1, 1)));
     assert!(!checked.checked, "Step completion is not task acceptance");
     assert_eq!(fixture.run(&worker).stage, RunStage::Working);
     let sibling = fixture.create_task(&root, "Not the child's task");
     assert_code(fixture.apply(&child, content_actions(&root, &sibling).remove(0)), "actor_forbidden");
-    let mut forged = child.clone();
-    caller_mut(&mut forged).omp_session_id = Some("unbound-child-session".into());
-    assert_code(fixture.apply(&forged, check(&checked)), "actor_forbidden");
-    caller_mut(&mut forged).omp_session_id = Some("actual-child-session".into());
-    caller_mut(&mut forged).process.as_mut().unwrap().start_ticks += 1;
-    assert_code(fixture.apply(&forged, check(&checked)), "actor_forbidden");
+    let unregistered = fixture.child_actor(&parent, &worker, "unregistered-child");
+    assert_code(fixture.apply(&unregistered, check(&checked)), "actor_forbidden");
+    let mut stale = child.clone();
+    caller_mut(&mut stale).auth.attachment_epoch += 1;
+    assert_code(fixture.apply(&stale, check(&checked)), "job_unauthorized");
+    let bytes = fixture.state_bytes();
+    assert!(fixture.apply(&child, fixture.successful_result(&child)).is_err());
+    assert_eq!(fixture.state_bytes(), bytes, "A child cannot file its worker's Result");
     let mut done = update;
     if let OrchestrationAction::SubagentUpdate { status, .. } = &mut done {
         *status = SubagentStatus::Done;
     }
-    fixture.apply(&child, done).unwrap();
+    fixture.apply(&parent, done).unwrap();
     assert_code(fixture.apply(&child, check(&checked)), "actor_forbidden");
 }
 
 #[test]
-fn dependencies_gate_prepare_before_supersession_and_current_attempt_stays_with_live_worker() {
+fn blocked_dependencies_never_replace_the_current_live_worker() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let source = fixture.create_task(&root, "Prerequisite");
@@ -4609,48 +3464,33 @@ fn dependencies_gate_prepare_before_supersession_and_current_attempt_stays_with_
     let task = related_task(&fixture, &root, &[source.task_id.clone()], None);
     let (old, _) = execute_task(&fixture, &root, &task);
     canonical_check(&fixture, &root, &source.task_id, false);
-    let replacement = fixture.propose(&root, &task, Some(&old));
-    let plan = fixture.plan(&replacement);
-    assert_eq!(projection::current_task_run(&fixture.state(), &root, &task.task_id).unwrap().run_id, old);
-    let state = fixture.state_bytes();
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), OrchestrationAction::GrantPrepare {
-        run_id: replacement.clone(), plan_revision: plan.plan_revision.clone(),
-    }), "task_blocked");
-    assert_eq!(fixture.state_bytes(), state);
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
+        fixture.start_action(&root, &task)), "task_has_active_run");
+    assert_eq!(fixture.state_bytes(), bytes);
     assert_eq!(fixture.run(&old).stage, RunStage::Working);
-    assert!(fixture.run(&replacement).grants.is_empty());
-    canonical_check(&fixture, &root, &source.task_id, true);
-    fixture.operator(OrchestrationAction::GrantPrepare { run_id: replacement.clone(), plan_revision: plan.plan_revision });
-    assert_eq!(fixture.run(&old).close_reason, Some(CloseReason::Superseded));
-    assert_eq!(projection::current_task_run(&fixture.state(), &root, &task.task_id).unwrap().run_id, replacement);
+    assert_eq!(projection::current_task_run(&fixture.state(), &root, &task.task_id).unwrap().run_id, old);
+    assert!(!fixture.service.dispatch_task_eligible(&fixture.run(&old)).unwrap());
 }
 
 #[test]
-fn dependency_changes_outside_target_bytes_gate_execute_accept_sendback_and_dispatch() {
+fn dependency_changes_outside_target_bytes_gate_content_accept_sendback_and_dispatch() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let source = fixture.create_task(&root, "Prerequisite");
     canonical_check(&fixture, &root, &source.task_id, true);
     let task = related_task(&fixture, &root, &[source.task_id.clone()], None);
-    let run_id = fixture.propose(&root, &task, None);
-    fixture.prepare(&run_id);
+    let run_id = fixture.start(&root, &task);
+    fixture.setup(&run_id);
     let actor = fixture.launch_and_bind(&run_id);
-    fixture.ready(&actor);
+    fixture.initialized(&actor);
     canonical_check(&fixture, &root, &source.task_id, false);
     assert_eq!(fixture.task(&root, &task.task_id).task_revision, task.task_revision);
     assert!(!fixture.service.dispatch_task_eligible(&fixture.run(&run_id)).unwrap());
-    let state = fixture.state_bytes();
-    let execute = OrchestrationAction::GrantExecute {
-        run_id: run_id.clone(), plan_revision: fixture.run(&run_id).work_plan.unwrap().plan_revision, note: None,
-    };
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), execute.clone()), "task_blocked");
-    assert_eq!(fixture.state_bytes(), state);
-    // No global task freeze: healthy independent work can still be granted.
+    // No global task freeze: independent work remains runnable.
     let independent = fixture.create_task(&root, "Independent task");
     let (independent_run, _) = execute_task(&fixture, &root, &independent);
     assert!(fixture.service.dispatch_task_eligible(&fixture.run(&independent_run)).unwrap());
-    canonical_check(&fixture, &root, &source.task_id, true);
-    fixture.operator(execute);
     canonical_check(&fixture, &root, &source.task_id, false);
     let path = fixture.service.base().join("tasks").join(format!("{root}.md"));
     let before = std::fs::read(&path).unwrap();
@@ -4659,7 +3499,7 @@ fn dependency_changes_outside_target_bytes_gate_execute_accept_sendback_and_disp
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
     canonical_check(&fixture, &root, &source.task_id, true);
-    fixture.apply(&actor, report(ReportKind::Result, Some(ReportOutcome::Succeeded), None)).unwrap();
+    fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
     assert!(!fixture.task(&root, &task.task_id).checked);
     canonical_check(&fixture, &root, &source.task_id, false);
     let state = fixture.state_bytes();
@@ -4683,7 +3523,7 @@ fn acceptance_recovery_rechecks_unpublished_prerequisites_but_never_rolls_back_p
             canonical_check(&fixture, &root, &source.task_id, true);
             let task = related_task(&fixture, &root, &[source.task_id.clone()], None);
             let (run_id, actor) = execute_task(&fixture, &root, &task);
-            fixture.apply(&actor, report(ReportKind::Result, Some(ReportOutcome::Succeeded), None)).unwrap();
+            fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
             fixture.pending_intent(&root, &task, &run_id);
             if published { canonical_check(&fixture, &root, &task.task_id, true); }
             let path = fixture.service.base().join("tasks").join(format!("{root}.md"));
@@ -4739,16 +3579,7 @@ fn live_relationship_removal_is_strict_root_only_and_preserves_other_owned_slots
         root_id: root.clone(), task_id: task.task_id, expected_task_revision: task.task_revision,
         step_id: id(), parent_step_id: None, before_step_id: None, title: "Preserved step".into(),
     }));
-    fixture.propose(&root, &task, None); // Proposed is live, even before Prepare.
-    // External source can be corrupted. Removing an unrelated edge is still
-    // monotone, and is allowed even when the remaining source edge stays cyclic.
-    {
-        let locked = fixture.service.store.lock().unwrap();
-        let document = locked.tasks(&root).unwrap();
-        let source = document.task(&source.task_id).unwrap();
-        document.set_dependencies(&source.task_id, &source.task_revision, &document.doc_revision,
-            &[task.task_id.clone()]).unwrap();
-    }
+    fixture.start(&root, &task); // Queued work already owns its canonical task.
     let worker_task = fixture.create_task(&root, "Independent worker");
     let (_, worker) = execute_task(&fixture, &root, &worker_task);
     let action = |edges: Vec<String>| OrchestrationAction::TaskDependenciesSet {
@@ -4756,10 +3587,10 @@ fn live_relationship_removal_is_strict_root_only_and_preserves_other_owned_slots
         expected_doc_revision: task_document_revision(&fixture, &root), depends_on: edges,
     };
     assert_code(fixture.apply(&worker, action(vec![source.task_id.clone()])), "actor_forbidden");
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
-        action(vec![source.task_id.clone(), extra.task_id.clone()])), "task_relationships_live");
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
-        action(vec![source.task_id.clone(), worker_task.task_id.clone()])), "task_relationships_live");
+    let unchanged = task_result(fixture.operator(action(vec![source.task_id.clone(), extra.task_id.clone()])));
+    assert_eq!(unchanged.task_revision, task.task_revision);
+    assert!(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
+        action(vec![source.task_id.clone(), worker_task.task_id.clone()])).is_err());
     let before_state = fixture.state_bytes();
     let removed = task_result(fixture.operator(action(vec![source.task_id.clone()])));
     assert_eq!(removed.description, task.description);
@@ -4770,7 +3601,7 @@ fn live_relationship_removal_is_strict_root_only_and_preserves_other_owned_slots
     let locked = fixture.service.store.lock().unwrap();
     let document = locked.tasks(&root).unwrap();
     assert_eq!(dependencies::DependencyGraph::new(&document.tasks).evaluate(document.task(&task.task_id).unwrap()).state,
-        TaskDependencyState::Invalid);
+        TaskDependencyState::Blocked);
 }
 
 #[test]
@@ -4866,7 +3697,7 @@ fn active_root_and_acceptance_intent_fences_cover_all_content_actions() {
     };
     assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), action), "invalid_stage");
     let (task, run_id, actor) = fixture.working(&root);
-    fixture.apply(&actor, report(ReportKind::Result, Some(ReportOutcome::Succeeded), None)).unwrap();
+    fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
     fixture.pending_intent(&root, &task, &run_id);
     let root_actor = fixture.launch_and_bind(&root);
     let path = fixture.service.base().join("tasks").join(format!("{root}.md"));
@@ -4884,17 +3715,13 @@ fn active_root_and_acceptance_intent_fences_cover_all_content_actions() {
 }
 
 #[test]
-fn proposing_waiting_work_is_non_destructive_but_checked_or_invalid_tasks_are_rejected_locally() {
+fn starting_waiting_work_is_non_destructive_but_checked_or_invalid_tasks_are_rejected_locally() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let source = fixture.create_task(&root, "Waiting prerequisite");
     let waiting = related_task(&fixture, &root, &[source.task_id.clone()], None);
-    let run_id = fixture.propose(&root, &waiting, None);
-    let plan = fixture.plan(&run_id);
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), OrchestrationAction::GrantPrepare {
-        run_id: run_id.clone(), plan_revision: plan.plan_revision,
-    }), "task_blocked");
-    assert_eq!(fixture.run(&run_id).stage, RunStage::AwaitingPrepare);
+    let run_id = fixture.start(&root, &waiting);
+    assert_eq!(fixture.run(&run_id).stage, RunStage::Queued);
     assert!(!fixture.service.dispatch_task_eligible(&fixture.run(&run_id)).unwrap());
     let invalid = fixture.create_task(&root, "Corrupt component");
     let invalid = {
@@ -4902,13 +3729,855 @@ fn proposing_waiting_work_is_non_destructive_but_checked_or_invalid_tasks_are_re
         let document = locked.tasks(&root).unwrap();
         document.set_dependencies(&invalid.task_id, &invalid.task_revision, &document.doc_revision, &[id()]).unwrap()
     };
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), proposal(&root, &invalid, None)),
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), fixture.start_action(&root, &invalid)),
         "task_dependencies_invalid");
     let independent = fixture.create_task(&root, "Healthy independent component");
-    let healthy = fixture.propose(&root, &independent, None);
-    fixture.prepare(&healthy);
+    let healthy = fixture.start(&root, &independent);
+    fixture.setup(&healthy);
     assert!(fixture.service.dispatch_task_eligible(&fixture.run(&healthy)).unwrap());
     canonical_check(&fixture, &root, &source.task_id, true);
     assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
-        proposal(&root, &fixture.task(&root, &source.task_id), None)), "task_checked");
+        fixture.start_action(&root, &fixture.task(&root, &source.task_id))), "task_checked");
+}
+
+#[test]
+fn staged_private_credential_grants_nothing_until_published_under_the_state_lock() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, mut actor) = fixture.working(&root);
+    let (record, path) = credentials::stage_credential(
+        fixture.service.base(), &fixture.run(&worker), JobRole::Worker, None,
+    ).unwrap();
+    caller_mut(&mut actor).auth = credentials::read_job_auth(&path).unwrap();
+    let action = report(ReportKind::Progress, None, None);
+    let before = fixture.state_bytes();
+    assert_code(fixture.apply(&actor, action.clone()), "job_unauthorized");
+    assert_eq!(fixture.state_bytes(), before);
+    fixture.seed_state(|state| state.credentials.push(record));
+    fixture.apply(&actor, action).unwrap();
+    assert_eq!(fixture.run(&worker).stage, RunStage::Working);
+}
+
+#[test]
+fn credential_role_root_epoch_and_exclusive_checkout_claim_are_all_fenced() {
+    for fence in 0..8 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let (_, worker, actor) = fixture.working(&root);
+        let Actor::Agent(caller) = &actor else { unreachable!() };
+        fixture.seed_state(|state| {
+            let index = run_index(state, &worker).unwrap();
+            let claim_id = state.runs[index].checkout_claim_id.clone().unwrap();
+            let claim_index = state.checkout_claims.iter().position(|c| c.claim_id == claim_id).unwrap();
+            let credential = state.credentials.iter_mut()
+                .find(|record| record.credential_id == caller.auth.credential_id).unwrap();
+            match fence {
+                0 => credential.state = credentials::CredentialState::Revoked,
+                1 => credential.root_id = id(),
+                2 => credential.role = JobRole::Root,
+                3 => state.runs[index].attachment.as_mut().unwrap().epoch += 1,
+                4 => state.checkout_claims[claim_index].state = claims::ClaimState::Released,
+                5 => state.checkout_claims[claim_index].holder.as_mut().unwrap().run_id = id(),
+                6 => state.runs[index].checkout.as_mut().unwrap().directory_identity.inode = "replaced-directory".into(),
+                7 => {
+                    let mut competing = state.checkout_claims[claim_index].clone();
+                    competing.claim_id = id();
+                    state.checkout_claims.push(competing);
+                }
+                _ => unreachable!(),
+            }
+        });
+        let before = fixture.state_bytes();
+        assert_code(fixture.apply(&actor, report(ReportKind::Progress, None, None)), "job_unauthorized");
+        assert_eq!(fixture.state_bytes(), before, "Fence {fence} must not write");
+        assert!(fixture.run(&worker).result.is_none());
+    }
+}
+
+#[test]
+fn run_attach_identical_replay_is_no_write_and_changed_payload_conflicts() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, actor) = fixture.working(&root);
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    let action = OrchestrationAction::RunAttach {
+        operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
+        expected_attachment_epoch: caller.auth.attachment_epoch,
+        main_session_id: caller.omp_session_id.clone().unwrap(),
+    };
+    let mut receiver = fixture.service.subscribe();
+    let first = fixture.apply(&actor, action.clone()).unwrap();
+    let OrchestrationActionResult::RunAttached { attach: first } = first.result else {
+        panic!("Expected attachment receipt");
+    };
+    assert!(!first.duplicate);
+    let before = fixture.state_bytes();
+    let revision = fixture.state().revision;
+    assert!(receiver.has_changed().unwrap(), "The first attachment operation must publish its commit");
+    assert_eq!(*receiver.borrow_and_update(), revision);
+    let replay = fixture.apply(&actor, action.clone()).unwrap();
+    let OrchestrationActionResult::RunAttached { attach: replay } = replay.result else {
+        panic!("Expected attachment replay");
+    };
+    assert!(replay.duplicate);
+    assert_eq!(replay.run_id, worker);
+    assert_eq!(serde_json::to_value(replay.attachment).unwrap(), serde_json::to_value(first.attachment).unwrap());
+    assert_eq!(fixture.state_bytes(), before);
+    assert_eq!(fixture.state().revision, revision);
+    assert!(!receiver.has_changed().unwrap());
+    for field in 0..3 {
+        let mut changed = action.clone();
+        let OrchestrationAction::RunAttach { main_session_id, expected_attachment_epoch, attachment_id, .. } = &mut changed else { unreachable!() };
+        match field {
+            0 => *main_session_id = "changed-conversation".into(),
+            1 => *expected_attachment_epoch += 1,
+            2 => *attachment_id = id(),
+            _ => unreachable!(),
+        }
+        assert_code(fixture.apply(&actor, changed), "operation_conflict");
+        assert_eq!(fixture.state_bytes(), before);
+    }
+}
+
+#[test]
+fn run_resume_identical_replay_preserves_protected_writer_and_changed_payload_conflicts() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, actor) = fixture.working(&root);
+    let other_root = fixture.root();
+    let original = fixture.run(&worker);
+    let old_claim = fixture.state().checkout_claims.into_iter()
+        .find(|claim| original.checkout_claim_id.as_ref() == Some(&claim.claim_id)).unwrap();
+    let action = OrchestrationAction::RunResume {
+        run_id: worker.clone(), operation_id: id(),
+        expected_attachment_epoch: Some(original.attachment.as_ref().unwrap().epoch),
+        mode: ResumeMode::ReattachOrRestart, decision_id: None,
+    };
+    let mut receiver = fixture.service.subscribe();
+    let first = fixture.operator(action.clone());
+    let OrchestrationActionResult::RunResumed { resume: first } = first.result else {
+        panic!("Expected resume receipt");
+    };
+    assert!(!first.duplicate);
+    assert_eq!(first.resume.phase, ResumePhase::Blocked);
+    assert_eq!(first.resume.cause.as_ref().unwrap().code, "writer_exit_unproven");
+    assert_eq!(first.resume.cause.as_ref().unwrap().class, ResumeCauseClass::Recover);
+    assert!(first.resume.decision_id.is_none(), "Missing observation is not a living-writer replacement decision");
+    let state = fixture.state();
+    let operation = state.operations.iter().find(|record| record.operation_id == first.resume.operation_id).unwrap();
+    assert_eq!(operation.run_id.as_deref(), Some(worker.as_str()));
+    assert_eq!(operation.resume_operation_id.as_deref(), Some(first.resume.operation_id.as_str()));
+    assert!(operation.result.is_none());
+    assert!(operation.effect_receipts.is_empty());
+    let blocked = fixture.run(&worker);
+    assert_eq!(serde_json::to_value(blocked.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
+    assert_eq!(blocked.checkout_claim_id, original.checkout_claim_id);
+    let current_claim = fixture.state().checkout_claims.into_iter()
+        .find(|claim| claim.claim_id == old_claim.claim_id).unwrap();
+    assert_eq!(serde_json::to_value(current_claim).unwrap(), serde_json::to_value(old_claim).unwrap());
+    let before = fixture.state_bytes();
+    let revision = fixture.state().revision;
+    assert!(receiver.has_changed().unwrap(), "The first resume operation must publish its commit");
+    assert_eq!(*receiver.borrow_and_update(), revision);
+    let replay = fixture.operator(action.clone());
+    let OrchestrationActionResult::RunResumed { resume: replay } = replay.result else {
+        panic!("Expected resume replay");
+    };
+    assert!(replay.duplicate);
+    assert_eq!(serde_json::to_value(replay.resume).unwrap(), serde_json::to_value(first.resume).unwrap());
+    assert_eq!(fixture.state_bytes(), before);
+    assert_eq!(fixture.state().revision, revision);
+    assert!(!receiver.has_changed().unwrap());
+    for field in 0..4 {
+        let mut changed = action.clone();
+        let OrchestrationAction::RunResume { run_id, expected_attachment_epoch, mode, decision_id, .. } = &mut changed else { unreachable!() };
+        match field {
+            0 => *expected_attachment_epoch = Some(original.attachment.as_ref().unwrap().epoch + 1),
+            1 => *mode = ResumeMode::ReplaceExisting,
+            2 => *decision_id = Some(id()),
+            3 => *run_id = other_root.clone(),
+            _ => unreachable!(),
+        }
+        assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), changed), "operation_conflict");
+        assert_eq!(fixture.state_bytes(), before);
+    }
+    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
+    assert_eq!(fixture.run(&worker).attachment.as_ref().unwrap().epoch, original.attachment.as_ref().unwrap().epoch);
+}
+
+#[test]
+fn supervisor_start_another_uses_immutable_project_and_replays_its_operation() {
+    let fixture = Fixture::new();
+    let action = OrchestrationAction::SupervisorStart {
+        operation_id: id(), mode: SupervisorStartMode::Another, target: Some(target()),
+        label: Some("Explicit another coordinator".into()), selected_root_id: None,
+        expected_project_key: Some(fixture.project().key),
+    };
+    let first = fixture.operator(action.clone());
+    let OrchestrationActionResult::SupervisorStarted { start: first } = first.result else {
+        panic!("Expected supervisor start");
+    };
+    assert!(!first.duplicate);
+    assert_eq!(fixture.run(&first.root_id).project, Some(fixture.project()));
+    assert_eq!(fixture.run(&first.root_id).attachment.as_ref().unwrap().epoch, 1);
+    assert!(fixture.run(&first.root_id).checkout_claim_id.is_none());
+    let before = fixture.state_bytes();
+    let replay = fixture.operator(action.clone());
+    let OrchestrationActionResult::SupervisorStarted { start: replay } = replay.result else {
+        panic!("Expected supervisor replay");
+    };
+    assert!(replay.duplicate);
+    assert_eq!(replay.root_id, first.root_id);
+    assert_eq!(fixture.state_bytes(), before);
+    let mut changed = action;
+    let OrchestrationAction::SupervisorStart { label, .. } = &mut changed else { unreachable!() };
+    *label = Some("Changed request under the same operation ID".into());
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), changed), "operation_conflict");
+    assert_eq!(fixture.state_bytes(), before);
+}
+
+#[test]
+fn concurrent_reuse_starts_match_or_create_one_open_project_root() {
+    let fixture = Fixture::new();
+    let project = fixture.project();
+    let barrier = std::sync::Barrier::new(3);
+    let revision = fixture.state().revision;
+    let roots = std::thread::scope(|scope| {
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let configuration = &fixture.configuration;
+            let project = project.clone();
+            let barrier = &barrier;
+            let operation_id = id();
+            workers.push(scope.spawn(move || {
+                let service = OrchestrationService::open(configuration).unwrap();
+                barrier.wait();
+                let response = service.mutate_resolved(
+                    &Actor::Operator(OperatorOrigin::Browser),
+                    OrchestrationMutationRequest {
+                        session_id: SESSION.into(), expected_revision: Some(revision),
+                        action: OrchestrationAction::SupervisorStart {
+                            operation_id, mode: SupervisorStartMode::ReuseOrResume, target: Some(target()),
+                            label: Some("Concurrent project coordinator".into()), selected_root_id: None,
+                            expected_project_key: Some(project.key.clone()),
+                        },
+                    },
+                    &ResolvedMutationInput { project: Some(project), ..ResolvedMutationInput::default() },
+                ).unwrap();
+                let OrchestrationActionResult::SupervisorStarted { start } = response.result else {
+                    panic!("Expected project start");
+                };
+                start.root_id
+            }));
+        }
+        barrier.wait();
+        workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>()
+    });
+    assert_eq!(roots[0], roots[1]);
+    assert_eq!(fixture.state().runs.iter().filter(|run| run.parent_run_id.is_none()
+        && run.stage != RunStage::Closed && run.project.as_ref() == Some(&project)).count(), 1);
+    assert_eq!(fixture.state().operations.iter()
+        .filter(|record| record.kind == store::DurableOperationKind::SupervisorStart).count(), 2);
+}
+
+#[test]
+fn child_registration_requires_physical_identity_and_replays_without_reminting_credentials() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, parent) = fixture.working(&root);
+    let mut registering = parent.clone();
+    let caller = caller_mut(&mut registering);
+    caller.agent_kind = Some(AgentKind::Subagent);
+    caller.subagent_id = Some("native-child".into());
+    caller.omp_session_id = Some("native-child-conversation".into());
+    let action = OrchestrationAction::JobChildRegister {
+        operation_id: id(), child_id: "native-child".into(),
+        child_session_id: "native-child-conversation".into(), parent_child_id: None,
+    };
+    for fence in 0..4 {
+        let mut forged = registering.clone();
+        let caller = caller_mut(&mut forged);
+        match fence {
+            0 => caller.process.as_mut().unwrap().start_ticks += 1,
+            1 => caller.actual_agent_kind = Some(NativeAgentKind::Other("shell".into())),
+            2 => caller.main_omp_session_id = Some("not-bound-main".into()),
+            3 => caller.subagent_id = Some("different-child".into()),
+            _ => unreachable!(),
+        }
+        let before = fixture.state_bytes();
+        assert_code(fixture.apply(&forged, action.clone()), "child_identity_unproven");
+        assert_eq!(fixture.state_bytes(), before);
+    }
+    let mut receiver = fixture.service.subscribe();
+    fixture.apply(&registering, action.clone()).unwrap();
+    let credentials = fixture.state().credentials.into_iter().filter(|record|
+        record.run_id == worker && record.role == JobRole::Child
+            && record.subject_child_id.as_deref() == Some("native-child")).collect::<Vec<_>>();
+    assert_eq!(credentials.len(), 1);
+    let Actor::Agent(main) = &parent else { unreachable!() };
+    let path = fixture.service.job_child_credential_file(main, "native-child").unwrap();
+    let child_auth = credentials::read_job_auth(&path).unwrap();
+    let credential_bytes = std::fs::read(&path).unwrap();
+    assert_eq!(child_auth.credential_id, credentials[0].credential_id);
+    let before = fixture.state_bytes();
+    let revision = fixture.state().revision;
+    assert!(receiver.has_changed().unwrap(), "The first registration must publish its commit");
+    assert_eq!(*receiver.borrow_and_update(), revision);
+    fixture.apply(&registering, action.clone()).unwrap();
+    assert_eq!(fixture.state_bytes(), before);
+    assert_eq!(fixture.state().revision, revision);
+    assert_eq!(std::fs::read(&path).unwrap(), credential_bytes, "Replay cannot remint the child token");
+    assert!(!receiver.has_changed().unwrap());
+    for field in 0..3 {
+        let mut changed = action.clone();
+        let OrchestrationAction::JobChildRegister { child_id, child_session_id, parent_child_id, .. } = &mut changed else { unreachable!() };
+        match field {
+            0 => *child_id = "changed-child".into(),
+            1 => *child_session_id = "changed-child-session".into(),
+            2 => *parent_child_id = Some("changed-parent".into()),
+            _ => unreachable!(),
+        }
+        assert_code(fixture.apply(&registering, changed), "operation_conflict");
+        assert_eq!(fixture.state_bytes(), before);
+    }
+    let caller = caller_mut(&mut registering);
+    caller.auth = child_auth;
+    assert_eq!(fixture.service.job_child_credential_file(caller, "native-child").unwrap_err().code,
+        "actor_forbidden");
+    assert_code(fixture.apply(&registering, action), "actor_forbidden");
+    assert_eq!(fixture.state_bytes(), before);
+}
+
+#[test]
+fn run_attach_never_replaces_physical_process_with_a_bearer_credential() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, actor) = fixture.working(&root);
+    let Actor::Agent(main) = &actor else { unreachable!() };
+    let original = fixture.run(&worker);
+    let action = OrchestrationAction::RunAttach {
+        operation_id: id(), attachment_id: main.auth.attachment_id.clone(),
+        expected_attachment_epoch: main.auth.attachment_epoch,
+        main_session_id: main.omp_session_id.clone().unwrap(),
+    };
+    for fence in 0..4 {
+        let mut forged = actor.clone();
+        let caller = caller_mut(&mut forged);
+        match fence {
+            0 => caller.process.as_mut().unwrap().start_ticks += 1,
+            1 => caller.process = None,
+            2 => caller.actual_agent_kind = Some(NativeAgentKind::Other("shell".into())),
+            3 => caller.omp_session_id = Some("other-conversation".into()),
+            _ => unreachable!(),
+        }
+        let before = fixture.state_bytes();
+        assert_code(fixture.apply(&forged, action.clone()), "attachment_conflict");
+        assert_eq!(fixture.state_bytes(), before);
+        assert_eq!(fixture.run(&worker).attachment.as_ref().unwrap().epoch, original.attachment.as_ref().unwrap().epoch);
+        assert_eq!(fixture.run(&worker).checkout_claim_id, original.checkout_claim_id);
+    }
+}
+
+#[test]
+fn reuse_start_prefers_selected_matching_root_then_stable_latest_open_root() {
+    let fixture = Fixture::new();
+    let first = fixture.root();
+    let second = fixture.root();
+    for root in [&first, &second] {
+        fixture.seed_run(root, |run| run.updated_at = "2026-10-10T00:00:00Z".into());
+    }
+    let state = fixture.state();
+    let latest = preferred_project_root(&state.runs, SESSION, &fixture.project().key, None).unwrap();
+    let preferred = state.runs[latest].run_id.clone();
+    // Equal timestamps have a deterministic UUID lexical preference.
+    assert_eq!(preferred.as_str(), first.as_str().min(second.as_str()));
+    let other = if preferred == first { second.clone() } else { first.clone() };
+    let selected = fixture.operator(OrchestrationAction::SupervisorStart {
+        operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
+        selected_root_id: Some(other.clone()), expected_project_key: Some(fixture.project().key),
+    });
+    let OrchestrationActionResult::SupervisorStarted { start } = selected.result else { unreachable!() };
+    assert_eq!(start.root_id, other);
+    assert_eq!(fixture.state().runs.len(), 2);
+    fixture.seed_run(&preferred, |run| run.updated_at = "2026-10-11T00:00:00Z".into());
+    let latest = fixture.operator(OrchestrationAction::SupervisorStart {
+        operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
+        selected_root_id: Some(id()), expected_project_key: Some(fixture.project().key),
+    });
+    let OrchestrationActionResult::SupervisorStarted { start } = latest.result else { unreachable!() };
+    assert_eq!(start.root_id, preferred);
+    fixture.operator(OrchestrationAction::CancelRun { run_id: preferred.clone() });
+    let open = fixture.operator(OrchestrationAction::SupervisorStart {
+        operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
+        selected_root_id: Some(preferred), expected_project_key: Some(fixture.project().key),
+    });
+    let OrchestrationActionResult::SupervisorStarted { start } = open.result else { unreachable!() };
+    assert_eq!(start.root_id, other, "Closed history is not implicitly reopened");
+    assert_eq!(fixture.state().runs.len(), 2);
+}
+
+#[test]
+fn obsolete_schema_reads_fresh_current_state_and_replaces_records_only_on_ordinary_save() {
+    let fixture = Fixture::new();
+    let source = serde_json::to_vec(&serde_json::json!({
+        "schema": 1, "revision": 17, "runs": [{"obsolete": "permission-era state"}],
+        "messages": [], "subagents": [], "task_intents": [], "assignment_intents": [],
+    })).unwrap();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        locked.state_dir().write("state.json", &source).unwrap();
+    }
+    let service = OrchestrationService::open(&fixture.configuration).unwrap();
+    let state = service.store.lock().unwrap().read().unwrap();
+    assert_eq!(state.schema, store::SCHEMA);
+    assert_eq!(state.revision, 17);
+    assert!(state.runs.is_empty());
+    assert!(state.operations.is_empty());
+    assert!(state.credentials.is_empty() && state.checkout_claims.is_empty());
+    assert_eq!(fixture.state_bytes(), source, "Read-only open does not rewrite obsolete state");
+    let response = service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+        OrchestrationMutationRequest { session_id: SESSION.into(), expected_revision: Some(17),
+            action: OrchestrationAction::SupervisorStart {
+                operation_id: id(), mode: SupervisorStartMode::Another, target: Some(target()),
+                label: None, selected_root_id: None, expected_project_key: Some(fixture.project().key),
+            },
+        }, &ResolvedMutationInput { project: Some(fixture.project()), ..ResolvedMutationInput::default() }).unwrap();
+    assert_eq!(response.revision, 18);
+    let state = service.store.lock().unwrap().read().unwrap();
+    assert_eq!(state.schema, store::SCHEMA);
+    assert_eq!(state.runs.len(), 1);
+    assert_eq!(state.operations.len(), 1);
+    assert_ne!(fixture.state_bytes(), source);
+}
+
+#[test]
+fn runtime_composition_does_not_hide_malformed_or_unsupported_store_errors() {
+    for source in [b"not-json".as_slice(), br#"{"schema":99,"revision":17}"#.as_slice()] {
+        let fixture = Fixture::new();
+        {
+            let locked = fixture.service.store.lock().unwrap();
+            locked.state_dir().write("state.json", source).unwrap();
+        }
+        match OrchestrationService::open(&fixture.configuration) {
+            Err(error) => assert_eq!(error.code, "state_corrupt"),
+            Ok(_) => panic!("Malformed or unsupported state must not open"),
+        }
+        assert_eq!(fixture.state_bytes(), source);
+    }
+}
+
+#[test]
+fn physical_resume_preserves_current_writer_but_needs_an_authenticated_extension() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, mut actor) = fixture.working(&root);
+    let original = fixture.run(&worker);
+    let observed = original.attachment.clone().unwrap();
+    let claim = fixture.state().checkout_claims.into_iter()
+        .find(|claim| original.checkout_claim_id.as_ref() == Some(&claim.claim_id)).unwrap();
+    fixture.seed_state(|state| {
+        state.credentials.retain(|record| record.run_id != worker);
+        state.operations.retain(|record| record.kind != store::DurableOperationKind::RunAttach
+            || record.actor_run_id.as_deref() != Some(worker.as_str()));
+    });
+    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&worker));
+    for staged in [false, true] {
+        if staged {
+            caller_mut(&mut actor).auth = fixture.auth(&worker, JobRole::Worker, None);
+        }
+        let response = fixture.resume_observed(&worker, observed.clone());
+        assert_eq!(response.resume.phase, ResumePhase::Blocked);
+        assert_eq!(response.resume.cause.as_ref().unwrap().code, "current_extension_unavailable");
+        assert_eq!(response.resume.cause.as_ref().unwrap().class, ResumeCauseClass::Recover);
+        assert!(response.resume.decision_id.is_none());
+        let current = fixture.run(&worker);
+        let attachment = current.attachment.as_ref().unwrap();
+        assert_eq!(attachment.state, AttachmentState::Disconnected);
+        assert_eq!(attachment.attachment_id, observed.attachment_id);
+        assert_eq!(attachment.epoch, observed.epoch);
+        assert_eq!(attachment.process, observed.process);
+        assert_eq!(attachment.shell, observed.shell);
+        assert_eq!(current.checkout_claim_id, original.checkout_claim_id);
+        assert_eq!(serde_json::to_value(&current.dispatch).unwrap(), serde_json::to_value(&original.dispatch).unwrap());
+        let protected = fixture.state().checkout_claims.into_iter()
+            .find(|record| record.claim_id == claim.claim_id).unwrap();
+        assert_eq!(serde_json::to_value(protected).unwrap(), serde_json::to_value(&claim).unwrap());
+        assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&worker),
+            "Staged credential alone is not evidence that this living OMP loaded the extension");
+    }
+    // Ordinary durable authority stays available while semantic connection is absent.
+    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
+    assert_eq!(fixture.run(&worker).attachment.as_ref().unwrap().state, AttachmentState::Disconnected);
+    let blocked = fixture.run(&worker).resume.unwrap();
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    fixture.apply(&actor, OrchestrationAction::RunAttach {
+        operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
+        expected_attachment_epoch: caller.auth.attachment_epoch,
+        main_session_id: caller.omp_session_id.clone().unwrap(),
+    }).unwrap();
+    let connected = fixture.run(&worker);
+    assert_eq!(connected.attachment.as_ref().unwrap().state, AttachmentState::Connected);
+    assert_eq!(connected.attachment.as_ref().unwrap().epoch, observed.epoch);
+    assert_eq!(connected.attachment.as_ref().unwrap().process, observed.process);
+    assert_eq!(connected.checkout_claim_id, original.checkout_claim_id);
+    assert_eq!(serde_json::to_value(&connected.dispatch).unwrap(), serde_json::to_value(&original.dispatch).unwrap());
+    let resumed = connected.resume.as_ref().unwrap();
+    assert_eq!(resumed.operation_id, blocked.operation_id);
+    assert_eq!(resumed.phase, ResumePhase::Reattached);
+    assert!(resumed.cause.is_none(), "Authenticated registration clears unavailable UX immediately");
+    assert!(resumed.replacement_attachment_epoch.is_none());
+    let state = fixture.state();
+    let operation = state.operations.iter().find(|record| record.operation_id == blocked.operation_id).unwrap();
+    assert_eq!(operation.run_id.as_deref(), Some(worker.as_str()));
+    assert_eq!(operation.resume_operation_id.as_deref(), Some(blocked.operation_id.as_str()));
+    assert!(operation.result.is_none());
+    assert!(operation.effect_receipts.is_empty());
+    let protected = state.checkout_claims.iter().find(|record| record.claim_id == claim.claim_id).unwrap();
+    assert_eq!(serde_json::to_value(protected).unwrap(), serde_json::to_value(&claim).unwrap());
+    assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&worker));
+    let before = fixture.state_bytes();
+    let replay = fixture.operator(OrchestrationAction::RunResume {
+        run_id: worker.clone(), operation_id: blocked.operation_id,
+        expected_attachment_epoch: Some(observed.epoch),
+        mode: ResumeMode::ReattachOrRestart, decision_id: None,
+    });
+    let OrchestrationActionResult::RunResumed { resume: replay } = replay.result else { unreachable!() };
+    assert!(replay.duplicate);
+    assert_eq!(replay.resume.phase, ResumePhase::Reattached);
+    assert!(replay.resume.cause.is_none());
+    assert_eq!(fixture.state_bytes(), before, "Owner replay returns the immediately recovered receipt without relaunch");
+}
+
+#[test]
+fn physical_start_observation_without_current_extension_binding_does_not_reuse_a_root() {
+    for staged in [false, true] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        fixture.launch_and_bind(&root);
+        let original = fixture.run(&root);
+        let observed = original.attachment.clone().unwrap();
+        fixture.seed_state(|state| {
+            state.credentials.retain(|record| record.run_id != root);
+            state.operations.retain(|record| record.kind != store::DurableOperationKind::RunAttach
+                || record.actor_run_id.as_deref() != Some(root.as_str()));
+        });
+        if staged {
+            fixture.auth(&root, JobRole::Root, None);
+        }
+        let response = fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+            OrchestrationMutationRequest {
+                session_id: SESSION.into(), expected_revision: Some(fixture.state().revision),
+                action: OrchestrationAction::SupervisorStart {
+                    operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
+                    selected_root_id: Some(root.clone()), expected_project_key: Some(fixture.project().key),
+                },
+            }, &ResolvedMutationInput {
+                project: Some(fixture.project()), attachment_observation: Some(observed.clone()),
+                ..ResolvedMutationInput::default()
+            }).unwrap();
+        let OrchestrationActionResult::SupervisorStarted { start } = response.result else { unreachable!() };
+        assert_eq!(start.root_id, root);
+        assert_eq!(start.outcome, SupervisorStartOutcome::Resuming);
+        let current = fixture.run(&root);
+        assert_eq!(current.resume.as_ref().unwrap().phase, ResumePhase::Blocked);
+        assert_eq!(current.resume.as_ref().unwrap().cause.as_ref().unwrap().code, "current_extension_unavailable");
+        assert_eq!(current.resume.as_ref().unwrap().cause.as_ref().unwrap().class, ResumeCauseClass::Recover);
+        let attachment = current.attachment.as_ref().unwrap();
+        assert_eq!(attachment.state, AttachmentState::Disconnected);
+        assert_eq!(attachment.epoch, observed.epoch);
+        assert_eq!(attachment.process, observed.process);
+        assert_eq!(serde_json::to_value(current.dispatch).unwrap(), serde_json::to_value(original.dispatch).unwrap());
+        assert_eq!(fixture.state().runs.len(), 1);
+        assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
+    }
+}
+
+#[test]
+fn authenticated_current_epoch_attach_allows_physical_reattach_without_launch_or_claim_transfer() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, actor) = fixture.working(&root);
+    let original = fixture.run(&worker);
+    let observed = original.attachment.clone().unwrap();
+    let claim = fixture.state().checkout_claims.into_iter()
+        .find(|claim| original.checkout_claim_id.as_ref() == Some(&claim.claim_id)).unwrap();
+    let (_, _, bindings) = fixture.service.recorded_runs_with_bindings(SESSION).unwrap();
+    assert_eq!(bindings.get(&worker), Some(&(observed.attachment_id.clone(), observed.epoch)));
+    let result = fixture.resume_observed(&worker, observed.clone());
+    assert_eq!(result.resume.phase, ResumePhase::Reattached);
+    assert!(result.resume.replacement_attachment_epoch.is_none());
+    assert!(result.resume.cause.is_none());
+    let current = fixture.run(&worker);
+    assert_eq!(current.checkout_claim_id, original.checkout_claim_id);
+    assert_eq!(serde_json::to_value(current.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
+    assert_eq!(serde_json::to_value(current.dispatch).unwrap(), serde_json::to_value(original.dispatch).unwrap());
+    let retained = fixture.state().checkout_claims.into_iter().find(|record| record.claim_id == claim.claim_id).unwrap();
+    assert_eq!(serde_json::to_value(retained).unwrap(), serde_json::to_value(claim).unwrap());
+    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
+    assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&worker));
+}
+
+#[test]
+fn revoked_credentials_or_stale_attach_receipts_never_prove_current_extension_binding() {
+    for fence in 0..2 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let (_, worker, _) = fixture.working(&root);
+        let original = fixture.run(&worker);
+        let observed = original.attachment.clone().unwrap();
+        fixture.seed_state(|state| {
+            if fence == 0 {
+                for credential in state.credentials.iter_mut().filter(|record| record.run_id == worker) {
+                    credential.state = credentials::CredentialState::Revoked;
+                }
+            } else {
+                for operation in state.operations.iter_mut().filter(|record|
+                    record.kind == store::DurableOperationKind::RunAttach
+                        && record.actor_run_id.as_deref() == Some(worker.as_str())) {
+                    if let Some(OrchestrationActionResult::RunAttached { attach }) = &mut operation.result {
+                        attach.attachment.epoch += 1;
+                    }
+                }
+            }
+        });
+        assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&worker));
+        let result = fixture.resume_observed(&worker, observed.clone());
+        assert_eq!(result.resume.phase, ResumePhase::Blocked);
+        assert_eq!(result.resume.cause.as_ref().unwrap().code, "current_extension_unavailable");
+        assert_eq!(result.resume.cause.as_ref().unwrap().class, ResumeCauseClass::Recover);
+        let current = fixture.run(&worker);
+        assert_eq!(current.attachment.as_ref().unwrap().epoch, observed.epoch);
+        assert_eq!(current.attachment.as_ref().unwrap().process, observed.process);
+        assert_eq!(current.attachment.as_ref().unwrap().state, AttachmentState::Disconnected);
+        assert_eq!(current.checkout_claim_id, original.checkout_claim_id);
+        assert_eq!(serde_json::to_value(current.dispatch).unwrap(), serde_json::to_value(original.dispatch).unwrap());
+    }
+}
+
+#[test]
+fn physical_start_reuses_only_a_root_with_applied_current_epoch_attachment_binding() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let actor = fixture.launch_and_bind(&root);
+    let original = fixture.run(&root);
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    fixture.apply(&actor, OrchestrationAction::RunAttach {
+        operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
+        expected_attachment_epoch: caller.auth.attachment_epoch,
+        main_session_id: caller.omp_session_id.clone().unwrap(),
+    }).unwrap();
+    let observed = fixture.run(&root).attachment.unwrap();
+    let response = fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+        OrchestrationMutationRequest {
+            session_id: SESSION.into(), expected_revision: Some(fixture.state().revision),
+            action: OrchestrationAction::SupervisorStart {
+                operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
+                selected_root_id: Some(root.clone()), expected_project_key: Some(fixture.project().key),
+            },
+        }, &ResolvedMutationInput {
+            project: Some(fixture.project()), attachment_observation: Some(observed.clone()),
+            ..ResolvedMutationInput::default()
+        }).unwrap();
+    let OrchestrationActionResult::SupervisorStarted { start } = response.result else { unreachable!() };
+    assert_eq!(start.root_id, root);
+    assert_eq!(start.outcome, SupervisorStartOutcome::Reused);
+    assert!(start.resume_operation_id.is_none());
+    let current = fixture.run(&root);
+    assert_eq!(current.attachment.as_ref().unwrap().epoch, observed.epoch);
+    assert_eq!(current.attachment.as_ref().unwrap().process, observed.process);
+    assert_eq!(serde_json::to_value(current.dispatch).unwrap(), serde_json::to_value(original.dispatch).unwrap());
+    assert_eq!(fixture.state().runs.len(), 1);
+    assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
+}
+
+#[test]
+fn closed_history_with_a_recorded_physical_process_cannot_be_adopted_as_another_root() {
+    let fixture = Fixture::new();
+    let seed = fixture.root();
+    let actor = fixture.launch_tab(&seed);
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    let bootstrap = BootstrapCaller {
+        endpoint_identity: caller.endpoint_identity.clone(), session_id: caller.session_id.clone(),
+        workspace_id: caller.workspace_id.clone(), tab_id: "fresh-adoption-tab".into(),
+        pane_id: "fresh-adoption-pane".into(), boot_id: caller.boot_id.clone(),
+        terminal_id: Some("fresh-adoption-terminal".into()),
+        native_session_id: Some("fresh-adoption-native".into()), omp_session_id: Some("fresh-adoption-native".into()),
+        agent_kind: Some(AgentKind::Main), actual_agent_kind: caller.actual_agent_kind.clone(),
+        process: Some(live_process()),
+    };
+    let adopted = run_result(fixture.apply(&Actor::Bootstrap(bootstrap.clone()),
+        OrchestrationAction::RunAdopt { label: "Fresh unbound process".into() }).unwrap()).0;
+    assert_eq!(fixture.run(&adopted).kind, RunKind::Adopted);
+    assert_eq!(fixture.run(&adopted).attachment.as_ref().unwrap().process, bootstrap.process);
+    fixture.seed_run(&adopted, |run| {
+        run.stage = RunStage::Closed;
+        run.close_reason = Some(CloseReason::Cancelled);
+    });
+    let before = fixture.state_bytes();
+    let state = fixture.state();
+    assert_eq!(fixture.run(&adopted).attachment.as_ref().unwrap().process, bootstrap.process,
+        "Closing tracking is not proof that its physical process exited");
+    assert_code(fixture.apply(&Actor::Bootstrap(bootstrap),
+        OrchestrationAction::RunAdopt { label: "Must not duplicate the retained incarnation".into() }), "caller_mismatch");
+    assert_eq!(fixture.state_bytes(), before);
+    assert_eq!(fixture.state().runs.len(), state.runs.len());
+    assert_eq!(fixture.state().credentials.len(), state.credentials.len());
+}
+
+#[test]
+fn resume_join_replays_current_owner_and_settles_old_receipt_before_later_resume() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, _) = fixture.working(&root);
+    let response = fixture.resume_exited(&Actor::Operator(OperatorOrigin::Browser), &worker);
+    let OrchestrationActionResult::RunResumed { resume: first } = response.result else { unreachable!() };
+    assert_eq!(first.resume.phase, ResumePhase::Launching);
+    let joined_action = fixture.resume_action(&worker);
+    let joined = fixture.operator(joined_action.clone());
+    let OrchestrationActionResult::RunResumed { resume: joined } = joined.result else { unreachable!() };
+    assert_eq!(joined.resume.operation_id, first.resume.operation_id);
+    let OrchestrationAction::RunResume { operation_id: joined_id, .. } = &joined_action else { unreachable!() };
+    let state = fixture.state();
+    let owner = state.operations.iter().find(|record| record.operation_id == first.resume.operation_id).unwrap();
+    assert!(owner.result.is_none());
+    assert_eq!(owner.effect_receipts.len(), 2);
+    let join = state.operations.iter().find(|record| &record.operation_id == joined_id).unwrap();
+    assert_eq!(join.run_id.as_deref(), Some(worker.as_str()));
+    assert_eq!(join.resume_operation_id.as_deref(), Some(first.resume.operation_id.as_str()));
+    assert!(join.result.is_none());
+    assert!(join.effect_receipts.is_empty());
+    fixture.launch_and_bind(&worker);
+    assert_eq!(fixture.run(&worker).resume.as_ref().unwrap().phase, ResumePhase::Connected);
+    let bytes = fixture.state_bytes();
+    let replay = fixture.operator(joined_action.clone());
+    let OrchestrationActionResult::RunResumed { resume: replay } = replay.result else { unreachable!() };
+    assert!(replay.duplicate);
+    assert_eq!(replay.resume.phase, ResumePhase::Connected);
+    assert_eq!(fixture.state_bytes(), bytes);
+    let later = fixture.operator(fixture.resume_action(&worker));
+    let OrchestrationActionResult::RunResumed { resume: later } = later.result else { unreachable!() };
+    assert_ne!(later.resume.operation_id, first.resume.operation_id);
+    assert_eq!(later.resume.phase, ResumePhase::Blocked);
+    let state = fixture.state();
+    for operation_id in [&first.resume.operation_id, joined_id] {
+        let operation = state.operations.iter().find(|record| &record.operation_id == operation_id).unwrap();
+        let Some(OrchestrationActionResult::RunResumed { resume }) = &operation.result else { unreachable!() };
+        assert_eq!(resume.resume.operation_id, first.resume.operation_id);
+        assert_eq!(resume.resume.phase, ResumePhase::Connected);
+    }
+    let bytes = fixture.state_bytes();
+    let replay = fixture.operator(joined_action);
+    let OrchestrationActionResult::RunResumed { resume: replay } = replay.result else { unreachable!() };
+    assert!(replay.duplicate);
+    assert_eq!(replay.resume.operation_id, first.resume.operation_id);
+    assert_eq!(replay.resume.phase, ResumePhase::Connected);
+    assert_eq!(fixture.state_bytes(), bytes);
+    let state = fixture.state();
+    let owner = state.operations.iter().find(|record| record.operation_id == first.resume.operation_id).unwrap();
+    assert_eq!(owner.effect_receipts.len(), 2, "Replays never rearchive launch/setup effects");
+}
+
+#[test]
+fn worker_can_resume_own_job_but_child_cannot_and_replace_never_stops_a_same_boot_writer() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, actor) = fixture.working(&root);
+    let child = fixture.child_actor(&actor, &worker, "resume-child");
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&child, fixture.resume_action(&worker)), "actor_forbidden");
+    assert_eq!(fixture.state_bytes(), bytes);
+    let action = fixture.resume_action(&worker);
+    let response = fixture.apply(&actor, action).unwrap();
+    let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
+    assert_eq!(resume.resume.phase, ResumePhase::Blocked);
+    // A decision is specific to this observed protected incarnation.
+    let response = fixture.service.advance_resume_observed(&worker, &resume.resume.operation_id,
+        &ResolvedMutationInput {
+            observation_cause: Some(ResumeCause {
+                code: "living_writer".into(), message: "Current writer is alive".into(),
+                class: ResumeCauseClass::Decision,
+            }), ..ResolvedMutationInput::default()
+        }).unwrap();
+    let original = fixture.run(&worker);
+    let decision = response.resume.decision_id.unwrap();
+    let response = fixture.apply(&actor, OrchestrationAction::RunResume {
+        run_id: worker.clone(), operation_id: id(),
+        expected_attachment_epoch: original.attachment.as_ref().map(|attachment| attachment.epoch),
+        mode: ResumeMode::ReplaceExisting, decision_id: Some(decision),
+    }).unwrap();
+    let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
+    assert_eq!(resume.resume.phase, ResumePhase::Blocked);
+    assert_eq!(resume.resume.cause.as_ref().unwrap().code, "same_boot_replacement_unsupported");
+    let current = fixture.run(&worker);
+    assert_review_fields_only(&original, &current);
+    assert!(current.retirement.is_none());
+    assert_ne!(current.attachment.as_ref().unwrap().state, AttachmentState::Quiescing);
+    let state = fixture.state();
+    let operation = state.operations.iter().find(|record| record.operation_id == resume.resume.operation_id).unwrap();
+    assert!(operation.result.is_none());
+    assert!(operation.effect_receipts.is_empty());
+    assert!(state.checkout_claims.iter().all(|claim| claim.state != claims::ClaimState::Released));
+    assert!(state.credentials.iter().filter(|credential| credential.run_id == worker)
+        .all(|credential| credential.state == credentials::CredentialState::Active));
+}
+
+#[test]
+fn private_attachment_after_native_launch_proof_starts_once_and_sends_one_brief() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Late private attachment");
+    let worker = fixture.start(&root, &task);
+    fixture.setup(&worker);
+    let actor = fixture.launch_tab(&worker);
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    // Native runtime proof is physical evidence, not an applied extension attach.
+    fixture.seed_run(&worker, |run| {
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.main_session_id = caller.omp_session_id.clone();
+        attachment.process = caller.process.clone();
+    });
+    fixture.service.record_launch_verified(&fixture.run(&worker)).unwrap();
+    assert_eq!(fixture.run(&worker).stage, RunStage::Starting);
+    assert!(fixture.state().messages.iter().all(|message|
+        message.to_run_id != worker || message.kind != MessageKind::WorkBrief));
+    let attach = OrchestrationAction::RunAttach {
+        operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
+        expected_attachment_epoch: caller.auth.attachment_epoch,
+        main_session_id: caller.omp_session_id.clone().unwrap(),
+    };
+    fixture.apply(&actor, attach.clone()).unwrap();
+    assert_eq!(fixture.run(&worker).stage, RunStage::Working);
+    let bytes = fixture.state_bytes();
+    fixture.apply(&actor, attach).unwrap();
+    assert_eq!(fixture.state_bytes(), bytes);
+    let briefs = fixture.state().messages.into_iter().filter(|message|
+        message.to_run_id == worker && message.kind == MessageKind::WorkBrief).collect::<Vec<_>>();
+    assert_eq!(briefs.len(), 1);
+    assert_eq!(briefs[0].text, fixture.run(&worker).brief);
+}
+
+#[test]
+fn worker_start_requires_current_canonical_task_and_document_revisions_without_writes() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Start revision fence");
+    let mut action = fixture.start_action(&root, &task);
+    fixture.create_task(&root, "Unrelated document edit");
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), action.clone()),
+        "task_revision_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+    let OrchestrationAction::WorkerStart { expected_doc_revision, .. } = &mut action else { unreachable!() };
+    *expected_doc_revision = task_document_revision(&fixture, &root);
+    fixture.operator(OrchestrationAction::TaskUpdate {
+        root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision,
+        title: None, description: Some("Changed canonical scope before start".into()),
+    });
+    let OrchestrationAction::WorkerStart { expected_doc_revision, .. } = &mut action else { unreachable!() };
+    *expected_doc_revision = task_document_revision(&fixture, &root);
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), action),
+        "task_revision_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+    assert!(fixture.state().runs.iter().all(|run| run.kind != RunKind::Worker));
 }

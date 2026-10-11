@@ -6,23 +6,42 @@ import json
 import os
 from pathlib import Path
 import shutil
-import signal
 import socket
 import subprocess
 import sys
 import tempfile
 import time
 
+try:
+    from . import fixture_resources
+except ImportError:
+    # Preserve importlib-based frozen-driver wrappers without changing sys.path.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cockpit_fixture_resources", Path(__file__).with_name("fixture_resources.py"))
+    fixture_resources = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture_resources)
+
 REPO = Path(__file__).resolve().parents[2]
 
 
 def environment(root):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("HERDR_", "COCKPIT_"))}
+    for key in ("ENV", "BASH_ENV", "ZDOTDIR", "PI_CONFIG_FILES",
+                "OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN"):
+        env.pop(key, None)
     env.update(HOME=str(root), XDG_CONFIG_HOME=str(root / "config"),
                XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
                XDG_DATA_HOME=str(root / "data"),
+               XDG_RUNTIME_DIR=str(root / "runtime"), TMPDIR=str(root / "tmp"),
+               PI_CODING_AGENT_DIR=str(root / "omp-agent"),
+               PI_CODING_AGENT_SESSION_DIR=str(root / "omp-sessions"),
+               PI_NATIVES_DIR=str(root / "native-cache"),
+               OMP_AUTH_BROKER_SNAPSHOT_TTL_MS="0",
                HERDR_CONFIG_PATH=str(root / "config/herdr/config.toml"),
                COCKPIT_CONFIG=str(root / "cockpit.toml"))
+    manifest_path = root / fixture_resources.MANIFEST
+    if manifest_path.exists():
+        env["COCKPIT_FIXTURE_CREATION_ID"] = json.loads(manifest_path.read_text())["creation_id"]
     ledger_path = root / "runtime.json"
     if ledger_path.exists():
         ledger = json.loads(ledger_path.read_text())
@@ -48,6 +67,7 @@ def launch(root, name, argv, env):
         child = subprocess.Popen(argv, cwd=REPO, env=env, stdin=subprocess.DEVNULL,
                                  stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
     (root / (name + ".pid")).write_text(str(child.pid))
+    fixture_resources.record_process(root, name, child.pid)
     return child.pid
 
 
@@ -103,8 +123,8 @@ def configure_action_launcher(root):
 def start(with_plugins=False, with_action_launcher=False):
     root = Path(tempfile.mkdtemp(prefix="cpol-", dir="/tmp"))
     session = "polish-" + root.name[5:]
-    for folder in ["config/herdr", "state", "cache", "data", "repositories/sample", "plain/nested", "evidence", "www"]:
-        (root / folder).mkdir(parents=True)
+    for folder in ["config/herdr", "state", "cache", "data", "runtime", "tmp", "omp-agent", "omp-sessions", "native-cache", "repositories/sample", "plain/nested", "evidence", "www"]:
+        (root / folder).mkdir(mode=0o700, parents=True)
     (root / "config/herdr/config.toml").write_text('')
     plugin_ids = list(VIEWER_PLUGINS) if with_plugins else []
     if with_action_launcher:
@@ -132,6 +152,7 @@ def start(with_plugins=False, with_action_launcher=False):
     ledger = {"root": str(root), "session": session, "socket": str(root / f"config/herdr/sessions/{session}/herdr.sock"),
               "protected": ["default", "pre-existing sessions and gateways"], "fixture": str(fixture)}
     (root / "runtime.json").write_text(json.dumps(ledger, indent=2))
+    fixture_resources.create(root, session)
     env = environment(root)
     launch(root, "fixture", [sys.executable, "-u", "-c",
         "from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler; from functools import partial; import sys; "
@@ -157,23 +178,17 @@ def start(with_plugins=False, with_action_launcher=False):
 
 
 def stop(root):
-    ledger = json.loads((root / "runtime.json").read_text())
-    assert str(root) == ledger["root"] and root.name.startswith("cpol-")
-    for name in ["native", "gateway", "tui", "fixture", "herdr"]:
-        pidfile = root / (name + ".pid")
-        if pidfile.exists():
-            pid = int(pidfile.read_text())
-            cmdline = Path(f"/proc/{pid}/cmdline")
-            environ = Path(f"/proc/{pid}/environ")
-            identity = cmdline.read_text() + environ.read_text() if cmdline.exists() and environ.exists() else ""
-            if ledger["session"] in identity or str(root) in identity:
-                os.killpg(pid, signal.SIGTERM)
-    print(f"Stopped matching fixture processes; evidence retained at {root}")
+    try:
+        result = fixture_resources.shutdown(root)
+    except (OSError, ValueError, KeyError) as error:
+        result = {"state": "unknown", "evidence": f"ownership unproven: {error}", "effects": []}
+    print(json.dumps(result, indent=2))
+    print(f"Normal fixture shutdown observed {result['state']}; evidence retained at {root}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["start", "stop", "rpc"])
+    parser.add_argument("action", choices=["start", "stop", "rpc", "resource-manifest", "inspect", "scratch-inspect", "scratch-cleanup"])
     parser.add_argument("root", nargs="?", type=Path)
     parser.add_argument("method", nargs="?")
     parser.add_argument("params", nargs="?", default="{}")
@@ -181,10 +196,20 @@ if __name__ == "__main__":
                         help="copy the owner's Files and Reviewr plugins into the fixture")
     parser.add_argument("--with-action-launcher", action="store_true",
                         help="copy the owner's action launcher and configure harmless custom binding acceptance actions")
+    parser.add_argument("--creation-id")
+    parser.add_argument("--scratch-path")
     args = parser.parse_args()
     if args.action == "start":
         start(args.with_plugins, args.with_action_launcher)
     elif args.action == "stop":
         stop(args.root)
-    else:
+    elif args.action == "rpc":
         print(json.dumps(rpc(args.root, args.method, json.loads(args.params)), indent=2))
+    elif args.action == "resource-manifest":
+        print(json.dumps(fixture_resources.registration(args.root), indent=2))
+    elif args.action == "inspect":
+        print(json.dumps(fixture_resources.shutdown(args.root, args.creation_id, inspect_only=True), indent=2))
+    else:
+        print(json.dumps(fixture_resources.cleanup_scratch(
+            args.root, args.creation_id, args.scratch_path,
+            inspect_only=args.action == "scratch-inspect"), indent=2))

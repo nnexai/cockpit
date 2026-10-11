@@ -1,7 +1,7 @@
 use cockpit_core::{
     extension_adapter::SourcePaneEvidence,
     orchestration::{
-        Actor, AgentCaller, NativeAgentKind,
+        Actor, AgentCaller, BootstrapCaller, CallerProvenance, NativeAgentKind, read_job_auth,
         caller::{declared_main_session, not_ready, settling_caller_matches},
         herdr::OrchestrationHerdr,
     },
@@ -17,12 +17,6 @@ use super::{
 };
 
 impl OrchestrationArgs {
-    pub(super) fn env_run(&self) -> Result<Option<(String, u32)>, CliError> {
-        parse_env_run(
-            std::env::var("COCKPIT_RUN_ID").ok(),
-            std::env::var("COCKPIT_RUN_ATTEMPT").ok(),
-        )
-    }
 
     pub(super) fn validate_identity(&self) -> Result<(), CliError> {
         match (self.agent_kind, self.subagent_id.as_deref()) {
@@ -45,30 +39,46 @@ impl OrchestrationArgs {
     }
 }
 
-pub(super) fn parse_env_run(
-    id: Option<String>,
-    attempt: Option<String>,
-) -> Result<Option<(String, u32)>, CliError> {
-    match (id, attempt) {
-        (None, None) => Ok(None),
-        (Some(id), Some(attempt)) if !id.is_empty() => {
-            let attempt = attempt
-                .parse::<u32>()
-                .ok()
-                .filter(|value| *value > 0)
-                .ok_or_else(|| {
-                    CliError::new(
-                        "attempt_stale",
-                        "COCKPIT_RUN_ATTEMPT must be a positive u32",
-                    )
-                })?;
-            Ok(Some((id, attempt)))
+
+pub(super) fn job_actor(args: &OrchestrationArgs) -> Result<Option<Actor>, CliError> {
+    let Some(path) = std::env::var_os("COCKPIT_JOB_CREDENTIAL_FILE") else {
+        return Ok(None);
+    };
+    let auth = read_job_auth(std::path::Path::new(&path))?;
+    let epoch = auth.attachment_epoch.to_string();
+    for (name, expected) in [
+        ("COCKPIT_ATTACHMENT_ID", auth.attachment_id.as_str()),
+        ("COCKPIT_ATTACHMENT_EPOCH", epoch.as_str()),
+    ] {
+        if std::env::var_os(name).is_some_and(|value| value != std::ffi::OsStr::new(expected)) {
+            return Err(CliError::new("credential_mismatch", "Launch attachment and credential differ"));
         }
-        _ => Err(CliError::new(
-            "caller_mismatch",
-            "COCKPIT_RUN_ID and COCKPIT_RUN_ATTEMPT must be supplied together",
-        )),
     }
+    Ok(Some(Actor::Agent(AgentCaller {
+        auth,
+        provenance: Some(CallerProvenance {
+            agent_kind: args.agent_kind.map(Into::into),
+            child_id: args.subagent_id.clone(),
+            main_session_id: args.omp_main_session.clone().or_else(|| args.omp_session.clone()),
+            native_session_id: args.omp_session.clone(),
+            process: None,
+        }),
+        endpoint_identity: String::new(),
+        session_id: String::new(),
+        workspace_id: String::new(),
+        tab_id: String::new(),
+        pane_id: String::new(),
+        boot_id: None,
+        terminal_id: None,
+        native_session_id: None,
+        actual_agent_kind: None,
+        env_run: None,
+        omp_session_id: args.omp_session.clone(),
+        main_omp_session_id: args.omp_main_session.clone(),
+        agent_kind: args.agent_kind.map(Into::into),
+        subagent_id: args.subagent_id.clone(),
+        process: None,
+    })))
 }
 
 pub(super) async fn attested_actor(
@@ -77,6 +87,7 @@ pub(super) async fn attested_actor(
     source: &SourcePaneEvidence,
     args: &OrchestrationArgs,
     process: Option<NativeProcessIdentity>,
+    actor: Option<Actor>,
 ) -> Result<Actor, CliError> {
     let runtime = adapter.runtime(session).await?;
     let pane = runtime
@@ -102,30 +113,48 @@ pub(super) async fn attested_actor(
             "caller source and runtime evidence disagree",
         ));
     }
-    Ok(Actor::Agent(AgentCaller {
-        endpoint_identity: source.endpoint_identity.clone(),
-        session_id: session.clone(),
-        workspace_id: source.workspace_id.clone(),
-        tab_id: source.tab_id.clone(),
-        pane_id: source.pane_id.clone(),
-        boot_id: runtime.boot_id,
-        terminal_id: Some(source.terminal_id.clone()),
-        native_session_id: pane.native_session_id.clone(),
-        actual_agent_kind: pane
-            .agent_kind
-            .map(NativeAgentKind::from)
-            .filter(|kind| kind != &NativeAgentKind::Omp || !pane.launch_pending),
-        env_run: args.env_run()?,
-        omp_session_id: args.omp_session.clone(),
-        main_omp_session_id: args.omp_main_session.clone(),
-        agent_kind: args.agent_kind.map(Into::into),
-        subagent_id: args.subagent_id.clone(),
-        process,
-    }))
+    let Some(Actor::Agent(mut caller)) = actor else {
+        return Ok(Actor::Bootstrap(BootstrapCaller {
+            endpoint_identity: source.endpoint_identity.clone(),
+            session_id: session.clone(),
+            workspace_id: source.workspace_id.clone(),
+            tab_id: source.tab_id.clone(),
+            pane_id: source.pane_id.clone(),
+            boot_id: runtime.boot_id,
+            terminal_id: Some(source.terminal_id.clone()),
+            native_session_id: pane.native_session_id,
+            omp_session_id: args.omp_session.clone(),
+            agent_kind: args.agent_kind.map(Into::into),
+            actual_agent_kind: pane.agent_kind.map(NativeAgentKind::from)
+                .filter(|kind| kind != &NativeAgentKind::Omp || !pane.launch_pending),
+            process,
+        }));
+    };
+    caller.endpoint_identity = source.endpoint_identity.clone();
+    caller.session_id = session.clone();
+    caller.workspace_id = source.workspace_id.clone();
+    caller.tab_id = source.tab_id.clone();
+    caller.pane_id = source.pane_id.clone();
+    caller.boot_id = runtime.boot_id;
+    caller.terminal_id = Some(source.terminal_id.clone());
+    caller.native_session_id = pane.native_session_id.clone();
+    caller.actual_agent_kind = pane.agent_kind.map(NativeAgentKind::from)
+        .filter(|kind| kind != &NativeAgentKind::Omp || !pane.launch_pending);
+    // Attempt is physical launch evidence only, never ordinary job authorization.
+    caller.env_run = None;
+    caller.process = process.clone();
+    if let Some(provenance) = caller.provenance.as_mut() {
+        provenance.process = process;
+        provenance.native_session_id = pane.native_session_id;
+    }
+    Ok(Actor::Agent(caller))
 }
 
 impl Context {
     pub(super) async fn check_caller(&self) -> Result<(), CliError> {
+        if let Some(Actor::Agent(caller)) = &self.actor {
+            self.authenticated_run(caller)?;
+        }
         if let Some(before) = &self.evidence {
             // Runtime parsing validates tab/workspace membership before returning this view.
             let runtime = self.adapter.runtime(&self.session).await?;
@@ -149,8 +178,27 @@ impl Context {
                     "caller pane identity changed during orchestration operation",
                 ));
             }
+            let actual_agent_kind = pane.agent_kind.map(NativeAgentKind::from);
+            if let Some(Actor::Bootstrap(caller)) = &self.actor {
+                if runtime.boot_id != caller.boot_id
+                    || pane.native_session_id != caller.native_session_id
+                    || actual_agent_kind.as_ref() != caller.actual_agent_kind.as_ref()
+                    || (caller.actual_agent_kind.is_some() && pane.launch_pending)
+                {
+                    return Err(CliError::new("caller_mismatch", "Bootstrap native identity changed"));
+                }
+                if let Some(process) = &caller.process {
+                    if native_process_evidence(process.pid)? != *process {
+                        return Err(CliError::new("caller_mismatch", "Bootstrap process incarnation changed"));
+                    }
+                }
+            }
             if let Some(Actor::Agent(caller)) = &self.actor {
-                let actual_agent_kind = pane.agent_kind.map(NativeAgentKind::from);
+                if let Some(process) = &caller.process {
+                    if native_process_evidence(process.pid)? != *process {
+                        return Err(CliError::new("caller_mismatch", "Physical caller process incarnation changed"));
+                    }
+                }
                 if runtime.endpoint_identity != caller.endpoint_identity
                     || runtime.boot_id != caller.boot_id
                     || (caller.actual_agent_kind.is_none()

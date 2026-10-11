@@ -1,14 +1,15 @@
 import { useMemo } from "react";
 import { agentState } from "./SupervisorActions";
 import { taskContentReason } from "./dependencies";
+import { taskRun } from "./retirementView";
 import { buildSupervisorGraph, selectionNodeId } from "./topology";
 import { GRAPH_GEOMETRY } from "./graphLayout";
 import { panelBounds, panelPlacement, type PanelKind, type SupervisorLayout } from "./useSupervisorLayout";
 import type { SupervisorViewInputs, SupervisorViewModel, SupervisorViewPanel } from "./supervisorViewTypes";
 
 export function useSupervisorViewModel(context: SupervisorViewInputs): SupervisorViewModel {
-  const { snapshot, rootId, connected, runtimeLive, session, scope, hoverSpace, sessionId } = context;
-  const root = snapshot?.runs.find(run => run.run_id === (rootId ?? snapshot.board?.root_id) && run.run_id === run.root_id && (run.stage !== "closed" || rootId === run.run_id)) ?? null;
+  const { snapshot, rootId, connected, runtimeLive, session, scope, hoverSpace, sessionId, draftStorageWarning, projectRootMissing } = context;
+  const root = !projectRootMissing ? snapshot?.runs.find(run => run.run_id === (rootId ?? snapshot.board?.root_id) && run.run_id === run.root_id && (run.stage !== "closed" || rootId === run.run_id)) ?? null : null;
   const openRoots = snapshot?.roots.filter(summary => snapshot.runs.some(run => run.run_id === summary.root_id && run.stage !== "closed")) ?? [];
   const closedRoots = snapshot?.roots.filter(summary => snapshot.runs.some(run => run.run_id === summary.root_id && run.stage === "closed")) ?? [];
   const orphanedWorkers = snapshot?.runs.filter(run => run.stage !== "closed" && !!run.parent_run_id && closedRoots.some(summary => summary.root_id === run.root_id) && (!root || run.root_id === root.run_id)) ?? [];
@@ -22,7 +23,7 @@ export function useSupervisorViewModel(context: SupervisorViewInputs): Superviso
   const observations = snapshot?.runtime.status === "fresh" ? snapshot.runtime.runs : [];
   const observe = (runId: string | null | undefined) => observations.find(item => item.run_id === runId);
   const selectedTask = tasks.find(task => task.task.task_id === scope.selectedTask) ?? null;
-  const detailRun = selectedTask ? snapshot?.runs.find(run => run.run_id === selectedTask.current_run_id) ?? null : selectedAgent;
+  const detailRun = selectedTask && snapshot ? taskRun(snapshot, selectedTask) ?? null : selectedAgent;
   const detailTask = selectedTask ?? tasks.find(task => task.task.task_id === detailRun?.task_id) ?? null;
   const detailSubagent = !selectedTask ? snapshot?.subagents.find(agent => agent.run_id === selectedAgent?.run_id && agent.subagent_id === scope.selectedSubagent) ?? null : null;
   const hasRetainedDraft = (taskId: string) => scope.steps.has(taskId) || scope.edits.has(taskId) || scope.relations.has(taskId) || scope.followUps.has(taskId);
@@ -38,7 +39,11 @@ export function useSupervisorViewModel(context: SupervisorViewInputs): Superviso
   const selectedNode = selectionNodeId(scope);
   const observedCount = rootRuns.filter(run => run.stage !== "closed" && live && observe(run.run_id)?.presence === "present" && observe(run.run_id)?.actual_omp).length;
   const rootSpace = observe(root?.run_id)?.workspace_id ?? (root?.target?.target === "existing_space" ? root.target.workspace_id : null);
-  const banner = !connected || !runtimeLive ? "Connection lost · showing saved tasks · agent may still be running" : snapshot?.runtime.status !== "fresh" ? "Cannot check agents right now · showing saved tasks" : null;
+  const restoration = snapshot?.restoration;
+  const restoring = restoration && (restoration.reattached < restoration.total_attachments || restoration.cleanup_pending > 0)
+    ? `Restored from saved tasks · reconnecting agents (${restoration.reattached} of ${restoration.total_attachments})${restoration.cleanup_pending ? ` · finishing cleanup for ${restoration.cleanup_pending} tasks` : ""}` : null;
+  const availabilityBanner = !connected || !runtimeLive ? "Connection lost · showing saved tasks · agent may still be running" : snapshot?.runtime.status !== "fresh" ? "Cannot check agents right now · showing saved tasks" : restoring;
+  const banner = [availabilityBanner, draftStorageWarning].filter(Boolean).join(" · ") || null;
   return { root, openRoots, closedRoots, orphanedWorkers, live, destination, rootState, tasks, rootRuns, selectedAgent, observations, observe, selectedTask, detailRun, detailTask, detailSubagent, hasRetainedDraft, retainedDraftTaskId, detailOpen, stepTaskId, detailTaskScope, contentReason, stepReadOnlyReason, sharedSpace, mode, model, selectedNode, observedCount, rootSpace, banner };
 }
 

@@ -36,6 +36,24 @@ pub(crate) struct TaskDocument<'a> {
     lock: Option<&'a LockGuard>,
 }
 
+pub(crate) struct PreparedTaskUpdate<'source, 'store> {
+    pub task: Task,
+    pub doc_revision: String,
+    source: &'source TaskDocument<'store>,
+    updated: Option<TaskDocument<'store>>,
+}
+
+impl PreparedTaskUpdate<'_, '_> {
+    pub(crate) fn publish(self) -> Result<Task, InspectionError> {
+        if let Some(updated) = self.updated {
+            self.source.publish_prepared(&updated)?;
+        } else if hash(&read_bytes(self.source.dir, &self.source.name)?) != self.source.doc_revision {
+            return Err(conflict());
+        }
+        Ok(self.task)
+    }
+}
+
 struct ItemLayout {
     range: Range<usize>,
     header_end: usize,
@@ -369,6 +387,16 @@ impl<'a> TaskDocument<'a> {
         title: Option<&str>,
         description: Option<&str>,
     ) -> Result<Task, InspectionError> {
+        self.prepare_update(task_id, expected_task_revision, title, description)?.publish()
+    }
+
+    pub(crate) fn prepare_update(
+        &self,
+        task_id: &str,
+        expected_task_revision: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<PreparedTaskUpdate<'_, 'a>, InspectionError> {
         let item = self.item(task_id, expected_task_revision)?;
         let mut patches = Vec::with_capacity(2);
         if let Some(title) = title {
@@ -391,7 +419,7 @@ impl<'a> TaskDocument<'a> {
             replacement.push_str(&encode_body(description, self.eol()));
             patches.push(BytePatch { range, replacement: Cow::Owned(replacement.into_bytes()) });
         }
-        self.publish_item(task_id, item, patches)
+        self.prepare_item(task_id, item, patches)
     }
 
     pub(crate) fn step(
@@ -418,8 +446,14 @@ impl<'a> TaskDocument<'a> {
     }
 
     fn publish_item(
-        &self, task_id: &str, item: &ItemLayout, mut patches: Vec<BytePatch<'_>>,
+        &self, task_id: &str, item: &ItemLayout, patches: Vec<BytePatch<'_>>,
     ) -> Result<Task, InspectionError> {
+        self.prepare_item(task_id, item, patches)?.publish()
+    }
+
+    fn prepare_item(
+        &self, task_id: &str, item: &ItemLayout, mut patches: Vec<BytePatch<'_>>,
+    ) -> Result<PreparedTaskUpdate<'_, 'a>, InspectionError> {
         self.require_lock()?;
         patches.sort_by_key(|patch| (patch.range.start, patch.range.end));
         for patch in &patches {
@@ -438,13 +472,12 @@ impl<'a> TaskDocument<'a> {
                 "complete task continuation including relations and steps exceeds 16 KiB"));
         }
         if patches.is_empty() {
-            if hash(&read_bytes(self.dir, &self.name)?) != self.doc_revision {
-                return Err(conflict());
-            }
-            return Ok(self.task(task_id)?.clone());
+            return Ok(PreparedTaskUpdate {
+                task: self.task(task_id)?.clone(), doc_revision: self.doc_revision.clone(), source: self, updated: None,
+            });
         }
         let bytes = splice(&self.bytes, &patches)?;
-        self.commit_task(bytes, task_id)
+        self.prepare_task(bytes, task_id)
     }
 
     /// The checkbox byte is the entire edit: bullets, line endings, marker,
@@ -557,6 +590,10 @@ impl<'a> TaskDocument<'a> {
     }
 
     fn commit_task(&self, bytes: Vec<u8>, task_id: &str) -> Result<Task, InspectionError> {
+        self.prepare_task(bytes, task_id)?.publish()
+    }
+
+    fn prepare_task(&self, bytes: Vec<u8>, task_id: &str) -> Result<PreparedTaskUpdate<'_, 'a>, InspectionError> {
         let task_id = validate_uuid(task_id)?.to_string();
         let mut updated = self.prepare_commit(bytes)?;
         let target = updated.tasks.iter().position(|task| task.task_id == task_id)
@@ -569,8 +606,7 @@ impl<'a> TaskDocument<'a> {
         // The complete return payload is already parsed and its identity proved.
         // Moving it out avoids cloning and any fallible lookup after publication.
         let task = updated.tasks.swap_remove(target);
-        self.publish_prepared(&updated)?;
-        Ok(task)
+        Ok(PreparedTaskUpdate { task, doc_revision: updated.doc_revision.clone(), source: self, updated: Some(updated) })
     }
 
     fn commit(&self, bytes: Vec<u8>) -> Result<TaskDocument<'a>, InspectionError> {

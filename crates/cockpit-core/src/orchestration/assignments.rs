@@ -326,7 +326,7 @@ pub(super) fn snapshot_intents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cockpit_protocol::orchestration::Run;
+    use cockpit_protocol::orchestration::{AttachmentState, ExecutionAttachment, Run};
     use std::path::PathBuf;
     use uuid::Uuid;
 
@@ -356,7 +356,7 @@ mod tests {
             let mut state = locked.read().unwrap();
             state.runs.push(Run {
                 session_id: SESSION.into(),
-                prepare_brief: String::new(),
+                brief: String::new(),
                 run_id: root_id.clone(),
                 kind: RunKind::Supervisor,
                 label: "Supervisor".into(),
@@ -364,25 +364,36 @@ mod tests {
                 parent_run_id: None,
                 task_id: None,
                 attempt: 1,
-                task_revision_at_propose: None,
+                task_revision_at_start: None,
                 stage: RunStage::Active,
                 close_reason: None,
                 dispatch: None,
                 target: None,
                 setup: None,
-                prepare_plan: None,
-                init_receipt: None,
-                work_plan: None,
-                grants: Vec::new(),
+                cleanup_policy: None,
                 last_report: None,
                 result: None,
+                source_output: None,
+                integration: cockpit_protocol::orchestration::Integration::Pending,
                 annotations: Vec::new(),
-                location: None,
-                bound_omp_session: Some("actual-main".into()),
-                bound_omp_process: None,
-                launch_shell_identity: None,
+                project: None,
+                checkout: None,
+                attachment: Some(ExecutionAttachment {
+                    attachment_id: Uuid::new_v4().to_string(),
+                    epoch: 1,
+                    state: AttachmentState::Disconnected,
+                    launch_mode: None,
+                    location: None,
+                    main_session_id: Some("actual-main".into()),
+                    process: None,
+                    shell: None,
+                    machine_id: None,
+                    launch_attempt: 0,
+                    updated_at: super::super::now(),
+                }),
+                checkout_claim_id: None,
+                resume: None,
                 retirement: None,
-                supersedes_run_id: None,
                 created_at: super::super::now(),
                 updated_at: super::super::now(),
             });

@@ -48,8 +48,8 @@ const ROOT_HELP: &str = "Agent workflows:
 Use <command> <subcommand> --help for payloads, selectors and examples.
 Prefer COCKPIT_CLI_PATH when supplied by a Cockpit-launched agent.
 Help and skills commands do not connect to Herdr or modify Notes.
-Notes UUID-pinned content works without Herdr; orchestration mutations need
-fresh bound caller authority, not UI focus or invented identity flags.";
+Notes UUID-pinned content and routine credential-scoped orchestration work
+without Herdr; physical attach/adopt/stop/control still require fresh evidence.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -91,13 +91,15 @@ pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     Widget(WidgetArgs),
     /// Print the live Library context selected by a Herdr Space.
     Context(ContextArgs),
+    /// Inspect the installed orchestration CLI protocol without a Herdr endpoint.
+    Orchestration(cli_orchestration::ProtocolArgs),
     /// Read and edit canonical supervisor tasks.
     #[command(after_long_help = cli_orchestration::TASK_HELP)]
     Task(cli_orchestration::TaskArgs),
-    /// Propose workers and report or message within the run forest.
+    /// Start task workers and report or message within the run forest.
     #[command(after_long_help = cli_orchestration::RUN_HELP)]
     Run(cli_orchestration::RunArgs),
-    /// Pull durable inbox messages; acknowledge only after processing.
+    /// Pull durable inbox messages and inspect native delivery receipts.
     #[command(after_long_help = cli_orchestration::INBOX_HELP)]
     Inbox(cli_orchestration::InboxArgs),
     /// Publish and control OMP subagents.
@@ -527,7 +529,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Notes(_) => unreachable!("Notes commands use their own exit-status contract"),
         Command::Skills(_) => unreachable!("skills commands use their own exit-status contract"),
         Command::Context(args) => run_context(args).await,
-        Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Subagent(_) | Command::Route(_) =>
+        Command::Orchestration(_) | Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Subagent(_) | Command::Route(_) =>
             unreachable!("orchestration commands preserve their structured error contract"),
     }
 }
@@ -1065,6 +1067,7 @@ async fn main() -> ExitCode {
     };
     let result = match cli.command {
         Command::Widget(args) => run_widget(args).await,
+        Command::Orchestration(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Task(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Run(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Inbox(args) => args.run().await.map(|()| 0).map_err(CliError::from),

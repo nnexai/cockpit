@@ -59,7 +59,7 @@ export function useSupervisorViewNavigation(context: SupervisorViewInputs & Supe
       rowElement(id)?.focus({ preventScroll: true }); return;
     }
     const id = scope.selectedTask && taskIds.includes(scope.selectedTask) ? scope.selectedTask : taskIds[0];
-    if (id) focusRow(id); else rootRef.current?.querySelector<HTMLButtonElement>("[data-start-agent]")?.focus({ preventScroll: true });
+    if (id) focusRow(id); else rootRef.current?.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")?.focus({ preventScroll: true });
   };
   const saveOffsets = () => {
     const scroller = mode !== "tasks" ? graphRef.current : listRef.current;
@@ -120,7 +120,13 @@ export function useSupervisorViewNavigation(context: SupervisorViewInputs & Supe
   return { navOptions, taskIds, listRef, listProps, tabIndexFor, focusRow, rowElement, selectedVisibleId, revealSelection, focusTaskOrStart, saveOffsets, closeAttention, closePanel, closeDetail, escapeLayer, select, navigateRelation, switchView, dimFor, showItem, openPanel };
 }
 export function useSupervisorViewOpeningFocus(context: SupervisorViewInputs & SupervisorViewModel & SupervisorViewNavigation & SupervisorViewPanel) {
-  const { active, snapshot, initialRootSnapshot, opened, dialog, placement, panelKind, rootRef, focusTaskOrStart, root, rootId, focusedTask, taskIds, mode, lastTaskIds, scope, hasRetainedDraft, changed, focusRow, setFocusNotice, tasks, createdSelection, selectedAgent, detailSubagent, selectedNode, previousGraph, model, retainedDraftTaskId, focusWithinDetail, focusedGraph, rowElement } = context;
+  const { active, snapshot, initialRootSnapshot, opened, dialog, placement, panelKind, rootRef, focusTaskOrStart, root, rootId, focusedTask, taskIds, mode, lastTaskIds, scope, hasRetainedDraft, changed, focusRow, setFocusNotice, tasks, createdSelection, selectedAgent, detailSubagent, selectedNode, previousGraph, model, retainedDraftTaskId, rowElement } = context;
+  const lastDocumentFocus = useRef<Element | null>(document.activeElement);
+  useEffect(() => {
+    const recordFocus = () => { lastDocumentFocus.current = document.activeElement; };
+    document.addEventListener("focusin", recordFocus);
+    return () => document.removeEventListener("focusin", recordFocus);
+  }, []);
   useEffect(() => {
     if (!active) { opened.current = false; return; }
     if (!snapshot || snapshot === initialRootSnapshot.current || opened.current || dialog) return;
@@ -135,19 +141,25 @@ export function useSupervisorViewOpeningFocus(context: SupervisorViewInputs & Su
       const index = lastTaskIds.current.indexOf(id);
       if (scope.selectedTask === id && !hasRetainedDraft(id)) { scope.selectedTask = null; changed(); }
       const next = taskIds[Math.min(Math.max(index, 0), taskIds.length - 1)];
-      if (next) focusRow(next); else rootRef.current?.querySelector<HTMLButtonElement>("[data-start-agent]")?.focus({ preventScroll: true });
-      focusedTask.current = next ?? null; setFocusNotice(next ? "The focused task changed elsewhere. Focus moved to the next available task." : "The focused task changed elsewhere. Focus moved to Start agent.");
+      const removedFocus = lastDocumentFocus.current;
+      if (removedFocus && !removedFocus.isConnected && document.activeElement === document.body && removedFocus.closest("[data-row-id]")?.getAttribute("data-row-id") === id) {
+        if (next) focusRow(next); else rootRef.current?.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")?.focus({ preventScroll: true });
+        setFocusNotice(next ? "The focused task changed elsewhere. Focus moved to the next available task." : "The focused task changed elsewhere. Focus moved to the primary action.");
+      }
+      focusedTask.current = next ?? null;
     }
-    // Closed graph rows and removed canonical tasks are no longer selectable; kept Done tasks remain selectable in Tasks.
-    const gone = scope.selectedTask && !tasks.some(task => task.task.task_id === scope.selectedTask) && !hasRetainedDraft(scope.selectedTask) && createdSelection.current?.taskId !== scope.selectedTask || scope.selectedRun && (!selectedAgent || selectedAgent.stage === "closed") || scope.selectedSubagent && !detailSubagent;
+    // Missing rows are no longer selectable; saved closed workers and Done tasks remain inspectable in Tasks.
+    const gone = scope.selectedTask && !tasks.some(task => task.task.task_id === scope.selectedTask) && !hasRetainedDraft(scope.selectedTask) && createdSelection.current?.taskId !== scope.selectedTask || scope.selectedRun && !selectedAgent || scope.selectedSubagent && !detailSubagent;
     const graphItemRemoved = mode === "graph" && selectedNode && previousGraph.current?.scope === scope && previousGraph.current.ids.includes(selectedNode) && !model?.byId.has(selectedNode) && !retainedDraftTaskId;
     if (gone || graphItemRemoved) {
-      const hadFocus = focusWithinDetail.current || focusedGraph.current === selectedNode || !!rowElement(selectedNode)?.contains(document.activeElement);
+      const removedFocus = lastDocumentFocus.current;
+      const hadFocus = !!removedFocus && (!removedFocus.isConnected && document.activeElement === document.body || rootRef.current?.contains(document.activeElement)) && (!!removedFocus.closest(".supervisor-detail-panel") || removedFocus.closest("[data-row-id]")?.getAttribute("data-row-id") === selectedNode);
       scope.selectedTask = null; scope.selectedRun = null; scope.selectedSubagent = null; changed();
       if (hadFocus) {
         const oldIndex = selectedNode ? previousGraph.current?.ids.indexOf(selectedNode) ?? 0 : 0;
         const next = model?.layout.order[Math.min(Math.max(oldIndex, 0), model.layout.order.length - 1)];
         requestAnimationFrame(() => {
+          if (lastDocumentFocus.current !== removedFocus || document.activeElement !== document.body && document.activeElement !== removedFocus) return;
           if (mode === "graph" && next) rowElement(next)?.focus({ preventScroll: true });
           else if (mode === "graph") rootRef.current?.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')?.focus({ preventScroll: true });
           else focusTaskOrStart();
@@ -181,8 +193,7 @@ export function useSupervisorViewDialogFocus(context: SupervisorViewInputs & Pic
       intent.invoker,
       ...view.querySelectorAll<HTMLElement>(".supervisor-queue-row.is-decide .supervisor-queue-summary,.supervisor-queue-row.is-recover .supervisor-queue-summary,.supervisor-summary-counter.is-decide,.supervisor-summary-counter.is-recover"),
       view.querySelector<HTMLElement>(`[data-view-segment="${mode}"]`),
-      view.querySelector<HTMLElement>(".supervisor-start-options"),
-      view.querySelector<HTMLElement>('[data-start-agent]'),
+      view.querySelector<HTMLElement>(".supervisor-summary-shortcut button"),
       view.querySelector<HTMLElement>('[aria-label="Hide Supervisor"]'),
     ];
     for (const candidate of candidates) {

@@ -185,7 +185,7 @@ describe("Supervisor attention interactions", () => {
     expect(summaries()[0].getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("passes each summary counter invoker for focus restoration and replaces the shortcut when attention appears", async () => {
+  it("passes summary invokers while keeping the primary action available with attention counters", async () => {
     const counter = vi.fn(); const shortcut = vi.fn();
     const props = { rootLabel: "Supervisor", stateLabel: "Managing tasks", stateGlyph: "working" as const, observedLine: "2 agents observed", banner: null, queueMode: "overlay" as const, onCounter: counter, shortcut: { key: "terminal", label: "Open terminal", onActivate: shortcut } };
     await mount(<SupervisorSummary {...props} counts={{ decide: 0, recover: 0, notice: 0 }} />);
@@ -193,12 +193,11 @@ describe("Supervisor attention interactions", () => {
     click(terminal);
     expect(shortcut).toHaveBeenLastCalledWith(terminal);
     await act(async () => root!.render(<SupervisorSummary {...props} counts={{ decide: 1, recover: 2, notice: 0 }} />));
-    expect(host.querySelector(".supervisor-summary-shortcut")).toBeNull();
+    expect(host.querySelector(".supervisor-summary-shortcut")).not.toBeNull();
     const counters = [...host.querySelectorAll<HTMLButtonElement>(".supervisor-summary-counter")];
     click(counters[1]);
     expect(counter).toHaveBeenLastCalledWith("recover", counters[1]);
     expect(counters).toHaveLength(2);
-    expect(host.querySelectorAll("[aria-live]")).toHaveLength(1);
-    expect(host.querySelector("[aria-live]")?.contains(counters[0])).toBe(true);
+    expect(host.querySelectorAll("[aria-live], [role=status]")).toHaveLength(0);
   });
 });

@@ -255,6 +255,16 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
                   guard = after(Orchestration); status = service
             }
+            { id: orchestration_project_root_lookup, ctx: orchestration, out: ::cockpit_protocol::orchestration::ProjectRootLookupResponse,
+              call: $crate::transport::operations::orchestration::orchestration_project_root_lookup,
+              native: orchestration_project_root_lookup(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "orchestration"),
+              http: post "/api/v1/sessions/{session_id}/orchestration/project-roots"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::orchestration::ProjectRootLookupRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::operations::orchestration::project_root_lookup_input();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
+                  guard = after(Orchestration); status = service
+            }
             { id: orchestration_wait, ctx: orchestration, out: ::cockpit_protocol::orchestration::OrchestrationWaitResponse,
               call: $crate::transport::operations::orchestration::orchestration_wait,
               native: orchestration_wait(request: ::serde_json::Value)

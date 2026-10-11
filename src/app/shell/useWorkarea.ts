@@ -3,20 +3,21 @@ import { flushSync } from "react-dom";
 import type { LibraryCommand } from "../context/ContextViewer";
 
 export type Workarea = { kind: "terminal" } | { kind: "library"; command: LibraryCommand | null } | { kind: "notes" } | { kind: "supervisor" };
-export type SupervisorSurface = { modal: boolean; startSessionId: string | null; startToken: number };
+export type SupervisorStartIntent = "reuse_or_resume" | "another";
+export type SupervisorSurface = { modal: boolean; startSessionId: string | null; startToken: number; startIntent?: SupervisorStartIntent };
 export type WorkareaState = { view: Workarea; supervisor: SupervisorSurface | null };
 export interface WorkareaController extends WorkareaState {
   attachFocusSuppressed: boolean;
   setAttachFocusSuppressed(value: boolean): void;
   openLibrary(command?: { kind: "refresh" } | { kind: "tokens" } | { kind: "open"; itemId: string }): void;
-  closeLibrary(): void; openSupervisor(start?: boolean): void; closeSupervisor(): void;
+  closeLibrary(): void; openSupervisor(startIntent?: SupervisorStartIntent): void; closeSupervisor(): void;
   openNotes(): void; closeNotes(): void; leave(mode: "focus" | "keep"): void;
   exitForPaneCommand(execute: () => void): void; captureLibraryInvoker(invoker: HTMLElement | null): void;
   setSupervisorModal(modal: boolean): void;
 }
 export type WorkareaAction =
   | { type: "show"; view: Exclude<Workarea, { kind: "supervisor" }> }
-  | { type: "supervisor/open"; start: boolean; sessionId: string | null }
+  | { type: "supervisor/open"; startIntent?: SupervisorStartIntent; sessionId: string | null }
   | { type: "supervisor/modal"; modal: boolean }
   | { type: "session/reset" };
 export const initialWorkareaState: WorkareaState = { view: { kind: "terminal" }, supervisor: null };
@@ -25,10 +26,10 @@ export function workareaReducer(state: WorkareaState, action: WorkareaAction): W
     case "show": return { ...state, view: action.view };
     case "supervisor/open": {
       const surface = state.supervisor ?? { modal: false, startSessionId: null, startToken: 0 };
-      return { view: { kind: "supervisor" }, supervisor: action.start ? { ...surface, startSessionId: action.sessionId, startToken: surface.startToken + 1 } : surface };
+      return { view: { kind: "supervisor" }, supervisor: action.startIntent ? { ...surface, startSessionId: action.sessionId, startToken: surface.startToken + 1, startIntent: action.startIntent } : { ...surface, startSessionId: null, startIntent: undefined } };
     }
     case "supervisor/modal": return state.supervisor ? { ...state, supervisor: { ...state.supervisor, modal: action.modal } } : state;
-    case "session/reset": return state.supervisor ? { ...state, supervisor: { ...state.supervisor, startSessionId: null, startToken: 0 } } : state;
+    case "session/reset": return state.supervisor ? { ...state, supervisor: { ...state.supervisor, startSessionId: null, startToken: 0, startIntent: undefined } } : state;
   }
 }
 export function useWorkarea(sessionId: string | null, selectedPaneId: string | null): WorkareaController {
@@ -68,9 +69,9 @@ export function useWorkarea(sessionId: string | null, selectedPaneId: string | n
       requestAnimationFrame(() => focusDocument(60));
     }
   }, []);
-  const openSupervisor = useCallback((start = false) => {
+  const openSupervisor = useCallback((startIntent?: SupervisorStartIntent) => {
     setAttachFocusSuppressed(true);
-    dispatch({ type: "supervisor/open", start, sessionId });
+    dispatch({ type: "supervisor/open", startIntent, sessionId });
   }, [sessionId]);
   const closeSupervisor = useCallback(() => { dispatch({ type: "show", view: { kind: "terminal" } }); setAttachFocusSuppressed(false); }, []);
   const closeNotes = useCallback(() => { dispatch({ type: "show", view: { kind: "terminal" } }); setAttachFocusSuppressed(true); }, []);

@@ -1,7 +1,7 @@
 use super::{Applied, MutationCtx};
 use super::super::*;
 use super::tasks::{active_task_root, task_transition_target};
-use super::super::retirement;
+use super::super::{retirement, scope_intents};
 
 pub(in crate::orchestration) fn accept(
     ctx: &mut MutationCtx<'_>,
@@ -48,7 +48,10 @@ pub(in crate::orchestration) fn accept(
             "Task changed before acceptance",
         ));
     }
-    task_transition_target(state, &state.runs[index], &document, false)?;
+    super::integration::require_source_identity(&state.runs[index],
+        &state.runs[index].result.as_ref().expect("successful result").message_id,
+        &expected_task_revision)?;
+    task_transition_target(state, &state.runs[index], &document)?;
     let intent_id = id();
     state.task_intents.push(TaskIntent {
         intent_id: intent_id.clone(),
@@ -87,6 +90,7 @@ pub(in crate::orchestration) fn accept(
         Ok(_) => {
             state.task_intents.retain(|i| i.intent_id != intent_id);
             retirement::close_accepted(state, index, RetirementTrigger::Accept, &expected_task_revision);
+            mark_non_code_accepted(&mut state.runs[index]);
             let annotation = Annotation {
                 at: now(),
                 by: actor_ref(actor, caller, state),
@@ -159,8 +163,11 @@ pub(in crate::orchestration) fn resolve(
         }
         dependencies::DependencyGraph::new(&document.tasks).require(document.task(&intent.task_id)?)?;
         let revision = document.task(&intent.task_id)?.task_revision.clone();
+        super::integration::require_source_identity(&state.runs[index],
+            intent.result_message_id.as_deref().expect("validated Result"), &revision)?;
         document.check(&intent.task_id, &revision, true)?;
         retirement::close_accepted(state, index, RetirementTrigger::OperatorConflictResolution, &revision);
+        mark_non_code_accepted(&mut state.runs[index]);
         state.runs[index].annotations.push(Annotation {
             at: now(), by: ActorRef::Operator,
             text: format!("Operator resolved acceptance conflict using current canonical task revision {revision}; prior requested Result {:?}.", intent.result_message_id),
@@ -168,6 +175,15 @@ pub(in crate::orchestration) fn resolve(
     }
     state.task_intents.retain(|i| i.intent_id != intent_id);
     Ok(Applied::Machine(OrchestrationActionResult::Done))
+}
+
+fn mark_non_code_accepted(run: &mut Run) {
+    if let Some(SourceOutput::NonCode { result_message_id, .. }) = &run.source_output {
+        run.integration = Integration::NotApplicable {
+            reason: "Accepted non-code output has no Git integration".into(),
+            result_message_id: result_message_id.clone(),
+        };
+    }
 }
 
 impl OrchestrationService {
@@ -185,6 +201,15 @@ impl OrchestrationService {
             true
         });
         assignment_recovery?;
+        let scope_recovery = scope_intents::recover(&locked, &mut state);
+        self.revision.send_if_modified(|revision| {
+            if *revision == state.revision {
+                return false;
+            }
+            *revision = state.revision;
+            true
+        });
+        scope_recovery?;
         let mut changed = false;
         for intent in state.task_intents.clone() {
             if intent.state == IntentState::Conflict {
@@ -198,7 +223,10 @@ impl OrchestrationService {
                     == Some(ReportOutcome::Succeeded)
                 && (run.stage == RunStage::Reported
                     || (run.stage == RunStage::Closed
-                        && run.close_reason == Some(CloseReason::Accepted)));
+                        && run.close_reason == Some(CloseReason::Accepted)))
+                && run.result.as_ref().is_some_and(|result|
+                    super::integration::require_source_identity(run, &result.message_id,
+                        &intent.expected_task_revision).is_ok());
             if !valid_receipt
                 || intent.result_message_id.as_ref().is_none_or(|message_id| {
                     state.runs[index]
@@ -255,6 +283,7 @@ impl OrchestrationService {
             if outcome {
                 let index = run_index(&state, &intent.run_id)?;
                 retirement::close_accepted(&mut state, index, RetirementTrigger::AcceptRecovery, &intent.expected_task_revision);
+                mark_non_code_accepted(&mut state.runs[index]);
                 state
                     .task_intents
                     .retain(|i| i.intent_id != intent.intent_id);

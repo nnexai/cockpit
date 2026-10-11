@@ -5,10 +5,10 @@ import { deriveAttention, rootAttentionSummary } from "./attention";
 const at = "2026-10-07T12:00:00Z";
 function run(runId: string, rootId = "root", taskId: string | null = null): Run {
   return { session_id: "session", run_id: runId, root_id: rootId, parent_run_id: runId === rootId ? null : rootId,
-    kind: runId === rootId ? "supervisor" : "worker", label: runId, prepare_brief: "", task_id: taskId, attempt: 1,
-    task_revision_at_propose: null, stage: "working", close_reason: null, dispatch: null, target: null, setup: null,
-    prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null,
-    annotations: [], location: null, bound_omp_session: null, bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at };
+    kind: runId === rootId ? "supervisor" : "worker", label: runId, brief: "", task_id: taskId, attempt: 1,
+    task_revision_at_start: null, stage: "working", close_reason: null, dispatch: null, target: null, setup: null,
+    cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" },
+    annotations: [], project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at };
 }
 function task(id = "task", currentRunId: string | null = "worker"): TaskView {
   return { task: { task_id: id, title: "Improve search", body: "Keep behavior", description: "Keep behavior", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "revision", diagnostic: null }, lane: "working", current_run_id: currentRunId, dependencies: { state: "none", unmet: [], problems: [] } };
@@ -16,14 +16,15 @@ function task(id = "task", currentRunId: string | null = "worker"): TaskView {
 function snapshot(attention: Attention[], runs = [run("root"), run("worker", "root", "task")]): OrchestrationSnapshot {
   const currentRuns = runs.map(run => {
     const question = attention.find(item => item.kind === "needs_input" && item.run_id === run.run_id);
-    return question ? { ...run, last_report: { message_id: `question-${run.run_id}`, kind: "needs_input" as const, outcome: null, summary: "Which checkout?", plan: null, at: question.since } } : run;
+    return question ? { ...run, last_report: { message_id: `question-${run.run_id}`, kind: "needs_input" as const, outcome: null, summary: "Which checkout?", plan: null, source_output: null, at: question.since } } : run;
   });
-  return { session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs: currentRuns, messages: [], subagents: [],
+  return { state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs: currentRuns, messages: [], subagents: [],
     questions: currentRuns.filter(run => run.stage !== "closed" && run.last_report?.kind === "needs_input").map(run => ({ run_id: run.run_id, question_message_id: run.last_report!.message_id, asked_at: run.last_report!.at, receipt: { status: "unresolved" } })),
     intents: [], assignment_intents: [], attention, unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [] } };
 }
 const entry = (kind: Attention["kind"], runId = "worker", since = at, taskId: string | null = null): Attention => ({ kind, run_id: runId, task_id: taskId, message_seq: null, since });
 const retirementIdentity: RetirementIdentity = {
+  attachment_id: null, attachment_epoch: null, launch_mode: null,
   run_attempt: 1, launch_attempt: 1, launch_tag: "launch", endpoint_identity: "endpoint", session_id: "session",
   workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", herdr_boot_id: "boot",
   omp_session_id: "omp", process: { pid: 101, start_ticks: 1000, kernel_boot_id: "kernel-boot" },
@@ -31,19 +32,36 @@ const retirementIdentity: RetirementIdentity = {
 };
 
 describe("Supervisor attention boundaries", () => {
-  it("keeps supervisor preparation, execution, review and worker questions out of the user queue", () => {
+  it("keeps supervisor review and worker questions out of the user queue", () => {
     const state = snapshot([
-      entry("awaits_prepare"), entry("awaits_execute"), entry("to_accept"), entry("needs_input"),
+      entry("to_accept"), entry("needs_input"),
       entry("needs_input", "root"),
     ]);
     const model = deriveAttention({ snapshot: state, rootId: "root", local: [] });
     expect(model.counts).toEqual({ decide: 1, recover: 0, notice: 0 });
     expect(model.items[0].runId).toBe("root");
-    expect(model.supervisorOwned.map(item => item.kind).sort()).toEqual(["awaits_execute", "awaits_prepare", "needs_input", "to_accept"]);
+    expect(model.supervisorOwned.map(item => item.kind).sort()).toEqual(["needs_input", "to_accept"]);
     expect(model.tierForTask(task())).toBeNull();
     expect(model.ownedForRun("worker")?.since).toBe(at);
     state.attention = state.attention.filter(item => !(item.kind === "needs_input" && item.run_id === "root"));
     expect(deriveAttention({ snapshot: state, rootId: "root", local: [] }).total).toBe(0);
+  });
+
+  it("does not turn an initialized diagnostic report into a permission or decision", () => {
+    const worker = run("worker", "root", "task");
+    worker.stage = "starting";
+    worker.last_report = { message_id: "initialized", kind: "initialized", outcome: null, summary: "Initialization observed", plan: null, source_output: null, at };
+    const state = snapshot([], [run("root"), worker]);
+    const model = deriveAttention({ snapshot: state, rootId: "root", local: [] });
+    expect(model.total).toBe(0);
+    expect(model.supervisorOwned).toEqual([]);
+    expect(model.tierForTask(task())).toBeNull();
+    expect(rootAttentionSummary(state, "root")).toEqual({ decide: 0, recover: 0, notice: 0 });
+  });
+  it("keeps routine unread-brief bookkeeping out of every queue counter", () => {
+    const state = snapshot([entry("brief_unread"), entry("brief_unread", "root")]);
+    expect(deriveAttention({ snapshot: state, rootId: "root", local: [] }).counts).toEqual({ decide: 0, recover: 0, notice: 0 });
+    expect(rootAttentionSummary(state, "root")).toEqual({ decide: 0, recover: 0, notice: 0 });
   });
 
   it("deduplicates recovery causes while retaining core priority and the earliest age", () => {
@@ -62,7 +80,7 @@ describe("Supervisor attention boundaries", () => {
   it("groups acceptance and assignment notices by task without promoting ordinary review to Decide", () => {
     const model = deriveAttention({ snapshot: snapshot([
       entry("to_accept"), entry("intent_conflict", "worker", at, "task"),
-      entry("idle_without_report"), entry("brief_unread"), entry("plan_changed"),
+      entry("idle_without_report"), entry("brief_unread"),
     ]), rootId: "root", local: [{ kind: "assignment", taskId: "task", state: "conflict" }] });
     expect(model.counts).toEqual({ decide: 0, recover: 0, notice: 2 });
     const conflict = model.items.find(item => item.subject.kind === "task")!;
@@ -83,7 +101,7 @@ describe("Supervisor attention boundaries", () => {
 
   it("isolates roots and counts only user-facing core subjects in the root selector", () => {
     const state = snapshot([
-      entry("needs_input", "root"), entry("awaits_execute"), entry("needs_input"),
+      entry("needs_input", "root"), entry("to_accept"), entry("needs_input"),
       entry("runtime_blocked"), entry("dispatch_unknown"), entry("needs_input", "second"),
       entry("exited_without_report", "second-worker"), entry("needs_input", "missing"),
     ], [run("root"), run("worker"), run("second", "second"), run("second-worker", "second")]);
@@ -130,6 +148,7 @@ describe("Supervisor attention boundaries", () => {
     worker.retirement = {
       retirement_id: "retirement", trigger: "accept", result_message_id: "result", task_revision: "revision",
       identity: retirementIdentity, state: { state: "unknown", at, phase: "terminal_close", detail: "Closure outcome unknown" },
+      quiescent_stop_at: null,
       created_at: at, updated_at: at,
     };
     const checked = task();
@@ -150,20 +169,27 @@ describe("Supervisor attention boundaries", () => {
     expect(combined.items[0].since).toBe(earlier);
   });
 
-  it("does not manufacture queue work for retained, waiting or absent retirement records", () => {
+  it.each(["pending", "running", "waiting", "waiting_integration", "reconciling", "removed", "kept", "stalled", "unknown"] as const)("projects cleanup %s without promoting routine waits to decisions", cleanupState => {
     const worker = run("worker", "root", "task");
     worker.stage = "closed"; worker.close_reason = "accepted";
     const state = snapshot([], [run("root"), worker]);
-    expect(deriveAttention({ snapshot: state, rootId: "root", local: [] }).total).toBe(0);
-    worker.retirement = {
-      retirement_id: "retirement", trigger: "accept", result_message_id: "result", task_revision: "revision",
-      identity: null, state: { state: "retained", at, reason: "identity_incomplete", native_stopped: false },
-      created_at: at, updated_at: at,
-    };
-    expect(deriveAttention({ snapshot: state, rootId: "root", local: [] }).total).toBe(0);
-    worker.retirement.identity = retirementIdentity;
-    worker.retirement.state = { state: "waiting", blockers: ["running_subagents"] };
-    expect(deriveAttention({ snapshot: state, rootId: "root", local: [] }).total).toBe(0);
+    state.cleanup = [{ run_id: "worker", removed_count: cleanupState === "removed" ? 1 : 0, waiting_count: ["pending", "running", "waiting", "waiting_integration", "reconciling", "stalled"].includes(cleanupState) ? 1 : 0, kept_count: cleanupState === "kept" ? 1 : 0, unknown_count: cleanupState === "unknown" ? 1 : 0,
+      items: [{ resource_id: "worktree", kind: "worktree", ownership: "owned", cleanup: { operation_id: null, state: cleanupState, reason: cleanupState === "kept" ? { class: "user_work", code: "dirty_worktree", message: "uncommitted changes" } : null, effects: [], updated_at: at } }] }];
+    const expected = cleanupState === "unknown" ? { decide: 0, recover: 1, notice: 0 } : cleanupState === "kept" || cleanupState === "stalled" ? { decide: 0, recover: 0, notice: 1 } : { decide: 0, recover: 0, notice: 0 };
+    expect(deriveAttention({ snapshot: state, rootId: "root", local: [] }).counts).toEqual(expected);
+    expect(rootAttentionSummary(state, "root")).toEqual(expected);
+    expect(rootAttentionSummary(state, "another-root")).toEqual({ decide: 0, recover: 0, notice: 0 });
+  });
+  it("deduplicates a cleanup unknown with its core recovery row and preserves checked task context", () => {
+    const worker = run("worker", "root", "task");
+    worker.stage = "closed"; worker.close_reason = "accepted";
+    const state = snapshot([entry("retirement_unconfirmed", "worker", at, "task")], [run("root"), worker]);
+    state.cleanup = [{ run_id: "worker", removed_count: 0, waiting_count: 0, kept_count: 0, unknown_count: 1,
+      items: [{ resource_id: "terminal", kind: "worker_terminal", ownership: "owned", cleanup: { operation_id: null, state: "unknown", reason: null, effects: [], updated_at: at } }] }];
+    const model = deriveAttention({ snapshot: state, rootId: "root", local: [] });
+    expect(model.counts).toEqual({ decide: 0, recover: 1, notice: 0 });
+    expect(model.items[0].sources).toHaveLength(2);
+    expect(model.itemsForTask({ ...task(), current_run_id: null })).toEqual(model.itemsForRun("worker"));
   });
 
   it("keeps explicit orphan recovery without a selected root and uses collision-safe subject ids", () => {

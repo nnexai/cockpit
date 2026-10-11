@@ -1,8 +1,11 @@
 use std::time::Duration;
 
-use cockpit_core::orchestration::{Actor, caller::retirement_read_scope};
+use cockpit_core::orchestration::{
+    Actor, AgentCaller, NativeAgentKind,
+    caller::{location_matches, not_ready, retirement_read_scope, settling_caller_matches},
+};
 use cockpit_protocol::orchestration::{
-    CloseReason, OrchestrationSnapshot, OrchestrationWaitRequest, RetirementState, Run,
+    AgentKind, CloseReason, OrchestrationSnapshot, OrchestrationWaitRequest, RetirementState, Run,
     RunRetirement, RunStage,
 };
 use serde::Serialize;
@@ -27,10 +30,13 @@ impl Context {
         let (id, _) = caller.env_run.as_ref().ok_or_else(|| {
             CliError::new(
                 "caller_mismatch",
-                "retirement requires the exact inherited run attempt",
+                "retirement requires the exact authoritative launch attempt",
             )
         })?;
-        let run = self.service.run_for_review(&self.session, id)?;
+        let run = self.service.job_run_retirement(caller)?;
+        if run.run_id != *id || run.session_id != self.session {
+            return Err(CliError::new("caller_mismatch", "Retirement job and physical caller differ"));
+        }
         retirement_read_scope(&run, caller)?;
         Ok(run)
     }
@@ -48,9 +54,13 @@ impl Context {
         let (id, _) = caller.env_run.as_ref().ok_or_else(|| {
             CliError::new(
                 "caller_mismatch",
-                "retirement requires the exact inherited run attempt",
+                "retirement requires the exact authoritative launch attempt",
             )
         })?;
+        let authorized = self.service.job_run_retirement(caller)?;
+        if authorized.run_id != *id || authorized.session_id != self.session {
+            return Err(CliError::new("caller_mismatch", "Retirement job and physical caller differ"));
+        }
         let run = snapshot
             .runs
             .iter()
@@ -137,10 +147,9 @@ pub(super) fn require_retirement_caller(args: &OrchestrationArgs) -> Result<(), 
     if args.omp_pid.is_none()
         || !matches!(args.agent_kind, Some(AgentKindArg::Main))
         || args.subagent_id.is_some()
-        || args.env_run()?.is_none()
     {
         return Err(CliError::usage(
-            "retirement requires an inherited run attempt, --omp-pid and --agent-kind main",
+            "retirement requires a job credential, --omp-pid and --agent-kind main",
         ));
     }
     required_session(args)?;
@@ -167,9 +176,16 @@ pub(super) async fn receipt(
     args: RetirementReceiptArgs,
     json: bool,
 ) -> Result<(), CliError> {
-    context.retiring_run_for_review()?;
+    let run = context.retiring_run_for_review()?;
     let action = args.action()?;
     context.check_retirement_process()?;
+    if let cockpit_protocol::orchestration::OrchestrationAction::RetirementNativeReceipt {
+        retirement_id, outcome: cockpit_protocol::orchestration::NativeStopReceipt::ShutdownRequested,
+    } = &action {
+        context.service.retirement_shutdown_preflight(
+            context.adapter.as_ref(), &run.run_id, retirement_id,
+        ).await?;
+    }
     let result = context.mutate(action).await?;
     context.check_retirement_process().map_err(|error| {
         CliError::new(
@@ -272,6 +288,37 @@ pub(super) fn main_wait_read(
     })
 }
 
+fn open_main_wait_scope(run: &Run, caller: &AgentCaller) -> Result<(), CliError> {
+    let mismatch = || CliError::new("caller_mismatch", "Wait requires this exact ordinary main attachment");
+    if caller.agent_kind != Some(AgentKind::Main) || caller.subagent_id.is_some()
+        || caller.env_run.as_ref().is_none_or(|(id, _)| id != &run.run_id)
+        || caller.session_id != run.session_id {
+        return Err(mismatch());
+    }
+    if caller.env_run.as_ref().is_none_or(|(_, attempt)| *attempt != run.attempt) {
+        return Err(CliError::new("attempt_stale", "Caller run attempt is stale"));
+    }
+    let attachment = run.attachment.as_ref().ok_or_else(mismatch)?;
+    if caller.omp_session_id.as_deref().is_none_or(str::is_empty)
+        || caller.omp_session_id != attachment.main_session_id {
+        return Err(CliError::new("session_mismatch", "Wait main session differs from binding"));
+    }
+    let location = attachment.location.as_ref().ok_or_else(mismatch)?;
+    if caller.auth.attachment_id != attachment.attachment_id
+        || caller.auth.attachment_epoch != attachment.epoch
+        || caller.process.is_none() || caller.process != attachment.process
+        || !location_matches(location, attachment.main_session_id.as_deref(), caller)
+        || caller.workspace_id != location.workspace_id || caller.tab_id != location.tab_id
+        || caller.pane_id != location.pane_id {
+        return Err(mismatch());
+    }
+    match caller.actual_agent_kind.as_ref() {
+        Some(NativeAgentKind::Omp) => Ok(()),
+        None if settling_caller_matches(run, caller, run.attempt) => Err(not_ready().into()),
+        _ => Err(mismatch()),
+    }
+}
+
 pub(super) fn completed_main_wait<'a>(
     context: &Context,
     snapshot: &'a OrchestrationSnapshot,
@@ -279,11 +326,20 @@ pub(super) fn completed_main_wait<'a>(
 ) -> Result<MainWaitRead<'a>, CliError> {
     // Context::snapshot already completed its fresh postcheck: no fourth runtime.
     context.check_retirement_process()?;
-    let run = context.own_retiring_run(snapshot)?;
+    let Some(Actor::Agent(caller)) = &context.actor else {
+        return Err(CliError::new("credential_required", "Wait requires a private job credential"));
+    };
+    let authorized = context.authenticated_run(caller)?;
+    let run = if authorized.stage == RunStage::Closed {
+        context.own_retiring_run(snapshot)?
+    } else {
+        let run = context.own_run(snapshot)?;
+        open_main_wait_scope(run, caller)?;
+        run
+    };
     let inbox = if run.stage == RunStage::Closed {
         None // Never inspect even secret-containing snapshot.messages after acceptance.
     } else {
-        context.own_run(snapshot)?;
         Some(inbox_counts(&snapshot.messages, &run.run_id, after))
     };
     main_wait_read(run, inbox)
@@ -292,7 +348,17 @@ pub(super) fn completed_main_wait<'a>(
 pub(super) fn main_wait_deadline_run(context: &Context) -> Result<Run, CliError> {
     // Caller has just completed the CPU-owned fresh runtime timeout fence.
     context.check_retirement_process()?;
-    context.retiring_run_for_review()
+    let Some(Actor::Agent(caller)) = &context.actor else {
+        return Err(CliError::new("credential_required", "Wait requires a private job credential"));
+    };
+    let authorized = context.authenticated_run(caller)?;
+    if authorized.stage == RunStage::Closed {
+        context.retiring_run_for_review()
+    } else {
+        let run = context.service.job_run(caller)?;
+        open_main_wait_scope(&run, caller)?;
+        Ok(run)
+    }
 }
 
 pub(super) fn empty_main_wait_read(run: &Run, after: u64) -> Result<MainWaitRead<'_>, CliError> {

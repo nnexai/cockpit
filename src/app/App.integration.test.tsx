@@ -236,6 +236,7 @@ class AppFixture {
     orchestrationSnapshot: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     orchestrationMutate: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     orchestrationWait: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
+    orchestrationProjectRootLookup: vi.fn(async () => { throw new Error("Unexpected project root lookup in terminal fixture"); }),
     planWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     startWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     workspaceOperation: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
@@ -1231,12 +1232,16 @@ describe("merged local workarea lifecycle", () => {
   it("starts from Commands in the current Space through the same single-entry workarea without changing Herdr focus", async () => {
     const fixture = new AppFixture();
     vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
+      state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
       roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "fresh", endpoint_identity: "fixture-endpoint", observed_at: "2026-10-06T12:00:00Z", runs: [] },
     });
     vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
-    vi.mocked(fixture.client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "run", run_id: "new-root", attempt: 1 } });
+    vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
+      if (request.action.action !== "supervisor_start") throw new Error("Expected supervisor start");
+      return { revision: 2, result: { result: "supervisor_started", start: { root_id: "new-root", outcome: "created", operation_id: request.action.operation_id, resume_operation_id: null, duplicate: false } } };
+    });
     await mount(fixture);
     const selectedBefore = selectedLeaf();
     fixture.focusCalls.mockClear();
@@ -1245,7 +1250,7 @@ describe("merged local workarea lifecycle", () => {
     await settle();
     expect(fixture.client.orchestrationMutate).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toEqual({
-      action: "supervisor_start", target: { target: "existing_space", workspace_id: snapshot("session-1").focused_space_id }, label: null,
+      action: "supervisor_start", operation_id: expect.any(String), mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: snapshot("session-1").focused_space_id }, label: null, selected_root_id: null, expected_project_key: null,
     });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(fixture.client.planWorkspace).not.toHaveBeenCalled();
@@ -1266,6 +1271,7 @@ describe("merged local workarea lifecycle", () => {
     emptyLibrary(fixture);
     vi.mocked(fixture.client.notes).mockRejectedValue(new CockpitClientError("http_error", "No notes are bound", { operationCode: "notes_unbound" }));
     vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
+      state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
       roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "No runtime observation" } },
@@ -1330,6 +1336,7 @@ describe("merged local workarea lifecycle", () => {
     await settle();
 
     observation.resolve({
+      state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
       roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "Late observation" } },

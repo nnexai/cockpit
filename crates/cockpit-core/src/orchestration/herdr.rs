@@ -11,36 +11,25 @@ pub trait OrchestrationHerdr: Send + Sync {
         session_id: &str,
         request: &AgentTabRequest,
     ) -> Result<RunLocation, InspectionError>;
-    /// A successful response means the shell command was accepted, not that
-    /// OMP started or bound its Cockpit integration.
-    async fn start_agent(
+    /// Create a new, unfocused tab whose PTY owns the direct command process.
+    /// Requires a persisted launch intent. An acknowledgement is not a connected
+    /// OMP attachment; uncertain effects must be reconciled, never replayed.
+    async fn create_direct_agent_tab(
         &self,
-        session_id: &str,
-        request: &AgentStartRequest,
-    ) -> Result<(), InspectionError>;
+        _session_id: &str,
+        _request: &DirectAgentTabRequest,
+    ) -> Result<RunLocation, InspectionError> {
+        Err(InspectionError::new(
+            "direct_agent_launch_unsupported",
+            "This Herdr adapter does not support direct agent tab creation",
+        ))
+    }
     async fn pane_process_info(
         &self,
         session_id: &str,
         endpoint_identity: &str,
         pane_id: &str,
     ) -> Result<PaneProcessInfo, InspectionError>;
-    /// Reconcile Herdr's expired Pending metadata on an exact recorded pane.
-    /// Success is not evidence that its queued command or native process stopped.
-    async fn expire_pending_agent(
-        &self,
-        session_id: &str,
-        endpoint_identity: &str,
-        pane_id: &str,
-    ) -> Result<(), InspectionError>;
-    /// Reclaim an exclusive recorded launch tab by closing its exact owned pane
-    /// after fresh identity validation, preserving any racing foreign split.
-    /// Requires a committed Core close intent; SDK-binding revocation is Core's
-    /// responsibility. The acknowledgement is not an absence/cancellation proof.
-    async fn close_owned_launch_tab(
-        &self,
-        session_id: &str,
-        location: &RunLocation,
-    ) -> Result<(), InspectionError>;
     /// A close acknowledgement is not proof of absence; callers must obtain a
     /// fresh observation and must never repeat an uncertain close.
     async fn close_pane(
@@ -59,14 +48,18 @@ pub struct AgentTabRequest {
     pub env: BTreeMap<String, String>,
     pub launch_tag: String,
 }
+/// Direct-process launch provenance is recorded on the execution attachment,
+/// separately from this location receipt and subsequent native OMP evidence.
 #[derive(Debug, Clone)]
-pub struct AgentStartRequest {
+pub struct DirectAgentTabRequest {
     pub endpoint_identity: String,
-    pub pane_id: String,
-    pub name: String,
-    pub kind: String,
-    pub args: Vec<String>,
-    pub timeout_ms: u64,
+    pub workspace_id: String,
+    pub cwd: String,
+    pub label: String,
+    pub env: BTreeMap<String, String>,
+    pub launch_tag: String,
+    /// Executable followed by literal arguments, never shell command text.
+    pub command: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneProcessInfo {
@@ -105,4 +98,42 @@ pub struct RuntimePane {
     pub interactive_ready: bool,
     pub agent_status: Option<String>,
     pub state_changed_at: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct UnsupportedDirectAdapter;
+
+    #[async_trait]
+    impl OrchestrationHerdr for UnsupportedDirectAdapter {
+        async fn runtime(&self, _: &str) -> Result<RuntimeView, InspectionError> {
+            panic!("unsupported direct launch must not inspect runtime")
+        }
+        async fn create_agent_tab(&self, _: &str, _: &AgentTabRequest) -> Result<RunLocation, InspectionError> {
+            panic!("unsupported direct launch must not fall back to a shell tab")
+        }
+        async fn pane_process_info(&self, _: &str, _: &str, _: &str) -> Result<PaneProcessInfo, InspectionError> {
+            panic!("unsupported direct launch must not inspect a pane")
+        }
+        async fn close_pane(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> {
+            panic!("unsupported direct launch must not close a pane")
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_launch_default_explicitly_refuses_unsupported_adapters() {
+        let request = DirectAgentTabRequest {
+            endpoint_identity: "endpoint".into(),
+            workspace_id: "workspace".into(),
+            cwd: "/work/repository".into(),
+            label: "launch-tag".into(),
+            env: BTreeMap::new(),
+            launch_tag: "launch-tag".into(),
+            command: vec!["omp".into()],
+        };
+        let error = UnsupportedDirectAdapter.create_direct_agent_tab("fixture", &request).await.unwrap_err();
+        assert_eq!(error.code, "direct_agent_launch_unsupported");
+    }
 }

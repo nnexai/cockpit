@@ -9,6 +9,7 @@ use cockpit_protocol::orchestration::{
     OperatorOrigin, OrchestrationMutationRequest, OrchestrationMutationResponse,
     OrchestrationSnapshot, OrchestrationSnapshotRequest, OrchestrationWaitRequest,
     OrchestrationWaitResponse,
+    ProjectRootLookupRequest, ProjectRootLookupResponse,
 };
 use serde::Deserialize;
 
@@ -20,6 +21,16 @@ use crate::{
         http_input::{self, Reject},
     },
 };
+
+/// Installed command-line contract. This does not construct or contact a runtime.
+/// Native GUI startup must not answer this as a GUI transport.
+pub fn orchestration_protocol() -> serde_json::Value {
+    serde_json::json!({
+        "orchestration_protocol": 2,
+        "store_schema": 2,
+        "client_role": "host",
+    })
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,6 +80,32 @@ pub fn mutation_input() -> impl FnOnce(
     }
 }
 
+pub fn project_root_lookup_input() -> impl FnOnce(
+    (Path<String>, Result<Json<ProjectRootLookupRequest>, JsonRejection>),
+) -> Result<ProjectRootLookupRequest, OperationError> {
+    |(path, body)| {
+        let (session_id, request): (String, ProjectRootLookupRequest) =
+            http_input::session_body(
+                Reject("invalid_session_id", "Session ID is invalid"),
+                Reject("invalid_orchestration_request", "Expected a project root lookup request"),
+            )((path, body))?;
+        if request.session_id != session_id {
+            return Err(OperationError::rejected(
+                "session_mismatch", "Path and request session IDs differ",
+            ));
+        }
+        Ok(request)
+    }
+}
+
+pub async fn orchestration_project_root_lookup(
+    runtime: &OrchestrationRuntime,
+    _transport: Transport,
+    request: ProjectRootLookupRequest,
+) -> Result<ProjectRootLookupResponse, OperationError> {
+    runtime.project_root_lookup(&request).await.map_err(Into::into)
+}
+
 pub async fn orchestration_snapshot(
     runtime: &OrchestrationRuntime,
     _transport: Transport,
@@ -98,4 +135,33 @@ pub async fn orchestration_wait(
 ) -> Result<OrchestrationWaitResponse, OperationError> {
     // No service mutex is held across the long poll.
     runtime.wait(&request).await.map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_lookup_fences_path_session_and_unknown_fields() {
+        let request = ProjectRootLookupRequest {
+            session_id: "session".into(),
+            workspace_id: "space".into(),
+            selected_root_id: None,
+        };
+        let matched = project_root_lookup_input()((Path("session".into()), Ok(Json(request.clone()))));
+        assert!(matched.is_ok());
+        let mismatched = project_root_lookup_input()((Path("other".into()), Ok(Json(request))));
+        assert!(mismatched.is_err());
+        assert!(serde_json::from_value::<ProjectRootLookupRequest>(serde_json::json!({
+            "session_id": "session", "workspace_id": "space", "selected_root_id": null,
+            "project_key": "caller-asserted",
+        })).is_err());
+    }
+
+    #[test]
+    fn protocol_descriptor_is_host_cli_not_herdr_protocol() {
+        assert_eq!(orchestration_protocol(), serde_json::json!({
+            "orchestration_protocol": 2, "store_schema": 2, "client_role": "host",
+        }));
+    }
 }

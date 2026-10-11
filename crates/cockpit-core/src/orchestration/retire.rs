@@ -1,8 +1,5 @@
-//! Lease-fenced effects for accepted workers. CloseIntent is a write-ahead,
-//! non-replayable effect boundary, not permission to retry a pane close.
-//! Fingerprints prove original launch-shell provenance, not shell idleness.
-//! After OS-proven worker exit, the approved owned-pane policy permits
-//! closing that original shell even during indistinguishable builtin work.
+//! Incarnation-fenced cooperative stop and accepted-worker cleanup effects.
+//! CloseIntent is a write-ahead, non-replayable effect boundary.
 use std::{collections::BTreeMap, time::{Duration, Instant}};
 use parking_lot::Mutex;
 
@@ -112,8 +109,8 @@ pub(super) async fn retire_run(
                 Ok(running) => running,
                 Err(_) => return effect.retain(RetainReason::NativeProcessUnverifiable, false),
             };
-            match retirement::classify_offer(identity, &runtime, info.as_ref(), running,
-                boot_id.as_deref()) {
+            let decision = retirement::classify_offer(identity, &runtime, info.as_ref(), running, boot_id.as_deref());
+            match decision {
                 OfferDecision::Offer => effect.save(RetirementState::NativeStopOffered { offered_at: now() }),
                 OfferDecision::AlreadyExited => effect.save(RetirementState::NativeStopped {
                     at: now(), evidence: NativeStopEvidence::AlreadyExited,
@@ -165,6 +162,13 @@ pub(super) async fn retire_run(
                 Ok(Err(TerminalDecision::Retain(reason))) => return effect.retain(reason, true),
                 Err(_) => return effect.observation_unavailable(at, true),
             }
+            // Main exit and an empty foreground group do not certify detached
+            // descendants/async consumers or seal new writer admissions.
+            // No installed native certificate producer exists, so preserve
+            // the container and claim rather than issue an unsafe close.
+            if record.quiescent_stop_at.is_none() {
+                return effect.retain(RetainReason::NativeProcessUnverifiable, true);
+            }
             effect.save(RetirementState::CloseIntent { at: now() })?;
             // From here onwards all saves expect CloseIntent, not the stale
             // NativeStopped record. Both preflights are uncached reads.
@@ -187,8 +191,31 @@ pub(super) async fn retire_run(
             effect.verify_close(Some(response)).await
         }
         RetirementState::CloseIntent { .. } => effect.verify_close(None).await,
-        RetirementState::Retired { .. } | RetirementState::Retained { .. }
-        | RetirementState::Unknown { .. } => { observations.clear(&run.run_id); Ok(()) }
+        RetirementState::Unknown { phase, .. } => {
+            // Unknown effects reconcile by observation only. Neither shutdown
+            // requests nor pane.close may be replayed after the deadline.
+            if !observations.ready(&run, record) { return Ok(()); }
+            match phase {
+                RetirementPhase::NativeStop => {
+                    if matches!(exact_running(&identity.process,
+                        process_identity::kernel_boot_id().as_deref()), Ok(false)) {
+                        effect.save(RetirementState::NativeStopped {
+                            at: now(), evidence: NativeStopEvidence::ExitedAfterShutdownRequest,
+                        })
+                    } else { observations.unavailable(&run, record); Ok(()) }
+                }
+                RetirementPhase::TerminalClose => {
+                    let fresh = herdr.runtime(&identity.session_id).await.ok();
+                    let next = retirement::classify_close(identity, None, fresh.as_ref());
+                    if matches!(next, RetirementState::Retired { .. }) {
+                        effect.save(next)
+                    } else { observations.unavailable(&run, record); Ok(()) }
+                }
+            }
+        }
+        RetirementState::Retired { .. } | RetirementState::Retained { .. } => {
+            observations.clear(&run.run_id); Ok(())
+        }
     }
 }
 
@@ -233,6 +260,13 @@ impl Effect<'_> {
             PaneProcessInfo { pane_id: self.identity.pane_id.clone(), shell_pid: None,
                 foreground_pgid: None, processes: vec![], shell_identity: None }
         };
+        if self.identity.launch_mode == Some(cockpit_protocol::orchestration::AttachmentLaunchMode::DirectProcess) {
+            match exact_running(&self.identity.process, process_identity::kernel_boot_id().as_deref()) {
+                Ok(false) => {},
+                Ok(true) => return Ok(Err(TerminalDecision::Retain(RetainReason::ForegroundProcess))),
+                Err(_) => return Ok(Err(TerminalDecision::Retain(RetainReason::NativeProcessUnverifiable))),
+            }
+        }
         Ok(retirement::classify_terminal(self.identity, &runtime, &info))
     }
     async fn verify_close(&self, response: Option<Result<(), InspectionError>>) -> Result<(), InspectionError> {

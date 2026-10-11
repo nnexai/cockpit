@@ -94,7 +94,7 @@
 .supervisor-lane-header > .ui-icon, .supervisor-lane-header button { margin-left: auto; }
 .supervisor-lane-header button { min-height: 24px; padding: 2px; border-color: transparent; background: transparent; }
 .supervisor-lane-dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: var(--idle); flex: 0 0 7px; }
-:is(.supervisor-lane,.supervisor-lane-group):is(.is-setup,.is-ready) .supervisor-lane-dot { background: var(--accent); }
+:is(.supervisor-lane,.supervisor-lane-group).is-starting .supervisor-lane-dot { background: var(--accent); }
 :is(.supervisor-lane,.supervisor-lane-group).is-working .supervisor-lane-dot { background: var(--working); }
 :is(.supervisor-lane,.supervisor-lane-group).is-review .supervisor-lane-dot { background: var(--warning); }
 :is(.supervisor-lane,.supervisor-lane-group).is-accepted .supervisor-lane-dot { background: var(--done); }

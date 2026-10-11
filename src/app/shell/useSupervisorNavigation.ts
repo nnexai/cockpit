@@ -15,7 +15,8 @@ export function useSupervisorNavigation({ state, onFocus }: WorkbenchProps, supe
     if (state.sync !== "live" || !pane || !snapshot?.tabs.some(tab => tab.id === pane.tab_id && tab.space_id === pane.space_id)) throw new Error("Terminal membership is no longer current. Refresh observation.");
     // Session server_instance is a SHA-256 prefix, not the raw endpoint identity.
     // Endpoint fencing comes from the fresh run observation and its launch receipt.
-    if (run && (orchestration?.runtime.status !== "fresh" || !run.location || run.location.session_id !== state.sessionId || run.location.endpoint_identity !== orchestration.runtime.endpoint_identity || !orchestration.runtime.runs.some(observation => observation.run_id === run.run_id && observation.presence === "present" && observation.pane_id === pane.id && observation.workspace_id === pane.space_id && observation.tab_id === pane.tab_id))) throw new Error("The run's current Herdr location is not confirmed. Reconcile before navigating.");
+    const location = run?.attachment?.location;
+    if (run && (orchestration?.runtime.status !== "fresh" || !location || run.attachment?.state === "revoked" || location.session_id !== state.sessionId || location.endpoint_identity !== orchestration.runtime.endpoint_identity || !orchestration.runtime.runs.some(observation => observation.run_id === run.run_id && observation.presence === "present" && observation.pane_id === pane.id && observation.workspace_id === pane.space_id && observation.tab_id === pane.tab_id))) throw new Error("The run's current Herdr location is not confirmed. Reconcile before navigating.");
     if (supervisorNavigationAck.current) throw new Error("Another terminal navigation is awaiting acknowledgement.");
     const promise = new Promise<void>((resolve, reject) => {
       supervisorNavigationAck.current = { sessionId: state.sessionId, resolve, reject };

@@ -308,6 +308,24 @@ describe("command consumers", () => {
     expect(buildCommands(input).find(row => row.id === "subscription-limits")).toBeDefined();
   });
 
+  it("routes observational Show separately from reuse/resume and distinct Start intents", () => {
+    const input = commandInput();
+    input.view.selectedSpace = undefined;
+    input.view.selectedTab = undefined;
+    input.view.selectedLeaf = undefined;
+    input.view.selectedPane = undefined;
+    input.view.live = false;
+    const rows = buildCommands(input);
+    for (const id of ["show-supervisor", "start-supervisor", "start-another-supervisor"]) {
+      expect(rows.find(row => row.id === id)?.disabled).not.toBe(true);
+      expect(rows.find(row => row.id === id)?.shortcut).toBeUndefined();
+    }
+    rows.find(row => row.id === "show-supervisor")!.run();
+    rows.find(row => row.id === "start-supervisor")!.run();
+    rows.find(row => row.id === "start-another-supervisor")!.run();
+    expect(vi.mocked(input.run.supervisor).mock.calls).toEqual([[], ["reuse_or_resume"], ["another"]]);
+  });
+
   it("gates missing selections and renderer capabilities without losing their details", () => {
     const input = commandInput();
     input.view.selectedSpace = undefined;
@@ -375,7 +393,7 @@ describe("command consumers", () => {
 
 describe("local workarea transitions", () => {
   it("keeps the inactive Supervisor surface when switching among local views and terminals", () => {
-    const supervisor = workareaReducer(initialWorkareaState, { type: "supervisor/open", sessionId: "session-1", start: true });
+    const supervisor = workareaReducer(initialWorkareaState, { type: "supervisor/open", sessionId: "session-1", startIntent: "reuse_or_resume" });
     const command = { kind: "refresh" as const, token: 1 };
     const library = workareaReducer(supervisor, { type: "show", view: { kind: "library", command } });
     const notes = workareaReducer(library, { type: "show", view: { kind: "notes" } });
@@ -386,20 +404,33 @@ describe("local workarea transitions", () => {
     expect(library.supervisor).toEqual(supervisor.supervisor);
     expect(notes.supervisor).toEqual(supervisor.supervisor);
     expect(terminal.supervisor).toEqual(supervisor.supervisor);
-    const reopened = workareaReducer(terminal, { type: "supervisor/open", sessionId: "session-1", start: false });
+    const reopened = workareaReducer(terminal, { type: "supervisor/open", sessionId: "session-1" });
     expect(reopened.view.kind).toBe("supervisor");
-    expect(reopened.supervisor).toEqual(supervisor.supervisor);
+    expect(reopened.supervisor).toEqual({ ...supervisor.supervisor, startSessionId: null, startIntent: undefined });
+  });
+
+  it("pairs explicit Start intents with monotonic tokens and cancels deferred intent on Show", () => {
+    const shown = workareaReducer(initialWorkareaState, { type: "supervisor/open", sessionId: "session-1" });
+    expect(shown.supervisor).toEqual({ modal: false, startSessionId: null, startToken: 0, startIntent: undefined });
+    const started = workareaReducer(shown, { type: "supervisor/open", sessionId: "session-1", startIntent: "reuse_or_resume" });
+    expect(started.supervisor).toEqual({ modal: false, startSessionId: "session-1", startToken: 1, startIntent: "reuse_or_resume" });
+    const another = workareaReducer(started, { type: "supervisor/open", sessionId: "session-1", startIntent: "another" });
+    expect(another.supervisor).toEqual({ modal: false, startSessionId: "session-1", startToken: 2, startIntent: "another" });
+    const shownAgain = workareaReducer(another, { type: "supervisor/open", sessionId: "session-1" });
+    expect(shownAgain.supervisor).toEqual({ modal: false, startSessionId: null, startToken: 2, startIntent: undefined });
+    expect(workareaReducer(shownAgain, { type: "supervisor/open", sessionId: "session-1", startIntent: "reuse_or_resume" }).supervisor)
+      .toEqual({ modal: false, startSessionId: "session-1", startToken: 3, startIntent: "reuse_or_resume" });
   });
 
   it("does not replay Library commands or carry a Supervisor start request into another session", () => {
     const library = workareaReducer(initialWorkareaState, { type: "show", view: { kind: "library", command: { kind: "tokens", token: 1 } } });
     const notes = workareaReducer(library, { type: "show", view: { kind: "notes" } });
     expect(workareaReducer(notes, { type: "show", view: { kind: "library", command: null } }).view).toEqual({ kind: "library", command: null });
-    const started = workareaReducer(notes, { type: "supervisor/open", sessionId: "session-1", start: true });
+    const started = workareaReducer(notes, { type: "supervisor/open", sessionId: "session-1", startIntent: "another" });
     const modal = workareaReducer(started, { type: "supervisor/modal", modal: true });
     const reset = workareaReducer(modal, { type: "session/reset" });
     expect(reset.view.kind).toBe("supervisor");
-    expect(reset.supervisor).toEqual({ modal: true, startSessionId: null, startToken: 0 });
-    expect(workareaReducer(reset, { type: "supervisor/open", sessionId: "session-2", start: true }).supervisor).toEqual({ modal: true, startSessionId: "session-2", startToken: 1 });
+    expect(reset.supervisor).toEqual({ modal: true, startSessionId: null, startToken: 0, startIntent: undefined });
+    expect(workareaReducer(reset, { type: "supervisor/open", sessionId: "session-2", startIntent: "reuse_or_resume" }).supervisor).toEqual({ modal: true, startSessionId: "session-2", startToken: 1, startIntent: "reuse_or_resume" });
   });
 });

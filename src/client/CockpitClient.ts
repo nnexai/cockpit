@@ -5,11 +5,13 @@ import type {
   OrchestrationSnapshotRequest, OrchestrationSnapshot,
   OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationWaitRequest, OrchestrationWaitResponse,
+  ProjectRootLookupRequest, ProjectRootLookupResponse,
 } from "../protocol/generated/v1";
 export type {
   OrchestrationSnapshotRequest, OrchestrationSnapshot,
   OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationWaitRequest, OrchestrationWaitResponse,
+  ProjectRootLookupRequest, ProjectRootLookupResponse,
 } from "../protocol/generated/v1";
 import type {
   WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent,
@@ -330,6 +332,8 @@ export interface TerminalStream extends ClosableStream {
 export interface CockpitClient {
   status(): Promise<StatusResponse>;
   orchestrationSnapshot(request: OrchestrationSnapshotRequest): Promise<OrchestrationSnapshot>;
+  /** Read-only host resolution for this Space; unavailable identity is not an empty match set. */
+  orchestrationProjectRootLookup(request: ProjectRootLookupRequest): Promise<ProjectRootLookupResponse>;
   orchestrationMutate(request: OrchestrationMutationRequest): Promise<OrchestrationMutationResponse>;
   orchestrationWait(request: OrchestrationWaitRequest): Promise<OrchestrationWaitResponse>;
   /** Cached subscription limits; provider CLIs own authentication and collection. */

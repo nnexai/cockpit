@@ -458,7 +458,9 @@ pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
     let browser_runtime = config.browser_runtime.clone();
     let orchestration_runtime = config.orchestration_runtime.clone();
     if let (Some(orchestration), Some(browser)) = (&orchestration_runtime, &browser_runtime) {
-        orchestration.start_owner(browser.is_owner().await).await;
+        orchestration
+            .start_owner(browser.is_owner().await)
+            .await;
     }
     let router = build_router_with_validated_root(
         config.service,

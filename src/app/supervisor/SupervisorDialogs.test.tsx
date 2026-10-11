@@ -2,20 +2,28 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OrchestrationActionResult, OrchestrationSnapshot, Run, SpaceSummary, Subagent, TaskView } from "../../protocol/generated/v1";
+import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, Run, SpaceSummary, Subagent, TaskView } from "../../protocol/generated/v1";
 import { SupervisorDialogs, TaskSourceDialog, type TaskSourceDialogState } from "./SupervisorDialogs";
 import type { EditDraft, FollowUpDraft, RelationDraft } from "./useSupervisorDrafts";
-import type { SourceResolution, SourceSubmission } from "./useSupervisor";
+import type { SourceResolution, SourceSubmission, TaskMutationOutcome } from "./useSupervisor";
 
 const at = "2026-10-07T12:00:00Z";
+const requestScope = { stateStoreId: "store", sessionId: "session", rootId: "root", expectedRevision: null };
+function competingRun(): Run {
+  return run({ resume: { operation_id: "00000000-0000-4000-8000-000000000001", run_id: "root", previous_attachment_epoch: null, phase: "blocked", cause: { code: "live_writer_conflict", message: "Another writer is still running", class: "decision" }, decision_id: "00000000-0000-4000-8000-000000000003", replacement_attachment_epoch: null, updated_at: at } });
+}
+async function startResponse(action: OrchestrationAction): Promise<OrchestrationActionResult> {
+  if (action.action !== "supervisor_start") throw new Error("Expected supervisor start");
+  return { result: "supervisor_started", start: { root_id: "new-root", outcome: "created", operation_id: action.operation_id, resume_operation_id: null, duplicate: false } };
+}
 function run(overrides: Partial<Run> = {}): Run {
-  return { session_id: "session", prepare_brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_propose: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launch_unknown", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null, annotations: [], location: null, bound_omp_session: null, bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at, ...overrides };
+  return { session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launch_unknown", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" }, annotations: [], project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
 }
 function task(): TaskView {
   return { task: { task_id: "task", title: "Current title", body: "Current body", description: "Current body", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "current-revision", diagnostic: null }, lane: "queued", current_run_id: null, dependencies: { state: "none", unmet: [], problems: [] } };
 }
 function snapshot(runs: Run[] = [run()], tasks: TaskView[] = [task()]): OrchestrationSnapshot {
-  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: [], board: { root_id: "root", path: "/state/tasks.md", doc_revision: "document", unidentified_items: 0, diagnostics: [], tasks }, runs, messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(item => ({ run_id: item.run_id, presence: "missing", actual_omp: false, workspace_id: null, workspace_label: null, tab_id: null, tab_label: null, pane_id: null, agent_status: null, state_changed_at: at })) } };
+  return { session_id: "session", state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, revision: 1, tasks_token: "tasks", roots: [], board: { root_id: "root", path: "/state/tasks.md", doc_revision: "document", unidentified_items: 0, diagnostics: [], tasks }, runs, messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(item => ({ run_id: item.run_id, presence: "missing", actual_omp: false, workspace_id: null, workspace_label: null, tab_id: null, tab_label: null, pane_id: null, agent_status: null, state_changed_at: at })) } };
 }
 const space: SpaceSummary = { id: "space", label: "Project", number: 1, tab_count: 1, pane_count: 1, focused: true, agent_status: "idle", git: null };
 const subagent: Subagent = { run_id: "root", subagent_id: "sub", bound_omp_session: null, parent_subagent_id: null, role: "scout", label: "Research", status: "running", summary: null, last_control: null, updated_at: at };
@@ -28,7 +36,7 @@ async function mount(dialog: Props["dialog"], overrides: Partial<Props> = {}) {
   opener.textContent = "Open dialog"; document.body.append(opener, host); opener.focus(); root = createRoot(host);
   let open = true;
   const render = () => root!.render(open ? <SupervisorDialogs {...props} /> : null);
-  const props: Props = { dialog, snapshot: snapshot(), spaces: [space], startDraft: { label: "", location: "existing", spaceId: "space", directory: "" }, changed: render, busy: false, available: true, mutateResult: vi.fn(async () => ({ result: "done" as const })), onStarted: vi.fn(), onStartUnconfirmed: vi.fn(), onCheck: vi.fn(), onClose: vi.fn(() => { open = false; render(); }), ...overrides };
+  const props: Props = { dialog, snapshot: snapshot("run" in dialog ? [dialog.run] : [run()]), spaces: [space], startDraft: { label: "", location: "existing", spaceId: "space", directory: "" }, changed: render, busy: false, available: true, mutateResult: vi.fn(async () => ({ result: "done" as const })), captureMutationScope: vi.fn(() => requestScope), onStarted: vi.fn(), onStartUnconfirmed: vi.fn(), onClose: vi.fn(() => { open = false; render(); }), ...overrides };
   await act(async () => render());
   return { props, rerender: async (next: Partial<Props>) => { Object.assign(props, next); await act(async () => render()); } };
 }
@@ -72,7 +80,7 @@ afterEach(async () => { if (root) await act(async () => root!.unmount()); root =
 
 describe("Supervisor dialog mutation boundaries", () => {
   it("prevents invalid destinations and clears the inline error after a valid selection", async () => {
-    const fixture = await mount({ mode: "start" }, { startDraft: { label: " Agent ", location: "existing", spaceId: "gone", directory: "" }, mutateResult: vi.fn(async () => ({ result: "run" as const, run_id: "new-root", attempt: 1 })) });
+    const fixture = await mount({ mode: "start" }, { startDraft: { label: " Agent ", location: "existing", spaceId: "gone", directory: "" }, mutateResult: vi.fn(startResponse) });
     await submit();
     const field = document.querySelectorAll<HTMLSelectElement>("select")[1];
     expect(field.getAttribute("aria-invalid")).toBe("true");
@@ -81,7 +89,7 @@ describe("Supervisor dialog mutation boundaries", () => {
     enter(field, "space");
     expect(field.hasAttribute("aria-invalid")).toBe(false);
     await submit();
-    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "supervisor_start", target: { target: "existing_space", workspace_id: "space" }, label: "Agent" });
+    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "supervisor_start", operation_id: expect.any(String), mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: "space" }, label: "Agent", selected_root_id: "root", expected_project_key: null }, requestScope);
     expect(fixture.props.onStarted).toHaveBeenCalledWith("new-root");
     expect(document.activeElement).toBe(opener);
   });
@@ -94,18 +102,77 @@ describe("Supervisor dialog mutation boundaries", () => {
     expect(fixture.props.mutateResult).not.toHaveBeenCalled();
   });
   it("requires an absolute directory and keeps setup launches unfocused", async () => {
-    const fixture = await mount({ mode: "start" }, { startDraft: { label: " Agent ", location: "directory", spaceId: "space", directory: "relative" }, mutateResult: vi.fn(async () => ({ result: "run" as const, run_id: "new-root", attempt: 1 })) });
+    const fixture = await mount({ mode: "start" }, { startDraft: { label: " Agent ", location: "directory", spaceId: "space", directory: "relative" }, mutateResult: vi.fn(startResponse) });
     await submit();
     const field = document.querySelectorAll<HTMLInputElement>("input")[1];
     expect(field.getAttribute("aria-invalid")).toBe("true");
     expect(fixture.props.mutateResult).not.toHaveBeenCalled();
     enter(field, " /project "); await submit();
-    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "supervisor_start", label: "Agent", target: { target: "setup", request: { operation: "open", path: "/project", label: "Agent", task_name: null, focus: false } } });
+    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "supervisor_start", operation_id: expect.any(String), mode: "reuse_or_resume", label: "Agent", selected_root_id: "root", expected_project_key: null, target: { target: "setup", request: { operation: "open", path: "/project", label: "Agent", task_name: null, focus: false } } }, requestScope);
   });
   it("keeps dedicated-folder startup as a real supervisor launch", async () => {
-    const fixture = await mount({ mode: "start" }, { startDraft: { label: "", location: "dedicated", spaceId: "space", directory: "" }, mutateResult: vi.fn(async () => ({ result: "run" as const, run_id: "new-root", attempt: 1 })) });
+    const fixture = await mount({ mode: "start" }, { startDraft: { label: "", location: "dedicated", spaceId: "space", directory: "" }, mutateResult: vi.fn(startResponse) });
     await submit();
-    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "supervisor_start", target: null, label: null });
+    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "supervisor_start", operation_id: expect.any(String), mode: "reuse_or_resume", target: null, label: null, selected_root_id: "root", expected_project_key: null }, requestScope);
+  });
+  it("requests another supervisor only after explicit additional intent", async () => {
+    const fixture = await mount({ mode: "start" }, { startDraft: { label: "", location: "existing", spaceId: "space", directory: "", intent: "another" }, mutateResult: vi.fn(startResponse) });
+    expect(document.querySelector('input[type="checkbox"]')).toBeNull();
+    await submit();
+    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "supervisor_start", operation_id: expect.any(String), mode: "another", target: { target: "existing_space", workspace_id: "space" }, label: null, selected_root_id: "root", expected_project_key: null }, requestScope);
+  });
+  it("retries the original retained start rather than retargeting after uncertain delivery", async () => {
+    const operation: Extract<OrchestrationAction, { action: "supervisor_start" }> = { action: "supervisor_start", operation_id: "00000000-0000-4000-8000-000000000001", mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: "original-space" }, label: "Original", selected_root_id: "original-root", expected_project_key: null };
+    const startDraft = { label: "Original", location: "existing" as const, spaceId: "original-space", directory: "", operation, requestScope };
+    const fixture = await mount({ mode: "start" }, { startDraft, spaces: [], mutateResult: vi.fn(startResponse) });
+    expect(document.querySelector<HTMLInputElement>('input')!.disabled).toBe(true);
+    await submit();
+    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith(operation, requestScope);
+    expect(startDraft.operation).toBeUndefined();
+    expect(fixture.props.onStarted).toHaveBeenCalledWith("new-root");
+  });
+  it("refuses to reconstruct missing original Start request scope from a newer observation", async () => {
+    const operation: Extract<OrchestrationAction, { action: "supervisor_start" }> = { action: "supervisor_start", operation_id: "00000000-0000-4000-8000-000000000001", mode: "reuse_or_resume", target: null, label: null, selected_root_id: null, expected_project_key: null };
+    const fixture = await mount({ mode: "start" }, { startDraft: { label: "", location: "dedicated", spaceId: "", directory: "", operation } });
+    await submit();
+    expect(fixture.props.captureMutationScope).not.toHaveBeenCalled();
+    expect(fixture.props.mutateResult).not.toHaveBeenCalled();
+    expect(fixture.props.startDraft.operation).toBe(operation);
+  });
+  it("retains source submission and exact CAS before dispatch completes", async () => {
+    const draft = editDraft();
+    let resolve!: (outcome: TaskMutationOutcome<SourceSubmission>) => void;
+    const promise = new Promise<TaskMutationOutcome<SourceSubmission>>(accept => { resolve = accept; });
+    const submitTask = vi.fn<SourceProps["submitTask"]>(submitted => {
+      expect(draft.submitted).toBe(submitted);
+      expect(draft.submitted?.action).toMatchObject({ action: "task_update", expected_task_revision: "current-revision" });
+      return promise;
+    });
+    await mountSource({ mode: "edit", task: task(), draft, scope: taskScope }, { submitTask });
+    await submit();
+    expect(draft.submitted?.submissionId).toEqual(expect.any(String));
+    await act(async () => resolve({ kind: "confirmed", task: task().task }));
+    expect(draft.submitted).toBeNull();
+  });
+  it("retains refused source UUID and CAS until an explicit reviewed new operation", async () => {
+    const draft = editDraft();
+    const fixture = await mountSource({ mode: "edit", task: task(), draft, scope: taskScope }, { submitTask: vi.fn(async (): Promise<TaskMutationOutcome<SourceSubmission>> => ({ kind: "refused", operationCode: "task_revision_conflict", message: "Task changed" })) });
+    await submit();
+    const original = draft.submitted!;
+    expect(original.action).toMatchObject({ expected_task_revision: "current-revision", title: "My title" });
+    const newer = task(); newer.task.task_revision = "newer-revision";
+    await fixture.rerender({ snapshot: snapshot([run()], [newer]), writeUnconfirmed: true });
+    expect(draft.submitted).toBe(original);
+    await submit();
+    expect(fixture.props.submitTask).toHaveBeenCalledTimes(1);
+  });
+  it("refuses a changed writer decision instead of silently rebasing replacement CAS", async () => {
+    const saved = competingRun();
+    const fixture = await mount({ mode: "replace", run: saved });
+    await fixture.rerender({ snapshot: snapshot([run({ resume: { ...saved.resume!, decision_id: "00000000-0000-4000-8000-000000000099" } })]) });
+    await submit();
+    expect(fixture.props.mutateResult).not.toHaveBeenCalled();
+    expect(document.querySelector("[role=dialog]")?.textContent).toContain("replacement decision changed");
   });
   it.each(["Keep my draft for reviewed save", "Use current"])("%s advances only the explicitly reviewed description revision", async choice => {
     const draft = editDraft("old-revision");
@@ -151,15 +218,11 @@ describe("Supervisor dialog mutation boundaries", () => {
     expect(writeText).toHaveBeenCalledExactlyOnceWith("My title\n\nMy body");
     expect(draft).toMatchObject({ title: "My title", description: "My body", revision: "current-revision" });
   });
-  it("checks the latest run without retrying its launch, then restores the opener", async () => {
-    const original = run(); const fixture = await mount({ mode: "retry", run: original });
-    const latest = run({ label: "Updated supervisor", dispatch: { ...original.dispatch!, step: "needs_review" } });
-    const next = snapshot([latest]);
-    if (next.runtime.status === "fresh") next.runtime.runs[0].presence = "endpoint_changed";
-    await fixture.rerender({ snapshot: next });
-    expect(document.querySelector(".supervisor-dialog-observed")?.textContent).toContain("endpoint changed");
-    await click(button("Check again first"));
-    expect(fixture.props.onCheck).toHaveBeenCalledExactlyOnceWith(latest);
+  it("focuses Keep existing and treats Escape as keeping the current writer without mutation", async () => {
+    const fixture = await mount({ mode: "replace", run: competingRun() });
+    expect(document.activeElement).toBe(button("Keep existing"));
+    expect(document.querySelector("[role=dialog]")?.textContent).not.toContain("Restart anyway");
+    key("Escape");
     expect(fixture.props.mutateResult).not.toHaveBeenCalled();
     expect(document.querySelector("[role=dialog]")).toBeNull();
     expect(document.activeElement).toBe(opener);
@@ -175,13 +238,19 @@ describe("Supervisor dialog mutation boundaries", () => {
     expect(document.querySelector("[role=dialog]")?.textContent).toContain("and 2 more");
     expect(document.querySelector("[role=dialog]")?.textContent).not.toContain("Unrelated sibling");
     await submit();
-    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "cancel_run", run_id: "worker" });
+    expect(fixture.props.mutateResult).toHaveBeenCalledTimes(1);
+    const [action, retainedScope] = vi.mocked(fixture.props.mutateResult).mock.calls[0];
+    expect(action).toEqual({ action: "cancel_run", run_id: "worker" });
+    expect(retainedScope).toBeUndefined();
   });
   it.each(["accept_existing_worktree", "retry_environment", null] as const)("recovers setup using the explicit %s choice without launching", async recovery => {
     const saved = run(); saved.dispatch = { ...saved.dispatch!, step: "setup_unknown", recovery };
     const fixture = await mount({ mode: "setup_recovery", run: saved });
     await click(primary());
-    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "reconcile_run", run_id: "root", recovery });
+    expect(fixture.props.mutateResult).toHaveBeenCalledTimes(1);
+    const [action, retainedScope] = vi.mocked(fixture.props.mutateResult).mock.calls[0];
+    expect(action).toEqual({ action: "reconcile_run", run_id: "root", recovery });
+    expect(retainedScope).toBeUndefined();
   });
   it("keeps a subagent running when cancellation is dismissed", async () => {
     const fixture = await mount({ mode: "subagent_cancel", run: run(), subagent });
@@ -191,25 +260,35 @@ describe("Supervisor dialog mutation boundaries", () => {
   it("sends cancellation to the selected internal subagent, not its parent run", async () => {
     const fixture = await mount({ mode: "subagent_cancel", run: run(), subagent });
     await click(button("Request cancellation"));
-    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "subagent_control", run_id: "root", subagent_id: "sub", op: { op: "cancel" } });
-  });
-  it.each(["null", "throw"])("keeps non-edit outcomes nonretryable after %s uncertainty", async outcome => {
-    const fixture = await mount({ mode: "retry", run: run() }, { mutateResult: vi.fn(async () => { if (outcome === "throw") throw new Error("Transport lost"); return null; }) });
-    await submit();
-    expect(primary().disabled).toBe(true);
-    await submit();
-    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "retry_launch", run_id: "root" });
-    expect(document.querySelector("[role=dialog]")).not.toBeNull();
-  });
-  it("locks Escape and repeated requests in flight, then restores focus after confirmation", async () => {
-    let resolve!: (result: OrchestrationActionResult) => void;
-    const promise = new Promise<OrchestrationActionResult>(accept => { resolve = accept; });
-    const fixture = await mount({ mode: "retry", run: run() }, { mutateResult: vi.fn(() => promise) });
-    await submit(); key("Escape"); await submit();
-    expect(fixture.props.onClose).not.toHaveBeenCalled();
     expect(fixture.props.mutateResult).toHaveBeenCalledTimes(1);
-    await act(async () => resolve({ result: "done" }));
-    expect(document.activeElement).toBe(opener);
+    const [action, retainedScope] = vi.mocked(fixture.props.mutateResult).mock.calls[0];
+    expect(action).toEqual({ action: "subagent_control", run_id: "root", subagent_id: "sub", op: { op: "cancel" } });
+    expect(retainedScope).toBeUndefined();
+  });
+  it.each(["null", "throw"])("keeps replacement nonretryable in the same dialog after %s uncertainty", async outcome => {
+    const fixture = await mount({ mode: "replace", run: competingRun() }, { mutateResult: vi.fn(async () => { if (outcome === "throw") throw new Error("Transport lost"); return null; }) });
+    await submit(); await submit();
+    expect(primary().disabled).toBe(true);
+    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith({ action: "run_resume", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: null, mode: "replace_existing", decision_id: competingRun().resume!.decision_id }, requestScope);
+  });
+  it("replays the frozen replacement and rejects a receipt for another operation", async () => {
+    const operation: Extract<OrchestrationAction, { action: "run_resume" }> = { action: "run_resume", run_id: "root", operation_id: "00000000-0000-4000-8000-000000000004", expected_attachment_epoch: 7, mode: "replace_existing", decision_id: competingRun().resume!.decision_id };
+    const fixture = await mount({ mode: "replace", run: competingRun(), operation, requestScope }, { mutateResult: vi.fn(async (): Promise<OrchestrationActionResult> => ({ result: "run_resumed", resume: { run_id: "root", resume: { ...competingRun().resume!, operation_id: "00000000-0000-4000-8000-000000000002", phase: "launching" }, duplicate: false } })) });
+    await submit();
+    expect(fixture.props.mutateResult).toHaveBeenCalledExactlyOnceWith(operation, requestScope);
+    expect(primary().disabled).toBe(true);
+    expect(fixture.props.onClose).not.toHaveBeenCalled();
+  });
+  it("truthfully refuses unsupported same-boot handover without claiming stopping or resuming", async () => {
+    const fixture = await mount({ mode: "replace", run: competingRun() }, { mutateResult: vi.fn(async (action): Promise<OrchestrationActionResult> => {
+      if (action.action !== "run_resume") throw new Error("Expected resume");
+      return { result: "run_resumed", resume: { run_id: "root", resume: { ...competingRun().resume!, operation_id: action.operation_id, cause: { code: "same_boot_unsupported", message: "Replacement is not supported here", class: "recover" } }, duplicate: false } };
+    }) });
+    await submit();
+    expect(document.querySelector("[role=dialog]")?.textContent).toContain("Existing agent kept · Replacement is not supported here");
+    expect(document.querySelector("[role=dialog]")?.textContent).not.toContain("Stopping the existing agent…");
+    expect(fixture.props.onClose).not.toHaveBeenCalled();
+    expect(primary().disabled).toBe(true);
   });
   it.each(["close", "subagent_cancel"] as const)("contains focus while every %s dialog control is disabled in flight", async mode => {
     let resolve!: (result: OrchestrationActionResult) => void;

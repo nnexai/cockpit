@@ -3,9 +3,10 @@ use std::{future::Future, sync::Arc, time::Duration};
 use clap::Parser;
 use cockpit_core::orchestration::{Actor, AgentCaller, OrchestrationService};
 use cockpit_protocol::orchestration::{
-    CloseReason, DeliveryStage, DispatchStep, MessageKind, NativeDeferReason,
-    NativeProcessIdentity, NativeShellIdentity, OrchestrationSnapshot, RetirementIdentity,
-    RetirementPhase, RetirementState, Run, RunLocation, RunStage,
+    AttachmentLaunchMode, CloseReason, DeliveryStage, DispatchStep, MessageKind, NativeDeferReason,
+    NativeProcessIdentity, NativeShellIdentity, OrchestrationAction, OrchestrationSnapshot,
+    OrchestrationSnapshotRequest, RetirementIdentity, RetirementPhase, RetirementState, Run,
+    RunLocation, RunStage,
 };
 use sha2::{Digest, Sha256};
 
@@ -20,7 +21,10 @@ use super::super::{
     },
     wait::{InboxCounts, KindCount, next_snapshot},
 };
-use super::{TestCli, TestCommand, accept_retirement, retirement_fixture, socket::SocketFixture};
+use super::{
+    TestCli, TestCommand, accept_retirement, retirement_fixture, socket::SocketFixture,
+    test_checkout_claim, test_credential_record, test_job_auth,
+};
 
 #[test]
 fn retirement_wait_tracks_acceptance_and_never_spins_on_unchanged_offer() {
@@ -112,59 +116,22 @@ fn inbox_retirement_envelope_never_exposes_mail_after_acceptance() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn retirement_wait_crosses_acceptance_without_quiet_herdr_reads() {
+async fn retirement_wait_tracks_accepted_metadata_without_quiet_herdr_reads() {
     let fixture = SocketFixture::new().await;
-    let mut caller = match fixture.context.actor.as_ref().unwrap() {
-        Actor::Agent(caller) => caller.clone(),
-        _ => panic!("expected native caller"),
-    };
-    let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
-    let parent: u32 = stat[stat.rfind(')').unwrap() + 1..]
-        .split_whitespace()
-        .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap();
-    caller.process = Some(native_process_evidence(parent).unwrap());
-    caller.env_run = Some(("worker".into(), 2));
-    let (mut run, _) = retirement_fixture();
-    run.bound_omp_process = caller.process.clone();
-    run.bound_omp_session = caller.omp_session_id.clone();
-    run.location = Some(RunLocation {
-        boot_id: caller.boot_id.clone(),
-        terminal_id: caller.terminal_id.clone(),
-        native_session_id: caller.native_session_id.clone(),
-        endpoint_identity: caller.endpoint_identity.clone(),
-        session_id: caller.session_id.clone(),
-        workspace_id: caller.workspace_id.clone(),
-        tab_id: caller.tab_id.clone(),
-        pane_id: caller.pane_id.clone(),
-        launch_tag: "launch".into(),
-    });
-    run.dispatch.as_mut().unwrap().endpoint_identity = Some(caller.endpoint_identity.clone());
-    let context = Arc::new(Context {
-        service: OrchestrationService::open(&fixture.configuration).unwrap(),
-        adapter: fixture.context.adapter.clone(),
-        session: "fixture".into(),
-        actor: Some(Actor::Agent(caller.clone())),
-        evidence: fixture.context.evidence.clone(),
-    });
-    let publish = |run: &Run, revision| {
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "schema": 1, "revision": revision, "runs": [run],
-            "messages": [], "subagents": [], "task_intents": [], "assignment_intents": [],
-        }))
-        .unwrap();
-        let temporary = context.service.base().join("retirement-test.next");
-        std::fs::write(&temporary, bytes).unwrap();
-        std::fs::rename(temporary, context.service.base().join("state.json")).unwrap();
-    };
-    publish(&run, 1_u64);
+    let (context, mut run, caller) = main_wait_socket_context(&fixture).await;
+    accept_retirement(&mut run, &caller);
+    publish_main_wait_run(&fixture, &run);
     let (initial_ready, initial_response) = fixture.gate(0);
     let (mut final_ready, final_response) = fixture.gate(0);
     let waiting_context = context.clone();
-    let waiting = tokio::spawn(async move { retirement_wait(&waiting_context, true, 10).await });
-    initial_ready.await.unwrap();
+    let mut waiting = tokio::spawn(async move { retirement_wait(&waiting_context, true, 10).await });
+    main_wait_test_step("accepted wait initial physical read", &fixture, async {
+        tokio::select! {
+            result = initial_ready => result.unwrap(),
+            result = &mut waiting => panic!("wait completed before initial physical read: {result:?}"),
+        }
+    })
+    .await;
     initial_response
         .send(Some(fixture.payload.lock().clone()))
         .unwrap();
@@ -174,22 +141,21 @@ async fn retirement_wait_crosses_acceptance_without_quiet_herdr_reads() {
             .await
             .is_err()
     );
-    run.stage = RunStage::Reported;
-    publish(&run, 2);
+    // Republishing an unchanged accepted offer must not make a quiet wait
+    // perform another physical read or return unchanged metadata.
+    publish_main_wait_run(&fixture, &run);
     assert!(
         tokio::time::timeout(Duration::from_millis(1100), &mut final_ready)
             .await
             .is_err()
     );
-    accept_retirement(&mut run, &caller);
-    run.retirement
-        .as_mut()
-        .unwrap()
-        .identity
-        .as_mut()
-        .unwrap()
-        .omp_session_id = caller.omp_session_id.clone().unwrap();
-    publish(&run, 3);
+    run.retirement.as_mut().unwrap().state = RetirementState::NativeStopDeferred {
+        offered_at: "2026-10-07T00:00:01Z".into(),
+        reason: NativeDeferReason::Busy,
+        at: "2026-10-07T00:00:02Z".into(),
+    };
+    publish_main_wait_run(&fixture, &run);
+    let committed = fixture.bytes().unwrap();
     tokio::time::timeout(Duration::from_secs(3), final_ready)
         .await
         .unwrap()
@@ -197,9 +163,18 @@ async fn retirement_wait_crosses_acceptance_without_quiet_herdr_reads() {
     final_response
         .send(Some(fixture.payload.lock().clone()))
         .unwrap();
-    let accepted = waiting.await.unwrap().unwrap();
+    let accepted = main_wait_test_step("accepted metadata wait completion", &fixture, waiting)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(accepted.stage, RunStage::Closed);
-    assert_eq!(accepted.retirement.unwrap().retirement_id, "retirement");
+    let retirement = accepted.retirement.unwrap();
+    assert_eq!(retirement.retirement_id, "retirement");
+    assert!(matches!(
+        retirement.state,
+        RetirementState::NativeStopDeferred { reason: NativeDeferReason::Busy, .. }
+    ));
+    assert_eq!(fixture.bytes().unwrap(), committed, "retirement observation cannot write");
 }
 
 #[cfg(target_os = "linux")]
@@ -208,10 +183,7 @@ async fn main_wait_socket_context(fixture: &SocketFixture) -> (Arc<Context>, Run
     let root_id =
         main_wait_test_step("adopting socket-backed root", fixture, fixture.adopt()).await;
 
-    let mut caller = match fixture.context.actor.as_ref().unwrap() {
-        Actor::Agent(caller) => caller.clone(),
-        _ => panic!("expected native caller"),
-    };
+    let mut caller = fixture.physical_caller();
     let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
     let parent: u32 = stat[stat.rfind(')').unwrap() + 1..]
         .split_whitespace()
@@ -220,13 +192,45 @@ async fn main_wait_socket_context(fixture: &SocketFixture) -> (Arc<Context>, Run
         .parse()
         .unwrap();
     caller.process = Some(native_process_evidence(parent).unwrap());
-    caller.env_run = Some(("worker".into(), 2));
+    caller.provenance.as_mut().unwrap().process = caller.process.clone();
     let (mut run, _) = retirement_fixture();
-    run.bound_omp_process = caller.process.clone();
+    run.run_id = uuid::Uuid::new_v4().to_string();
+    caller.env_run = Some((run.run_id.clone(), run.attempt));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    fixture.operator(OrchestrationAction::TaskCreate {
+        root_id: root_id.clone(),
+        task_id: task_id.clone(),
+        title: "Observe the exact worker incarnation".into(),
+        description: "Retain durable mail and do not authorize another source writer.".into(),
+        depends_on: vec![],
+        follow_up_of: None,
+        expected_doc_revision: None,
+        source_revision: None,
+    });
+    let task_snapshot = fixture
+        .context
+        .service
+        .snapshot_saved(&OrchestrationSnapshotRequest {
+            session_id: caller.session_id.clone(),
+            root_id: Some(root_id.clone()),
+        })
+        .unwrap();
+    let task = &task_snapshot
+        .board
+        .as_ref()
+        .unwrap()
+        .tasks
+        .iter()
+        .find(|view| view.task.task_id == task_id)
+        .unwrap()
+        .task;
+    run.task_id = Some(task_id);
+    run.task_revision_at_start = Some(task.task_revision.clone());
+    run.attachment.as_mut().unwrap().process = caller.process.clone();
     run.root_id = root_id.clone();
     run.parent_run_id = Some(root_id);
-    run.bound_omp_session = caller.omp_session_id.clone();
-    run.location = Some(RunLocation {
+    run.attachment.as_mut().unwrap().main_session_id = caller.omp_session_id.clone();
+    run.attachment.as_mut().unwrap().location = Some(RunLocation {
         boot_id: caller.boot_id.clone(),
         terminal_id: caller.terminal_id.clone(),
         native_session_id: caller.native_session_id.clone(),
@@ -242,18 +246,24 @@ async fn main_wait_socket_context(fixture: &SocketFixture) -> (Arc<Context>, Run
     // fixture's imaginary PID. Acceptance copies this exact launch baseline.
     let executable = std::fs::metadata(format!("/proc/{parent}/exe")).unwrap();
     let argv = std::fs::read(format!("/proc/{parent}/cmdline")).unwrap();
-    run.launch_shell_identity = Some(NativeShellIdentity {
+    run.attachment.as_mut().unwrap().shell = Some(NativeShellIdentity {
         process: caller.process.clone().unwrap(),
         executable_device: executable.dev().to_string(),
         executable_inode: executable.ino().to_string(),
         argv_digest: format!("{:x}", Sha256::digest(argv)),
     });
+    // The observed executable is the native process itself, not a distinct
+    // shell parent; keep the typed launch layout coherent with this evidence.
+    run.attachment.as_mut().unwrap().launch_mode = Some(AttachmentLaunchMode::DirectProcess);
     let context = Arc::new(Context {
         service: OrchestrationService::open(&fixture.configuration).unwrap(),
         adapter: fixture.context.adapter.clone(),
         session: caller.session_id.clone(),
         actor: Some(Actor::Agent(caller.clone())),
         evidence: fixture.context.evidence.clone(),
+        configuration: fixture.configuration.clone(),
+        retirement: true,
+        child_registration: false,
     });
     publish_main_wait_run(fixture, &run);
     (context, run, caller)
@@ -274,6 +284,15 @@ fn publish_main_wait_run(fixture: &SocketFixture, run: &Run) {
         *existing = serialized;
     } else {
         runs.push(serialized);
+    }
+    let credentials = state["credentials"].as_array_mut().unwrap();
+    let auth = test_job_auth();
+    if !credentials.iter().any(|record| record["credential_id"] == auth.credential_id) {
+        credentials.push(test_credential_record(run, &auth, "worker"));
+    }
+    let claims = state["checkout_claims"].as_array_mut().unwrap();
+    if !claims.iter().any(|claim| claim["claim_id"] == run.checkout_claim_id.as_deref().unwrap()) {
+        claims.push(test_checkout_claim(run));
     }
     let temporary = fixture.context.service.base().join("main-wait-test.next");
     std::fs::write(&temporary, serde_json::to_vec(&state).unwrap()).unwrap();
@@ -329,14 +348,18 @@ async fn main_wait_timeout_fence(
     let (fence_ready, fence_response) = fixture.gate(0);
     tokio::time::pause();
     let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
-    let waiting = tokio::spawn(async move { next_snapshot(&context, &initial, deadline).await });
+    let mut waiting = tokio::spawn(async move { next_snapshot(&context, &initial, deadline).await });
     main_wait_test_step(
         &format!("{case}: snapshot precheck gate"),
         fixture,
-        blocked_ready,
+        async {
+            tokio::select! {
+                result = blocked_ready => result.unwrap(),
+                result = &mut waiting => panic!("{case}: wait completed before snapshot gate: {result:?}"),
+            }
+        },
     )
-    .await
-    .unwrap();
+    .await;
     // Advance PAST the deadline, including the timer wheel's next tick.
     // Advancing to equality and then spinning a runnable barrier prevents
     // paused-time auto-advance and can strand the timeout at its last tick.
@@ -345,10 +368,14 @@ async fn main_wait_timeout_fence(
     main_wait_test_step(
         &format!("{case}: post-timeout authority gate"),
         fixture,
-        fence_ready,
+        async {
+            tokio::select! {
+                result = fence_ready => result.unwrap(),
+                result = &mut waiting => panic!("{case}: wait completed before deadline fence: {result:?}"),
+            }
+        },
     )
-    .await
-    .unwrap();
+    .await;
     tokio::time::resume();
     assert!(
         !waiting.is_finished(),
@@ -395,13 +422,7 @@ async fn main_wait_deadline_reconstructs_accepted_metadata_without_mail_or_write
     let late_secret = "SECRET late durable body: no counts or ACK after acceptance";
     fixture.send(&run.run_id, late_secret);
     accept_retirement(&mut run, &caller);
-    run.retirement
-        .as_mut()
-        .unwrap()
-        .identity
-        .as_mut()
-        .unwrap()
-        .omp_session_id = caller.omp_session_id.clone().unwrap();
+    
     publish_main_wait_run(&fixture, &run);
     let committed = fixture.bytes().unwrap();
     let stored: serde_json::Value = serde_json::from_slice(&committed).unwrap();
@@ -487,17 +508,20 @@ fn main_wait_retirement_identity(run: &mut Run) -> &mut RetirementIdentity {
 fn main_wait_durable_replacements() -> &'static [(&'static str, &'static str, fn(&mut Run))] {
     &[
         ("run attempt", "attempt_stale", |r| r.attempt += 1),
+        ("attachment launch attempt", "caller_mismatch", |r| {
+            r.attachment.as_mut().unwrap().launch_attempt += 1
+        }),
         ("bound native session", "session_mismatch", |r| {
-            r.bound_omp_session = Some("replacement".into())
+            r.attachment.as_mut().unwrap().main_session_id = Some("replacement".into())
         }),
         ("bound PID", "caller_mismatch", |r| {
-            r.bound_omp_process.as_mut().unwrap().pid += 1
+            r.attachment.as_mut().unwrap().process.as_mut().unwrap().pid += 1
         }),
         ("bound PID incarnation", "caller_mismatch", |r| {
-            r.bound_omp_process.as_mut().unwrap().start_ticks += 1
+            r.attachment.as_mut().unwrap().process.as_mut().unwrap().start_ticks += 1
         }),
         ("bound kernel boot", "caller_mismatch", |r| {
-            r.bound_omp_process.as_mut().unwrap().kernel_boot_id = Some("replacement".into())
+            r.attachment.as_mut().unwrap().process.as_mut().unwrap().kernel_boot_id = Some("replacement".into())
         }),
         ("dispatch launch attempt", "caller_mismatch", |r| {
             r.dispatch.as_mut().unwrap().launch_attempt += 1
@@ -509,13 +533,26 @@ fn main_wait_durable_replacements() -> &'static [(&'static str, &'static str, fn
             r.dispatch.as_mut().unwrap().endpoint_identity = Some("replacement".into())
         }),
         ("current launch shell", "caller_mismatch", |r| {
-            r.launch_shell_identity.as_mut().unwrap().argv_digest = "b".repeat(64)
+            r.attachment.as_mut().unwrap().shell.as_mut().unwrap().argv_digest = "b".repeat(64)
         }),
         ("location native session", "caller_mismatch", |r| {
-            r.location.as_mut().unwrap().native_session_id = Some("replacement".into())
+            r.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id = Some("replacement".into())
         }),
         ("location launch tag", "caller_mismatch", |r| {
-            r.location.as_mut().unwrap().launch_tag = "replacement".into()
+            r.attachment.as_mut().unwrap().location.as_mut().unwrap().launch_tag = "replacement".into()
+        }),
+        ("retirement attachment ID", "caller_mismatch", |r| {
+            main_wait_retirement_identity(r).attachment_id = Some("replacement".into())
+        }),
+        ("retirement attachment epoch", "caller_mismatch", |r| {
+            let identity = main_wait_retirement_identity(r);
+            identity.attachment_epoch = Some(identity.attachment_epoch.unwrap() + 1)
+        }),
+        ("missing retirement attachment ID", "caller_mismatch", |r| {
+            main_wait_retirement_identity(r).attachment_id = None
+        }),
+        ("missing retirement attachment epoch", "caller_mismatch", |r| {
+            main_wait_retirement_identity(r).attachment_epoch = None
         }),
         ("retirement run attempt", "caller_mismatch", |r| {
             main_wait_retirement_identity(r).run_attempt += 1
@@ -605,14 +642,7 @@ async fn main_wait_consumers_reject_durable_incarnation_replacement_at_deadline(
         "SECRET mail retained during identity rejection",
     );
     accept_retirement(&mut baseline, &caller);
-    baseline
-        .retirement
-        .as_mut()
-        .unwrap()
-        .identity
-        .as_mut()
-        .unwrap()
-        .omp_session_id = caller.omp_session_id.clone().unwrap();
+    
     let replacements = main_wait_durable_replacements();
     for (name, code, replace) in replacements {
         publish_main_wait_run(&fixture, &baseline);
@@ -684,13 +714,7 @@ async fn main_wait_deadline_rejects_runtime_and_live_process_replacement_without
     .await;
     fixture.send(&run.run_id, "SECRET mail retained at final runtime fence");
     accept_retirement(&mut run, &caller);
-    run.retirement
-        .as_mut()
-        .unwrap()
-        .identity
-        .as_mut()
-        .unwrap()
-        .omp_session_id = caller.omp_session_id.clone().unwrap();
+    
     let runtime_replacements: &[(&str, fn(&mut serde_json::Value))] = &[
         ("native session", |v| {
             v["snapshot"]["agents"][0]["agent_session"]["value"] = serde_json::json!("replacement")
@@ -772,6 +796,7 @@ async fn check_main_wait_live_process_replacements(
         )
         .await
         .unwrap();
+        let completed_snapshot = initial.clone();
         let (waiting, final_response) =
             main_wait_timeout_fence(fixture, context.clone(), initial, run, name).await;
         final_response
@@ -791,10 +816,13 @@ async fn check_main_wait_live_process_replacements(
         );
         let mut replaced_caller = caller.clone();
         replace(replaced_caller.process.as_mut().unwrap());
+        replaced_caller.provenance.as_mut().unwrap().process = replaced_caller.process.clone();
         let mut replaced_run = run.clone();
         // Keep durable authority internally coherent with the replacement.
         // Only live ancestor evidence can reject this fabricated incarnation.
-        replaced_run.bound_omp_process = replaced_caller.process.clone();
+        replaced_run.attachment.as_mut().unwrap().process = replaced_caller.process.clone();
+        replaced_run.attachment.as_mut().unwrap().shell.as_mut().unwrap().process =
+            replaced_caller.process.clone().unwrap();
         replaced_run
             .retirement
             .as_mut()
@@ -803,6 +831,8 @@ async fn check_main_wait_live_process_replacements(
             .as_mut()
             .unwrap()
             .process = replaced_caller.process.clone().unwrap();
+        main_wait_retirement_identity(&mut replaced_run).shell.process =
+            replaced_caller.process.clone().unwrap();
         publish_main_wait_run(fixture, &replaced_run);
         let committed = fixture.bytes().unwrap();
         let replaced_context = Context {
@@ -811,6 +841,9 @@ async fn check_main_wait_live_process_replacements(
             session: context.session.clone(),
             actor: Some(Actor::Agent(replaced_caller)),
             evidence: context.evidence.clone(),
+            configuration: fixture.configuration.clone(),
+            retirement: true,
+            child_registration: false,
         };
         assert!(
             replaced_context.retiring_run_for_review().is_ok(),
@@ -821,15 +854,16 @@ async fn check_main_wait_live_process_replacements(
             "caller_mismatch",
             "{name}: live process fence"
         );
-        let snapshot = main_wait_test_step(
+        let snapshot_error = main_wait_test_step(
             &format!("{name}: replaced process snapshot"),
             fixture,
             replaced_context.snapshot(None),
         )
         .await
-        .unwrap();
+        .unwrap_err();
+        assert_eq!(snapshot_error.code, "caller_mismatch", "{name}: snapshot live process fence");
         assert_eq!(
-            completed_main_wait(&replaced_context, &snapshot, 0)
+            completed_main_wait(&replaced_context, &completed_snapshot, 0)
                 .err()
                 .unwrap()
                 .code,
@@ -849,7 +883,7 @@ async fn check_main_wait_live_process_replacements(
 async fn main_wait_startup_not_ready_then_attested_observes_late_brief_without_writes() {
     let fixture = SocketFixture::new().await;
     let (baseline, mut run, mut caller) = main_wait_socket_context(&fixture).await;
-    run.stage = RunStage::Preparing;
+    run.stage = RunStage::Starting;
     run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending;
     run.dispatch.as_mut().unwrap().agent_started = false;
     publish_main_wait_run(&fixture, &run);
@@ -861,6 +895,9 @@ async fn main_wait_startup_not_ready_then_attested_observes_late_brief_without_w
         session: baseline.session.clone(),
         actor: Some(Actor::Agent(caller.clone())),
         evidence: baseline.evidence.clone(),
+        configuration: fixture.configuration.clone(),
+        retirement: true,
+        child_registration: false,
     };
     let committed = fixture.bytes().unwrap();
     let snapshot = context.snapshot(None).await.unwrap();
@@ -878,16 +915,16 @@ async fn main_wait_startup_not_ready_then_attested_observes_late_brief_without_w
     assert_eq!(fixture.bytes().unwrap(), committed);
     let replacements: &[(&str, &str, fn(&mut Run))] = &[
         ("session_mismatch", "main session", |r| {
-            r.bound_omp_session = Some("replacement".into())
+            r.attachment.as_mut().unwrap().main_session_id = Some("replacement".into())
         }),
         ("caller_mismatch", "process incarnation", |r| {
-            r.bound_omp_process.as_mut().unwrap().start_ticks += 1
+            r.attachment.as_mut().unwrap().process.as_mut().unwrap().start_ticks += 1
         }),
         ("caller_mismatch", "endpoint", |r| {
-            r.location.as_mut().unwrap().endpoint_identity = "replacement".into()
+            r.attachment.as_mut().unwrap().location.as_mut().unwrap().endpoint_identity = "replacement".into()
         }),
         ("caller_mismatch", "pane", |r| {
-            r.location.as_mut().unwrap().pane_id = "replacement".into()
+            r.attachment.as_mut().unwrap().location.as_mut().unwrap().pane_id = "replacement".into()
         }),
         ("caller_mismatch", "dispatch tag", |r| {
             r.dispatch.as_mut().unwrap().launch_tag = Some("replacement".into())
@@ -920,7 +957,7 @@ async fn main_wait_startup_not_ready_then_attested_observes_late_brief_without_w
     // Launch proof and the durable brief come later. The old opening
     // snapshot must ask for fresh evidence, not permanently revoke itself.
     fixture.payload.lock()["snapshot"]["agents"][0]["launch_pending"] = serde_json::json!(false);
-    run.stage = RunStage::Initializing;
+    run.stage = RunStage::Working;
     run.dispatch.as_mut().unwrap().step = DispatchStep::Launched;
     run.dispatch.as_mut().unwrap().agent_started = true;
     publish_main_wait_run(&fixture, &run);
@@ -939,6 +976,9 @@ async fn main_wait_startup_not_ready_then_attested_observes_late_brief_without_w
         session: baseline.session.clone(),
         actor: Some(Actor::Agent(caller.clone())),
         evidence: baseline.evidence.clone(),
+        configuration: fixture.configuration.clone(),
+        retirement: true,
+        child_registration: false,
     };
     let snapshot = fresh.snapshot(None).await.unwrap();
     let read = completed_main_wait(&fresh, &snapshot, 0).unwrap();
@@ -977,7 +1017,7 @@ async fn main_wait_startup_not_ready_then_attested_observes_late_brief_without_w
 async fn main_wait_startup_settling_fences_current_and_deadline_observation() {
     let fixture = SocketFixture::new().await;
     let (baseline, mut run, mut caller) = main_wait_socket_context(&fixture).await;
-    run.stage = RunStage::Preparing;
+    run.stage = RunStage::Starting;
     run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending;
     run.dispatch.as_mut().unwrap().agent_started = false;
     caller.actual_agent_kind = None;
@@ -988,6 +1028,9 @@ async fn main_wait_startup_settling_fences_current_and_deadline_observation() {
         session: baseline.session.clone(),
         actor: Some(Actor::Agent(caller.clone())),
         evidence: baseline.evidence.clone(),
+        configuration: fixture.configuration.clone(),
+        retirement: true,
+        child_registration: false,
     });
     let attested = fixture.payload.lock().clone();
     let mut pending = attested.clone();
@@ -1028,7 +1071,7 @@ async fn main_wait_startup_settling_fences_current_and_deadline_observation() {
             "foreign process incarnation",
             "caller_mismatch",
             |_| {},
-            |r| r.bound_omp_process.as_mut().unwrap().start_ticks += 1,
+            |r| r.attachment.as_mut().unwrap().process.as_mut().unwrap().start_ticks += 1,
         ),
         (
             "foreign dispatch tag",
@@ -1083,4 +1126,44 @@ async fn main_wait_startup_settling_fences_current_and_deadline_observation() {
             "{name}: no observation writes"
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn main_wait_credentials_reject_replaced_attachment_before_physical_reads_or_writes() {
+    let fixture = SocketFixture::new().await;
+    let (context, mut baseline, caller) = main_wait_socket_context(&fixture).await;
+    accept_retirement(&mut baseline, &caller);
+    
+    publish_main_wait_run(&fixture, &baseline);
+    let snapshot = context.snapshot(None).await.unwrap();
+    let replacements: &[fn(&mut Run)] = &[
+        |run| run.attachment.as_mut().unwrap().attachment_id =
+            "00000000-0000-4000-8000-000000000099".into(),
+        |run| run.attachment.as_mut().unwrap().epoch += 1,
+    ];
+    // An invalid credential must fail before even opening the queued
+    // physical authority read, not merely fail after a harmless RPC.
+    let (mut physical_read, physical_response) = fixture.gate(0);
+    for replace in replacements {
+        let mut replaced = baseline.clone();
+        replace(&mut replaced);
+        publish_main_wait_run(&fixture, &replaced);
+        let committed = fixture.bytes();
+        assert_eq!(context.snapshot(None).await.unwrap_err().code, "job_unauthorized");
+        assert_eq!(context.retiring_run_for_review().unwrap_err().code, "job_unauthorized");
+        assert_eq!(main_wait_deadline_run(&context).unwrap_err().code, "job_unauthorized");
+        assert_eq!(
+            completed_main_wait(&context, &snapshot, 0).err().unwrap().code,
+            "job_unauthorized",
+            "a previously completed snapshot cannot authorize a replaced attachment",
+        );
+        assert_eq!(fixture.bytes(), committed, "stale attachment cannot write or ACK");
+    }
+    assert!(matches!(
+        physical_read.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    assert_eq!(fixture.gates.lock().len(), 1);
+    drop(physical_response);
 }

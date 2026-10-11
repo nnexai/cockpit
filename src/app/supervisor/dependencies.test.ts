@@ -16,14 +16,14 @@ function task(id: string, content: Partial<TaskView["task"]> = {}, dependencies:
 
 function resultRun(taskId: string): Run {
   const at = "2026-10-08T00:00:00Z";
-  const result: Run["result"] = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Work succeeded", plan: null, at };
+  const result: Run["result"] = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Work succeeded", plan: null, source_output: null, at };
   return {
-    session_id: "session", prepare_brief: "", run_id: "worker", kind: "worker", label: "Worker", root_id: "root",
-    parent_run_id: "root", task_id: taskId, attempt: 1, task_revision_at_propose: `revision-${taskId}`,
-    stage: "reported", close_reason: null, dispatch: null, target: null, setup: null, prepare_plan: null,
-    init_receipt: null, work_plan: null, grants: [], last_report: result, result, annotations: [], location: null,
-    bound_omp_session: null, bound_omp_process: null, launch_shell_identity: null, retirement: null,
-    supersedes_run_id: null, created_at: at, updated_at: at,
+    session_id: "session", brief: "", run_id: "worker", kind: "worker", label: "Worker", root_id: "root",
+    parent_run_id: "root", task_id: taskId, attempt: 1, task_revision_at_start: `revision-${taskId}`,
+    stage: "reported", close_reason: null, dispatch: null, target: null, setup: null,
+    cleanup_policy: null, last_report: result, result, source_output: null, integration: { state: "pending" }, annotations: [],
+    project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null,
+    created_at: at, updated_at: at,
   };
 }
 

@@ -4,13 +4,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
 import type { OrchestrationAction, OrchestrationActionResult, OrchestrationMutationResponse, OrchestrationSnapshot, OrchestrationWaitResponse, Run, Task } from "../../protocol/generated/v1";
-import { acceptsSupervisorSnapshot, useSupervisor, type SourceSubmission, type SourceResolution, type SourceResolutionOutcome, type TaskMutationOutcome } from "./useSupervisor";
+import { acceptsSupervisorSnapshot, useSupervisor, type SourceSubmission, type SourceResolution, type SourceResolutionOutcome, type TaskMutationOutcome, type MutationRequestScope, type RetainedDraftSubmission } from "./useSupervisor";
 import type { StepScope, StepSubmission, StepUnknownResolution, StepResolutionOutcome, StepReadOutcome } from "./stepInteractions";
 
 const snapshot: OrchestrationSnapshot = {
-  session_id: "session-a", revision: 12, tasks_token: "external-edit-a",
+  state_store_id: "store", session_id: "session-a", revision: 12, tasks_token: "external-edit-a",
   roots: [], board: { root_id: "root-a", path: "/state/tasks/root-a.md", doc_revision: "doc-a", unidentified_items: 0, diagnostics: [], tasks: [] },
   runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+  cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
   runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "offline" } },
 };
 
@@ -33,13 +34,13 @@ describe("supervisor snapshot fences", () => {
 
 const at = "2026-10-07T12:00:00Z";
 function reportedRun(kind: "needs_input" | "result"): Run {
-  const report = { message_id: `${kind}-receipt`, kind, outcome: kind === "result" ? "succeeded" as const : null, summary: `${kind}-summary`, plan: null, at };
+  const report = { message_id: `${kind}-receipt`, kind, outcome: kind === "result" ? "succeeded" as const : null, summary: `${kind}-summary`, plan: null, source_output: null, at };
   return {
-    session_id: "session-a", prepare_brief: "", run_id: "worker", kind: "worker", label: "Worker", root_id: "root-a", parent_run_id: "root-a",
-    task_id: "task-a", attempt: 1, task_revision_at_propose: null, stage: "reported", close_reason: null,
-    dispatch: null, target: null, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [],
-    last_report: report, result: kind === "result" ? report : null, annotations: [], location: null,
-    bound_omp_session: null, bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at,
+    session_id: "session-a", brief: "", run_id: "worker", kind: "worker", label: "Worker", root_id: "root-a", parent_run_id: "root-a",
+    task_id: "task-a", attempt: 1, task_revision_at_start: null, stage: "reported", close_reason: null,
+    dispatch: null, target: null, setup: null, cleanup_policy: "owned_when_safe",
+    last_report: report, result: kind === "result" ? report : null, source_output: null, integration: { state: "pending" }, annotations: [],
+    project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at,
   };
 }
 function observedState(overrides: Partial<OrchestrationSnapshot> = {}): OrchestrationSnapshot {
@@ -87,7 +88,9 @@ interface VisibleState {
   busy: boolean;
 }
 interface HookState extends VisibleState {
-  mutateResult: (action: OrchestrationAction) => Promise<OrchestrationActionResult | null>;
+  mutateResult: (action: OrchestrationAction, requestScope?: MutationRequestScope) => Promise<OrchestrationActionResult | null>;
+  captureMutationScope(action: OrchestrationAction): MutationRequestScope | null;
+  hydrateDraftUncertainty(stateStoreId: string, submissions: readonly RetainedDraftSubmission[]): void;
   submitStep: (submitted: StepSubmission) => Promise<TaskMutationOutcome<StepSubmission>>;
   submitTask: (submitted: SourceSubmission) => Promise<TaskMutationOutcome<SourceSubmission>>;
   readSaved: (scope: StepScope) => Promise<StepReadOutcome>;
@@ -293,6 +296,66 @@ describe("mounted Supervisor observation", () => {
 
 describe("mounted Supervisor mutations", () => {
   const action: OrchestrationAction = { action: "cancel_run", run_id: "worker" };
+  it.each<OrchestrationAction>([
+    { action: "worker_start", operation_id: "start-operation", root_id: "root-a", task_id: "task-a", expected_task_revision: "task-original", expected_doc_revision: "doc-original", target: { target: "existing_space", workspace_id: "space" }, label: null, brief: "Deliver work", cleanup_policy: "owned_when_safe" },
+    { action: "task_scope_update", operation_id: "scope-operation", root_id: "root-a", task_id: "task-a", run_id: "worker", expected_task_revision: "task-original", expected_doc_revision: "doc-original", title: null, description: "Original scope\n\nRefinement" },
+    { action: "supervisor_start", operation_id: "root-operation", mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: "space" }, label: null, selected_root_id: "root-a", expected_project_key: null },
+    { action: "run_resume", operation_id: "resume-operation", run_id: "worker", expected_attachment_epoch: null, mode: "reattach_or_restart", decision_id: null },
+    { action: "cleanup_finish", request: { operation_id: "cleanup-operation", root_id: "root-a", run_id: "worker" } },
+  ])("submits durable $action with its own operation and CAS fences", async retained => {
+    const api = transport(), consumer = await mount(api.client);
+    await flush(() => api.snapshot().resolve(observedState()));
+    let result!: Promise<OrchestrationActionResult | null>;
+    await flush(() => { result = consumer.mutate(retained); });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledExactlyOnceWith({ session_id: "session-a", expected_revision: null, action: retained });
+    await flush(() => api.mutation().reject(new Error("Confirmation unavailable")));
+    expect(await result).toBeNull();
+    expect(consumer.state().error).toBe("Confirmation unavailable");
+  });
+  it("retries a retained request with its original scope and CAS after a newer observation", async () => {
+    const api = transport(), consumer = await mount(api.client);
+    await flush(() => api.snapshot().resolve(observedState()));
+    const requestScope = consumer.hookState().captureMutationScope(action)!;
+    await flush(() => api.wait().resolve({ revision: 20, tasks_token: "newer", changed: true }));
+    await flush(() => api.snapshot().resolve(observedState({ revision: 20 })));
+    let result!: Promise<OrchestrationActionResult | null>;
+    await flush(() => { result = consumer.hookState().mutateResult(action, requestScope); });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledExactlyOnceWith({ session_id: "session-a", expected_revision: 12, action });
+    await flush(() => api.mutation().reject(new Error("Original CAS refused")));
+    expect(await result).toBeNull();
+  });
+  it.each(["store", "root", "session"] as const)("does not dispatch a retained request after its original %s changes", async changed => {
+    const api = transport(), consumer = await mount(api.client);
+    await flush(() => api.snapshot().resolve(observedState()));
+    const requestScope = consumer.hookState().captureMutationScope(action)!;
+    if (changed === "store") {
+      await flush(() => api.wait().resolve({ revision: 13, tasks_token: "new-store", changed: true }));
+      await flush(() => api.snapshot().resolve(observedState({ state_store_id: "another-store", revision: 13 })));
+    } else {
+      await consumer.render(changed === "root" ? { rootId: "root-b" } : { sessionId: "session-b" });
+      await flush(() => api.snapshot().resolve(observedState(changed === "root"
+        ? { board: { ...snapshot.board!, root_id: "root-b" } } : { session_id: "session-b" })));
+    }
+    let result!: OrchestrationActionResult | null;
+    await flush(async () => { result = await consumer.hookState().mutateResult(action, requestScope); });
+    expect(result).toBeNull();
+    expect(api.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("retries the exact global Start request after lookup discovers its newly created root", async () => {
+    const api = transport(), consumer = await mount(api.client);
+    await flush(() => api.snapshot().resolve(observedState()));
+    const retained: OrchestrationAction = { action: "supervisor_start", operation_id: "same-start", mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: "space" }, label: null, selected_root_id: null, expected_project_key: null };
+    const requestScope = consumer.hookState().captureMutationScope(retained)!;
+    expect(requestScope.rootId).toBeNull();
+    await consumer.render({ rootId: "root-b" });
+    await flush(() => api.snapshot().resolve(observedState({ board: { ...snapshot.board!, root_id: "root-b" } })));
+    let result!: Promise<OrchestrationActionResult | null>;
+    await flush(() => { result = consumer.hookState().mutateResult(retained, requestScope); });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledExactlyOnceWith({ session_id: "session-a", expected_revision: null, action: retained });
+    const receipt: OrchestrationActionResult = { result: "supervisor_started", start: { root_id: "root-b", outcome: "reused", operation_id: "same-start", resume_operation_id: null, duplicate: true } };
+    await flush(() => api.mutation().resolve({ revision: 13, result: receipt }));
+    expect(await result).toEqual(receipt);
+  });
   it.each(["success", "failure"] as const)("refreshes immediately on mutation %s and supersedes an old wait", async outcome => {
     vi.useFakeTimers();
     const api = transport(), consumer = await mount(api.client);
@@ -410,6 +473,29 @@ async function readOriginal({ api, consumer }: TaskFixture, scope = taskScope, r
 }
 
 describe("mounted Supervisor task uncertainty", () => {
+  it("hydrates the original source operation after reload without trusting old read evidence", async () => {
+    const { api, consumer } = await mountedTasks(), original = sourceSubmission();
+    consumer.hookState().hydrateDraftUncertainty("store", [{ kind: "source", submitted: original }]);
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(await consumer.hookState().submitStep(stepSubmission())).toMatchObject({ kind: "not_sent" });
+    expect(api.client.orchestrationMutate).not.toHaveBeenCalled();
+    expect(await consumer.hookState().resolveSourceUnknown({ originalSubmitted: original, reviewedTaskRevision: "task-reviewed", decision: { kind: "keep_saved" } })).toMatchObject({ kind: "not_resolved", message: "Read the original saved task before resolving this operation." });
+  });
+  it("keeps durable task uncertainty across session reconnect but never applies it to another store", async () => {
+    const { api, consumer } = await mountedTasks(), original = sourceSubmission();
+    consumer.hookState().hydrateDraftUncertainty("store", [{ kind: "source", submitted: original }]);
+    const previousSessionWait = api.wait();
+    await consumer.render({ sessionId: "session-b" });
+    await flush(() => previousSessionWait.resolve({ revision: 12, tasks_token: "previous-session", changed: false }));
+    await flush(() => api.snapshot().resolve({ ...taskSnapshot(), session_id: "session-b" }));
+    expect(consumer.hookState().taskWriteUnconfirmed({ ...taskScope, sessionId: "session-b" })).toBe(true);
+    expect(await consumer.hookState().submitTask(sourceSubmission({ ...taskScope, sessionId: "session-b" }, "new-operation"))).toMatchObject({ kind: "not_sent" });
+    await flush(() => api.wait().resolve({ revision: 13, tasks_token: "other-store", changed: true }));
+    await flush(() => api.snapshot().resolve({ ...taskSnapshot(), state_store_id: "other-store", session_id: "session-b", revision: 13 }));
+    consumer.hookState().hydrateDraftUncertainty("store", [{ kind: "source", submitted: original }]);
+    expect(consumer.hookState().taskWriteUnconfirmed({ ...taskScope, sessionId: "session-b" })).toBe(false);
+    expect(api.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
   it("returns not_sent while busy before invoking transport for either task writer", async () => {
     const { api, consumer } = await mountedTasks();
     let pending!: Promise<OrchestrationActionResult | null>;
@@ -436,6 +522,20 @@ describe("mounted Supervisor task uncertainty", () => {
     expect(await result).toEqual({ kind: "refused", operationCode, message: "Rejected before publication" });
     expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
     expect(consumer.state().busy).toBe(false);
+  });
+  it("keeps a refused source conflict frozen until the original saved task is explicitly reviewed", async () => {
+    const fixture = await mountedTasks(), { api, consumer } = fixture, original = sourceSubmission();
+    let result!: Promise<TaskMutationOutcome<SourceSubmission>>;
+    await flush(() => { result = consumer.hookState().submitTask(original); });
+    await flush(() => api.mutation().reject(new CockpitClientError("http_error", "Task changed", { operationCode: "task_revision_conflict" })));
+    expect(await result).toMatchObject({ kind: "refused", operationCode: "task_revision_conflict" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(true);
+    expect(await consumer.hookState().submitTask(sourceSubmission(taskScope, "new-operation"))).toMatchObject({ kind: "not_sent" });
+    // A refused write refreshes observation before the explicit original-task read.
+    await flush(() => api.snapshot().resolve({ ...taskSnapshot([savedTask("task-a", "task-reviewed")]), revision: 13 }));
+    await readOriginal(fixture);
+    expect(await consumer.hookState().resolveSourceUnknown({ originalSubmitted: original, reviewedTaskRevision: "task-reviewed", decision: { kind: "keep_saved" } })).toMatchObject({ kind: "resolved" });
+    expect(consumer.hookState().taskWriteUnconfirmed(taskScope)).toBe(false);
   });
 
   it.each([

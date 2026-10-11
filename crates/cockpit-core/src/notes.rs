@@ -13,6 +13,21 @@ use std::{
     sync::Arc,
 };
 
+/// Inspect current bindings without creating Notes directories or opening drafts.
+pub fn space_has_binding(
+    root: &Path,
+    endpoint: &str,
+    session_id: &str,
+    space_id: &str,
+) -> Result<bool, InspectionError> {
+    let (_, root) = match fs::root(root, false) {
+        Err(error) if error.code == "notes_not_found" => return Ok(false),
+        result => result?,
+    };
+    root.entries().map_err(fs::io_error)?;
+    registry::space_has_binding(&root, endpoint, session_id, space_id)
+}
+
 #[derive(Clone)]
 pub struct NotesService {
     root: PathBuf,

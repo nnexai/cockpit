@@ -1,8 +1,8 @@
 import type { Dispatch, SetStateAction, RefObject, FocusEvent, KeyboardEvent } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { OrchestrationSnapshot, Run, SessionSnapshotResponse, TaskView, RootSummary, RunObservation, Subagent, Report, TaskLane } from "../../protocol/generated/v1";
-import type { ScopeDrafts, TextDraft } from "./useSupervisorDrafts";
-import type { SourceSubmission, SourceResolution, SourceResolutionOutcome, TaskMutationOutcome } from "./useSupervisor";
+import type { ScopeDrafts, TextDraft, SupervisorLifecycleDrafts } from "./useSupervisorDrafts";
+import type { SourceSubmission, SourceResolution, SourceResolutionOutcome, TaskMutationOutcome, MutationRequestScope } from "./useSupervisor";
 import type { StepScope, StepSubmission, StepReadOutcome, StepUnknownResolution, StepResolutionOutcome } from "./stepInteractions";
 import type { StartDraft, SupervisorDialogState } from "./SupervisorDialogs";
 import type { AttentionTier, AttentionModel, SupervisorOwned } from "./attention";
@@ -25,9 +25,9 @@ type ViewStateValues = {
 export type SupervisorViewState = ViewStateValues & Setters<ViewStateValues> & {
   opened: RefObject<boolean>; initialRootSnapshot: RefObject<OrchestrationSnapshot | null>;
 };
-type StartStateValues = { startPending: boolean; startUnknown: boolean; pendingRestart: string | null };
+type StartStateValues = { startPending: boolean; startUnknown: boolean };
 export type StartAgentFlowState = StartStateValues & Setters<StartStateValues> & {
-  startLock: RefObject<boolean>; startDraft: RefObject<StartDraft>; lastSession: RefObject<string>; seenStart: RefObject<number>;
+  startLock: RefObject<boolean>; resumeOperations: RefObject<SupervisorLifecycleDrafts["resumes"]>; startDraft: RefObject<StartDraft>; lastSession: RefObject<string>; seenStart: RefObject<number>;
 };
 export type DetailFocus = {
   detailInvoker: RefObject<HTMLElement | null>; panelInvoker: RefObject<HTMLElement | null>; counterInvoker: RefObject<HTMLElement | null>;
@@ -43,6 +43,7 @@ export type DetailFocus = {
 };
 type SupervisorService = {
   snapshot: OrchestrationSnapshot | null; error: string | null; connected: boolean; busy: boolean; mutateResult: Mutation; refresh(): void;
+  captureMutationScope(action: Parameters<Mutation>[0]): MutationRequestScope | null;
   submitStep(submitted: StepSubmission): Promise<TaskMutationOutcome<StepSubmission>>;
   submitTask(submitted: SourceSubmission): Promise<TaskMutationOutcome<SourceSubmission>>;
   readSaved(scope: StepScope): Promise<StepReadOutcome>;
@@ -52,11 +53,12 @@ type SupervisorService = {
 };
 
 export type SupervisorViewProps = {
-  client: CockpitClient; sessionId: string; session: SessionSnapshotResponse | null; runtimeLive: boolean; active: boolean; startToken: number;
+  client: CockpitClient; sessionId: string; session: SessionSnapshotResponse | null; runtimeLive: boolean; active: boolean; startToken: number; startIntent?: "reuse_or_resume" | "another";
   navigationError: string | null; onClose(): void; onTerminal(run: Run, snapshot: OrchestrationSnapshot): Promise<void>; onModalChange(open: boolean): void;
 };
 export type SupervisorViewInputs = SupervisorViewProps & SupervisorService & SupervisorViewState & DetailFocus & StartAgentFlowState & {
-  rootId: string | null; setRootId: Setter<string | null>; scope: ScopeDrafts; changed(): void;
+  rootId: string | null; setRootId: Setter<string | null>; projectRootMissing: boolean; scope: ScopeDrafts; changed(): void; lifecycleDrafts: SupervisorLifecycleDrafts;
+  draftStorageWarning: string | null;
 };
 export type SupervisorViewModel = {
   root: Run | null; openRoots: RootSummary[]; closedRoots: RootSummary[]; orphanedWorkers: Run[];

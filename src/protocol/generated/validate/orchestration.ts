@@ -34,6 +34,7 @@ export const wireOrchestrationMutationResponse: WireDescriptor<V1.OrchestrationM
 
 export const wireOrchestrationSnapshot: WireDescriptor<V1.OrchestrationSnapshot> = struct<V1.OrchestrationSnapshot>("OrchestrationSnapshot", {
   "session_id": req(str),
+  "state_store_id": req(str),
   "revision": req(u53),
   "tasks_token": req(str),
   "roots": req(list(named(() => wireRootSummary))),
@@ -44,6 +45,8 @@ export const wireOrchestrationSnapshot: WireDescriptor<V1.OrchestrationSnapshot>
   "subagents": req(list(named(() => wireSubagent))),
   "intents": req(list(named(() => wireTaskIntent))),
   "assignment_intents": req(list(named(() => wireTaskAssignmentIntent))),
+  "cleanup": req(list(named(() => wireRunCleanupSummary))),
+  "restoration": req(named(() => wireRestorationSummary)),
   "runtime": req(named(() => wireRuntimeObservation)),
   "unmanaged_agents": req(list(named(() => wireUnmanagedAgent))),
   "attention": req(list(named(() => wireAttention))),
@@ -139,11 +142,11 @@ export const wireTaskView: WireDescriptor<V1.TaskView> = struct<V1.TaskView>("Ta
   "dependencies": req(named(() => wireTaskDependencies)),
 });
 
-export const wireTaskLane: WireDescriptor<V1.TaskLane> = literal<V1.TaskLane>("TaskLane", ["queued", "setup", "ready", "working", "review", "accepted"]);
+export const wireTaskLane: WireDescriptor<V1.TaskLane> = literal<V1.TaskLane>("TaskLane", ["queued", "starting", "working", "review", "accepted"]);
 
 export const wireRunKind: WireDescriptor<V1.RunKind> = literal<V1.RunKind>("RunKind", ["supervisor", "adopted", "worker"]);
 
-export const wireRunStage: WireDescriptor<V1.RunStage> = literal<V1.RunStage>("RunStage", ["proposed", "awaiting_prepare", "preparing", "initializing", "ready", "working", "reported", "active", "closed"]);
+export const wireRunStage: WireDescriptor<V1.RunStage> = literal<V1.RunStage>("RunStage", ["queued", "starting", "working", "reported", "active", "closed"]);
 
 export const wireCloseReason: WireDescriptor<V1.CloseReason> = literal<V1.CloseReason>("CloseReason", ["accepted", "cancelled", "superseded", "failed"]);
 
@@ -171,33 +174,167 @@ export const wireSetupSummary: WireDescriptor<V1.SetupSummary> = struct<V1.Setup
   "repository_id": req(nullable(str), { fill: null }),
   "branch": req(nullable(str), { fill: null }),
   "base": req(nullable(str), { fill: null }),
+  "base_commit": req(nullable(str), { fill: null }),
   "ownership": req(nullable(named(() => wireWorkspaceCheckoutOwnership)), { fill: null }),
   "effects": req(list(str)),
   "warnings": req(list(str)),
   "project_workspace_id": req(nullable(str), { fill: null }),
 });
 
-export const wirePlanRecord: WireDescriptor<V1.PlanRecord> = struct<V1.PlanRecord>("PlanRecord", {
-  "plan_revision": req(str),
-  "text": req(str),
-  "created_at": req(str),
+export const wireDecisionOrigin: WireDescriptor<V1.DecisionOrigin> = literal<V1.DecisionOrigin>("DecisionOrigin", ["browser", "native", "supervisor"]);
+
+export const wireWorkerCleanupPolicy: WireDescriptor<V1.WorkerCleanupPolicy> = literal<V1.WorkerCleanupPolicy>("WorkerCleanupPolicy", ["owned_when_safe"]);
+
+export const wireWorkerStartResult: WireDescriptor<V1.WorkerStartResult> = struct<V1.WorkerStartResult>("WorkerStartResult", {
+  "operation_id": req(str),
+  "run_id": req(str),
+  "attempt": req(u32),
+  "duplicate": req(bool),
 });
 
-export const wireGrant: WireDescriptor<V1.Grant> = struct<V1.Grant>("Grant", {
-  "grant_id": req(str),
-  "scope": req(named(() => wireGrantScope)),
-  "plan_revision": req(str),
-  "origin": req(named(() => wireGrantOrigin)),
-  "supervisor_run_id": req(nullable(str), { fill: null }),
-  "omp_session_id": req(nullable(str), { fill: null }),
-  "granted_at": req(str),
+export const wireTaskScopeUpdateState: WireDescriptor<V1.TaskScopeUpdateState> = literal<V1.TaskScopeUpdateState>("TaskScopeUpdateState", ["applied", "conflict", "pending"]);
+
+export const wireTaskScopeUpdateResult: WireDescriptor<V1.TaskScopeUpdateResult> = struct<V1.TaskScopeUpdateResult>("TaskScopeUpdateResult", {
+  "operation_id": req(str),
+  "state": req(named(() => wireTaskScopeUpdateState)),
+  "task_revision": req(nullable(str), { fill: null }),
+  "doc_revision": req(nullable(str), { fill: null }),
+  "instruction_message_id": req(nullable(str), { fill: null }),
+  "duplicate": req(bool),
 });
-
-export const wireGrantScope: WireDescriptor<V1.GrantScope> = literal<V1.GrantScope>("GrantScope", ["prepare", "execute"]);
-
-export const wireGrantOrigin: WireDescriptor<V1.GrantOrigin> = literal<V1.GrantOrigin>("GrantOrigin", ["browser", "native", "supervisor"]);
 
 export const wireOperatorOrigin: WireDescriptor<V1.OperatorOrigin> = literal<V1.OperatorOrigin>("OperatorOrigin", ["browser", "native"]);
+
+export const wireProjectIdentity: WireDescriptor<V1.ProjectIdentity> = struct<V1.ProjectIdentity>("ProjectIdentity", {
+  "key": req(str),
+  "machine_id": req(str),
+  "source": req(named(() => wireProjectSource)),
+  "repository_id": req(nullable(str), { fill: null }),
+  "source_workspace_id": req(nullable(str), { fill: null }),
+});
+
+export const wireProjectSource: WireDescriptor<V1.ProjectSource> = tagged<V1.ProjectSource, "kind">("ProjectSource", "kind", {
+  "git": {
+    "common_dir": req(str),
+  },
+  "directory": {
+    "root": req(str),
+  },
+});
+
+export const wireDirectoryIdentity: WireDescriptor<V1.DirectoryIdentity> = struct<V1.DirectoryIdentity>("DirectoryIdentity", {
+  "device": req(str),
+  "inode": req(str),
+});
+
+export const wireCheckoutGitIdentity: WireDescriptor<V1.CheckoutGitIdentity> = struct<V1.CheckoutGitIdentity>("CheckoutGitIdentity", {
+  "common_dir": req(str),
+  "worktree_git_dir": req(str),
+});
+
+export const wireCheckoutIdentity: WireDescriptor<V1.CheckoutIdentity> = struct<V1.CheckoutIdentity>("CheckoutIdentity", {
+  "key": req(str),
+  "machine_id": req(str),
+  "path": req(str),
+  "directory_identity": req(named(() => wireDirectoryIdentity)),
+  "git": req(nullable(named(() => wireCheckoutGitIdentity)), { fill: null }),
+});
+
+export const wireAttachmentState: WireDescriptor<V1.AttachmentState> = literal<V1.AttachmentState>("AttachmentState", ["reserved", "connecting", "connected", "disconnected", "quiescing", "revoked"]);
+
+export const wireAttachmentLaunchMode: WireDescriptor<V1.AttachmentLaunchMode> = literal<V1.AttachmentLaunchMode>("AttachmentLaunchMode", ["direct_process", "shell_agent"]);
+
+export const wireExecutionAttachment: WireDescriptor<V1.ExecutionAttachment> = struct<V1.ExecutionAttachment>("ExecutionAttachment", {
+  "attachment_id": req(str),
+  "epoch": req(u53),
+  "state": req(named(() => wireAttachmentState)),
+  "launch_mode": req(nullable(named(() => wireAttachmentLaunchMode)), { fill: null }),
+  "location": req(nullable(named(() => wireRunLocation)), { fill: null }),
+  "main_session_id": req(nullable(str), { fill: null }),
+  "process": req(nullable(named(() => wireNativeProcessIdentity)), { fill: null }),
+  "shell": req(nullable(named(() => wireNativeShellIdentity)), { fill: null }),
+  "machine_id": req(nullable(str), { fill: null }),
+  "launch_attempt": req(u32),
+  "updated_at": req(str),
+});
+
+export const wireResumeMode: WireDescriptor<V1.ResumeMode> = literal<V1.ResumeMode>("ResumeMode", ["reattach_or_restart", "replace_existing"]);
+
+export const wireResumePhase: WireDescriptor<V1.ResumePhase> = literal<V1.ResumePhase>("ResumePhase", ["reconciling", "reattached", "launching", "connected", "blocked"]);
+
+export const wireResumeCauseClass: WireDescriptor<V1.ResumeCauseClass> = literal<V1.ResumeCauseClass>("ResumeCauseClass", ["recover", "decision"]);
+
+export const wireResumeCause: WireDescriptor<V1.ResumeCause> = struct<V1.ResumeCause>("ResumeCause", {
+  "code": req(str),
+  "message": req(str),
+  "class": req(named(() => wireResumeCauseClass)),
+});
+
+export const wireResumeRecord: WireDescriptor<V1.ResumeRecord> = struct<V1.ResumeRecord>("ResumeRecord", {
+  "operation_id": req(str),
+  "run_id": req(str),
+  "previous_attachment_epoch": req(nullable(u53), { fill: null }),
+  "phase": req(named(() => wireResumePhase)),
+  "cause": req(nullable(named(() => wireResumeCause)), { fill: null }),
+  "decision_id": req(nullable(str), { fill: null }),
+  "replacement_attachment_epoch": req(nullable(u53), { fill: null }),
+  "updated_at": req(str),
+});
+
+export const wireProjectRootLookupRequest: WireDescriptor<V1.ProjectRootLookupRequest> = struct<V1.ProjectRootLookupRequest>("ProjectRootLookupRequest", {
+  "session_id": req(str),
+  "workspace_id": req(str),
+  "selected_root_id": req(nullable(str), { fill: null }),
+});
+
+export const wireRootConnection: WireDescriptor<V1.RootConnection> = literal<V1.RootConnection>("RootConnection", ["connected", "reconnecting", "disconnected", "unknown"]);
+
+export const wireRootResumeAvailability: WireDescriptor<V1.RootResumeAvailability> = literal<V1.RootResumeAvailability>("RootResumeAvailability", ["available", "in_progress", "blocked"]);
+
+export const wireProjectRootCandidate: WireDescriptor<V1.ProjectRootCandidate> = struct<V1.ProjectRootCandidate>("ProjectRootCandidate", {
+  "root_id": req(str),
+  "connection": req(named(() => wireRootConnection)),
+  "resume": req(named(() => wireRootResumeAvailability)),
+  "cause": req(nullable(named(() => wireResumeCause)), { fill: null }),
+  "updated_at": req(str),
+});
+
+export const wireProjectRootLookupResponse: WireDescriptor<V1.ProjectRootLookupResponse> = tagged<V1.ProjectRootLookupResponse, "status">("ProjectRootLookupResponse", "status", {
+  "resolved": {
+    "project": req(named(() => wireProjectIdentity)),
+    "lookup_revision": req(u53),
+    "preferred_root_id": req(nullable(str), { fill: null }),
+    "roots": req(list(named(() => wireProjectRootCandidate))),
+  },
+  "unavailable": {
+    "code": req(str),
+    "message": req(str),
+  },
+});
+
+export const wireSupervisorStartMode: WireDescriptor<V1.SupervisorStartMode> = literal<V1.SupervisorStartMode>("SupervisorStartMode", ["reuse_or_resume", "another"]);
+
+export const wireSupervisorStartOutcome: WireDescriptor<V1.SupervisorStartOutcome> = literal<V1.SupervisorStartOutcome>("SupervisorStartOutcome", ["reused", "resuming", "created"]);
+
+export const wireSupervisorStartResult: WireDescriptor<V1.SupervisorStartResult> = struct<V1.SupervisorStartResult>("SupervisorStartResult", {
+  "root_id": req(str),
+  "outcome": req(named(() => wireSupervisorStartOutcome)),
+  "operation_id": req(str),
+  "resume_operation_id": req(nullable(str), { fill: null }),
+  "duplicate": req(bool),
+});
+
+export const wireRunResumeResult: WireDescriptor<V1.RunResumeResult> = struct<V1.RunResumeResult>("RunResumeResult", {
+  "run_id": req(str),
+  "resume": req(named(() => wireResumeRecord)),
+  "duplicate": req(bool),
+});
+
+export const wireRunAttachResult: WireDescriptor<V1.RunAttachResult> = struct<V1.RunAttachResult>("RunAttachResult", {
+  "run_id": req(str),
+  "attachment": req(named(() => wireExecutionAttachment)),
+  "duplicate": req(bool),
+});
 
 export const wireRunLocation: WireDescriptor<V1.RunLocation> = struct<V1.RunLocation>("RunLocation", {
   "boot_id": req(nullable(str), { fill: null }),
@@ -217,6 +354,292 @@ export const wireNativeProcessIdentity: WireDescriptor<V1.NativeProcessIdentity>
   "kernel_boot_id": req(nullable(str), { fill: null }),
 });
 
+export const wireAttachmentReference: WireDescriptor<V1.AttachmentReference> = struct<V1.AttachmentReference>("AttachmentReference", {
+  "run_id": req(str),
+  "attachment_id": req(str),
+  "attachment_epoch": req(u53),
+});
+
+export const wireCheckStatus: WireDescriptor<V1.CheckStatus> = literal<V1.CheckStatus>("CheckStatus", ["passed", "failed", "not_run"]);
+
+export const wireCheckOutcome: WireDescriptor<V1.CheckOutcome> = struct<V1.CheckOutcome>("CheckOutcome", {
+  "contract": req(str),
+  "command_or_scenario": req(str),
+  "outcome": req(named(() => wireCheckStatus)),
+  "evidence": req(nullable(str), { fill: null }),
+  "limitation": req(nullable(str), { fill: null }),
+});
+
+export const wireSourceOutput: WireDescriptor<V1.SourceOutput> = tagged<V1.SourceOutput, "kind">("SourceOutput", "kind", {
+  "code": {
+    "repository_key": req(str),
+    "checkout_key": req(str),
+    "base_commit": req(str),
+    "head_commit": req(str),
+    "commits": req(list(str)),
+    "task_revision": req(str),
+    "result_message_id": req(str),
+    "focused_checks": req(list(named(() => wireCheckOutcome))),
+  },
+  "non_code": {
+    "result_message_id": req(str),
+    "task_revision": req(str),
+    "artifacts": req(list(str)),
+    "focused_checks": req(list(named(() => wireCheckOutcome))),
+  },
+});
+
+export const wireIntegrationMethod: WireDescriptor<V1.IntegrationMethod> = literal<V1.IntegrationMethod>("IntegrationMethod", ["ancestor", "patch_equivalent", "recorded_adaptation"]);
+
+export const wireIntegrationMapping: WireDescriptor<V1.IntegrationMapping> = struct<V1.IntegrationMapping>("IntegrationMapping", {
+  "source_commits": req(list(str)),
+  "target_commits": req(list(str)),
+  "source_paths": req(list(str)),
+  "target_paths": req(list(str)),
+  "explanation": req(nullable(str), { fill: null }),
+});
+
+export const wireIntegration: WireDescriptor<V1.Integration> = tagged<V1.Integration, "state">("Integration", "state", {
+  "pending": {
+  },
+  "not_applicable": {
+    "reason": req(str),
+    "result_message_id": req(str),
+  },
+  "integrated": {
+    "operation_id": req(str),
+    "accepted_result_message_id": req(str),
+    "accepted_task_revision": req(str),
+    "source": req(named(() => wireSourceOutput)),
+    "target_repository_key": req(str),
+    "target_ref": req(str),
+    "target_commit": req(str),
+    "method": req(named(() => wireIntegrationMethod)),
+    "mappings": req(list(named(() => wireIntegrationMapping))),
+    "checks": req(list(named(() => wireCheckOutcome))),
+    "integrator_run_id": req(str),
+    "verified_at": req(str),
+  },
+});
+
+export const wireIntegrationRecord: WireDescriptor<V1.IntegrationRecord> = struct<V1.IntegrationRecord>("IntegrationRecord", {
+  "operation_id": req(str),
+  "run_id": req(str),
+  "expected_result_message_id": req(str),
+  "expected_task_revision": req(str),
+  "integration": req(named(() => wireIntegration)),
+});
+
+export const wireIntegrationRecordResult: WireDescriptor<V1.IntegrationRecordResult> = struct<V1.IntegrationRecordResult>("IntegrationRecordResult", {
+  "operation_id": req(str),
+  "run_id": req(str),
+  "integration": req(named(() => wireIntegration)),
+  "checks": req(list(named(() => wireCheckOutcome))),
+  "duplicate": req(bool),
+});
+
+export const wireResourceSourceIdentity: WireDescriptor<V1.ResourceSourceIdentity> = struct<V1.ResourceSourceIdentity>("ResourceSourceIdentity", {
+  "checkout_key": req(str),
+  "source_commit": req(str),
+  "source_tree": req(str),
+  "input_configuration": req(str),
+  "toolchain_fingerprint": req(str),
+});
+
+export const wireResourceRequest: WireDescriptor<V1.ResourceRequest> = struct<V1.ResourceRequest>("ResourceRequest", {
+  "operation_id": req(str),
+  "resource_key": req(str),
+  "source_identity": req(named(() => wireResourceSourceIdentity)),
+  "holder": req(named(() => wireAttachmentReference)),
+});
+
+export const wireResourceRequestState: WireDescriptor<V1.ResourceRequestState> = literal<V1.ResourceRequestState>("ResourceRequestState", ["queued", "held", "released", "blocked"]);
+
+export const wireResourceRequestRecord: WireDescriptor<V1.ResourceRequestRecord> = struct<V1.ResourceRequestRecord>("ResourceRequestRecord", {
+  "request_id": req(str),
+  "sequence": req(u53),
+  "resource_key": req(str),
+  "source_identity": req(named(() => wireResourceSourceIdentity)),
+  "holder": req(named(() => wireAttachmentReference)),
+  "requester_child_id": req(nullable(str), { fill: null }),
+  "state": req(named(() => wireResourceRequestState)),
+  "build_processes": req(list(named(() => wireNativeShellIdentity))),
+  "machine_id": req(str),
+  "blocked_reason": req(nullable(str), { fill: null }),
+  "updated_at": req(str),
+});
+
+export const wireResourceRelease: WireDescriptor<V1.ResourceRelease> = struct<V1.ResourceRelease>("ResourceRelease", {
+  "request_id": req(str),
+  "expected_holder": req(named(() => wireAttachmentReference)),
+});
+
+export const wireResourceBuildRegistration: WireDescriptor<V1.ResourceBuildRegistration> = struct<V1.ResourceBuildRegistration>("ResourceBuildRegistration", {
+  "request_id": req(str),
+  "expected_holder": req(named(() => wireAttachmentReference)),
+  "process": req(named(() => wireNativeProcessIdentity)),
+});
+
+export const wireOwnedResourceKind: WireDescriptor<V1.OwnedResourceKind> = literal<V1.OwnedResourceKind>("OwnedResourceKind", ["worker_terminal", "worktree", "branch", "space", "scratch", "fixture_set"]);
+
+export const wireResourceOwnership: WireDescriptor<V1.ResourceOwnership> = literal<V1.ResourceOwnership>("ResourceOwnership", ["owned", "borrowed", "unknown"]);
+
+export const wireCleanupAuthority: WireDescriptor<V1.CleanupAuthority> = literal<V1.CleanupAuthority>("CleanupAuthority", ["owned_when_safe", "authority_unproven"]);
+
+export const wireOwnedGitIdentity: WireDescriptor<V1.OwnedGitIdentity> = struct<V1.OwnedGitIdentity>("OwnedGitIdentity", {
+  "creation_operation_id": req(str),
+  "machine_id": req(str),
+  "repository_key": req(str),
+  "repository_root": req(str),
+  "repository_device": req(str),
+  "repository_inode": req(str),
+  "common_dir": req(str),
+  "common_device": req(str),
+  "common_inode": req(str),
+  "checkout_path": req(str),
+  "checkout_device": req(str),
+  "checkout_inode": req(str),
+  "checkout_key": req(str),
+  "branch_ref": req(nullable(str), { fill: null }),
+  "creation_tip": req(str),
+});
+
+export const wireOwnedSpaceIdentity: WireDescriptor<V1.OwnedSpaceIdentity> = struct<V1.OwnedSpaceIdentity>("OwnedSpaceIdentity", {
+  "creation_operation_id": req(str),
+  "endpoint_identity": req(str),
+  "session_id": req(str),
+  "workspace_id": req(str),
+  "checkout_path": req(str),
+});
+
+export const wireOwnedFilesystemIdentity: WireDescriptor<V1.OwnedFilesystemIdentity> = struct<V1.OwnedFilesystemIdentity>("OwnedFilesystemIdentity", {
+  "creation_operation_id": req(str),
+  "machine_id": req(str),
+  "root": req(str),
+  "device": req(str),
+  "inode": req(str),
+  "manifest_path": req(str),
+  "manifest_device": req(str),
+  "manifest_inode": req(str),
+});
+
+export const wireFixtureAdapterId: WireDescriptor<V1.FixtureAdapterId> = literal<V1.FixtureAdapterId>("FixtureAdapterId", ["ui_polish_runtime"]);
+
+export const wireOwnedFixtureIdentity: WireDescriptor<V1.OwnedFixtureIdentity> = struct<V1.OwnedFixtureIdentity>("OwnedFixtureIdentity", {
+  "adapter": req(named(() => wireFixtureAdapterId)),
+  "creation_operation_id": req(str),
+  "filesystem": req(named(() => wireOwnedFilesystemIdentity)),
+  "processes": req(list(named(() => wireNativeProcessIdentity))),
+});
+
+export const wireOwnedResourceIdentity: WireDescriptor<V1.OwnedResourceIdentity> = tagged<V1.OwnedResourceIdentity, "kind">("OwnedResourceIdentity", "kind", {
+  "worker_terminal": {
+    "identity": req(named(() => wireRetirementIdentity)),
+  },
+  "worktree": {
+    "identity": req(named(() => wireOwnedGitIdentity)),
+  },
+  "branch": {
+    "identity": req(named(() => wireOwnedGitIdentity)),
+  },
+  "space": {
+    "identity": req(named(() => wireOwnedSpaceIdentity)),
+  },
+  "scratch": {
+    "identity": req(named(() => wireOwnedFilesystemIdentity)),
+  },
+  "fixture_set": {
+    "identity": req(named(() => wireOwnedFixtureIdentity)),
+  },
+});
+
+export const wireCleanupState: WireDescriptor<V1.CleanupState> = literal<V1.CleanupState>("CleanupState", ["pending", "running", "waiting", "waiting_integration", "reconciling", "removed", "kept", "stalled", "unknown"]);
+
+export const wireCleanupReasonClass: WireDescriptor<V1.CleanupReasonClass> = literal<V1.CleanupReasonClass>("CleanupReasonClass", ["transient", "reconcilable", "user_work", "authority"]);
+
+export const wireCleanupReason: WireDescriptor<V1.CleanupReason> = struct<V1.CleanupReason>("CleanupReason", {
+  "class": req(named(() => wireCleanupReasonClass)),
+  "code": req(str),
+  "message": req(str),
+});
+
+export const wireCleanupEffectState: WireDescriptor<V1.CleanupEffectState> = literal<V1.CleanupEffectState>("CleanupEffectState", ["intent", "applied", "absent", "refused", "unknown"]);
+
+export const wireCleanupEffectReceipt: WireDescriptor<V1.CleanupEffectReceipt> = struct<V1.CleanupEffectReceipt>("CleanupEffectReceipt", {
+  "effect_id": req(str),
+  "kind": req(named(() => wireOwnedResourceKind)),
+  "identity_digest": req(str),
+  "state": req(named(() => wireCleanupEffectState)),
+  "evidence": req(nullable(str), { fill: null }),
+  "updated_at": req(str),
+});
+
+export const wireCleanupItem: WireDescriptor<V1.CleanupItem> = struct<V1.CleanupItem>("CleanupItem", {
+  "operation_id": req(nullable(str), { fill: null }),
+  "state": req(named(() => wireCleanupState)),
+  "reason": req(nullable(named(() => wireCleanupReason)), { fill: null }),
+  "effects": req(list(named(() => wireCleanupEffectReceipt))),
+  "updated_at": req(str),
+});
+
+export const wireOwnedResourceRecord: WireDescriptor<V1.OwnedResourceRecord> = struct<V1.OwnedResourceRecord>("OwnedResourceRecord", {
+  "resource_id": req(str),
+  "root_id": req(str),
+  "run_id": req(str),
+  "kind": req(named(() => wireOwnedResourceKind)),
+  "ownership": req(named(() => wireResourceOwnership)),
+  "creation_operation_id": req(nullable(str), { fill: null }),
+  "identity": req(named(() => wireOwnedResourceIdentity)),
+  "authority": req(named(() => wireCleanupAuthority)),
+  "consumers": req(list(named(() => wireAttachmentReference))),
+  "integration_result_id": req(nullable(str), { fill: null }),
+  "cleanup": req(named(() => wireCleanupItem)),
+});
+
+export const wireResourceRegister: WireDescriptor<V1.ResourceRegister> = struct<V1.ResourceRegister>("ResourceRegister", {
+  "operation_id": req(str),
+  "run_id": req(str),
+  "resource": req(named(() => wireOwnedResourceIdentity)),
+});
+
+export const wireCleanupFinish: WireDescriptor<V1.CleanupFinish> = struct<V1.CleanupFinish>("CleanupFinish", {
+  "operation_id": req(str),
+  "root_id": req(str),
+  "run_id": req(nullable(str), { fill: null }),
+});
+
+export const wireCleanupFinishResult: WireDescriptor<V1.CleanupFinishResult> = struct<V1.CleanupFinishResult>("CleanupFinishResult", {
+  "operation_id": req(str),
+  "items": req(list(named(() => wireOwnedResourceRecord))),
+  "removed_count": req(u32),
+  "waiting_count": req(u32),
+  "kept_count": req(u32),
+  "unknown_count": req(u32),
+  "duplicate": req(bool),
+});
+
+export const wireCleanupResourceSummary: WireDescriptor<V1.CleanupResourceSummary> = struct<V1.CleanupResourceSummary>("CleanupResourceSummary", {
+  "resource_id": req(str),
+  "kind": req(named(() => wireOwnedResourceKind)),
+  "ownership": req(named(() => wireResourceOwnership)),
+  "cleanup": req(named(() => wireCleanupItem)),
+});
+
+export const wireRunCleanupSummary: WireDescriptor<V1.RunCleanupSummary> = struct<V1.RunCleanupSummary>("RunCleanupSummary", {
+  "run_id": req(str),
+  "items": req(list(named(() => wireCleanupResourceSummary))),
+  "removed_count": req(u32),
+  "waiting_count": req(u32),
+  "kept_count": req(u32),
+  "unknown_count": req(u32),
+});
+
+export const wireRestorationSummary: WireDescriptor<V1.RestorationSummary> = struct<V1.RestorationSummary>("RestorationSummary", {
+  "reattached": req(u32),
+  "total_attachments": req(u32),
+  "cleanup_pending": req(u32),
+});
+
 export const wireNativeShellIdentity: WireDescriptor<V1.NativeShellIdentity> = struct<V1.NativeShellIdentity>("NativeShellIdentity", {
   "process": req(named(() => wireNativeProcessIdentity)),
   "executable_device": req(str),
@@ -227,6 +650,9 @@ export const wireNativeShellIdentity: WireDescriptor<V1.NativeShellIdentity> = s
 export const wireRetirementTrigger: WireDescriptor<V1.RetirementTrigger> = literal<V1.RetirementTrigger>("RetirementTrigger", ["accept", "accept_recovery", "operator_conflict_resolution"]);
 
 export const wireRetirementIdentity: WireDescriptor<V1.RetirementIdentity> = struct<V1.RetirementIdentity>("RetirementIdentity", {
+  "attachment_id": req(nullable(str), { fill: null }),
+  "attachment_epoch": req(nullable(u53), { fill: null }),
+  "launch_mode": req(nullable(named(() => wireAttachmentLaunchMode)), { fill: null }),
   "run_attempt": req(u32),
   "launch_attempt": req(u32),
   "launch_tag": req(str),
@@ -248,6 +674,7 @@ export const wireRunRetirement: WireDescriptor<V1.RunRetirement> = struct<V1.Run
   "result_message_id": req(str),
   "task_revision": req(str),
   "identity": req(nullable(named(() => wireRetirementIdentity)), { fill: null }),
+  "quiescent_stop_at": req(nullable(str), { fill: null }),
   "state": req(named(() => wireRetirementState)),
   "created_at": req(str),
   "updated_at": req(str),
@@ -319,7 +746,7 @@ export const wireNativeStopReceipt: WireDescriptor<V1.NativeStopReceipt> = tagge
 
 export const wireRun: WireDescriptor<V1.Run> = struct<V1.Run>("Run", {
   "session_id": req(str),
-  "prepare_brief": req(str),
+  "brief": req(str),
   "run_id": req(str),
   "kind": req(named(() => wireRunKind)),
   "label": req(str),
@@ -327,25 +754,24 @@ export const wireRun: WireDescriptor<V1.Run> = struct<V1.Run>("Run", {
   "parent_run_id": req(nullable(str), { fill: null }),
   "task_id": req(nullable(str), { fill: null }),
   "attempt": req(u32),
-  "task_revision_at_propose": req(nullable(str), { fill: null }),
+  "task_revision_at_start": req(nullable(str), { fill: null }),
   "stage": req(named(() => wireRunStage)),
   "close_reason": req(nullable(named(() => wireCloseReason)), { fill: null }),
   "dispatch": req(nullable(named(() => wireDispatchState)), { fill: null }),
   "target": req(nullable(named(() => wireDispatchTarget)), { fill: null }),
   "setup": req(nullable(named(() => wireSetupSummary)), { fill: null }),
-  "prepare_plan": req(nullable(named(() => wirePlanRecord)), { fill: null }),
-  "init_receipt": req(nullable(named(() => wireReport)), { fill: null }),
-  "work_plan": req(nullable(named(() => wirePlanRecord)), { fill: null }),
-  "grants": req(list(named(() => wireGrant))),
+  "cleanup_policy": req(nullable(named(() => wireWorkerCleanupPolicy)), { fill: null }),
   "last_report": req(nullable(named(() => wireReport)), { fill: null }),
   "result": req(nullable(named(() => wireReport)), { fill: null }),
+  "source_output": req(nullable(named(() => wireSourceOutput)), { fill: null }),
+  "integration": req(named(() => wireIntegration), { fill: () => ({"state":"pending"}) }),
   "annotations": req(list(named(() => wireAnnotation))),
-  "location": req(nullable(named(() => wireRunLocation)), { fill: null }),
-  "bound_omp_session": req(nullable(str), { fill: null }),
-  "bound_omp_process": req(nullable(named(() => wireNativeProcessIdentity)), { fill: null }),
-  "launch_shell_identity": req(nullable(named(() => wireNativeShellIdentity)), { fill: null }),
+  "project": req(nullable(named(() => wireProjectIdentity)), { fill: null }),
+  "checkout": req(nullable(named(() => wireCheckoutIdentity)), { fill: null }),
+  "attachment": req(nullable(named(() => wireExecutionAttachment)), { fill: null }),
+  "checkout_claim_id": req(nullable(str), { fill: null }),
+  "resume": req(nullable(named(() => wireResumeRecord)), { fill: null }),
   "retirement": req(nullable(named(() => wireRunRetirement)), { fill: null }),
-  "supersedes_run_id": req(nullable(str), { fill: null }),
   "created_at": req(str),
   "updated_at": req(str),
 });
@@ -377,7 +803,7 @@ export const wireActorRef: WireDescriptor<V1.ActorRef> = tagged<V1.ActorRef, "ty
   },
 });
 
-export const wireReportKind: WireDescriptor<V1.ReportKind> = literal<V1.ReportKind>("ReportKind", ["progress", "ready", "result", "needs_input"]);
+export const wireReportKind: WireDescriptor<V1.ReportKind> = literal<V1.ReportKind>("ReportKind", ["progress", "initialized", "result", "needs_input"]);
 
 export const wireReportOutcome: WireDescriptor<V1.ReportOutcome> = literal<V1.ReportOutcome>("ReportOutcome", ["succeeded", "failed"]);
 
@@ -387,10 +813,11 @@ export const wireReport: WireDescriptor<V1.Report> = struct<V1.Report>("Report",
   "outcome": req(nullable(named(() => wireReportOutcome)), { fill: null }),
   "summary": req(str),
   "plan": req(nullable(str), { fill: null }),
+  "source_output": req(nullable(named(() => wireSourceOutput)), { fill: null }),
   "at": req(str),
 });
 
-export const wireMessageKind: WireDescriptor<V1.MessageKind> = literal<V1.MessageKind>("MessageKind", ["prepare_brief", "work_brief", "supervisor_brief", "instruction", "answer", "cancel_request", "subagent_control", "report", "observation"]);
+export const wireMessageKind: WireDescriptor<V1.MessageKind> = literal<V1.MessageKind>("MessageKind", ["work_brief", "supervisor_brief", "instruction", "answer", "cancel_request", "subagent_control", "report", "observation"]);
 
 export const wireDeliveryStage: WireDescriptor<V1.DeliveryStage> = literal<V1.DeliveryStage>("DeliveryStage", ["stored", "woken", "read", "acked"]);
 
@@ -475,7 +902,7 @@ export const wireTaskIntent: WireDescriptor<V1.TaskIntent> = struct<V1.TaskInten
   "run_id": req(str),
   "expected_task_revision": req(str),
   "state": req(named(() => wireIntentState)),
-  "origin": req(nullable(named(() => wireGrantOrigin)), { fill: null }),
+  "origin": req(nullable(named(() => wireDecisionOrigin)), { fill: null }),
   "supervisor_run_id": req(nullable(str), { fill: null }),
   "omp_session_id": req(nullable(str), { fill: null }),
   "result_message_id": req(nullable(str), { fill: null }),
@@ -513,7 +940,7 @@ export const wireRuntimeObservation: WireDescriptor<V1.RuntimeObservation> = tag
   },
 });
 
-export const wireAttentionKind: WireDescriptor<V1.AttentionKind> = literal<V1.AttentionKind>("AttentionKind", ["awaits_prepare", "awaits_execute", "plan_changed", "to_accept", "needs_input", "runtime_blocked", "brief_unread", "idle_without_report", "exited_without_report", "dispatch_unknown", "intent_conflict", "retirement_unconfirmed"]);
+export const wireAttentionKind: WireDescriptor<V1.AttentionKind> = literal<V1.AttentionKind>("AttentionKind", ["to_accept", "needs_input", "runtime_blocked", "brief_unread", "idle_without_report", "exited_without_report", "dispatch_unknown", "intent_conflict", "retirement_unconfirmed"]);
 
 export const wireAttention: WireDescriptor<V1.Attention> = struct<V1.Attention>("Attention", {
   "kind": req(named(() => wireAttentionKind)),
@@ -603,11 +1030,31 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
     "expected_doc_revision": req(str),
   },
   "supervisor_start": {
+    "operation_id": req(str),
+    "mode": req(named(() => wireSupervisorStartMode)),
     "target": req(nullable(named(() => wireDispatchTarget)), { fill: null }),
     "label": req(nullable(str), { fill: null }),
+    "selected_root_id": req(nullable(str), { fill: null }),
+    "expected_project_key": req(nullable(str), { fill: null }),
   },
-  "run_bind_session": {
-    "omp_session_id": req(str),
+  "run_resume": {
+    "run_id": req(str),
+    "operation_id": req(str),
+    "expected_attachment_epoch": req(nullable(u53), { fill: null }),
+    "mode": req(named(() => wireResumeMode)),
+    "decision_id": req(nullable(str), { fill: null }),
+  },
+  "run_attach": {
+    "operation_id": req(str),
+    "attachment_id": req(str),
+    "expected_attachment_epoch": req(u53),
+    "main_session_id": req(str),
+  },
+  "job_child_register": {
+    "operation_id": req(str),
+    "child_id": req(str),
+    "child_session_id": req(str),
+    "parent_child_id": req(nullable(str), { fill: null }),
   },
   "retirement_native_receipt": {
     "retirement_id": req(str),
@@ -616,35 +1063,54 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
   "run_adopt": {
     "label": req(str),
   },
-  "run_propose": {
+  "worker_start": {
+    "operation_id": req(str),
+    "root_id": req(str),
     "task_id": req(str),
-    "parent_run_id": req(nullable(str), { fill: null }),
-    "label": req(nullable(str), { fill: null }),
+    "expected_task_revision": req(str),
+    "expected_doc_revision": req(str),
     "target": req(named(() => wireDispatchTarget)),
-    "prepare_brief": req(str),
-    "supersedes_run_id": req(nullable(str), { fill: null }),
+    "label": req(nullable(str), { fill: null }),
+    "brief": req(str),
+    "cleanup_policy": req(named(() => wireWorkerCleanupPolicy)),
   },
-  "grant_prepare": {
+  "task_scope_update": {
+    "operation_id": req(str),
+    "root_id": req(str),
+    "task_id": req(str),
     "run_id": req(str),
-    "plan_revision": req(str),
-  },
-  "grant_execute": {
-    "run_id": req(str),
-    "plan_revision": req(str),
-    "note": req(nullable(str), { fill: null }),
+    "expected_task_revision": req(str),
+    "expected_doc_revision": req(str),
+    "title": req(nullable(str), { fill: null }),
+    "description": req(nullable(str), { fill: null }),
   },
   "accept": {
     "run_id": req(str),
     "expected_task_revision": req(str),
+  },
+  "integration_record": {
+    "record": req(named(() => wireIntegrationRecord)),
+  },
+  "resource_request": {
+    "request": req(named(() => wireResourceRequest)),
+  },
+  "resource_release": {
+    "release": req(named(() => wireResourceRelease)),
+  },
+  "resource_build_register": {
+    "registration": req(named(() => wireResourceBuildRegistration)),
+  },
+  "resource_register": {
+    "request": req(named(() => wireResourceRegister)),
+  },
+  "cleanup_finish": {
+    "request": req(named(() => wireCleanupFinish)),
   },
   "send_back": {
     "run_id": req(str),
     "text": req(str),
   },
   "cancel_run": {
-    "run_id": req(str),
-  },
-  "retry_launch": {
     "run_id": req(str),
   },
   "reconcile_run": {
@@ -661,7 +1127,10 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
     "outcome": req(nullable(named(() => wireReportOutcome)), { fill: null }),
     "summary": req(str),
     "plan": req(nullable(str), { fill: null }),
+    "source_output": req(nullable(named(() => wireSourceOutput)), { fill: null }),
     "to_run_id": req(nullable(str), { fill: null }),
+    "original_task_revision": opt(nullable(str), OMIT, { fill: null, rustOmits: true }),
+    "original_claim_id": opt(nullable(str), OMIT, { fill: null, rustOmits: true }),
   },
   "message_send": {
     "message_id": req(str),
@@ -669,6 +1138,8 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
     "kind": req(named(() => wireMessageKind)),
     "text": req(str),
     "in_reply_to": req(nullable(str), { fill: null }),
+    "original_task_revision": opt(nullable(str), OMIT, { fill: null, rustOmits: true }),
+    "original_claim_id": opt(nullable(str), OMIT, { fill: null, rustOmits: true }),
   },
   "annotate": {
     "run_id": req(str),
@@ -714,6 +1185,35 @@ export const wireSubagentOp: WireDescriptor<V1.SubagentOp> = tagged<V1.SubagentO
 });
 
 export const wireOrchestrationActionResult: WireDescriptor<V1.OrchestrationActionResult> = tagged<V1.OrchestrationActionResult, "result">("OrchestrationActionResult", "result", {
+  "worker_started": {
+    "start": req(named(() => wireWorkerStartResult)),
+  },
+  "task_scope_updated": {
+    "update": req(named(() => wireTaskScopeUpdateResult)),
+  },
+  "integration_recorded": {
+    "receipt": req(named(() => wireIntegrationRecordResult)),
+  },
+  "resource": {
+    "request": req(named(() => wireResourceRequestRecord)),
+    "duplicate": req(bool),
+  },
+  "resource_registered": {
+    "resource": req(named(() => wireOwnedResourceRecord)),
+    "duplicate": req(bool),
+  },
+  "cleanup_finished": {
+    "cleanup": req(named(() => wireCleanupFinishResult)),
+  },
+  "supervisor_started": {
+    "start": req(named(() => wireSupervisorStartResult)),
+  },
+  "run_resumed": {
+    "resume": req(named(() => wireRunResumeResult)),
+  },
+  "run_attached": {
+    "attach": req(named(() => wireRunAttachResult)),
+  },
   "task": {
     "task": req(named(() => wireTask)),
   },

@@ -154,6 +154,21 @@ fn load(dir: Option<&Dir>) -> Result<(Registry, NotesDocument), InspectionError>
     }
     Ok((reg, doc))
 }
+
+pub(super) fn space_has_binding(
+    root: &Dir,
+    endpoint: &str,
+    session_id: &str,
+    space_id: &str,
+) -> Result<bool, InspectionError> {
+    let state = state(root, false)?;
+    let (registry, _) = load(state.as_ref())?;
+    Ok(registry.bindings.iter().any(|binding| {
+        binding.endpoint == endpoint
+            && binding.session_id == session_id
+            && binding.space_id == space_id
+    }))
+}
 fn save(dir: &Dir, base: &NotesDocument, reg: &Registry) -> Result<(), InspectionError> {
     if reg.bindings.len() > 4096 || reg.notes.len() > 4096 {
         return Err(fs::error(
@@ -400,6 +415,42 @@ mod tests {
             space_id: "w1".into(),
             label: "Same label".into(),
         }
+    }
+    #[test]
+    fn readonly_binding_protects_empty_notes_and_only_current_authority() {
+        let f = Fixture::new();
+        let dir = f.dir();
+        let old = authority("boot-1");
+        let fresh = authority("boot-2");
+        assert!(!super::super::space_has_binding(&f.0, "boot-1", "session", "w1").unwrap());
+        assert!(!f.0.join(".cockpit").exists());
+        let (id, _) = bind(&dir, &old, None).unwrap();
+        assert_eq!(std::fs::read_dir(f.0.join(&id)).unwrap().count(), 0);
+        assert!(super::super::space_has_binding(&f.0, "boot-1", "session", "w1").unwrap());
+        assert!(!super::super::space_has_binding(&f.0, "boot-1", "other", "w1").unwrap());
+        bind(&dir, &fresh, Some(&id)).unwrap();
+        assert!(!super::super::space_has_binding(&f.0, "boot-1", "session", "w1").unwrap());
+        assert!(super::super::space_has_binding(&f.0, "boot-2", "session", "w1").unwrap());
+    }
+    #[test]
+    fn readonly_binding_missing_root_is_absent_but_malformed_registry_is_unknown() {
+        let f = Fixture::new();
+        let missing = f.0.join("never-created");
+        assert!(!super::super::space_has_binding(&missing, "boot", "session", "w1").unwrap());
+        assert!(!missing.exists());
+        std::fs::create_dir(f.0.join(".cockpit")).unwrap();
+        let path = f.0.join(".cockpit/registry.json");
+        std::fs::write(&path, r#"{"schema":2,"notes":{},"bindings":[]}"#).unwrap();
+        assert_eq!(
+            super::super::space_has_binding(&f.0, "boot", "session", "w1")
+                .unwrap_err().code,
+            "notes_registry_corrupt"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(),
+            r#"{"schema":2,"notes":{},"bindings":[]}"#);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(super::super::space_has_binding(&f.0, "boot", "session", "w1").is_err());
     }
     #[test]
     fn notes_binding_is_boot_scoped_and_attach_moves_single_association() {

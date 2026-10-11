@@ -47,32 +47,38 @@ pub fn location_matches(
 }
 
 pub fn run_location_matches(run: &Run, caller: &AgentCaller) -> bool {
-    run.location.as_ref().is_some_and(|location| {
-        location_matches(location, run.bound_omp_session.as_deref(), caller)
+    run.attachment.as_ref().is_some_and(|attachment| {
+        attachment.location.as_ref().is_some_and(|location| {
+            location_matches(location, attachment.main_session_id.as_deref(), caller)
+        })
     })
 }
 
 /// Read-side precheck: unlike session_matches, missing bindings/declarations pass.
 pub fn bound_session_conflicts(run: &Run, caller: &AgentCaller) -> bool {
     declared_main_session(caller).is_some_and(|session| {
-        run.bound_omp_session
-            .as_deref()
+        run.attachment.as_ref()
+            .and_then(|attachment| attachment.main_session_id.as_deref())
             .is_some_and(|bound| bound != session)
     })
 }
 
 fn exact_location_matches(run: &Run, caller: &AgentCaller) -> bool {
-    run.location.as_ref().is_some_and(|location| {
-        location_matches(location, run.bound_omp_session.as_deref(), caller)
-            && location.pane_id == caller.pane_id
-            && location.workspace_id == caller.workspace_id
-            && location.tab_id == caller.tab_id
+    run.attachment.as_ref().is_some_and(|attachment| {
+        attachment.location.as_ref().is_some_and(|location| {
+            location_matches(location, attachment.main_session_id.as_deref(), caller)
+                && location.pane_id == caller.pane_id
+                && location.workspace_id == caller.workspace_id
+                && location.tab_id == caller.tab_id
+        })
     })
 }
 
 // Startup read admission, not dispatch's owner-recovery classification.
 fn startup_launch_matches(run: &Run, caller: &AgentCaller) -> bool {
-    run.stage == RunStage::Preparing
+    run.stage == RunStage::Starting
+        && caller.agent_kind == Some(AgentKind::Main)
+        && caller.subagent_id.is_none()
         && matches!(run.kind, RunKind::Supervisor | RunKind::Worker)
         && run.close_reason.is_none()
         && run.retirement.is_none()
@@ -89,7 +95,7 @@ fn startup_launch_matches(run: &Run, caller: &AgentCaller) -> bool {
                     .native_session_id
                     .as_deref()
                     .is_none_or(|native| caller.omp_session_id.as_deref() == Some(native))
-                && run.location.as_ref().is_some_and(|location| {
+                && run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()).is_some_and(|location| {
                     dispatch.launch_tag.as_deref() == Some(location.launch_tag.as_str())
                         && !location.launch_tag.is_empty()
                         && location
@@ -100,7 +106,7 @@ fn startup_launch_matches(run: &Run, caller: &AgentCaller) -> bool {
         })
 }
 
-// Settling read admission, not the binding-only same_process_main_rollover rule.
+// Settling read admission retains exact opening evidence while launch proof commits.
 fn settling_launch_matches(run: &Run, caller: &AgentCaller) -> bool {
     if startup_launch_matches(run, caller) {
         return true;
@@ -110,17 +116,20 @@ fn settling_launch_matches(run: &Run, caller: &AgentCaller) -> bool {
     // caller snapshot or revive an observer on a mature/retired run.
     matches!(
         (run.kind, run.stage),
-        (RunKind::Supervisor, RunStage::Active) | (RunKind::Worker, RunStage::Initializing)
+        (RunKind::Supervisor, RunStage::Starting | RunStage::Active)
+            | (RunKind::Worker, RunStage::Starting | RunStage::Working)
     ) && run.retirement.is_none()
+        && caller.agent_kind == Some(AgentKind::Main)
+        && caller.subagent_id.is_none()
         && run.close_reason.is_none()
-        && run.bound_omp_session == caller.omp_session_id
-        && run.bound_omp_process == caller.process
+        && run.attachment.as_ref().and_then(|attachment| attachment.main_session_id.as_ref()) == caller.omp_session_id.as_ref()
+        && run.attachment.as_ref().and_then(|attachment| attachment.process.as_ref()) == caller.process.as_ref()
         && run.dispatch.as_ref().is_some_and(|dispatch| {
             dispatch.step == DispatchStep::Launched
                 && dispatch.agent_started
                 && dispatch.launch_attempt > 0
                 && dispatch.endpoint_identity.as_deref() == Some(caller.endpoint_identity.as_str())
-                && run.location.as_ref().is_some_and(|location| {
+                && run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()).is_some_and(|location| {
                     dispatch.launch_tag.as_deref() == Some(location.launch_tag.as_str())
                         && !location.launch_tag.is_empty()
                         && location
@@ -137,13 +146,12 @@ pub fn settling_caller_matches(run: &Run, caller: &AgentCaller, attempt: u32) ->
         && run.session_id == caller.session_id
         && settling_launch_matches(run, caller)
         && exact_location_matches(run, caller)
-        && run
-            .bound_omp_session
-            .as_deref()
+        && run.attachment.as_ref()
+            .and_then(|attachment| attachment.main_session_id.as_deref())
             .is_none_or(|bound| Some(bound) == declared_main_session(caller))
         && caller.process.as_ref().is_some_and(|process| {
-            run.bound_omp_process
-                .as_ref()
+            run.attachment.as_ref()
+                .and_then(|attachment| attachment.process.as_ref())
                 .is_none_or(|bound| bound == process)
         })
 }
@@ -189,7 +197,10 @@ pub fn retirement_read_scope(run: &Run, caller: &AgentCaller) -> Result<(), Insp
             "retirement requires the actual main session",
         ));
     };
-    if run.bound_omp_session.as_deref() != Some(session) {
+    let Some(attachment) = run.attachment.as_ref() else {
+        return Err(mismatch());
+    };
+    if attachment.main_session_id.as_deref() != Some(session) {
         return Err(InspectionError::new(
             "session_mismatch",
             "retirement main session differs from binding",
@@ -198,28 +209,30 @@ pub fn retirement_read_scope(run: &Run, caller: &AgentCaller) -> Result<(), Insp
     let Some(process) = caller.process.as_ref() else {
         return Err(mismatch());
     };
-    if run.bound_omp_process.as_ref() != Some(process) {
+    if attachment.process.as_ref() != Some(process) {
         return Err(mismatch());
     }
-    let Some(location) = &run.location else {
+    let Some(location) = &attachment.location else {
         return Err(mismatch());
     };
     if !exact_location_matches(run, caller) {
         return Err(mismatch());
     }
-    if run.stage != RunStage::Closed && run.retirement.is_some() {
+    if run.kind != RunKind::Worker
+        || run.stage != RunStage::Closed
+        || run.close_reason != Some(CloseReason::Accepted)
+    {
+        return Err(mismatch());
+    }
+    if caller.auth.attachment_id != attachment.attachment_id
+        || caller.auth.attachment_epoch != attachment.epoch
+    {
         return Err(mismatch());
     }
     if caller.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp) {
-        if caller.actual_agent_kind.is_none() && startup_launch_matches(run, caller) {
-            return Err(not_ready());
-        }
         return Err(mismatch());
     }
-    if run.stage == RunStage::Closed {
-        if run.close_reason != Some(CloseReason::Accepted) || run.kind != RunKind::Worker {
-            return Err(mismatch());
-        }
+    {
         let identity = run
             .retirement
             .as_ref()
@@ -236,7 +249,14 @@ pub fn retirement_read_scope(run: &Run, caller: &AgentCaller) -> Result<(), Insp
             || location.terminal_id.as_deref() != Some(identity.terminal_id.as_str())
             || identity.omp_session_id != session
             || &identity.process != process
-            || run.launch_shell_identity.as_ref() != Some(&identity.shell)
+            || attachment.shell.as_ref() != Some(&identity.shell)
+            || identity.launch_mode.is_none()
+            || attachment.launch_mode != identity.launch_mode
+            || identity.attachment_id.as_ref() != Some(&attachment.attachment_id)
+            || identity.attachment_epoch != Some(attachment.epoch)
+            || identity.attachment_id.as_ref() != Some(&caller.auth.attachment_id)
+            || identity.attachment_epoch != Some(caller.auth.attachment_epoch)
+            || attachment.launch_attempt != identity.launch_attempt
             || !retirement::caller_location_matches(run, caller)
         {
             return Err(mismatch());

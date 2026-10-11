@@ -1,7 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use cockpit_core::orchestration::{
-    Actor, AgentCaller, NativeAgentKind, OrchestrationService, herdr::OrchestrationHerdr,
+    Actor, AgentCaller, BootstrapCaller, CallerProvenance, NativeAgentKind, OrchestrationService,
+    herdr::OrchestrationHerdr,
 };
 use cockpit_herdr::HerdrCliAdapter;
 use cockpit_protocol::{
@@ -13,6 +14,7 @@ use cockpit_protocol::{
 };
 
 use super::super::context::Context;
+use super::{test_credential_record, test_job_auth};
 
 // All authority in these tests comes through the real Unix-socket adapter.
 // Gates select read phases, not permanent RPC-count or cadence assertions.
@@ -133,7 +135,9 @@ impl SocketFixture {
             .unwrap();
         let runtime = adapter.runtime("fixture").await.unwrap();
         let pane = &runtime.panes[0];
-        let actor = Actor::Agent(AgentCaller {
+        let parent = u32::try_from(nix::unistd::getppid().as_raw()).unwrap();
+        let process = super::super::caller::native_process_evidence(parent).unwrap();
+        let actor = Actor::Bootstrap(BootstrapCaller {
             endpoint_identity: evidence.endpoint_identity.clone(),
             session_id: "fixture".into(),
             workspace_id: evidence.workspace_id.clone(),
@@ -143,12 +147,9 @@ impl SocketFixture {
             terminal_id: pane.terminal_id.clone(),
             native_session_id: pane.native_session_id.clone(),
             actual_agent_kind: pane.agent_kind.clone().map(NativeAgentKind::from),
-            env_run: None,
             omp_session_id: Some("main-native".into()),
-            main_omp_session_id: None,
             agent_kind: Some(AgentKind::Main),
-            subagent_id: None,
-            process: None,
+            process: Some(process),
         });
         let context = Arc::new(Context {
             service: OrchestrationService::open(&configuration).unwrap(),
@@ -156,6 +157,9 @@ impl SocketFixture {
             session: "fixture".into(),
             actor: Some(actor),
             evidence: Some(evidence),
+            configuration: configuration.clone(),
+            retirement: false,
+            child_registration: false,
         });
         Self {
             root,
@@ -165,6 +169,59 @@ impl SocketFixture {
             gates,
             server,
         }
+    }
+
+    pub(super) fn physical_caller(&self) -> AgentCaller {
+        let Actor::Bootstrap(caller) = self.context.actor.as_ref().unwrap() else {
+            panic!("expected physical bootstrap caller");
+        };
+        AgentCaller {
+            auth: test_job_auth(),
+            provenance: Some(CallerProvenance {
+                agent_kind: caller.agent_kind,
+                child_id: None,
+                main_session_id: caller.omp_session_id.clone(),
+                native_session_id: caller.native_session_id.clone(),
+                process: caller.process.clone(),
+            }),
+            endpoint_identity: caller.endpoint_identity.clone(),
+            session_id: caller.session_id.clone(),
+            workspace_id: caller.workspace_id.clone(),
+            tab_id: caller.tab_id.clone(),
+            pane_id: caller.pane_id.clone(),
+            boot_id: caller.boot_id.clone(),
+            terminal_id: caller.terminal_id.clone(),
+            native_session_id: caller.native_session_id.clone(),
+            env_run: None,
+            omp_session_id: caller.omp_session_id.clone(),
+            agent_kind: caller.agent_kind,
+            actual_agent_kind: caller.actual_agent_kind.clone(),
+            subagent_id: None,
+            main_omp_session_id: None,
+            process: caller.process.clone(),
+        }
+    }
+
+    pub(super) fn job_context(&self) -> Arc<Context> {
+        let state: serde_json::Value = serde_json::from_slice(&self.bytes().unwrap()).unwrap();
+        let run: cockpit_protocol::orchestration::Run =
+            serde_json::from_value(state["runs"][0].clone()).unwrap();
+        let mut caller = self.physical_caller();
+        caller.auth.credential_id = "00000000-0000-4000-8000-000000000004".into();
+        let attachment = run.attachment.as_ref().unwrap();
+        caller.auth.attachment_id = attachment.attachment_id.clone();
+        caller.auth.attachment_epoch = attachment.epoch;
+        caller.env_run = Some((run.run_id, run.attempt));
+        Arc::new(Context {
+            service: OrchestrationService::open(&self.configuration).unwrap(),
+            adapter: self.context.adapter.clone(),
+            session: self.context.session.clone(),
+            actor: Some(Actor::Agent(caller)),
+            evidence: self.context.evidence.clone(),
+            configuration: self.configuration.clone(),
+            retirement: false,
+            child_registration: false,
+        })
     }
 
     pub(super) fn bytes(&self) -> Option<Vec<u8>> {
@@ -204,6 +261,20 @@ impl SocketFixture {
         let OrchestrationActionResult::Run { run_id, .. } = response.result else {
             panic!("expected adopted run");
         };
+        let mut state: serde_json::Value = serde_json::from_slice(&self.bytes().unwrap()).unwrap();
+        let run: cockpit_protocol::orchestration::Run = serde_json::from_value(
+            state["runs"].as_array().unwrap().iter()
+                .find(|run| run["run_id"] == run_id).unwrap().clone(),
+        ).unwrap();
+        let mut auth = test_job_auth();
+        auth.credential_id = "00000000-0000-4000-8000-000000000004".into();
+        auth.attachment_id = run.attachment.as_ref().unwrap().attachment_id.clone();
+        auth.attachment_epoch = run.attachment.as_ref().unwrap().epoch;
+        state["credentials"].as_array_mut().unwrap()
+            .push(test_credential_record(&run, &auth, "root"));
+        let temporary = self.context.service.base().join("socket-credentials.next");
+        std::fs::write(&temporary, serde_json::to_vec(&state).unwrap()).unwrap();
+        std::fs::rename(temporary, self.context.service.base().join("state.json")).unwrap();
         run_id
     }
 
@@ -236,6 +307,8 @@ impl SocketFixture {
             kind: MessageKind::Instruction,
             text: id.into(),
             in_reply_to: None,
+            original_task_revision: None,
+            original_claim_id: None,
         });
     }
 }

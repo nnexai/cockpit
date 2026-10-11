@@ -38,6 +38,37 @@ pub(crate) const STATE_DIRS: &[&str] = &[
     "drafts",
 ];
 
+/// Inspect the configured state's browser store without creating or changing it.
+pub fn space_has_saved_state(
+    state_root: &Path,
+    endpoint: &str,
+    session_id: &str,
+    space_id: &str,
+) -> Result<bool, InspectionError> {
+    let root = if state_root.is_absolute() {
+        state_root.join("browser")
+    } else {
+        let mut root = std::env::current_dir()
+            .map_err(|error| InspectionError::new("browser_state_unavailable", error.to_string()))?;
+        root.push(state_root);
+        root.push("browser");
+        root
+    };
+    let Some(_directory) = receipts::optional_state_dir(&root)? else {
+        return Ok(false);
+    };
+    let receipts = receipts::saved_receipts(&root)?;
+    if receipts.iter().any(|receipt| {
+        receipt.endpoint_identity == endpoint
+            && receipt.session_id == session_id
+            && receipt.space_id == space_id
+    }) {
+        // Closed and recovery receipts are still persisted Space consumers.
+        return Ok(true);
+    }
+    drafts::space_has_saved_state(&root, &receipts, endpoint, session_id, space_id)
+}
+
 /// A snapshot pinned to the exact Herdr endpoint that served it.
 #[derive(Clone, Debug)]
 pub struct BrowserHerdrSnapshot {
@@ -167,6 +198,52 @@ mod tests {
         assert!(!super::compatible_playwright_cli_version("0.1.17.1"));
         assert!(!super::compatible_playwright_cli_version("0.1.17-alpha"));
     }
+    #[test]
+    fn readonly_saved_state_protects_receipts_in_every_lifecycle_state() {
+        let root = std::env::temp_dir()
+            .join(format!("cockpit-browser-consumer-{}", uuid::Uuid::new_v4()));
+        assert!(!super::space_has_saved_state(&root, "boot", "session", "space").unwrap());
+        assert!(!root.exists());
+        let browser = root.join("browser");
+        std::fs::create_dir_all(browser.join("tab-associations")).unwrap();
+        let key = association_key("boot", "session", "space:tab");
+        let path = browser.join("tab-associations").join(format!("{key}.json"));
+        let mut receipt = serde_json::json!({
+            "association_key": key, "owner_id": "owner",
+            "endpoint_identity": "boot", "endpoint_path": "/herdr.sock",
+            "session_id": "session", "space_id": "space", "space_label": "Space",
+            "tab_id": "space:tab", "tab_label": "Browser",
+            "artifacts": {
+                "profile": {"dev": 1, "inode": 1},
+                "workspace": {"dev": 1, "inode": 2},
+                "config": {"dev": 1, "inode": 3}
+            },
+            "cleanup_reason": null, "unproven_paths": [],
+            "playwright_session": format!("cockpit-{key}"),
+            "working_directory": browser.join("workspaces").join(&key),
+            "profile_path": browser.join("profiles").join(&key),
+            "config_path": browser.join("configs").join(format!("{key}.json")),
+            "cdp_endpoint": null, "cdp_browser_identity": null,
+            "intent": "none", "state": "closed",
+            "target_id": null, "opened_tab": null, "incarnation": null
+        });
+        for state in [
+            "pending_open", "open", "closing", "closed", "outcome_unknown",
+            "disconnected", "cleanup_pending", "cleanup_failed",
+        ] {
+            receipt["state"] = state.into();
+            let bytes = serde_json::to_vec(&receipt).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            assert!(super::space_has_saved_state(&root, "boot", "session", "space").unwrap());
+            assert!(!super::space_has_saved_state(&root, "other-boot", "session", "space").unwrap());
+            assert!(!super::space_has_saved_state(&root, "boot", "other-session", "space").unwrap());
+            assert!(!super::space_has_saved_state(&root, "boot", "session", "other-space").unwrap());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        std::fs::write(&path, "{}").unwrap();
+        assert!(super::space_has_saved_state(&root, "boot", "session", "space").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn association_key_changes_with_endpoint_process_generation() {
@@ -214,6 +291,7 @@ mod tests {
         let link = root.join("link");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
         assert!(super::prepare_root(&link.join("browser")).is_err());
+        assert!(super::space_has_saved_state(&link, "boot", "session", "space").is_err());
         assert!(!outside.join("browser").exists());
         std::fs::remove_dir_all(root).unwrap();
     }

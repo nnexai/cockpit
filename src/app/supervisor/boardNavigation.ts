@@ -1,9 +1,9 @@
 import type { TaskLane, TaskView } from "../../protocol/generated/v1";
 
 export const taskLanes: readonly { lane: TaskLane; label: string }[] = [
-  { lane: "queued", label: "Queued" }, { lane: "setup", label: "Preparing" },
-  { lane: "ready", label: "Ready" }, { lane: "working", label: "Working" },
-  { lane: "review", label: "Review" }, { lane: "accepted", label: "Done" },
+  { lane: "queued", label: "Queued" }, { lane: "starting", label: "Starting" },
+  { lane: "working", label: "Working" }, { lane: "review", label: "Review" },
+  { lane: "accepted", label: "Done" },
 ];
 
 export type BoardArrangement = "lanes" | "stacked";

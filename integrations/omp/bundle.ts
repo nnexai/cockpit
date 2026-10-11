@@ -9,8 +9,8 @@ function requireSelfContainedDefault(source: string): void {
   if (/^\s*import\b/m.test(source) || /\brequire\s*\(/.test(source)) {
     throw new Error("The deployed extension must not contain runtime imports.");
   }
-  const exports = [...source.matchAll(/^\s*export\b[^;]*;/gm)];
-  if (exports.length !== 1 || !/^\s*export\s*\{\s*[\w$]+\s+as\s+default\s*,?\s*\}\s*;$/.test(exports[0][0])) {
+  const { exports } = new Bun.Transpiler({ loader: "js" }).scan(source);
+  if (exports.length !== 1 || exports[0] !== "default") {
     throw new Error("The deployed extension must export only default.");
   }
 }

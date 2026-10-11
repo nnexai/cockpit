@@ -1,15 +1,16 @@
 use cockpit_protocol::orchestration::*;
 
 use super::{
-    Actor, AppendMessage, OrchestrationState, agent, actor_ref, append, duplicate, error,
-    is_ancestor, main_session, message_result, now, run_index, text_bound, upward,
+    Actor, AuthorizedJob, JobRole, AppendMessage, OrchestrationState, agent, actor_ref, append, duplicate, error,
+    current_question, deliverable, is_ancestor, latest_progress_sequences, main_session, message_result, now,
+    run_index, subagent_context, text_bound, upward,
 };
 use crate::InspectionError;
 
 pub(super) fn apply(
     state: &mut OrchestrationState,
     actor: &Actor,
-    caller: Option<usize>,
+    caller: Option<&AuthorizedJob>,
     action: &OrchestrationAction,
 ) -> Result<Option<OrchestrationActionResult>, InspectionError> {
     let result = match action {
@@ -19,22 +20,29 @@ pub(super) fn apply(
             kind,
             text,
             in_reply_to,
+            ..
         } => send(state, actor, caller, message_id, to_run_id, *kind, text, in_reply_to)?,
         OrchestrationAction::Annotate { run_id, text } => {
             text_bound(text)?;
             let target = run_index(state, run_id)?;
             if let Actor::Agent(_) = actor {
                 let (_, index) = agent(actor, caller)?;
+                let job = caller.expect("admitted agent");
                 let own = &state.runs[index].run_id;
-                if own != run_id && !is_ancestor(state, own, run_id) {
+                if own != run_id && (job.role != JobRole::Root || !is_ancestor(state, own, run_id)) {
                     return Err(error(
                         "not_in_subtree",
                         "Annotations require the caller's run or descendant",
                     ));
                 }
             }
+            if state.runs[target].stage == RunStage::Closed
+                && state.runs[target].close_reason == Some(CloseReason::Accepted)
+            {
+                return Err(error("invalid_stage", "Accepted run history is read-only"));
+            }
             let annotation = Annotation {
-                by: actor_ref(actor, caller, state),
+                by: actor_ref(actor, caller.map(|job| job.run_index), state),
                 text: text.clone(),
                 at: now(),
             };
@@ -43,9 +51,10 @@ pub(super) fn apply(
             OrchestrationActionResult::Done
         }
         OrchestrationAction::InboxPull { after_seq, limit } => {
-            let (agent, index) = agent(actor, caller)?;
-            main_session(agent, &state.runs[index])?;
+            let (_, index) = agent(actor, caller)?;
+            main_session(caller)?;
             let own = &state.runs[index].run_id;
+            let latest_progress = latest_progress_sequences(&state.messages, own);
             // Append order is per-recipient sequence order; stop before touching the next page.
             let mut messages = Vec::new();
             let mut read_through_seq = *after_seq;
@@ -56,6 +65,7 @@ pub(super) fn apply(
                     message.to_run_id == *own
                         && message.seq > *after_seq
                         && message.kind != MessageKind::SubagentControl
+                        && deliverable(message, &latest_progress)
                 })
                 .take((*limit).min(100) as usize)
             {
@@ -74,19 +84,18 @@ pub(super) fn apply(
             through_seq,
             omp_session_id,
         } => {
-            let (agent, index) = agent(actor, caller)?;
-            main_session(agent, &state.runs[index])?;
-            if agent.omp_session_id.as_deref() != Some(omp_session_id) {
-                return Err(error(
-                    "session_mismatch",
-                    "Wake receipt must name the caller's bound session",
-                ));
+            let (_, index) = agent(actor, caller)?;
+            main_session(caller)?;
+            if omp_session_id.trim().is_empty() {
+                return Err(error("invalid_session", "Wake receipt requires a nonempty diagnostic session"));
             }
             let own = &state.runs[index].run_id;
+            let latest_progress = latest_progress_sequences(&state.messages, own);
             for message in state.messages.iter_mut().filter(|message| {
                 message.to_run_id == *own
                     && message.seq <= *through_seq
                     && message.kind != MessageKind::SubagentControl
+                    && deliverable(message, &latest_progress)
             }) {
                 if matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken) {
                     message.stage = DeliveryStage::Woken;
@@ -96,18 +105,20 @@ pub(super) fn apply(
             OrchestrationActionResult::Done
         }
         OrchestrationAction::InboxAck { through_seq } => {
-            let (agent, index) = agent(actor, caller)?;
-            main_session(agent, &state.runs[index])?;
+            let (_, index) = agent(actor, caller)?;
+            main_session(caller)?;
             let own = &state.runs[index].run_id;
+            let latest_progress = latest_progress_sequences(&state.messages, own);
             if state.messages.iter().any(|message| {
                 message.to_run_id == *own
                     && message.seq <= *through_seq
                     && message.kind != MessageKind::SubagentControl
+                    && deliverable(message, &latest_progress)
                     && matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken)
             }) {
                 return Err(error(
                     "ack_before_read",
-                    "Every message through the acknowledged sequence must first be read",
+                    "Every deliverable message through the acknowledged sequence must first be captured",
                 ));
             }
             let at = now();
@@ -115,6 +126,7 @@ pub(super) fn apply(
                 message.to_run_id == *own
                     && message.seq <= *through_seq
                     && message.kind != MessageKind::SubagentControl
+                    && deliverable(message, &latest_progress)
             }) {
                 if message.stage != DeliveryStage::Acked {
                     message.stage = DeliveryStage::Acked;
@@ -131,12 +143,13 @@ pub(super) fn apply(
 fn recipient(
     state: &OrchestrationState,
     actor: &Actor,
-    caller: Option<usize>,
+    caller: Option<&AuthorizedJob>,
     target: usize,
     to_run_id: &str,
     kind: MessageKind,
 ) -> Result<(String, Option<String>), InspectionError> {
     match actor {
+        Actor::Bootstrap(_) => Err(error("actor_forbidden", "Bootstrap does not authorize messages")),
         Actor::Operator(_) => {
             if !matches!(
                 kind,
@@ -151,13 +164,19 @@ fn recipient(
         }
         Actor::Agent(_) => {
             let (_, index) = agent(actor, caller)?;
+            let job = caller.expect("admitted agent");
             let own = &state.runs[index].run_id;
+            if matches!(kind, MessageKind::Answer | MessageKind::Instruction | MessageKind::CancelRequest)
+                && job.role != JobRole::Root
+            {
+                return Err(error("actor_forbidden", "Only the root job may coordinate descendant runs"));
+            }
             match kind {
                 MessageKind::Answer => {
                     super::super::management_target(
                         state,
                         actor,
-                        caller,
+                        caller.map(|job| job.run_index),
                         &state.runs[index].session_id,
                         to_run_id,
                     )?;
@@ -176,13 +195,15 @@ fn recipient(
                     Ok((to_run_id.to_owned(), None))
                 }
                 MessageKind::Observation => {
-                    if !is_ancestor(state, to_run_id, own) {
+                    if !(job.role == JobRole::Child && to_run_id == own)
+                        && !is_ancestor(state, to_run_id, own)
+                    {
                         return Err(error(
                             "not_ancestor",
                             "Observations require a strict ancestor",
                         ));
                     }
-                    upward(state, index, Some(to_run_id), false)
+                    upward(state, index, Some(to_run_id), job.role == JobRole::Child && to_run_id == own)
                 }
                 _ => Err(error(
                     "actor_forbidden",
@@ -196,7 +217,7 @@ fn recipient(
 fn send(
     state: &mut OrchestrationState,
     actor: &Actor,
-    caller: Option<usize>,
+    caller: Option<&AuthorizedJob>,
     message_id: &str,
     to_run_id: &str,
     kind: MessageKind,
@@ -205,7 +226,8 @@ fn send(
 ) -> Result<OrchestrationActionResult, InspectionError> {
     let target = run_index(state, to_run_id)?;
     let (recipient, escalated) = recipient(state, actor, caller, target, to_run_id, kind)?;
-    let from = actor_ref(actor, caller, state);
+    let from = actor_ref(actor, caller.map(|job| job.run_index), state);
+    let from_subagent_id = subagent_context(caller);
     // An observation retry does not change its original delivery location if ancestors later close.
     if let Some(existing) = duplicate(state, &from, message_id) {
         if existing.kind != kind
@@ -217,7 +239,7 @@ fn send(
                 .as_deref()
                 .unwrap_or(&existing.to_run_id)
                 != to_run_id
-            || existing.from_subagent_id.is_some()
+            || existing.from_subagent_id != from_subagent_id
         {
             return Err(error(
                 "message_id_conflict",
@@ -225,6 +247,12 @@ fn send(
             ));
         }
         return Ok(message_result(existing, true));
+    }
+    let receiver = run_index(state, &recipient)?;
+    if state.runs[receiver].stage == RunStage::Closed
+        && state.runs[receiver].close_reason == Some(CloseReason::Accepted)
+    {
+        return Err(error("invalid_stage", "Accepted run history is read-only"));
     }
     let answer_provenance = if kind == MessageKind::Answer {
         if in_reply_to.as_deref().is_none_or(|id| id.trim().is_empty()) {
@@ -234,10 +262,11 @@ fn send(
             ));
         }
         let run = &state.runs[target];
+        // Progress and transport receipts cannot resolve or replace a semantic question.
+        let current = current_question(&state.messages, &run.run_id);
         if run.stage == RunStage::Closed
-            || run.last_report.as_ref().is_none_or(|report| {
-                report.kind != ReportKind::NeedsInput
-                    || Some(report.message_id.as_str()) != in_reply_to.as_deref()
+            || current.is_none_or(|report| {
+                Some(report.message_id.as_str()) != in_reply_to.as_deref()
             })
         {
             return Err(error(
@@ -248,7 +277,7 @@ fn send(
         Some(super::super::management_target(
             state,
             actor,
-            caller,
+            caller.map(|job| job.run_index),
             &state.runs[target].session_id,
             to_run_id,
         )?.1)
@@ -272,13 +301,13 @@ fn send(
             in_reply_to: in_reply_to.clone(),
             report: None,
             stale: false,
-            from_subagent_id: None,
+            from_subagent_id,
             escalated_from: escalated,
         },
     )?;
     if let Some(provenance) = answer_provenance {
         let annotation = super::super::decision_annotation(
-            actor_ref(actor, caller, state),
+            actor_ref(actor, caller.map(|job| job.run_index), state),
             &provenance,
             &format!("Answer delivered as message {message_id}"),
         );

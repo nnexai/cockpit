@@ -44,7 +44,7 @@ export type LocalShortcutId =
   | "comment-lines" | "comment-file"
   | "terminal-copy" | "terminal-paste" | "terminal-newline"
   | "browser-delete-annotation"
-  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "subscription-limits" | "show-supervisor" | "start-supervisor"
+  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "subscription-limits" | "show-supervisor" | "start-supervisor" | "start-another-supervisor"
   | "show-widgets" | "next-widget" | "previous-widget" | "remove-widget";
 
 export type ShortcutId = PrefixCommand | LocalShortcutId;
@@ -130,7 +130,8 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "switch-session", label: "Switch session…", group: "Navigate", scope: "global", prefix: k("g"), primary: true, allowWhileBusy: true },
   { id: "subscription-limits", label: "Subscription limits", group: "Navigate", scope: "global", note: "Commands-only; opens read-only subscription limits in the lower workarea strip." },
   { id: "show-supervisor", label: "Show Supervisor", group: "Navigate", scope: "global", palette: "custom", primary: true, note: "Commands or top bar; opens tasks, progress and genuine questions without changing Herdr focus. No assigned shortcut." },
-  { id: "start-supervisor", label: "Start agent", group: "Navigate", scope: "global", palette: "custom", primary: true, note: "Commands-only; starts an OMP supervisor in a new tab in the fresh current Space, without changing terminal focus. Location options appear only when needed. The supervisor manages its workers. No assigned shortcut." },
+  { id: "start-supervisor", label: "Start agent", group: "Navigate", scope: "global", palette: "custom", primary: true, note: "Commands-only; reuses a matching live OMP supervisor, resumes a stopped one, or creates one if absent. Uses the fresh current Space without changing terminal focus; location options appear only when needed. No assigned shortcut." },
+  { id: "start-another-supervisor", label: "Start another agent…", group: "Navigate", scope: "global", palette: "custom", note: "Commands-only; opens the existing Name/Location dialog to create a distinct OMP supervisor without changing terminal focus. No assigned shortcut." },
   { id: "show-widgets", label: "Show widgets", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; opens widgets waiting in the selected tab without taking terminal focus." },
   { id: "next-widget", label: "Next widget", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; shows the next widget in the selected tab's dock." },
   { id: "previous-widget", label: "Previous widget", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; shows the previous widget in the selected tab's dock." },

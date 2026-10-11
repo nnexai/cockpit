@@ -1,15 +1,14 @@
 use std::{
     collections::BTreeMap,
     path::Path,
-    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use cockpit_core::{
     InspectionError,
     orchestration::herdr::{
-        AgentStartRequest, AgentTabRequest, OrchestrationHerdr, PaneProcessInfo, RuntimePane,
-        RuntimeView, RuntimeWorkspace,
+        AgentTabRequest, DirectAgentTabRequest, OrchestrationHerdr,
+        PaneProcessInfo, RuntimePane, RuntimeView, RuntimeWorkspace,
     },
 };
 use cockpit_protocol::orchestration::RunLocation;
@@ -21,6 +20,9 @@ fn unknown(error: InspectionError) -> InspectionError {
     if matches!(
         error.code.as_str(),
         "request_outcome_unknown" | "malformed_json" | "malformed_response" | "response_timeout"
+            // Stock layout.apply can fail after spawning the new PTY command.
+            // Its rollback acknowledgement is not proof that no writer ran.
+            | "layout_apply_failed"
     ) {
         InspectionError::new("herdr_outcome_unknown", error.message)
     } else {
@@ -99,11 +101,20 @@ fn validate_close_receipt(result: &Value) -> Result<(), InspectionError> {
 }
 
 fn validate_agent_tab_request(request: &AgentTabRequest) -> Result<(), InspectionError> {
-    let ordinary_terminal = request.launch_tag.is_empty()
-        && request.label == "Working terminal"
-        && request.env.is_empty();
-    let tagged_launch = !request.launch_tag.is_empty() && request.label == request.launch_tag;
-    if !Path::new(&request.cwd).is_absolute() || !(ordinary_terminal || tagged_launch) {
+    validate_tab_request(&request.cwd, &request.label, &request.launch_tag, &request.env)
+}
+
+fn validate_tab_request(
+    cwd: &str,
+    label: &str,
+    launch_tag: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<(), InspectionError> {
+    let ordinary_terminal = launch_tag.is_empty()
+        && label == "Working terminal"
+        && env.is_empty();
+    let tagged_launch = !launch_tag.is_empty() && label == launch_tag;
+    if !Path::new(cwd).is_absolute() || !(ordinary_terminal || tagged_launch) {
         return Err(InspectionError::new(
             "invalid_launch_request",
             "Tab requires an absolute cwd and either an exact launch tag or an ordinary working terminal without launch environment",
@@ -112,106 +123,117 @@ fn validate_agent_tab_request(request: &AgentTabRequest) -> Result<(), Inspectio
     Ok(())
 }
 
-fn validate_pending_expiry_receipt(result: &Value, pane_id: &str) -> Result<(), InspectionError> {
-    let response = object(result, "agent.get").map_err(unknown)?;
-    if response.get("type").and_then(Value::as_str) != Some("agent_info")
-        || response.get("agent")
-            .and_then(|agent| agent.get("pane_id"))
-            .and_then(Value::as_str) != Some(pane_id)
+fn direct_agent_tab_params(request: &DirectAgentTabRequest) -> Result<Value, InspectionError> {
+    validate_tab_request(&request.cwd, &request.label, &request.launch_tag, &request.env)?;
+    if request.launch_tag.is_empty()
+        || request.command.first().is_none_or(|program| program != "omp")
+        || request.command.iter().any(|arg| arg.contains('\0'))
+    {
+        return Err(InspectionError::new(
+            "invalid_launch_request",
+            "Direct agent tab requires an exact launch tag and literal OMP command argv",
+        ));
+    }
+    let env = launch_environment(&request.env)?;
+    // Stock Herdr v0.9.3 layout.apply: omitting tab_id creates a NEW tab;
+    // omitting pane_id creates a NEW PTY rather than replacing a live pane.
+    Ok(json!({
+        "workspace_id": request.workspace_id,
+        "tab_label": request.label,
+        "focus": false,
+        "root": {
+            "type": "pane",
+            "label": request.label,
+            "cwd": request.cwd,
+            "command": request.command,
+            "env": env,
+        },
+    }))
+}
+
+fn direct_launch_receipt<'a>(
+    result: &'a Value,
+    request: &DirectAgentTabRequest,
+) -> Result<(&'a str, &'a str), InspectionError> {
+    // Herdr v0.9.3 schema/response.rs: LayoutApply { layout }, serialized
+    // as type=layout_apply; schema/panes.rs: LayoutDescription / LayoutPane.
+    let layout = &result["layout"];
+    let root = &layout["root"];
+    let tab_id = layout["tab_id"].as_str().filter(|id| !id.is_empty());
+    let pane_id = root["pane_id"].as_str().filter(|id| !id.is_empty());
+    let command_matches = root["command"].as_array().is_some_and(|argv| {
+        argv.len() == request.command.len()
+            && argv.iter().zip(&request.command).all(|(actual, expected)| {
+                actual.as_str() == Some(expected.as_str())
+            })
+    });
+    if result["type"].as_str() != Some("layout_apply")
+        || layout["workspace_id"].as_str() != Some(request.workspace_id.as_str())
+        || root["type"].as_str() != Some("pane")
+        || root["label"].as_str() != Some(request.launch_tag.as_str())
+        || tab_id.is_none()
+        || pane_id.is_none()
+        || layout["focused_pane_id"].as_str() != pane_id
+        || !command_matches
     {
         return Err(InspectionError::new(
             "herdr_outcome_unknown",
-            "agent.get returned no exact-pane inspection receipt",
+            "layout.apply receipt does not match the exact direct launch workspace, tab, pane, tag and argv",
         ));
     }
-    Ok(())
+    Ok((tab_id.unwrap(), pane_id.unwrap()))
 }
 
-fn validate_owned_launch_tab(
-    runtime: &RuntimeView,
+fn direct_launch_location(
     session_id: &str,
-    location: &RunLocation,
-) -> Result<(), InspectionError> {
-    let terminal_id = location.terminal_id.as_deref().filter(|id| !id.is_empty());
-    if location.session_id != session_id
-        || runtime.endpoint_identity != location.endpoint_identity
-        || location.boot_id.as_ref().is_some_and(|boot| runtime.boot_id.as_ref() != Some(boot))
-        || terminal_id.is_none()
-    {
-        return Err(InspectionError::new(
-            "stale_identity",
-            "Recorded launch endpoint, boot, session or terminal identity is unavailable or changed",
-        ));
-    }
-    let mut tab_panes = runtime.panes.iter().filter(|pane| pane.tab_id == location.tab_id);
-    let pane = tab_panes.next().ok_or_else(|| InspectionError::new(
-        "tab_not_found", "Recorded launch tab is absent",
-    ))?;
-    if tab_panes.next().is_some()
-        || pane.workspace_id != location.workspace_id
-        || pane.pane_id != location.pane_id
-        || pane.terminal_id.as_deref() != terminal_id
-        || runtime.panes.iter().any(|other| {
-            other.terminal_id.as_deref() == terminal_id && other.pane_id != location.pane_id
+    request: &DirectAgentTabRequest,
+    tab_id: &str,
+    pane_id: &str,
+    before: &RuntimeView,
+    runtime: &RuntimeView,
+) -> Result<RunLocation, InspectionError> {
+    let mut tab_panes = runtime.panes.iter().filter(|pane| pane.tab_id == tab_id);
+    let pane = tab_panes.next();
+    let terminal = pane.and_then(|pane| pane.terminal_id.as_deref()).filter(|id| !id.is_empty());
+    if before.endpoint_identity != request.endpoint_identity
+        || runtime.endpoint_identity != request.endpoint_identity
+        || before.boot_id != runtime.boot_id
+        || runtime.workspaces.iter().filter(|space| space.workspace_id == request.workspace_id).count() != 1
+        || tab_panes.next().is_some()
+        || pane.is_none_or(|pane| {
+            pane.workspace_id != request.workspace_id
+                || pane.pane_id != pane_id
+                || pane.tab_label != request.launch_tag
+        })
+        || terminal.is_none()
+        || runtime.panes.iter().filter(|pane| pane.pane_id == pane_id).count() != 1
+        || runtime.panes.iter().filter(|pane| pane.tab_label == request.launch_tag).count() != 1
+        || runtime.panes.iter().filter(|pane| pane.terminal_id.as_deref() == terminal).count() != 1
+        || before.panes.iter().any(|pane| {
+            pane.tab_id == tab_id || pane.pane_id == pane_id || pane.terminal_id.as_deref() == terminal
         })
     {
         return Err(InspectionError::new(
-            "owned_launch_tab_unsafe",
-            "Recorded launch tab is shared, moved or has a reused terminal",
+            "herdr_outcome_unknown",
+            "Direct launch receipt lacks a fresh exact, unique tagged tab/pane/terminal on the pinned endpoint",
         ));
     }
-    // Closing the only pane also closes its tab and, for the last tab, its
-    // workspace. That broader effect is never authorized by this receipt.
-    if !runtime.panes.iter().any(|other| {
-        other.workspace_id == location.workspace_id && other.tab_id != location.tab_id
-    }) {
-        return Err(InspectionError::new(
-            "owned_launch_tab_unsafe",
-            "Closing the recorded launch tab would also close its workspace",
-        ));
-    }
-    Ok(())
+    let pane = pane.unwrap();
+    Ok(RunLocation {
+        endpoint_identity: runtime.endpoint_identity.clone(),
+        session_id: session_id.into(),
+        workspace_id: request.workspace_id.clone(),
+        tab_id: tab_id.into(),
+        pane_id: pane_id.into(),
+        launch_tag: request.launch_tag.clone(),
+        boot_id: runtime.boot_id.clone(),
+        terminal_id: pane.terminal_id.clone(),
+        native_session_id: pane.native_session_id.clone(),
+    })
 }
 
-fn validate_start_receipt(
-    result: &Value,
-    request: &AgentStartRequest,
-) -> Result<(), InspectionError> {
-    let response = object(&result, "agent.start")
-        .map_err(|error| InspectionError::new("herdr_outcome_unknown", error.message))?;
-    if required_string(response, "type", "agent.start")
-        .ok()
-        .as_deref()
-        != Some("agent_started")
-    {
-        return Err(InspectionError::new(
-            "herdr_outcome_unknown",
-            "agent.start returned no accepted command receipt",
-        ));
-    }
-    let agent = response
-        .get("agent")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            InspectionError::new(
-                "herdr_outcome_unknown",
-                "agent.start receipt missing agent identity",
-            )
-        })?;
-    if agent.get("pane_id").and_then(Value::as_str) != Some(&request.pane_id)
-        || agent.get("name").and_then(Value::as_str) != Some(&request.name)
-        || agent
-            .get("agent")
-            .and_then(Value::as_str)
-            .is_some_and(|kind| kind != request.kind)
-    {
-        return Err(InspectionError::new(
-            "herdr_outcome_unknown",
-            "agent.start receipt does not match requested agent/pane",
-        ));
-    }
-    Ok(())
-}
+
+
 fn launch_environment(env: &BTreeMap<String, String>) -> Result<Value, InspectionError> {
     if env.len() > 24 {
         return Err(InspectionError::new(
@@ -237,6 +259,9 @@ fn launch_environment(env: &BTreeMap<String, String>) -> Result<Value, Inspectio
                 | "COCKPIT_HERDR_EXECUTABLE"
                 | "COCKPIT_CLI_PATH"
                 | "COCKPIT_STATE_ROOT"
+                | "COCKPIT_JOB_CREDENTIAL_FILE"
+                | "COCKPIT_ATTACHMENT_ID"
+                | "COCKPIT_ATTACHMENT_EPOCH"
                 | "COCKPIT_CACHE_ROOT"
                 | "COCKPIT_WORKTREE_ROOT"
                 | "COCKPIT_REPOSITORY_ROOTS"
@@ -416,52 +441,34 @@ impl OrchestrationHerdr for HerdrCliAdapter {
         })
     }
 
-    async fn start_agent(
+    async fn create_direct_agent_tab(
         &self,
         session_id: &str,
-        request: &AgentStartRequest,
-    ) -> Result<(), InspectionError> {
-        if request.kind != "omp" || !(3001..=300_000).contains(&request.timeout_ms) {
+        request: &DirectAgentTabRequest,
+    ) -> Result<RunLocation, InspectionError> {
+        let params = direct_agent_tab_params(request)?;
+        let before = self.runtime(session_id).await?;
+        if before.endpoint_identity != request.endpoint_identity {
             return Err(InspectionError::new(
-                "invalid_launch_request",
-                "Only OMP with a bounded start timeout is supported",
+                "stale_identity",
+                "Endpoint changed before direct tab creation; mutation was not dispatched",
             ));
         }
-        // v0.9.3 rejects a typed start before submission while a fresh shell
-        // initializes. Mirror only its pinned-terminal, process-info branch;
-        // never repeat an accepted or ambiguous command.
-        let pinned = self.launch_terminal(session_id, request).await?;
-        let mut deadline = None;
-        loop {
-            match self.socket_request_with_identity(session_id, "agent.start", json!({"pane_id":request.pane_id,"name":request.name,"kind":request.kind,"args":request.args,"timeout_ms":request.timeout_ms}), Some(&request.endpoint_identity)).await {
-                Ok((result, _)) => {
-                    validate_start_receipt(&result, request)?;
-                    if pinned.as_deref().zip(result["agent"]["terminal_id"].as_str())
-                        .is_some_and(|(expected, actual)| expected != actual)
-                    {
-                        return Err(InspectionError::new("herdr_outcome_unknown", "Accepted start receipt belongs to a different terminal; no additional start was sent"));
-                    }
-                    return Ok(());
-                }
-                Err(error) if error.code == "agent_pane_busy" && pinned.is_some() => {
-                    let until = *deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
-                    if Instant::now() >= until
-                        || self.launch_terminal(session_id, request).await? != pinned
-                        || !self.launch_shell_initializing(session_id, request).await?
-                    {
-                        return Err(error);
-                    }
-                    tokio::time::sleep(Duration::from_millis(100).min(until.saturating_duration_since(Instant::now()))).await;
-                    if Instant::now() >= until
-                        || self.launch_terminal(session_id, request).await? != pinned
-                        || !self.launch_shell_initializing(session_id, request).await?
-                    {
-                        return Err(error);
-                    }
-                }
-                Err(error) => return Err(unknown(error)),
-            }
+        if before.panes.iter().any(|pane| pane.tab_label == request.launch_tag) {
+            return Err(InspectionError::new(
+                "herdr_outcome_unknown",
+                "Launch tag already exists; reconcile the recorded launch intent instead of replaying it",
+            ));
         }
+        // One supported effect, never agent.start, terminal typing or a retry.
+        let (result, _) = self.socket_request_with_identity(
+            session_id, "layout.apply", params, Some(&request.endpoint_identity),
+        ).await.map_err(unknown)?;
+        let (tab_id, pane_id) = direct_launch_receipt(&result, request)?;
+        let runtime = self.runtime(session_id).await.map_err(|error| {
+            InspectionError::new("herdr_outcome_unknown", error.message)
+        })?;
+        direct_launch_location(session_id, request, tab_id, pane_id, &before, &runtime)
     }
 
     async fn pane_process_info(
@@ -484,41 +491,6 @@ impl OrchestrationHerdr for HerdrCliAdapter {
         Ok(info)
     }
 
-    async fn expire_pending_agent(
-        &self,
-        session_id: &str,
-        endpoint_identity: &str,
-        pane_id: &str,
-    ) -> Result<(), InspectionError> {
-        // Herdr 0.9.3 agent.get reconciles the managed-launch deadline while
-        // snapshots do not. Keep it outside the pre-identity read whitelist:
-        // even this ordinary inspection can clear expired Pending metadata.
-        match self.socket_request_with_identity(
-            session_id,
-            "agent.get",
-            json!({"target": pane_id}),
-            Some(endpoint_identity),
-        ).await {
-            Ok((result, _)) => validate_pending_expiry_receipt(&result, pane_id),
-            // Reconciliation may clear the only tracked agent. This is an
-            // authoritative inspection outcome, never process/command absence.
-            Err(error) if error.code == "agent_not_found" => Ok(()),
-            Err(error) => Err(unknown(error)),
-        }
-    }
-
-    async fn close_owned_launch_tab(
-        &self,
-        session_id: &str,
-        location: &RunLocation,
-    ) -> Result<(), InspectionError> {
-        let runtime = self.runtime(session_id).await?;
-        validate_owned_launch_tab(&runtime, session_id, location)?;
-        // Close the recorded pane, not the tab: a foreign split created after
-        // the fresh exclusive-tab check must survive. The caller requires the
-        // entire old tab and terminal absent before it can retry the launch.
-        self.close_pane(session_id, &location.endpoint_identity, &location.pane_id).await
-    }
 
     async fn close_pane(
         &self,
@@ -536,189 +508,243 @@ impl OrchestrationHerdr for HerdrCliAdapter {
     }
 }
 
-impl HerdrCliAdapter {
-    async fn launch_terminal(
-        &self,
-        session_id: &str,
-        request: &AgentStartRequest,
-    ) -> Result<Option<String>, InspectionError> {
-        let (result, _) = self
-            .socket_request_with_identity(
-                session_id,
-                "pane.get",
-                json!({"pane_id":request.pane_id}),
-                Some(&request.endpoint_identity),
-            )
-            .await?;
-        Ok(result
-            .get("pane")
-            .and_then(|pane| pane.get("terminal_id"))
-            .and_then(Value::as_str)
-            .map(str::to_owned))
-    }
-
-    async fn launch_shell_initializing(
-        &self,
-        session_id: &str,
-        request: &AgentStartRequest,
-    ) -> Result<bool, InspectionError> {
-        let (result, _) = self
-            .socket_request_with_identity(
-                session_id,
-                "pane.process_info",
-                json!({"pane_id":request.pane_id}),
-                Some(&request.endpoint_identity),
-            )
-            .await?;
-        Ok(process_info_shows_shell_initialization(
-            &result["process_info"],
-        ))
-    }
-}
-
-// Source: Herdr v0.9.3 cli/agent.rs and platform/mod.rs. A busy
-// foreground child is not evidence of shell initialization.
-fn process_info_shows_shell_initialization(info: &Value) -> bool {
-    let Some(shell_pid) = info["shell_pid"].as_u64() else {
-        return false;
-    };
-    info["foreground_process_group_id"].as_u64() == Some(shell_pid)
-        && info["foreground_processes"]
-            .as_array()
-            .is_some_and(|processes| {
-                processes.iter().any(|process| {
-                    process["pid"].as_u64() == Some(shell_pid)
-                        && (process["name"].as_str().is_some_and(is_shell_name)
-                            || process["argv"]
-                                .as_array()
-                                .and_then(|argv| argv.first())
-                                .and_then(Value::as_str)
-                                .is_some_and(is_shell_name))
-                })
-            })
-}
-
-fn is_shell_name(name: &str) -> bool {
-    let basename = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .trim_start_matches('-');
-    let basename = basename.trim_end_matches(".exe");
-    [
-        "sh",
-        "bash",
-        "dash",
-        "zsh",
-        "fish",
-        "ksh",
-        "mksh",
-        "csh",
-        "tcsh",
-        "elvish",
-        "xonsh",
-        "nu",
-        "pwsh",
-        "powershell",
-        "cmd",
-    ]
-    .iter()
-    .any(|shell| basename.eq_ignore_ascii_case(shell))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn direct_launch_request() -> DirectAgentTabRequest {
+        DirectAgentTabRequest {
+            endpoint_identity: "endpoint".into(),
+            workspace_id: "workspace".into(),
+            cwd: "/work/repository".into(),
+            label: "launch-tag".into(),
+            env: BTreeMap::from([
+                ("COCKPIT_LAUNCH_TAG".into(), "launch-tag".into()),
+                ("COCKPIT_JOB_CREDENTIAL_FILE".into(), "/private/credential".into()),
+                ("COCKPIT_ATTACHMENT_ID".into(), "attachment".into()),
+                ("COCKPIT_ATTACHMENT_EPOCH".into(), "2".into()),
+            ]),
+            launch_tag: "launch-tag".into(),
+            command: vec!["omp".into(), "--append-system-prompt".into(), "literal ; $(text)".into()],
+        }
+    }
+
+    #[test]
+    fn direct_launch_uses_stock_new_unfocused_layout_with_literal_argv() {
+        let request = direct_launch_request();
+        let params = direct_agent_tab_params(&request).unwrap();
+        assert_eq!(params, json!({
+            "workspace_id": "workspace",
+            "tab_label": "launch-tag",
+            "focus": false,
+            "root": {
+                "type": "pane",
+                "label": "launch-tag",
+                "cwd": "/work/repository",
+                "command": request.command,
+                "env": request.env,
+            },
+        }));
+        assert!(params.get("tab_id").is_none());
+        assert!(params["root"].get("pane_id").is_none());
+        assert!(params["root"].get("respawn_shell_on_exit").is_none());
+    }
+
+    #[test]
+    fn direct_launch_shares_request_and_environment_validation_without_shell_fallback() {
+        for change in 0..7 {
+            let mut request = direct_launch_request();
+            match change {
+                0 => request.cwd = "relative".into(),
+                1 => request.label = "different-tag".into(),
+                2 => request.launch_tag.clear(),
+                3 => request.command.clear(),
+                4 => request.command = vec!["sh".into(), "-c".into(), "exec omp".into()],
+                5 => request.command.push("invalid\0argument".into()),
+                _ => { request.env.insert("UNSUPPORTED".into(), "value".into()); }
+            }
+            assert!(direct_agent_tab_params(&request).is_err(), "change {change}");
+        }
+    }
+
+    fn direct_receipt(request: &DirectAgentTabRequest) -> Value {
+        json!({
+            "type": "layout_apply",
+            "layout": {
+                "workspace_id": request.workspace_id,
+                "tab_id": "new-tab",
+                "zoomed": false,
+                "focused_pane_id": "new-pane",
+                "root": {
+                    "type": "pane",
+                    "pane_id": "new-pane",
+                    "label": request.launch_tag,
+                    "cwd": request.cwd,
+                    "command": request.command,
+                },
+            },
+        })
+    }
+
+    #[test]
+    fn direct_launch_refuses_malformed_or_contradictory_stock_receipts() {
+        let request = direct_launch_request();
+        let receipt = direct_receipt(&request);
+        assert_eq!(direct_launch_receipt(&receipt, &request).unwrap(), ("new-tab", "new-pane"));
+        for change in 0..9 {
+            let mut receipt = receipt.clone();
+            match change {
+                0 => receipt["type"] = json!("tab_created"),
+                1 => receipt["layout"]["workspace_id"] = json!("other-workspace"),
+                2 => receipt["layout"]["tab_id"] = json!(""),
+                3 => receipt["layout"]["root"]["pane_id"] = Value::Null,
+                4 => receipt["layout"]["root"]["type"] = json!("split"),
+                5 => receipt["layout"]["root"]["label"] = json!("other-launch"),
+                6 => receipt["layout"]["focused_pane_id"] = json!("other-pane"),
+                7 => receipt["layout"]["root"]["command"] = json!(["sh", "-c", "exec omp"]),
+                _ => receipt["layout"]["root"]["command"] = Value::Null,
+            }
+            assert_eq!(direct_launch_receipt(&receipt, &request).unwrap_err().code, "herdr_outcome_unknown");
+        }
+    }
+
+    #[test]
+    fn direct_launch_location_requires_fresh_unique_pinned_runtime_not_agent_ack() {
+        let request = direct_launch_request();
+        let (mut runtime, _) = owned_launch_fixture();
+        let before = runtime.clone();
+        runtime.workspaces.push(RuntimeWorkspace {
+            workspace_id: request.workspace_id.clone(),
+            label: "workspace".into(),
+            cwd: request.cwd.clone(),
+        });
+        let mut pane = runtime.panes[0].clone();
+        pane.tab_id = "new-tab".into();
+        pane.pane_id = "new-pane".into();
+        pane.tab_label = request.launch_tag.clone();
+        pane.terminal_id = Some("new-terminal".into());
+        // No agent.start metadata or extension registration is required for a
+        // location receipt, and neither is fabricated from the launch ACK.
+        pane.native_session_id = None;
+        pane.agent_kind = None;
+        runtime.panes.push(pane);
+        let location = direct_launch_location("fixture", &request, "new-tab", "new-pane", &before, &runtime).unwrap();
+        assert_eq!(location.terminal_id.as_deref(), Some("new-terminal"));
+        assert_eq!(location.native_session_id, None);
+        for change in 0..13 {
+            let mut before = before.clone();
+            let mut runtime = runtime.clone();
+            match change {
+                0 => runtime.endpoint_identity = "other-endpoint".into(),
+                1 => runtime.boot_id = Some("other-boot".into()),
+                2 => runtime.panes[2].workspace_id = "other-workspace".into(),
+                3 => runtime.panes[2].pane_id = "other-pane".into(),
+                4 => runtime.panes[2].tab_label = "other-launch".into(),
+                5 => runtime.panes[2].terminal_id = None,
+                6 => runtime.panes[2].terminal_id = Some(String::new()),
+                7 => runtime.panes[0].terminal_id = Some("new-terminal".into()),
+                8 => runtime.panes[0].tab_id = "new-tab".into(),
+                9 => runtime.panes[0].tab_label = request.launch_tag.clone(),
+                10 => before.panes.push(runtime.panes[2].clone()),
+                11 => runtime.workspaces.clear(),
+                _ => runtime.panes[0].pane_id = "new-pane".into(),
+            }
+            assert_eq!(
+                direct_launch_location("fixture", &request, "new-tab", "new-pane", &before, &runtime).unwrap_err().code,
+                "herdr_outcome_unknown", "change {change}",
+            );
+        }
+    }
+
     #[cfg(unix)]
-    async fn pending_expiry_response(mut response: Value) -> Result<(), InspectionError> {
+    #[tokio::test]
+    async fn direct_launch_dispatches_one_stock_effect_and_pins_fresh_receipt() {
         use std::sync::atomic::Ordering;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         use tokio::net::{UnixListener, UnixStream};
         use super::super::{HerdrCliConfig, NEXT_REQUEST_ID};
 
-        let socket = std::env::temp_dir().join(format!(
-            "cockpit-herdr-expiry-{}-{}.sock",
-            std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
-        ));
-        let listener = UnixListener::bind(&socket).unwrap();
-        let probe = UnixStream::connect(&socket).await.unwrap();
-        let endpoint = HerdrCliAdapter::socket_peer_identity(&socket, &probe).unwrap();
-        drop(probe);
-        drop(listener.accept().await.unwrap());
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut reader = BufReader::new(stream);
-            let mut line = String::new();
-            reader.read_line(&mut line).await.unwrap();
-            let request: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(request["method"], "agent.get");
-            assert_eq!(request["params"], json!({"target": "w1:p2"}));
-            response["id"] = request["id"].clone();
-            reader.into_inner().write_all(format!("{response}\n").as_bytes()).await.unwrap();
-        });
-        let config = HerdrCliConfig::from_options(
-            None, Some("fixture".into()), Some(socket.clone()),
-        ).unwrap();
-        let result = HerdrCliAdapter::new(config)
-            .expire_pending_agent("fixture", &endpoint, "w1:p2").await;
-        server.await.unwrap();
-        std::fs::remove_file(socket).unwrap();
-        result
+        for outcome in 0..4 {
+            let socket = std::env::temp_dir().join(format!(
+                "cockpit-herdr-direct-{}-{}.sock",
+                std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+            ));
+            let listener = UnixListener::bind(&socket).unwrap();
+            let probe = UnixStream::connect(&socket).await.unwrap();
+            let endpoint = HerdrCliAdapter::socket_peer_identity(&socket, &probe).unwrap();
+            drop(probe);
+            drop(listener.accept().await.unwrap());
+            let mut request = direct_launch_request();
+            request.endpoint_identity = endpoint.clone();
+            request.workspace_id = "space-a".into();
+            let fixture: Value = serde_json::from_str(include_str!(
+                "../../tests/fixtures/session-snapshot.json"
+            )).unwrap();
+            let before = fixture["result"].clone();
+            let mut after = before.clone();
+            let snapshot = &mut after["snapshot"];
+            let mut tab = snapshot["tabs"][0].clone();
+            tab["tab_id"] = json!("new-tab");
+            tab["label"] = json!(request.launch_tag);
+            snapshot["tabs"].as_array_mut().unwrap().push(tab);
+            let mut pane = snapshot["panes"][0].clone();
+            pane["tab_id"] = json!("new-tab");
+            pane["pane_id"] = json!("new-pane");
+            pane["terminal_id"] = json!("new-terminal");
+            pane["agent"] = Value::Null;
+            snapshot["panes"].as_array_mut().unwrap().push(pane);
+            let mut receipt = direct_receipt(&request);
+            if outcome == 1 {
+                receipt["layout"]["workspace_id"] = json!("foreign-workspace");
+            }
+            let mut exchanges = vec![
+                ("session.snapshot", json!({}), json!({"result": before})),
+                ("layout.apply", direct_agent_tab_params(&request).unwrap(), if outcome >= 2 {
+                    json!({"error":{
+                        "code": if outcome == 2 { "request_outcome_unknown" } else { "layout_apply_failed" },
+                        "message":"effect uncertain",
+                    }})
+                } else {
+                    json!({"result": receipt})
+                }),
+            ];
+            if outcome == 0 {
+                exchanges.push(("session.snapshot", json!({}), json!({"result": after})));
+            }
+            let server = tokio::spawn(async move {
+                for (method, params, mut response) in exchanges {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    let actual: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(actual["method"], method);
+                    assert_eq!(actual["params"], params);
+                    response["id"] = actual["id"].clone();
+                    reader.into_inner().write_all(format!("{response}\n").as_bytes()).await.unwrap();
+                }
+            });
+            let config = HerdrCliConfig::from_options(
+                None, Some("fixture".into()), Some(socket.clone()),
+            ).unwrap();
+            let result = HerdrCliAdapter::new(config).create_direct_agent_tab("fixture", &request).await;
+            if outcome == 0 {
+                let location = result.unwrap();
+                assert_eq!(location.endpoint_identity, endpoint);
+                assert_eq!(location.workspace_id, "space-a");
+                assert_eq!(location.tab_id, "new-tab");
+                assert_eq!(location.pane_id, "new-pane");
+                assert_eq!(location.terminal_id.as_deref(), Some("new-terminal"));
+                assert_eq!(location.launch_tag, request.launch_tag);
+                assert_eq!(location.native_session_id, None);
+            } else {
+                assert_eq!(result.unwrap_err().code, "herdr_outcome_unknown");
+            }
+            server.await.unwrap();
+            std::fs::remove_file(socket).unwrap();
+        }
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn pending_expiry_accepts_only_authoritative_exact_pane_inspection() {
-        for response in [
-            json!({"result":{"type":"agent_info","agent":{"pane_id":"w1:p2","launch_pending":true}}}),
-            json!({"result":{"type":"agent_info","agent":{"pane_id":"w1:p2","launch_pending":false}}}),
-            json!({"error":{"code":"agent_not_found","message":"expired managed launch"}}),
-        ] {
-            pending_expiry_response(response).await.unwrap();
-        }
-        for response in [
-            json!({"result":{"type":"agent_info","agent":{"pane_id":"w1:p3"}}}),
-            json!({"result":{"type":"ok"}}),
-            json!({"result":null}),
-            json!({"error":{"code":null,"message":"invalid"}}),
-        ] {
-            assert_eq!(pending_expiry_response(response).await.unwrap_err().code, "herdr_outcome_unknown");
-        }
-        for code in ["pane_not_found", "agent_not_ready", "permission_denied", "request_outcome_unknown"] {
-            let response = json!({"error":{"code":code,"message":"failed inspection"}});
-            let expected = if code == "request_outcome_unknown" { "herdr_outcome_unknown" } else { code };
-            assert_eq!(pending_expiry_response(response).await.unwrap_err().code, expected);
-        }
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn pending_expiry_fences_endpoint_before_dispatch() {
-        use std::sync::atomic::Ordering;
-        use tokio::io::{AsyncBufReadExt, BufReader};
-        use tokio::net::UnixListener;
-        use super::super::{HerdrCliConfig, NEXT_REQUEST_ID};
-
-        let socket = std::env::temp_dir().join(format!(
-            "cockpit-herdr-expiry-fence-{}-{}.sock",
-            std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
-        ));
-        let listener = UnixListener::bind(&socket).unwrap();
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut line = String::new();
-            assert_eq!(BufReader::new(stream).read_line(&mut line).await.unwrap(), 0);
-        });
-        let config = HerdrCliConfig::from_options(
-            None, Some("fixture".into()), Some(socket.clone()),
-        ).unwrap();
-        let error = HerdrCliAdapter::new(config)
-            .expire_pending_agent("fixture", "wrong-endpoint", "w1:p2").await.unwrap_err();
-        assert_eq!(error.code, "stale_identity");
-        server.await.unwrap();
-        std::fs::remove_file(socket).unwrap();
-    }
 
     fn owned_launch_fixture() -> (RuntimeView, RunLocation) {
         let location = RunLocation {
@@ -786,116 +812,6 @@ mod tests {
         validate_agent_tab_request(&launch).unwrap();
     }
 
-    #[test]
-    fn owned_launch_close_requires_exact_exclusive_receipt_without_label_discovery() {
-        let (runtime, location) = owned_launch_fixture();
-        validate_owned_launch_tab(&runtime, "fixture", &location).unwrap();
-        for change in 0..12 {
-            let mut runtime = runtime.clone();
-            let mut location = location.clone();
-            match change {
-                0 => runtime.endpoint_identity = "new-endpoint".into(),
-                1 => runtime.boot_id = Some("new-boot".into()),
-                2 => runtime.boot_id = None,
-                3 => location.session_id = "other-session".into(),
-                4 => location.terminal_id = None,
-                5 => location.terminal_id = Some(String::new()),
-                6 => runtime.panes[0].workspace_id = "moved-workspace".into(),
-                7 => runtime.panes[0].pane_id = "replacement-pane".into(),
-                8 => runtime.panes[0].terminal_id = Some("replacement-terminal".into()),
-                9 => runtime.panes[1].tab_id = location.tab_id.clone(),
-                10 => runtime.panes[1].terminal_id = location.terminal_id.clone(),
-                _ => { runtime.panes.pop(); }
-            }
-            assert!(validate_owned_launch_tab(&runtime, "fixture", &location).is_err(), "change {change}");
-        }
-    }
-
-    #[test]
-    fn owned_launch_reclaim_fences_identity_not_mutable_agent_observation() {
-        let (mut runtime, location) = owned_launch_fixture();
-        runtime.panes[0].native_session_id = Some("unbound-native".into());
-        runtime.panes[0].interactive_ready = true;
-        runtime.panes[0].agent_kind = Some("omp".into());
-        // Core's durable close intent revokes the unbound incarnation; valid
-        // current SDK bindings are protected by Core before this adapter call.
-        validate_owned_launch_tab(&runtime, "fixture", &location).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn owned_launch_close_reads_fresh_exact_tab_and_requires_close_acknowledgement() {
-        use std::sync::atomic::Ordering;
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        use tokio::net::{UnixListener, UnixStream};
-        use super::super::{HerdrCliConfig, NEXT_REQUEST_ID};
-
-        for close_result in [json!({"type":"ok"}), json!({"type":"tab_info"})] {
-            let socket = std::env::temp_dir().join(format!(
-                "cockpit-herdr-launch-close-{}-{}.sock",
-                std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
-            ));
-            let listener = UnixListener::bind(&socket).unwrap();
-            let probe = UnixStream::connect(&socket).await.unwrap();
-            let endpoint = HerdrCliAdapter::socket_peer_identity(&socket, &probe).unwrap();
-            drop(probe);
-            drop(listener.accept().await.unwrap());
-            let mut fixture: Value = serde_json::from_str(include_str!(
-                "../../tests/fixtures/session-snapshot.json"
-            )).unwrap();
-            let snapshot = &mut fixture["result"]["snapshot"];
-            snapshot["boot_id"] = json!("boot");
-            snapshot["agents"] = json!([]);
-            snapshot["panes"][0]["agent"] = Value::Null;
-            let mut sibling = snapshot["panes"][0].clone();
-            sibling["pane_id"] = json!("user-pane");
-            sibling["tab_id"] = json!("user-tab");
-            sibling["terminal_id"] = json!("user-terminal");
-            snapshot["panes"].as_array_mut().unwrap().push(sibling);
-            let mut tab = snapshot["tabs"][0].clone();
-            tab["tab_id"] = json!("user-tab");
-            snapshot["tabs"].as_array_mut().unwrap().push(tab);
-            let expected_ok = close_result["type"] == "ok";
-            let server = tokio::spawn(async move {
-                for (method, params, result) in [
-                    ("session.snapshot", json!({}), fixture["result"].clone()),
-                    ("pane.close", json!({"pane_id":"pane-a"}), close_result),
-                ] {
-                    let (stream, _) = listener.accept().await.unwrap();
-                    let mut reader = BufReader::new(stream);
-                    let mut line = String::new();
-                    reader.read_line(&mut line).await.unwrap();
-                    let request: Value = serde_json::from_str(&line).unwrap();
-                    assert_eq!(request["method"], method);
-                    assert_eq!(request["params"], params);
-                    let response = json!({"id":request["id"],"result":result});
-                    reader.into_inner().write_all(format!("{response}\n").as_bytes()).await.unwrap();
-                }
-            });
-            let config = HerdrCliConfig::from_options(
-                None, Some("fixture".into()), Some(socket.clone()),
-            ).unwrap();
-            let location = RunLocation {
-                endpoint_identity: endpoint,
-                session_id: "fixture".into(),
-                workspace_id: "space-a".into(),
-                tab_id: "tab-a".into(),
-                pane_id: "pane-a".into(),
-                terminal_id: Some("term-a".into()),
-                boot_id: Some("boot".into()),
-                launch_tag: "original-tag-not-current-label".into(),
-                native_session_id: None,
-            };
-            let result = HerdrCliAdapter::new(config).close_owned_launch_tab("fixture", &location).await;
-            if expected_ok {
-                result.unwrap();
-            } else {
-                assert_eq!(result.unwrap_err().code, "herdr_outcome_unknown");
-            }
-            server.await.unwrap();
-            std::fs::remove_file(socket).unwrap();
-        }
-    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -1003,36 +919,6 @@ mod tests {
             )]))
             .is_ok()
         );
-    }
-    #[test]
-    fn pending_start_receipt_uses_name_not_manifest_kind() {
-        let request = AgentStartRequest {
-            endpoint_identity: "endpoint".into(),
-            pane_id: "w1:p2".into(),
-            name: "ck-run-1-0".into(),
-            kind: "omp".into(),
-            args: vec![],
-            timeout_ms: 60_000,
-        };
-        let pending = json!({"type":"agent_started","agent":{"name":"ck-run-1-0","pane_id":"w1:p2","launch_pending":true}});
-        assert!(validate_start_receipt(&pending, &request).is_ok());
-        let detected = json!({"type":"agent_started","agent":{"name":"ck-run-1-0","agent":"omp","pane_id":"w1:p2"}});
-        assert!(validate_start_receipt(&detected, &request).is_ok());
-        let wrong = json!({"type":"agent_started","agent":{"name":"another-run","agent":"omp","pane_id":"w1:p2"}});
-        assert_eq!(
-            validate_start_receipt(&wrong, &request).unwrap_err().code,
-            "herdr_outcome_unknown"
-        );
-    }
-    #[test]
-    fn busy_retry_requires_the_shell_as_foreground_group_owner() {
-        let initializing = json!({"shell_pid":12,"foreground_process_group_id":12,"foreground_processes":[{"pid":12,"name":"-zsh","argv":["/bin/zsh"]}]});
-        assert!(process_info_shows_shell_initialization(&initializing));
-        let child = json!({"shell_pid":12,"foreground_process_group_id":20,"foreground_processes":[{"pid":20,"name":"omp","argv":["omp"]}]});
-        assert!(!process_info_shows_shell_initialization(&child));
-        let same_group_child = json!({"shell_pid":12,"foreground_process_group_id":12,"foreground_processes":[{"pid":13,"name":"bash","argv":["bash"]}]});
-        assert!(!process_info_shows_shell_initialization(&same_group_child));
-        assert!(!process_info_shows_shell_initialization(&json!({})));
     }
 
     #[test]

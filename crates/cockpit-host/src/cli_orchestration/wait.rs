@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
+use cockpit_core::orchestration::{Actor, JobRole, latest_progress_sequences};
+
 use cockpit_protocol::orchestration::{
     DeliveryStage, Message, MessageKind, OrchestrationSnapshot, OrchestrationWaitRequest,
     SubagentOp,
@@ -26,16 +28,19 @@ pub(super) struct KindCount {
 
 pub(super) fn inbox_counts(messages: &[Message], run_id: &str, after: u64) -> InboxCounts {
     let mut counts: BTreeMap<&str, KindCount> = BTreeMap::new();
+    let latest_progress = latest_progress_sequences(messages, run_id);
     let mut through = after;
     for message in messages.iter().filter(|message| {
         message.to_run_id == run_id
             && message.seq > after
             && message.kind != MessageKind::SubagentControl
             && message.stage != DeliveryStage::Acked
+            && (!message.report.as_ref().is_some_and(|report| {
+                report.kind == cockpit_protocol::orchestration::ReportKind::Progress
+            }) || latest_progress.contains(&message.seq))
     }) {
         through = through.max(message.seq);
         let key = match message.kind {
-            MessageKind::PrepareBrief => "prepare_brief",
             MessageKind::WorkBrief => "work_brief",
             MessageKind::SupervisorBrief => "supervisor_brief",
             MessageKind::Instruction => "instruction",
@@ -70,6 +75,27 @@ pub(super) async fn inbox_wait(
     json: bool,
 ) -> Result<(), CliError> {
     let mut snapshot = context.snapshot(None).await?;
+    let with_retirement = if with_retirement {
+        let Some(Actor::Agent(caller)) = &context.actor else {
+            return Err(CliError::new("credential_required", "Inbox wait requires a private job credential"));
+        };
+        match context.service.job_role(caller) {
+            Ok((_, role, _)) => role == JobRole::Worker,
+            Err(ordinary_error) => {
+                // Only the existing accepted-worker retirement purpose may outlive ordinary auth.
+                let run = context.service.job_run_retirement(caller)?;
+                if run.stage != cockpit_protocol::orchestration::RunStage::Closed
+                    || run.close_reason != Some(cockpit_protocol::orchestration::CloseReason::Accepted)
+                    || run.retirement.is_none()
+                {
+                    return Err(ordinary_error.into());
+                }
+                true
+            }
+        }
+    } else {
+        false
+    };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
     loop {
         let narrow = if with_retirement {
@@ -142,15 +168,19 @@ pub(super) async fn wait_next(
     if remaining.is_zero() {
         return Ok(());
     }
+    let Some(Actor::Agent(caller)) = &context.actor else {
+        return Err(CliError::new("credential_required", "Inbox wait requires a private job credential"));
+    };
+    let root_id = context.authenticated_run(caller)?.root_id;
     // Reobserve idle runtime even without an owner; durable changes wake this wait early.
     let timeout_ms = remaining.min(Duration::from_secs(3)).as_millis().max(1) as u32;
     context
         .service
-        .wait(&OrchestrationWaitRequest {
+        .wait_for_root(&OrchestrationWaitRequest {
             after_revision: snapshot.revision,
             after_tasks_token: snapshot.tasks_token.clone(),
             timeout_ms,
-        })
+        }, &root_id)
         .await?;
     Ok(())
 }

@@ -1,26 +1,29 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import { CockpitClientError } from "../../client/CockpitClient";
-import type { OrchestrationSnapshot, OrchestrationWaitResponse, Run, RunObservation, SessionSnapshotResponse, TaskBoard, TaskView } from "../../protocol/generated/v1";
+import type { CleanupState, OwnedResourceKind, OrchestrationSnapshot, OrchestrationWaitResponse, Run, RunCleanupSummary, RunObservation, SessionSnapshotResponse, TaskBoard, TaskView } from "../../protocol/generated/v1";
 import { agentState, taskStatus } from "./SupervisorActions";
 import { SupervisorView } from "./SupervisorView";
 
 const at = "2026-10-06T12:00:00Z";
+let fixtureSequence = 0;
+let stateStoreId: string;
 function run(overrides: Partial<Run> = {}): Run {
-  return { session_id: "session", prepare_brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_propose: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, prepare_plan: null, init_receipt: null, work_plan: null, grants: [], last_report: null, result: null, annotations: [], location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, bound_omp_session: "native", bound_omp_process: null, launch_shell_identity: null, retirement: null, supersedes_run_id: null, created_at: at, updated_at: at, ...overrides };
+  return { source_output: null, integration: { state: "pending" }, session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, main_session_id: "native", process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
 }
-function acceptedWorker(state: NonNullable<Run["retirement"]>["state"]): Run {
-  const process = { pid: 42, start_ticks: 100, kernel_boot_id: "kernel-boot" };
+function acceptedWorker(): Run {
   return run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "closed", close_reason: "accepted",
-    bound_omp_process: process,
-    result: { message_id: "accepted-result", kind: "result", outcome: "succeeded", summary: "Accepted result kept", plan: null, at },
-    retirement: { retirement_id: "retirement-worker", trigger: "accept", result_message_id: "accepted-result", task_revision: "task-revision",
-      identity: { run_attempt: 1, launch_attempt: 1, launch_tag: "tag", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", herdr_boot_id: "boot", omp_session_id: "native", process, shell: { process: { pid: 43, start_ticks: 101, kernel_boot_id: "fictional-shell-boot" }, executable_device: "7", executable_inode: "9002", argv_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } },
-      state, created_at: at, updated_at: at },
+    result: { message_id: "accepted-result", kind: "result", outcome: "succeeded", summary: "Accepted result kept", plan: null, source_output: null, at },
+    source_output: { kind: "code", repository_key: "repository", checkout_key: "checkout", base_commit: "base", head_commit: "head", commits: ["head"], task_revision: "task-revision", result_message_id: "accepted-result", focused_checks: [] },
   });
+}
+function cleanup(state: CleanupState, kind: OwnedResourceKind = "worker_terminal", message = "Worker terminal outcome unknown"): RunCleanupSummary {
+  return { run_id: "worker", removed_count: state === "removed" ? 1 : 0, kept_count: state === "kept" ? 1 : 0, unknown_count: state === "unknown" ? 1 : 0, waiting_count: ["removed", "kept", "unknown"].includes(state) ? 0 : 1,
+    items: [{ resource_id: kind, kind, ownership: "owned", cleanup: { operation_id: null, state, reason: { class: state === "kept" ? "user_work" : "reconcilable", code: state, message }, effects: [], updated_at: at } }],
+  };
 }
 function observed(runId = "root", overrides: Partial<RunObservation> = {}): RunObservation {
   return { run_id: runId, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at, ...overrides };
@@ -32,7 +35,13 @@ function board(rootId = "root", tasks: TaskView[] = []): TaskBoard {
   return { root_id: rootId, path: `/state/${rootId}.md`, doc_revision: "document-revision", unidentified_items: 0, diagnostics: [], tasks };
 }
 function snapshot(runs: Run[] = [run()], tasks: TaskView[] = []): OrchestrationSnapshot {
-  return { session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => !run.parent_run_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: board("root", tasks), runs, messages: [], questions: runs.filter(run => run.stage !== "closed" && run.last_report?.kind === "needs_input").map(run => ({ run_id: run.run_id, question_message_id: run.last_report!.message_id, asked_at: run.last_report!.at, receipt: { status: "unresolved" } })), subagents: [], intents: [], assignment_intents: [], attention: runs.filter(run => run.run_id === run.root_id && run.last_report?.kind === "needs_input").map(run => ({ kind: "needs_input", run_id: run.run_id, task_id: null, message_seq: 1, since: at })), unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => observed(run.run_id)) } };
+  const messages = runs.flatMap<OrchestrationSnapshot["messages"][number]>((run, index) => run.last_report ? [{
+    message_id: run.last_report.message_id, to_run_id: run.root_id, seq: index + 1,
+    from: { type: "run", run_id: run.run_id }, kind: "report", text: run.last_report.summary,
+    in_reply_to: null, report: run.last_report, stale: false, escalated_from: null, from_subagent_id: null,
+    stage: "acked", woken_omp_session: null, created_at: run.last_report.at, acked_at: run.last_report.at,
+  }] : []);
+  return { state_store_id: stateStoreId, cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => !run.parent_run_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: board("root", tasks), runs, messages, questions: runs.filter(run => run.stage !== "closed" && run.last_report?.kind === "needs_input").map(run => ({ run_id: run.run_id, question_message_id: run.last_report!.message_id, asked_at: run.last_report!.at, receipt: { status: "unresolved" } })), subagents: [], intents: [], assignment_intents: [], attention: runs.filter(run => run.run_id === run.root_id && run.last_report?.kind === "needs_input").map(run => ({ kind: "needs_input", run_id: run.run_id, task_id: null, message_seq: 1, since: at })), unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => observed(run.run_id)) } };
 }
 const session: SessionSnapshotResponse = { session_id: "session", server_instance: "server", version: "fixture", protocol: 20, focused_space_id: "space", focused_tab_id: "tab", focused_pane_id: "pane", spaces: [{ id: "space", label: "Project", number: 1, tab_count: 1, pane_count: 1, focused: true, agent_status: "working", git: null }], tabs: [], panes: [], agents: [] };
 let host: HTMLDivElement;
@@ -63,12 +72,17 @@ async function mount(initial: OrchestrationSnapshot, boards?: Map<string, TaskBo
   const mutation = vi.fn<CockpitClient["orchestrationMutate"]>(async request => {
     state = { ...state, revision: state.revision + 1 };
     if (request.action.action === "message_send") return { revision: state.revision, result: { result: "message", to_run_id: request.action.to_run_id, seq: 1, duplicate: false, stale: false } };
-    if (request.action.action === "supervisor_start") return { revision: state.revision, result: { result: "run", run_id: "new-root", attempt: 1 } };
+    if (request.action.action === "supervisor_start") return { revision: state.revision, result: { result: "supervisor_started", start: { root_id: "new-root", outcome: "created", operation_id: request.action.operation_id, resume_operation_id: null, duplicate: false } } };
     return { revision: state.revision, result: { result: "done" } };
   });
   let wake: (() => void) | null = null;
   const client = {
     orchestrationSnapshot: snapshotCall,
+    orchestrationProjectRootLookup: vi.fn<CockpitClient["orchestrationProjectRootLookup"]>(async request => ({
+      status: "resolved", project: { key: "project", machine_id: "machine", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: request.workspace_id }, lookup_revision: state.revision,
+      preferred_root_id: state.runs.some(run => run.run_id === request.selected_root_id && run.stage !== "closed") ? request.selected_root_id : state.roots[0]?.root_id ?? null,
+      roots: state.roots.map(root => ({ root_id: root.root_id, connection: "connected", resume: "available", cause: null, updated_at: at })),
+    })),
     orchestrationWait: vi.fn(() => new Promise<OrchestrationWaitResponse>(resolve => {
       wake = () => resolve({ revision: state.revision, tasks_token: state.tasks_token, changed: true });
     })),
@@ -97,7 +111,34 @@ async function expandQueue() {
     if (row.getAttribute("aria-expanded") !== "true") { act(() => row.click()); await settle(); }
   }
 }
-afterEach(async () => { if (reactRoot) await act(async () => reactRoot!.unmount()); reactRoot = null; host?.remove(); vi.restoreAllMocks(); });
+beforeEach(() => {
+  // The module's app-session draft cache survives clearing browser storage.
+  // Keep one identity through this test's snapshots, remounts and reconnects.
+  stateStoreId = `supervisor-view-store-${++fixtureSequence}`;
+  const values = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+    clear: () => values.clear(),
+    key: (index: number) => [...values.keys()][index] ?? null,
+    get length() { return values.size; },
+  } satisfies Storage);
+});
+afterEach(async () => {
+  try {
+    if (reactRoot) await act(async () => reactRoot!.unmount());
+  } finally {
+    reactRoot = null;
+    try {
+      host?.remove();
+      localStorage.clear();
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  }
+});
 
 describe("Supervisor authority and retained operations", () => {
   it("does not turn a historical binding or ACK into fresh OMP proof", () => {
@@ -109,67 +150,110 @@ describe("Supervisor authority and retained operations", () => {
     expect(agentState(state, saved, false, true).verified).toBe(false);
     expect(agentState(state, saved, true, false).verified).toBe(false);
   });
+  it.each(["reserved", "connecting", "disconnected", "quiescing", "revoked"] as const)("does not promote a saved %s attachment into a verified agent", attachmentState => {
+    const saved = run({ attachment: { ...run().attachment!, state: attachmentState } });
+    const state = snapshot([saved]);
+    expect(agentState(state, saved, true, true).verified).toBe(false);
+    saved.attachment = null;
+    expect(agentState(state, saved, true, true).verified).toBe(false);
+  });
+  it("keeps connected attachment metadata unverified without a fresh runtime observation", () => {
+    const saved = run(), state = snapshot([saved]);
+    state.runtime = { status: "unavailable", error: { code: "offline", message: "Observation unavailable" } };
+    expect(agentState(state, saved, true, true).verified).toBe(false);
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [] };
+    expect(agentState(state, saved, true, true).verified).toBe(false);
+  });
   it("requires explicit successful Result and acceptance, not runtime Done or a checkbox", () => {
     const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
     const state = snapshot([run(), worker], [task()]);
     const checked = task({ lane: "accepted", task: { ...task().task, checked: true } });
-    expect(taskStatus(checked, worker, state)).not.toBe("Completed");
+    expect(taskStatus(checked, worker, state)).toBe("Marked complete in task file");
     worker.stage = "closed"; worker.close_reason = "accepted";
-    worker.result = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Tests passed", plan: null, at };
-    expect(taskStatus(checked, worker, state)).toBe("Completed");
+    worker.result = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Tests passed", plan: null, source_output: null, at };
+    expect(taskStatus(checked, worker, state)).toBe("Done · Source complete");
     worker.close_reason = "cancelled";
-    expect(taskStatus(checked, worker, state)).not.toBe("Completed");
+    expect(taskStatus(checked, worker, state)).toBe("Marked complete in task file");
   });
-  it.each(["native_stop", "terminal_close"] as const)("keeps retirement ambiguity in Recover with canonical Done context and no retry/close writes (%s)", async phase => {
-    const receiptText = "Opaque receipt text must not select user-facing copy";
-    const worker = acceptedWorker({ state: "unknown", at, phase, detail: receiptText });
+  it.each(["worker_terminal", "worktree"] as const)("keeps %s cleanup ambiguity in Recover with source-complete Done context, without automatic writes", async kind => {
+    const worker = acceptedWorker();
     const completed = task({ lane: "accepted", task: { ...task().task, checked: true } });
     const state = snapshot([run(), worker], [completed]);
-    state.attention = [{ kind: "retirement_unconfirmed", run_id: "worker", task_id: "task-a", message_seq: null, since: at }];
+    state.cleanup = [cleanup("unknown", kind)];
+    state.cleanup[0]!.items[0]!.cleanup.effects = [{ effect_id: "opaque-effect", kind, identity_digest: "opaque-identity", state: "unknown", evidence: "Opaque effect evidence must not select user-facing copy", updated_at: at }];
     const fixture = await mount(state);
     act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    act(() => host.querySelector<HTMLButtonElement>(".supervisor-queue-row.is-recover .supervisor-queue-summary")!.click()); await settle();
     const queue = host.querySelector<HTMLElement>(".supervisor-queue-row.is-recover")!;
-    act(() => queue.querySelector<HTMLButtonElement>(".supervisor-queue-summary")!.click()); await settle();
-    expect(queue.textContent).not.toContain(receiptText);
-    expect(queue.querySelectorAll("button")).toHaveLength(2); // Disclosure plus saved canonical context, never a run operation.
-    act(() => button("Show completed task").click()); await settle();
+    expect(queue.textContent).toContain("Cleanup not confirmed");
+    expect(queue.textContent).not.toContain("Opaque effect evidence");
+    expect([...queue.querySelectorAll("button")].some(item => item.textContent === "Finish cleanup")).toBe(true);
+    act(() => button("Show in Tasks").click()); await settle();
     expect(host.querySelector('[data-view-segment="tasks"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector<HTMLUListElement>(".is-accepted .supervisor-task-list")!.hidden).toBe(false);
     expect(host.querySelector('[data-row-id="task-a"]')?.getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelector(".supervisor-state-block .supervisor-attention-badge")?.textContent).toBe("Recover");
     expect(host.querySelector('aside[aria-label="Selected details"]')?.textContent).toContain(worker.result!.summary);
-    expect(taskStatus(completed, worker, state)).toBe("Completed");
+    expect(host.querySelector('[aria-label="Outcome"]')?.textContent).toContain("Source complete");
+    expect(taskStatus(completed, worker, state)).toBe("Done · Source complete");
     expect(fixture.mutation).not.toHaveBeenCalled();
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
-  it("exposes canonical Done and the saved retiring worker separately when the task no longer points at that run", async () => {
-    const worker = acceptedWorker({ state: "unknown", at, phase: "terminal_close", detail: "Uncertain receipt" });
+  it("finds source and cleanup from the historic accepted worker after the task drops its current-run pointer", async () => {
+    const worker = acceptedWorker();
     const completed = task({ lane: "accepted", current_run_id: null, task: { ...task().task, checked: true } });
-    const state = snapshot([run(), worker], [completed]);
-    state.attention = [{ kind: "retirement_unconfirmed", run_id: "worker", task_id: "task-a", message_seq: null, since: at }];
+    const state = snapshot([run(), worker], [completed]); state.cleanup = [cleanup("unknown")];
     const fixture = await mount(state);
     act(() => host.querySelector<HTMLButtonElement>(".supervisor-queue-row.is-recover .supervisor-queue-summary")!.click()); await settle();
-    act(() => button("Show completed task").click()); await settle();
+    act(() => button("Show in Tasks").click()); await settle();
     expect(host.querySelector<HTMLUListElement>(".is-accepted .supervisor-task-list")!.hidden).toBe(false);
     expect(host.querySelector('[data-row-id="task-a"]')?.getAttribute("aria-expanded")).toBe("true");
-    act(() => button("View saved worker details").click()); await settle();
     expect(host.querySelector(".supervisor-state-block .supervisor-attention-badge")?.textContent).toBe("Recover");
     expect(host.querySelector('aside[aria-label="Selected details"]')?.textContent).toContain(worker.result!.summary);
+    expect(host.querySelector('[data-row-id="task-a"]')?.getAttribute("aria-label")).toContain("Outcome: Done, source complete");
     expect(fixture.mutation).not.toHaveBeenCalled();
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
-  it.each([true, false])("keeps retained retirement Notice informational in saved details without reopening canonical completion (native stopped: %s)", async nativeStopped => {
-    const worker = acceptedWorker({ state: "retained", at, reason: nativeStopped ? "shared_tab" : "user_activity", native_stopped: nativeStopped });
+  it.each(["unsent text in its terminal", "uncommitted changes"])("keeps %s as informational Notice and never expands Done on polling", async reason => {
+    workarea(1100, 900);
+    const worker = acceptedWorker();
     const completed = task({ lane: "accepted", task: { ...task().task, checked: true } });
     const state = snapshot([run(), worker], [completed]);
     const fixture = await mount(state);
-    expect(host.querySelector(".supervisor-queue-row.is-notice,.supervisor-queue-row.is-recover")).toBeNull();
+    const primary = button("Open terminal"); act(() => primary.focus());
+    const next = { ...state, revision: 2, cleanup: [cleanup("kept", reason === "uncommitted changes" ? "worktree" : "worker_terminal", reason)] };
+    await fixture.push(next);
+    expect(host.querySelector(".supervisor-queue-row.is-notice")).not.toBeNull();
+    expect(host.querySelector(".supervisor-queue-row.is-recover")).toBeNull();
+    expect(host.querySelector<HTMLUListElement>(".is-accepted .supervisor-task-list")!.hidden).toBe(true);
+    expect(document.activeElement).toBe(primary);
+    expect(host.querySelector(".is-accepted .supervisor-lane-count")?.textContent).toBe("1 · 1 kept");
     act(() => button("Show completed tasks").click()); await settle();
     act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.click()); await settle();
     expect(host.querySelector(".supervisor-state-block .supervisor-attention-badge")?.textContent).toBe("Notice");
-    expect(agentState(state, worker, true, true)).toMatchObject({ kind: "closed", verified: false, restartable: false, terminal: false });
-    expect(taskStatus(completed, worker, state)).toBe("Completed");
-    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(host.querySelector('ul[aria-label="Cleanup"]')?.textContent).toContain(`Kept — ${reason}`);
+    expect(host.querySelector('aside[aria-label="Selected details"] [role="alert"]')).toBeNull();
+    expect(agentState(next, worker, true, true)).toMatchObject({ kind: "closed", verified: false, restartable: false, terminal: false });
+    expect(taskStatus(completed, worker, next)).toBe("Done · Source complete");
+    expect(fixture.mutation).not.toHaveBeenCalled(); expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("keeps unconfirmed Finish cleanup request UUID and scope across reconnect and explicit retry", async () => {
+    const worker = acceptedWorker(), completed = task({ lane: "accepted", task: { ...task().task, checked: true } });
+    const state = snapshot([run(), worker], [completed]); state.cleanup = [cleanup("stalled")];
+    const fixture = await mount(state); await expandQueue();
+    fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
+    act(() => button("Finish cleanup").click()); await settle();
+    const original = fixture.mutation.mock.calls[0][0];
+    expect(original.action).toEqual({ action: "cleanup_finish", request: { operation_id: expect.any(String), root_id: "root", run_id: "worker" } });
+    act(() => button("Show in Tasks").click()); await settle();
+    await rerender(false, false); await rerender(true, true); await expandQueue();
+    fixture.mutation.mockImplementationOnce(async request => {
+      if (request.action.action !== "cleanup_finish") throw new Error("Expected cleanup");
+      return { revision: 1, result: { result: "cleanup_finished", cleanup: { operation_id: request.action.request.operation_id, items: [], removed_count: 1, waiting_count: 0, kept_count: 0, unknown_count: 0, duplicate: true } } };
+    });
+    act(() => button("Retry same cleanup").click()); await settle();
+    expect(fixture.mutation.mock.calls[1][0]).toEqual(original);
+    expect(host.textContent).toContain("Cleanup finished");
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
   it("starts exactly one OMP tab in the current Space without requesting Herdr focus", async () => {
@@ -177,42 +261,41 @@ describe("Supervisor authority and retained operations", () => {
     const fixture = await mount(empty);
     act(() => button("Start agent").click()); await settle();
     expect(fixture.mutation).toHaveBeenCalledTimes(1);
-    expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "supervisor_start", target: { target: "existing_space", workspace_id: "space" }, label: null });
+    expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "supervisor_start", operation_id: expect.any(String), mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: "space" }, label: null, selected_root_id: null, expected_project_key: null });
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    const startedRoot = run({ run_id: "new-root", root_id: "new-root" });
+    const ready = snapshot([startedRoot]); ready.board = board("new-root");
+    ready.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("new-root")] };
+    await fixture.push({ ...ready, revision: 2 });
+    expect(fixture.mutation).toHaveBeenCalledTimes(1);
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
-  it("blocks a second launch until an unconfirmed start is explicitly reviewed", async () => {
+  it("keeps an uncertain Start locked and only retries its original request through recovery", async () => {
     const fixture = await mount(snapshot([]));
     fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
     act(() => button("Start agent").click()); await settle();
-    expect(button("Start agent").disabled).toBe(true);
-    // The queue deliberately expands only one row; select Recover rather than opening the subsequent Notice.
-    act(() => host.querySelector<HTMLButtonElement>(".supervisor-queue-row.is-recover .supervisor-queue-summary")!.click());
-    await settle();
-    act(() => button("I have reviewed the previous start").click()); await settle();
-    expect(button("Start agent").disabled).toBe(false);
-    expect(fixture.mutation).toHaveBeenCalledTimes(1);
+    expect(button("Start agent").getAttribute("aria-disabled")).toBe("true");
+    const original = fixture.mutation.mock.calls[0][0];
+    expect([...host.querySelectorAll("button")].some(item => item.textContent === "I have reviewed the previous start")).toBe(false);
+    await expandQueue();
+    act(() => button("Retry same start").click()); await settle();
+    expect(fixture.mutation).toHaveBeenCalledTimes(2);
+    expect(fixture.mutation.mock.calls[1][0]).toEqual(original);
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
-  it("returns an unconfirmed Start dialog to an enabled review target when the opener is disabled, without unlocking a second launch", async () => {
-    const fixture = await mount(snapshot([]));
-    fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
-    const opener = button("Start options…");
-    act(() => { opener.focus(); opener.click(); }); await settle();
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
-    act(() => dialog.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); await settle();
-    expect(opener.disabled).toBe(true);
-    press(dialog, "Escape"); await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    const reviewTarget = document.activeElement as HTMLElement;
-    expect(reviewTarget.matches(".supervisor-queue-row.is-recover .supervisor-queue-summary,.supervisor-summary-counter.is-recover")).toBe(true);
-    expect(host.contains(reviewTarget)).toBe(true);
-    expect(reviewTarget.matches(":disabled,[aria-disabled='true']")).toBe(false);
-    expect(reviewTarget.closest("[hidden],[inert]")).toBeNull();
-    expect(reviewTarget.tabIndex).toBeGreaterThanOrEqual(0);
-    expect(button("Start agent").disabled).toBe(true);
-    expect(fixture.mutation).toHaveBeenCalledTimes(1);
+  it("exposes the actual rootless freshness guard without demanding a root or launching", async () => {
+    const empty = snapshot([]); empty.board = null;
+    const fixture = await mount(empty);
+    await rerender(true, false);
+    const start = button("Start agent");
+    expect(start.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(start.getAttribute("aria-describedby")!)?.textContent).toContain("fresh agent status");
+    act(() => start.click()); await settle();
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
   it("retains an unknown answer and retries the identical operation, without consuming textarea Escape", async () => {
-    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
     const fixture = await mount(snapshot([supervisor]));
     const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
     enter(field, "Use the existing checkout");
@@ -227,8 +310,32 @@ describe("Supervisor authority and retained operations", () => {
     expect(field.value).toBe("");
     expect(fixture.onClose).not.toHaveBeenCalled();
   });
+  it("keeps the unresolved root Answer and exact retry through a later Progress report", async () => {
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
+    const state = snapshot([supervisor]);
+    const fixture = await mount(state);
+    const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    enter(field, "Use the existing checkout");
+    fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
+    act(() => button("Send answer").click()); await settle();
+    const original = fixture.mutation.mock.calls[0][0];
+    act(() => field.focus());
+    const progressed = run({ last_report: { ...supervisor.last_report!, message_id: "progress", kind: "progress", summary: "Waiting for the checkout decision" } });
+    await fixture.push({ ...state, revision: 2, runs: [progressed], messages: [...state.messages, ...snapshot([progressed]).messages.map(message => ({ ...message, seq: state.messages.length + 1 }))] });
+    const retained = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    expect(retained).toBe(field);
+    expect(retained.value).toBe("Use the existing checkout");
+    expect(retained.readOnly).toBe(true);
+    expect(document.activeElement).toBe(field);
+    expect(host.querySelector(".supervisor-summary-counter.is-decide")).not.toBeNull();
+    expect(fixture.mutation).toHaveBeenCalledTimes(1);
+    act(() => button("Retry same message").click()); await settle();
+    expect(fixture.mutation.mock.calls[1][0]).toEqual(original);
+    expect(original.action).toMatchObject({ action: "message_send", to_run_id: "root", in_reply_to: "question", text: "Use the existing checkout" });
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
   it("keeps a rejected old-question answer separate from the next displayed question", async () => {
-    const supervisor = run({ last_report: { message_id: "q1", kind: "needs_input", outcome: null, summary: "First question", plan: null, at } });
+    const supervisor = run({ last_report: { message_id: "q1", kind: "needs_input", outcome: null, summary: "First question", plan: null, source_output: null, at } });
     const fixture = await mount(snapshot([supervisor]));
     const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
     enter(field, "Answer to the first question");
@@ -248,7 +355,7 @@ describe("Supervisor authority and retained operations", () => {
 
   it("uses the same receipt status in prerequisite links and Dependencies nodes without changing dependency facts", async () => {
     workarea(1100, 900);
-    const worker = run({ run_id: "worker", kind: "worker", parent_run_id: "root", task_id: "task-a", stage: "working", last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which fixture?", plan: null, at } });
+    const worker = run({ run_id: "worker", kind: "worker", parent_run_id: "root", task_id: "task-a", stage: "working", last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which fixture?", plan: null, source_output: null, at } });
     const prerequisite = task();
     const dependent = task({ task: { ...task().task, task_id: "task-b", title: "Follow-on work", depends_on: ["task-a"] }, lane: "queued", current_run_id: null, dependencies: { state: "blocked", unmet: [{ task_id: "task-a", reason: "unchecked" }], problems: [] } });
     const state = snapshot([run(), worker], [prerequisite, dependent]);
@@ -262,10 +369,38 @@ describe("Supervisor authority and retained operations", () => {
     expect(dependent.dependencies).toEqual({ state: "blocked", unmet: [{ task_id: "task-a", reason: "unchecked" }], problems: [] });
     expect(fixture.mutation).not.toHaveBeenCalled();
   });
+  it("does not turn a checked prerequisite into accepted source without its successful Result", async () => {
+    workarea(1100, 900);
+    const prerequisite = task({ lane: "accepted", current_run_id: null, task: { ...task().task, checked: true } });
+    const dependent = task({ task: { ...task().task, task_id: "task-b", title: "Follow-on work", depends_on: ["task-a"] }, lane: "queued", current_run_id: null });
+    const initial = snapshot([run()], [prerequisite, dependent]), fixture = await mount(initial);
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-b"]')!.click()); await settle();
+    expect(host.querySelector(".supervisor-dependencies .supervisor-path-row")?.getAttribute("aria-label")).toContain("Marked complete in task file");
+    const worker = acceptedWorker();
+    await fixture.push({ ...snapshot([run(), worker], [prerequisite, dependent]), revision: 2 });
+    expect(host.querySelector(".supervisor-dependencies .supervisor-path-row")?.getAttribute("aria-label")).toContain("Done · Source complete");
+    expect(prerequisite.task.checked).toBe(true);
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="dependencies"]')!.click()); await settle();
+    expect(host.querySelector('[data-row-id="task:task-a"]')?.getAttribute("aria-label")).toContain("Done · Source complete");
+    expect(fixture.mutation).not.toHaveBeenCalled(); expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("retains selected saved-worker Overview when automatic cleanup changes its closed run", async () => {
+    workarea(1100, 900);
+    const worker = acceptedWorker(), initial = snapshot([run(), worker]);
+    initial.cleanup = [cleanup("unknown")];
+    const fixture = await mount(initial); await expandQueue();
+    act(() => button("View saved worker details").click()); await settle();
+    expect(host.querySelector('aside[aria-label="Selected details"]')?.textContent).toContain(worker.result!.summary);
+    await fixture.push({ ...initial, revision: 2, cleanup: [cleanup("removed", "worker_terminal", "Worker terminal removed")] });
+    expect(host.querySelector('aside[aria-label="Selected details"]')?.textContent).toContain(worker.result!.summary);
+    expect(host.querySelector('[aria-label="Outcome"]')?.textContent).toContain("Source complete");
+    expect(host.querySelector('ul[aria-label="Cleanup"]')?.textContent).toContain("Worker terminal · Removed");
+    expect(fixture.mutation).not.toHaveBeenCalled(); expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
 
   it("clears root Decide on linked delivery, keeps receipt/history, and returns to Decide for a new question", async () => {
     workarea(1100, 900);
-    const supervisor = run({ last_report: { message_id: "q1", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const supervisor = run({ last_report: { message_id: "q1", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
     const fixture = await mount(snapshot([supervisor]));
     const state = snapshot([supervisor]);
     const answer = { sender: { type: "operator" as const }, message_id: "answer", seq: 1, stage: "stored" as const, created_at: "2026-10-06T12:01:00Z", acked_at: null };
@@ -302,7 +437,7 @@ describe("Supervisor authority and retained operations", () => {
 
   it.each(["blocked", "missing", "offline", "recover"] as const)("never masks root runtime/recovery state with an answer receipt (%s)", async condition => {
     workarea(1100, 900);
-    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
     const state = snapshot([supervisor]);
     state.questions[0]!.receipt = { status: "answer_delivered", answer: { sender: { type: "operator" }, message_id: "answer", seq: 1, stage: "stored", created_at: at, acked_at: null } };
     state.attention = condition === "recover" ? [{ kind: "runtime_blocked", run_id: "root", task_id: null, message_seq: null, since: at }] : [];
@@ -319,7 +454,7 @@ describe("Supervisor authority and retained operations", () => {
   });
 
   it.each([true, false])("returns focus when core clears the root question (task exists: %s)", async hasTask => {
-    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
     const tasks = hasTask ? [task({ lane: "queued", current_run_id: null })] : [];
     const fixture = await mount(snapshot([supervisor], tasks));
     const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
@@ -327,10 +462,12 @@ describe("Supervisor authority and retained operations", () => {
     fixture.mutation.mockImplementationOnce(async () => { fixture.replace({ ...snapshot([run()], tasks), revision: 2 }); return { revision: 2, result: { result: "message", to_run_id: "root", seq: 1, duplicate: false, stale: false } }; });
     act(() => button("Send answer").click()); await settle();
     expect(host.querySelector('[aria-label="Needs you"]')).toBeNull();
-    expect(document.activeElement).toBe(hasTask ? host.querySelector('[data-row-id="task-a"]') : button("Start agent"));
+    const expectedFocus = hasTask ? host.querySelector('[data-row-id="task-a"]') : host.querySelector(".supervisor-summary-shortcut button");
+    expect(expectedFocus).not.toBeNull();
+    expect(document.activeElement).toBe(expectedFocus);
   });
   it("keeps root-specific answer drafts and view choices through switching, hide and offline", async () => {
-    const first = run({ last_report: { message_id: "ask", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const first = run({ last_report: { message_id: "ask", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
     const second = run({ run_id: "second", root_id: "second", label: "Other supervisor" });
     const fixture = await mount(snapshot([first, second]), new Map([["root", board()], ["second", board("second")]]));
     const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
@@ -343,6 +480,25 @@ describe("Supervisor authority and retained operations", () => {
     expect(host.querySelector('[data-view-segment="graph"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!.value).toBe("Retained answer");
     expect(button("Send answer").disabled).toBe(true);
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("retains the same question draft, pending message and focus across attachment replacement", async () => {
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
+    const fixture = await mount(snapshot([supervisor]));
+    const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    enter(field, "Retained exact answer");
+    fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
+    act(() => button("Send answer").click()); await settle();
+    const original = fixture.mutation.mock.calls[0][0].action;
+    act(() => field.focus());
+    const replacement = run({ ...supervisor, attachment: { ...supervisor.attachment!, attachment_id: "00000000-0000-4000-8000-000000000002", epoch: 2, main_session_id: "replacement-conversation" } });
+    await fixture.push({ ...snapshot([replacement]), revision: 2 });
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe("Retained exact answer");
+    expect(field.readOnly).toBe(true);
+    expect(fixture.mutation).toHaveBeenCalledTimes(1);
+    act(() => button("Retry same message").click()); await settle();
+    expect(fixture.mutation.mock.calls[1][0].action).toEqual(original);
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
   it("resolves assignment and acceptance conflicts using canonical revision and exact intent identity", async () => {
@@ -359,16 +515,31 @@ describe("Supervisor authority and retained operations", () => {
     expect(fixture.mutation.mock.calls[2][0].action).toEqual({ action: "intent_resolve", intent_id: "exact-intent", apply: true });
     expect(state.board!.tasks[0].task.body).toBe(task().task.body);
   });
-  it("reconciles a missing launch before allowing an explicit retry", async () => {
+  it("resumes directly without a dialog and retains the original operation and scope on uncertain retry", async () => {
     const original = run(), state = snapshot([original]);
     state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_omp: false, pane_id: null })] };
-    const fixture = await mount(state); await expandQueue();
-    fixture.mutation.mockImplementationOnce(async () => { fixture.replace({ ...state, revision: 2, runs: [run({ dispatch: { ...original.dispatch!, step: "launch_unknown" } })] }); return { revision: 2, result: { result: "done" } }; });
-    act(() => button("Restart agent…").click()); await settle();
-    expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "reconcile_run", run_id: "root", recovery: null });
-    act(() => button("Restart anyway").click()); await settle();
-    expect(fixture.mutation.mock.calls[1][0].action).toEqual({ action: "retry_launch", run_id: "root" });
-    expect(fixture.mutation.mock.calls.some(([request]) => request.action.action === "supervisor_start")).toBe(false);
+    const fixture = await mount(state);
+    fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
+    act(() => host.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")!.click()); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    const request = fixture.mutation.mock.calls[0][0];
+    expect(request.action).toEqual({ action: "run_resume", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: 1, mode: "reattach_or_restart", decision_id: null });
+    act(() => host.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")!.click()); await settle();
+    expect(fixture.mutation.mock.calls[1][0]).toEqual(request);
+    expect(fixture.mutation.mock.calls.some(([next]) => next.action.action === "supervisor_start" || next.action.action === "reconcile_run")).toBe(false);
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("does not steal later user focus when an explicitly requested Resume reconnects", async () => {
+    const original = run(), state = snapshot([original]);
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_omp: false, pane_id: null })] };
+    const fixture = await mount(state);
+    const other = document.createElement("textarea"); document.body.append(other);
+    act(() => host.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")!.click()); await settle();
+    act(() => other.focus());
+    await fixture.push({ ...snapshot([original]), revision: 3 });
+    expect(document.activeElement).toBe(other);
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    other.remove();
   });
   it("retains cancelled edit drafts and disables editing when disconnected", async () => {
     const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "reported" });
@@ -432,7 +603,7 @@ describe("Supervisor selection, scroll and panel transitions", () => {
   });
   it("moves Board keyboard focus without selection and returns from details Escape", async () => {
     const first = task({ lane: "queued", current_run_id: null });
-    const next = task({ task: { ...task().task, task_id: "next", title: "Next task" }, lane: "ready", current_run_id: null });
+    const next = task({ task: { ...task().task, task_id: "next", title: "Next task" }, lane: "starting", current_run_id: null });
     const fixture = await mount(snapshot([run()], [first, next]));
     const row = host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!;
     act(() => row.focus()); press(row, "ArrowRight");
@@ -482,11 +653,11 @@ describe("Supervisor selection, scroll and panel transitions", () => {
   });
   it("keeps literal failures on cards but routine technical report text only in details", async () => {
     const failure = "Compiler rejected operation. No files lost.";
-    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "reported", last_report: { message_id: "failed", kind: "result", outcome: "failed", summary: failure, plan: null, at } });
+    const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "reported", last_report: { message_id: "failed", kind: "result", outcome: "failed", summary: failure, plan: null, source_output: null, at } });
     worker.result = worker.last_report;
     const fixture = await mount(snapshot([run(), worker], [task({ lane: "review" })]));
     expect(host.querySelector("li.supervisor-task")?.textContent).toContain(failure);
-    const ordinary = run({ ...worker, stage: "working", result: null, last_report: { message_id: "progress", kind: "progress", outcome: null, summary: "Exact technical report /tmp/checkouts revision abc123", plan: null, at } });
+    const ordinary = run({ ...worker, stage: "working", result: null, last_report: { message_id: "progress", kind: "progress", outcome: null, summary: "Exact technical report /tmp/checkouts revision abc123", plan: null, source_output: null, at } });
     fixture.replace({ ...snapshot([run(), ordinary], [task()]), revision: 2 }); await rerender(false); await rerender(true);
     expect(host.querySelector("li.supervisor-task")?.textContent).not.toContain(ordinary.last_report!.summary);
     act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.click()); await settle();
@@ -552,7 +723,7 @@ describe("Supervisor selection, scroll and panel transitions", () => {
   });
   it("opens narrow attention from a counter and returns Escape focus to that counter", async () => {
     workarea(360, 600);
-    const supervisor = run({ last_report: { message_id: "ask", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, at } });
+    const supervisor = run({ last_report: { message_id: "ask", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
     const fixture = await mount(snapshot([supervisor], [task({ lane: "queued", current_run_id: null })]));
     const counter = host.querySelector<HTMLButtonElement>(".supervisor-summary-counter.is-decide")!;
     act(() => { counter.focus(); counter.click(); }); await settle();
@@ -566,7 +737,7 @@ describe("Supervisor selection, scroll and panel transitions", () => {
   it("remembers narrow lane disclosures across view switches and arrows cross visible lane boundaries", async () => {
     workarea(360, 620);
     const first = task({ lane: "queued", current_run_id: null });
-    const next = task({ task: { ...task().task, task_id: "next" }, lane: "ready", current_run_id: null });
+    const next = task({ task: { ...task().task, task_id: "next" }, lane: "starting", current_run_id: null });
     await mount(snapshot([run()], [first, next]));
     const row = host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!;
     act(() => row.focus()); press(row, "ArrowDown");

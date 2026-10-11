@@ -6,6 +6,7 @@ import { taskStatus } from "./SupervisorActions";
 import { dependencyChain, dependencySummary, dependentCount, uniqueTask } from "./dependencies";
 import { dependencyLayout } from "./dependencyLayout";
 import type { AttentionTier } from "./attention";
+import { taskRun } from "./retirementView";
 
 export function DependenciesSection({ view, tasks, snapshot, onNavigate, onEdit, writable }: { view: TaskView; tasks: readonly TaskView[]; snapshot: OrchestrationSnapshot; onNavigate(taskId: string): void; onEdit(task: TaskView): void; writable: boolean }) {
   const dependents = tasks.filter(task => task.task.depends_on.includes(view.task.task_id));
@@ -15,7 +16,8 @@ export function DependenciesSection({ view, tasks, snapshot, onNavigate, onEdit,
   const row = (id: string, label: string) => {
     const target = label === "Prerequisite" && id === view.task.task_id ? null : uniqueTask(tasks, id), unmet = view.dependencies.unmet.find(item => item.task_id === id);
     const cause = id === view.task.task_id ? "Waits on itself" : unmet?.reason === "missing" ? "Not in this task file" : unmet?.reason === "ambiguous" ? "Prerequisite ID is duplicated in the task file" : "Unresolvable task identity";
-    return <li key={id}>{target ? <button type="button" className="supervisor-path-row" onClick={() => onNavigate(id)} aria-label={`${label}: ${target.task.title}, ${target.task.checked ? "Accepted" : taskStatus(target, snapshot.runs.find(run => run.run_id === target.current_run_id), snapshot)}`}><strong>{target.task.checked ? "✓ " : "○ "}{target.task.title}</strong><span>{target.task.checked ? "Accepted" : taskStatus(target, snapshot.runs.find(run => run.run_id === target.current_run_id), snapshot)}</span></button> : <div className="supervisor-dependency-missing"><span>{source === id && label === "Follow-up of" ? "Follow-up of a removed task" : cause} · {id}</span>{writable && label === "Prerequisite" ? <button type="button" onClick={() => onEdit(view)}>Fix prerequisites…</button> : null}</div>}</li>;
+    const status = target ? taskStatus(target, undefined, snapshot) : null;
+    return <li key={id}>{target ? <button type="button" className="supervisor-path-row" onClick={() => onNavigate(id)} aria-label={`${label}: ${target.task.title}, ${status}`}><strong>{target.task.checked ? "✓ " : "○ "}{target.task.title}</strong><span>{status}</span></button> : <div className="supervisor-dependency-missing"><span>{source === id && label === "Follow-up of" ? "Follow-up of a removed task" : cause} · {id}</span>{writable && label === "Prerequisite" ? <button type="button" onClick={() => onEdit(view)}>Fix prerequisites…</button> : null}</div>}</li>;
   };
   const list = (name: string, ids: readonly string[], label: string) => ids.length ? <section><h4>{name}</h4><ul aria-label={name}>{ids.slice(0, 5).map(id => row(id, label))}</ul>{ids.length > 5 ? <details><summary>Show {ids.length - 5} more</summary><ul>{ids.slice(5).map(id => row(id, label))}</ul></details> : null}</section> : null;
   return <section className="supervisor-detail-group supervisor-dependencies" aria-label="Dependencies"><h3>Dependencies</h3>
@@ -43,9 +45,9 @@ export function SupervisorDependencies({ tasks, snapshot, selectedTaskId, showCo
   const attentionChain = attentionOnly ? dependencyChain(tasks, tasks.filter(task => tierFor(task)).map(task => task.task.task_id)) : null;
   const waiting = tasks.filter(task => !task.task.checked && ["blocked", "invalid"].includes(task.dependencies.state)).length;
   const node = (position: typeof model.positions[number]) => {
-    const view = position.view, id = view.task.task_id, worker = snapshot.runs.find(run => run.run_id === view.current_run_id);
+    const view = position.view, id = view.task.task_id, worker = taskRun(snapshot, view);
     const tier = tierFor(view), dim = attentionChain && !attentionChain.has(id) ? "attention filter" : dimFor(view);
-    const status = view.task.checked ? "Accepted" : view.dependencies.state === "invalid" ? "Prerequisites need fixing" : view.dependencies.state === "blocked" ? `Waiting on ${view.dependencies.unmet.length}` : worker ? taskStatus(view, worker, snapshot) : "Ready";
+    const status = view.task.checked ? taskStatus(view, worker, snapshot) : view.dependencies.state === "invalid" ? "Prerequisites need fixing" : view.dependencies.state === "blocked" ? `Waiting on ${view.dependencies.unmet.length}` : taskStatus(view, worker, snapshot);
     return <button type="button" key={id} data-row-id={`task:${id}`} tabIndex={roving.tabIndexFor(`task:${id}`)} className={`supervisor-graph-node supervisor-dependency-node${selectedTaskId === id ? " is-selected" : ""}${highlighted.has(id) ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}${view.task.checked ? " is-accepted" : ""}${position.cycle || view.dependencies.state === "invalid" ? " is-diagnosed" : ""}`} style={narrow ? undefined : { left: position.x, top: position.y }} aria-expanded={selectedTaskId === id} aria-controls="supervisor-detail" aria-label={`${view.task.title}, ${status}${tier ? `, ${tier}` : ""}${dim ? `, dimmed by ${dim}` : ""}`} onClick={event => onSelect(view, event.currentTarget)} onMouseEnter={() => setHover(id)} onMouseLeave={() => setHover(null)}><span className="supervisor-dependency-title">{view.task.checked ? "✓" : view.dependencies.state === "invalid" ? <UiIcon name="info" /> : "○"} {view.task.title}{tier ? ` · ${tier === "notice" ? "Notice" : tier === "recover" ? "Recover" : "Decide"}` : ""}</span><span>{status} · {worker?.label ?? "not assigned"}{tier && dependentCount(view, tasks) ? ` · holds ${dependentCount(view, tasks)}` : ""}{view.task.follow_up_of ? ` · ↳ follow-up of ${uniqueTask(tasks, view.task.follow_up_of)?.task.title ?? "removed task"}` : ""}</span></button>;
   };
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {

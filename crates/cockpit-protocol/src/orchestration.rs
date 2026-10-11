@@ -44,6 +44,8 @@ pub struct OrchestrationMutationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct OrchestrationSnapshot {
     pub session_id: String,
+    /// Opaque canonical durable-store identity, independent of native sessions.
+    pub state_store_id: String,
     #[ts(type = "number")]
     pub revision: u64,
     pub tasks_token: String, // hash of (name, len, mtime, inode) of tasks/*.md; wait invalidation
@@ -55,6 +57,8 @@ pub struct OrchestrationSnapshot {
     pub subagents: Vec<Subagent>,
     pub intents: Vec<TaskIntent>,
     pub assignment_intents: Vec<TaskAssignmentIntent>,
+    pub cleanup: Vec<RunCleanupSummary>,
+    pub restoration: RestorationSummary,
     pub runtime: RuntimeObservation,
     pub unmanaged_agents: Vec<UnmanagedAgent>,
     pub attention: Vec<Attention>, // Activity "Needs you", derived
@@ -173,8 +177,7 @@ pub struct TaskView {
 #[serde(rename_all = "snake_case")]
 pub enum TaskLane {
     Queued,
-    Setup,
-    Ready,
+    Starting,
     Working,
     Review,
     Accepted,
@@ -190,14 +193,11 @@ pub enum RunKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStage {
-    Proposed,        // worker: setup plan being computed
-    AwaitingPrepare, // plan ready; needs GrantPrepare
-    Preparing,       // granted (or supervisor start); dispatcher running setup/launch
-    Initializing,    // launched; prepare brief in inbox; waiting for Ready report
-    Ready,           // init receipt filed (work plan); needs GrantExecute
-    Working,         // execute granted; work brief in inbox
-    Reported,        // result report received; needs Accept or SendBack
-    Active,          // supervisor/adopted root launched or bound
+    Queued,
+    Starting,
+    Working,
+    Reported,
+    Active,
     Closed,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -239,7 +239,7 @@ pub enum DispatchTarget {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SetupSummary {
-    // what the user authorizes
+    // Typed setup intent and actual creation/ownership receipts.
     pub operation_id: Option<String>,
     pub generation: Option<u32>,
     pub workspace_id: Option<String>,
@@ -247,40 +247,51 @@ pub struct SetupSummary {
     pub repository_id: Option<String>,
     pub branch: Option<String>,
     pub base: Option<String>,
+    /// Actual checkout HEAD observed before managed work starts.
+    #[serde(default)]
+    pub base_commit: Option<String>,
     pub ownership: Option<WorkspaceCheckoutOwnership>,
     pub effects: Vec<String>,
     pub warnings: Vec<String>,
     /// Source project Space for SpaceWorktree; absent for other targets.
     pub project_workspace_id: Option<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct PlanRecord {
-    pub plan_revision: String,
-    pub text: String,
-    pub created_at: String,
-} // revision = sha256 of canonical JSON
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct Grant {
-    pub grant_id: String,
-    pub scope: GrantScope,
-    pub plan_revision: String,
-    pub origin: GrantOrigin,
-    pub supervisor_run_id: Option<String>,
-    pub omp_session_id: Option<String>,
-    pub granted_at: String,
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum GrantScope {
-    Prepare,
-    Execute,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum GrantOrigin {
+pub enum DecisionOrigin {
     Browser,
     Native,
     Supervisor,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerCleanupPolicy {
+    OwnedWhenSafe,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerStartResult {
+    pub operation_id: String,
+    pub run_id: String,
+    pub attempt: u32,
+    pub duplicate: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskScopeUpdateState {
+    Applied,
+    Conflict,
+    Pending,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TaskScopeUpdateResult {
+    pub operation_id: String,
+    pub state: TaskScopeUpdateState,
+    pub task_revision: Option<String>,
+    pub doc_revision: Option<String>,
+    pub instruction_message_id: Option<String>,
+    pub duplicate: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -288,6 +299,195 @@ pub enum OperatorOrigin {
     Browser,
     Native,
 }
+/// Host-derived identity; aliases and display labels do not determine the key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectIdentity {
+    pub key: String,
+    pub machine_id: String,
+    pub source: ProjectSource,
+    pub repository_id: Option<String>,
+    pub source_workspace_id: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[ts(tag = "kind", rename_all = "snake_case")]
+pub enum ProjectSource {
+    Git { common_dir: String },
+    Directory { root: String },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct DirectoryIdentity {
+    pub device: String,
+    pub inode: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CheckoutGitIdentity {
+    pub common_dir: String,
+    pub worktree_git_dir: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CheckoutIdentity {
+    pub key: String,
+    pub machine_id: String,
+    pub path: String,
+    pub directory_identity: DirectoryIdentity,
+    pub git: Option<CheckoutGitIdentity>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentState {
+    Reserved,
+    Connecting,
+    Connected,
+    Disconnected,
+    Quiescing,
+    Revoked,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentLaunchMode {
+    DirectProcess,
+    ShellAgent,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionAttachment {
+    pub attachment_id: String,
+    #[ts(type = "number")]
+    pub epoch: u64,
+    pub state: AttachmentState,
+    pub launch_mode: Option<AttachmentLaunchMode>,
+    pub location: Option<RunLocation>,
+    pub main_session_id: Option<String>,
+    pub process: Option<NativeProcessIdentity>,
+    pub shell: Option<NativeShellIdentity>,
+    pub machine_id: Option<String>,
+    pub launch_attempt: u32,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumeMode {
+    ReattachOrRestart,
+    ReplaceExisting,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumePhase {
+    Reconciling,
+    Reattached,
+    Launching,
+    Connected,
+    Blocked,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumeCauseClass {
+    Recover,
+    Decision,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeCause {
+    pub code: String,
+    pub message: String,
+    pub class: ResumeCauseClass,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeRecord {
+    pub operation_id: String,
+    pub run_id: String,
+    #[ts(type = "number | null")]
+    pub previous_attachment_epoch: Option<u64>,
+    pub phase: ResumePhase,
+    pub cause: Option<ResumeCause>,
+    pub decision_id: Option<String>,
+    #[ts(type = "number | null")]
+    pub replacement_attachment_epoch: Option<u64>,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRootLookupRequest {
+    pub session_id: String,
+    pub workspace_id: String,
+    pub selected_root_id: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RootConnection {
+    Connected,
+    Reconnecting,
+    Disconnected,
+    Unknown,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RootResumeAvailability {
+    Available,
+    InProgress,
+    Blocked,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ProjectRootCandidate {
+    pub root_id: String,
+    pub connection: RootConnection,
+    pub resume: RootResumeAvailability,
+    pub cause: Option<ResumeCause>,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "status", rename_all = "snake_case")]
+#[ts(tag = "status", rename_all = "snake_case")]
+pub enum ProjectRootLookupResponse {
+    Resolved {
+        project: ProjectIdentity,
+        #[ts(type = "number")]
+        lookup_revision: u64,
+        preferred_root_id: Option<String>,
+        roots: Vec<ProjectRootCandidate>,
+    },
+    Unavailable { code: String, message: String },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SupervisorStartMode {
+    ReuseOrResume,
+    Another,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SupervisorStartOutcome {
+    Reused,
+    Resuming,
+    Created,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct SupervisorStartResult {
+    pub root_id: String,
+    pub outcome: SupervisorStartOutcome,
+    pub operation_id: String,
+    pub resume_operation_id: Option<String>,
+    pub duplicate: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct RunResumeResult {
+    pub run_id: String,
+    pub resume: ResumeRecord,
+    pub duplicate: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct RunAttachResult {
+    pub run_id: String,
+    pub attachment: ExecutionAttachment,
+    pub duplicate: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct RunLocation {
     pub boot_id: Option<String>,
@@ -307,6 +507,301 @@ pub struct NativeProcessIdentity {
     pub start_ticks: u64,
     pub kernel_boot_id: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentReference {
+    pub run_id: String,
+    pub attachment_id: String,
+    #[ts(type = "number")]
+    pub attachment_epoch: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus { Passed, Failed, NotRun }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CheckOutcome {
+    pub contract: String,
+    pub command_or_scenario: String,
+    pub outcome: CheckStatus,
+    pub evidence: Option<String>,
+    pub limitation: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[ts(tag = "kind", rename_all = "snake_case")]
+pub enum SourceOutput {
+    Code { repository_key: String, checkout_key: String, base_commit: String,
+        head_commit: String, commits: Vec<String>, task_revision: String,
+        result_message_id: String, focused_checks: Vec<CheckOutcome> },
+    NonCode { result_message_id: String, task_revision: String,
+        artifacts: Vec<String>, focused_checks: Vec<CheckOutcome> },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationMethod { Ancestor, PatchEquivalent, RecordedAdaptation }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationMapping {
+    pub source_commits: Vec<String>,
+    pub target_commits: Vec<String>,
+    pub source_paths: Vec<String>,
+    pub target_paths: Vec<String>,
+    pub explanation: Option<String>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+#[ts(tag = "state", rename_all = "snake_case")]
+pub enum Integration {
+    #[default]
+    Pending,
+    NotApplicable { reason: String, result_message_id: String },
+    Integrated { operation_id: String, accepted_result_message_id: String,
+        accepted_task_revision: String, source: SourceOutput,
+        target_repository_key: String, target_ref: String, target_commit: String,
+        method: IntegrationMethod, mappings: Vec<IntegrationMapping>,
+        checks: Vec<CheckOutcome>, integrator_run_id: String, verified_at: String },
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationRecord {
+    pub operation_id: String,
+    pub run_id: String,
+    pub expected_result_message_id: String,
+    pub expected_task_revision: String,
+    pub integration: Integration,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct IntegrationRecordResult {
+    pub operation_id: String,
+    pub run_id: String,
+    pub integration: Integration,
+    pub checks: Vec<CheckOutcome>,
+    pub duplicate: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceSourceIdentity {
+    pub checkout_key: String,
+    pub source_commit: String,
+    pub source_tree: String,
+    pub input_configuration: String,
+    pub toolchain_fingerprint: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceRequest {
+    pub operation_id: String,
+    pub resource_key: String,
+    pub source_identity: ResourceSourceIdentity,
+    pub holder: AttachmentReference,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceRequestState { Queued, Held, Released, Blocked }
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceRequestRecord {
+    pub request_id: String,
+    #[ts(type = "number")]
+    pub sequence: u64,
+    pub resource_key: String,
+    pub source_identity: ResourceSourceIdentity,
+    pub holder: AttachmentReference,
+    pub requester_child_id: Option<String>,
+    pub state: ResourceRequestState,
+    pub build_processes: Vec<NativeShellIdentity>,
+    pub machine_id: String,
+    pub blocked_reason: Option<String>,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceRelease {
+    pub request_id: String,
+    pub expected_holder: AttachmentReference,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceBuildRegistration {
+    pub request_id: String,
+    pub expected_holder: AttachmentReference,
+    pub process: NativeProcessIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnedResourceKind { WorkerTerminal, Worktree, Branch, Space, Scratch, FixtureSet }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceOwnership { Owned, Borrowed, Unknown }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupAuthority { OwnedWhenSafe, AuthorityUnproven }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedGitIdentity {
+    pub creation_operation_id: String,
+    pub machine_id: String,
+    pub repository_key: String,
+    pub repository_root: String,
+    pub repository_device: String,
+    pub repository_inode: String,
+    pub common_dir: String,
+    pub common_device: String,
+    pub common_inode: String,
+    pub checkout_path: String,
+    pub checkout_device: String,
+    pub checkout_inode: String,
+    pub checkout_key: String,
+    pub branch_ref: Option<String>,
+    pub creation_tip: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedSpaceIdentity {
+    pub creation_operation_id: String,
+    pub endpoint_identity: String,
+    pub session_id: String,
+    pub workspace_id: String,
+    pub checkout_path: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedFilesystemIdentity {
+    pub creation_operation_id: String,
+    pub machine_id: String,
+    pub root: String,
+    pub device: String,
+    pub inode: String,
+    pub manifest_path: String,
+    pub manifest_device: String,
+    pub manifest_inode: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum FixtureAdapterId { UiPolishRuntime }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedFixtureIdentity {
+    pub adapter: FixtureAdapterId,
+    pub creation_operation_id: String,
+    pub filesystem: OwnedFilesystemIdentity,
+    pub processes: Vec<NativeProcessIdentity>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[ts(tag = "kind", rename_all = "snake_case")]
+pub enum OwnedResourceIdentity {
+    WorkerTerminal { identity: RetirementIdentity },
+    Worktree { identity: OwnedGitIdentity },
+    Branch { identity: OwnedGitIdentity },
+    Space { identity: OwnedSpaceIdentity },
+    Scratch { identity: OwnedFilesystemIdentity },
+    FixtureSet { identity: OwnedFixtureIdentity },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupState { Pending, Running, Waiting, WaitingIntegration, Reconciling, Removed, Kept, Stalled, Unknown }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupReasonClass { Transient, Reconcilable, UserWork, Authority }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupReason {
+    pub class: CleanupReasonClass,
+    pub code: String,
+    pub message: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupEffectState { Intent, Applied, Absent, Refused, Unknown }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupEffectReceipt {
+    pub effect_id: String,
+    pub kind: OwnedResourceKind,
+    pub identity_digest: String,
+    pub state: CleanupEffectState,
+    pub evidence: Option<String>,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupItem {
+    pub operation_id: Option<String>,
+    pub state: CleanupState,
+    pub reason: Option<CleanupReason>,
+    pub effects: Vec<CleanupEffectReceipt>,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedResourceRecord {
+    pub resource_id: String,
+    pub root_id: String,
+    pub run_id: String,
+    pub kind: OwnedResourceKind,
+    pub ownership: ResourceOwnership,
+    pub creation_operation_id: Option<String>,
+    pub identity: OwnedResourceIdentity,
+    pub authority: CleanupAuthority,
+    pub consumers: Vec<AttachmentReference>,
+    pub integration_result_id: Option<String>,
+    pub cleanup: CleanupItem,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceRegister {
+    pub operation_id: String,
+    pub run_id: String,
+    pub resource: OwnedResourceIdentity,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupFinish {
+    pub operation_id: String,
+    pub root_id: String,
+    #[serde(default)]
+    pub run_id: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupFinishResult {
+    pub operation_id: String,
+    pub items: Vec<OwnedResourceRecord>,
+    pub removed_count: u32,
+    pub waiting_count: u32,
+    pub kept_count: u32,
+    pub unknown_count: u32,
+    pub duplicate: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupResourceSummary {
+    pub resource_id: String,
+    pub kind: OwnedResourceKind,
+    pub ownership: ResourceOwnership,
+    pub cleanup: CleanupItem,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct RunCleanupSummary {
+    pub run_id: String,
+    pub items: Vec<CleanupResourceSummary>,
+    pub removed_count: u32,
+    pub waiting_count: u32,
+    pub kept_count: u32,
+    pub unknown_count: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct RestorationSummary {
+    pub reattached: u32,
+    pub total_attachments: u32,
+    pub cleanup_pending: u32,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct NativeShellIdentity {
     pub process: NativeProcessIdentity,
@@ -323,6 +818,10 @@ pub enum RetirementTrigger {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct RetirementIdentity {
+    pub attachment_id: Option<String>,
+    #[ts(type = "number | null")]
+    pub attachment_epoch: Option<u64>,
+    pub launch_mode: Option<AttachmentLaunchMode>,
     pub run_attempt: u32,
     pub launch_attempt: u32,
     pub launch_tag: String,
@@ -344,6 +843,9 @@ pub struct RunRetirement {
     pub result_message_id: String,
     pub task_revision: String,
     pub identity: Option<RetirementIdentity>,
+    /// Independently confirmed native writer-admission seal after consumer
+    /// drain. A shutdown request or observed PID absence alone is not proof.
+    pub quiescent_stop_at: Option<String>,
     pub state: RetirementState,
     pub created_at: String,
     pub updated_at: String,
@@ -483,9 +985,10 @@ pub enum NativeStopReceipt {
     },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 pub struct Run {
     pub session_id: String,
-    pub prepare_brief: String,
+    pub brief: String,
     pub run_id: String,
     pub kind: RunKind,
     pub label: String,
@@ -493,25 +996,27 @@ pub struct Run {
     pub parent_run_id: Option<String>,
     pub task_id: Option<String>,
     pub attempt: u32,
-    pub task_revision_at_propose: Option<String>,
+    pub task_revision_at_start: Option<String>,
     pub stage: RunStage,
     pub close_reason: Option<CloseReason>,
     pub dispatch: Option<DispatchState>,
     pub target: Option<DispatchTarget>,
     pub setup: Option<SetupSummary>,
-    pub prepare_plan: Option<PlanRecord>, // setup summary + prepare brief; GrantPrepare binds here
-    pub init_receipt: Option<Report>,     // the Ready report; preserved after execute
-    pub work_plan: Option<PlanRecord>,    // from the Ready report; GrantExecute binds here
-    pub grants: Vec<Grant>,
+    /// Standing authority covers only resources proven owned by creation receipts.
+    pub cleanup_policy: Option<WorkerCleanupPolicy>,
     pub last_report: Option<Report>,
     pub result: Option<Report>,
+    #[serde(default)]
+    pub source_output: Option<SourceOutput>,
+    #[serde(default)]
+    pub integration: Integration,
     pub annotations: Vec<Annotation>,
-    pub location: Option<RunLocation>,
-    pub bound_omp_session: Option<String>, // set by RunBindSession; cleared by RetryLaunch
-    pub bound_omp_process: Option<NativeProcessIdentity>, // trusted bind evidence; cleared by RetryLaunch
-    pub launch_shell_identity: Option<NativeShellIdentity>, // captured before launch; cleared by RetryLaunch
+    pub project: Option<ProjectIdentity>,
+    pub checkout: Option<CheckoutIdentity>,
+    pub attachment: Option<ExecutionAttachment>,
+    pub checkout_claim_id: Option<String>,
+    pub resume: Option<ResumeRecord>,
     pub retirement: Option<RunRetirement>, // created with accepted closure; never backfilled
-    pub supersedes_run_id: Option<String>, // from RunPropose; applied on GrantPrepare
     pub created_at: String,
     pub updated_at: String,
 }
@@ -545,7 +1050,7 @@ pub enum ActorRef {
 #[serde(rename_all = "snake_case")]
 pub enum ReportKind {
     Progress,
-    Ready,
+    Initialized,
     Result,
     NeedsInput,
 }
@@ -562,13 +1067,13 @@ pub struct Report {
     pub outcome: Option<ReportOutcome>,
     pub summary: String,
     pub plan: Option<String>,
+    pub source_output: Option<SourceOutput>,
     pub at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageKind {
-    PrepareBrief,
     WorkBrief,
     SupervisorBrief,
     Instruction,
@@ -688,7 +1193,7 @@ pub struct TaskIntent {
     pub run_id: String,
     pub expected_task_revision: String,
     pub state: IntentState,
-    pub origin: Option<GrantOrigin>,
+    pub origin: Option<DecisionOrigin>,
     pub supervisor_run_id: Option<String>,
     pub omp_session_id: Option<String>,
     pub result_message_id: Option<String>,
@@ -738,9 +1243,6 @@ pub enum RuntimeObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionKind {
-    AwaitsPrepare,
-    AwaitsExecute,
-    PlanChanged,
     ToAccept,
     NeedsInput,
     RuntimeBlocked,
@@ -849,12 +1351,34 @@ pub enum OrchestrationAction {
     },
     // roots
     SupervisorStart {
+        operation_id: String,
+        mode: SupervisorStartMode,
         target: Option<DispatchTarget>,
         label: Option<String>,
-    }, // operator; None = Open `<state_root>/orchestration/supervisors/<root_id>/`
-    RunBindSession {
-        omp_session_id: String,
-    }, // main-session extension at session_start
+        selected_root_id: Option<String>,
+        expected_project_key: Option<String>,
+    },
+    RunResume {
+        run_id: String,
+        operation_id: String,
+        #[ts(type = "number | null")]
+        expected_attachment_epoch: Option<u64>,
+        mode: ResumeMode,
+        decision_id: Option<String>,
+    },
+    RunAttach {
+        operation_id: String,
+        attachment_id: String,
+        #[ts(type = "number")]
+        expected_attachment_epoch: u64,
+        main_session_id: String,
+    },
+    JobChildRegister {
+        operation_id: String,
+        child_id: String,
+        child_session_id: String,
+        parent_child_id: Option<String>,
+    },
     RetirementNativeReceipt {
         retirement_id: String,
         outcome: NativeStopReceipt,
@@ -863,27 +1387,37 @@ pub enum OrchestrationAction {
         label: String,
     }, // unbound agent: binds caller pane as Adopted root
     // worker lifecycle
-    RunPropose {
+    WorkerStart {
+        operation_id: String,
+        root_id: String,
         task_id: String,
-        parent_run_id: Option<String>,
-        label: Option<String>,
+        expected_task_revision: String,
+        expected_doc_revision: String,
         target: DispatchTarget,
-        prepare_brief: String,
-        supersedes_run_id: Option<String>,
-    }, // agent (default parent = caller) or operator
-    GrantPrepare {
+        label: Option<String>,
+        brief: String,
+        cleanup_policy: WorkerCleanupPolicy,
+    },
+    TaskScopeUpdate {
+        operation_id: String,
+        root_id: String,
+        task_id: String,
         run_id: String,
-        plan_revision: String,
-    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker
-    GrantExecute {
-        run_id: String,
-        plan_revision: String,
-        note: Option<String>,
-    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker
+        expected_task_revision: String,
+        expected_doc_revision: String,
+        title: Option<String>,
+        description: Option<String>,
+    },
     Accept {
         run_id: String,
         expected_task_revision: String,
     }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker
+    IntegrationRecord { record: IntegrationRecord },
+    ResourceRequest { request: ResourceRequest },
+    ResourceRelease { release: ResourceRelease },
+    ResourceBuildRegister { registration: ResourceBuildRegistration },
+    ResourceRegister { request: ResourceRegister },
+    CleanupFinish { request: CleanupFinish },
     SendBack {
         run_id: String,
         text: String,
@@ -892,10 +1426,6 @@ pub enum OrchestrationAction {
         run_id: String,
     }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker;
     // closes tracking and requests stop, not process termination
-    RetryLaunch {
-        run_id: String,
-    }, // operator or current bound top-main supervisor root targeting a strict-descendant Worker;
-    // requires fresh absence review for supervisors; new tab, launch_attempt + 1
     ReconcileRun {
         run_id: String,
         recovery: Option<WorkspaceRecoveryAction>,
@@ -912,7 +1442,12 @@ pub enum OrchestrationAction {
         outcome: Option<ReportOutcome>,
         summary: String,
         plan: Option<String>,
+        source_output: Option<SourceOutput>,
         to_run_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_task_revision: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_claim_id: Option<String>,
     },
     MessageSend {
         message_id: String,
@@ -921,6 +1456,10 @@ pub enum OrchestrationAction {
         text: String,
         #[serde(default)]
         in_reply_to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_task_revision: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_claim_id: Option<String>,
     },
     Annotate {
         run_id: String,
@@ -973,6 +1512,25 @@ pub enum SubagentOp {
 #[ts(tag = "result", rename_all = "snake_case")]
 pub enum OrchestrationActionResult {
     // tag = "result"
+    WorkerStarted {
+        start: WorkerStartResult,
+    },
+    TaskScopeUpdated {
+        update: TaskScopeUpdateResult,
+    },
+    IntegrationRecorded { receipt: IntegrationRecordResult },
+    Resource { request: ResourceRequestRecord, duplicate: bool },
+    ResourceRegistered { resource: OwnedResourceRecord, duplicate: bool },
+    CleanupFinished { cleanup: CleanupFinishResult },
+    SupervisorStarted {
+        start: SupervisorStartResult,
+    },
+    RunResumed {
+        resume: RunResumeResult,
+    },
+    RunAttached {
+        attach: RunAttachResult,
+    },
     Task {
         task: Task,
     },
@@ -1010,6 +1568,24 @@ pub enum OrchestrationActionResult {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn resume_and_attachment_requests_cannot_assert_credentials_or_exit_proof() {
+        let value = json!({
+            "action": "run_resume", "run_id": "run", "operation_id": "operation",
+            "expected_attachment_epoch": 7, "mode": "reattach_or_restart", "decision_id": null,
+        });
+        let action: OrchestrationAction = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(action, OrchestrationAction::RunResume { expected_attachment_epoch: Some(7), mode: ResumeMode::ReattachOrRestart, .. }));
+        let mut forged = value;
+        forged["writer_exit_proof"] = json!({"all_consumers_absent": true});
+        assert!(serde_json::from_value::<OrchestrationAction>(forged).is_err());
+        let forged = json!({
+            "action": "run_attach", "operation_id": "operation", "attachment_id": "attachment",
+            "expected_attachment_epoch": 7, "main_session_id": "conversation", "secret": "not-action-input",
+        });
+        assert!(serde_json::from_value::<OrchestrationAction>(forged).is_err());
+    }
 
     #[test]
     fn project_space_worktree_target_preserves_explicit_source_and_branch() {
@@ -1115,18 +1691,5 @@ mod tests {
             let question: QuestionStatus = serde_json::from_value(value.clone()).unwrap();
             assert_eq!(serde_json::to_value(question).unwrap(), value);
         }
-    }
-
-    #[test]
-    fn supervisor_grant_provenance_round_trips_without_operator_promotion() {
-        let value = json!({
-            "grant_id": "supervisor-grant", "scope": "prepare", "plan_revision": "d".repeat(64),
-            "origin": "supervisor", "supervisor_run_id": "root", "omp_session_id": "actual-omp",
-            "granted_at": "2026-10-05T12:00:00Z",
-        });
-        let grant: Grant = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(grant.origin, GrantOrigin::Supervisor);
-        assert_eq!(serde_json::to_value(grant).unwrap(), value);
-        assert!(serde_json::from_value::<OperatorOrigin>(json!("supervisor")).is_err());
     }
 }

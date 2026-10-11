@@ -1,25 +1,29 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import type { DispatchTarget, OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, Run, SpaceSummary, Subagent, Task, TaskView } from "../../protocol/generated/v1";
+import type { DispatchTarget, OrchestrationAction, OrchestrationSnapshot, Run, SpaceSummary, Subagent, Task, TaskView } from "../../protocol/generated/v1";
 import { copyText } from "../library/clipboard";
 import { ErrorSlot } from "../ErrorSlot";
 import { UiIcon } from "../UiIcon";
 import type { EditDraft, FollowUpDraft, RelationDraft } from "./useSupervisorDrafts";
 import type { StepScope, StepReadOutcome } from "./stepInteractions";
-import type { SourceSubmission, SourceResolution, SourceResolutionOutcome, TaskMutationOutcome } from "./useSupervisor";
+import type { SourceSubmission, SourceResolution, SourceResolutionOutcome, TaskMutationOutcome, MutationRequestScope } from "./useSupervisor";
 import { taskContentReason, uniqueTask } from "./dependencies";
 import { TaskSourceForm } from "./taskSourceForm";
 import { TaskSourcePreview } from "./taskSourcePreview";
+import type { Mutation } from "./SupervisorActions";
 import "../projects/setup.css";
 
-export type StartDraft = { label: string; location: "existing" | "directory" | "dedicated"; spaceId: string; directory: string };
+export type StartDraft = { label: string; location: "existing" | "directory" | "dedicated"; spaceId: string; directory: string; intent?: "reuse_or_resume" | "another"; operation?: Extract<OrchestrationAction, { action: "supervisor_start" }>; requestScope?: MutationRequestScope };
 export type TaskSourceDialogState = { mode: "edit"; task: TaskView; draft: EditDraft; scope: StepScope } | { mode: "relations"; task: TaskView; draft: RelationDraft; scope: StepScope } | { mode: "follow_up"; task: TaskView; draft: FollowUpDraft; scope: StepScope };
-type RuntimeDialogState = { mode: "start" } | { mode: "retry" | "close" | "setup_recovery"; run: Run } | { mode: "subagent_cancel"; run: Run; subagent: Subagent };
+export type ResumeAction = Extract<OrchestrationAction, { action: "run_resume" }>;
+type RuntimeDialogState = { mode: "start" } | { mode: "replace"; run: Run; operation?: ResumeAction; requestScope?: MutationRequestScope } | { mode: "close" | "setup_recovery"; run: Run } | { mode: "subagent_cancel"; run: Run; subagent: Subagent };
 export type SupervisorDialogState = RuntimeDialogState | TaskSourceDialogState;
-export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, changed, busy, available, mutateResult, onStarted, onStartUnconfirmed, onCheck, onReturnFocus, onClose }: {
+export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, changed, busy, available, mutateResult, captureMutationScope, onResumeOperation, onStarted, onStartUnconfirmed, onReturnFocus, onClose }: {
   dialog: RuntimeDialogState; snapshot: OrchestrationSnapshot; spaces: SpaceSummary[]; startDraft: StartDraft;
-  changed(): void; busy: boolean; available: boolean; mutateResult(action: OrchestrationAction): Promise<OrchestrationActionResult | null>;
-  onStarted(runId: string): void; onStartUnconfirmed(): void; onCheck(run: Run): void; onClose(): void;
+  changed(): void; busy: boolean; available: boolean; mutateResult: Mutation;
+  captureMutationScope(action: OrchestrationAction): MutationRequestScope | null;
+  onResumeOperation?(action: ResumeAction, scope: MutationRequestScope): void;
+  onStarted(runId: string): void; onStartUnconfirmed(): void; onClose(): void;
   onReturnFocus?(invoker: Element | null): void;
 }) {
   const titleId = useId();
@@ -37,11 +41,12 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
   const [fieldError, setFieldError] = useState<"space" | "directory" | null>(null);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const locked = busy || pending;
+  const startFieldsLocked = locked || !!startDraft.operation;
   const mode = dialog.mode;
   const dialogRun = "run" in dialog ? dialog.run : null;
   const latestRun = dialogRun ? snapshot.runs.find(run => run.run_id === dialogRun.run_id) ?? dialogRun : null;
   const descendantIds = new Set<string>();
-  if (dialogRun && (mode === "retry" || mode === "close")) {
+  if (dialogRun && mode === "close") {
     const children = new Map<string, Run[]>();
     for (const run of snapshot.runs) {
       if (run.root_id !== dialogRun.root_id || !run.parent_run_id) continue;
@@ -59,17 +64,17 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
     }
   }
   const descendants = descendantIds.size ? snapshot.runs.filter(run => descendantIds.has(run.run_id)) : [];
-  const observed = snapshot.runtime.status === "fresh" ? snapshot.runtime.runs.find(item => item.run_id === dialogRun?.run_id) : undefined;
-  const lastObserved = !available || snapshot.runtime.status !== "fresh" ? "unobserved" : observed?.presence === "missing" ? "terminal gone" : observed?.presence === "endpoint_changed" ? "endpoint changed" : latestRun?.dispatch?.step === "launch_unknown" || latestRun?.dispatch?.step === "needs_review" ? "start unconfirmed" : observed?.presence === "present" ? observed.actual_omp ? observed.agent_status ?? "unknown" : "OMP not confirmed" : "unobserved";
   const chosenSpace = spaces.find(space => space.id === startDraft.spaceId);
   const destination = startDraft.location === "existing" ? chosenSpace ? `New tab in ${chosenSpace.label}` : "Choose a Space for the new tab" : startDraft.location === "directory" ? startDraft.directory.trim() ? `Opens ${startDraft.directory.trim()}` : "Choose an absolute directory" : "Dedicated agent folder";
   const primaryReason = locked ? "Wait for the current operation to finish." : !available ? "Reconnect before applying this change." : unconfirmed ? "Check current status before requesting another action." : null;
-  const title = mode === "start" ? "Start agent" : mode === "retry" ? "Restart agent" : mode === "close" ? "Close tracking" : mode === "setup_recovery" ? "Recover setup" : "Cancel subagent";
+  const title = mode === "start" ? startDraft.intent === "another" ? "Start another agent…" : "Start agent" : mode === "replace" ? "Another agent is still running here" : mode === "close" ? "Close tracking" : mode === "setup_recovery" ? "Recover setup" : "Cancel subagent";
   useLayoutEffect(() => {
     const invoker = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    const section = ref.current;
     const ancestors: HTMLElement[] = [];
     for (let element = invoker?.parentElement; element && element !== document.body; element = element.parentElement) ancestors.push(element);
     return () => {
+      if (document.activeElement !== document.body && !section?.contains(document.activeElement)) return;
       if (returnFocus.current) { returnFocus.current(invoker); return; }
       if (invoker?.isConnected && !invoker.matches(":disabled") && !invoker.closest("[hidden],[inert]")) { invoker.focus({ preventScroll: true }); return; }
       const container = ancestors.find(element => element.isConnected && !element.closest("[hidden],[inert]"));
@@ -90,9 +95,15 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
     if (locked && section && (!section.contains(document.activeElement) || document.activeElement?.matches(":disabled"))) section.focus({ preventScroll: true });
   }, [locked]);
   const close = () => { if (!inFlight.current && !busy) onClose(); };
+  useEffect(() => {
+    if (dialog.mode !== "replace" || !dialog.operation || latestRun?.resume?.operation_id !== dialog.operation.operation_id) return;
+    const resume = latestRun.resume;
+    if (resume.phase === "blocked") { setCopyStatus(null); setError(`Existing agent kept · ${resume.cause?.message ?? "replacement is not supported here"}`); setUnconfirmed(true); }
+    else if (resume.phase === "connected" || resume.phase === "reattached") onClose();
+  }, [latestRun?.resume]);
   const keys = (event: KeyboardEvent<HTMLElement>) => {
     if (event.nativeEvent.isComposing) return;
-    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
+    if (event.key === "Escape" && !(event.target as HTMLElement).closest("textarea")) { event.preventDefault(); event.stopPropagation(); close(); return; }
     if (event.key !== "Tab") return;
     event.stopPropagation();
     const elements = [...event.currentTarget.querySelectorAll<HTMLElement>("button,input,textarea,select,summary,[tabindex]:not([tabindex='-1'])")].filter(element => {
@@ -112,10 +123,11 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
     else if (!event.shiftKey && (index < 0 || index === elements.length - 1)) { event.preventDefault(); elements[0]?.focus(); }
   };
   const submit = async () => {
-    if (locked || inFlight.current || unconfirmed) return;
+    if (locked || inFlight.current || unconfirmed || copyStatus) return;
     if (!available) { setError("The required connection is unavailable. Your draft and resources are kept."); return; }
     let action: OrchestrationAction;
-    if (dialog.mode === "start") {
+    if (dialog.mode === "start" && startDraft.operation) action = startDraft.operation;
+    else if (dialog.mode === "start") {
       let target: DispatchTarget | null = null;
       if (startDraft.location === "existing") {
         if (!spaces.some(space => space.id === startDraft.spaceId)) { setFieldError("space"); return; }
@@ -124,21 +136,44 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
         if (!startDraft.directory.trim().startsWith("/")) { setFieldError("directory"); return; }
         target = { target: "setup", request: { operation: "open", path: startDraft.directory.trim(), label: startDraft.label.trim() || null, task_name: null, focus: false } };
       }
-      action = { action: "supervisor_start", target, label: startDraft.label.trim() || null };
+      action = startDraft.operation ??= { action: "supervisor_start", operation_id: crypto.randomUUID(), mode: startDraft.intent ?? "reuse_or_resume", target, label: startDraft.label.trim() || null, selected_root_id: snapshot.board?.root_id ?? null, expected_project_key: null };
+      startDraft.requestScope = captureMutationScope(action) ?? undefined;
     } else if (dialog.mode === "subagent_cancel") action = { action: "subagent_control", run_id: dialog.run.run_id, subagent_id: dialog.subagent.subagent_id, op: { op: "cancel" } };
     else if (dialog.mode === "setup_recovery") action = { action: "reconcile_run", run_id: dialog.run.run_id, recovery: dialog.run.dispatch?.recovery ?? null };
-    else action = { action: dialog.mode === "retry" ? "retry_launch" : "cancel_run", run_id: dialog.run.run_id };
+    else if (dialog.mode === "replace") {
+      if (!dialog.operation) {
+        if (dialog.run.resume?.phase !== "blocked" || dialog.run.resume.cause?.class !== "decision" || !dialog.run.resume.decision_id || latestRun?.resume?.decision_id !== dialog.run.resume.decision_id || latestRun.attachment?.epoch !== dialog.run.attachment?.epoch) { setError("Existing agent kept · the replacement decision changed. Close this dialog and review the current decision."); return; }
+        dialog.operation = { action: "run_resume", run_id: dialog.run.run_id, operation_id: crypto.randomUUID(), expected_attachment_epoch: dialog.run.attachment?.epoch ?? null, mode: "replace_existing", decision_id: dialog.run.resume.decision_id };
+        dialog.requestScope = captureMutationScope(dialog.operation) ?? undefined;
+      }
+      action = dialog.operation;
+    }
+    else action = { action: "cancel_run", run_id: dialog.run.run_id };
+    let requestScope: MutationRequestScope | undefined;
+    if (dialog.mode === "start") {
+      requestScope = startDraft.requestScope;
+    } else if (dialog.mode === "replace") {
+      requestScope = dialog.requestScope;
+      if (requestScope && action.action === "run_resume") onResumeOperation?.(action, requestScope);
+    }
+    if ((dialog.mode === "start" || dialog.mode === "replace") && !requestScope) { setError("The original request scope is unavailable. Your request and resources are kept."); return; }
+    changed();
     inFlight.current = true; setPending(true); setError(null);
     try {
-      const result = await mutateResult(action);
-      const confirmed = result && (dialog.mode === "start" ? result.result === "run" : result.result === "done" || result.result === "message");
+      const result = await mutateResult(action, requestScope);
+      const confirmed = result && (action.action === "supervisor_start" ? result.result === "supervisor_started" && result.start.operation_id === action.operation_id : action.action === "run_resume" ? result.result === "run_resumed" && result.resume.run_id === action.run_id && result.resume.resume.operation_id === action.operation_id : result.result === "done" || result.result === "message");
       if (!result || !confirmed) {
         setUnconfirmed(true);
         if (dialog.mode === "start") onStartUnconfirmed();
-        setError(dialog.mode === "start" ? "The start was not confirmed. Close these options and check status before another start; the previous request may have opened a terminal." : "The change was not confirmed. Your draft and tracking are kept. Check current status before requesting another action.");
+        setError(dialog.mode === "start" ? "The start was not confirmed. Your original request is kept; close these options and retry that same start from recovery." : "The change was not confirmed. Your original request and tracking are kept.");
         return;
       }
-      if (dialog.mode === "start" && result.result === "run") onStarted(result.run_id);
+      if (dialog.mode === "start" && result.result === "supervisor_started") { delete startDraft.operation; delete startDraft.requestScope; changed(); onStarted(result.start.root_id); }
+      if (dialog.mode === "replace" && result.result === "run_resumed") {
+        const resume = result.resume.resume;
+        if (resume.phase === "blocked") { setError(`Existing agent kept · ${resume.cause?.message ?? "replacement is not supported here"}`); setUnconfirmed(true); return; }
+        if (resume.phase !== "connected" && resume.phase !== "reattached") { setCopyStatus("Resuming…"); return; }
+      }
       onClose();
     } catch (cause) {
       setUnconfirmed(true);
@@ -148,36 +183,36 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
     finally { inFlight.current = false; setPending(false); }
   };
   return createPortal(<div className="setup-overlay" role="presentation"><section ref={ref} className="supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={locked} tabIndex={-1} onKeyDown={keys}>
-    <header className="supervisor-dialog-header"><span className="supervisor-dialog-icon"><UiIcon name={mode === "start" ? "plus" : mode === "retry" || mode === "setup_recovery" ? "refresh" : mode === "close" ? "close" : "stop"} /></span><h2 id={titleId}>{title}</h2></header><form id={formId} onSubmit={event => { event.preventDefault(); void submit(); }}>
+    <header className="supervisor-dialog-header"><span className="supervisor-dialog-icon"><UiIcon name={mode === "start" ? "plus" : mode === "replace" || mode === "setup_recovery" ? "refresh" : mode === "close" ? "close" : "stop"} /></span><h2 id={titleId}>{title}</h2></header><form id={formId} onSubmit={event => { event.preventDefault(); void submit(); }}>
       {dialog.mode === "start" ? <>
         <p>An OMP supervisor manages tasks and delegates work for you.</p>
-        <label>Name (optional)<input value={startDraft.label} disabled={locked} onChange={event => { startDraft.label = event.target.value; changed(); }} /></label>
-        <label>Location<select data-initial value={startDraft.location} disabled={locked} onChange={event => { startDraft.location = event.target.value as StartDraft["location"]; setFieldError(null); changed(); }}><option value="existing">Existing Space</option><option value="directory">Directory</option><option value="dedicated">Dedicated agent folder</option></select></label>
+        <label>Name (optional)<input value={startDraft.label} disabled={startFieldsLocked} onChange={event => { startDraft.label = event.target.value; changed(); }} /></label>
+        <label>Location<select data-initial value={startDraft.location} disabled={startFieldsLocked} onChange={event => { startDraft.location = event.target.value as StartDraft["location"]; setFieldError(null); changed(); }}><option value="existing">Existing Space</option><option value="directory">Directory</option><option value="dedicated">Dedicated agent folder</option></select></label>
         {startDraft.location === "existing" ? <>
-          <label>Space<select value={startDraft.spaceId} disabled={locked || spaces.length === 0} aria-invalid={fieldError === "space" || undefined} aria-describedby={fieldError === "space" || spaces.length === 0 ? spaceErrorId : undefined} onChange={event => { startDraft.spaceId = event.target.value; setFieldError(null); changed(); }}><option value="">Choose a Space</option>{spaces.map(space => <option key={space.id} value={space.id}>{space.label}</option>)}</select></label>
+          <label>Space<select value={startDraft.spaceId} disabled={startFieldsLocked || spaces.length === 0} aria-invalid={fieldError === "space" || undefined} aria-describedby={fieldError === "space" || spaces.length === 0 ? spaceErrorId : undefined} onChange={event => { startDraft.spaceId = event.target.value; setFieldError(null); changed(); }}><option value="">Choose a Space</option>{spaces.map(space => <option key={space.id} value={space.id}>{space.label}</option>)}</select></label>
           {fieldError === "space" ? <p id={spaceErrorId} className="supervisor-dialog-field-error" role="alert">Choose a currently available Space. No different destination will be selected automatically.</p> : spaces.length === 0 ? <p id={spaceErrorId} className="supervisor-dialog-field-reason">No Space is available right now</p> : null}
         </> : startDraft.location === "directory" ? <>
-          <label>Absolute directory<input value={startDraft.directory} disabled={locked} aria-invalid={fieldError === "directory" || undefined} aria-describedby={fieldError === "directory" ? directoryErrorId : undefined} onChange={event => { startDraft.directory = event.target.value; setFieldError(null); changed(); }} /></label>
+          <label>Absolute directory<input value={startDraft.directory} disabled={startFieldsLocked} aria-invalid={fieldError === "directory" || undefined} aria-describedby={fieldError === "directory" ? directoryErrorId : undefined} onChange={event => { startDraft.directory = event.target.value; setFieldError(null); changed(); }} /></label>
           {fieldError === "directory" ? <p id={directoryErrorId} className="supervisor-dialog-field-error" role="alert">Enter an absolute directory path.</p> : null}
         </> : <p>Creates a dedicated agent folder and Space. Existing project context is not copied.</p>}
-      </> : dialog.mode === "retry" ? <>
-        <p>Restart {dialog.run.label}?</p><p>We cannot confirm whether the previous agent is still running. Restarting creates a new terminal and could leave another agent running. The previous launch is checked again before a new launch.</p>{descendants.length ? <p>Worker agents may still be running. Restart only this agent; keep their tasks and history.</p> : null}
-        <p className="supervisor-dialog-observed">Last observed: {lastObserved}</p>
+      </> : dialog.mode === "replace" ? <>
+        <p>{dialog.run.label} already has a running agent in this checkout. Replace requests a safe handover; it continues only after the existing writer is proven stopped. Nothing runs twice.</p>
+        <p>Unsent terminal text and uncertain writers are kept. Replacement may be refused if safe handover is not supported here.</p>
       </> : dialog.mode === "close" ? <>
         <p>Close tracking for {dialog.run.label}?</p><p>Tasks, history, Spaces and worktrees are kept. This does not guarantee the agent or its workers stop.</p>
         {descendants.length ? <><ul className="supervisor-dialog-descendants">{descendants.slice(0, 3).map(run => <li key={run.run_id}>{run.label}</li>)}</ul>{descendants.length > 3 ? <p>and {descendants.length - 3} more</p> : null}<p>Live descendants will still need supervision.</p></> : null}
       </> : dialog.mode === "subagent_cancel" ? <p>Request cancellation of {dialog.subagent.label}. Its OMP control receipt, not this request, confirms whether it stopped.</p> : <>
         <p>Setup for {dialog.run.label} needs review before launch. Existing resources are kept.</p><p>{dialog.run.dispatch?.recovery === "accept_existing_worktree" ? "Confirm using the existing worktree receipt rather than creating another worktree." : dialog.run.dispatch?.recovery === "retry_environment" ? "Explicitly retry the uncertain setup operation after reviewing its recorded effects." : "Check and reconcile the existing setup only. No new launch is requested by this confirmation."}</p>
-        {dialog.run.prepare_plan ? <details><summary>Exact setup plan</summary><p className="supervisor-exact-text">{dialog.run.prepare_plan.text}</p></details> : null}{dialog.run.setup ? <><p>{dialog.run.setup.checkout_path}</p><ul>{dialog.run.setup.effects.map((effect, index) => <li key={index}>{effect}</li>)}</ul>{dialog.run.setup.warnings.map((warning, index) => <p className="supervisor-warning" key={index}>{warning}</p>)}</> : null}
+        {dialog.run.setup ? <><p>{dialog.run.setup.checkout_path}</p><ul>{dialog.run.setup.effects.map((effect, index) => <li key={index}>{effect}</li>)}</ul>{dialog.run.setup.warnings.map((warning, index) => <p className="supervisor-warning" key={index}>{warning}</p>)}</> : null}
       </>}
     </form>
     {mode === "start" ? <p className="supervisor-dialog-destination">{destination} · OMP starts without switching terminal focus</p> : null}
     <ErrorSlot placement="dialog" message={error} className={`supervisor-dialog-error-slot${error ? "" : " is-empty"}`} />
+    {copyStatus ? <p className="supervisor-dialog-observed" role="status">{copyStatus}</p> : null}
     {primaryReason ? <p id={primaryReasonId} className="supervisor-dialog-unavailable">{primaryReason}{!available ? " You can keep editing or close this dialog without losing your draft." : ""}</p> : null}
     <footer>
-      <button type="button" data-initial={mode !== "start" || undefined} disabled={locked} onClick={close}>{mode === "close" ? "Keep tracking" : mode === "retry" ? "Back" : mode === "subagent_cancel" ? "Keep running" : "Cancel"}</button>
-      {dialog.mode === "retry" ? <button type="button" disabled={locked || !available} aria-describedby={!available || locked ? primaryReasonId : undefined} onClick={() => { if (locked || inFlight.current || !available) return; onCheck(latestRun ?? dialog.run); onClose(); }}>Check again first</button> : null}
-      <button type="submit" form={formId} data-primary aria-describedby={primaryReason ? primaryReasonId : undefined} disabled={locked || !available || unconfirmed}>{pending ? "Working…" : dialog.mode === "retry" ? "Restart anyway" : dialog.mode === "subagent_cancel" ? "Request cancellation" : dialog.mode === "setup_recovery" ? dialog.run.dispatch?.recovery === "accept_existing_worktree" ? "Use existing worktree" : dialog.run.dispatch?.recovery === "retry_environment" ? "Retry setup" : "Check setup" : title}</button>
+      <button type="button" data-initial={mode !== "start" || undefined} disabled={locked} onClick={close}>{mode === "close" ? "Keep tracking" : mode === "replace" ? "Keep existing" : mode === "subagent_cancel" ? "Keep running" : "Cancel"}</button>
+      <button type="submit" form={formId} data-primary aria-disabled={locked || !available || unconfirmed || !!copyStatus} aria-describedby={primaryReason ? primaryReasonId : undefined} disabled={locked || !available || unconfirmed || !!copyStatus}>{pending ? "Working…" : dialog.mode === "replace" ? "Replace existing" : dialog.mode === "subagent_cancel" ? "Request cancellation" : dialog.mode === "setup_recovery" ? dialog.run.dispatch?.recovery === "accept_existing_worktree" ? "Use existing worktree" : dialog.run.dispatch?.recovery === "retry_environment" ? "Retry setup" : "Check setup" : title}</button>
     </footer>
   </section></div>, document.body);
 }
@@ -238,7 +273,7 @@ export function TaskSourceDialog({ dialog, snapshot, changed, busy, available, w
   const finish = (outcome: TaskMutationOutcome<SourceSubmission>) => {
     if (outcome.kind === "confirmed") { dialog.draft.submitted = null; onSaved(outcome.task, dialog.mode === "follow_up"); onClose(); }
     else if (outcome.kind === "unknown") { dialog.draft.submitted = outcome.submitted; dialog.draft.reviewed = null; setError(outcome.message); }
-    else setError(outcome.kind === "refused" ? `${outcome.message} (${outcome.operationCode})` : outcome.reason);
+    else { if (outcome.kind === "not_sent") { dialog.draft.submitted = null; dialog.draft.reviewed = null; } setError(outcome.kind === "refused" ? `${outcome.message} (${outcome.operationCode})` : outcome.reason); }
     changed();
   };
   const capture = (): SourceSubmission => {
@@ -259,8 +294,10 @@ export function TaskSourceDialog({ dialog, snapshot, changed, busy, available, w
       if (confirmRemoval !== fence) { setConfirmRemoval(fence); return; }
     }
     const submitted = capture();
+    dialog.draft.submitted = submitted; dialog.draft.reviewed = null; changed();
     inFlight.current = true; setPending(true); setError(null);
     try { finish(await submitTask(submitted)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "The source change was not confirmed. Your original request is kept."); changed(); }
     finally { inFlight.current = false; setPending(false); }
   };
   const read = async () => {
@@ -304,13 +341,14 @@ export function TaskSourceDialog({ dialog, snapshot, changed, busy, available, w
       if (next.action.action === "task_update") next = { ...next, action: { ...next.action, expected_task_revision: reviewed.task_revision } };
       else if (next.action.action === "task_dependencies_set") next = { ...next, action: { ...next.action, expected_task_revision: reviewed.task_revision, expected_doc_revision: docRevision } };
     }
+    if (next) { dialog.draft.submitted = next; dialog.draft.reviewed = null; changed(); }
     inFlight.current = true; setPending(true);
     try {
       const result = await resolveUnknown({ originalSubmitted: submitted, reviewedTaskRevision: reviewed.task_revision, decision: next ? { kind: "apply_reviewed", submitted: next } : { kind: decision as "use_saved" | "keep_saved" } });
-      if (result.kind === "not_resolved") setError(result.message);
+      if (result.kind === "not_resolved") { dialog.draft.submitted = submitted; dialog.draft.reviewed = reviewed; changed(); setError(result.message); }
       else if (result.kind === "applied") {
-        if (result.outcome.kind !== "not_sent") dialog.draft.submitted = null;
         finish(result.outcome);
+        if (result.outcome.kind === "not_sent") { dialog.draft.submitted = submitted; dialog.draft.reviewed = reviewed; changed(); }
       } else {
         dialog.draft.submitted = null; dialog.draft.reviewed = null; setError(null);
         if (dialog.mode === "edit") { dialog.draft.title = result.task.title; dialog.draft.description = result.task.description; dialog.draft.revision = result.task.task_revision; dialog.draft.baseTask = result.task; }

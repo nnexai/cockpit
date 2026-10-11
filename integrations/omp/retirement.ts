@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { NativeDeferReason, NativeRefuseReason, NativeStopReceipt, RunRetirement } from "../../src/protocol/generated/v1";
+import type { NativeDeferReason, NativeProcessIdentity, NativeRefuseReason, NativeStopReceipt, RunRetirement } from "../../src/protocol/generated/v1";
 import { errorText, hasFields, nonemptyFields, type CockpitCli } from "./cliCall";
 import { mainSessions } from "./identity";
 
@@ -15,6 +15,8 @@ export interface RetirementReadinessInput {
   boundSession: string;
   pid: number;
   mode: unknown;
+  attachmentId: string | undefined;
+  attachmentEpoch: number | undefined;
   entries: unknown;
   idle: boolean;
   pendingMessages: boolean;
@@ -49,12 +51,13 @@ export function retirementReadiness(input: RetirementReadinessInput): Retirement
   const identity = input.retirement.identity;
   if (input.agentKind !== "main" || !identity || !input.nativeSession ||
       input.nativeSession !== input.boundSession || input.nativeSession !== identity.omp_session_id ||
+      identity.attachment_id !== input.attachmentId || identity.attachment_epoch !== input.attachmentEpoch ||
       !Number.isSafeInteger(input.pid) || input.pid <= 0 || input.pid !== identity.process.pid) {
     return refuse("The exact bound native main session/process is not available.");
   }
   if (input.mode !== "tui") return refuse("Native retirement requires the supported TUI shutdown mode.");
-  const acceptedAt = journalTime(input.retirement.created_at);
-  if (acceptedAt === null || !Array.isArray(input.entries)) return refuse("Acceptance timestamp or full native journal is unavailable.");
+  const intentAt = journalTime(input.retirement.created_at);
+  if (intentAt === null || !Array.isArray(input.entries)) return refuse("Stop intent timestamp or full native journal is unavailable.");
   for (const entry of input.entries) {
     if (!entry || typeof entry !== "object") return refuse("Native journal contains a malformed entry.");
     const e = entry as { type?: unknown; timestamp?: unknown; message?: { role?: unknown } };
@@ -64,8 +67,8 @@ export function retirementReadiness(input: RetirementReadinessInput): Retirement
     if (!e.message || typeof e.message !== "object" || typeof e.message.role !== "string") return refuse("Native journal contains a malformed message.");
     // Includes extension-generated wakes, alternate branches and equal-time
     // ambiguity. Content/markers are never evidence of trusted provenance.
-    if (e.message.role === "user" && timestamp >= acceptedAt) {
-      return { kind: "refuse", reason: "user_activity", text: "Native user input arrived at or after acceptance; the worker is retained." };
+    if (e.message.role === "user" && timestamp >= intentAt) {
+      return { kind: "refuse", reason: "user_activity", text: "Native user input arrived at or after the stop intent; the agent is retained." };
     }
   }
   if ([input.idle, input.pendingMessages, input.admittedSubmission, input.mainPendingAsyncWork, input.liveSubagents].some(value => typeof value !== "boolean")) {
@@ -94,6 +97,8 @@ export function readRetirementReadiness(pi: ExtensionAPI, ctx: ExtensionContext,
     return retirementReadiness({
       retirement, agentKind: ctx.agent.kind, nativeSession: ctx.sessionManager.getSessionId(),
       boundSession, pid: process.pid, mode: ctx.mode,
+      attachmentId: process.env.COCKPIT_ATTACHMENT_ID,
+      attachmentEpoch: process.env.COCKPIT_ATTACHMENT_EPOCH === undefined ? undefined : Number(process.env.COCKPIT_ATTACHMENT_EPOCH),
       // getEntries, unlike getBranch, includes all alternate native branches.
       entries: ctx.sessionManager.getEntries(), idle: ctx.isIdle(),
       pendingMessages: ctx.hasPendingMessages() || main.session.queuedMessageCount > 0,
@@ -141,8 +146,17 @@ export function createRetirementHandler(deps: {
           // No await between the fresh native check and the public shutdown call.
           // A rejected receipt or newly admitted user work must never cause exit.
           if (!deps.active() || latest?.retirement_id !== retirement.retirement_id ||
-              !["native_stop_offered", "native_stop_deferred", "native_stop_requested"].includes(latest.state.state) ||
-              deps.readiness(retirement).kind !== "ready") return;
+              !["native_stop_offered", "native_stop_deferred", "native_stop_requested"].includes(latest.state.state)) return;
+          const finalReadiness = deps.readiness(retirement);
+          if (finalReadiness.kind === "defer") {
+            await deps.receipt(retirement, { outcome: "deferred", reason: finalReadiness.reason });
+            deferred = { id: retirement.retirement_id, reason: finalReadiness.reason };
+            return;
+          }
+          if (finalReadiness.kind === "refuse") {
+            await deps.receipt(retirement, { outcome: "refused", reason: finalReadiness.reason, text: finalReadiness.text });
+            return;
+          }
           requested = retirement;
           deps.shutdown();
         }
@@ -163,7 +177,7 @@ export interface RetirementHandler {
   observationUnavailable(): void;
 }
 
-function isNativeProcess(value: unknown): boolean {
+function isNativeProcess(value: unknown): value is NativeProcessIdentity {
   return hasFields(value, ["pid", "start_ticks", "kernel_boot_id"]) &&
     typeof value.pid === "number" && Number.isInteger(value.pid) && value.pid > 0 && value.pid <= 0xffff_ffff &&
     typeof value.start_ticks === "number" && Number.isSafeInteger(value.start_ticks) && value.start_ticks >= 0 &&
@@ -171,10 +185,11 @@ function isNativeProcess(value: unknown): boolean {
 }
 
 export function isRunRetirement(value: unknown): value is RunRetirement {
-  if (!hasFields(value, ["retirement_id", "trigger", "result_message_id", "task_revision", "identity", "state", "created_at", "updated_at"]) ||
+  if (!hasFields(value, ["retirement_id", "trigger", "result_message_id", "task_revision", "identity", "quiescent_stop_at", "state", "created_at", "updated_at"]) ||
       !nonemptyFields(value, ["retirement_id", "result_message_id", "task_revision"]) ||
       typeof value.trigger !== "string" || !["accept", "accept_recovery", "operator_conflict_resolution"].includes(value.trigger) ||
       journalTime(value.created_at) === null || journalTime(value.updated_at) === null ||
+      !(value.quiescent_stop_at === null || journalTime(value.quiescent_stop_at) !== null) ||
       value.state === null || typeof value.state !== "object" || Array.isArray(value.state) ||
       !("state" in value.state) || typeof value.state.state !== "string") return false;
   const state = value.state;
@@ -218,13 +233,20 @@ export function isRunRetirement(value: unknown): value is RunRetirement {
   }
   if (value.identity === null) return state.state === "retained" && "reason" in state && state.reason === "identity_incomplete";
   const identity = value.identity;
-  if (!hasFields(identity, ["run_attempt", "launch_attempt", "launch_tag", "endpoint_identity", "session_id", "workspace_id",
+  if (!hasFields(identity, ["attachment_id", "attachment_epoch", "launch_mode", "run_attempt", "launch_attempt", "launch_tag", "endpoint_identity", "session_id", "workspace_id",
       "tab_id", "pane_id", "terminal_id", "herdr_boot_id", "omp_session_id", "process", "shell"]) ||
+      !(identity.attachment_id === null || (typeof identity.attachment_id === "string" && identity.attachment_id.length > 0)) ||
+      !(identity.attachment_epoch === null || (typeof identity.attachment_epoch === "number" && Number.isSafeInteger(identity.attachment_epoch) && identity.attachment_epoch >= 1)) ||
+      !(identity.launch_mode === null || identity.launch_mode === "direct_process" || identity.launch_mode === "shell_agent") ||
       !nonemptyFields(identity, ["launch_tag", "endpoint_identity", "session_id", "workspace_id", "tab_id", "pane_id", "terminal_id", "omp_session_id"]) ||
       ![identity.run_attempt, identity.launch_attempt].every(attempt => typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 0 && attempt <= 0xffff_ffff) ||
       !(identity.herdr_boot_id === null || (typeof identity.herdr_boot_id === "string" && identity.herdr_boot_id.length > 0)) ||
       !isNativeProcess(identity.process) || !hasFields(identity.shell, ["process", "executable_device", "executable_inode", "argv_digest"]) ||
       !nonemptyFields(identity.shell, ["executable_device", "executable_inode", "argv_digest"]) || !isNativeProcess(identity.shell.process)) return false;
+  if (identity.launch_mode === "direct_process") {
+    if (identity.process.pid !== identity.shell.process.pid || identity.process.start_ticks !== identity.shell.process.start_ticks ||
+        identity.process.kernel_boot_id !== identity.shell.process.kernel_boot_id) return false;
+  } else if (identity.launch_mode === "shell_agent" && identity.process.pid === identity.shell.process.pid) return false;
   return true;
 }
 
@@ -232,7 +254,8 @@ export function bindRetirementHandler(pi: ExtensionAPI, runId: string, cli: Cock
     const session = ctx.sessionManager.getSessionId();
     return createRetirementHandler({
       readiness: retirement => readRetirementReadiness(pi, ctx, mainSessions.get(runId) ?? "", retirement),
-      active: () => !signal.aborted && ctx.sessionManager.getSessionId() === session && mainSessions.get(runId) === session,
+      active: () => !signal.aborted && ctx.sessionManager.getSessionId() === session &&
+        mainSessions.get(runId) === session && cli.prompt(ctx)?.kind === "worker",
       receipt: async (retirement, outcome) => {
         const args = ["run", "retirement-receipt", "--retirement", retirement.retirement_id];
         if (outcome.outcome === "shutdown_requested") args.push("--shutdown-requested");

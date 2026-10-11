@@ -44,6 +44,16 @@ pub(crate) enum TeardownReceiptState {
     Completed,
 }
 
+/// Immutable receipts captured by a successful owned creation, never by
+/// inspecting a recovered path. Cleanup effects have their own intent journal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OwnedCreationReceipt {
+    pub operation_id: String,
+    pub resources: Vec<cockpit_protocol::orchestration::OwnedResourceIdentity>,
+    pub git_capture_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredOperation {
@@ -380,6 +390,53 @@ impl ProjectStore {
             }
         })
     }
+    pub(crate) fn read_owned_creation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<OwnedCreationReceipt>, InspectionError> {
+        validate_operation_id(operation_id)?;
+        let _lock = self.acquire_named_lock(&format!(".{operation_id}.owned.lock"), "owned_lock")?;
+        let name = format!("{operation_id}.owned.json");
+        match self.root_dir.symlink_metadata(&name) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() =>
+                Err(InspectionError::new("unsafe_path", "owned creation receipt is not a regular file")),
+            Ok(_) => {
+                let receipt: OwnedCreationReceipt = read_json(&self.root_dir, &name)?;
+                if receipt.operation_id != operation_id {
+                    return Err(InspectionError::new("association_conflict", "owned creation receipt belongs to another operation"));
+                }
+                Ok(Some(receipt))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(map_io(error, "owned_read")),
+        }
+    }
+
+    pub(crate) fn write_owned_creation(
+        &self,
+        receipt: &OwnedCreationReceipt,
+    ) -> Result<(), InspectionError> {
+        validate_operation_id(&receipt.operation_id)?;
+        let operation = self.load(&receipt.operation_id)?;
+        crate::project_teardown::validate_creation_receipt(receipt, &operation)?;
+        let _lock = self.acquire_named_lock(&format!(".{}.owned.lock", receipt.operation_id), "owned_lock")?;
+        let name = format!("{}.owned.json", receipt.operation_id);
+        match self.root_dir.symlink_metadata(&name) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() =>
+                return Err(InspectionError::new("unsafe_path", "owned creation receipt is not a regular file")),
+            Ok(_) => {
+                let prior: OwnedCreationReceipt = read_json(&self.root_dir, &name)?;
+                if prior != *receipt {
+                    return Err(InspectionError::new("association_conflict", "owned creation provenance cannot be replaced"));
+                }
+                return Ok(());
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(map_io(error, "owned_read")),
+        }
+        atomic_write_json(&self.root_dir, &name, receipt).map_err(io_error("owned_write"))
+    }
+
 
     /// Call only while holding the operation's journal lock.
     fn read_stored_operation(&self, name: &str) -> Result<StoredOperation, InspectionError> {

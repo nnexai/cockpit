@@ -57,26 +57,27 @@ import type * as P9 from "./policy_herdr_shell";
 import type * as P10 from "./policy_library";
 import type * as P11 from "./policy_notes";
 import type * as P12 from "./policy_orchestration";
-import type * as P13 from "./policy_project_defaults";
-import type * as P14 from "./policy_project_teardown";
-import type * as P15 from "./policy_projects";
-import type * as P16 from "./policy_quota";
-import type * as P17 from "./policy_review";
-import type * as P18 from "./policy_sources";
-import type * as P19 from "./policy_v1";
-import type * as P20 from "./policy_viewer";
-import type * as P21 from "./policy_widget";
+import type * as P13 from "./policy_orchestration_2";
+import type * as P14 from "./policy_project_defaults";
+import type * as P15 from "./policy_project_teardown";
+import type * as P16 from "./policy_projects";
+import type * as P17 from "./policy_quota";
+import type * as P18 from "./policy_review";
+import type * as P19 from "./policy_sources";
+import type * as P20 from "./policy_v1";
+import type * as P21 from "./policy_viewer";
+import type * as P22 from "./policy_widget";
 
-export interface WireTypes extends P0.WireTypes, P1.WireTypes, P2.WireTypes, P3.WireTypes, P4.WireTypes, P5.WireTypes, P6.WireTypes, P7.WireTypes, P8.WireTypes, P9.WireTypes, P10.WireTypes, P11.WireTypes, P12.WireTypes, P13.WireTypes, P14.WireTypes, P15.WireTypes, P16.WireTypes, P17.WireTypes, P18.WireTypes, P19.WireTypes, P20.WireTypes, P21.WireTypes {}
-export interface WireOwners extends P0.WireOwners, P1.WireOwners, P2.WireOwners, P3.WireOwners, P4.WireOwners, P5.WireOwners, P6.WireOwners, P7.WireOwners, P8.WireOwners, P9.WireOwners, P10.WireOwners, P11.WireOwners, P12.WireOwners, P13.WireOwners, P14.WireOwners, P15.WireOwners, P16.WireOwners, P17.WireOwners, P18.WireOwners, P19.WireOwners, P20.WireOwners, P21.WireOwners {}
-export interface WireFields extends P0.WireFields, P1.WireFields, P2.WireFields, P3.WireFields, P4.WireFields, P5.WireFields, P6.WireFields, P7.WireFields, P8.WireFields, P9.WireFields, P10.WireFields, P11.WireFields, P12.WireFields, P13.WireFields, P14.WireFields, P15.WireFields, P16.WireFields, P17.WireFields, P18.WireFields, P19.WireFields, P20.WireFields, P21.WireFields {}
-export interface WireFieldNames extends P0.WireFieldNames, P1.WireFieldNames, P2.WireFieldNames, P3.WireFieldNames, P4.WireFieldNames, P5.WireFieldNames, P6.WireFieldNames, P7.WireFieldNames, P8.WireFieldNames, P9.WireFieldNames, P10.WireFieldNames, P11.WireFieldNames, P12.WireFieldNames, P13.WireFieldNames, P14.WireFieldNames, P15.WireFieldNames, P16.WireFieldNames, P17.WireFieldNames, P18.WireFieldNames, P19.WireFieldNames, P20.WireFieldNames, P21.WireFieldNames {}
-export interface WireChildNames extends P0.WireChildNames, P1.WireChildNames, P2.WireChildNames, P3.WireChildNames, P4.WireChildNames, P5.WireChildNames, P6.WireChildNames, P7.WireChildNames, P8.WireChildNames, P9.WireChildNames, P10.WireChildNames, P11.WireChildNames, P12.WireChildNames, P13.WireChildNames, P14.WireChildNames, P15.WireChildNames, P16.WireChildNames, P17.WireChildNames, P18.WireChildNames, P19.WireChildNames, P20.WireChildNames, P21.WireChildNames {}
-export interface WireTagNames extends P0.WireTagNames, P1.WireTagNames, P2.WireTagNames, P3.WireTagNames, P4.WireTagNames, P5.WireTagNames, P6.WireTagNames, P7.WireTagNames, P8.WireTagNames, P9.WireTagNames, P10.WireTagNames, P11.WireTagNames, P12.WireTagNames, P13.WireTagNames, P14.WireTagNames, P15.WireTagNames, P16.WireTagNames, P17.WireTagNames, P18.WireTagNames, P19.WireTagNames, P20.WireTagNames, P21.WireTagNames {}
-export interface WireCheckpointFieldNames extends P0.WireCheckpointFieldNames, P1.WireCheckpointFieldNames, P2.WireCheckpointFieldNames, P3.WireCheckpointFieldNames, P4.WireCheckpointFieldNames, P5.WireCheckpointFieldNames, P6.WireCheckpointFieldNames, P7.WireCheckpointFieldNames, P8.WireCheckpointFieldNames, P9.WireCheckpointFieldNames, P10.WireCheckpointFieldNames, P11.WireCheckpointFieldNames, P12.WireCheckpointFieldNames, P13.WireCheckpointFieldNames, P14.WireCheckpointFieldNames, P15.WireCheckpointFieldNames, P16.WireCheckpointFieldNames, P17.WireCheckpointFieldNames, P18.WireCheckpointFieldNames, P19.WireCheckpointFieldNames, P20.WireCheckpointFieldNames, P21.WireCheckpointFieldNames {}
-export type WireOmittableField = P0.WireOmittableField | P1.WireOmittableField | P2.WireOmittableField | P3.WireOmittableField | P4.WireOmittableField | P5.WireOmittableField | P6.WireOmittableField | P7.WireOmittableField | P8.WireOmittableField | P9.WireOmittableField | P10.WireOmittableField | P11.WireOmittableField | P12.WireOmittableField | P13.WireOmittableField | P14.WireOmittableField | P15.WireOmittableField | P16.WireOmittableField | P17.WireOmittableField | P18.WireOmittableField | P19.WireOmittableField | P20.WireOmittableField | P21.WireOmittableField;
-export type WireOptionalField = P0.WireOptionalField | P1.WireOptionalField | P2.WireOptionalField | P3.WireOptionalField | P4.WireOptionalField | P5.WireOptionalField | P6.WireOptionalField | P7.WireOptionalField | P8.WireOptionalField | P9.WireOptionalField | P10.WireOptionalField | P11.WireOptionalField | P12.WireOptionalField | P13.WireOptionalField | P14.WireOptionalField | P15.WireOptionalField | P16.WireOptionalField | P17.WireOptionalField | P18.WireOptionalField | P19.WireOptionalField | P20.WireOptionalField | P21.WireOptionalField;
-export type WireListField = P0.WireListField | P1.WireListField | P2.WireListField | P3.WireListField | P4.WireListField | P5.WireListField | P6.WireListField | P7.WireListField | P8.WireListField | P9.WireListField | P10.WireListField | P11.WireListField | P12.WireListField | P13.WireListField | P14.WireListField | P15.WireListField | P16.WireListField | P17.WireListField | P18.WireListField | P19.WireListField | P20.WireListField | P21.WireListField;
+export interface WireTypes extends P0.WireTypes, P1.WireTypes, P2.WireTypes, P3.WireTypes, P4.WireTypes, P5.WireTypes, P6.WireTypes, P7.WireTypes, P8.WireTypes, P9.WireTypes, P10.WireTypes, P11.WireTypes, P12.WireTypes, P13.WireTypes, P14.WireTypes, P15.WireTypes, P16.WireTypes, P17.WireTypes, P18.WireTypes, P19.WireTypes, P20.WireTypes, P21.WireTypes, P22.WireTypes {}
+export interface WireOwners extends P0.WireOwners, P1.WireOwners, P2.WireOwners, P3.WireOwners, P4.WireOwners, P5.WireOwners, P6.WireOwners, P7.WireOwners, P8.WireOwners, P9.WireOwners, P10.WireOwners, P11.WireOwners, P12.WireOwners, P13.WireOwners, P14.WireOwners, P15.WireOwners, P16.WireOwners, P17.WireOwners, P18.WireOwners, P19.WireOwners, P20.WireOwners, P21.WireOwners, P22.WireOwners {}
+export interface WireFields extends P0.WireFields, P1.WireFields, P2.WireFields, P3.WireFields, P4.WireFields, P5.WireFields, P6.WireFields, P7.WireFields, P8.WireFields, P9.WireFields, P10.WireFields, P11.WireFields, P12.WireFields, P13.WireFields, P14.WireFields, P15.WireFields, P16.WireFields, P17.WireFields, P18.WireFields, P19.WireFields, P20.WireFields, P21.WireFields, P22.WireFields {}
+export interface WireFieldNames extends P0.WireFieldNames, P1.WireFieldNames, P2.WireFieldNames, P3.WireFieldNames, P4.WireFieldNames, P5.WireFieldNames, P6.WireFieldNames, P7.WireFieldNames, P8.WireFieldNames, P9.WireFieldNames, P10.WireFieldNames, P11.WireFieldNames, P12.WireFieldNames, P13.WireFieldNames, P14.WireFieldNames, P15.WireFieldNames, P16.WireFieldNames, P17.WireFieldNames, P18.WireFieldNames, P19.WireFieldNames, P20.WireFieldNames, P21.WireFieldNames, P22.WireFieldNames {}
+export interface WireChildNames extends P0.WireChildNames, P1.WireChildNames, P2.WireChildNames, P3.WireChildNames, P4.WireChildNames, P5.WireChildNames, P6.WireChildNames, P7.WireChildNames, P8.WireChildNames, P9.WireChildNames, P10.WireChildNames, P11.WireChildNames, P12.WireChildNames, P13.WireChildNames, P14.WireChildNames, P15.WireChildNames, P16.WireChildNames, P17.WireChildNames, P18.WireChildNames, P19.WireChildNames, P20.WireChildNames, P21.WireChildNames, P22.WireChildNames {}
+export interface WireTagNames extends P0.WireTagNames, P1.WireTagNames, P2.WireTagNames, P3.WireTagNames, P4.WireTagNames, P5.WireTagNames, P6.WireTagNames, P7.WireTagNames, P8.WireTagNames, P9.WireTagNames, P10.WireTagNames, P11.WireTagNames, P12.WireTagNames, P13.WireTagNames, P14.WireTagNames, P15.WireTagNames, P16.WireTagNames, P17.WireTagNames, P18.WireTagNames, P19.WireTagNames, P20.WireTagNames, P21.WireTagNames, P22.WireTagNames {}
+export interface WireCheckpointFieldNames extends P0.WireCheckpointFieldNames, P1.WireCheckpointFieldNames, P2.WireCheckpointFieldNames, P3.WireCheckpointFieldNames, P4.WireCheckpointFieldNames, P5.WireCheckpointFieldNames, P6.WireCheckpointFieldNames, P7.WireCheckpointFieldNames, P8.WireCheckpointFieldNames, P9.WireCheckpointFieldNames, P10.WireCheckpointFieldNames, P11.WireCheckpointFieldNames, P12.WireCheckpointFieldNames, P13.WireCheckpointFieldNames, P14.WireCheckpointFieldNames, P15.WireCheckpointFieldNames, P16.WireCheckpointFieldNames, P17.WireCheckpointFieldNames, P18.WireCheckpointFieldNames, P19.WireCheckpointFieldNames, P20.WireCheckpointFieldNames, P21.WireCheckpointFieldNames, P22.WireCheckpointFieldNames {}
+export type WireOmittableField = P0.WireOmittableField | P1.WireOmittableField | P2.WireOmittableField | P3.WireOmittableField | P4.WireOmittableField | P5.WireOmittableField | P6.WireOmittableField | P7.WireOmittableField | P8.WireOmittableField | P9.WireOmittableField | P10.WireOmittableField | P11.WireOmittableField | P12.WireOmittableField | P13.WireOmittableField | P14.WireOmittableField | P15.WireOmittableField | P16.WireOmittableField | P17.WireOmittableField | P18.WireOmittableField | P19.WireOmittableField | P20.WireOmittableField | P21.WireOmittableField | P22.WireOmittableField;
+export type WireOptionalField = P0.WireOptionalField | P1.WireOptionalField | P2.WireOptionalField | P3.WireOptionalField | P4.WireOptionalField | P5.WireOptionalField | P6.WireOptionalField | P7.WireOptionalField | P8.WireOptionalField | P9.WireOptionalField | P10.WireOptionalField | P11.WireOptionalField | P12.WireOptionalField | P13.WireOptionalField | P14.WireOptionalField | P15.WireOptionalField | P16.WireOptionalField | P17.WireOptionalField | P18.WireOptionalField | P19.WireOptionalField | P20.WireOptionalField | P21.WireOptionalField | P22.WireOptionalField;
+export type WireListField = P0.WireListField | P1.WireListField | P2.WireListField | P3.WireListField | P4.WireListField | P5.WireListField | P6.WireListField | P7.WireListField | P8.WireListField | P9.WireListField | P10.WireListField | P11.WireListField | P12.WireListField | P13.WireListField | P14.WireListField | P15.WireListField | P16.WireListField | P17.WireListField | P18.WireListField | P19.WireListField | P20.WireListField | P21.WireListField | P22.WireListField;
 
 /** Names come from the Rust model; cycle detection avoids unbounded recursive DTO paths. */
 type ChildOwner<O extends keyof WireCheckpointFieldNames, F extends string> =
@@ -513,13 +514,74 @@ export const wireRegistry = {
   "DispatchStep": D12.wireDispatchStep,
   "DispatchTarget": D12.wireDispatchTarget,
   "SetupSummary": D12.wireSetupSummary,
-  "PlanRecord": D12.wirePlanRecord,
-  "Grant": D12.wireGrant,
-  "GrantScope": D12.wireGrantScope,
-  "GrantOrigin": D12.wireGrantOrigin,
+  "DecisionOrigin": D12.wireDecisionOrigin,
+  "WorkerCleanupPolicy": D12.wireWorkerCleanupPolicy,
+  "WorkerStartResult": D12.wireWorkerStartResult,
+  "TaskScopeUpdateState": D12.wireTaskScopeUpdateState,
+  "TaskScopeUpdateResult": D12.wireTaskScopeUpdateResult,
   "OperatorOrigin": D12.wireOperatorOrigin,
+  "ProjectIdentity": D12.wireProjectIdentity,
+  "ProjectSource": D12.wireProjectSource,
+  "DirectoryIdentity": D12.wireDirectoryIdentity,
+  "CheckoutGitIdentity": D12.wireCheckoutGitIdentity,
+  "CheckoutIdentity": D12.wireCheckoutIdentity,
+  "AttachmentState": D12.wireAttachmentState,
+  "AttachmentLaunchMode": D12.wireAttachmentLaunchMode,
+  "ExecutionAttachment": D12.wireExecutionAttachment,
+  "ResumeMode": D12.wireResumeMode,
+  "ResumePhase": D12.wireResumePhase,
+  "ResumeCauseClass": D12.wireResumeCauseClass,
+  "ResumeCause": D12.wireResumeCause,
+  "ResumeRecord": D12.wireResumeRecord,
+  "ProjectRootLookupRequest": D12.wireProjectRootLookupRequest,
+  "RootConnection": D12.wireRootConnection,
+  "RootResumeAvailability": D12.wireRootResumeAvailability,
+  "ProjectRootCandidate": D12.wireProjectRootCandidate,
+  "ProjectRootLookupResponse": D12.wireProjectRootLookupResponse,
+  "SupervisorStartMode": D12.wireSupervisorStartMode,
+  "SupervisorStartOutcome": D12.wireSupervisorStartOutcome,
+  "SupervisorStartResult": D12.wireSupervisorStartResult,
+  "RunResumeResult": D12.wireRunResumeResult,
+  "RunAttachResult": D12.wireRunAttachResult,
   "RunLocation": D12.wireRunLocation,
   "NativeProcessIdentity": D12.wireNativeProcessIdentity,
+  "AttachmentReference": D12.wireAttachmentReference,
+  "CheckStatus": D12.wireCheckStatus,
+  "CheckOutcome": D12.wireCheckOutcome,
+  "SourceOutput": D12.wireSourceOutput,
+  "IntegrationMethod": D12.wireIntegrationMethod,
+  "IntegrationMapping": D12.wireIntegrationMapping,
+  "Integration": D12.wireIntegration,
+  "IntegrationRecord": D12.wireIntegrationRecord,
+  "IntegrationRecordResult": D12.wireIntegrationRecordResult,
+  "ResourceSourceIdentity": D12.wireResourceSourceIdentity,
+  "ResourceRequest": D12.wireResourceRequest,
+  "ResourceRequestState": D12.wireResourceRequestState,
+  "ResourceRequestRecord": D12.wireResourceRequestRecord,
+  "ResourceRelease": D12.wireResourceRelease,
+  "ResourceBuildRegistration": D12.wireResourceBuildRegistration,
+  "OwnedResourceKind": D12.wireOwnedResourceKind,
+  "ResourceOwnership": D12.wireResourceOwnership,
+  "CleanupAuthority": D12.wireCleanupAuthority,
+  "OwnedGitIdentity": D12.wireOwnedGitIdentity,
+  "OwnedSpaceIdentity": D12.wireOwnedSpaceIdentity,
+  "OwnedFilesystemIdentity": D12.wireOwnedFilesystemIdentity,
+  "FixtureAdapterId": D12.wireFixtureAdapterId,
+  "OwnedFixtureIdentity": D12.wireOwnedFixtureIdentity,
+  "OwnedResourceIdentity": D12.wireOwnedResourceIdentity,
+  "CleanupState": D12.wireCleanupState,
+  "CleanupReasonClass": D12.wireCleanupReasonClass,
+  "CleanupReason": D12.wireCleanupReason,
+  "CleanupEffectState": D12.wireCleanupEffectState,
+  "CleanupEffectReceipt": D12.wireCleanupEffectReceipt,
+  "CleanupItem": D12.wireCleanupItem,
+  "OwnedResourceRecord": D12.wireOwnedResourceRecord,
+  "ResourceRegister": D12.wireResourceRegister,
+  "CleanupFinish": D12.wireCleanupFinish,
+  "CleanupFinishResult": D12.wireCleanupFinishResult,
+  "CleanupResourceSummary": D12.wireCleanupResourceSummary,
+  "RunCleanupSummary": D12.wireRunCleanupSummary,
+  "RestorationSummary": D12.wireRestorationSummary,
   "NativeShellIdentity": D12.wireNativeShellIdentity,
   "RetirementTrigger": D12.wireRetirementTrigger,
   "RetirementIdentity": D12.wireRetirementIdentity,

@@ -936,7 +936,11 @@ export type OrchestrationMutationRequest = { session_id: string, expected_revisi
 
 export type OrchestrationMutationResponse = { revision: number, result: OrchestrationActionResult, };
 
-export type OrchestrationSnapshot = { session_id: string, revision: number, tasks_token: string, roots: Array<RootSummary>, board: TaskBoard | null, runs: Array<Run>, messages: Array<Message>, questions: Array<QuestionStatus>, subagents: Array<Subagent>, intents: Array<TaskIntent>, assignment_intents: Array<TaskAssignmentIntent>, runtime: RuntimeObservation, unmanaged_agents: Array<UnmanagedAgent>, attention: Array<Attention>, };
+export type OrchestrationSnapshot = { session_id: string,
+/**
+ * Opaque canonical durable-store identity, independent of native sessions.
+ */
+state_store_id: string, revision: number, tasks_token: string, roots: Array<RootSummary>, board: TaskBoard | null, runs: Array<Run>, messages: Array<Message>, questions: Array<QuestionStatus>, subagents: Array<Subagent>, intents: Array<TaskIntent>, assignment_intents: Array<TaskAssignmentIntent>, cleanup: Array<RunCleanupSummary>, restoration: RestorationSummary, runtime: RuntimeObservation, unmanaged_agents: Array<UnmanagedAgent>, attention: Array<Attention>, };
 
 export type UnmanagedAgent = { workspace_id: string, workspace_label: string, tab_id: string, tab_label: string, pane_id: string, agent_name: string, agent_status: string | null, state_changed_at: string | null, };
 
@@ -964,11 +968,11 @@ export type TaskDependencyBlockerReason = "unchecked" | "missing" | "ambiguous";
 
 export type TaskView = { task: Task, lane: TaskLane, current_run_id: string | null, dependencies: TaskDependencies, };
 
-export type TaskLane = "queued" | "setup" | "ready" | "working" | "review" | "accepted";
+export type TaskLane = "queued" | "starting" | "working" | "review" | "accepted";
 
 export type RunKind = "supervisor" | "adopted" | "worker";
 
-export type RunStage = "proposed" | "awaiting_prepare" | "preparing" | "initializing" | "ready" | "working" | "reported" | "active" | "closed";
+export type RunStage = "queued" | "starting" | "working" | "reported" | "active" | "closed";
 
 export type CloseReason = "accepted" | "cancelled" | "superseded" | "failed";
 
@@ -976,33 +980,164 @@ export type DispatchStep = "planning" | "plan_failed" | "setup_pending" | "setup
 
 export type DispatchTarget = { "target": "setup", request: WorkspaceSetupRequest, } | { "target": "existing_space", workspace_id: string, } | { "target": "space_worktree", workspace_id: string, branch: string | null, base_ref: string | null, };
 
-export type SetupSummary = { operation_id: string | null, generation: number | null, workspace_id: string | null, checkout_path: string, repository_id: string | null, branch: string | null, base: string | null, ownership: WorkspaceCheckoutOwnership | null, effects: Array<string>, warnings: Array<string>,
+export type SetupSummary = { operation_id: string | null, generation: number | null, workspace_id: string | null, checkout_path: string, repository_id: string | null, branch: string | null, base: string | null,
+/**
+ * Actual checkout HEAD observed before managed work starts.
+ */
+base_commit: string | null, ownership: WorkspaceCheckoutOwnership | null, effects: Array<string>, warnings: Array<string>,
 /**
  * Source project Space for SpaceWorktree; absent for other targets.
  */
 project_workspace_id: string | null, };
 
-export type PlanRecord = { plan_revision: string, text: string, created_at: string, };
+export type DecisionOrigin = "browser" | "native" | "supervisor";
 
-export type Grant = { grant_id: string, scope: GrantScope, plan_revision: string, origin: GrantOrigin, supervisor_run_id: string | null, omp_session_id: string | null, granted_at: string, };
+export type WorkerCleanupPolicy = "owned_when_safe";
 
-export type GrantScope = "prepare" | "execute";
+export type WorkerStartResult = { operation_id: string, run_id: string, attempt: number, duplicate: boolean, };
 
-export type GrantOrigin = "browser" | "native" | "supervisor";
+export type TaskScopeUpdateState = "applied" | "conflict" | "pending";
+
+export type TaskScopeUpdateResult = { operation_id: string, state: TaskScopeUpdateState, task_revision: string | null, doc_revision: string | null, instruction_message_id: string | null, duplicate: boolean, };
 
 export type OperatorOrigin = "browser" | "native";
+
+export type ProjectIdentity = { key: string, machine_id: string, source: ProjectSource, repository_id: string | null, source_workspace_id: string | null, };
+
+export type ProjectSource = { "kind": "git", common_dir: string, } | { "kind": "directory", root: string, };
+
+export type DirectoryIdentity = { device: string, inode: string, };
+
+export type CheckoutGitIdentity = { common_dir: string, worktree_git_dir: string, };
+
+export type CheckoutIdentity = { key: string, machine_id: string, path: string, directory_identity: DirectoryIdentity, git: CheckoutGitIdentity | null, };
+
+export type AttachmentState = "reserved" | "connecting" | "connected" | "disconnected" | "quiescing" | "revoked";
+
+export type AttachmentLaunchMode = "direct_process" | "shell_agent";
+
+export type ExecutionAttachment = { attachment_id: string, epoch: number, state: AttachmentState, launch_mode: AttachmentLaunchMode | null, location: RunLocation | null, main_session_id: string | null, process: NativeProcessIdentity | null, shell: NativeShellIdentity | null, machine_id: string | null, launch_attempt: number, updated_at: string, };
+
+export type ResumeMode = "reattach_or_restart" | "replace_existing";
+
+export type ResumePhase = "reconciling" | "reattached" | "launching" | "connected" | "blocked";
+
+export type ResumeCauseClass = "recover" | "decision";
+
+export type ResumeCause = { code: string, message: string, class: ResumeCauseClass, };
+
+export type ResumeRecord = { operation_id: string, run_id: string, previous_attachment_epoch: number | null, phase: ResumePhase, cause: ResumeCause | null, decision_id: string | null, replacement_attachment_epoch: number | null, updated_at: string, };
+
+export type ProjectRootLookupRequest = { session_id: string, workspace_id: string, selected_root_id: string | null, };
+
+export type RootConnection = "connected" | "reconnecting" | "disconnected" | "unknown";
+
+export type RootResumeAvailability = "available" | "in_progress" | "blocked";
+
+export type ProjectRootCandidate = { root_id: string, connection: RootConnection, resume: RootResumeAvailability, cause: ResumeCause | null, updated_at: string, };
+
+export type ProjectRootLookupResponse = { "status": "resolved", project: ProjectIdentity, lookup_revision: number, preferred_root_id: string | null, roots: Array<ProjectRootCandidate>, } | { "status": "unavailable", code: string, message: string, };
+
+export type SupervisorStartMode = "reuse_or_resume" | "another";
+
+export type SupervisorStartOutcome = "reused" | "resuming" | "created";
+
+export type SupervisorStartResult = { root_id: string, outcome: SupervisorStartOutcome, operation_id: string, resume_operation_id: string | null, duplicate: boolean, };
+
+export type RunResumeResult = { run_id: string, resume: ResumeRecord, duplicate: boolean, };
+
+export type RunAttachResult = { run_id: string, attachment: ExecutionAttachment, duplicate: boolean, };
 
 export type RunLocation = { boot_id: string | null, terminal_id: string | null, native_session_id: string | null, endpoint_identity: string, session_id: string, workspace_id: string, tab_id: string, pane_id: string, launch_tag: string, };
 
 export type NativeProcessIdentity = { pid: number, start_ticks: number, kernel_boot_id: string | null, };
 
+export type AttachmentReference = { run_id: string, attachment_id: string, attachment_epoch: number, };
+
+export type CheckStatus = "passed" | "failed" | "not_run";
+
+export type CheckOutcome = { contract: string, command_or_scenario: string, outcome: CheckStatus, evidence: string | null, limitation: string | null, };
+
+export type SourceOutput = { "kind": "code", repository_key: string, checkout_key: string, base_commit: string, head_commit: string, commits: Array<string>, task_revision: string, result_message_id: string, focused_checks: Array<CheckOutcome>, } | { "kind": "non_code", result_message_id: string, task_revision: string, artifacts: Array<string>, focused_checks: Array<CheckOutcome>, };
+
+export type IntegrationMethod = "ancestor" | "patch_equivalent" | "recorded_adaptation";
+
+export type IntegrationMapping = { source_commits: Array<string>, target_commits: Array<string>, source_paths: Array<string>, target_paths: Array<string>, explanation: string | null, };
+
+export type Integration = { "state": "pending" } | { "state": "not_applicable", reason: string, result_message_id: string, } | { "state": "integrated", operation_id: string, accepted_result_message_id: string, accepted_task_revision: string, source: SourceOutput, target_repository_key: string, target_ref: string, target_commit: string, method: IntegrationMethod, mappings: Array<IntegrationMapping>, checks: Array<CheckOutcome>, integrator_run_id: string, verified_at: string, };
+
+export type IntegrationRecord = { operation_id: string, run_id: string, expected_result_message_id: string, expected_task_revision: string, integration: Integration, };
+
+export type IntegrationRecordResult = { operation_id: string, run_id: string, integration: Integration, checks: Array<CheckOutcome>, duplicate: boolean, };
+
+export type ResourceSourceIdentity = { checkout_key: string, source_commit: string, source_tree: string, input_configuration: string, toolchain_fingerprint: string, };
+
+export type ResourceRequest = { operation_id: string, resource_key: string, source_identity: ResourceSourceIdentity, holder: AttachmentReference, };
+
+export type ResourceRequestState = "queued" | "held" | "released" | "blocked";
+
+export type ResourceRequestRecord = { request_id: string, sequence: number, resource_key: string, source_identity: ResourceSourceIdentity, holder: AttachmentReference, requester_child_id: string | null, state: ResourceRequestState, build_processes: Array<NativeShellIdentity>, machine_id: string, blocked_reason: string | null, updated_at: string, };
+
+export type ResourceRelease = { request_id: string, expected_holder: AttachmentReference, };
+
+export type ResourceBuildRegistration = { request_id: string, expected_holder: AttachmentReference, process: NativeProcessIdentity, };
+
+export type OwnedResourceKind = "worker_terminal" | "worktree" | "branch" | "space" | "scratch" | "fixture_set";
+
+export type ResourceOwnership = "owned" | "borrowed" | "unknown";
+
+export type CleanupAuthority = "owned_when_safe" | "authority_unproven";
+
+export type OwnedGitIdentity = { creation_operation_id: string, machine_id: string, repository_key: string, repository_root: string, repository_device: string, repository_inode: string, common_dir: string, common_device: string, common_inode: string, checkout_path: string, checkout_device: string, checkout_inode: string, checkout_key: string, branch_ref: string | null, creation_tip: string, };
+
+export type OwnedSpaceIdentity = { creation_operation_id: string, endpoint_identity: string, session_id: string, workspace_id: string, checkout_path: string, };
+
+export type OwnedFilesystemIdentity = { creation_operation_id: string, machine_id: string, root: string, device: string, inode: string, manifest_path: string, manifest_device: string, manifest_inode: string, };
+
+export type FixtureAdapterId = "ui_polish_runtime";
+
+export type OwnedFixtureIdentity = { adapter: FixtureAdapterId, creation_operation_id: string, filesystem: OwnedFilesystemIdentity, processes: Array<NativeProcessIdentity>, };
+
+export type OwnedResourceIdentity = { "kind": "worker_terminal", identity: RetirementIdentity, } | { "kind": "worktree", identity: OwnedGitIdentity, } | { "kind": "branch", identity: OwnedGitIdentity, } | { "kind": "space", identity: OwnedSpaceIdentity, } | { "kind": "scratch", identity: OwnedFilesystemIdentity, } | { "kind": "fixture_set", identity: OwnedFixtureIdentity, };
+
+export type CleanupState = "pending" | "running" | "waiting" | "waiting_integration" | "reconciling" | "removed" | "kept" | "stalled" | "unknown";
+
+export type CleanupReasonClass = "transient" | "reconcilable" | "user_work" | "authority";
+
+export type CleanupReason = { class: CleanupReasonClass, code: string, message: string, };
+
+export type CleanupEffectState = "intent" | "applied" | "absent" | "refused" | "unknown";
+
+export type CleanupEffectReceipt = { effect_id: string, kind: OwnedResourceKind, identity_digest: string, state: CleanupEffectState, evidence: string | null, updated_at: string, };
+
+export type CleanupItem = { operation_id: string | null, state: CleanupState, reason: CleanupReason | null, effects: Array<CleanupEffectReceipt>, updated_at: string, };
+
+export type OwnedResourceRecord = { resource_id: string, root_id: string, run_id: string, kind: OwnedResourceKind, ownership: ResourceOwnership, creation_operation_id: string | null, identity: OwnedResourceIdentity, authority: CleanupAuthority, consumers: Array<AttachmentReference>, integration_result_id: string | null, cleanup: CleanupItem, };
+
+export type ResourceRegister = { operation_id: string, run_id: string, resource: OwnedResourceIdentity, };
+
+export type CleanupFinish = { operation_id: string, root_id: string, run_id: string | null, };
+
+export type CleanupFinishResult = { operation_id: string, items: Array<OwnedResourceRecord>, removed_count: number, waiting_count: number, kept_count: number, unknown_count: number, duplicate: boolean, };
+
+export type CleanupResourceSummary = { resource_id: string, kind: OwnedResourceKind, ownership: ResourceOwnership, cleanup: CleanupItem, };
+
+export type RunCleanupSummary = { run_id: string, items: Array<CleanupResourceSummary>, removed_count: number, waiting_count: number, kept_count: number, unknown_count: number, };
+
+export type RestorationSummary = { reattached: number, total_attachments: number, cleanup_pending: number, };
+
 export type NativeShellIdentity = { process: NativeProcessIdentity, executable_device: string, executable_inode: string, argv_digest: string, };
 
 export type RetirementTrigger = "accept" | "accept_recovery" | "operator_conflict_resolution";
 
-export type RetirementIdentity = { run_attempt: number, launch_attempt: number, launch_tag: string, endpoint_identity: string, session_id: string, workspace_id: string, tab_id: string, pane_id: string, terminal_id: string, herdr_boot_id: string | null, omp_session_id: string, process: NativeProcessIdentity, shell: NativeShellIdentity, };
+export type RetirementIdentity = { attachment_id: string | null, attachment_epoch: number | null, launch_mode: AttachmentLaunchMode | null, run_attempt: number, launch_attempt: number, launch_tag: string, endpoint_identity: string, session_id: string, workspace_id: string, tab_id: string, pane_id: string, terminal_id: string, herdr_boot_id: string | null, omp_session_id: string, process: NativeProcessIdentity, shell: NativeShellIdentity, };
 
-export type RunRetirement = { retirement_id: string, trigger: RetirementTrigger, result_message_id: string, task_revision: string, identity: RetirementIdentity | null, state: RetirementState, created_at: string, updated_at: string, };
+export type RunRetirement = { retirement_id: string, trigger: RetirementTrigger, result_message_id: string, task_revision: string, identity: RetirementIdentity | null,
+/**
+ * Independently confirmed native writer-admission seal after consumer
+ * drain. A shutdown request or observed PID absence alone is not proof.
+ */
+quiescent_stop_at: string | null, state: RetirementState, created_at: string, updated_at: string, };
 
 export type RetirementState = { "state": "waiting", blockers: Array<RetirementBlocker>, } | { "state": "native_stop_offered", offered_at: string, } | { "state": "native_stop_deferred", offered_at: string, reason: NativeDeferReason, at: string, } | { "state": "native_stop_requested", at: string, } | { "state": "native_stopped", at: string, evidence: NativeStopEvidence, } | { "state": "close_intent", at: string, } | { "state": "retired", at: string, terminal: TerminalOutcome, } | { "state": "retained", at: string, reason: RetainReason, native_stopped: boolean, } | { "state": "unknown", at: string, phase: RetirementPhase, detail: string, };
 
@@ -1022,7 +1157,11 @@ export type NativeRefuseReason = "user_activity" | "native_refused";
 
 export type NativeStopReceipt = { "outcome": "shutdown_requested" } | { "outcome": "deferred", reason: NativeDeferReason, } | { "outcome": "refused", reason: NativeRefuseReason, text: string, };
 
-export type Run = { session_id: string, prepare_brief: string, run_id: string, kind: RunKind, label: string, root_id: string, parent_run_id: string | null, task_id: string | null, attempt: number, task_revision_at_propose: string | null, stage: RunStage, close_reason: CloseReason | null, dispatch: DispatchState | null, target: DispatchTarget | null, setup: SetupSummary | null, prepare_plan: PlanRecord | null, init_receipt: Report | null, work_plan: PlanRecord | null, grants: Array<Grant>, last_report: Report | null, result: Report | null, annotations: Array<Annotation>, location: RunLocation | null, bound_omp_session: string | null, bound_omp_process: NativeProcessIdentity | null, launch_shell_identity: NativeShellIdentity | null, retirement: RunRetirement | null, supersedes_run_id: string | null, created_at: string, updated_at: string, };
+export type Run = { session_id: string, brief: string, run_id: string, kind: RunKind, label: string, root_id: string, parent_run_id: string | null, task_id: string | null, attempt: number, task_revision_at_start: string | null, stage: RunStage, close_reason: CloseReason | null, dispatch: DispatchState | null, target: DispatchTarget | null, setup: SetupSummary | null,
+/**
+ * Standing authority covers only resources proven owned by creation receipts.
+ */
+cleanup_policy: WorkerCleanupPolicy | null, last_report: Report | null, result: Report | null, source_output: SourceOutput | null, integration: Integration, annotations: Array<Annotation>, project: ProjectIdentity | null, checkout: CheckoutIdentity | null, attachment: ExecutionAttachment | null, checkout_claim_id: string | null, resume: ResumeRecord | null, retirement: RunRetirement | null, created_at: string, updated_at: string, };
 
 export type DispatchState = { launch_tag: string | null, endpoint_identity: string | null, recovery: WorkspaceRecoveryAction | null, agent_started: boolean, step: DispatchStep, launch_attempt: number, error: ErrorResponse | null, updated_at: string, };
 
@@ -1030,13 +1169,13 @@ export type Annotation = { by: ActorRef, text: string, at: string, };
 
 export type ActorRef = { "type": "operator" } | { "type": "run", run_id: string, } | { "type": "dispatcher" };
 
-export type ReportKind = "progress" | "ready" | "result" | "needs_input";
+export type ReportKind = "progress" | "initialized" | "result" | "needs_input";
 
 export type ReportOutcome = "succeeded" | "failed";
 
-export type Report = { message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, at: string, };
+export type Report = { message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, source_output: SourceOutput | null, at: string, };
 
-export type MessageKind = "prepare_brief" | "work_brief" | "supervisor_brief" | "instruction" | "answer" | "cancel_request" | "subagent_control" | "report" | "observation";
+export type MessageKind = "work_brief" | "supervisor_brief" | "instruction" | "answer" | "cancel_request" | "subagent_control" | "report" | "observation";
 
 export type DeliveryStage = "stored" | "woken" | "read" | "acked";
 
@@ -1060,7 +1199,7 @@ export type AgentKind = "main" | "subagent";
 
 export type IntentState = "pending" | "conflict";
 
-export type TaskIntent = { intent_id: string, root_id: string, task_id: string, run_id: string, expected_task_revision: string, state: IntentState, origin: GrantOrigin | null, supervisor_run_id: string | null, omp_session_id: string | null, result_message_id: string | null, };
+export type TaskIntent = { intent_id: string, root_id: string, task_id: string, run_id: string, expected_task_revision: string, state: IntentState, origin: DecisionOrigin | null, supervisor_run_id: string | null, omp_session_id: string | null, result_message_id: string | null, };
 
 export type TaskAssignmentIntent = { root_id: string, task_id: string, state: IntentState, };
 
@@ -1070,12 +1209,12 @@ export type RunObservation = { run_id: string, presence: Presence, actual_omp: b
 
 export type RuntimeObservation = { "status": "fresh", endpoint_identity: string, observed_at: string, runs: Array<RunObservation>, } | { "status": "unavailable", error: ErrorResponse, };
 
-export type AttentionKind = "awaits_prepare" | "awaits_execute" | "plan_changed" | "to_accept" | "needs_input" | "runtime_blocked" | "brief_unread" | "idle_without_report" | "exited_without_report" | "dispatch_unknown" | "intent_conflict" | "retirement_unconfirmed";
+export type AttentionKind = "to_accept" | "needs_input" | "runtime_blocked" | "brief_unread" | "idle_without_report" | "exited_without_report" | "dispatch_unknown" | "intent_conflict" | "retirement_unconfirmed";
 
 export type Attention = { kind: AttentionKind, run_id: string | null, task_id: string | null, message_seq: number | null, since: string, };
 
-export type OrchestrationAction = { "action": "task_create", root_id: string, task_id: string, title: string, description: string, depends_on: Array<string>, follow_up_of: string | null, expected_doc_revision: string | null, source_revision: string | null, } | { "action": "task_assign", root_id: string, task_id: string, title: string, description: string, } | { "action": "task_assignment_resolve", root_id: string, task_id: string, expected_task_revision: string | null, assign: boolean, } | { "action": "task_update", root_id: string, task_id: string, expected_task_revision: string, title: string | null, description: string | null, } | { "action": "task_dependencies_set", root_id: string, task_id: string, expected_task_revision: string, expected_doc_revision: string, depends_on: Array<string>, } | { "action": "task_step_add", root_id: string, task_id: string, expected_task_revision: string, step_id: string, parent_step_id: string | null, before_step_id: string | null, title: string, } | { "action": "task_step_rename", root_id: string, task_id: string, expected_task_revision: string, step_id: string, title: string, } | { "action": "task_step_set_checked", root_id: string, task_id: string, expected_task_revision: string, step_id: string, checked: boolean, scope: TaskStepScope, } | { "action": "task_step_move", root_id: string, task_id: string, expected_task_revision: string, step_id: string, parent_step_id: string | null, before_step_id: string | null, } | { "action": "task_step_remove", root_id: string, task_id: string, expected_task_revision: string, step_id: string, } | { "action": "tasks_assign_ids", root_id: string, expected_doc_revision: string, } | { "action": "supervisor_start", target: DispatchTarget | null, label: string | null, } | { "action": "run_bind_session", omp_session_id: string, } | { "action": "retirement_native_receipt", retirement_id: string, outcome: NativeStopReceipt, } | { "action": "run_adopt", label: string, } | { "action": "run_propose", task_id: string, parent_run_id: string | null, label: string | null, target: DispatchTarget, prepare_brief: string, supersedes_run_id: string | null, } | { "action": "grant_prepare", run_id: string, plan_revision: string, } | { "action": "grant_execute", run_id: string, plan_revision: string, note: string | null, } | { "action": "accept", run_id: string, expected_task_revision: string, } | { "action": "send_back", run_id: string, text: string, } | { "action": "cancel_run", run_id: string, } | { "action": "retry_launch", run_id: string, } | { "action": "reconcile_run", run_id: string, recovery: WorkspaceRecoveryAction | null, } | { "action": "intent_resolve", intent_id: string, apply: boolean, } | { "action": "report", message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, to_run_id: string | null, } | { "action": "message_send", message_id: string, to_run_id: string, kind: MessageKind, text: string, in_reply_to: string | null, } | { "action": "annotate", run_id: string, text: string, } | { "action": "inbox_pull", after_seq: number, limit: number, } | { "action": "inbox_woken", through_seq: number, omp_session_id: string, } | { "action": "inbox_ack", through_seq: number, } | { "action": "subagent_update", subagent_id: string, parent_subagent_id: string | null, role: string | null, label: string, status: SubagentStatus, summary: string | null, } | { "action": "subagent_control", run_id: string, subagent_id: string, op: SubagentOp, } | { "action": "subagent_control_done", seq: number, applied: boolean, error: string | null, };
+export type OrchestrationAction = { "action": "task_create", root_id: string, task_id: string, title: string, description: string, depends_on: Array<string>, follow_up_of: string | null, expected_doc_revision: string | null, source_revision: string | null, } | { "action": "task_assign", root_id: string, task_id: string, title: string, description: string, } | { "action": "task_assignment_resolve", root_id: string, task_id: string, expected_task_revision: string | null, assign: boolean, } | { "action": "task_update", root_id: string, task_id: string, expected_task_revision: string, title: string | null, description: string | null, } | { "action": "task_dependencies_set", root_id: string, task_id: string, expected_task_revision: string, expected_doc_revision: string, depends_on: Array<string>, } | { "action": "task_step_add", root_id: string, task_id: string, expected_task_revision: string, step_id: string, parent_step_id: string | null, before_step_id: string | null, title: string, } | { "action": "task_step_rename", root_id: string, task_id: string, expected_task_revision: string, step_id: string, title: string, } | { "action": "task_step_set_checked", root_id: string, task_id: string, expected_task_revision: string, step_id: string, checked: boolean, scope: TaskStepScope, } | { "action": "task_step_move", root_id: string, task_id: string, expected_task_revision: string, step_id: string, parent_step_id: string | null, before_step_id: string | null, } | { "action": "task_step_remove", root_id: string, task_id: string, expected_task_revision: string, step_id: string, } | { "action": "tasks_assign_ids", root_id: string, expected_doc_revision: string, } | { "action": "supervisor_start", operation_id: string, mode: SupervisorStartMode, target: DispatchTarget | null, label: string | null, selected_root_id: string | null, expected_project_key: string | null, } | { "action": "run_resume", run_id: string, operation_id: string, expected_attachment_epoch: number | null, mode: ResumeMode, decision_id: string | null, } | { "action": "run_attach", operation_id: string, attachment_id: string, expected_attachment_epoch: number, main_session_id: string, } | { "action": "job_child_register", operation_id: string, child_id: string, child_session_id: string, parent_child_id: string | null, } | { "action": "retirement_native_receipt", retirement_id: string, outcome: NativeStopReceipt, } | { "action": "run_adopt", label: string, } | { "action": "worker_start", operation_id: string, root_id: string, task_id: string, expected_task_revision: string, expected_doc_revision: string, target: DispatchTarget, label: string | null, brief: string, cleanup_policy: WorkerCleanupPolicy, } | { "action": "task_scope_update", operation_id: string, root_id: string, task_id: string, run_id: string, expected_task_revision: string, expected_doc_revision: string, title: string | null, description: string | null, } | { "action": "accept", run_id: string, expected_task_revision: string, } | { "action": "integration_record", record: IntegrationRecord, } | { "action": "resource_request", request: ResourceRequest, } | { "action": "resource_release", release: ResourceRelease, } | { "action": "resource_build_register", registration: ResourceBuildRegistration, } | { "action": "resource_register", request: ResourceRegister, } | { "action": "cleanup_finish", request: CleanupFinish, } | { "action": "send_back", run_id: string, text: string, } | { "action": "cancel_run", run_id: string, } | { "action": "reconcile_run", run_id: string, recovery: WorkspaceRecoveryAction | null, } | { "action": "intent_resolve", intent_id: string, apply: boolean, } | { "action": "report", message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, source_output: SourceOutput | null, to_run_id: string | null, original_task_revision?: string | null, original_claim_id?: string | null, } | { "action": "message_send", message_id: string, to_run_id: string, kind: MessageKind, text: string, in_reply_to: string | null, original_task_revision?: string | null, original_claim_id?: string | null, } | { "action": "annotate", run_id: string, text: string, } | { "action": "inbox_pull", after_seq: number, limit: number, } | { "action": "inbox_woken", through_seq: number, omp_session_id: string, } | { "action": "inbox_ack", through_seq: number, } | { "action": "subagent_update", subagent_id: string, parent_subagent_id: string | null, role: string | null, label: string, status: SubagentStatus, summary: string | null, } | { "action": "subagent_control", run_id: string, subagent_id: string, op: SubagentOp, } | { "action": "subagent_control_done", seq: number, applied: boolean, error: string | null, };
 
 export type SubagentOp = { "op": "cancel" } | { "op": "send", text: string, };
 
-export type OrchestrationActionResult = { "result": "task", task: Task, } | { "result": "task_assigned", task: Task, to_run_id: string, seq: number, duplicate: boolean, } | { "result": "task_ids", assigned: number, doc_revision: string, } | { "result": "run", run_id: string, attempt: number, } | { "result": "message", to_run_id: string, seq: number, duplicate: boolean, stale: boolean, } | { "result": "inbox", messages: Array<Message>, read_through_seq: number, } | { "result": "done" };
+export type OrchestrationActionResult = { "result": "worker_started", start: WorkerStartResult, } | { "result": "task_scope_updated", update: TaskScopeUpdateResult, } | { "result": "integration_recorded", receipt: IntegrationRecordResult, } | { "result": "resource", request: ResourceRequestRecord, duplicate: boolean, } | { "result": "resource_registered", resource: OwnedResourceRecord, duplicate: boolean, } | { "result": "cleanup_finished", cleanup: CleanupFinishResult, } | { "result": "supervisor_started", start: SupervisorStartResult, } | { "result": "run_resumed", resume: RunResumeResult, } | { "result": "run_attached", attach: RunAttachResult, } | { "result": "task", task: Task, } | { "result": "task_assigned", task: Task, to_run_id: string, seq: number, duplicate: boolean, } | { "result": "task_ids", assigned: number, doc_revision: string, } | { "result": "run", run_id: string, attempt: number, } | { "result": "message", to_run_id: string, seq: number, duplicate: boolean, stale: boolean, } | { "result": "inbox", messages: Array<Message>, read_through_seq: number, } | { "result": "done" };

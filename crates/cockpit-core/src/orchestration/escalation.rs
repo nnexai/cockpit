@@ -37,7 +37,11 @@ fn eligible(run: &Run) -> bool {
 }
 
 fn incarnation(run: &Run) -> String {
-    format!("{}:{}:{}", run.run_id, run.attempt, run.dispatch.as_ref().expect("dispatch").launch_attempt)
+    let attachment = run.attachment.as_ref();
+    format!("{}:{}:{}:{}:{}", run.run_id, run.attempt,
+        attachment.map_or("unattached", |attachment| attachment.attachment_id.as_str()),
+        attachment.map_or(0, |attachment| attachment.epoch),
+        run.dispatch.as_ref().expect("dispatch").launch_attempt)
 }
 
 fn dispatcher_message(message: &Message, root: &str) -> bool {
@@ -73,16 +77,18 @@ fn next_steps(run: &Run) -> (&'static str, &'static [&'static str], Option<&'sta
         }
         return ("unknown", &["show", "reconcile_accept_existing_worktree", "operator"], Some("Only checkout-proven recovery is supervisor-owned; environment retry needs the operator"));
     }
-    if run.bound_omp_session.is_some() && run.bound_omp_process.is_none() {
+    if run.attachment.as_ref().is_some_and(|attachment| {
+        attachment.main_session_id.is_some() && attachment.process.is_none()
+    }) {
         return ("unknown", &["show", "reconcile", "operator"], Some("Original OMP process identity was not recorded; only the operator can decide a restart"));
     }
     if dispatch.launch_tag.is_none() {
-        return ("none", &["show", "retry_launch"], None);
+        return ("none", &["show", "resume"], None);
     }
     if dispatch.step == DispatchStep::LaunchUnknown && !dispatch.agent_started {
-        return ("unknown", &["show", "retry_launch"], None);
+        return ("unknown", &["show", "resume"], None);
     }
-    ("unknown", &["show", "reconcile", "retry_launch"], None)
+    ("unknown", &["show", "reconcile", "resume"], None)
 }
 
 fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool) -> Result<bool, InspectionError> {
@@ -153,7 +159,14 @@ pub(super) fn failure(state: &mut OrchestrationState, index: usize) -> Result<bo
 /// A success notice is meaningful only after a failure of this exact incarnation.
 pub(super) fn recovered(state: &mut OrchestrationState, index: usize) -> Result<bool, InspectionError> {
     let run = &state.runs[index];
-    if !eligible(run) || run.dispatch.as_ref().is_none_or(|dispatch| dispatch.step != DispatchStep::Launched || !dispatch.agent_started) {
+    if !eligible(run) || run.dispatch.as_ref().is_none_or(|dispatch| {
+        dispatch.step != DispatchStep::Launched || !dispatch.agent_started
+            || run.attachment.as_ref().is_none_or(|attachment| {
+                matches!(attachment.state, AttachmentState::Reserved | AttachmentState::Revoked)
+                    || attachment.launch_attempt != dispatch.launch_attempt
+                    || attachment.main_session_id.as_deref().is_none_or(str::is_empty)
+            })
+    }) {
         return Ok(false);
     }
     let incarnation = incarnation(run);
@@ -193,14 +206,15 @@ fn freshly_proven(
     run: &Run,
     runtime: &super::herdr::RuntimeView,
     kernel_boot_id: &mut Option<Option<String>>,
+    machine_id: &mut Option<Option<String>>,
 ) -> bool {
-    let Some(location) = run.location.as_ref() else { return false };
+    let Some(location) = run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()) else { return false };
     if location.endpoint_identity != runtime.endpoint_identity
         || !super::optional_available(&location.boot_id, &runtime.boot_id)
     { return false; }
     runtime.panes.iter().any(|pane| {
         super::optional_available(&location.native_session_id, &pane.native_session_id)
-            && super::projection::actual_omp(run, pane, kernel_boot_id)
+            && super::projection::actual_omp(run, pane, kernel_boot_id, machine_id)
     })
 }
 
@@ -208,13 +222,14 @@ fn freshly_proven(
 pub(super) fn unresolved_launches(state: &mut OrchestrationState, session_id: &str, settle_ms: u64, now: time::OffsetDateTime, runtime: &super::herdr::RuntimeView) -> Result<bool, InspectionError> {
     let mut changed = false;
     let mut kernel_boot_id = None;
+    let mut machine_id = None;
     for index in 0..state.runs.len() {
         let run = &state.runs[index];
         if super::dispatch::automatic_recovery_available(run) { continue; }
         if run.session_id != session_id || !eligible(run) || run.dispatch.as_ref().is_none_or(|dispatch| {
             dispatch.step != DispatchStep::LaunchUnknown || dispatch.agent_started
                 || parse_time(&dispatch.updated_at).is_none_or(|entered| (now - entered).whole_milliseconds() < i128::from(settle_ms))
-        }) || freshly_proven(run, runtime, &mut kernel_boot_id) { continue; }
+        }) || freshly_proven(run, runtime, &mut kernel_boot_id, &mut machine_id) { continue; }
         changed |= append_failure(state, index, true)?;
     }
     Ok(changed)

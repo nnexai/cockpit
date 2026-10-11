@@ -6,6 +6,7 @@ import { ProvenancePair, reportAge } from "./SupervisorActions";
 import { TIER_LABEL, type AttentionTier } from "./attention";
 import { taskLanes } from "./boardNavigation";
 import { dependencySummary, uniqueTask } from "./dependencies";
+import { cleanupForRun, cleanupView, outcomeView } from "./retirementView";
 
 export type TaskCardView = {
   task: TaskView; worker: Run | undefined; observed: RunObservation | undefined; snapshot: OrchestrationSnapshot;
@@ -17,17 +18,24 @@ export function TaskCard({ view: v, rowId, tabIndex, onFocus, onSelect, onHover 
 }) {
   const laneLabel = taskLanes.find(lane => lane.lane === v.task.lane)?.label ?? v.task.lane;
   const status = v.status.toLowerCase() === laneLabel.toLowerCase() ? null : v.status;
+  const sourceOutcome = v.worker ? outcomeView(v.worker) : null;
+  const accepted = v.task.lane === "accepted" && v.task.task.checked && v.worker?.stage === "closed" && v.worker.close_reason === "accepted" && !!sourceOutcome;
+  const outcome = !v.task.task.checked || accepted ? sourceOutcome : null;
+  const cleanup = accepted && v.worker ? cleanupView(cleanupForRun(v.snapshot, v.worker.run_id)) : null;
   const dependencyLine = dependencySummary(v.task, v.snapshot.board?.tasks ?? []);
   const source = v.task.task.follow_up_of ? uniqueTask(v.snapshot.board?.tasks ?? [], v.task.task.follow_up_of) : null;
   const followUpLine = v.task.task.follow_up_of ? `Follow-up of ${source ? `“${source.task.title}”` : "a removed task"}` : null;
   const progress = v.task.task.step_progress;
   const stepLine = !progress ? "Steps unavailable" : progress.total ? `Steps ${progress.done}/${progress.total}` : v.task.task.steps.some(step => !step.step_id) ? "Checklist not tracked" : null;
-  const label = [v.task.task.title, v.status, v.worker?.label, v.subagentCount && `+${v.subagentCount} subagents`, dependencyLine, followUpLine, stepLine && progress?.total ? `${progress.done} of ${progress.total} steps complete` : stepLine, v.tier && TIER_LABEL[v.tier], v.dimReason && `dimmed by ${v.dimReason}`].filter(Boolean).join(", ");
+  const outcomeLabel = outcome ? `Outcome: ${accepted ? "Done" + (outcome.label === "Done" ? "" : `, ${outcome.label.toLowerCase()}`) : outcome.label + ", awaiting acceptance"}` : v.status;
+  const cleanupLabel = accepted ? `Cleanup: ${cleanup?.label ?? "not observed yet"}` : null;
+  const label = [v.task.task.title, outcomeLabel, cleanupLabel, v.worker?.label, v.subagentCount && `+${v.subagentCount} subagents`, dependencyLine, followUpLine, stepLine && progress?.total ? `${progress.done} of ${progress.total} steps complete` : stepLine, v.tier && TIER_LABEL[v.tier], v.dimReason && `dimmed by ${v.dimReason}`].filter(Boolean).join(", ");
   return <li className={`supervisor-task supervisor-card${v.selected ? " is-selected" : ""}${v.dimReason ? " is-dimmed" : ""}${v.linked ? " is-linked" : ""}`} onMouseEnter={() => onHover(true)} onMouseLeave={() => onHover(false)}>
     <button type="button" className="supervisor-task-toggle supervisor-card-toggle" data-row-id={rowId} tabIndex={tabIndex} aria-label={label} aria-expanded={v.selected} aria-controls="supervisor-detail" onFocus={onFocus} onClick={onSelect}>
       <span className="supervisor-card-heading"><span className="supervisor-task-title">{v.task.task.title}</span>{v.tier ? <span className={`supervisor-attention-badge is-${v.tier}`}><StateGlyph shape={v.tier === "decide" ? "blocked" : v.tier === "recover" ? "unknown" : "idle"} />{TIER_LABEL[v.tier]}</span> : null}</span>
       <div className="supervisor-card-meta">
-        {status ? <span className="supervisor-task-stage">{status}</span> : null}
+        {outcome ? <span className="supervisor-task-stage" aria-label={outcomeLabel}>Outcome: {outcome.label}</span> : status ? <span className="supervisor-task-stage">{status}</span> : null}
+        {cleanupLabel ? <span className="supervisor-task-stage" title={cleanupLabel} aria-label={cleanupLabel}>{cleanupLabel}</span> : null}
         {v.worker ? <span className="supervisor-worker-chip">{v.worker.label}</span> : null}
         {v.subagentCount ? <span className="supervisor-card-subagents">+{v.subagentCount} subagents</span> : null}
       {dependencyLine ? <span className={`supervisor-card-dependencies${v.task.dependencies.state === "invalid" ? " is-diagnosed" : ""}`} aria-hidden="true">{dependencyLine}</span> : null}

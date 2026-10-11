@@ -9,6 +9,7 @@
     "allow-cockpit-status",
     "allow-cockpit-quota-status",
     "allow-orchestration-snapshot",
+    "allow-orchestration-project-root-lookup",
     "allow-orchestration-mutate",
     "allow-orchestration-wait",
     "allow-cockpit-widget-subscribe",

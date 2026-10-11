@@ -34,7 +34,7 @@ function runLink(run: Run): ActivityLink {
   return run.kind === "worker" && run.task_id ? { kind: "task", taskId: run.task_id } : { kind: "run", runId: run.run_id };
 }
 
-/** Activity is the readable record; exact plans, sessions and receipts stay in Diagnostics. */
+/** Activity is the readable record; exact sessions and receipts stay in Diagnostics. */
 export function activityRows(snapshot: OrchestrationSnapshot, rootRuns: readonly Run[], tasks: readonly TaskView[]): ActivityRow[] {
   const scopedRuns = new Map(rootRuns.map(run => [run.run_id, run]));
   const assignedTasks = new Map(tasks.map(task => [`assign-${task.task.task_id}`, task]));
@@ -43,24 +43,17 @@ export function activityRows(snapshot: OrchestrationSnapshot, rootRuns: readonly
     ...snapshot.messages.filter(message => scopedRuns.has(message.to_run_id)).map(message => {
       const recipient = scopedRuns.get(message.to_run_id)!;
       const task = assignedTasks.get(message.message_id);
-      const systemBrief = ["supervisor_brief", "prepare_brief", "work_brief"].includes(message.kind);
+      const systemBrief = ["supervisor_brief", "work_brief"].includes(message.kind);
       const pointer = message.kind === "observation" || !!task;
-      const summary = message.report?.summary ?? (task ? `Task assigned: ${task.task.title}` : systemBrief ? `Guidance delivered to ${recipient.label}` : pointer ? `Lifecycle update for ${recipient.label}` : message.text);
+      const diagnosticReport = message.report?.kind === "initialized";
+      const summary = diagnosticReport ? `Initialization reported by ${recipient.label}` : message.report?.summary ?? (task ? `Task assigned: ${task.task.title}` : systemBrief ? `Guidance delivered to ${recipient.label}` : pointer ? `Lifecycle update for ${recipient.label}` : message.text);
       return row({
         id: `message:${message.message_id}`, actor: actorName(message.from, snapshot),
         what: `${message.kind.replaceAll("_", " ")} · ${summary}`, at: message.created_at, stale: message.stale,
         link: task ? { kind: "task", taskId: task.task.task_id } : runLink(recipient),
-        detail: systemBrief || pointer ? `${summary}. Exact delivery records are available in Diagnostics.` : message.report?.summary ?? message.text,
+        detail: systemBrief || pointer || diagnosticReport ? `${summary}. Exact delivery records are available in Diagnostics.` : message.report?.summary ?? message.text,
       });
     }),
-    ...rootRuns.flatMap(run => run.grants.map(grant => {
-      const actor = grant.origin === "supervisor" ? snapshot.runs.find(root => root.run_id === grant.supervisor_run_id)?.label ?? "Supervisor" : `You (${grant.origin})`;
-      return row({
-        id: grant.grant_id, actor, what: `${grant.scope === "prepare" ? "Preparation" : "Execution"} authorized · ${actor} · ${run.label}`,
-        at: grant.granted_at, stale: false, link: runLink(run),
-        detail: `An exact ${grant.scope === "prepare" ? "preparation" : "work"} plan was authorized for ${run.label}. Actor, actual OMP session and exact revision are retained in Diagnostics.`,
-      });
-    })),
     ...rootRuns.flatMap(run => run.annotations.map((note, index) => {
       const receiptNote = ["Acceptance requested for Result ", "Accepted Result at exact task revision ", "Recovered acceptance of Result "].some(prefix => note.text.startsWith(prefix));
       const summary = receiptNote ? `Result review note for ${run.label}` : note.text;
@@ -132,7 +125,7 @@ export function SupervisorDiagnostics({ snapshot, rootRuns, busy, connected, onI
       <tr><th scope="row">Unidentified items</th><td>{board?.unidentified_items ?? 0}{board?.unidentified_items ? <> task-file checklist items need identity markers. <button type="button" disabled={busy || !connected} aria-describedby={identifyReason ? "supervisor-identify-reason" : undefined} onClick={() => { if (!busy && connected) onIdentify(); }}>Identify task-file items</button>{identifyReason ? <p className="supervisor-disabled-reason" id="supervisor-identify-reason">{identifyReason}</p> : null}</> : null}</td></tr>
     </tbody></table>
     <div className="supervisor-diagnostics-table-scroll"><table className="supervisor-diagnostics-summary"><caption>Run summary</caption><thead><tr><th scope="col">Run</th><th scope="col">Dispatch step</th><th scope="col">Observation</th><th scope="col">Binding</th><th scope="col">Last delivery stage</th></tr></thead>
-      <tbody>{rootRuns.map(run => <tr key={run.run_id}><th scope="row">{run.label}</th><td>{run.dispatch?.step.replaceAll("_", " ") ?? "No dispatch record"}</td><td>{observation(run.run_id)}</td><td>Bound session {run.bound_omp_session ? "yes" : "no"}</td><td>{latestMessages.get(run.run_id)?.stage ?? "No delivery record"}{latestMessages.get(run.run_id)?.stale ? " · stale evidence" : ""}</td></tr>)}</tbody>
+      <tbody>{rootRuns.map(run => <tr key={run.run_id}><th scope="row">{run.label}</th><td>{run.dispatch?.step.replaceAll("_", " ") ?? "No dispatch record"}</td><td>{observation(run.run_id)}</td><td>Bound session {run.attachment?.main_session_id ? "yes" : "no"}</td><td>{latestMessages.get(run.run_id)?.stage ?? "No delivery record"}{latestMessages.get(run.run_id)?.stale ? " · stale evidence" : ""}</td></tr>)}</tbody>
     </table></div>
     <p className="supervisor-delivery-stages">Stored ≠ woken ≠ read ≠ acked.</p>
     <div className="supervisor-diagnostics-records">{rootRuns.map(run => <details key={run.run_id}><summary>{run.label} · exact records</summary><RunDiagnostics run={run} snapshot={snapshot} /></details>)}

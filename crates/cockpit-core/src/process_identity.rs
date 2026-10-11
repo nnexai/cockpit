@@ -134,6 +134,180 @@ pub fn kernel_boot_id() -> Option<String> {
     None
 }
 
+/// Application-domain hash of a stable local OS identifier. Never accept a
+/// caller environment value, endpoint name or Herdr boot ID as machine proof.
+#[cfg(target_os = "linux")]
+pub fn machine_id() -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open("/etc/machine-id").ok()?;
+    let mut bytes = [0u8; 65];
+    let mut size = 0;
+    while size < bytes.len() {
+        let count = file.read(&mut bytes[size..]).ok()?;
+        if count == 0 { break; }
+        size += count;
+    }
+    machine_digest(&bytes[..size])
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn machine_id() -> Option<String> { None }
+
+fn machine_digest(bytes: &[u8]) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if bytes.len() > 64 { return None; }
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    if text.len() != 32 || !text.bytes().all(|b| b.is_ascii_hexdigit())
+        || text.bytes().all(|b| b == b'0') {
+        return None;
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"cockpit:local-machine:v1\0");
+    let mut normalized = [0u8; 32];
+    for (target, source) in normalized.iter_mut().zip(text.bytes()) {
+        *target = source.to_ascii_lowercase();
+    }
+    digest.update(normalized);
+    Some(format!("{:x}", digest.finalize()))
+}
+
+/// Capture machine proof only alongside a freshly verified local incarnation.
+/// A historical PID must never acquire today's machine identity by being loaded.
+pub fn verified_machine_id(process: &cockpit_protocol::orchestration::NativeProcessIdentity) -> Option<String> {
+    let pid = i32::try_from(process.pid).ok()?;
+    let boot = kernel_boot_id()?;
+    if process.start_ticks == 0 || process.kernel_boot_id.as_deref() != Some(boot.as_str())
+        || !incarnation_running(pid, process.start_ticks).ok()? {
+        return None;
+    }
+    let machine = machine_id()?;
+    (kernel_boot_id().as_deref() == Some(boot.as_str())
+        && incarnation_running(pid, process.start_ticks).ok()?).then_some(machine)
+}
+
+/// Exit is only meaningful on the recorded local machine. A different kernel
+/// boot proves old incarnations absent only after stable machine equality.
+pub fn same_machine_process_running(
+    process: &cockpit_protocol::orchestration::NativeProcessIdentity,
+    recorded_machine: Option<&str>,
+) -> io::Result<bool> {
+    let unavailable = || io::Error::other("local machine or kernel boot evidence unavailable");
+    if process.pid == 0 || process.start_ticks == 0 { return Err(unavailable()); }
+    let machine = machine_id().ok_or_else(unavailable)?;
+    if recorded_machine != Some(machine.as_str()) { return Err(unavailable()); }
+    let old_boot = process.kernel_boot_id.as_deref().filter(|s| {
+        s.len() == 36 && s.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() }
+        })
+    }).ok_or_else(unavailable)?;
+    let boot = kernel_boot_id().ok_or_else(unavailable)?;
+    if old_boot != boot { return Ok(false); }
+    incarnation_running(i32::try_from(process.pid).map_err(|_| unavailable())?, process.start_ticks)
+}
+
+/// Capture a live build only within the managed job's exact process scope and
+/// source checkout. Action JSON can nominate a PID, but cannot supply this proof.
+pub(crate) fn managed_build_identity(
+    process: &cockpit_protocol::orchestration::NativeProcessIdentity,
+    scope: &cockpit_protocol::orchestration::NativeProcessIdentity,
+    source: &std::path::Path,
+    machine: &str,
+) -> io::Result<NativeShellIdentity> {
+    if same_machine_process_running(process, Some(machine))? != true
+        || same_machine_process_running(scope, Some(machine))? != true {
+        return Err(io::Error::other("build or managed job incarnation is absent"));
+    }
+    let pid = i32::try_from(process.pid).map_err(io::Error::other)?;
+    let scope_pid = i32::try_from(scope.pid).map_err(io::Error::other)?;
+    let executable = executable_identity(pid, process.start_ticks)?;
+    if executable.process != *process || !managed_descendant(pid, scope_pid, scope.start_ticks)? {
+        return Err(io::Error::other("build is not a descendant of the managed job"));
+    }
+    verify_source_cwd(pid, source)?;
+    let fresh = executable_identity(pid, process.start_ticks)?;
+    if fresh != executable || !managed_descendant(pid, scope_pid, scope.start_ticks)?
+        || !same_machine_process_running(scope, Some(machine))? {
+        return Err(io::Error::other("build evidence changed during observation"));
+    }
+    verify_source_cwd(pid, source)?;
+    Ok(executable)
+}
+
+fn managed_descendant(pid: i32, scope: i32, scope_start: u64) -> io::Result<bool> {
+    managed_descendant_with(pid, scope, scope_start, read_process)
+}
+
+fn managed_descendant_with(
+    mut pid: i32, scope: i32, scope_start: u64,
+    mut read: impl FnMut(i32) -> io::Result<ProcessStatus>,
+) -> io::Result<bool> {
+    if pid == scope { return Ok(false); }
+    let mut chain = [(0, 0, 0); 128];
+    for depth in 0..chain.len() {
+        let current = read(pid)?;
+        if current.exited || current.parent <= 0 || current.parent == pid {
+            return Ok(false);
+        }
+        chain[depth] = (pid, current.start, current.parent);
+        if current.parent == scope {
+            let parent = read(scope)?;
+            if parent.start != scope_start || parent.exited { return Ok(false); }
+            for &(pid, start, parent) in &chain[..=depth] {
+                let fresh = read(pid)?;
+                if fresh.start != start || fresh.exited || fresh.parent != parent { return Ok(false); }
+            }
+            let fresh = read(scope)?;
+            return Ok(fresh.start == scope_start && !fresh.exited);
+        }
+        pid = current.parent;
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "linux")]
+fn verify_source_cwd(pid: i32, source: &std::path::Path) -> io::Result<()> {
+    let source = std::fs::canonicalize(source)?;
+    let cwd = std::fs::canonicalize(format!("/proc/{pid}/cwd"))?;
+    if !cwd.starts_with(source) {
+        return Err(io::Error::other("build cwd is outside the source checkout"));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn verify_source_cwd(_pid: i32, _source: &std::path::Path) -> io::Result<()> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "build cwd evidence unavailable on this OS"))
+}
+
+#[cfg(test)]
+mod machine_tests {
+    use super::*;
+    #[test]
+    fn machine_hash_is_domain_separated_and_rejects_missing_identity() {
+        assert!(machine_digest(b"").is_none());
+        assert!(machine_digest(b"00000000000000000000000000000000\n").is_none());
+        assert!(machine_digest(b"not-a-machine").is_none());
+        let lower = machine_digest(b"abcdef0123456789abcdef0123456789\n").unwrap();
+        assert_eq!(Some(lower.clone()), machine_digest(b"ABCDEF0123456789ABCDEF0123456789"));
+        assert_ne!(lower, "abcdef0123456789abcdef0123456789");
+    }
+    #[test]
+    fn missing_foreign_or_malformed_identity_never_proves_exit() {
+        let mut process = cockpit_protocol::orchestration::NativeProcessIdentity {
+            pid: std::process::id(), start_ticks: 1,
+            kernel_boot_id: Some("00000000-0000-0000-0000-000000000001".into()),
+        };
+        assert!(same_machine_process_running(&process, None).is_err());
+        assert!(same_machine_process_running(&process, Some("different-machine")).is_err());
+        let machine = machine_id();
+        process.start_ticks = 0;
+        assert!(same_machine_process_running(&process, machine.as_deref()).is_err());
+        process.start_ticks = 1;
+        process.kernel_boot_id = Some("unknown".into());
+        assert!(same_machine_process_running(&process, machine.as_deref()).is_err());
+    }
+}
+
 /// Prove that the nominated incarnation is a strict ancestor of this process.
 /// Bound the walk and reject replacement of the nominated PID during observation.
 pub fn is_ancestor_of_self(pid: i32, max_depth: usize) -> bool {
@@ -284,6 +458,50 @@ fn read_process(pid: i32) -> io::Result<ProcessStatus> {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    fn fake_status(parent: i32, start: u64) -> ProcessStatus {
+        ProcessStatus { parent, start, exited: false,
+            #[cfg(target_os = "linux")]
+            process_group: 0,
+            #[cfg(target_os = "linux")]
+            tty: 0,
+            #[cfg(target_os = "linux")]
+            foreground_group: 0,
+            #[cfg(target_os = "linux")]
+            stopped: false,
+        }
+    }
+
+    #[test]
+    fn managed_build_scope_rejects_unrelated_and_reused_processes() {
+        let reader = |pid| Ok(match pid {
+            41 => fake_status(40, 9),
+            40 => fake_status(1, 8),
+            _ => fake_status(0, 1),
+        });
+        assert!(managed_descendant_with(41, 40, 8, reader).unwrap());
+        assert!(!managed_descendant_with(41, 40, 7, reader).unwrap());
+        assert!(!managed_descendant_with(41, 50, 8, reader).unwrap());
+        assert!(!managed_descendant_with(40, 40, 8, reader).unwrap());
+        assert!(managed_descendant_with(41, 40, 8, |_| Err(io::Error::other("unknown ancestry"))).is_err());
+    }
+
+    #[test]
+    fn managed_build_scope_rechecks_every_ancestor_before_admission() {
+        let mut intermediate_reads = 0;
+        let valid = managed_descendant_with(42, 40, 8, |pid| {
+            Ok(match pid {
+                42 => fake_status(41, 10),
+                41 => {
+                    intermediate_reads += 1;
+                    fake_status(if intermediate_reads == 1 { 40 } else { 99 }, 9)
+                }
+                40 => fake_status(1, 8),
+                _ => fake_status(0, 1),
+            })
+        }).unwrap();
+        assert!(!valid, "reparenting an intermediate ancestor must invalidate job scope");
+    }
 
     #[test]
     fn current_incarnation_has_stable_identity() {

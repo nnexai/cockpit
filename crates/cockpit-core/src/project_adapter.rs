@@ -5,6 +5,11 @@ use cockpit_protocol::projects::WorkspaceSetupMode;
 
 use crate::{HerdrAdapter, InspectionError};
 
+mod owned_git;
+pub use owned_git::{
+    capture_owned_git_identity, inspect_owned_git, remove_owned_branch, remove_owned_worktree,
+};
+
 #[derive(Debug, Clone)]
 pub struct ProjectWorktreeEntry {
     pub checkout_path: String,
