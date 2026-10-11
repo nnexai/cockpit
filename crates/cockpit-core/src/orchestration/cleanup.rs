@@ -259,12 +259,29 @@ pub(crate) fn summaries(state: &OrchestrationState, session_id: &str) -> Vec<Run
 }
 
 pub(crate) fn restoration_summary(state: &OrchestrationState, session_id: &str) -> RestorationSummary {
-    let runs = state.runs.iter().filter(|r| r.session_id == session_id);
-    let total_attachments = runs.clone().filter(|r| r.attachment.is_some()).count() as u32;
-    let reattached = runs.filter(|r| r.resume.as_ref().is_some_and(|resume| resume.phase == ResumePhase::Reattached)).count() as u32;
+    // Progress covers recovery operations, not every retained attachment.
+    // Blocked recovery remains actionable on its run rather than spinning here.
+    let (mut reattached, mut total_attachments) = (0, 0);
+    for run in state.runs.iter().filter(|run| run.session_id == session_id
+        && !matches!(run.stage, RunStage::Closed | RunStage::Reported)
+        && run.result.is_none()) {
+        match run.resume.as_ref().map(|resume| resume.phase) {
+            Some(ResumePhase::Reattached | ResumePhase::Connected) => {
+                reattached += 1;
+                total_attachments += 1;
+            }
+            Some(ResumePhase::Reconciling | ResumePhase::Launching) => total_attachments += 1,
+            Some(ResumePhase::Blocked) | None => {}
+        }
+    }
+    // Registration alone is not cleanup in progress. Effects require a closed
+    // run; waiting or uncertain resources retain their per-run diagnostics.
     let cleanup_pending = state.owned_resources.iter().filter(|resource| {
-        !matches!(resource.cleanup.state, CleanupState::Removed | CleanupState::Kept)
-            && state.runs.iter().any(|r| r.session_id == session_id && r.run_id == resource.run_id)
+        resource.ownership == ResourceOwnership::Owned
+            && resource.authority == CleanupAuthority::OwnedWhenSafe
+            && matches!(resource.cleanup.state, CleanupState::Pending | CleanupState::Running | CleanupState::Reconciling)
+            && state.runs.iter().any(|run| run.session_id == session_id
+                && run.run_id == resource.run_id && run.stage == RunStage::Closed)
     }).count() as u32;
     RestorationSummary { reattached, total_attachments, cleanup_pending }
 }

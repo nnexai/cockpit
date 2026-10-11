@@ -32,7 +32,7 @@ pub use resource_queue::ResourceSourceFacts;
 pub use cleanup::ResourceRegistrationFacts;
 pub use messages::latest_progress_sequences;
 pub use credentials::{JobAuth, JobRole, SecretBytes, read_job_auth};
-pub use claims::WriterExitProof;
+pub use claims::{RootMainRecoveryProof, WriterExitProof};
 use mutate::{Applied, MutationCtx};
 use crate::{
     InspectionError,
@@ -120,7 +120,9 @@ pub struct ResolvedMutationInput {
     pub project: Option<ProjectIdentity>,
     pub checkout: Option<CheckoutIdentity>,
     pub writer_exit_proof: Option<WriterExitProof>,
+    pub root_main_recovery: Option<RootMainRecoveryProof>,
     pub attachment_observation: Option<ExecutionAttachment>,
+    pub root_attachment_expected: Option<ExecutionAttachment>,
     pub observation_cause: Option<ResumeCause>,
     pub output_facts: Option<OutputFacts>,
     pub resource_source: Option<ResourceSourceFacts>,

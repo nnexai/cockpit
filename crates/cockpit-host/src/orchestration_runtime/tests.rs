@@ -1,6 +1,6 @@
 use super::*;
 use cockpit_core::orchestration::herdr::{
-    AgentTabRequest, DirectAgentTabRequest, RuntimePane, RuntimeView,
+    AgentTabRequest, DirectAgentTabRequest, PaneProcessInfo, RuntimePane, RuntimeView,
 };
 use cockpit_core::{
     HerdrAdapter, ProjectHerdrAdapter, SessionSubscription, TerminalSession,
@@ -132,10 +132,13 @@ impl Fixture {
             Arc::new(InspectionProjectAdapter(inventory))).unwrap()
     }
     fn publish(&self, runs: &[Run]) {
+        self.publish_with_claims(runs, &[]);
+    }
+    fn publish_with_claims(&self, runs: &[Run], claims: &[serde_json::Value]) {
         let state = serde_json::json!({
             "schema":2,"revision":7,"runs":runs,"messages":[],"subagents":[],
             "task_intents":[],"scope_intents":[],"assignment_intents":[],"credentials":[],
-            "checkout_claims":[],"operations":[]
+            "checkout_claims":claims,"operations":[]
         });
         let mut file = OpenOptions::new().create(true).truncate(true).write(true)
             .mode(0o600).open(self.service.base().join("state.json")).unwrap();
@@ -170,6 +173,153 @@ fn bind_process(run: &mut Run, pid: u32) {
 }
 
 #[cfg(target_os = "linux")]
+struct ForegroundPty {
+    parent: std::process::Child,
+    shell: NativeShellIdentity,
+}
+#[cfg(target_os = "linux")]
+impl ForegroundPty {
+    fn new() -> Self {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        // Only this disposable child gets a controlling PTY. The handshake
+        // happens after exec, so both OS foreground and executable evidence
+        // describe the shell that remains blocked in its own read builtin.
+        let mut parent = Command::new("python3").arg("-c").arg(
+            "import os, pty, sys\n\
+             pid, fd = pty.fork()\n\
+             if pid == 0:\n\
+             \x20\x20\x20\x20os.execv('/bin/sh', ['sh', '-c', 'printf \"ready\\\\n\"; read -r line'])\n\
+             ready = b''\n\
+             while b'ready' not in ready:\n\
+             \x20\x20\x20\x20ready += os.read(fd, 1024)\n\
+             print(pid, flush=True)\n\
+             sys.stdin.readline()\n\
+             os.write(fd, b'stop\\n')\n\
+             os.waitpid(pid, 0)\n\
+             os.close(fd)\n"
+        ).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(parent.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        let pid: u32 = line.trim().parse().unwrap();
+        let start = cockpit_core::process_identity::start_identity(pid as i32).unwrap();
+        let shell = cockpit_core::process_identity::executable_identity(pid as i32, start).unwrap();
+        Self { parent, shell }
+    }
+    fn herdr(&self, restored: bool) -> OwnedPaneHerdr {
+        let mut runtime = observed();
+        runtime.panes[0].native_session_id = Some("native".into());
+        if restored {
+            runtime.endpoint_identity = "restored-endpoint".into();
+            runtime.panes[0].tab_id = "restored-tab".into();
+            runtime.panes[0].pane_id = "restored-pane".into();
+        }
+        let pid = self.shell.process.pid;
+        let info = PaneProcessInfo {
+            pane_id: runtime.panes[0].pane_id.clone(),
+            shell_pid: Some(pid), foreground_pgid: Some(pid),
+            processes: vec![(pid, "shell".into())], shell_identity: Some(self.shell.clone()),
+        };
+        OwnedPaneHerdr { runtime, info }
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for ForegroundPty {
+    fn drop(&mut self) {
+        self.parent.stdin.take().unwrap().write_all(b"stop\n").unwrap();
+        assert!(self.parent.wait().unwrap().success());
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct OwnedPaneHerdr {
+    runtime: RuntimeView,
+    info: PaneProcessInfo,
+}
+#[cfg(target_os = "linux")]
+#[async_trait::async_trait]
+impl OrchestrationHerdr for OwnedPaneHerdr {
+    async fn runtime(&self, session: &str) -> Result<RuntimeView, InspectionError> {
+        assert_eq!(session, "fixture");
+        Ok(self.runtime.clone())
+    }
+    async fn pane_process_info(&self, session: &str, endpoint: &str, pane: &str) -> Result<PaneProcessInfo, InspectionError> {
+        assert_eq!(session, "fixture");
+        assert_eq!(endpoint, self.runtime.endpoint_identity);
+        assert_eq!(pane, self.info.pane_id);
+        Ok(self.info.clone())
+    }
+    async fn create_agent_tab(&self, _: &str, _: &AgentTabRequest) -> Result<RunLocation, InspectionError> {
+        panic!("root observation must not launch a terminal")
+    }
+    async fn create_direct_agent_tab(&self, _: &str, _: &DirectAgentTabRequest) -> Result<RunLocation, InspectionError> {
+        panic!("root observation must not launch a process")
+    }
+    async fn close_pane(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> {
+        panic!("root recovery proof never grants cleanup authority")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn root_with_process(pid: u32) -> Run {
+    let mut run = reviewed();
+    bind_process(&mut run, pid);
+    run.dispatch.as_mut().unwrap().step = DispatchStep::Launched;
+    run.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id = Some("native".into());
+    run
+}
+
+#[cfg(target_os = "linux")]
+fn dead_root() -> Run {
+    let process = ForegroundPty::new();
+    let run = root_with_process(process.shell.process.pid);
+    drop(process);
+    run
+}
+
+fn resume_request(run: &Run) -> OrchestrationMutationRequest {
+    OrchestrationMutationRequest {
+        session_id: run.session_id.clone(), expected_revision: None,
+        action: OrchestrationAction::RunResume {
+            operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
+            expected_attachment_epoch: run.attachment.as_ref().map(|a| a.epoch),
+            mode: ResumeMode::ReattachOrRestart, decision_id: None,
+        },
+    }
+}
+
+fn resume_result(response: OrchestrationMutationResponse) -> RunResumeResult {
+    let OrchestrationActionResult::RunResumed { resume } = response.result
+        else { panic!("expected root Resume result"); };
+    resume
+}
+
+#[cfg(target_os = "linux")]
+fn reserve_root_once(fixture: &Fixture, run: &Run, resolved: &ResolvedMutationInput) {
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let request = resume_request(run);
+    let first = resume_result(fixture.service.mutate_resolved(&actor, request.clone(), resolved).unwrap());
+    assert!(!first.duplicate);
+    assert_eq!(first.resume.phase, ResumePhase::Launching);
+    assert_eq!(first.resume.previous_attachment_epoch, Some(1));
+    assert_eq!(first.resume.replacement_attachment_epoch, Some(2));
+    let replacement = fixture.service.run_for_review("fixture", &run.run_id).unwrap();
+    let attachment = replacement.attachment.as_ref().unwrap();
+    assert_eq!(attachment.epoch, 2);
+    assert_eq!(attachment.state, AttachmentState::Reserved);
+    assert_ne!(attachment.attachment_id, run.attachment.as_ref().unwrap().attachment_id);
+    assert!(attachment.process.is_none());
+    assert!(attachment.shell.is_none());
+    assert!(attachment.location.is_none());
+    assert_eq!(replacement.dispatch.as_ref().unwrap().launch_attempt, 1);
+    let before_retry = fs::read(fixture.service.base().join("state.json")).unwrap();
+    let retry = resume_result(fixture.service.mutate_resolved(&actor, request, resolved).unwrap());
+    assert!(retry.duplicate);
+    assert_eq!(retry.resume.replacement_attachment_epoch, Some(2));
+    assert_eq!(before_retry, fs::read(fixture.service.base().join("state.json")).unwrap());
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resume_reattaches_live_process_before_inspecting_missing_checkout_or_endpoint() {
     let fixture = Fixture::new();
@@ -195,44 +345,27 @@ async fn resume_reattaches_live_process_before_inspecting_missing_checkout_or_en
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn resume_reboot_proof_is_same_machine_only_and_unknown_roots_stay_protected() {
+async fn resume_rebooted_root_uses_main_proof_and_unknown_roots_stay_protected() {
     let fixture = Fixture::new();
-    let mut run = reviewed();
+    let mut run = root_with_process(std::process::id());
     run.kind = RunKind::Adopted;
-    bind_process(&mut run, std::process::id());
-    let attachment = run.attachment.as_mut().unwrap();
-    let boot = attachment.process.as_mut().unwrap().kernel_boot_id.as_mut().unwrap();
+    let boot = run.attachment.as_mut().unwrap().process.as_mut().unwrap().kernel_boot_id.as_mut().unwrap();
     let replacement = if boot.starts_with('0') { "1" } else { "0" };
     boot.replace_range(0..1, replacement);
     fixture.publish(&[run.clone()]);
-    let resolved = resolve_resume_input(&fixture.service, &empty_observation(), &run).await.unwrap();
-    assert!(resolved.writer_exit_proof.is_some());
-    assert!(resolved.attachment_observation.is_none());
-    let mut drifted = empty_observation();
-    drifted.0.as_mut().unwrap().endpoint_identity = "new-endpoint".into();
-    assert!(resolve_resume_input(&fixture.service, &drifted, &run).await.unwrap().writer_exit_proof.is_some());
+    for drift in [false, true] {
+        let mut herdr = empty_observation();
+        if drift { herdr.0.as_mut().unwrap().endpoint_identity = "new-endpoint".into(); }
+        let resolved = resolve_resume_input(&fixture.service, &herdr, &run).await.unwrap();
+        assert!(resolved.writer_exit_proof.is_none());
+        assert!(resolved.root_main_recovery.is_some());
+        assert!(resolved.attachment_observation.is_none());
+        assert!(resolved.observation_cause.is_none());
+    }
     let offline = resolve_resume_input(&fixture.service, &ObservedHerdr(None), &run).await.unwrap();
     assert!(offline.writer_exit_proof.is_none());
+    assert!(offline.root_main_recovery.is_none());
     assert_eq!(offline.observation_cause.unwrap().code, "resume_observation_unavailable");
-    for occupant in 0..3 {
-        let mut restored = observed();
-        match occupant {
-            0 => restored.panes[0].agent_kind = Some("foreign-agent".into()),
-            1 => {
-                let mut shared = restored.panes[0].clone();
-                shared.pane_id = "shared-pane".into();
-                shared.terminal_id = Some("shared-terminal".into());
-                restored.panes.push(shared);
-            }
-            _ => restored.panes[0].agent_kind = None,
-        }
-        let refused = resolve_resume_input(&fixture.service, &ObservedHerdr(Some(restored)), &run).await.unwrap();
-        assert!(refused.writer_exit_proof.is_none());
-        assert!(refused.attachment_observation.is_none());
-        let cause = refused.observation_cause.unwrap();
-        assert_eq!(cause.code, "consumer_activity_unproven", "occupant {occupant}");
-        assert_eq!(cause.class, ResumeCauseClass::Recover);
-    }
     for change in 0..3 {
         let mut changed = run.clone();
         let attachment = changed.attachment.as_mut().unwrap();
@@ -242,27 +375,361 @@ async fn resume_reboot_proof_is_same_machine_only_and_unknown_roots_stay_protect
             _ => attachment.process = None,
         }
         fixture.publish(&[changed.clone()]);
-        let resolved = resolve_resume_input(&fixture.service, &ObservedHerdr(None), &changed).await.unwrap();
-        assert!(resolved.writer_exit_proof.is_none());
-        assert!(resolved.attachment_observation.is_none());
+        let refused = resolve_resume_input(&fixture.service, &empty_observation(), &changed).await.unwrap();
+        assert!(refused.writer_exit_proof.is_none());
+        assert!(refused.root_main_recovery.is_none());
+        assert!(refused.attachment_observation.is_none());
+        let cause = refused.observation_cause.as_ref().unwrap();
+        assert_eq!(cause.code, "root_main_exit_unproven");
+        assert_eq!(cause.class, ResumeCauseClass::Recover);
+        let blocked = resume_result(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+            resume_request(&changed), &refused).unwrap());
+        assert_eq!(blocked.resume.phase, ResumePhase::Blocked);
+        assert_eq!(serde_json::to_value(fixture.service.run_for_review("fixture", &changed.run_id).unwrap().attachment).unwrap(), serde_json::to_value(&changed.attachment).unwrap());
     }
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn same_boot_abrupt_exit_preserves_detached_consumer_refusal() {
+async fn resume_same_boot_dead_root_missing_container_reserves_only_root_epoch_once() {
     let fixture = Fixture::new();
-    let mut run = reviewed();
-    run.kind = RunKind::Adopted;
-    bind_process(&mut run, std::process::id());
-    run.attachment.as_mut().unwrap().process.as_mut().unwrap().start_ticks += 1;
+    let run = dead_root();
+    let mut worker = root_with_process(std::process::id());
+    worker.run_id = "worker".into();
+    worker.kind = RunKind::Worker;
+    worker.parent_run_id = Some(run.run_id.clone());
+    worker.attachment.as_mut().unwrap().attachment_id = "worker-attachment".into();
+    let (project, checkout) = resolve_directory(&fixture.root, None, None).await.unwrap();
+    worker.project = Some(project);
+    worker.checkout = Some(checkout);
+    worker.checkout_claim_id = Some("worker-claim".into());
+    let claim = serde_json::json!({
+        "claim_id":"worker-claim","checkout":worker.checkout,"revision":3,"state":"held",
+        "holder":{"run_id":worker.run_id,"attachment_id":"worker-attachment","attachment_epoch":1},
+        "transition_operation_id":null
+    });
+    fixture.publish_with_claims(&[run.clone(), worker.clone()], &[claim.clone()]);
+    let resolved = resolve_resume_input(&fixture.service, &empty_observation(), &run).await.unwrap();
+    assert!(resolved.writer_exit_proof.is_none(), "root exit is not an all-consumer cleanup proof");
+    assert!(resolved.root_main_recovery.is_some());
+    assert!(resolved.attachment_observation.is_none());
+    assert!(resolved.observation_cause.is_none());
+    reserve_root_once(&fixture, &run, &resolved);
+    let preserved = fixture.service.run_for_review("fixture", &worker.run_id).unwrap();
+    assert_eq!(serde_json::to_value(preserved).unwrap(), serde_json::to_value(worker).unwrap());
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(fixture.service.base().join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["checkout_claims"], serde_json::json!([claim]));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_dead_root_accepts_fresh_original_and_restored_idle_shells() {
+    let shell = ForegroundPty::new();
+    for restored in [false, true] {
+        let fixture = Fixture::new();
+        let mut run = dead_root();
+        if !restored { run.attachment.as_mut().unwrap().shell = Some(shell.shell.clone()); }
+        fixture.publish(&[run.clone()]);
+        let herdr = shell.herdr(restored);
+        let resolved = resolve_resume_input(&fixture.service, &herdr, &run).await.unwrap();
+        assert!(resolved.writer_exit_proof.is_none());
+        assert!(resolved.root_main_recovery.is_some(), "restored {restored}");
+        assert!(resolved.attachment_observation.is_none());
+        assert!(resolved.observation_cause.is_none());
+        reserve_root_once(&fixture, &run, &resolved);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_root_refuses_live_missing_container_and_unsettled_dispatch() {
+    let fixture = Fixture::new();
+    let live = ForegroundPty::new();
+    let run = root_with_process(live.shell.process.pid);
     fixture.publish(&[run.clone()]);
-    let resolved = resolve_resume_input(&fixture.service, &ObservedHerdr(None), &run).await.unwrap();
+    let refused = resolve_resume_input(&fixture.service, &empty_observation(), &run).await.unwrap();
+    assert!(refused.root_main_recovery.is_none());
+    assert!(refused.attachment_observation.is_none());
+    assert!(refused.writer_exit_proof.is_none());
+    assert_eq!(refused.observation_cause.as_ref().unwrap().code, "consumer_activity_unproven");
+    let result = resume_result(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+        resume_request(&run), &refused).unwrap());
+    assert_eq!(result.resume.phase, ResumePhase::Blocked);
+    assert_eq!(serde_json::to_value(fixture.service.run_for_review("fixture", &run.run_id).unwrap().attachment).unwrap(), serde_json::to_value(&run.attachment).unwrap());
+    let dead = dead_root();
+    for step in [DispatchStep::SetupRunning, DispatchStep::SetupUnknown, DispatchStep::LaunchIntent,
+        DispatchStep::LaunchPending, DispatchStep::LaunchUnknown] {
+        let mut changed = dead.clone();
+        changed.dispatch.as_mut().unwrap().step = step;
+        fixture.publish(&[changed.clone()]);
+        let refused = resolve_resume_input(&fixture.service, &empty_observation(), &changed).await.unwrap();
+        assert!(refused.writer_exit_proof.is_none());
+        assert!(refused.root_main_recovery.is_none());
+        assert!(refused.attachment_observation.is_none());
+        assert_eq!(refused.observation_cause.unwrap().code, "root_main_exit_unproven", "{step:?}");
+    }
+    let mut mismatched = dead;
+    mismatched.dispatch.as_mut().unwrap().launch_attempt += 1;
+    fixture.publish(&[mismatched.clone()]);
+    let refused = resolve_resume_input(&fixture.service, &empty_observation(), &mismatched).await.unwrap();
+    assert!(refused.root_main_recovery.is_none());
+    assert_eq!(refused.observation_cause.unwrap().code, "root_main_exit_unproven");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_root_refuses_pending_foreign_ambiguous_and_different_live_pid_occupants() {
+    let fixture = Fixture::new();
+    let run = dead_root();
+    let shell = ForegroundPty::new();
+    for occupant in 0..9 {
+        fixture.publish(&[run.clone()]);
+        let mut herdr = shell.herdr(true);
+        match occupant {
+            0 => herdr.runtime.panes[0].launch_pending = true,
+            1 => herdr.runtime.panes[0].agent_kind = Some("foreign-agent".into()),
+            2 => {
+                let mut alias = herdr.runtime.panes[0].clone();
+                alias.pane_id = "other-pane".into();
+                alias.terminal_id = Some("other-terminal".into());
+                herdr.runtime.panes.push(alias);
+            }
+            3 => herdr.runtime.panes[0].native_session_id = Some("foreign-native".into()),
+            4 => herdr.info.shell_identity = None,
+            5 => herdr.info.foreground_pgid = None,
+            6 => herdr.info.shell_identity.as_mut().unwrap().argv_digest.push('0'),
+            7 => herdr.runtime.panes[0].terminal_id = Some("different-terminal".into()),
+            _ => herdr.info.processes.push((std::process::id(), "other-live-process".into())),
+        }
+        let refused = resolve_resume_input(&fixture.service, &herdr, &run).await.unwrap();
+        assert!(refused.writer_exit_proof.is_none());
+        assert!(refused.root_main_recovery.is_none(), "occupant {occupant}");
+        assert!(refused.attachment_observation.is_none());
+        let cause = refused.observation_cause.as_ref().unwrap();
+        assert_eq!(cause.code, "consumer_activity_unproven", "occupant {occupant}");
+        assert_eq!(cause.class, ResumeCauseClass::Recover);
+        let result = resume_result(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+            resume_request(&run), &refused).unwrap());
+        assert_eq!(result.resume.phase, ResumePhase::Blocked);
+        assert_eq!(serde_json::to_value(fixture.service.run_for_review("fixture", &run.run_id).unwrap().attachment).unwrap(), serde_json::to_value(&run.attachment).unwrap());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_live_root_reattaches_restored_endpoint_with_current_authenticated_binding() {
+    use cockpit_core::orchestration::{AgentCaller, BootstrapCaller, NativeAgentKind, read_job_auth};
+    let fixture = Fixture::new();
+    let process = ForegroundPty::new();
+    let mut original = process.herdr(false);
+    original.runtime.workspaces.push(RuntimeWorkspace {
+        workspace_id: "space".into(), label: "Project".into(),
+        cwd: fixture.root.to_string_lossy().into_owned(),
+    });
+    let bootstrap = BootstrapCaller {
+        endpoint_identity: "endpoint".into(), session_id: "fixture".into(),
+        workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(),
+        boot_id: None, terminal_id: Some("terminal".into()), native_session_id: Some("native".into()),
+        omp_session_id: Some("native".into()), agent_kind: Some(AgentKind::Main),
+        actual_agent_kind: Some(NativeAgentKind::Omp), process: Some(process.shell.process.clone()),
+    };
+    // Adoption stages a real credential; ordinary RunAttach commits the
+    // authenticated receipt. Never fabricate has_current_binding's inputs.
+    let actor = Actor::Bootstrap(bootstrap.clone());
+    let request = OrchestrationMutationRequest {
+        session_id: "fixture".into(), expected_revision: None,
+        action: OrchestrationAction::RunAdopt { label: "Root".into() },
+    };
+    let resolved = resolve_mutation_input(&fixture.service, &fixture.projects(None), &original, &actor, &request)
+        .await.unwrap();
+    let response = fixture.service.mutate_resolved(&actor, request, &resolved).unwrap();
+    let OrchestrationActionResult::Run { run_id, .. } = response.result else { panic!("adopted root"); };
+    let path = fixture.service.job_bootstrap_credential_file(&bootstrap, &run_id).unwrap();
+    let auth = read_job_auth(&path).unwrap();
+    let agent = AgentCaller {
+        auth, provenance: None, endpoint_identity: bootstrap.endpoint_identity,
+        session_id: bootstrap.session_id, workspace_id: bootstrap.workspace_id,
+        tab_id: bootstrap.tab_id, pane_id: bootstrap.pane_id, boot_id: bootstrap.boot_id,
+        terminal_id: bootstrap.terminal_id, native_session_id: bootstrap.native_session_id,
+        env_run: Some((run_id.clone(), 1)), omp_session_id: bootstrap.omp_session_id,
+        agent_kind: bootstrap.agent_kind, actual_agent_kind: bootstrap.actual_agent_kind,
+        subagent_id: None, main_omp_session_id: Some("native".into()), process: bootstrap.process,
+    };
+    fixture.service.mutate_resolved(&Actor::Agent(agent.clone()), OrchestrationMutationRequest {
+        session_id: "fixture".into(), expected_revision: None,
+        action: OrchestrationAction::RunAttach {
+            operation_id: uuid::Uuid::new_v4().to_string(), attachment_id: agent.auth.attachment_id.clone(),
+            expected_attachment_epoch: agent.auth.attachment_epoch, main_session_id: "native".into(),
+        },
+    }, &ResolvedMutationInput::default()).unwrap();
+    let run = fixture.service.run_for_review("fixture", &run_id).unwrap();
+    assert!(fixture.service.recorded_runs_with_bindings("fixture").unwrap().2.contains_key(&run_id));
+    let restored = process.herdr(true);
+    let resolved = resolve_resume_input(&fixture.service, &restored, &run).await.unwrap();
+    assert!(resolved.writer_exit_proof.is_none());
+    assert!(resolved.root_main_recovery.is_none());
+    assert!(resolved.observation_cause.is_none());
+    let fresh = resolved.attachment_observation.as_ref().unwrap();
+    let original = run.attachment.as_ref().unwrap();
+    assert_eq!(fresh.process, original.process);
+    assert_eq!(fresh.attachment_id, original.attachment_id);
+    assert_eq!(fresh.epoch, original.epoch);
+    let location = fresh.location.as_ref().unwrap();
+    assert_eq!(location.endpoint_identity, "restored-endpoint");
+    assert_eq!(location.tab_id, "restored-tab");
+    assert_eq!(location.pane_id, "restored-pane");
+    assert_eq!(location.terminal_id, original.location.as_ref().unwrap().terminal_id);
+    let request = resume_request(&run);
+    let operator = Actor::Operator(OperatorOrigin::Browser);
+    let result = resume_result(fixture.service.mutate_resolved(&operator, request.clone(), &resolved).unwrap());
+    assert!(!result.duplicate);
+    assert_eq!(result.resume.phase, ResumePhase::Reattached);
+    assert!(result.resume.replacement_attachment_epoch.is_none());
+    let saved = fixture.service.run_for_review("fixture", &run_id).unwrap();
+    assert_eq!(serde_json::to_value(saved.attachment.as_ref().unwrap()).unwrap(), serde_json::to_value(fresh).unwrap());
+    assert!(fixture.service.recorded_runs_with_bindings("fixture").unwrap().2.contains_key(&run_id));
+    let before = fs::read(fixture.service.base().join("state.json")).unwrap();
+    assert!(resume_result(fixture.service.mutate_resolved(&operator, request, &resolved).unwrap()).duplicate);
+    assert_eq!(before, fs::read(fixture.service.base().join("state.json")).unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_live_root_refuses_different_foreground_incarnation() {
+    let fixture = Fixture::new();
+    let original = ForegroundPty::new();
+    let other = ForegroundPty::new();
+    let run = root_with_process(original.shell.process.pid);
+    fixture.publish(&[run.clone()]);
+    let herdr = other.herdr(true);
+    let refused = resolve_resume_input(&fixture.service, &herdr, &run).await.unwrap();
+    assert!(refused.writer_exit_proof.is_none());
+    assert!(refused.root_main_recovery.is_none());
+    assert!(refused.attachment_observation.is_none());
+    assert_eq!(refused.observation_cause.as_ref().unwrap().code, "consumer_activity_unproven");
+    let result = resume_result(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+        resume_request(&run), &refused).unwrap());
+    assert_eq!(result.resume.phase, ResumePhase::Blocked);
+    assert_eq!(serde_json::to_value(fixture.service.run_for_review("fixture", &run.run_id).unwrap().attachment).unwrap(), serde_json::to_value(&run.attachment).unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_worker_retains_reboot_all_consumer_proof_and_offline_refusal() {
+    let fixture = Fixture::new();
+    let process = ForegroundPty::new();
+    let mut worker = root_with_process(process.shell.process.pid);
+    worker.kind = RunKind::Worker;
+    worker.parent_run_id = Some("root".into());
+    worker.root_id = "root".into();
+    worker.attachment.as_mut().unwrap().shell = Some(process.shell.clone());
+    let (project, checkout) = resolve_directory(&fixture.root, None, None).await.unwrap();
+    worker.project = Some(project);
+    worker.checkout = Some(checkout);
+    worker.checkout_claim_id = Some("worker-claim".into());
+    let claim = serde_json::json!({
+        "claim_id":"worker-claim","checkout":worker.checkout,"revision":1,"state":"held",
+        "holder":{"run_id":worker.run_id,"attachment_id":"attachment","attachment_epoch":1},
+        "transition_operation_id":null
+    });
+    drop(process);
+    fixture.publish_with_claims(&[worker.clone()], &[claim.clone()]);
+    let refused = resolve_resume_input(&fixture.service, &empty_observation(), &worker).await.unwrap();
+    assert!(refused.writer_exit_proof.is_none());
+    assert!(refused.root_main_recovery.is_none());
+    assert!(refused.attachment_observation.is_none());
+    assert_eq!(refused.observation_cause.unwrap().code, "consumer_activity_unproven");
+    let attachment = worker.attachment.as_mut().unwrap();
+    for process in [attachment.process.as_mut().unwrap(), &mut attachment.shell.as_mut().unwrap().process] {
+        let boot = process.kernel_boot_id.as_mut().unwrap();
+        let replacement = if boot.starts_with('0') { "1" } else { "0" };
+        boot.replace_range(0..1, replacement);
+    }
+    fixture.publish_with_claims(&[worker.clone()], &[claim]);
+    let resolved = resolve_resume_input(&fixture.service, &empty_observation(), &worker).await.unwrap();
+    assert!(resolved.writer_exit_proof.is_some());
+    assert!(resolved.root_main_recovery.is_none());
+    assert!(resolved.attachment_observation.is_none());
+    let offline = resolve_resume_input(&fixture.service, &ObservedHerdr(None), &worker).await.unwrap();
+    assert!(offline.writer_exit_proof.is_none());
+    assert!(offline.root_main_recovery.is_none());
+    assert_eq!(offline.observation_cause.unwrap().code, "resume_observation_unavailable");
+    let occupied = resolve_resume_input(&fixture.service, &ObservedHerdr(Some(observed())), &worker).await.unwrap();
+    assert!(occupied.writer_exit_proof.is_none());
+    assert!(occupied.root_main_recovery.is_none());
+    assert_eq!(occupied.observation_cause.unwrap().code, "consumer_activity_unproven");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_root_terminal_ownership_fallback_is_same_endpoint_only() {
+    let fixture = Fixture::new();
+    let shell = ForegroundPty::new();
+    let mut run = dead_root();
+    run.attachment.as_mut().unwrap().location.as_mut().unwrap().terminal_id = None;
+    fixture.publish(&[run.clone()]);
+    let original = resolve_resume_input(&fixture.service, &shell.herdr(false), &run).await.unwrap();
+    assert!(original.root_main_recovery.is_some());
+    assert!(original.writer_exit_proof.is_none());
+    let restored = resolve_resume_input(&fixture.service, &shell.herdr(true), &run).await.unwrap();
+    assert!(restored.root_main_recovery.is_none());
+    assert!(restored.writer_exit_proof.is_none());
+    assert!(restored.attachment_observation.is_none());
+    assert_eq!(restored.observation_cause.unwrap().code, "consumer_activity_unproven");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_dispatchless_adopted_root_requires_exact_retained_checkout_and_workspace() {
+    let fixture = Fixture::new();
+    let mut run = dead_root();
+    run.kind = RunKind::Adopted;
+    run.dispatch = None;
+    let (project, checkout) = resolve_directory(&fixture.root, None, None).await.unwrap();
+    run.project = Some(project);
+    run.checkout = Some(checkout.clone());
+    fixture.publish(&[run.clone()]);
+    let mut runtime = fixture.runtime();
+    runtime.0.as_mut().unwrap().panes.clear();
+    let resolved = resolve_resume_input(&fixture.service, &runtime, &run).await.unwrap();
+    assert!(resolved.root_main_recovery.is_some());
     assert!(resolved.writer_exit_proof.is_none());
     assert!(resolved.attachment_observation.is_none());
-    let cause = resolved.observation_cause.unwrap();
-    assert_eq!(cause.code, "consumer_activity_unproven");
-    assert_eq!(cause.class, ResumeCauseClass::Recover);
+    reserve_root_once(&fixture, &run, &resolved);
+    let replacement = fixture.service.run_for_review("fixture", &run.run_id).unwrap();
+    assert!(matches!(replacement.target,
+        Some(DispatchTarget::ExistingSpace { workspace_id }) if workspace_id == "space"));
+    let setup = replacement.setup.as_ref().unwrap();
+    assert_eq!(setup.checkout_path, checkout.path);
+    assert_eq!(setup.workspace_id.as_deref(), Some("space"));
+    assert!(setup.operation_id.is_none());
+    assert!(setup.ownership.is_none());
+    assert!(setup.effects.is_empty());
+    assert_eq!(replacement.checkout, run.checkout);
+    for change in 0..4 {
+        let mut changed = run.clone();
+        let mut unavailable = runtime.clone();
+        match change {
+            0 => changed.checkout = None,
+            1 => unavailable.0.as_mut().unwrap().workspaces[0].cwd = fixture.root.join("foreign").to_string_lossy().into_owned(),
+            2 => {
+                let workspace = unavailable.0.as_ref().unwrap().workspaces[0].clone();
+                unavailable.0.as_mut().unwrap().workspaces.push(workspace);
+            }
+            _ => changed.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }),
+        }
+        fixture.publish(&[changed.clone()]);
+        let refused = resolve_resume_input(&fixture.service, &unavailable, &changed).await.unwrap();
+        assert!(refused.root_main_recovery.is_none(), "change {change}");
+        assert!(refused.writer_exit_proof.is_none());
+        assert!(refused.attachment_observation.is_none());
+        let cause = refused.observation_cause.as_ref().unwrap();
+        assert_eq!(cause.class, ResumeCauseClass::Recover);
+        let blocked = resume_result(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+            resume_request(&changed), &refused).unwrap());
+        assert_eq!(blocked.resume.phase, ResumePhase::Blocked);
+        assert_eq!(serde_json::to_value(fixture.service.run_for_review("fixture", &run.run_id).unwrap().attachment).unwrap(), serde_json::to_value(&changed.attachment).unwrap());
+    }
 }
 
 #[tokio::test]
@@ -547,10 +1014,15 @@ async fn start_preserves_selected_legacy_live_root_without_retargeting_or_new_wr
     let fixture = Fixture::new();
     let projects = fixture.projects(None);
     let (project, checkout) = resolve_directory(&fixture.root, None, None).await.unwrap();
-    let mut run = reviewed();
+    let process = ForegroundPty::new();
+    let mut run = root_with_process(process.shell.process.pid);
     run.project = Some(project);
     run.checkout = Some(checkout.clone());
-    bind_process(&mut run, std::process::id());
+    let mut herdr = process.herdr(false);
+    herdr.runtime.workspaces.push(RuntimeWorkspace {
+        workspace_id: "space".into(), label: "Project".into(),
+        cwd: fixture.root.to_string_lossy().into_owned(),
+    });
     run.attachment.as_mut().unwrap().state = AttachmentState::Connected;
     // This fixture has no authenticated RunAttach; preserving its living writer
     // must not become permission to launch a replacement or report SDK connection.
@@ -561,7 +1033,7 @@ async fn start_preserves_selected_legacy_live_root_without_retargeting_or_new_wr
     let OrchestrationAction::SupervisorStart { selected_root_id, .. } = &mut request.action
         else { unreachable!() };
     *selected_root_id = Some(run.run_id.clone());
-    let resolved = resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &request)
+    let resolved = resolve_mutation_input(&fixture.service, &projects, &herdr, &actor, &request)
         .await.unwrap();
     assert_eq!(resolved.checkout.as_ref(), Some(&checkout));
     assert_eq!(resolved.attachment_observation.as_ref().unwrap().state, AttachmentState::Connected);
@@ -639,10 +1111,12 @@ async fn adopt_resolves_only_fresh_exact_caller_pane_workspace() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn legacy_process_machine_is_observed_only_with_exact_fresh_native_pane() {
+async fn legacy_worker_process_machine_is_observed_only_with_exact_fresh_native_pane() {
     let fixture = Fixture::new();
     let mut run = reviewed();
     bind_process(&mut run, std::process::id());
+    run.kind = RunKind::Worker;
+    run.parent_run_id = Some("root".into());
     run.attachment.as_mut().unwrap().machine_id = None;
     let mut runtime = fixture.runtime();
     runtime.0.as_mut().unwrap().panes[0].native_session_id = Some("native".into());
@@ -697,4 +1171,53 @@ fn installed_native_cockpit_uses_sibling_cli_never_gui_self() {
         native
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resume_restored_root_terminal_id_requires_retained_physical_checkout_and_launch_receipt() {
+    for retained_checkout in [true, false] {
+        let fixture = Fixture::new();
+        let mut run = dead_root();
+        let (project, checkout) = resolve_directory(&fixture.root, None, None).await.unwrap();
+        run.project = Some(project);
+        run.checkout = retained_checkout.then(|| checkout.clone());
+        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
+        run.setup = Some(SetupSummary {
+            operation_id: None, generation: None, workspace_id: Some("space".into()),
+            checkout_path: checkout.path.clone(), repository_id: None, branch: None, base: None,
+            base_commit: None, ownership: Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::BorrowedDirectory),
+            effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+        });
+        run.attachment.as_mut().unwrap().launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+        fixture.publish(&[run.clone()]);
+        let shell = ForegroundPty::new();
+        let mut herdr = shell.herdr(false);
+        herdr.runtime.endpoint_identity = "restored-daemon-endpoint".into();
+        herdr.runtime.workspaces = vec![RuntimeWorkspace {
+            workspace_id: "space".into(), label: "Restored root".into(), cwd: checkout.path.clone(),
+        }];
+        let pane = &mut herdr.runtime.panes[0];
+        pane.terminal_id = Some("new-herdr-restored-terminal".into());
+        pane.native_session_id = None;
+        pane.agent_name = None;
+        pane.agent_kind = None;
+        let resolved = resolve_resume_input(&fixture.service, &herdr, &run).await.unwrap();
+        assert!(resolved.writer_exit_proof.is_none(), "Root recovery never fabricates worker closure");
+        if retained_checkout {
+            assert!(resolved.root_main_recovery.is_some(), "{:?}", resolved.observation_cause);
+            reserve_root_once(&fixture, &run, &resolved);
+        } else {
+            assert!(resolved.root_main_recovery.is_none());
+            assert_eq!(resolved.observation_cause.as_ref().unwrap().code, "consumer_activity_unproven");
+            let before = serde_json::to_value(&run.attachment).unwrap();
+            let blocked = resume_result(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+                resume_request(&run), &resolved).unwrap());
+            assert_eq!(blocked.resume.phase, ResumePhase::Blocked);
+            assert_eq!(serde_json::to_value(fixture.service.run_for_review("fixture", &run.run_id).unwrap().attachment).unwrap(), before);
+        }
+        assert!(same_machine_process_running(&shell.shell.process,
+            cockpit_core::process_identity::machine_id().as_deref()).unwrap(),
+            "The restored borrowed shell grants liaison launch authority, never cleanup authority");
+    }
 }

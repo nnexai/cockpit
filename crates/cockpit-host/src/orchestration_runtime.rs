@@ -202,6 +202,8 @@ async fn resolve_physical_mutation_input(
                     let observed = resolve_resume_input(service, herdr, &runs[index]).await?;
                     resolved.attachment_observation = observed.attachment_observation;
                     resolved.writer_exit_proof = observed.writer_exit_proof;
+                    resolved.root_main_recovery = observed.root_main_recovery;
+                    resolved.root_attachment_expected = observed.root_attachment_expected;
                     resolved.observation_cause = observed.observation_cause;
                     // Reuse/resume retains the root's original checkout, not the
                     // checkout of a different Space for the same project.
@@ -369,6 +371,9 @@ async fn resolve_resume_input(
     herdr: &dyn OrchestrationHerdr,
     run: &Run,
 ) -> Result<ResolvedMutationInput, InspectionError> {
+    if run.kind != RunKind::Worker {
+        return Ok(service.observe_root_resume(herdr, run).await);
+    }
     let mut resolved = ResolvedMutationInput {
         project: run.project.clone(), checkout: run.checkout.clone(), ..Default::default()
     };
@@ -440,9 +445,7 @@ async fn resolve_resume_input(
         }
         return Ok(resolved);
     }
-    let proof = if run.parent_run_id.is_none() {
-        service.observe_root_exit(run)
-    } else if let Some(checkout) = run.checkout.as_ref() {
+    let proof = if let Some(checkout) = run.checkout.as_ref() {
         // Revalidate the exact saved checkout, never a current Space or target.
         let (project, fresh) = resolve_directory(
             Path::new(&checkout.path),

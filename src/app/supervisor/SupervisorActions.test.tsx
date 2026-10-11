@@ -2,8 +2,8 @@
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CleanupResourceSummary, OrchestrationActionResult, OrchestrationSnapshot, Report, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
-import { AgentRecovery, agentState, CleanupFinishAction, finishCleanup, ObservedEvidence, ProgressTrail, ProvenancePair, RunDiagnostics, SupervisorActions, taskStatus, TextAction, type Mutation } from "./SupervisorActions";
+import type { CleanupResourceSummary, OrchestrationActionResult, OrchestrationSnapshot, Report, ResumePhase, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
+import { AgentRecovery, agentState, canRestart, CleanupFinishAction, finishCleanup, ObservedEvidence, ProgressTrail, ProvenancePair, RunDiagnostics, SupervisorActions, taskStatus, TextAction, type Mutation } from "./SupervisorActions";
 import { messageDraft, newScopeDrafts, newTextDraft } from "./useSupervisorDrafts";
 
 const at = "2026-10-06T12:00:00Z";
@@ -505,6 +505,61 @@ describe("independent Outcome and optional Cleanup actions", () => {
 });
 
 describe("Supervisor evidence and recovery boundaries", () => {
+  function endpointSnapshot(saved: Run): OrchestrationSnapshot {
+    return { ...snapshot(saved), runs: [saved], runtime: { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observation(saved.run_id, { presence: "endpoint_changed", actual_omp: false, pane_id: null })] } };
+  }
+  function savedRoot(overrides: Partial<Run> = {}): Run {
+    return run({ run_id: "root", kind: "supervisor", parent_run_id: null, task_id: null, stage: "active", ...overrides });
+  }
+  it.each(["supervisor", "adopted"] as const)("permits only backend inspection of a claim-free top-level %s after an endpoint change", kind => {
+    const saved = savedRoot({ kind });
+    const state = agentState(endpointSnapshot(saved), saved, true, true);
+    expect(state).toMatchObject({ kind: "unknown", label: "Cannot confirm the agent", restartable: true, verified: false, terminal: false });
+    expect(state.detail).toBe("The server identity changed. Waiting for fresh matching agent identity before resuming.");
+    expect(canRestart(state, { busy: false, connected: true, runtimeLive: true }, saved)).toBe(true);
+  });
+  it.each([
+    ["worker", { kind: "worker", run_id: "worker", parent_run_id: "root" }],
+    ["worker masquerading as a root", { kind: "worker" }],
+    ["root with a checkout claim", { checkout_claim_id: "claim" }],
+    ["adopted root with a checkout claim", { kind: "adopted", checkout_claim_id: "claim" }],
+    ["root with a different root ID", { root_id: "other-root" }],
+    ["root with a parent", { parent_run_id: "parent" }],
+  ] satisfies [string, Partial<Run>][])("keeps endpoint-changed %s fenced", (_label, overrides) => {
+    const saved = savedRoot(overrides);
+    const state = agentState(endpointSnapshot(saved), saved, true, true);
+    expect(state).toMatchObject({ restartable: false, verified: false, terminal: false });
+    expect(canRestart(state, { busy: false, connected: true, runtimeLive: true }, saved)).toBe(false);
+  });
+  it.each([
+    ["disconnected", false, true],
+    ["runtime offline", true, false],
+  ] as const)("keeps endpoint-changed root inspection fenced when %s", (_label, connected, runtimeLive) => {
+    const saved = savedRoot();
+    const state = agentState(endpointSnapshot(saved), saved, connected, runtimeLive);
+    expect(state).toMatchObject({ kind: "offline", restartable: false, verified: false });
+    expect(canRestart(state, { busy: false, connected, runtimeLive }, saved)).toBe(false);
+  });
+  it("keeps stale root observations and busy inspection fenced", () => {
+    const saved = savedRoot(), snapshot = endpointSnapshot(saved);
+    snapshot.runtime = { status: "unavailable", error: { code: "stale", message: "Fresh observation unavailable" } };
+    expect(agentState(snapshot, saved, true, true)).toMatchObject({ kind: "offline", restartable: false, verified: false });
+    const freshState = agentState(endpointSnapshot(saved), saved, true, true);
+    expect(canRestart(freshState, { busy: true, connected: true, runtimeLive: true }, saved)).toBe(false);
+  });
+  it.each(["reconciling", "waiting_quiescence", "launching"] as const)("keeps %s root Resume in progress rather than inspecting again", phase => {
+    // Exercise the waiting_quiescence fence retained by agentState too.
+    const saved = savedRoot({ resume: { operation_id: "resume", run_id: "root", previous_attachment_epoch: 1, phase: phase as ResumePhase, cause: null, decision_id: null, replacement_attachment_epoch: null, updated_at: at } });
+    const state = agentState(endpointSnapshot(saved), saved, true, true);
+    expect(state).toMatchObject({ kind: "starting", label: "Resuming…", restartable: false, verified: false });
+    expect(canRestart(state, { busy: false, connected: true, runtimeLive: true }, saved)).toBe(false);
+  });
+  it.each(["reported", "closed"] as const)("preserves the %s root recovery fence", stage => {
+    const saved = savedRoot({ stage, result });
+    const state = agentState(endpointSnapshot(saved), saved, true, true);
+    expect(canRestart(state, { busy: false, connected: true, runtimeLive: true }, saved)).toBe(false);
+  });
+
   it("uses queued and starting stages while requiring genuine live connection, not Initialized or an advisory plan", () => {
     const queued = run({ stage: "queued", dispatch: null, attachment: null });
     expect(agentState(snapshot(queued), queued, true, true).label).toBe("Worker queued");

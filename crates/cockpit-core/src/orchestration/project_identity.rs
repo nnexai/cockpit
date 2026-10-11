@@ -3,7 +3,7 @@ use std::{path::Path, os::unix::fs::MetadataExt};
 use cockpit_protocol::orchestration::*;
 use sha2::{Digest, Sha256};
 use crate::{InspectionError, process_identity, space_git};
-use super::{OrchestrationService, claims::{AttachmentReference, WriterExitProof}};
+use super::{OrchestrationService, ResolvedMutationInput, claims::{AttachmentReference, RootMainRecoveryProof, WriterExitProof}};
 
 fn unavailable(text: &str) -> InspectionError { InspectionError::new("project_identity_unavailable", text) }
 fn path_text(path: &Path) -> Result<String, InspectionError> {
@@ -127,31 +127,314 @@ pub async fn replacement_consumers_preflight(herdr: &dyn super::herdr::Orchestra
     Ok(())
 }
 
+fn root_unproven() -> InspectionError {
+    InspectionError::new("root_main_exit_unproven", "The exact saved root main must be positively absent and its owned terminal freshly safe")
+}
+
+fn root_container_unproven() -> InspectionError {
+    InspectionError::new("consumer_activity_unproven", "The root terminal is pending, busy, foreign, ambiguous or lacks exact ownership evidence; no liaison was launched")
+}
+
+pub(crate) fn same_location(left: Option<&RunLocation>, right: Option<&RunLocation>) -> bool {
+    match (left, right) {
+        (Some(a), Some(b)) => a.endpoint_identity == b.endpoint_identity && a.boot_id == b.boot_id
+            && a.session_id == b.session_id && a.workspace_id == b.workspace_id
+            && a.tab_id == b.tab_id && a.pane_id == b.pane_id && a.terminal_id == b.terminal_id
+            && a.native_session_id == b.native_session_id && a.launch_tag == b.launch_tag,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+pub(crate) fn same_root_attachment(a: &ExecutionAttachment, b: &ExecutionAttachment) -> bool {
+    a.attachment_id == b.attachment_id && a.epoch == b.epoch && a.state == b.state
+        && a.process == b.process && a.shell == b.shell && a.machine_id == b.machine_id
+        && a.main_session_id == b.main_session_id && a.launch_mode == b.launch_mode
+        && a.launch_attempt == b.launch_attempt && same_location(a.location.as_ref(), b.location.as_ref())
+}
+
+fn same_dispatch(a: Option<&DispatchState>, b: Option<&DispatchState>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.launch_attempt == b.launch_attempt && a.launch_tag == b.launch_tag
+            && a.step == b.step && a.endpoint_identity == b.endpoint_identity && a.agent_started == b.agent_started
+            && a.updated_at == b.updated_at,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn root_recovery_target(state: &super::store::OrchestrationState, run: &Run) -> Result<(), InspectionError> {
+    if !matches!(run.kind, RunKind::Supervisor | RunKind::Adopted) || run.run_id != run.root_id
+        || run.parent_run_id.is_some() || run.checkout_claim_id.is_some() || run.stage == RunStage::Closed
+        || run.stage == RunStage::Reported || run.result.is_some()
+        || (run.kind == RunKind::Supervisor && run.dispatch.is_none())
+        || state.checkout_claims.iter().any(|claim| claim.state != super::claims::ClaimState::Released
+            && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id)) {
+        return Err(root_unproven());
+    }
+    let attachment = run.attachment.as_ref().ok_or_else(root_unproven)?;
+    if matches!(attachment.state, AttachmentState::Quiescing | AttachmentState::Revoked)
+        || attachment.main_session_id.as_deref().is_none_or(str::is_empty)
+        || attachment.location.as_ref().is_none_or(|location| location.session_id != run.session_id
+            || location.native_session_id.as_ref().is_some_and(|native| attachment.main_session_id.as_ref() != Some(native)))
+        || run.dispatch.as_ref().is_some_and(|dispatch|
+            matches!(dispatch.step, DispatchStep::SetupRunning | DispatchStep::SetupUnknown
+                | DispatchStep::LaunchIntent | DispatchStep::LaunchPending | DispatchStep::LaunchUnknown)
+            || dispatch.launch_attempt != attachment.launch_attempt
+            || attachment.location.as_ref().is_none_or(|location|
+                dispatch.endpoint_identity.as_deref() != Some(location.endpoint_identity.as_str())
+                    || dispatch.launch_tag.as_deref() != Some(location.launch_tag.as_str()))) {
+        return Err(root_unproven());
+    }
+    Ok(())
+}
+
+fn root_main_running(attachment: &ExecutionAttachment) -> Result<bool, InspectionError> {
+    let process = attachment.process.as_ref().ok_or_else(root_unproven)?;
+    if process.pid == 0 || process.start_ticks == 0
+        || process.kernel_boot_id.as_deref().is_none_or(str::is_empty)
+        || attachment.machine_id.as_deref().is_none_or(str::is_empty) {
+        return Err(root_unproven());
+    }
+    process_identity::same_machine_process_running(process, attachment.machine_id.as_deref())
+        .map_err(|_| root_unproven())
+}
+
+pub(crate) fn revalidate_root_recovery(state: &super::store::OrchestrationState, run: &Run, proof: &RootMainRecoveryProof) -> Result<(), InspectionError> {
+    root_recovery_target(state, run)?;
+    let attachment = run.attachment.as_ref().ok_or_else(root_unproven)?;
+    if run.session_id != proof.session_id || run.run_id != proof.run_id
+        || !same_root_attachment(attachment, &proof.attachment)
+        || !same_dispatch(run.dispatch.as_ref(), proof.dispatch.as_ref()) || root_main_running(attachment)? {
+        return Err(root_unproven());
+    }
+    if run.kind == RunKind::Adopted && run.dispatch.is_none() {
+        let checkout = run.checkout.as_ref().ok_or_else(root_unproven)?;
+        if run.target.is_some() || run.setup.is_some() || proof.retained_checkout.as_ref() != Some(checkout) {
+            return Err(root_unproven());
+        }
+    }
+    if let Some(checkout) = &proof.retained_checkout {
+        if run.checkout.as_ref() != Some(checkout) { return Err(root_unproven()); }
+        if run.dispatch.is_some() { restored_root_receipt_checkout(run)?; }
+        revalidate_checkout(checkout)?;
+    }
+    if let Some(shell) = &proof.idle_shell {
+        if process_identity::executable_identity(shell.process.pid as i32, shell.process.start_ticks).ok().as_ref() != Some(shell)
+            || !matches!(process_identity::incarnation_foreground(shell.process.pid as i32, shell.process.start_ticks), Ok(true)) {
+            return Err(root_container_unproven());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn revalidate_root_observation(state: &super::store::OrchestrationState, run: &Run, expected: &ExecutionAttachment) -> Result<(), InspectionError> {
+    root_recovery_target(state, run)?;
+    let attachment = run.attachment.as_ref().ok_or_else(root_unproven)?;
+    let process = attachment.process.as_ref().ok_or_else(root_unproven)?;
+    if !same_root_attachment(attachment, expected) || !root_main_running(attachment)?
+        || !matches!(process_identity::incarnation_foreground(process.pid as i32, process.start_ticks), Ok(true)) {
+        return Err(root_unproven());
+    }
+    Ok(())
+}
+
+/// Restored PTYs may get new terminal IDs. Equivalent ownership is only a
+/// settled managed launch receipt plus its exact topology and physical checkout,
+/// never a label/name/conversation alias or authority to touch the restored pane.
+fn restored_root_receipt_checkout(run: &Run) -> Result<&CheckoutIdentity, InspectionError> {
+    let attachment = run.attachment.as_ref().ok_or_else(root_container_unproven)?;
+    let location = attachment.location.as_ref().ok_or_else(root_container_unproven)?;
+    let dispatch = run.dispatch.as_ref().ok_or_else(root_container_unproven)?;
+    let setup = run.setup.as_ref().ok_or_else(root_container_unproven)?;
+    let checkout = run.checkout.as_ref().ok_or_else(root_container_unproven)?;
+    if location.launch_tag.is_empty() || dispatch.step != DispatchStep::Launched || !dispatch.agent_started
+        || dispatch.launch_tag.as_deref() != Some(location.launch_tag.as_str())
+        || dispatch.launch_attempt != attachment.launch_attempt
+        || setup.workspace_id.as_ref() != Some(&location.workspace_id) || setup.checkout_path != checkout.path
+        || attachment.machine_id.as_ref() != Some(&checkout.machine_id) {
+        return Err(root_container_unproven());
+    }
+    Ok(checkout)
+}
+
+fn fresh_root_checkout<'a>(runtime: &super::herdr::RuntimeView, run: &'a Run) -> Result<&'a CheckoutIdentity, InspectionError> {
+    let checkout = run.checkout.as_ref().ok_or_else(root_container_unproven)?;
+    let location = run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()).ok_or_else(root_container_unproven)?;
+    let mut workspaces = runtime.workspaces.iter().filter(|workspace| workspace.workspace_id == location.workspace_id);
+    let workspace = workspaces.next().ok_or_else(root_container_unproven)?;
+    if workspaces.next().is_some() { return Err(root_container_unproven()); }
+    let (path, identity) = directory(Path::new(&workspace.cwd)).map_err(|_| root_container_unproven())?;
+    if path != checkout.path || identity != checkout.directory_identity {
+        return Err(root_container_unproven());
+    }
+    revalidate_checkout(checkout).map_err(|_| root_container_unproven())?;
+    Ok(checkout)
+}
+
+fn owned_root_pane<'a>(runtime: &'a super::herdr::RuntimeView, run: &Run, allow_restored_shell: bool) -> Result<Option<&'a super::herdr::RuntimePane>, InspectionError> {
+    let attachment = run.attachment.as_ref().ok_or_else(root_container_unproven)?;
+    let location = attachment.location.as_ref().ok_or_else(root_container_unproven)?;
+    let same_endpoint = runtime.endpoint_identity == location.endpoint_identity
+        && super::optional_available(&location.boot_id, &runtime.boot_id);
+    if !same_endpoint && location.terminal_id.is_none() {
+        if !allow_restored_shell { return Err(root_container_unproven()); }
+        restored_root_receipt_checkout(run)?;
+        fresh_root_checkout(runtime, run)?;
+    }
+    let exact_layout = |pane: &super::herdr::RuntimePane| pane.workspace_id == location.workspace_id
+        && pane.tab_id == location.tab_id && pane.pane_id == location.pane_id;
+    let mut candidates = runtime.panes.iter().filter(|pane|
+        location.terminal_id.as_ref().is_some_and(|id| pane.terminal_id.as_ref() == Some(id))
+        || exact_layout(pane)
+        || attachment.main_session_id.as_ref().is_some_and(|id| pane.native_session_id.as_ref() == Some(id))
+        || (!location.launch_tag.is_empty() && (pane.tab_label == location.launch_tag
+            || pane.agent_name.as_deref() == Some(location.launch_tag.as_str()))));
+    let Some(pane) = candidates.next() else { return Ok(None) };
+    if candidates.next().is_some() || pane.workspace_id != location.workspace_id || pane.launch_pending {
+        return Err(root_container_unproven());
+    }
+    let same_terminal = location.terminal_id.as_ref().is_some_and(|id| pane.terminal_id.as_ref() == Some(id));
+    if !same_terminal && !(same_endpoint && exact_layout(pane) && location.terminal_id.is_none()) {
+        if same_endpoint || !allow_restored_shell || !exact_layout(pane) || pane.tab_label != location.launch_tag
+            || pane.terminal_id.as_deref().is_none_or(str::is_empty) {
+            return Err(root_container_unproven());
+        }
+        restored_root_receipt_checkout(run)?;
+        fresh_root_checkout(runtime, run)?;
+    }
+    Ok(Some(pane))
+}
+
 impl OrchestrationService {
-    /// Private proof constructor: the host cannot invent `all_consumers_absent`.
+    /// One observation path for explicit Resume and automatic root recovery.
+    /// It never closes a pane, signals a process or inspects worker consumers.
+    pub async fn observe_root_resume(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run) -> ResolvedMutationInput {
+        let mut input = ResolvedMutationInput { project: expected.project.clone(), checkout: expected.checkout.clone(), ..Default::default() };
+        match self.observe_root_main(herdr, expected).await {
+            Ok((attachment, proof)) => {
+                input.root_attachment_expected = if attachment.is_some() { expected.attachment.clone() } else { None };
+                input.attachment_observation = attachment;
+                input.root_main_recovery = proof;
+            }
+            Err(error) => input.observation_cause = Some(ResumeCause {
+                code: error.code, message: error.message, class: ResumeCauseClass::Recover,
+            }),
+        }
+        input
+    }
+
+    async fn observe_root_main(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run) -> Result<(Option<ExecutionAttachment>, Option<RootMainRecoveryProof>), InspectionError> {
+        {
+            let locked = self.store.lock()?;
+            let state = locked.read()?;
+            let run = state.runs.iter().find(|run| run.run_id == expected.run_id).ok_or_else(root_unproven)?;
+            root_recovery_target(&state, run)?;
+            if !same_root_attachment(run.attachment.as_ref().ok_or_else(root_unproven)?, expected.attachment.as_ref().ok_or_else(root_unproven)?)
+                || !same_dispatch(run.dispatch.as_ref(), expected.dispatch.as_ref()) {
+                return Err(root_unproven());
+            }
+        }
+        let attachment = expected.attachment.as_ref().ok_or_else(root_unproven)?;
+        let alive = root_main_running(attachment)?;
+        let runtime = herdr.runtime(&expected.session_id).await.map_err(|_| InspectionError::new(
+            "resume_observation_unavailable", "Fresh owned root-container evidence is unavailable; the saved incarnation is preserved"))?;
+        let pane = owned_root_pane(&runtime, expected, !alive)?;
+        let mut idle_shell = None;
+        let mut observed = None;
+        if let Some(pane) = pane {
+            let info = herdr.pane_process_info(&expected.session_id, &runtime.endpoint_identity, &pane.pane_id)
+                .await.map_err(|_| root_container_unproven())?;
+            if info.pane_id != pane.pane_id { return Err(root_container_unproven()); }
+            if alive {
+                let process = attachment.process.as_ref().ok_or_else(root_unproven)?;
+                if !pane.agent_kind.as_deref().is_some_and(super::NativeAgentKind::is_omp)
+                    || pane.native_session_id.as_ref().is_some_and(|id| attachment.main_session_id.as_ref() != Some(id))
+                    || !info.processes.iter().any(|(pid, _)| *pid == process.pid)
+                    || !matches!(process_identity::incarnation_foreground(process.pid as i32, process.start_ticks), Ok(true)) {
+                    return Err(root_container_unproven());
+                }
+                let mut fresh = attachment.clone();
+                let location = fresh.location.as_mut().ok_or_else(root_container_unproven)?;
+                location.endpoint_identity = runtime.endpoint_identity.clone();
+                location.boot_id = runtime.boot_id.clone();
+                location.tab_id = pane.tab_id.clone();
+                location.pane_id = pane.pane_id.clone();
+                location.terminal_id = pane.terminal_id.clone();
+                location.native_session_id = pane.native_session_id.clone();
+                fresh.state = AttachmentState::Connected;
+                observed = Some(fresh);
+            } else {
+                // Cached native identity is not current occupancy. A genuine
+                // shell-only foreground fingerprint, not its label, proves idle.
+                if pane.agent_kind.as_deref().is_some_and(|kind| !super::NativeAgentKind::is_omp(kind))
+                    || pane.native_session_id.as_ref().is_some_and(|id| attachment.main_session_id.as_ref() != Some(id)) {
+                    return Err(root_container_unproven());
+                }
+                let shell = info.shell_identity.as_ref().ok_or_else(root_container_unproven)?;
+                if info.shell_pid != Some(shell.process.pid) || info.foreground_pgid != info.shell_pid
+                    || info.processes.is_empty() || info.processes.iter().any(|(pid, _)| Some(*pid) != info.shell_pid)
+                    || process_identity::executable_identity(shell.process.pid as i32, shell.process.start_ticks).ok().as_ref() != Some(shell)
+                    || attachment.process.as_ref() == Some(&shell.process) {
+                    return Err(root_container_unproven());
+                }
+                idle_shell = Some(shell.clone());
+            }
+        } else if alive {
+            return Err(root_container_unproven());
+        }
+        // Re-read daemon ownership after process inspection. Ambiguity or a
+        // new/restored occupant must not turn an old empty observation into exit.
+        let fresh_runtime = herdr.runtime(&expected.session_id).await.map_err(|_| root_container_unproven())?;
+        let fresh_pane = owned_root_pane(&fresh_runtime, expected, !alive)?;
+        if fresh_runtime.endpoint_identity != runtime.endpoint_identity || fresh_runtime.boot_id != runtime.boot_id
+            || match (pane, fresh_pane) {
+                (Some(a), Some(b)) => a.pane_id != b.pane_id || a.tab_id != b.tab_id || a.terminal_id != b.terminal_id
+                    || a.native_session_id != b.native_session_id || a.agent_kind != b.agent_kind,
+                (None, None) => false,
+                _ => true,
+            } || root_main_running(attachment)? != alive {
+            return Err(root_container_unproven());
+        }
+        if let Some(observed) = observed { return Ok((Some(observed), None)); }
+        let location = attachment.location.as_ref().ok_or_else(root_unproven)?;
+        let restored_receipt = (fresh_runtime.endpoint_identity != location.endpoint_identity
+            || !super::optional_available(&location.boot_id, &fresh_runtime.boot_id))
+            && (location.terminal_id.is_none() || fresh_pane.is_some_and(|pane| pane.terminal_id != location.terminal_id));
+        let retained_checkout = if expected.kind == RunKind::Adopted && expected.dispatch.is_none() {
+            Some(fresh_root_checkout(&fresh_runtime, expected)?.clone())
+        } else if restored_receipt {
+            restored_root_receipt_checkout(expected)?;
+            Some(fresh_root_checkout(&fresh_runtime, expected)?.clone())
+        } else { None };
+        let proof = RootMainRecoveryProof { run_id: expected.run_id.clone(), session_id: expected.session_id.clone(),
+            attachment: attachment.clone(), dispatch: expected.dispatch.clone(), retained_checkout, idle_shell };
+        let locked = self.store.lock()?;
+        let state = locked.read()?;
+        let current = state.runs.iter().find(|run| run.run_id == expected.run_id).ok_or_else(root_unproven)?;
+        revalidate_root_recovery(&state, current, &proof)?;
+        Ok((None, Some(proof)))
+    }
+}
+
+impl OrchestrationService {
+    /// Worker-only all-consumer proof; never used to recover a root liaison.
     /// A stale projection, heartbeat, endpoint failure or closed status is never
     /// substituted for OS incarnation evidence.
     pub fn observe_writer_exit(&self, expected: &Run, checkout: &CheckoutIdentity) -> Result<WriterExitProof, InspectionError> {
-        self.observe_attachment_exit(expected, Some(checkout))
-    }
-
-    pub fn observe_root_exit(&self, expected: &Run) -> Result<WriterExitProof, InspectionError> {
-        if expected.kind == RunKind::Worker { return Err(exit_unproven()); }
-        self.observe_attachment_exit(expected, None)
-    }
-
-    fn observe_attachment_exit(&self, expected: &Run, checkout: Option<&CheckoutIdentity>) -> Result<WriterExitProof, InspectionError> {
+        if expected.kind != RunKind::Worker { return Err(exit_unproven()); }
         let locked = self.store.lock()?;
         let state = locked.read()?;
-        if let Some(checkout) = checkout { revalidate_checkout(checkout)?; }
+        revalidate_checkout(checkout)?;
         let run = state.runs.iter().find(|r| r.run_id == expected.run_id).ok_or_else(exit_unproven)?;
         let old = run.attachment.as_ref().ok_or_else(exit_unproven)?;
-        if expected.attachment.as_ref().is_none_or(|a| a.attachment_id != old.attachment_id || a.epoch != old.epoch)
-            || checkout.is_some_and(|c| run.checkout.as_ref() != Some(c)) { return Err(exit_unproven()); }
+        if run.kind != RunKind::Worker
+            || expected.attachment.as_ref().is_none_or(|a| a.attachment_id != old.attachment_id || a.epoch != old.epoch)
+            || run.checkout.as_ref() != Some(checkout) { return Err(exit_unproven()); }
         let machine = process_identity::machine_id().ok_or_else(exit_unproven)?;
         let boot = process_identity::kernel_boot_id().ok_or_else(exit_unproven)?;
         if old.machine_id.as_deref() != Some(machine.as_str())
-            || checkout.is_some_and(|c| c.machine_id != machine) { return Err(exit_unproven()); }
+            || checkout.machine_id != machine { return Err(exit_unproven()); }
         let previous = old.process.as_ref().and_then(|p| p.kernel_boot_id.as_ref())
             .or_else(|| old.shell.as_ref().and_then(|s| s.process.kernel_boot_id.as_ref())).ok_or_else(exit_unproven)?;
         if previous == &boot { return Err(consumer_unproven()); }
@@ -188,12 +471,9 @@ impl OrchestrationService {
             }
         }
         let incarnation = AttachmentReference { run_id: run.run_id.clone(), attachment_id: old.attachment_id.clone(), attachment_epoch: old.epoch };
-        let claim_revision = if let Some(checkout) = checkout {
-            let claim = state.checkout_claims.iter().find(|c| Some(c.claim_id.as_str()) == run.checkout_claim_id.as_deref()).ok_or_else(exit_unproven)?;
-            if claim.checkout != *checkout || claim.holder.as_ref() != Some(&incarnation) { return Err(exit_unproven()); }
-            claim.revision
-        } else { 0 };
-        Ok(WriterExitProof { incarnation, claim_revision, checkout: checkout.cloned(), machine_id: machine,
+        let claim = state.checkout_claims.iter().find(|c| Some(c.claim_id.as_str()) == run.checkout_claim_id.as_deref()).ok_or_else(exit_unproven)?;
+        if claim.checkout != *checkout || claim.holder.as_ref() != Some(&incarnation) { return Err(exit_unproven()); }
+        Ok(WriterExitProof { incarnation, claim_revision: claim.revision, checkout: Some(checkout.clone()), machine_id: machine,
             previous_kernel_boot_id: previous.clone(), observed_kernel_boot_id: boot, all_consumers_absent: true })
     }
 }

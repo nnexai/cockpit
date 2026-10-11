@@ -211,6 +211,7 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         }
         if observed.attachment_id != current.attachment_id || observed.epoch != current.epoch
             || observed.process != current.process || observed.shell != current.shell
+            || observed.main_session_id != current.main_session_id || observed.launch_attempt != current.launch_attempt
             || observed.launch_mode != current.launch_mode
             || current.machine_id.as_ref().is_some_and(|m| observed.machine_id.as_ref() != Some(m))
             || observed.machine_id.is_none() || observed.process.is_none()
@@ -220,6 +221,22 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         if current.machine_id.is_none()
             && observed.process.as_ref().and_then(crate::process_identity::verified_machine_id) != observed.machine_id {
             return Err(error("attachment_conflict", "Missing machine metadata requires freshly verified local process evidence"));
+        }
+        if state.runs[index].kind != RunKind::Worker
+            && (resolved.and_then(|input| input.root_attachment_expected.as_ref()).is_some_and(|expected|
+                !project_identity::same_root_attachment(current, expected))
+                || (!project_identity::same_location(current.location.as_ref(), observed.location.as_ref())
+                    && resolved.and_then(|input| input.root_attachment_expected.as_ref()).is_none())) {
+            return Err(error("attachment_conflict", "Root location changed during the physical observation"));
+        }
+        if let Some(expected) = resolved.and_then(|input| input.root_attachment_expected.as_ref()) {
+            project_identity::revalidate_root_observation(state, &state.runs[index], expected)?;
+        }
+        if state.runs[index].kind != RunKind::Worker
+            && !project_identity::same_location(current.location.as_ref(), observed.location.as_ref())
+            && let Some(dispatch) = state.runs[index].dispatch.as_mut() {
+            dispatch.endpoint_identity = observed.location.as_ref().map(|location| location.endpoint_identity.clone());
+            dispatch.updated_at = now();
         }
         state.runs[index].attachment = Some(observed.clone());
         if state.runs[index].project.is_none() {
@@ -231,18 +248,28 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
                 "The live incarnation is preserved, but no current-epoch credential-authenticated attachment proves a compatible loaded extension", false);
         }
         let resume = state.runs[index].resume.as_mut().expect("matched resume");
-        resume.phase = ResumePhase::Reattached;
+        resume.phase = if resume.replacement_attachment_epoch == Some(observed.epoch) {
+            ResumePhase::Connected
+        } else {
+            ResumePhase::Reattached
+        };
         resume.cause = None;
         resume.updated_at = now();
         return Ok(());
     }
-    let proof = resolved.and_then(|r| r.writer_exit_proof.as_ref());
-    if let Some(proof) = proof {
-        if proof.incarnation.run_id != state.runs[index].run_id {
-            return Err(error("writer_exit_unproven", "Exit proof belongs to another job"));
-        }
-        if let Some(checkout) = proof.checkout.as_ref() {
-            project_identity::revalidate_checkout(checkout)?;
+    let writer_proof = resolved.and_then(|r| r.writer_exit_proof.as_ref());
+    let root_proof = resolved.and_then(|r| r.root_main_recovery.as_ref());
+    if writer_proof.is_some() || root_proof.is_some() {
+        if state.runs[index].kind == RunKind::Worker {
+            let proof = writer_proof.ok_or_else(|| error("writer_exit_unproven", "Root-main proof cannot transfer a worker claim"))?;
+            if proof.incarnation.run_id != state.runs[index].run_id || root_proof.is_some() {
+                return Err(error("writer_exit_unproven", "Exit proof belongs to another job"));
+            }
+            if let Some(checkout) = proof.checkout.as_ref() {
+                project_identity::revalidate_checkout(checkout)?;
+            }
+        } else if root_proof.is_none() || writer_proof.is_some() {
+            return Err(error("root_main_exit_unproven", "Root-main recovery requires its dedicated physical observation"));
         }
         if state.runs[index].dispatch.as_ref().is_some_and(|d| matches!(d.step, DispatchStep::SetupUnknown | DispatchStep::SetupRunning)) {
             return block(state, index, "resume_effect_unknown", "Unsettled setup must be reconciled before replacement", false);
@@ -250,14 +277,33 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         let current = state.runs[index].attachment.as_ref().ok_or_else(|| error("writer_exit_unproven", "No recorded incarnation to replace"))?;
         let receipts = effects(&state.runs[index]);
         let epoch = current.epoch.checked_add(1).filter(|n| *n <= MAX_SAFE_COUNTER).ok_or_else(|| error("orchestration_state_full", "Attachment epoch exhausted"))?;
-        let launch_attempt = state.runs[index].dispatch.as_ref().map(|d| d.launch_attempt).unwrap_or(0).checked_add(1)
+        let launch_attempt = state.runs[index].dispatch.as_ref().map(|d| d.launch_attempt).unwrap_or(current.launch_attempt).checked_add(1)
             .ok_or_else(|| error("orchestration_state_full", "Launch attempt exhausted"))?;
         let replacement = reserved_attachment(epoch, launch_attempt);
         if state.runs[index].kind == RunKind::Worker {
             let claim_id = state.runs[index].checkout_claim_id.clone().ok_or_else(|| error("writer_exit_unproven", "Worker checkout is not reconciled"))?;
-            claims::revoke_and_reserve_replacement(state, &claim_id, proof, replacement, operation_id)?;
+            claims::revoke_and_reserve_replacement(state, &claim_id, writer_proof.expect("worker proof validated"), replacement, operation_id)?;
         } else {
-            claims::revoke_root_and_reserve_replacement(state, proof, replacement, operation_id)?;
+            claims::revoke_root_and_reserve_replacement(state, root_proof.expect("root proof validated"), replacement, operation_id)?;
+            if state.runs[index].kind == RunKind::Adopted && state.runs[index].dispatch.is_none() {
+                // The observer verified the retained physical checkout and
+                // existing Space before revocation. No setup/ownership effect
+                // is invented; the ordinary dispatcher opens a new liaison tab.
+                let proof = root_proof.expect("root proof validated");
+                let checkout = proof.retained_checkout.as_ref().expect("adopted checkout revalidated");
+                let location = proof.attachment.location.as_ref().expect("root location revalidated");
+                let run = &mut state.runs[index];
+                run.target = Some(DispatchTarget::ExistingSpace { workspace_id: location.workspace_id.clone() });
+                run.setup = Some(SetupSummary {
+                    operation_id: None, generation: None, workspace_id: Some(location.workspace_id.clone()),
+                    checkout_path: checkout.path.clone(), repository_id: run.project.as_ref().and_then(|project| project.repository_id.clone()),
+                    branch: None, base: None, base_commit: None, ownership: None,
+                    effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+                });
+                let mut previous = dispatch(DispatchStep::Launched);
+                previous.launch_attempt = proof.attachment.launch_attempt;
+                run.dispatch = Some(previous);
+            }
         }
         if let Some(operation) = state.operations.iter_mut().find(|record| record.operation_id == operation_id) {
             operation.effect_receipts.extend(receipts);
@@ -491,10 +537,15 @@ impl OrchestrationService {
         };
         let stop_pending = state.runs[index].attachment.as_ref().is_some_and(|a| a.state == AttachmentState::Quiescing)
             && resolved.attachment_observation.is_some();
-        if matches!(current.phase, ResumePhase::Connected | ResumePhase::Reattached)
+        let unchanged_observation = resolved.attachment_observation.as_ref().is_some_and(|observed|
+            state.runs[index].attachment.as_ref().is_some_and(|attachment|
+                project_identity::same_root_attachment(attachment, observed))
+            && has_current_binding(&state, &state.runs[index]));
+        if (matches!(current.phase, ResumePhase::Connected | ResumePhase::Reattached) && unchanged_observation)
             || stop_pending
             || (current.phase == ResumePhase::Launching && resolved.attachment_observation.is_none())
-            || (resolved.writer_exit_proof.is_none() && resolved.attachment_observation.is_none() && same_cause) {
+            || (resolved.writer_exit_proof.is_none() && resolved.root_main_recovery.is_none()
+                && resolved.attachment_observation.is_none() && same_cause) {
             return Ok(RunResumeResult { run_id: run_id.into(), resume: current.clone(), duplicate: true });
         }
         if resolved.writer_exit_proof.is_some() && state.runs[index].kind == RunKind::Worker {
@@ -521,7 +572,7 @@ impl OrchestrationService {
         }
         if let Some(resume) = &current.resume {
             let settled = matches!(resume.phase, ResumePhase::Connected | ResumePhase::Reattached);
-            if !settled || (resolved.writer_exit_proof.is_none() && resolved.observation_cause.is_none()) {
+            if !settled || (resolved.writer_exit_proof.is_none() && resolved.root_main_recovery.is_none() && resolved.observation_cause.is_none()) {
                 return self.advance_resume_observed(&current.run_id, &resume.operation_id, resolved);
             }
             // A later disconnection belongs to a new owner operation; a

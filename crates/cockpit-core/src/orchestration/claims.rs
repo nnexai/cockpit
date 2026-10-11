@@ -35,6 +35,18 @@ pub struct WriterExitProof {
     pub(crate) all_consumers_absent: bool,
 }
 
+/// Recovery authority for the liaison main only, never consumer closure or
+/// checkout transfer. Constructed from fresh physical root-container evidence.
+#[derive(Debug, Clone)]
+pub struct RootMainRecoveryProof {
+    pub(crate) run_id: String,
+    pub(crate) session_id: String,
+    pub(crate) attachment: ExecutionAttachment,
+    pub(crate) dispatch: Option<cockpit_protocol::orchestration::DispatchState>,
+    pub(crate) retained_checkout: Option<cockpit_protocol::orchestration::CheckoutIdentity>,
+    pub(crate) idle_shell: Option<cockpit_protocol::orchestration::NativeShellIdentity>,
+}
+
 fn refusal(code: &str, text: &str) -> InspectionError { InspectionError::new(code, text) }
 fn absolute_normal(path: &str) -> bool {
     Path::new(path).is_absolute() && !Path::new(path).components().any(|c| matches!(c, Component::ParentDir | Component::CurDir))
@@ -139,26 +151,23 @@ pub(crate) fn revoke_and_reserve_replacement(state: &mut OrchestrationState, cla
     Ok(next)
 }
 
-pub(crate) fn revoke_root_and_reserve_replacement(state: &mut OrchestrationState, proof: &WriterExitProof, replacement: ExecutionAttachment, operation_id: &str) -> Result<(), InspectionError> {
+pub(crate) fn revoke_root_and_reserve_replacement(state: &mut OrchestrationState, proof: &RootMainRecoveryProof, replacement: ExecutionAttachment, operation_id: &str) -> Result<(), InspectionError> {
     super::tasks_md::validate_uuid(operation_id)?;
     super::tasks_md::validate_uuid(&replacement.attachment_id)?;
-    let index = state.runs.iter().position(|r| r.run_id == proof.incarnation.run_id)
+    let index = state.runs.iter().position(|r| r.run_id == proof.run_id)
         .ok_or_else(|| refusal("run_not_found", "root run was not found"))?;
     let run = &state.runs[index];
+    super::project_identity::revalidate_root_recovery(state, run, proof)?;
     let old = run.attachment.as_ref().ok_or_else(|| refusal("attachment_conflict", "root attachment is missing"))?;
-    let boot = old.process.as_ref().and_then(|p| p.kernel_boot_id.as_ref()).or_else(|| old.shell.as_ref().and_then(|s| s.process.kernel_boot_id.as_ref()));
     let epoch = old.epoch.checked_add(1).filter(|e| *e <= MAX_SAFE_COUNTER)
         .ok_or_else(|| refusal("orchestration_state_full", "attachment epoch exhausted"))?;
-    if run.kind == RunKind::Worker || run.parent_run_id.is_some() || run.checkout_claim_id.is_some()
-        || old.attachment_id != proof.incarnation.attachment_id || old.epoch != proof.incarnation.attachment_epoch
-        || old.state == AttachmentState::Revoked || old.machine_id.as_ref() != Some(&proof.machine_id)
-        || proof.claim_revision != 0 || proof.machine_id.is_empty() || boot != Some(&proof.previous_kernel_boot_id)
-        || proof.previous_kernel_boot_id.is_empty() || proof.observed_kernel_boot_id.is_empty() || !proof.all_consumers_absent
-        || proof.previous_kernel_boot_id == proof.observed_kernel_boot_id
-        || replacement.epoch != epoch || replacement.attachment_id == old.attachment_id
+    let attempt = old.launch_attempt.checked_add(1)
+        .ok_or_else(|| refusal("orchestration_state_full", "launch attempt exhausted"))?;
+    if replacement.epoch != epoch || replacement.attachment_id == old.attachment_id
         || replacement.state != AttachmentState::Reserved || replacement.process.is_some() || replacement.shell.is_some()
-        || replacement.location.is_some() {
-        return Err(refusal("writer_exit_unproven", "root replacement requires same-machine evidence covering all owned consumers"));
+        || replacement.location.is_some() || replacement.main_session_id.is_some()
+        || replacement.machine_id.is_some() || replacement.launch_mode.is_some() || replacement.launch_attempt != attempt {
+        return Err(refusal("root_main_exit_unproven", "Root replacement must reserve exactly the next main attachment"));
     }
     for credential in &mut state.credentials {
         if credential.run_id == run.run_id && credential.attachment_id == old.attachment_id && credential.attachment_epoch == old.epoch {
@@ -234,5 +243,66 @@ mod tests {
     fn ancestor_writer_cannot_be_bypassed_by_subdirectory() {
         assert!(checkouts_conflict(&checkout("/repo", "a"), &checkout("/repo/sub", "b")));
         assert!(!checkouts_conflict(&checkout("/repo", "a"), &checkout("/repository", "b")));
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_main_cutover_revalidates_incarnation_dispatch_and_claim_fences_atomically() {
+        use cockpit_protocol::orchestration::{NativeProcessIdentity, RunLocation, RunStage, DispatchStep};
+        let mut original = OrchestrationState::default();
+        let id = Uuid::new_v4().to_string();
+        let mut root = super::super::new_run(&id, "session", RunKind::Supervisor, "Root".into(), &id, None, None, 1);
+        root.stage = RunStage::Active;
+        let attachment = root.attachment.as_mut().unwrap();
+        attachment.state = AttachmentState::Disconnected;
+        attachment.launch_attempt = 1;
+        attachment.machine_id = crate::process_identity::machine_id();
+        attachment.main_session_id = Some("native".into());
+        attachment.process = Some(NativeProcessIdentity { pid: i32::MAX as u32, start_ticks: 1,
+            kernel_boot_id: crate::process_identity::kernel_boot_id() });
+        attachment.location = Some(RunLocation {
+            endpoint_identity: "endpoint".into(), boot_id: None, session_id: "session".into(),
+            workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(),
+            terminal_id: Some("terminal".into()), native_session_id: Some("native".into()), launch_tag: "tag".into(),
+        });
+        let mut dispatch = super::super::dispatch(DispatchStep::Launched);
+        dispatch.launch_tag = Some("tag".into());
+        dispatch.endpoint_identity = Some("endpoint".into());
+        root.dispatch = Some(dispatch);
+        let proof = RootMainRecoveryProof { run_id: id.clone(), session_id: "session".into(),
+            attachment: root.attachment.clone().unwrap(), dispatch: root.dispatch.clone(), retained_checkout: None, idle_shell: None };
+        original.runs.push(root);
+        let holder = worker(&mut original, "independent-worker");
+        let claim_id = reserve_claim(&mut original, &checkout("/worker", "worker-checkout"), &holder, &Uuid::new_v4().to_string()).unwrap();
+        for fence in 0..9 {
+            let mut state = original.clone();
+            let root = &mut state.runs[0];
+            match fence {
+                0 => {}
+                1 => root.attachment.as_mut().unwrap().epoch += 1,
+                2 => root.attachment.as_mut().unwrap().location.as_mut().unwrap().endpoint_identity = "newer-endpoint".into(),
+                3 => root.dispatch.as_mut().unwrap().launch_attempt += 1,
+                4 => root.dispatch.as_mut().unwrap().step = DispatchStep::LaunchUnknown,
+                5 => root.attachment.as_mut().unwrap().process.as_mut().unwrap().start_ticks += 1,
+                6 => root.checkout_claim_id = Some(claim_id.clone()),
+                7 => root.attachment.as_mut().unwrap().state = AttachmentState::Quiescing,
+                8 => {
+                    state.checkout_claims[0].holder = Some(AttachmentReference { run_id: id.clone(),
+                        attachment_id: proof.attachment.attachment_id.clone(), attachment_epoch: proof.attachment.epoch });
+                }
+                _ => unreachable!(),
+            }
+            let before = serde_json::to_vec(&state).unwrap();
+            let result = revoke_root_and_reserve_replacement(&mut state, &proof,
+                super::super::reserved_attachment(2, 2), &Uuid::new_v4().to_string());
+            if fence == 0 {
+                result.unwrap();
+                assert_eq!(state.runs[0].attachment.as_ref().unwrap().epoch, 2);
+                assert_eq!(serde_json::to_value(&state.runs[1]).unwrap(), serde_json::to_value(&original.runs[1]).unwrap());
+                assert_eq!(serde_json::to_value(&state.checkout_claims).unwrap(), serde_json::to_value(&original.checkout_claims).unwrap());
+            } else {
+                assert!(result.is_err(), "fence {fence}");
+                assert_eq!(serde_json::to_vec(&state).unwrap(), before, "refusal {fence} must not mutate any authority");
+            }
+        }
     }
 }

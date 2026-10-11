@@ -192,7 +192,9 @@ impl Dispatcher {
             let Ok(current) = self.service.run_for_review(&queued.session_id, &queued.run_id) else { continue };
             let Some(attachment) = &current.attachment else { continue };
             let mut input = super::ResolvedMutationInput::default();
-            if attachment.process.as_ref().is_some_and(|p|
+            if current.kind != RunKind::Worker {
+                input = self.service.observe_root_resume(self.herdr.as_ref(), &current).await;
+            } else if attachment.process.as_ref().is_some_and(|p|
                 crate::process_identity::verified_machine_id(p).as_ref() == attachment.machine_id.as_ref()
                     && attachment.machine_id.is_some()) {
                 if attachment.state == cockpit_protocol::orchestration::AttachmentState::Quiescing { continue; }
@@ -217,14 +219,6 @@ impl Dispatcher {
                         input.checkout = Some(checkout);
                     }
                     _ => continue,
-                }
-            } else {
-                match self.service.observe_root_exit(&current) {
-                    Ok(proof) => input.writer_exit_proof = Some(proof),
-                    Err(error) => input.observation_cause = Some(cockpit_protocol::orchestration::ResumeCause {
-                        code: error.code, message: error.message,
-                        class: cockpit_protocol::orchestration::ResumeCauseClass::Recover,
-                    }),
                 }
             }
             if input.writer_exit_proof.is_some()

@@ -407,11 +407,12 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
                         },
                     )
                     .unwrap();
-                fixture.resume_exited(&Actor::Operator(OperatorOrigin::Browser), &root);
-                assert_eq!(
-                    fixture.run(&root).dispatch.unwrap().launch_attempt,
-                    reviewed.dispatch.as_ref().unwrap().launch_attempt + 1
-                );
+                fixture.operator(fixture.resume_action(&root));
+                let retained = fixture.run(&root);
+                assert_eq!(retained.resume.as_ref().unwrap().phase, ResumePhase::Blocked,
+                    "An uncertain initial launch has no root-main recovery authority");
+                assert_eq!(retained.dispatch.unwrap().launch_attempt,
+                    reviewed.dispatch.as_ref().unwrap().launch_attempt);
             }
             2 => {
                 fixture

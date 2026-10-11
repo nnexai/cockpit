@@ -207,15 +207,10 @@ impl Fixture {
     fn resume_exited(&self, actor: &Actor, run_id: &str) -> OrchestrationMutationResponse {
         let run = self.run(run_id);
         let attachment = run.attachment.as_ref().unwrap();
+        assert_eq!(run.kind, RunKind::Worker, "Root recovery tests use the dedicated physical observer");
         let claim = self.state().checkout_claims.into_iter()
-            .find(|claim| run.checkout_claim_id.as_ref() == Some(&claim.claim_id));
-        let (claim_revision, checkout) = match claim {
-            Some(claim) => (claim.revision, Some(claim.checkout)),
-            None => {
-                assert_ne!(run.kind, RunKind::Worker);
-                (0, None)
-            }
-        };
+            .find(|claim| run.checkout_claim_id.as_ref() == Some(&claim.claim_id)).unwrap();
+        let (claim_revision, checkout) = (claim.revision, Some(claim.checkout));
         let proof = claims::WriterExitProof {
             incarnation: AttachmentReference {
                 run_id: run_id.into(), attachment_id: attachment.attachment_id.clone(),

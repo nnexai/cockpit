@@ -20,7 +20,10 @@ export function agentState(snapshot: OrchestrationSnapshot, run: Run, connected:
   const observed = snapshot.runtime.status === "fresh" && connected && runtimeLive ? snapshot.runtime.runs.find(item => item.run_id === run.run_id) : undefined;
   const terminal = observed?.presence === "present" && !!observed.pane_id;
   const resuming = !!run.resume && ["reconciling", "waiting_quiescence", "launching"].includes(run.resume.phase);
-  const restartable = snapshot.runtime.status === "fresh" && connected && runtimeLive && observed?.presence !== "endpoint_changed" && !resuming;
+  const inspectableRoot = (run.kind === "supervisor" || run.kind === "adopted")
+    && run.run_id === run.root_id && run.parent_run_id === null && run.checkout_claim_id === null;
+  const restartable = snapshot.runtime.status === "fresh" && connected && runtimeLive
+    && (observed?.presence !== "endpoint_changed" || inspectableRoot) && !resuming;
   const state = (kind: AgentState["kind"], label: string, detail: string, verified = false): AgentState => ({ kind, label, detail, verified, blocked: verified && observed?.agent_status === "blocked", terminal, restartable });
   if (!connected || !runtimeLive) return state("offline", "Connection lost", "Showing saved tasks. The agent may still be running.");
   if (snapshot.runtime.status !== "fresh") return state("offline", "Cannot check the agent right now", "Showing saved tasks. Herdr observation is unavailable; no absence is inferred.");

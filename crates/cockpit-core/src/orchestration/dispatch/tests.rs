@@ -659,66 +659,117 @@ async fn dispatch_reservation_refuses_changed_inode_without_rotating_epoch_or_cl
     }
 }
 #[cfg(target_os = "linux")]
-#[test]
-fn root_exit_proof_requires_same_machine_reboot_for_every_known_owned_attachment() {
-    use cockpit_protocol::orchestration::AttachmentLaunchMode;
+#[tokio::test]
+async fn root_main_exit_proof_is_same_boot_and_independent_of_worker_consumers() {
+    use cockpit_protocol::orchestration::{AttachmentState, NativeProcessIdentity};
     let machine = crate::process_identity::machine_id().unwrap();
-    let current_boot = crate::process_identity::kernel_boot_id().unwrap();
-    let previous_boot = loop {
-        let candidate = uuid::Uuid::new_v4().to_string();
-        if candidate != current_boot { break candidate; }
-    };
-    for case in 0..6 {
+    let boot = crate::process_identity::kernel_boot_id().unwrap();
+    for case in 0..11 {
         let fixture = ReviewFixture::new(RunStage::Active);
         fixture.change(|run| {
             let attachment = test_attachment(run);
-            attachment.machine_id = match case {
-                1 => None,
-                2 => Some("different-machine".into()),
-                _ => Some(machine.clone()),
-            };
-            attachment.launch_mode = Some(AttachmentLaunchMode::ShellAgent);
-            attachment.shell.as_mut().unwrap().process.kernel_boot_id = Some(previous_boot.clone());
+            attachment.state = AttachmentState::Disconnected;
+            attachment.machine_id = Some(machine.clone());
+            attachment.process = Some(NativeProcessIdentity { pid: i32::MAX as u32, start_ticks: 1, kernel_boot_id: Some(boot.clone()) });
+            attachment.launch_attempt = 1;
+            let dispatch = run.dispatch.as_mut().unwrap();
+            dispatch.step = DispatchStep::Launched;
+            dispatch.launch_attempt = 1;
+            match case {
+                1 => test_attachment(run).machine_id = None,
+                2 => test_attachment(run).machine_id = Some("different-machine".into()),
+                3 => test_attachment(run).process = Some(NativeProcessIdentity {
+                    pid: std::process::id(), start_ticks: crate::process_identity::start_identity(std::process::id() as i32).unwrap(),
+                    kernel_boot_id: Some(boot.clone()),
+                }),
+                4 => test_attachment(run).process = None,
+                7 => run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchUnknown,
+                8 => test_attachment(run).state = AttachmentState::Quiescing,
+                9 => test_attachment(run).main_session_id = None,
+                10 => test_attachment(run).process.as_mut().unwrap().kernel_boot_id = Some(uuid::Uuid::new_v4().to_string()),
+                _ => {}
+            }
         });
         let current = fixture.current().1;
-        if case >= 3 {
+        if case == 5 {
             let id = uuid::Uuid::new_v4().to_string();
-            let mut child = crate::orchestration::new_run(
-                &id, "test-session", RunKind::Worker, "Known owned child".into(),
-                &current.root_id, Some(current.run_id.clone()), Some(uuid::Uuid::new_v4().to_string()), 1,
-            );
+            let mut child = crate::orchestration::new_run(&id, "test-session", RunKind::Worker,
+                "Independently live worker".into(), &current.root_id, Some(current.run_id.clone()), Some(uuid::Uuid::new_v4().to_string()), 1);
             let attachment = test_attachment(&mut child);
-            attachment.machine_id = match case {
-                3 => None,
-                4 => Some("different-machine".into()),
-                _ => Some(machine.clone()),
-            };
-            attachment.launch_mode = Some(AttachmentLaunchMode::ShellAgent);
-            attachment.shell = current.attachment.as_ref().unwrap().shell.clone();
+            attachment.machine_id = Some(machine.clone());
+            attachment.process = Some(NativeProcessIdentity { pid: std::process::id(),
+                start_ticks: crate::process_identity::start_identity(std::process::id() as i32).unwrap(), kernel_boot_id: Some(boot.clone()) });
             let locked = fixture.service.store.lock().unwrap();
             let mut state = locked.read().unwrap();
             state.runs.push(child);
             locked.save(&mut state).unwrap();
         }
+        if case == 6 {
+            fixture.change(|run| run.checkout_claim_id = Some(uuid::Uuid::new_v4().to_string()));
+        }
+        let expected = fixture.current().1;
         let before = fixture.service.store.lock().unwrap().read().unwrap();
-        let observed = fixture.service.observe_root_exit(&current);
-        if matches!(case, 0 | 5) {
-            let proof = observed.unwrap();
-            assert_eq!(proof.incarnation.run_id, current.run_id);
-            assert_eq!(proof.incarnation.attachment_id, current.attachment.as_ref().unwrap().attachment_id);
-            assert_eq!(proof.incarnation.attachment_epoch, current.attachment.as_ref().unwrap().epoch);
-            assert_eq!(proof.machine_id, machine);
-            assert_eq!(proof.previous_kernel_boot_id, previous_boot);
-            assert_eq!(proof.observed_kernel_boot_id, current_boot);
-            assert!(proof.all_consumers_absent);
-            assert!(proof.checkout.is_none());
+        let mut absent = runtime();
+        absent.panes.clear();
+        absent.endpoint_identity = "restarted-endpoint".into();
+        let herdr = CountingHerdr::new(absent, false, false);
+        let observed = fixture.service.observe_root_resume(&herdr, &expected).await;
+        assert!(observed.writer_exit_proof.is_none(), "root authority never claims worker consumer closure");
+        if matches!(case, 0 | 5 | 10) {
+            let proof = observed.root_main_recovery.unwrap();
+            assert_eq!(proof.run_id, expected.run_id);
+            assert_eq!(proof.attachment.process, expected.attachment.as_ref().unwrap().process);
+            assert!(proof.idle_shell.is_none());
         } else {
-            assert_eq!(observed.unwrap_err().code, "writer_exit_unproven", "case {case}");
+            assert!(observed.root_main_recovery.is_none(), "case {case}");
+            assert!(observed.observation_cause.is_some(), "case {case}");
         }
         let after = fixture.service.store.lock().unwrap().read().unwrap();
         assert_eq!(serde_json::to_value(after).unwrap(), serde_json::to_value(before).unwrap(),
-            "exit observation must not change epochs, claims or durable history");
+            "observation must not change epochs, worker claims or durable history");
     }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn automatic_root_observation_reserves_one_epoch_and_keeps_the_root_identity() {
+    let fixture = ReviewFixture::new(RunStage::Active);
+    fixture.change(|run| {
+        let attachment = test_attachment(run);
+        attachment.state = cockpit_protocol::orchestration::AttachmentState::Disconnected;
+        attachment.machine_id = crate::process_identity::machine_id();
+        attachment.launch_attempt = 1;
+        attachment.process = Some(cockpit_protocol::orchestration::NativeProcessIdentity {
+            pid: i32::MAX as u32, start_ticks: 1, kernel_boot_id: crate::process_identity::kernel_boot_id(),
+        });
+        let dispatch = run.dispatch.as_mut().unwrap();
+        dispatch.step = DispatchStep::Launched;
+        dispatch.launch_attempt = 1;
+        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
+        run.setup = Some(SetupSummary {
+            operation_id: None, generation: None, workspace_id: Some("space".into()), checkout_path: "/".into(),
+            repository_id: None, branch: None, base: None, base_commit: None, ownership: None,
+            effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+        });
+    });
+    let old = fixture.current().1;
+    let mut absent = runtime();
+    absent.panes.clear();
+    let herdr = Arc::new(CountingHerdr::new(absent, false, false));
+    let dispatcher = fixture.dispatcher(herdr.clone());
+    dispatcher.observe().await;
+    let recovered = fixture.current().1;
+    assert_eq!(recovered.resume.as_ref().unwrap().phase, cockpit_protocol::orchestration::ResumePhase::Launching,
+        "Automatic recovery refusal: {:?}", recovered.resume.as_ref().unwrap().cause);
+    assert_eq!(recovered.run_id, old.run_id);
+    assert_eq!(recovered.attachment.as_ref().unwrap().epoch, old.attachment.as_ref().unwrap().epoch + 1);
+    assert_eq!(recovered.dispatch.as_ref().unwrap().launch_attempt, old.dispatch.as_ref().unwrap().launch_attempt + 1);
+    assert_eq!(recovered.stage, RunStage::Starting);
+    let epoch = recovered.attachment.as_ref().unwrap().epoch;
+    dispatcher.observe().await;
+    assert_eq!(fixture.current().1.attachment.as_ref().unwrap().epoch, epoch);
+    assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().runs.len(), 1);
+    herdr.assert_read_only();
 }
 
 

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import { CockpitClientError } from "../../client/CockpitClient";
-import type { CleanupState, OwnedResourceKind, OrchestrationSnapshot, OrchestrationWaitResponse, Run, RunCleanupSummary, RunObservation, SessionSnapshotResponse, TaskBoard, TaskView } from "../../protocol/generated/v1";
+import type { CleanupState, OwnedResourceKind, OrchestrationMutationResponse, OrchestrationSnapshot, OrchestrationWaitResponse, Run, RunCleanupSummary, RunObservation, SessionSnapshotResponse, TaskBoard, TaskView } from "../../protocol/generated/v1";
 import { agentState, taskStatus } from "./SupervisorActions";
 import { SupervisorView } from "./SupervisorView";
 
@@ -540,6 +540,111 @@ describe("Supervisor authority and retained operations", () => {
     expect(document.activeElement).toBe(other);
     expect(fixture.onTerminal).not.toHaveBeenCalled();
     other.remove();
+  });
+  it("inspects a blocked endpoint-changed root through replacement Launching and Connected snapshots while retaining the same question draft", async () => {
+    const original = run({
+      last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at },
+      attachment: { ...run().attachment!, state: "disconnected" },
+      resume: { operation_id: "blocked-operation", run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause: { code: "endpoint_changed", message: "The server identity changed.", class: "recover" }, decision_id: null, replacement_attachment_epoch: null, updated_at: at },
+    });
+    const state = snapshot([original]);
+    state.runtime = { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "endpoint_changed", actual_omp: false, pane_id: null })] };
+    // Blocked records are not members of the phase-only restoration cohort.
+    state.restoration = { reattached: 0, total_attachments: 0, cleanup_pending: 0 };
+    const fixture = await mount(state);
+    const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    enter(field, "Keep this exact checkout choice");
+    expect(host.querySelector(".supervisor-summary-state")?.textContent).toContain("Can't resume");
+    expect(host.querySelector(".supervisor-summary-observed")?.textContent).toContain("0 agents observed");
+    expect(host.querySelector(".supervisor-queue-row.is-recover")).not.toBeNull();
+    expect(host.querySelector(".supervisor-summary-banner")).toBeNull();
+    const resume = host.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")!;
+    expect(resume.textContent).toBe("Resume");
+    expect(resume.getAttribute("aria-disabled")).toBe("false");
+    let complete!: (response: OrchestrationMutationResponse) => void;
+    const promise = new Promise<OrchestrationMutationResponse>(resolve => { complete = resolve; });
+    fixture.mutation.mockImplementationOnce(() => promise);
+    act(() => { resume.focus(); resume.click(); }); await settle();
+    const request = fixture.mutation.mock.calls[0][0];
+    expect(request.action).toEqual({ action: "run_resume", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: 1, mode: "reattach_or_restart", decision_id: null });
+    if (request.action.action !== "run_resume") throw new Error("Expected root inspection");
+    expect(host.querySelector(".supervisor-summary-shortcut button")).toBe(resume);
+    expect(resume.textContent).toBe("Resuming…");
+    expect(resume.getAttribute("aria-disabled")).toBe("true");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    act(() => field.focus());
+    const reconciling = run({ ...original, resume: { ...original.resume!, operation_id: request.action.operation_id, phase: "reconciling", cause: null } });
+    const inspecting = { ...state, revision: 2, runs: [reconciling], restoration: { reattached: 0, total_attachments: 1, cleanup_pending: 0 } };
+    fixture.replace(inspecting);
+    await act(async () => { complete({ revision: 2, result: { result: "run_resumed", resume: { run_id: "root", resume: reconciling.resume!, duplicate: false } } }); });
+    await settle();
+    expect(resume.textContent).toBe("Resuming…");
+    expect(resume.getAttribute("aria-disabled")).toBe("true");
+    expect(host.querySelector(".supervisor-summary-banner")?.textContent).toBe("Restored from saved tasks · reconnecting agents (0 of 1)");
+    expect(host.querySelector(".supervisor-queue-row.is-recover")).toBeNull();
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')?.value).toBe("Keep this exact checkout choice");
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    const launching = run({
+      ...reconciling, stage: "starting",
+      dispatch: { ...original.dispatch!, endpoint_identity: "replacement-endpoint", launch_attempt: 2, step: "launch_pending", agent_started: false },
+      attachment: { ...original.attachment!, attachment_id: "00000000-0000-4000-8000-000000000002", epoch: 2, state: "connecting", launch_attempt: 2, main_session_id: null, location: { ...original.attachment!.location!, endpoint_identity: "replacement-endpoint", terminal_id: "replacement-terminal", pane_id: "replacement-pane", native_session_id: null } },
+      resume: { ...reconciling.resume!, phase: "launching", replacement_attachment_epoch: 2 },
+    });
+    const pending = { ...inspecting, revision: 3, runs: [launching], runtime: { status: "fresh" as const, endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "present", actual_omp: false, pane_id: "replacement-pane" })] } };
+    await fixture.push(pending);
+    expect(host.querySelector(".supervisor-summary-state")?.textContent).toContain("Resuming…");
+    expect(resume.getAttribute("aria-disabled")).toBe("true");
+    expect(host.querySelector(".supervisor-summary-observed")?.textContent).toContain("0 agents observed");
+    expect(host.querySelector(".supervisor-summary-banner")?.textContent).toBe("Restored from saved tasks · reconnecting agents (0 of 1)");
+    expect(host.querySelector(".supervisor-queue-row.is-recover")).toBeNull();
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')?.value).toBe("Keep this exact checkout choice");
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    const connected = run({ ...launching, stage: "active", dispatch: { ...launching.dispatch!, step: "launched", agent_started: true }, attachment: { ...launching.attachment!, state: "connected", main_session_id: "replacement-conversation", location: { ...launching.attachment!.location!, native_session_id: "replacement-conversation" } }, resume: { ...launching.resume!, phase: "connected" } });
+    const ready = { ...pending, revision: 4, runs: [connected], restoration: { reattached: 1, total_attachments: 1, cleanup_pending: 0 }, runtime: { ...pending.runtime, runs: [observed("root", { pane_id: "replacement-pane" })] } };
+    await fixture.push(ready);
+    expect(host.querySelector(".supervisor-summary-state")?.textContent).toContain("Managing tasks");
+    expect(host.querySelector(".supervisor-summary-observed")?.textContent).toContain("1 agents observed");
+    expect(host.querySelector(".supervisor-summary-shortcut button")?.textContent).toBe("Open terminal");
+    expect(host.querySelector(".supervisor-summary-banner")).toBeNull();
+    expect(host.querySelector(".supervisor-queue-row.is-recover")).toBeNull();
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')?.value).toBe("Keep this exact checkout choice");
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(fixture.onClose).not.toHaveBeenCalled();
+  });
+  it.each(["supervisor", "adopted"] as const)("shows a surviving endpoint-changed %s reconnecting and then freshly observed", async kind => {
+    const original = run({ kind, dispatch: kind === "adopted" ? null : run().dispatch, attachment: { ...run().attachment!, state: "disconnected" } });
+    const state = snapshot([original]);
+    state.runtime = { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "endpoint_changed", actual_omp: false, pane_id: null })] };
+    const fixture = await mount(state);
+    fixture.mutation.mockImplementationOnce(async request => {
+      if (request.action.action !== "run_resume") throw new Error("Expected root inspection");
+      const reconciling = run({ ...original, resume: { operation_id: request.action.operation_id, run_id: "root", previous_attachment_epoch: 1, phase: "reconciling", cause: null, decision_id: null, replacement_attachment_epoch: null, updated_at: at } });
+      fixture.replace({ ...state, revision: 2, runs: [reconciling], restoration: { reattached: 0, total_attachments: 1, cleanup_pending: 0 } });
+      return { revision: 2, result: { result: "run_resumed", resume: { run_id: "root", resume: { operation_id: request.action.operation_id, run_id: "root", previous_attachment_epoch: 1, phase: "reconciling", cause: null, decision_id: null, replacement_attachment_epoch: null, updated_at: at }, duplicate: false } } };
+    });
+    const resume = host.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")!;
+    expect(resume.getAttribute("aria-disabled")).toBe("false");
+    expect(host.querySelector(".supervisor-queue-row.is-recover")).not.toBeNull();
+    act(() => { resume.focus(); resume.click(); }); await settle();
+    const action = fixture.mutation.mock.calls[0][0].action;
+    expect(action).toMatchObject({ action: "run_resume", run_id: "root", expected_attachment_epoch: 1, mode: "reattach_or_restart" });
+    if (action.action !== "run_resume") throw new Error("Expected root inspection");
+    expect(host.querySelector(".supervisor-summary-state")?.textContent).toContain("Resuming…");
+    expect(host.querySelector(".supervisor-summary-shortcut button")?.getAttribute("aria-disabled")).toBe("true");
+    expect(host.querySelector(".supervisor-summary-banner")?.textContent).toBe("Restored from saved tasks · reconnecting agents (0 of 1)");
+    const reattached = run({
+      ...original, attachment: { ...original.attachment!, state: "connected", location: { ...original.attachment!.location!, endpoint_identity: "replacement-endpoint" } },
+      dispatch: original.dispatch ? { ...original.dispatch, endpoint_identity: "replacement-endpoint" } : null,
+      resume: { operation_id: action.operation_id, run_id: "root", previous_attachment_epoch: 1, phase: "reattached", cause: null, decision_id: null, replacement_attachment_epoch: null, updated_at: at },
+    });
+    const ready = { ...snapshot([reattached]), revision: 3, restoration: { reattached: 1, total_attachments: 1, cleanup_pending: 0 }, runtime: { status: "fresh" as const, endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed()] } };
+    await fixture.push(ready);
+    expect(host.querySelector(".supervisor-summary-state")?.textContent).toContain("Ready for a task");
+    expect(host.querySelector(".supervisor-summary-observed")?.textContent).toContain("1 agents observed");
+    expect(host.querySelector(".supervisor-summary-shortcut button")?.textContent).toBe("Open terminal");
+    expect(host.querySelector(".supervisor-queue-row.is-recover")).toBeNull();
+    expect(host.querySelector(".supervisor-summary-banner")).toBeNull();
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
   it("retains cancelled edit drafts and disables editing when disconnected", async () => {
     const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "reported" });

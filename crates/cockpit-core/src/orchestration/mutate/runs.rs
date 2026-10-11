@@ -51,9 +51,21 @@ pub(in crate::orchestration) fn supervisor_start(
                         && observed.epoch == current.epoch && observed.process == current.process
                         && observed.shell == current.shell && observed.machine_id == current.machine_id
                         && observed.launch_mode == current.launch_mode
+                        && observed.main_session_id == current.main_session_id
+                        && observed.launch_attempt == current.launch_attempt
+                        && project_identity::same_location(observed.location.as_ref(), current.location.as_ref())
                         && !matches!(current.state, AttachmentState::Quiescing | AttachmentState::Revoked)
-                        && observed.process.is_some() && observed.state == AttachmentState::Connected));
+                        && observed.process.is_some() && observed.state == AttachmentState::Connected))
+                    && run.resume.as_ref().is_none_or(|resume|
+                        matches!(resume.phase, ResumePhase::Connected | ResumePhase::Reattached));
                 let (outcome, resume_operation_id) = if observed_connected {
+                    if let Some(expected) = ctx.resolved.and_then(|input| input.root_attachment_expected.as_ref()) {
+                        let current = ctx.state.runs[index].attachment.as_ref().ok_or_else(|| error("attachment_conflict", "Root attachment is missing"))?;
+                        if !project_identity::same_root_attachment(current, expected) {
+                            return Err(error("attachment_conflict", "Root attachment changed during Start observation"));
+                        }
+                        project_identity::revalidate_root_observation(ctx.state, &ctx.state.runs[index], expected)?;
+                    }
                     ctx.state.runs[index].attachment = ctx.resolved.and_then(|r| r.attachment_observation.clone());
                     (SupervisorStartOutcome::Reused, None)
                 } else {
