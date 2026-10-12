@@ -22,6 +22,14 @@ impl Fixture {
             repository_roots: vec![],
             branch_template: "test/{task}".into(),
             checkout_template: "{task}".into(),
+            orchestration: cockpit_protocol::projects::OrchestrationConfiguration {
+                harness_kind: "service-test".into(),
+                command: "test-agent".into(),
+                extra_args: vec!["fresh".into()],
+                resume_args: Some(vec!["resume".into(), "{session_id}".into()]),
+                inbox_prompt_hints: false,
+                routes: Vec::new(),
+            },
             limits: cockpit_protocol::projects::ProjectLimits {
                 catalog_depth: 1,
                 catalog_entries: 1,
@@ -117,7 +125,7 @@ impl Fixture {
         }
     }
 
-    fn auth(&self, run_id: &str, role: JobRole, child: Option<&str>) -> JobAuth {
+    fn auth(&self, run_id: &str, role: JobRole) -> JobAuth {
         let locked = self.service.store.lock().unwrap();
         let mut state = locked.read().unwrap();
         let index = run_index(&state, run_id).unwrap();
@@ -136,28 +144,12 @@ impl Fixture {
             claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
         }
         let (credential, path) =
-            credentials::stage_credential(self.service.base(), &state.runs[index], role, child).unwrap();
+            credentials::stage_credential(self.service.base(), &state.runs[index], role).unwrap();
         state.credentials.push(credential);
         locked.save(&mut state).unwrap();
         credentials::read_job_auth(&path).unwrap()
     }
 
-    fn child_actor(&self, parent: &Actor, run_id: &str, child_id: &str) -> Actor {
-        let mut child = parent.clone();
-        let caller = caller_mut(&mut child);
-        caller.auth = self.auth(run_id, JobRole::Child, Some(child_id));
-        caller.agent_kind = Some(AgentKind::Subagent);
-        caller.subagent_id = Some(child_id.into());
-        caller.omp_session_id = Some(format!("{child_id}-native"));
-        caller.provenance = Some(CallerProvenance {
-            agent_kind: caller.agent_kind,
-            child_id: caller.subagent_id.clone(),
-            main_session_id: caller.main_omp_session_id.clone(),
-            native_session_id: caller.omp_session_id.clone(),
-            process: caller.process.clone(),
-        });
-        child
-    }
 
     fn attach_observed(&self, actor: &Actor, run_id: &str) {
         let Actor::Agent(caller) = actor else { unreachable!() };
@@ -169,12 +161,12 @@ impl Fixture {
         location.native_session_id = caller.native_session_id.clone();
         attachment.process = caller.process.clone();
         attachment.state = AttachmentState::Connected;
-        self.service.mutate_resolved(actor, OrchestrationMutationRequest {
-            session_id: SESSION.into(), expected_revision: None,
+        self.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), OrchestrationMutationRequest {
+            session_id: SESSION.into(), expected_revision: Some(self.state().revision),
             action: OrchestrationAction::RunAttach {
                 operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
                 expected_attachment_epoch: caller.auth.attachment_epoch,
-                main_session_id: caller.omp_session_id.clone().unwrap(),
+                conversation: caller.conversation.clone(),
             },
         }, &ResolvedMutationInput {
             attachment_observation: Some(attachment), ..ResolvedMutationInput::default()
@@ -234,7 +226,7 @@ impl Fixture {
     }
     fn create_task(&self, root_id: &str, title: &str) -> Task {
         if self.run(root_id).stage == RunStage::Starting {
-            self.launch_and_bind(root_id);
+            self.root_actor(root_id);
         }
         task_result(self.operator(OrchestrationAction::TaskCreate {
             root_id: root_id.into(),
@@ -250,7 +242,8 @@ impl Fixture {
 
     fn start(&self, parent: &str, task: &Task) -> String {
         let root = self.run(parent).root_id;
-        let run_id = run_result(self.operator(self.start_action(&root, task))).0;
+        let actor = self.root_actor(&root);
+        let run_id = run_result(self.apply(&actor, self.start_action(&root, task)).unwrap()).0;
         if parent != root {
             // Persisted ancestry remains meaningful for retention and delivery;
             // current WorkerStart always creates a direct child of the root.
@@ -287,22 +280,36 @@ impl Fixture {
             },
         }).unwrap();
     }
+    fn root_actor(&self, root_id: &str) -> Actor {
+        let actor = self.neutral_actor(root_id);
+        self.apply(&actor, OrchestrationAction::RunRegister {
+            operation_id: caller_auth(&actor).credential_id.clone(),
+        }).unwrap();
+        actor
+    }
+
+    fn neutral_actor(&self, run_id: &str) -> Actor {
+        let run = self.run(run_id);
+        let auth = self.auth(run_id, if run.kind == RunKind::Worker { JobRole::Worker } else { JobRole::Root });
+        Actor::Agent(AgentCaller {
+            assignment_generation: auth.assignment_generation,
+            auth,
+            conversation: run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone())
+                .unwrap_or_else(|| ConversationIdentity { harness: run.launch_config.harness_kind.clone(), session_id: format!("opaque-chat-{run_id}") }),
+            endpoint_identity: String::new(), session_id: SESSION.into(),
+            workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
+            boot_id: None, terminal_id: None, native_session_id: None,
+            actual_agent_kind: None, process: None,
+        })
+    }
+
     fn launch_and_bind(&self, run_id: &str) -> Actor {
         let actor = self.launch_tab(run_id);
-        self.service
-            .record_launch_pending(&self.run(run_id))
-            .unwrap();
-        let Actor::Agent(caller) = &actor else {
-            unreachable!();
-        };
-        self.apply(
-            &actor,
-            OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
-        )
-        .unwrap();
-        self.service
-            .record_launch_verified(&self.run(run_id))
-            .unwrap();
+        self.service.record_launch_pending(&self.run(run_id)).unwrap();
+        self.apply(&actor, OrchestrationAction::RunRegister {
+            operation_id: caller_auth(&actor).credential_id.clone(),
+        }).unwrap();
+        self.service.record_launch_verified(&self.run(run_id)).unwrap();
         actor
     }
 
@@ -345,10 +352,18 @@ impl Fixture {
                 },
             )
             .unwrap();
-        self.seed_run(run_id, |run| run.attachment.as_mut().unwrap().machine_id = Some(self.project.machine_id.clone()));
+        self.seed_run(run_id, |run| {
+            let attachment = run.attachment.as_mut().unwrap();
+            attachment.machine_id = Some(self.project.machine_id.clone());
+            attachment.process = Some(NativeProcessIdentity {
+                pid: 42, start_ticks: 123, kernel_boot_id: Some("kernel-one".into()),
+            });
+        });
         Actor::Agent(AgentCaller {
-            auth: self.auth(run_id, if run.kind == RunKind::Worker { JobRole::Worker } else { JobRole::Root }, None),
-            provenance: None,
+            auth: self.auth(run_id, if run.kind == RunKind::Worker { JobRole::Worker } else { JobRole::Root }),
+            assignment_generation: run.assignment_generation,
+            conversation: run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone())
+                .unwrap_or_else(|| ConversationIdentity { harness: run.launch_config.harness_kind.clone(), session_id: format!("opaque-chat-{run_id}") }),
             endpoint_identity: location.endpoint_identity,
             session_id: SESSION.into(),
             workspace_id: location.workspace_id,
@@ -357,12 +372,7 @@ impl Fixture {
             boot_id: location.boot_id,
             terminal_id: location.terminal_id,
             native_session_id: location.native_session_id,
-            env_run: Some((run_id.into(), run.attempt)),
-            omp_session_id: Some(native.clone()),
-            main_omp_session_id: Some(native.clone()),
-            agent_kind: Some(AgentKind::Main),
-            actual_agent_kind: Some(NativeAgentKind::Omp),
-            subagent_id: None,
+            actual_agent_kind: Some(NativeAgentKind::Other(run.launch_config.harness_kind.clone())),
             process: Some(NativeProcessIdentity {
                 pid: 42,
                 start_ticks: 123,
@@ -423,7 +433,7 @@ impl Fixture {
             state: IntentState::Pending,
             origin: Some(DecisionOrigin::Browser),
             supervisor_run_id: None,
-            omp_session_id: None,
+            conversation: None,
             result_message_id: Some(result_message_id),
         });
         locked.save(&mut state).unwrap();
@@ -504,6 +514,13 @@ fn task_result(response: OrchestrationMutationResponse) -> Task {
 fn caller_mut(actor: &mut Actor) -> &mut AgentCaller {
     match actor {
         Actor::Agent(caller) => caller,
+        _ => panic!("Expected an agent actor"),
+    }
+}
+
+fn caller_auth(actor: &Actor) -> &JobAuth {
+    match actor {
+        Actor::Agent(caller) => &caller.auth,
         _ => panic!("Expected an agent actor"),
     }
 }

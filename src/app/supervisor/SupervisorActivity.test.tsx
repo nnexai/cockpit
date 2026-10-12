@@ -7,16 +7,16 @@ import { activityRows, ClosedTracking, SupervisorActivity, SupervisorDiagnostics
 
 const at = "2026-10-07T12:00:00Z";
 function run(overrides: Partial<Run> = {}): Run {
-  return { session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" }, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: null, main_session_id: "native", process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
+  return { session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, assignment_generation: overrides.kind === "worker" ? 1 : null, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] }, attempt: 1, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" }, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: null, conversation: { harness: "omp", session_id: "native" }, process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
 }
 function task(): TaskView {
   return { task: { task_id: "task-a", title: "Improve search", body: "Keep existing behavior.", description: "Keep existing behavior.", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "task-revision", diagnostic: null }, lane: "working", current_run_id: "worker", dependencies: { state: "none", unmet: [], problems: [] } };
 }
 function message(overrides: Partial<Message> = {}): Message {
-  return { message_id: "message", to_run_id: "root", seq: 1, from: { type: "dispatcher" }, kind: "instruction", text: "Inspect search behavior", in_reply_to: null, report: null, stale: false, escalated_from: null, from_subagent_id: null, stage: "stored", woken_omp_session: null, created_at: at, acked_at: null, ...overrides };
+  return { message_id: "message", to_run_id: "root", seq: 1, from: { type: "dispatcher" }, kind: "instruction", text: "Inspect search behavior", in_reply_to: null, report: null, stale: false, escalated_from: null, stage: "stored", created_at: at, acked_at: null, ...overrides };
 }
 function snapshot(runs: Run[] = [run()]): OrchestrationSnapshot {
-  return { session_id: "session", state_store_id: "store", revision: 1, tasks_token: "tasks", roots: runs.filter(run => run.run_id === run.root_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: { root_id: "root", path: "/state/tasks.md", doc_revision: "document-revision", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs, messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => ({ run_id: run.run_id, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at })) } };
+  return { session_id: "session", state_store_id: "store", revision: 1, tasks_token: "tasks", roots: runs.filter(run => run.run_id === run.root_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: { root_id: "root", path: "/state/tasks.md", doc_revision: "document-revision", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs, messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => ({ run_id: run.run_id, presence: "present", actual_agent: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at })) } };
 }
 let host: HTMLDivElement;
 let root: Root | null = null;
@@ -131,15 +131,15 @@ describe("Supervisor diagnostics consumer transitions", () => {
     const view = (connected: boolean) => <SupervisorDiagnostics snapshot={state} rootRuns={state.runs} busy={false} connected={connected} onIdentify={() => undefined} onCopyPath={() => undefined} />;
     const cells = () => [...host.querySelectorAll(".supervisor-diagnostics-table-scroll tbody td")].map(cell => cell.textContent);
     await render(view(true));
-    expect(cells()).toEqual(["launched", "present · actual OMP yes · working", "Bound session yes", "stored"]);
-    if (state.runtime.status === "fresh") state.runtime.runs[0] = { ...state.runtime.runs[0], presence: "missing", actual_omp: false, agent_status: null };
-    for (const stage of ["woken", "read", "acked"] as const) {
+    expect(cells()).toEqual(["launched", "present · actual agent yes · working", "Bound conversation yes", "stored"]);
+    if (state.runtime.status === "fresh") state.runtime.runs[0] = { ...state.runtime.runs[0], presence: "missing", actual_agent: false, agent_status: null };
+    for (const stage of ["read", "acked"] as const) {
       state.messages[0] = { ...state.messages[0], stage };
       await render(view(true));
-      expect(cells()).toEqual(["launched", "missing · actual OMP no", "Bound session yes", stage]);
+      expect(cells()).toEqual(["launched", "missing · actual agent no", "Bound conversation yes", stage]);
     }
     await render(view(false));
-    expect(cells()[1]).toBe("Saved · missing · actual OMP no");
+    expect(cells()[1]).toBe("Saved · missing · actual agent no");
     state.runtime = { status: "unavailable", error: { code: "offline", message: "Could not observe runtime" } };
     await render(view(true));
     expect(cells()[1]).toBe("Observation unavailable");

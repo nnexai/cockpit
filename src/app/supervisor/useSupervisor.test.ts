@@ -10,7 +10,7 @@ import type { StepScope, StepSubmission, StepUnknownResolution, StepResolutionOu
 const snapshot: OrchestrationSnapshot = {
   state_store_id: "store", session_id: "session-a", revision: 12, tasks_token: "external-edit-a",
   roots: [], board: { root_id: "root-a", path: "/state/tasks/root-a.md", doc_revision: "doc-a", unidentified_items: 0, diagnostics: [], tasks: [] },
-  runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+  runs: [], messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
   cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
   runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "offline" } },
 };
@@ -37,7 +37,7 @@ function reportedRun(kind: "needs_input" | "result"): Run {
   const report = { message_id: `${kind}-receipt`, kind, outcome: kind === "result" ? "succeeded" as const : null, summary: `${kind}-summary`, plan: null, source_output: null, at };
   return {
     session_id: "session-a", brief: "", run_id: "worker", kind: "worker", label: "Worker", root_id: "root-a", parent_run_id: "root-a",
-    task_id: "task-a", attempt: 1, task_revision_at_start: null, stage: "reported", close_reason: null,
+    task_id: "task-a", attempt: 1, assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] }, task_revision_at_start: null, stage: "reported", close_reason: null,
     dispatch: null, target: null, setup: null, cleanup_policy: "owned_when_safe",
     last_report: report, result: kind === "result" ? report : null, source_output: null, integration: { state: "pending" }, annotations: [],
     project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at,
@@ -47,7 +47,7 @@ function observedState(overrides: Partial<OrchestrationSnapshot> = {}): Orchestr
   return {
     ...snapshot,
     runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [{
-      run_id: "worker", presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project",
+      run_id: "worker", presence: "present", actual_agent: true, workspace_id: "space", workspace_label: "Project",
       tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at,
     }] },
     ...overrides,
@@ -80,7 +80,7 @@ function transport() {
   };
   return { client, snapshot: () => take(snapshots), wait: () => take(waits), mutation: () => take(mutations) };
 }
-type Scope = { client: CockpitClient; sessionId: string; rootId: string | null; active: boolean };
+type Scope = { client: CockpitClient; sessionId: string; rootId: string | null; active: boolean; sessionLive: boolean };
 interface VisibleState {
   snapshot: OrchestrationSnapshot | null;
   connected: boolean;
@@ -110,11 +110,11 @@ async function mount(client: CockpitClient) {
   document.body.append(host);
   const entry = { root: createRoot(host), host, unmounted: false };
   mounted.push(entry);
-  let scope: Scope = { client, sessionId: "session-a", rootId: "root-a", active: true };
+  let scope: Scope = { client, sessionId: "session-a", rootId: "root-a", active: true, sessionLive: true };
   let accepted!: HookState;
   let lastVisible!: VisibleState;
   function Consumer(props: Scope) {
-    accepted = useSupervisor(props.client, props.sessionId, props.rootId, props.active);
+    accepted = useSupervisor(props.client, props.sessionId, props.rootId, props.active, props.sessionLive);
     lastVisible = { snapshot: accepted.snapshot, connected: accepted.connected, error: accepted.error, busy: accepted.busy };
     return createElement("output", null, JSON.stringify(lastVisible));
   }
@@ -150,7 +150,7 @@ describe("mounted Supervisor observation", () => {
     expect(consumer.state().snapshot).toEqual(initial);
     const next = observedState({
       runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: "2026-10-07T12:00:05Z", runs: [{
-        run_id: "worker", presence: "missing", actual_omp: false, workspace_id: null, workspace_label: null,
+        run_id: "worker", presence: "missing", actual_agent: false, workspace_id: null, workspace_label: null,
         tab_id: null, tab_label: null, pane_id: null, agent_status: null, state_changed_at: at,
       }] },
     });
@@ -296,6 +296,32 @@ describe("mounted Supervisor observation", () => {
 
 describe("mounted Supervisor mutations", () => {
   const action: OrchestrationAction = { action: "cancel_run", run_id: "worker" };
+  it.each<OrchestrationAction>([
+    { action: "message_send", message_id: "answer", to_run_id: "worker", kind: "answer", text: "Proceed", in_reply_to: "question" },
+    { action: "report", message_id: "progress", kind: "progress", outcome: null, summary: "Progress", plan: null, source_output: null, to_run_id: null },
+    { action: "accept", run_id: "worker", expected_task_revision: "task-original" },
+    { action: "cancel_run", run_id: "worker" },
+  ])("submits semantic $action through the connected canonical service without physical observations", async semantic => {
+    const api = transport(), consumer = await mount(api.client);
+    await flush(() => api.snapshot().resolve(snapshot));
+    let result!: Promise<OrchestrationActionResult | null>;
+    await flush(() => { result = consumer.mutate(semantic); });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledOnce();
+    await flush(() => api.mutation().resolve({ revision: 13, result: { result: "done" } }));
+    expect(await result).toEqual({ result: "done" });
+  });
+  it.each<OrchestrationAction>([
+    { action: "worker_start", operation_id: "start-operation", root_id: "root-a", task_id: "task-a", expected_task_revision: "task-original", expected_doc_revision: "doc-original", target: { target: "existing_space", workspace_id: "space" }, label: null, brief: "Deliver work", cleanup_policy: "owned_when_safe" },
+    { action: "supervisor_start", operation_id: "root-operation", mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: "space" }, label: null, selected_root_id: "root-a", expected_project_key: null },
+    { action: "run_resume", operation_id: "resume-operation", run_id: "worker", expected_attachment_epoch: null, mode: "reattach_or_restart", decision_id: null },
+    { action: "reconcile_run", run_id: "worker", recovery: null },
+    { action: "cleanup_finish", request: { operation_id: "cleanup-operation", root_id: "root-a", run_id: "worker" } },
+  ])("retains the physical observation guard for $action when only canonical state is connected", async physical => {
+    const api = transport(), consumer = await mount(api.client);
+    await flush(() => api.snapshot().resolve(snapshot));
+    expect(await consumer.mutate(physical)).toBeNull();
+    expect(api.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
   it.each<OrchestrationAction>([
     { action: "worker_start", operation_id: "start-operation", root_id: "root-a", task_id: "task-a", expected_task_revision: "task-original", expected_doc_revision: "doc-original", target: { target: "existing_space", workspace_id: "space" }, label: null, brief: "Deliver work", cleanup_policy: "owned_when_safe" },
     { action: "task_scope_update", operation_id: "scope-operation", root_id: "root-a", task_id: "task-a", run_id: "worker", expected_task_revision: "task-original", expected_doc_revision: "doc-original", title: null, description: "Original scope\n\nRefinement" },
@@ -473,6 +499,33 @@ async function readOriginal({ api, consumer }: TaskFixture, scope = taskScope, r
 }
 
 describe("mounted Supervisor task uncertainty", () => {
+  it.each(["source", "steps"] as const)("saves canonical %s changes without requiring physical runtime observation", async kind => {
+    const api = transport(), consumer = await mount(api.client);
+    await flush(() => api.snapshot().resolve({ ...taskSnapshot(), runtime: snapshot.runtime }));
+    const submitted = kind === "source" ? sourceSubmission() : stepSubmission();
+    let result!: Promise<TaskMutationOutcome<SourceSubmission | StepSubmission>>;
+    await flush(() => { result = "action" in submitted ? consumer.hookState().submitTask(submitted) : consumer.hookState().submitStep(submitted); });
+    expect(api.client.orchestrationMutate).toHaveBeenCalledOnce();
+    const saved = savedTask("task-a", "task-saved");
+    await flush(() => api.mutation().resolve({ revision: 13, result: { result: "task", task: saved } }));
+    expect(await result).toEqual({ kind: "confirmed", task: saved });
+  });
+  it("retains canonical state but blocks semantic mutations while the selected session transport is offline", async () => {
+    const api = transport(), consumer = await mount(api.client);
+    const initial = { ...taskSnapshot(), runtime: snapshot.runtime };
+    await flush(() => api.snapshot().resolve(initial));
+    await consumer.render({ sessionLive: false });
+    expect(consumer.state().snapshot).toEqual(initial);
+    expect(consumer.state().connected).toBe(false);
+    expect(await consumer.mutate({ action: "message_send", message_id: "answer", to_run_id: "worker", kind: "answer", text: "Proceed", in_reply_to: "question" })).toBeNull();
+    expect(await consumer.hookState().submitTask(sourceSubmission())).toEqual({ kind: "not_sent", reason: "Reconnect to the task state before saving." });
+    expect(await consumer.hookState().submitStep(stepSubmission())).toEqual({ kind: "not_sent", reason: "Reconnect to the task state before saving." });
+    expect(api.client.orchestrationMutate).not.toHaveBeenCalled();
+    await consumer.render({ sessionLive: true });
+    expect(consumer.state().connected).toBe(false);
+    await flush(() => api.snapshot().resolve(initial));
+    expect(consumer.state().connected).toBe(true);
+  });
   it("hydrates the original source operation after reload without trusting old read evidence", async () => {
     const { api, consumer } = await mountedTasks(), original = sourceSubmission();
     consumer.hookState().hydrateDraftUncertainty("store", [{ kind: "source", submitted: original }]);

@@ -2,7 +2,7 @@ use cockpit_protocol::orchestration::*;
 
 use super::{
     Actor, AuthorizedJob, AppendMessage, OrchestrationState, agent, actor_ref, append,
-    duplicate, error, main_session, message_result, now, same_report, subagent_context,
+    duplicate, error, message_result, now, same_report,
     text_bound, upward,
 };
 use crate::InspectionError;
@@ -29,10 +29,6 @@ pub(super) fn apply(
             if let Some(plan) = plan {
                 text_bound(plan)?;
             }
-            if *kind == ReportKind::Result {
-                main_session(caller)?;
-            }
-            let from_subagent_id = subagent_context(caller);
             let from = actor_ref(actor, caller.map(|job| job.run_index), state);
             let report = Report {
                 message_id: message_id.clone(),
@@ -48,16 +44,12 @@ pub(super) fn apply(
                 .as_deref()
                 .or(state.runs[index].parent_run_id.as_deref())
                 .unwrap_or(&state.runs[index].run_id);
-            let own_main_report = from_subagent_id.is_some()
-                && to_run_id.as_deref() == Some(state.runs[index].run_id.as_str());
-            let (recipient, escalated) =
-                upward(state, index, to_run_id.as_deref(), own_main_report)?;
+            let (recipient, escalated) = upward(state, index, to_run_id.as_deref())?;
             if let Some(existing) = duplicate(state, &from, message_id) {
                 if existing.kind != MessageKind::Report
                     || existing.text != *summary
                     || !same_report(existing.report.as_ref(), Some(&report))
                     || existing.in_reply_to.is_some()
-                    || existing.from_subagent_id != from_subagent_id
                     || existing
                         .escalated_from
                         .as_deref()
@@ -83,7 +75,6 @@ pub(super) fn apply(
                     in_reply_to: None,
                     report: Some(report.clone()),
                     stale: false,
-                    from_subagent_id: from_subagent_id.clone(),
                     escalated_from: escalated,
                 },
             )?;
@@ -92,7 +83,6 @@ pub(super) fn apply(
                 index,
                 *kind,
                 report,
-                from_subagent_id.as_deref(),
                 &recipient,
                 message_id,
             )?;
@@ -132,35 +122,21 @@ fn publish_report_receipt(
     index: usize,
     kind: ReportKind,
     report: Report,
-    from_subagent_id: Option<&str>,
     recipient: &str,
     message_id: &str,
 ) -> Result<(), InspectionError> {
-    if let Some(subagent_id) = from_subagent_id {
-        let own = &state.runs[index].run_id;
-        if let Some(entry) = state.subagents.iter_mut()
-            .find(|entry| entry.run_id == *own && entry.subagent_id == subagent_id)
-        {
-            entry.summary = Some(report.summary.clone());
-            entry.updated_at = report.at.clone();
-        }
-    }
     let run = &mut state.runs[index];
-    // Child reports are evidence, not the main run's outcome or latest view.
-    if from_subagent_id.is_none() {
-        run.last_report = Some(report.clone());
-        if kind == ReportKind::Result {
-            run.source_output = report.source_output.clone();
-            run.integration = Integration::Pending;
-            run.result = Some(report);
-            if run.parent_run_id.is_some() {
-                run.stage = RunStage::Reported;
-            }
+    run.last_report = Some(report.clone());
+    if kind == ReportKind::Result {
+        run.source_output = report.source_output.clone();
+        run.integration = Integration::Pending;
+        run.result = Some(report);
+        if run.parent_run_id.is_some() {
+            run.stage = RunStage::Reported;
         }
-        run.updated_at = now();
     }
-    if from_subagent_id.is_none()
-        && matches!(kind, ReportKind::Initialized | ReportKind::Result | ReportKind::NeedsInput)
+    run.updated_at = now();
+    if matches!(kind, ReportKind::Initialized | ReportKind::Result | ReportKind::NeedsInput)
         && recipient != state.runs[index].root_id
         && state.runs[index].parent_run_id.is_some()
     {
@@ -181,7 +157,6 @@ fn publish_report_receipt(
             in_reply_to: None,
             report: None,
             stale: false,
-            from_subagent_id: None,
             escalated_from: None,
         })?;
     }

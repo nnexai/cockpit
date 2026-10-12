@@ -54,7 +54,6 @@ fn runtime() -> RuntimeView {
             agent_name: None,
             agent_kind: None,
             launch_pending: false,
-            interactive_ready: false,
             agent_status: Some("idle".into()),
             state_changed_at: None,
         }],
@@ -103,7 +102,7 @@ fn launch_proof_uses_pinned_receipt_not_mutable_names() {
     for name in [None, Some("renamed"), Some("tag"), Some("omp")] {
         observed.panes[0].agent_name = name.map(str::to_owned);
         assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-            Some(&location), Some("native"), false), ReconciledLaunch::Agent));
+            Some(&location), Some("native"), false, "omp"), ReconciledLaunch::Agent));
     }
     // A different pane's display alias is not a competing launch receipt.
     let mut unrelated = observed.panes[0].clone();
@@ -112,27 +111,27 @@ fn launch_proof_uses_pinned_receipt_not_mutable_names() {
     unrelated.agent_name = Some("tag".into());
     observed.panes.push(unrelated);
     assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-        Some(&location), Some("native"), false), ReconciledLaunch::Agent));
+        Some(&location), Some("native"), false, "omp"), ReconciledLaunch::Agent));
     assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-        None, Some("native"), false), ReconciledLaunch::Conflict));
+        None, Some("native"), false, "omp"), ReconciledLaunch::Conflict));
     observed.panes.pop();
     assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-        None, Some("native"), true), ReconciledLaunch::Tab));
+        None, Some("native"), true, "omp"), ReconciledLaunch::Tab));
     observed.panes[0].launch_pending = true;
     assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-        Some(&location), Some("native"), true), ReconciledLaunch::Tab));
+        Some(&location), Some("native"), true, "omp"), ReconciledLaunch::Tab));
     observed.panes[0].launch_pending = false;
     assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-        Some(&location), None, true), ReconciledLaunch::Tab));
+        Some(&location), None, true, "omp"), ReconciledLaunch::Agent));
     observed.panes[0].native_session_id = None;
     for (proof, expected) in [(false, false), (true, true)] {
         assert_eq!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-            Some(&location), Some("native"), proof), ReconciledLaunch::Agent), expected);
+            Some(&location), Some("native"), proof, "omp"), ReconciledLaunch::Agent), expected);
     }
     observed.panes[0].tab_label = "not-a-launch".into();
     observed.panes[0].agent_name = Some("tag".into());
     assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-        None, None, false), ReconciledLaunch::Unknown));
+        None, None, false, "omp"), ReconciledLaunch::Unknown));
 }
 fn receipt() -> RunLocation {
     RunLocation {
@@ -162,7 +161,7 @@ fn launch_proof_fences_available_boot_terminal_and_native_identity() {
             Some("endpoint"),
             "tag",
             Some(&location),
-            Some("native"), false
+            Some("native"), false, "omp"
         ),
         ReconciledLaunch::Agent
     ));
@@ -188,7 +187,7 @@ fn launch_proof_fences_available_boot_terminal_and_native_identity() {
                     Some("endpoint"),
                     "tag",
                     Some(&location),
-                    Some("native"), true
+                    Some("native"), true, "omp"
                 ),
                 ReconciledLaunch::Conflict
             ),
@@ -204,18 +203,18 @@ fn launch_proof_fences_available_boot_terminal_and_native_identity() {
                 Some("endpoint"),
                 "tag",
                 Some(&location),
-                Some("native"), true
+                Some("native"), true, "omp"
             ),
             ReconciledLaunch::Agent
         ),
         "optional omission is unobserved, not a contradictory value"
     );
     assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-        Some(&location), Some("native"), false), ReconciledLaunch::Tab));
+        Some(&location), Some("native"), false, "omp"), ReconciledLaunch::Tab));
     let mut missing_terminal = location.clone();
     missing_terminal.terminal_id = None;
     assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag",
-        Some(&missing_terminal), Some("native"), true), ReconciledLaunch::Tab));
+        Some(&missing_terminal), Some("native"), true, "omp"), ReconciledLaunch::Tab));
 }
 
 fn test_attachment(run: &mut Run) -> &mut cockpit_protocol::orchestration::ExecutionAttachment {
@@ -226,7 +225,7 @@ fn test_attachment(run: &mut Run) -> &mut cockpit_protocol::orchestration::Execu
         state: cockpit_protocol::orchestration::AttachmentState::Reserved,
         launch_mode: None,
         location: None,
-        main_session_id: None,
+        conversation: None,
         process: None,
         shell: None,
         machine_id: None,
@@ -283,8 +282,11 @@ impl ReviewFixture {
             1,
         );
         run.stage = stage;
+        run.launch_config.resume_args = Some(vec!["--session".into(), "{session_id}".into()]);
         test_attachment(&mut run).location = Some(receipt());
-        test_attachment(&mut run).main_session_id = Some("native".into());
+        test_attachment(&mut run).conversation = Some(cockpit_protocol::orchestration::ConversationIdentity {
+            harness: "omp".into(), session_id: "conversation".into(),
+        });
         test_attachment(&mut run).shell = Some(cockpit_protocol::orchestration::NativeShellIdentity {
             process: cockpit_protocol::orchestration::NativeProcessIdentity {
                 pid: 123, start_ticks: 1, kernel_boot_id: Some("00000000-0000-0000-0000-000000000001".into()),
@@ -346,7 +348,7 @@ impl ReviewFixture {
         self.run = self.current().1;
         let locked = self.service.store.lock().unwrap();
         let mut state = locked.read().unwrap();
-        super::super::messages::append(&mut state, super::super::messages::AppendMessage { from: cockpit_protocol::orchestration::ActorRef::Operator, to_run_id: &self.run.run_id, message_id: "preserved-message", kind: cockpit_protocol::orchestration::MessageKind::Observation, text: "Existing operator message", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None }).unwrap();
+        super::super::messages::append(&mut state, super::super::messages::AppendMessage { from: cockpit_protocol::orchestration::ActorRef::Operator, to_run_id: &self.run.run_id, message_id: "preserved-message", kind: cockpit_protocol::orchestration::MessageKind::Observation, text: "Existing operator message", in_reply_to: None, report: None, stale: false, escalated_from: None }).unwrap();
         locked.save(&mut state).unwrap();
     }
     fn worker_task(&mut self, prerequisite: Option<(&str, bool)>) {
@@ -376,6 +378,11 @@ impl ReviewFixture {
         worker.parent_run_id = Some(root_id);
         worker.task_id = Some(task_id);
         worker.task_revision_at_start = Some(task_revision);
+        worker.assignment_generation = Some(1);
+        state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
+            root_id: worker.root_id.clone(), task_id: worker.task_id.clone().unwrap(),
+            generation: 0, owner: None,
+        });
         state.runs.push(root);
         locked.save(&mut state).unwrap();
         self.run = state.runs.iter().find(|run| run.run_id == self.run.run_id).unwrap().clone();
@@ -421,6 +428,11 @@ impl ReviewFixture {
         ).unwrap();
         worker.task_revision_at_start = Some(locked.tasks(&root_id).unwrap().task(task_id).unwrap().task_revision.clone());
         let mut state = locked.read().unwrap();
+        worker.assignment_generation = Some(1);
+        state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
+            root_id: worker.root_id.clone(), task_id: worker.task_id.clone().unwrap(),
+            generation: 0, owner: None,
+        });
         state.runs.extend([root, worker.clone()]);
         locked.save(&mut state).unwrap();
         worker
@@ -447,7 +459,7 @@ impl ReviewFixture {
             state.runs.iter_mut().find(|r| r.run_id == run.run_id).unwrap().project = Some(project);
         }
         let current = state.runs.iter().find(|r| r.run_id == run.run_id).unwrap();
-        let (record, path) = credentials::stage_credential(self.service.base(), current, role, None).unwrap();
+        let (record, path) = credentials::stage_credential(self.service.base(), current, role).unwrap();
         state.credentials.push(record);
         locked.save(&mut state).unwrap();
         credentials::read_job_auth(&path).unwrap()
@@ -463,7 +475,7 @@ impl ReviewFixture {
         self.change(|run| {
             run.stage = RunStage::Starting;
             test_attachment(run).location = None;
-            test_attachment(run).main_session_id = None;
+            test_attachment(run).conversation = None;
             test_attachment(run).process = None;
             test_attachment(run).shell = None;
             run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));
@@ -480,13 +492,14 @@ impl ReviewFixture {
         let projects = Arc::new(ProjectService::new(self.config.clone(), Arc::new(UnusedProjectAdapter)).unwrap());
         let sources = Arc::new(crate::sources::SourceService::new(&self.config, vec![]).unwrap());
         let library = Arc::new(LibraryService::new(self.config.clone(), sources));
-        let extension = self.root.join("extension.ts");
-        std::fs::write(&extension, "// Test extension identity\n").unwrap();
         Arc::new(Dispatcher::new(Arc::clone(&self.service), projects, library, herdr,
             DispatcherSettings {
-                omp_extension: extension, agent_kind: "omp".into(), start_timeout_ms: 3001,
+                harness_kind: self.run.launch_config.harness_kind.clone(),
+                command: self.run.launch_config.command.clone(), start_timeout_ms: 3001,
                 cli_path: self.root.join("cockpit-cli"), config_path: None, herdr_socket: None,
-                model: None, extra_args: vec![], herdr_executable: None,
+                extra_args: self.run.launch_config.extra_args.clone(),
+                resume_args: self.run.launch_config.resume_args.clone(),
+                inbox_prompt_hints: self.run.launch_config.inbox_prompt_hints, herdr_executable: None,
             }))
     }
     async fn running_launch_shell(&mut self) -> tokio::process::Child {
@@ -529,7 +542,7 @@ async fn dispatch_reservation_stages_active_credential_and_durable_claim_before_
     assert!(reserved.setup.as_ref().unwrap().base_commit.is_none(), "non-Git has no code baseline");
     assert_eq!(attachment.state, cockpit_protocol::orchestration::AttachmentState::Reserved);
     assert!(attachment.location.is_none() && attachment.process.is_none()
-        && attachment.shell.is_none() && attachment.main_session_id.is_none());
+        && attachment.shell.is_none() && attachment.conversation.is_none());
     assert!(!reserved.dispatch.as_ref().unwrap().agent_started);
     assert_eq!(reserved.project.as_ref(), Some(&project));
     assert_eq!(reserved.checkout.as_ref(), Some(&checkout));
@@ -544,6 +557,12 @@ async fn dispatch_reservation_stages_active_credential_and_durable_claim_before_
     assert_eq!(credential.root_id, reserved.root_id);
     assert_eq!(credential.attachment_id, attachment.attachment_id);
     assert_eq!(credential.attachment_epoch, attachment.epoch);
+    assert_eq!(credential.assignment_generation, Some(1));
+    assert_eq!(auth.assignment_generation, Some(1));
+    let ownership = before.task_ownership.iter()
+        .find(|record| record.task_id == reserved.task_id.as_deref().unwrap()).unwrap();
+    assert_eq!(ownership.generation, 0);
+    assert!(ownership.owner.is_none(), "physical launch cannot claim a cooperative conversation");
     assert_eq!(auth.credential_id, credential.credential_id);
     assert_eq!(credentials::credential_path(fixture.service.base(), credential).unwrap(), path);
     let authorized = credentials::validate_job_auth(&before, &auth).unwrap();
@@ -685,7 +704,7 @@ async fn root_main_exit_proof_is_same_boot_and_independent_of_worker_consumers()
                 4 => test_attachment(run).process = None,
                 7 => run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchUnknown,
                 8 => test_attachment(run).state = AttachmentState::Quiescing,
-                9 => test_attachment(run).main_session_id = None,
+                9 => test_attachment(run).conversation = None,
                 10 => test_attachment(run).process.as_mut().unwrap().kernel_boot_id = Some(uuid::Uuid::new_v4().to_string()),
                 _ => {}
             }
@@ -789,6 +808,10 @@ struct CountingHerdr {
     pause_create: bool,
     create_entered: tokio::sync::Semaphore,
     create_release: tokio::sync::Semaphore,
+    expected_command: Option<Vec<String>>,
+    expected_harness: String,
+    prompt_calls: std::sync::atomic::AtomicUsize,
+    prompt_unknown: bool,
 }
 impl CountingHerdr {
     fn new(observed: RuntimeView, error: bool, paused: bool) -> Self {
@@ -806,6 +829,10 @@ impl CountingHerdr {
             pause_create: false,
             create_entered: tokio::sync::Semaphore::new(0),
             create_release: tokio::sync::Semaphore::new(0),
+            expected_command: None,
+            expected_harness: "omp".into(),
+            prompt_calls: 0.into(),
+            prompt_unknown: false,
         }
     }
     fn assert_read_only(&self) {
@@ -853,7 +880,14 @@ impl OrchestrationHerdr for CountingHerdr {
         assert_eq!(session, "test-session");
         assert_eq!(request.endpoint_identity, "endpoint");
         assert_eq!(request.workspace_id, "space");
-        assert_eq!(request.command.first().map(String::as_str), Some("omp"));
+        if let Some(expected) = &self.expected_command {
+            assert_eq!(&request.command, expected);
+        } else {
+            assert_eq!(request.command.first().map(String::as_str), Some("omp"));
+        }
+        assert_eq!(request.env.get("COCKPIT_HARNESS"), Some(&self.expected_harness));
+        assert!(!request.env.contains_key("COCKPIT_SESSION_ID"), "launch must not freeze or fabricate chat identity");
+        assert!(!request.env.contains_key("COCKPIT_OMP_EXTENSION"));
         assert_eq!(request.env.get("COCKPIT_LAUNCH_TAG"), Some(&request.launch_tag));
         let auth = super::super::credentials::read_job_auth(
             std::path::Path::new(request.env.get("COCKPIT_JOB_CREDENTIAL_FILE").unwrap()),
@@ -885,6 +919,26 @@ impl OrchestrationHerdr for CountingHerdr {
         })?;
         assert_eq!(pane_id, "pane");
         Ok(info)
+    }
+    async fn prompt_agent(
+        &self, session: &str, request: &super::super::herdr::AgentPromptRequest,
+    ) -> Result<(), InspectionError> {
+        assert_eq!(session, "test-session");
+        assert_eq!(request.location.endpoint_identity, "endpoint");
+        assert_eq!(request.location.pane_id, "pane");
+        assert_eq!(request.location.terminal_id.as_deref(), Some("terminal"));
+        assert_eq!(request.harness_kind, self.expected_harness);
+        assert_eq!(request.location.workspace_id, self.observed.panes[0].workspace_id);
+        assert_eq!(request.location.tab_id, self.observed.panes[0].tab_id);
+        assert_eq!(request.location.launch_tag, self.observed.panes[0].tab_label);
+        assert_eq!(request.location.native_session_id, self.observed.panes[0].native_session_id);
+        assert!(!request.text.contains("private pending instruction"), "hints must not copy inbox message bodies");
+        self.prompt_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.prompt_unknown {
+            Err(InspectionError::new("herdr_outcome_unknown", "Prompt response lost after submission"))
+        } else {
+            Ok(())
+        }
     }
     async fn close_pane(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> {
         panic!("launch review must not close a pane")
@@ -1000,7 +1054,7 @@ async fn blocked_owned_recovery_preserves_incarnation_without_consuming_retry() 
     fixture.uncertain(RunKind::Worker);
     fixture.worker_task(Some((&prerequisite, true)));
     fixture.change(|run| {
-        test_attachment(run).main_session_id = None;
+        test_attachment(run).conversation = None;
         test_attachment(run).location.as_mut().unwrap().native_session_id = None;
     });
     fixture.run = fixture.current().1;
@@ -1018,7 +1072,6 @@ async fn blocked_owned_recovery_preserves_incarnation_without_consuming_retry() 
     let retained = fixture.current().1;
     assert_eq!(serde_json::to_value(&retained.attachment).unwrap(), serde_json::to_value(&before.1.attachment).unwrap());
     assert_eq!(retained.dispatch.as_ref().unwrap().launch_attempt, before.1.dispatch.as_ref().unwrap().launch_attempt);
-    assert!(!recovery_incarnation_revoked(&retained));
     let settled = serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap();
     recover_owned_launch(&fixture.service, adapter.as_ref(), &retained).await.unwrap();
     assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), settled);
@@ -1047,6 +1100,11 @@ async fn blocked_consumer_does_not_prevent_independent_worker_in_same_root_from_
         independent.task_revision_at_start = Some(locked.tasks(&fixture.run.root_id).unwrap()
             .task(&independent_task).unwrap().task_revision.clone());
         let mut state = locked.read().unwrap();
+        independent.assignment_generation = Some(1);
+        state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
+            root_id: independent.root_id.clone(), task_id: independent_task.clone(),
+            generation: 0, owner: None,
+        });
         state.runs.push(independent.clone());
         locked.save(&mut state).unwrap();
     }
@@ -1067,12 +1125,13 @@ async fn blocked_consumer_does_not_prevent_independent_worker_in_same_root_from_
 }
 
 #[tokio::test]
-async fn blocked_task_physical_observation_does_not_invent_missing_attachment_proof() {
+async fn blocked_task_physical_observation_does_not_grant_task_or_writer_authority() {
     let prerequisite = uuid::Uuid::new_v4().to_string();
     let mut fixture = ReviewFixture::new(RunStage::Starting);
     fixture.uncertain(RunKind::Worker);
     fixture.worker_task(Some((&prerequisite, false)));
     let location = serde_json::to_value(fixture.run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())).unwrap();
+    let before = fixture.service.store.lock().unwrap().read().unwrap();
     let mut observed = runtime();
     observed.panes[0].agent_kind = Some("omp".into());
     observed.panes[0].native_session_id = Some("native".into());
@@ -1080,14 +1139,26 @@ async fn blocked_task_physical_observation_does_not_invent_missing_attachment_pr
     reconcile_current_launch(&fixture.service, &adapter, &fixture.run, 0).await.unwrap();
     adapter.assert_read_only();
     let current = fixture.current().1;
-    assert_eq!(current.dispatch.as_ref().unwrap().step, DispatchStep::LaunchUnknown);
-    assert!(!current.dispatch.as_ref().unwrap().agent_started);
+    // Physical readiness may settle the launch receipt, but cannot register
+    // a conversation, claim a task, or promote its semantic lifecycle.
     assert_eq!(current.stage, RunStage::Starting);
+    assert_eq!(current.attachment.as_ref().unwrap().conversation,
+        fixture.run.attachment.as_ref().unwrap().conversation);
+    assert!(current.attachment.as_ref().unwrap().process.is_none());
+    let after = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(after.credentials.is_empty());
+    assert!(after.task_ownership.iter().all(|ownership| ownership.owner.is_none()));
+    assert_eq!(serde_json::to_value(&after.task_ownership).unwrap(),
+        serde_json::to_value(&before.task_ownership).unwrap());
+    assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(),
+        serde_json::to_value(&before.checkout_claims).unwrap());
+    assert_eq!(serde_json::to_value(&after.messages).unwrap(),
+        serde_json::to_value(&before.messages).unwrap());
     assert_eq!(serde_json::to_value(current.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())).unwrap(), location);
 }
 
 #[tokio::test]
-async fn physical_launch_review_preserves_lifecycle_and_requires_current_extension() {
+async fn physical_launch_review_preserves_lifecycle_without_conversation_registration() {
     for outcome in 0..10 {
         for stage in [
             RunStage::Active,
@@ -1095,6 +1166,8 @@ async fn physical_launch_review_preserves_lifecycle_and_requires_current_extensi
             RunStage::Reported,
         ] {
             let mut fixture = ReviewFixture::new(stage);
+            fixture.change(|run| test_attachment(run).conversation = None);
+            fixture.run = fixture.current().1;
             let mut observed = runtime();
             observed.panes[0].agent_name = Some("tag".into());
             observed.panes[0].agent_kind = Some("omp".into());
@@ -1153,7 +1226,7 @@ async fn physical_launch_review_preserves_lifecycle_and_requires_current_extensi
                 assert_eq!(current.attachment.as_ref().unwrap().state,
                     cockpit_protocol::orchestration::AttachmentState::Disconnected);
                 assert_eq!(current.dispatch.as_ref().unwrap().error.as_ref().unwrap().code,
-                    "current_extension_unavailable");
+                    "run_unregistered");
                 preserved.attachment.as_mut().unwrap().state =
                     cockpit_protocol::orchestration::AttachmentState::Disconnected;
             }
@@ -1189,7 +1262,7 @@ async fn late_review_cannot_rewrite_explicit_retry_or_drop_root_result() {
                 dispatch.agent_started = false;
                 dispatch.step = DispatchStep::SetupPending;
                 test_attachment(run).location = None;
-                test_attachment(run).main_session_id = None;
+                test_attachment(run).conversation = None;
                 test_attachment(run).shell = None;
                 run.stage = RunStage::Starting;
             } else {
@@ -1224,13 +1297,12 @@ async fn late_review_cannot_rewrite_explicit_retry_or_drop_root_result() {
 }
 
 #[tokio::test]
-async fn unknown_launch_alias_does_not_supply_missing_process_or_extension_proof() {
+async fn exact_physical_receipt_resolves_launch_without_registering_conversation() {
     for kind in [RunKind::Supervisor, RunKind::Worker] {
         for name in [None, Some("renamed")] {
             let mut fixture = ReviewFixture::new(RunStage::Starting);
             fixture.uncertain(kind);
             let original = fixture.run.clone();
-            let before = serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap();
             let mut observed = runtime();
             observed.panes[0].agent_name = name.map(str::to_owned);
             observed.panes[0].agent_kind = Some("omp".into());
@@ -1239,10 +1311,19 @@ async fn unknown_launch_alias_does_not_supply_missing_process_or_extension_proof
             reconcile_current_launch(&fixture.service, &herdr, &original, 0).await.unwrap();
             let current = fixture.current().1;
             assert_eq!(current.stage, RunStage::Starting);
-            assert!(!current.dispatch.as_ref().unwrap().agent_started);
-            assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), before);
+            assert!(current.dispatch.as_ref().unwrap().agent_started);
+            assert_eq!(current.dispatch.as_ref().unwrap().step, DispatchStep::Launched);
+            assert_eq!(current.attachment.as_ref().unwrap().state,
+                cockpit_protocol::orchestration::AttachmentState::Disconnected);
+            assert!(current.attachment.as_ref().unwrap().process.is_none());
+            let state = fixture.service.store.lock().unwrap().read().unwrap();
+            assert!(state.credentials.is_empty(), "physical observation does not mint semantic capabilities");
+            assert!(state.task_ownership.iter().all(|ownership| ownership.owner.is_none()));
+            assert_eq!(state.messages.len(), 1);
             reconcile_current_launch(&fixture.service, &herdr, &current, 0).await.unwrap();
-            assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), before);
+            let reread = fixture.current().1;
+            assert_eq!(reread.stage, RunStage::Starting);
+            assert_eq!(reread.dispatch.as_ref().unwrap().step, DispatchStep::Launched);
             herdr.assert_read_only();
         }
     }
@@ -1269,15 +1350,22 @@ async fn unknown_launch_rejects_replacement_and_keeps_unproven_identity_unknown(
             }
             _ => observed.panes[0].native_session_id = None,
         }
-        let before = fixture.current().0;
+        let before = fixture.service.store.lock().unwrap().read().unwrap();
         let herdr = CountingHerdr::new(observed, false, false);
         reconcile_current_launch(&fixture.service, &herdr, &fixture.run, 0).await.unwrap();
-        let (revision, current) = fixture.current();
+        let (_, current) = fixture.current();
         assert_eq!(current.stage, RunStage::Starting);
         assert!(!current.dispatch.as_ref().unwrap().agent_started);
-        assert_eq!(current.dispatch.as_ref().unwrap().step, DispatchStep::NeedsReview);
-        assert!(revision > before);
-        assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().messages.len(), 1);
+        assert!(!matches!(current.dispatch.as_ref().unwrap().step, DispatchStep::Launched));
+        assert_eq!(serde_json::to_value(&current.attachment).unwrap(),
+            serde_json::to_value(&fixture.run.attachment).unwrap());
+        let after = fixture.service.store.lock().unwrap().read().unwrap();
+        assert!(after.credentials.is_empty());
+        assert!(after.task_ownership.iter().all(|ownership| ownership.owner.is_none()));
+        assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(),
+            serde_json::to_value(&before.checkout_claims).unwrap());
+        assert_eq!(serde_json::to_value(&after.messages).unwrap(),
+            serde_json::to_value(&before.messages).unwrap());
         herdr.assert_read_only();
     }
 }
@@ -1298,6 +1386,7 @@ async fn process_fallback_requires_original_incarnation_in_pinned_foreground_pan
         let kind = if mismatch == 10 { RunKind::Worker } else { RunKind::Supervisor };
         fixture.uncertain(kind);
         fixture.change(|run| {
+            test_attachment(run).conversation = None;
             test_attachment(run).process = Some(identity.clone());
             test_attachment(run).machine_id = crate::process_identity::machine_id();
         });
@@ -1327,16 +1416,16 @@ async fn process_fallback_requires_original_incarnation_in_pinned_foreground_pan
         let current = fixture.current().1;
         let proven = matches!(mismatch, 0 | 10);
         assert_eq!(current.stage, RunStage::Starting,
-            "native process proof without private attachment authentication must not authorize work");
+            "physical process proof without conversation registration must not authorize work");
         assert_eq!(current.dispatch.as_ref().unwrap().step,
             if proven { DispatchStep::Launched } else { DispatchStep::NeedsReview });
         if proven {
             let attachment = current.attachment.as_ref().unwrap();
             assert_eq!(attachment.state, cockpit_protocol::orchestration::AttachmentState::Disconnected);
-            assert_eq!(current.dispatch.as_ref().unwrap().error.as_ref().unwrap().code, "current_extension_unavailable");
+            assert_eq!(current.dispatch.as_ref().unwrap().error.as_ref().unwrap().code, "run_unregistered");
         }
         assert_eq!(current.attachment.as_ref().and_then(|attachment| attachment.process.as_ref()), fixture.run.attachment.as_ref().and_then(|attachment| attachment.process.as_ref()));
-        assert_eq!(current.attachment.as_ref().and_then(|attachment| attachment.main_session_id.as_ref()), fixture.run.attachment.as_ref().and_then(|attachment| attachment.main_session_id.as_ref()));
+        assert_eq!(current.attachment.as_ref().and_then(|attachment| attachment.conversation.as_ref()), fixture.run.attachment.as_ref().and_then(|attachment| attachment.conversation.as_ref()));
         assert_eq!(serde_json::to_value(current.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())).unwrap(),
             serde_json::to_value(fixture.run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())).unwrap());
         let messages = fixture.service.store.lock().unwrap().read().unwrap().messages;
@@ -1381,7 +1470,7 @@ async fn failed_owned_start_retains_same_boot_container_and_run_state_without_re
         let mut fixture = ReviewFixture::new(RunStage::Starting);
         fixture.uncertain(kind);
         fixture.change(|run| {
-            test_attachment(run).main_session_id = None;
+            test_attachment(run).conversation = None;
             test_attachment(run).location.as_mut().unwrap().native_session_id = None;
             // Historical operator retries do not consume automatic budget.
             run.dispatch.as_mut().unwrap().launch_attempt = 4;
@@ -1407,7 +1496,6 @@ async fn failed_owned_start_retains_same_boot_container_and_run_state_without_re
         assert_eq!(fresh.dispatch.as_ref().unwrap().error.as_ref().unwrap().code, "writer_exit_unproven");
         assert_eq!(fresh.dispatch.as_ref().unwrap().launch_attempt, original.dispatch.as_ref().unwrap().launch_attempt);
         assert_eq!(serde_json::to_value(&fresh.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
-        assert!(!recovery_incarnation_revoked(&fresh));
         assert_eq!(fresh.task_id, original.task_id);
         assert_eq!(fresh.brief, original.brief);
         assert_eq!(fresh.checkout_claim_id, original.checkout_claim_id);
@@ -1423,7 +1511,6 @@ async fn failed_owned_start_retains_same_boot_container_and_run_state_without_re
         assert_eq!(serde_json::to_value(&retained.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
         assert_eq!(retained.dispatch.as_ref().unwrap().launch_attempt, original.dispatch.as_ref().unwrap().launch_attempt);
         assert_eq!(retained.stage, original.stage);
-        assert!(!recovery_incarnation_revoked(&retained));
         let after = fixture.service.store.lock().unwrap().read().unwrap();
         assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(), serde_json::to_value(&before.checkout_claims).unwrap());
         assert_eq!(serde_json::to_value(&after.credentials).unwrap(), serde_json::to_value(&before.credentials).unwrap());
@@ -1437,7 +1524,7 @@ async fn live_launch_shell_and_later_exit_never_authorize_same_boot_container_ca
     let mut fixture = ReviewFixture::new(RunStage::Starting);
     fixture.uncertain(RunKind::Supervisor);
     fixture.change(|run| {
-        test_attachment(run).main_session_id = None;
+        test_attachment(run).conversation = None;
         test_attachment(run).location.as_mut().unwrap().native_session_id = None;
     });
     let mut shell = fixture.running_launch_shell().await;
@@ -1445,7 +1532,6 @@ async fn live_launch_shell_and_later_exit_never_authorize_same_boot_container_ca
     recover_owned_launch(&fixture.service, &herdr, &fixture.run).await.unwrap();
     let retained = fixture.current().1;
     assert!(!recovery_close_pending(&retained));
-    assert!(!recovery_incarnation_revoked(&retained));
     assert!(!cancelled_launch_processes_stopped(&retained).unwrap());
     assert_eq!(retained.dispatch.as_ref().unwrap().step, DispatchStep::NeedsReview);
     assert_eq!(retained.dispatch.as_ref().unwrap().error.as_ref().unwrap().code,
@@ -1474,7 +1560,7 @@ async fn absent_layout_with_missing_original_shell_identity_never_sends_fresh_la
     let mut fixture = ReviewFixture::new(RunStage::Starting);
     fixture.uncertain(RunKind::Supervisor);
     fixture.change(|run| {
-        test_attachment(run).main_session_id = None;
+        test_attachment(run).conversation = None;
         test_attachment(run).location.as_mut().unwrap().native_session_id = None;
         test_attachment(run).shell = None;
     });
@@ -1495,7 +1581,7 @@ async fn interrupted_preservation_intent_retains_old_pane_and_never_replays_crea
         let mut fixture = ReviewFixture::new(RunStage::Starting);
         fixture.uncertain(RunKind::Supervisor);
         fixture.change(|run| {
-            test_attachment(run).main_session_id = None;
+            test_attachment(run).conversation = None;
             test_attachment(run).location.as_mut().unwrap().native_session_id = None;
         });
         fixture.stopped_launch_shell().await;
@@ -1551,99 +1637,48 @@ fn ownership_rejects_foreign_split_reused_terminal_and_endpoint_not_labels() {
     }
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn mature_main_attach_preserves_epoch_and_credentials_for_same_process_rollover() {
-    use cockpit_protocol::orchestration::{AgentKind, NativeProcessIdentity, OrchestrationAction, OrchestrationMutationRequest};
+#[test]
+fn root_registration_pins_generic_conversation_without_physical_process_evidence() {
+    use cockpit_protocol::orchestration::{ConversationIdentity, OrchestrationAction, OrchestrationMutationRequest};
     use super::super::{Actor, AgentCaller};
-    let mut child = tokio::process::Command::new("sh").args(["-c", "read line"])
-        .stdin(std::process::Stdio::piped()).kill_on_drop(true).spawn().unwrap();
-    let pid = child.id().unwrap();
-    let process = NativeProcessIdentity {
-        pid, start_ticks: crate::process_identity::start_identity(pid as i32).unwrap(),
-        kernel_boot_id: crate::process_identity::kernel_boot_id(),
-    };
-    for case in 0..9 {
-        let fixture = ReviewFixture::new(RunStage::Active);
-        fixture.change(|run| {
-            test_attachment(run).process = Some(process.clone());
-            if case == 7 {
-                run.annotations.push(cockpit_protocol::orchestration::Annotation {
-                    by: cockpit_protocol::orchestration::ActorRef::Dispatcher,
-                    text: format!("{RECOVERY_ATTEMPT_ANNOTATION}; launch_attempt=1"), at: now(),
-                });
-            }
-        });
-        let old = fixture.current().1;
-        let location = old.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()).unwrap();
-        let mut caller = AgentCaller {
-            auth: fixture.staged_auth(&old),
-            provenance: None,
-            endpoint_identity: location.endpoint_identity.clone(), session_id: old.session_id.clone(),
-            workspace_id: location.workspace_id.clone(), tab_id: location.tab_id.clone(),
-            pane_id: location.pane_id.clone(), boot_id: location.boot_id.clone(),
-            terminal_id: location.terminal_id.clone(), native_session_id: None,
-            env_run: Some((old.run_id.clone(), old.attempt)), omp_session_id: Some("new-main".into()),
-            agent_kind: Some(AgentKind::Main), actual_agent_kind: Some("omp".into()),
-            subagent_id: None, main_omp_session_id: None, process: Some(process.clone()),
-        };
-        match case {
-            1 => caller.native_session_id = Some("new-main".into()),
-            2 => caller.process.as_mut().unwrap().start_ticks += 1,
-            3 => caller.terminal_id = Some("foreign".into()),
-            4 => caller.agent_kind = Some(AgentKind::Subagent),
-            5 => caller.auth.attachment_epoch += 1,
-            6 => caller.native_session_id = Some("foreign-main".into()),
-            8 => caller.env_run.as_mut().unwrap().1 += 1,
-            _ => {}
-        }
-        caller.provenance = Some(super::super::CallerProvenance {
-            agent_kind: caller.agent_kind, child_id: caller.subagent_id.clone(),
-            main_session_id: caller.omp_session_id.clone(),
-            native_session_id: caller.native_session_id.clone(), process: caller.process.clone(),
-        });
-        let action = OrchestrationAction::RunAttach {
-            operation_id: uuid::Uuid::new_v4().to_string(),
-            attachment_id: old.attachment.as_ref().unwrap().attachment_id.clone(),
-            expected_attachment_epoch: old.attachment.as_ref().unwrap().epoch,
-            main_session_id: "new-main".into(),
-        };
-        let before = fixture.service.store.lock().unwrap().read().unwrap();
-        let actor = Actor::Agent(caller);
-        let result = fixture.service.mutate(&actor, OrchestrationMutationRequest {
-            session_id: old.session_id.clone(), expected_revision: None,
-            action: action.clone(),
-        });
-        if matches!(case, 0 | 1 | 3 | 6 | 8) {
-            result.unwrap();
-            let fresh = fixture.current().1;
-            assert_eq!(fresh.attachment.as_ref().and_then(|attachment| attachment.main_session_id.as_deref()), Some("new-main"));
-            assert_eq!(fresh.attachment.as_ref().and_then(|attachment| attachment.process.as_ref()), old.attachment.as_ref().and_then(|attachment| attachment.process.as_ref()));
-            assert_eq!(fresh.stage, old.stage);
-            assert_eq!(fresh.dispatch.as_ref().unwrap().launch_attempt, old.dispatch.as_ref().unwrap().launch_attempt);
-            assert_eq!(fresh.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()).unwrap().terminal_id, old.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()).unwrap().terminal_id);
-            assert_eq!(fresh.brief, old.brief);
-            assert_eq!(fresh.attachment.as_ref().unwrap().attachment_id, old.attachment.as_ref().unwrap().attachment_id);
-            assert_eq!(fresh.attachment.as_ref().unwrap().epoch, old.attachment.as_ref().unwrap().epoch);
-            assert_eq!(fresh.checkout_claim_id, old.checkout_claim_id);
-            let after = fixture.service.store.lock().unwrap().read().unwrap();
-            assert_eq!(serde_json::to_value(&after.credentials).unwrap(), serde_json::to_value(&before.credentials).unwrap());
-            assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(), serde_json::to_value(&before.checkout_claims).unwrap());
-            fixture.service.mutate(&actor, OrchestrationMutationRequest {
-                session_id: old.session_id.clone(), expected_revision: None,
-                action,
-            }).unwrap();
-            let state = fixture.service.store.lock().unwrap().read().unwrap();
-            assert_eq!(state.revision, after.revision, "replayed attachment operation is a no-op");
-            assert_eq!(state.operations.len(), after.operations.len());
-            assert_eq!(state.messages.len(), after.messages.len());
-        } else {
-            assert!(result.is_err(), "case {case} must not rebind a foreign incarnation");
-            assert_eq!(fixture.current().1.attachment.as_ref().and_then(|attachment| attachment.main_session_id.as_ref()), old.attachment.as_ref().and_then(|attachment| attachment.main_session_id.as_ref()));
-        }
-    }
-    child.kill().await.unwrap();
-    child.wait().await.unwrap();
+    let fixture = ReviewFixture::new(RunStage::Active);
+    fixture.change(|run| {
+        test_attachment(run).conversation = None;
+        test_attachment(run).process = None;
+        test_attachment(run).shell = None;
+        test_attachment(run).state = cockpit_protocol::orchestration::AttachmentState::Disconnected;
+    });
+    let old = fixture.current().1;
+    let actor = Actor::Agent(AgentCaller {
+        auth: fixture.staged_auth(&old),
+        conversation: ConversationIdentity { harness: "omp".into(), session_id: "opaque/non-uuid chat".into() },
+        assignment_generation: None,
+        endpoint_identity: String::new(), session_id: String::new(), workspace_id: String::new(),
+        tab_id: String::new(), pane_id: String::new(), boot_id: None, terminal_id: None,
+        native_session_id: None, actual_agent_kind: None, process: None,
+    });
+    let action = OrchestrationAction::RunRegister { operation_id: uuid::Uuid::new_v4().to_string() };
+    fixture.service.mutate(&actor, OrchestrationMutationRequest {
+        session_id: old.session_id.clone(), expected_revision: None, action: action.clone(),
+    }).unwrap();
+    let fresh = fixture.current().1;
+    let registered = fixture.service.store.lock().unwrap().read().unwrap();
+    let wrong_route = fixture.service.mutate(&actor, OrchestrationMutationRequest {
+        session_id: "different-stored-route".into(), expected_revision: None, action: action.clone(),
+    }).unwrap_err();
+    assert_eq!(wrong_route.code, "session_mismatch");
+    assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(),
+        serde_json::to_value(registered).unwrap(), "a valid conversation cannot redirect its stored run");
+    assert_eq!(fresh.attachment.as_ref().unwrap().conversation.as_ref().unwrap().session_id, "opaque/non-uuid chat");
+    assert_eq!(fresh.stage, old.stage);
+    assert_eq!(fresh.attachment.as_ref().unwrap().epoch, old.attachment.as_ref().unwrap().epoch);
+    assert!(fresh.attachment.as_ref().unwrap().process.is_none());
+    let before = fixture.service.store.lock().unwrap().read().unwrap();
+    fixture.service.mutate(&actor, OrchestrationMutationRequest {
+        session_id: old.session_id, expected_revision: None, action,
+    }).unwrap();
+    assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(),
+        serde_json::to_value(before).unwrap(), "registration replay does not rotate launch credentials or create physical proof");
 }
 
 
@@ -1664,4 +1699,256 @@ fn now() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("UTC time is representable")
+}
+
+#[tokio::test]
+async fn generic_launch_preserves_literal_argv_and_durable_harness_policy() {
+    use std::sync::atomic::Ordering;
+    let prerequisite = uuid::Uuid::new_v4().to_string();
+    let mut fixture = ReviewFixture::new(RunStage::Starting);
+    fixture.prepared_launch(&prerequisite, true);
+    let config = cockpit_protocol::projects::OrchestrationConfiguration {
+        harness_kind: "plain-agent".into(),
+        command: "/opt/plain agent".into(),
+        extra_args: vec!["--fresh".into(), "literal ; $(no-shell)".into()],
+        resume_args: Some(vec!["--resume".into(), "{session_id}".into()]),
+        inbox_prompt_hints: false,
+        routes: Vec::new(),
+    };
+    fixture.change(|run| run.launch_config = config.clone());
+    fixture.run = fixture.current().1;
+    let mut adapter = CountingHerdr::new(runtime(), false, false);
+    adapter.managed_launch = true;
+    adapter.expected_harness = "plain-agent".into();
+    adapter.expected_command = Some(vec![
+        "/opt/plain agent".into(), "--fresh".into(), "literal ; $(no-shell)".into(),
+    ]);
+    let adapter = Arc::new(adapter);
+    fixture.dispatcher(Arc::clone(&adapter)).step(&fixture.run).await.unwrap();
+    assert_eq!(adapter.create_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(adapter.start_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(serde_json::to_value(fixture.current().1.launch_config).unwrap(), serde_json::to_value(config).unwrap());
+    assert!(fixture.current().1.attachment.as_ref().unwrap().conversation.is_none());
+}
+
+fn inbox_hint_fixture(enabled: bool) -> (ReviewFixture, RuntimeView) {
+    let mut fixture = ReviewFixture::new(RunStage::Active);
+    fixture.change(|run| {
+        run.launch_config.inbox_prompt_hints = enabled;
+        test_attachment(run).state = cockpit_protocol::orchestration::AttachmentState::Connected;
+        test_attachment(run).launch_mode = Some(cockpit_protocol::orchestration::AttachmentLaunchMode::DirectProcess);
+    });
+    fixture.run = fixture.current().1;
+    let auth = fixture.staged_auth(&fixture.run);
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let credential = state.credentials.iter_mut()
+            .find(|credential| credential.credential_id == auth.credential_id).unwrap();
+        credential.conversation = fixture.run.attachment.as_ref().unwrap().conversation.clone();
+        locked.save(&mut state).unwrap();
+    }
+    append_hint_instruction(&fixture, "hint-instruction");
+    let mut observed = runtime();
+    observed.panes[0].agent_kind = Some("omp".into());
+    observed.panes[0].agent_name = Some("tag".into());
+    observed.panes[0].native_session_id = Some("native".into());
+    (fixture, observed)
+}
+
+fn append_hint_instruction(fixture: &ReviewFixture, message_id: &str) {
+    use super::super::messages::{append, AppendMessage};
+    use cockpit_protocol::orchestration::{ActorRef, MessageKind};
+    let locked = fixture.service.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    append(&mut state, AppendMessage {
+        from: ActorRef::Operator, to_run_id: &fixture.run.run_id, message_id,
+        kind: MessageKind::Instruction, text: "private pending instruction",
+        in_reply_to: None, report: None, stale: false, escalated_from: None,
+    }).unwrap();
+    locked.save(&mut state).unwrap();
+}
+
+#[tokio::test]
+async fn ordinary_inbox_prompt_hints_are_off_by_default_for_registered_chat() {
+    use std::sync::atomic::Ordering;
+    assert!(!cockpit_protocol::projects::OrchestrationConfiguration::default().inbox_prompt_hints);
+    let (fixture, observed) = inbox_hint_fixture(false);
+    let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+    let dispatcher = fixture.dispatcher(Arc::clone(&adapter));
+    let before = serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap();
+    dispatcher.hint_agents().await.unwrap();
+    dispatcher.hint_agents().await.unwrap();
+    assert_eq!(adapter.prompt_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), before);
+}
+
+#[tokio::test]
+async fn busy_departed_or_contradictory_hint_targets_defer_without_submission() {
+    use std::sync::atomic::Ordering;
+    use super::super::store::HintState;
+    for mismatch in ["busy", "blocked", "departed", "harness", "endpoint", "terminal", "native_session", "missing_native_session", "launch_tag"] {
+        let (fixture, mut observed) = inbox_hint_fixture(true);
+        match mismatch {
+            "busy" => observed.panes[0].agent_status = Some("busy".into()),
+            "blocked" => observed.panes[0].agent_status = Some("blocked".into()),
+            "departed" => observed.panes.clear(),
+            "harness" => observed.panes[0].agent_kind = Some("foreign-harness".into()),
+            "endpoint" => observed.endpoint_identity = "replacement".into(),
+            "native_session" => observed.panes[0].native_session_id = Some("replacement-conversation".into()),
+            "missing_native_session" => observed.panes[0].native_session_id = None,
+            "launch_tag" => observed.panes[0].tab_label = "replacement-launch".into(),
+            _ => observed.panes[0].terminal_id = Some("replacement".into()),
+        }
+        let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+        fixture.dispatcher(Arc::clone(&adapter)).hint_agents().await.unwrap();
+        assert_eq!(adapter.prompt_calls.load(Ordering::SeqCst), 0, "{mismatch}");
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        let hint = state.inbox_hints.iter().find(|hint| hint.run_id == fixture.run.run_id).unwrap();
+        assert!(matches!(hint.state, HintState::Deferred), "{mismatch}");
+        assert!(hint.cause.is_some(), "{mismatch}");
+        assert_eq!(hint.through_seq, 1);
+        assert!(!serde_json::to_string(hint).unwrap().contains("private pending instruction"));
+        assert_eq!(state.messages[0].stage, cockpit_protocol::orchestration::DeliveryStage::Stored);
+    }
+}
+
+#[tokio::test]
+async fn uncertain_prompt_is_durable_and_not_repeated_after_restart_or_new_message() {
+    use std::sync::atomic::Ordering;
+    use super::super::store::HintState;
+    let (mut fixture, observed) = inbox_hint_fixture(true);
+    let mut adapter = CountingHerdr::new(observed.clone(), false, false);
+    adapter.prompt_unknown = true;
+    let adapter = Arc::new(adapter);
+    let dispatcher = fixture.dispatcher(Arc::clone(&adapter));
+    dispatcher.hint_agents().await.unwrap();
+    assert_eq!(adapter.prompt_calls.load(Ordering::SeqCst), 1);
+    let before = fixture.service.store.lock().unwrap().read().unwrap();
+    let hint = before.inbox_hints.iter().find(|hint| hint.run_id == fixture.run.run_id).unwrap();
+    assert!(matches!(hint.state, HintState::Unknown));
+    let attempt_id = hint.attempt_id.clone();
+    assert_eq!(before.messages[0].stage, cockpit_protocol::orchestration::DeliveryStage::Stored);
+    dispatcher.hint_agents().await.unwrap();
+    append_hint_instruction(&fixture, "newer-hint-instruction");
+    fixture.service = Arc::new(OrchestrationService::open(&fixture.config).unwrap());
+    let restarted_adapter = Arc::new(CountingHerdr::new(observed, false, false));
+    fixture.dispatcher(Arc::clone(&restarted_adapter)).hint_agents().await.unwrap();
+    assert_eq!(adapter.prompt_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(restarted_adapter.prompt_calls.load(Ordering::SeqCst), 0);
+    let after = fixture.service.store.lock().unwrap().read().unwrap();
+    let hint = after.inbox_hints.iter().find(|hint| hint.run_id == fixture.run.run_id).unwrap();
+    assert!(matches!(hint.state, HintState::Unknown));
+    assert_eq!(hint.attempt_id, attempt_id);
+    assert!(after.messages.iter().all(|message| message.stage == cockpit_protocol::orchestration::DeliveryStage::Stored));
+    let credential_path = super::super::credentials::credential_path(
+        fixture.service.base(), &after.credentials[0],
+    ).unwrap();
+    let actor = super::super::Actor::Agent(super::super::AgentCaller {
+        auth: super::super::credentials::read_job_auth(&credential_path).unwrap(),
+        conversation: fixture.run.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+        assignment_generation: None,
+        endpoint_identity: String::new(), session_id: "deliberately-foreign-physical-session".into(), workspace_id: String::new(),
+        tab_id: String::new(), pane_id: String::new(), boot_id: None, terminal_id: None,
+        native_session_id: None, actual_agent_kind: None, process: None,
+    });
+    let wrong_route = fixture.service.mutate(&actor, cockpit_protocol::orchestration::OrchestrationMutationRequest {
+        session_id: "different-stored-route".into(), expected_revision: None,
+        action: cockpit_protocol::orchestration::OrchestrationAction::InboxPull { after_seq: 0, limit: 100 },
+    }).unwrap_err();
+    assert_eq!(wrong_route.code, "session_mismatch");
+    assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(),
+        serde_json::to_value(&after).unwrap(), "wrong logical routing must not capture inbox or settle an uncertain hint");
+    fixture.service.mutate(&actor, cockpit_protocol::orchestration::OrchestrationMutationRequest {
+        session_id: fixture.run.session_id.clone(), expected_revision: None,
+        action: cockpit_protocol::orchestration::OrchestrationAction::InboxPull { after_seq: 0, limit: 100 },
+    }).unwrap();
+    let captured = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(matches!(captured.inbox_hints[0].state, HintState::Sent));
+    assert_eq!(captured.inbox_hints[0].cause.as_deref(), Some("inbox_captured"));
+    assert!(captured.messages.iter().all(|message| message.stage == cockpit_protocol::orchestration::DeliveryStage::Read));
+    assert!(captured.messages.iter().all(|message| message.acked_at.is_none()));
+}
+
+#[tokio::test]
+async fn successful_prompt_submission_is_not_inbox_capture_or_ack() {
+    use std::sync::atomic::Ordering;
+    use super::super::store::HintState;
+    let (fixture, observed) = inbox_hint_fixture(true);
+    let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+    fixture.dispatcher(Arc::clone(&adapter)).hint_agents().await.unwrap();
+    assert_eq!(adapter.prompt_calls.load(Ordering::SeqCst), 1);
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(matches!(state.inbox_hints[0].state, HintState::Sent));
+    assert_eq!(state.messages[0].stage, cockpit_protocol::orchestration::DeliveryStage::Stored);
+    assert!(state.messages[0].acked_at.is_none());
+}
+
+#[test]
+fn same_chat_resume_substitutes_only_the_whole_opaque_session_argument() {
+    use cockpit_protocol::orchestration::{ConversationIdentity, ResumePhase, ResumeRecord};
+    let fixture = ReviewFixture::new(RunStage::Starting);
+    let mut run = fixture.run.clone();
+    run.launch_config.extra_args = vec!["--fresh-only".into()];
+    run.launch_config.resume_args = Some(vec![
+        "--resume".into(), "{session_id}".into(), "literal-{session_id}".into(),
+    ]);
+    assert_eq!(launch_args(&run).unwrap(), ["--fresh-only"]);
+    run.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
+        harness: "plain-agent".into(), session_id: "opaque/chat ; $(literal)".into(),
+    });
+    run.resume = Some(ResumeRecord {
+        operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
+        previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+        phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
+    });
+    assert_eq!(launch_args(&run).unwrap(), [
+        "--resume", "opaque/chat ; $(literal)", "literal-{session_id}",
+    ]);
+    run.launch_config.resume_args = None;
+    assert_eq!(launch_args(&run).unwrap_err().code, "harness_resume_unsupported");
+    for invalid in [
+        vec!["--resume".into()],
+        vec!["prefix-{session_id}".into()],
+        vec!["{session_id}".into(), "{session_id}".into()],
+    ] {
+        run.launch_config.resume_args = Some(invalid);
+        assert_eq!(launch_args(&run).unwrap_err().code, "invalid_launch_settings");
+    }
+    run.launch_config.resume_args = Some(vec!["{session_id}".into()]);
+    run.attachment.as_mut().unwrap().conversation = None;
+    assert_eq!(launch_args(&run).unwrap_err().code, "resume_session_unavailable");
+}
+
+#[test]
+fn generic_agent_observation_requires_configured_harness() {
+    let mut observed = runtime();
+    let location = receipt();
+    observed.panes[0].agent_kind = Some("omp".into());
+    assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag", Some(&location),
+        None, true, "plain-agent"), ReconciledLaunch::Tab));
+    observed.panes[0].agent_kind = Some("plain-agent".into());
+    assert!(matches!(reconcile_tag(&observed, Some("endpoint"), "tag", Some(&location),
+        None, true, "plain-agent"), ReconciledLaunch::Agent));
+}
+
+#[tokio::test]
+async fn interrupted_durable_hint_submission_becomes_unknown_without_resubmitting() {
+    use std::sync::atomic::Ordering;
+    use super::super::store::HintState;
+    let (fixture, observed) = inbox_hint_fixture(true);
+    assert_eq!(fixture.service.hint_queue().unwrap().len(), 1);
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.inbox_hints[0].state = HintState::Submitting;
+        locked.save(&mut state).unwrap();
+    }
+    let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+    fixture.dispatcher(Arc::clone(&adapter)).hint_agents().await.unwrap();
+    assert_eq!(adapter.prompt_calls.load(Ordering::SeqCst), 0);
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(matches!(state.inbox_hints[0].state, HintState::Unknown));
+    assert_eq!(state.inbox_hints[0].cause.as_deref(), Some("submission_interrupted"));
+    assert_eq!(state.messages[0].stage, cockpit_protocol::orchestration::DeliveryStage::Stored);
 }

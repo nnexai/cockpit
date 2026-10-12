@@ -1,5 +1,5 @@
 import type { AttentionKind, OrchestrationSnapshot, Run, TaskView } from "../../protocol/generated/v1";
-import { cleanupForRun, cleanupView } from "./retirementView";
+import { cleanupForRun, cleanupView, taskOwnerRun } from "./retirementView";
 
 export type AttentionTier = "decide" | "recover" | "notice";
 export const TIER_ORDER: Readonly<Record<AttentionTier, number>> = { decide: 0, recover: 1, notice: 2 };
@@ -140,8 +140,10 @@ export function deriveAttention({ snapshot, rootId, local }: { snapshot: Orchest
   }
   const itemsForRun = (id: string): readonly AttentionItem[] => byRun.get(id) ?? [];
   const itemsForTask = (task: TaskView): readonly AttentionItem[] => {
-    const direct = byTask.get(task.task.task_id) ?? [];
-    const worker = task.current_run_id === null ? [] : byRun.get(task.current_run_id) ?? [];
+    const ownerRunId = taskOwnerRun(snapshot, task)?.run_id;
+    const direct = (byTask.get(task.task.task_id) ?? []).filter(item => item.runId === null || item.runId === ownerRunId
+      || item.sources.some(source => source.origin === "core" ? source.kind === "intent_conflict" || source.kind === "retirement_unconfirmed" : source.condition.kind === "cleanup"));
+    const worker = ownerRunId ? byRun.get(ownerRunId) ?? [] : [];
     if (!direct.length) return worker;
     if (!worker.length) return direct;
     const matches = new Set([...direct, ...worker]);

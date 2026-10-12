@@ -162,7 +162,7 @@ fn finalize(
     };
     let text = serde_json::to_string(&pointer)
         .map_err(|failure| error("task_assignment_write", failure.to_string()))?;
-    let result = messages::append(state, messages::AppendMessage { from: ActorRef::Operator, to_run_id: &pointer.root_id, message_id: &format!("assign-{}", pointer.task_id), kind: MessageKind::Instruction, text: &text, in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })?;
+    let result = messages::append(state, messages::AppendMessage { from: ActorRef::Operator, to_run_id: &pointer.root_id, message_id: &format!("assign-{}", pointer.task_id), kind: MessageKind::Instruction, text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     let OrchestrationActionResult::Message {
         seq,
         duplicate: message_duplicate,
@@ -364,6 +364,8 @@ mod tests {
                 parent_run_id: None,
                 task_id: None,
                 attempt: 1,
+                assignment_generation: None,
+                launch_config: Default::default(),
                 task_revision_at_start: None,
                 stage: RunStage::Active,
                 close_reason: None,
@@ -384,7 +386,10 @@ mod tests {
                     state: AttachmentState::Disconnected,
                     launch_mode: None,
                     location: None,
-                    main_session_id: Some("actual-main".into()),
+                    conversation: Some(cockpit_protocol::orchestration::ConversationIdentity {
+                        harness: "omp".into(),
+                        session_id: "actual-main".into(),
+                    }),
                     process: None,
                     shell: None,
                     machine_id: None,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CleanupResourceSummary, CleanupState, OrchestrationSnapshot, Run, RunCleanupSummary, TaskView } from "../../protocol/generated/v1";
-import { cleanupItemView, cleanupResourceLabel, cleanupView, keptTaskCount, outcomeView } from "./retirementView";
+import { cleanupItemView, cleanupResourceLabel, cleanupView, keptTaskCount, outcomeView, taskOwnerRun, taskRun } from "./retirementView";
 
 const at = "2026-10-07T12:00:00Z";
 function resource(state: CleanupState, kind: CleanupResourceSummary["kind"] = "worktree"): CleanupResourceSummary {
@@ -10,7 +10,7 @@ function summary(...items: CleanupResourceSummary[]): RunCleanupSummary {
   return { run_id: "worker", items, removed_count: items.filter(item => item.cleanup.state === "removed").length, kept_count: items.filter(item => item.cleanup.state === "kept").length, waiting_count: items.filter(item => !["removed", "kept", "unknown"].includes(item.cleanup.state)).length, unknown_count: items.filter(item => item.cleanup.state === "unknown").length };
 }
 function worker(): Run {
-  return { session_id: "session", brief: "", run_id: "worker", root_id: "root", kind: "worker", parent_run_id: "root", task_id: "task", label: "Worker", attempt: 1, task_revision_at_start: "revision", stage: "closed", close_reason: "accepted", dispatch: null, target: null, setup: null, cleanup_policy: null, last_report: null, result: { message_id: "result", kind: "result", outcome: "succeeded", summary: "Verified work", plan: null, source_output: null, at }, source_output: { kind: "code", repository_key: "repo", checkout_key: "checkout", base_commit: "base", head_commit: "head", commits: ["head"], task_revision: "revision", result_message_id: "result", focused_checks: [] }, integration: { state: "pending" }, annotations: [], project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at };
+  return { session_id: "session", brief: "", run_id: "worker", root_id: "root", kind: "worker", parent_run_id: "root", task_id: "task", assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] }, label: "Worker", attempt: 1, task_revision_at_start: "revision", stage: "closed", close_reason: "accepted", dispatch: null, target: null, setup: null, cleanup_policy: null, last_report: null, result: { message_id: "result", kind: "result", outcome: "succeeded", summary: "Verified work", plan: null, source_output: null, at }, source_output: { kind: "code", repository_key: "repo", checkout_key: "checkout", base_commit: "base", head_commit: "head", commits: ["head"], task_revision: "revision", result_message_id: "result", focused_checks: [] }, integration: { state: "pending" }, annotations: [], project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at };
 }
 
 describe("independent source, integration and cleanup truth", () => {
@@ -55,8 +55,16 @@ describe("independent source, integration and cleanup truth", () => {
   it("counts completed tasks once across multiple kept resources and historical runs, excluding another root", () => {
     const run = worker();
     const task: TaskView = { task: { task_id: "task", title: "Work", body: "", description: "", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: true, line: 1, task_revision: "revision", diagnostic: null }, lane: "accepted", current_run_id: "new-run", dependencies: { state: "none", unmet: [], problems: [] } };
-    const state: OrchestrationSnapshot = { state_store_id: "store", session_id: "session", revision: 1, tasks_token: "tasks", roots: [], board: { root_id: "root", path: "tasks", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task] }, runs: [run, { ...run, run_id: "old" }, { ...run, run_id: "foreign", root_id: "other", task_id: "foreign-task" }], cleanup: [summary(resource("kept"), resource("kept", "branch")), { ...summary(resource("kept")), run_id: "old" }, { ...summary(resource("kept")), run_id: "foreign" }], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], unmanaged_agents: [], attention: [], runtime: { status: "unavailable", error: { code: "offline", message: "Offline" } } };
+    const state: OrchestrationSnapshot = { state_store_id: "store", session_id: "session", revision: 1, tasks_token: "tasks", roots: [], board: { root_id: "root", path: "tasks", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task] }, runs: [run, { ...run, run_id: "old" }, { ...run, run_id: "foreign", root_id: "other", task_id: "foreign-task" }], cleanup: [summary(resource("kept"), resource("kept", "branch")), { ...summary(resource("kept")), run_id: "old" }, { ...summary(resource("kept")), run_id: "foreign" }], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], unmanaged_agents: [], attention: [], runtime: { status: "unavailable", error: { code: "offline", message: "Offline" } } };
     expect(keptTaskCount(state, [task, task])).toBe(1);
     expect(keptTaskCount(state, [{ ...task, lane: "working" }])).toBe(0);
+    expect(taskOwnerRun(state, task)).toBeUndefined();
+    expect(taskRun(state, task)).toBe(run);
+    const openTask: TaskView = { ...task, lane: "working", task: { ...task.task, checked: false }, current_run_id: "old" };
+    expect(taskRun(state, openTask)).toBeUndefined();
+    state.task_ownership = [{ root_id: "root", task_id: "task", generation: 3, owner: { run_id: "worker", conversation: { harness: "custom", session_id: "opaque-conversation" }, claim_operation_id: "claim" } }];
+    expect(taskOwnerRun(state, openTask)).toBe(run);
+    state.task_ownership[0].owner = { ...state.task_ownership[0].owner!, run_id: "foreign" };
+    expect(taskOwnerRun(state, openTask)).toBeUndefined();
   });
 });

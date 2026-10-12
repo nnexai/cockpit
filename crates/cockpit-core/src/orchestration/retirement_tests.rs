@@ -13,7 +13,7 @@ impl Fixture {
         let path = std::env::temp_dir().join(format!("cockpit-retirement-{}", id()));
         let store = OrchestrationStore::open(&path).unwrap();
         let (revision, _) = watch::channel(0);
-        let service = OrchestrationService { store, revision };
+        let service = OrchestrationService { store, revision, launch_config: Default::default() };
         let locked = service.store.lock().unwrap();
         let mut state = locked.read().unwrap();
         let mut root = new_run(ROOT, SESSION, RunKind::Supervisor, "root".into(), ROOT, None, None, 1);
@@ -33,9 +33,10 @@ impl Fixture {
         };
         worker.source_output = Some(source_output.clone());
         worker.result.as_mut().unwrap().source_output = Some(source_output);
-        let (credential, credential_file) = credentials::stage_credential(
-            service.base(), &worker, credentials::JobRole::Worker, None,
+        let (mut credential, credential_file) = credentials::stage_credential(
+            service.base(), &worker, credentials::JobRole::Worker,
         ).unwrap();
+        credential.conversation = Some(conversation());
         let auth = credentials::read_job_auth(&credential_file).unwrap();
         state.runs.push(worker);
         let (_, checkout) = project_identity::resolve_owned_directory(&path).unwrap();
@@ -43,6 +44,13 @@ impl Fixture {
             attachment_id: auth.attachment_id.clone(), attachment_epoch: auth.attachment_epoch };
         claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
         state.credentials.push(credential);
+        state.task_ownership.push(TaskOwnership {
+            root_id: ROOT.into(), task_id: task.task_id.clone(), generation: 1,
+            owner: Some(TaskOwner {
+                run_id: state.runs[1].run_id.clone(),
+                conversation: conversation(), claim_operation_id: id(),
+            }),
+        });
         locked.save(&mut state).unwrap();
         drop(locked);
         Self { path, service, task, auth }
@@ -64,13 +72,6 @@ impl Fixture {
             run_id: "12345678-1234-4234-8234-123456789abd".into(), expected_task_revision: self.task.task_revision.clone(),
         }).unwrap();
     }
-    fn offer(&self) -> String {
-        self.accept();
-        let r = self.run().retirement.unwrap();
-        self.service.record_retirement("12345678-1234-4234-8234-123456789abd", &r.retirement_id, RetirementStateKind::Waiting,
-            RetirementState::NativeStopOffered { offered_at: AT.into() }).unwrap();
-        r.retirement_id
-    }
     fn intent(&self) -> TaskIntent {
         let expected_task_revision = {
             let locked = self.service.store.lock().unwrap();
@@ -79,7 +80,7 @@ impl Fixture {
         let result_message_id = self.run().result.map(|report| report.message_id);
         let intent = TaskIntent { intent_id: id(), root_id: ROOT.into(), task_id: self.task.task_id.clone(),
             run_id: "12345678-1234-4234-8234-123456789abd".into(), expected_task_revision, state: IntentState::Pending,
-            origin: Some(DecisionOrigin::Browser), supervisor_run_id: None, omp_session_id: None,
+            origin: Some(DecisionOrigin::Browser), supervisor_run_id: None, conversation: None,
             result_message_id };
         self.edit(|s| s.task_intents.push(intent.clone()));
         intent
@@ -90,10 +91,11 @@ impl Drop for Fixture { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&se
 fn worker() -> Run {
     let mut run = new_run("12345678-1234-4234-8234-123456789abd", SESSION, RunKind::Worker, "12345678-1234-4234-8234-123456789abd".into(), ROOT, Some(ROOT.into()), None, 7);
     run.stage = RunStage::Reported;
+    run.assignment_generation = Some(1);
     run.cleanup_policy = Some(WorkerCleanupPolicy::OwnedWhenSafe);
     run.attachment = Some(ExecutionAttachment {
         attachment_id: "12345678-1234-4234-8234-123456789abe".into(), epoch: 1,
-        state: AttachmentState::Connected, location: None, main_session_id: None,
+        state: AttachmentState::Connected, location: None, conversation: Some(conversation()),
         launch_mode: Some(AttachmentLaunchMode::ShellAgent),
         process: None, shell: None, machine_id: Some("test-machine".into()), launch_attempt: 3,
         updated_at: AT.into(),
@@ -103,7 +105,6 @@ fn worker() -> Run {
     run.attachment.as_mut().unwrap().location = Some(RunLocation { boot_id: Some("herdr-boot".into()), terminal_id: Some("terminal".into()),
         native_session_id: Some("native".into()), endpoint_identity: "endpoint".into(), session_id: SESSION.into(),
         workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(), launch_tag: "owned-launch".into() });
-    run.attachment.as_mut().unwrap().main_session_id = Some("native".into());
     run.attachment.as_mut().unwrap().process = Some(NativeProcessIdentity { pid: 123, start_ticks: 456, kernel_boot_id: Some("kernel".into()) });
     run.attachment.as_mut().unwrap().shell = Some(shell_identity());
     let source_output = SourceOutput::NonCode {
@@ -116,21 +117,21 @@ fn worker() -> Run {
         source_output: Some(source_output), at: AT.into() });
     run
 }
-fn caller(auth: JobAuth) -> AgentCaller {
-    AgentCaller { auth, provenance: None, endpoint_identity: "endpoint".into(), session_id: SESSION.into(), workspace_id: "space".into(),
-        tab_id: "tab".into(), pane_id: "pane".into(), boot_id: Some("herdr-boot".into()), terminal_id: Some("terminal".into()),
-        native_session_id: Some("native".into()), env_run: Some(("12345678-1234-4234-8234-123456789abd".into(), 7)), omp_session_id: Some("native".into()),
-        agent_kind: Some(AgentKind::Main), actual_agent_kind: Some(NativeAgentKind::Omp), subagent_id: None,
-        main_omp_session_id: Some("native".into()), process: worker().attachment.unwrap().process }
+fn conversation() -> ConversationIdentity {
+    ConversationIdentity { harness: "omp".into(), session_id: "retirement-chat".into() }
 }
-fn receipt(retirement_id: &str, outcome: NativeStopReceipt) -> OrchestrationAction {
-    OrchestrationAction::RetirementNativeReceipt { retirement_id: retirement_id.into(), outcome }
+fn caller(auth: JobAuth) -> AgentCaller {
+    AgentCaller { auth, conversation: conversation(), assignment_generation: Some(1),
+        endpoint_identity: "endpoint".into(), session_id: SESSION.into(), workspace_id: "space".into(),
+        tab_id: "tab".into(), pane_id: "pane".into(), boot_id: Some("herdr-boot".into()), terminal_id: Some("terminal".into()),
+        native_session_id: Some("native".into()), actual_agent_kind: Some(NativeAgentKind::Omp),
+        process: worker().attachment.unwrap().process }
 }
 fn runtime() -> RuntimeView {
     RuntimeView { endpoint_identity: "endpoint".into(), boot_id: Some("herdr-boot".into()), workspaces: vec![], panes: vec![RuntimePane {
         workspace_id: "space".into(), workspace_label: "Space".into(), tab_id: "tab".into(), tab_label: "owned-launch".into(),
         pane_id: "pane".into(), terminal_id: Some("terminal".into()), native_session_id: None, agent_name: None,
-        agent_kind: None, launch_pending: false, interactive_ready: false, agent_status: None, state_changed_at: None,
+        agent_kind: None, launch_pending: false, agent_status: None, state_changed_at: None,
     }] }
 }
 fn shell_identity() -> NativeShellIdentity {
@@ -190,26 +191,22 @@ fn failed_acceptance_cancel_and_old_closed_runs_never_queue() {
 }
 
 #[test]
-fn incomplete_evidence_is_retained_not_acted_and_roots_are_excluded() {
-    for missing in 0..12 {
+fn incomplete_physical_evidence_is_retained_and_roots_are_excluded() {
+    for missing in 0..7 {
         let mut run = worker();
         match missing {
-            0 => run.attachment.as_mut().unwrap().process = None,
-            1 => run.attachment.as_mut().unwrap().main_session_id = None,
-            2 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().terminal_id = None,
-            3 => run.dispatch.as_mut().unwrap().launch_tag = Some("other".into()),
-            4 => run.dispatch.as_mut().unwrap().endpoint_identity = Some("other".into()),
-            5 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id = Some("other".into()),
-            6 => run.attachment.as_mut().unwrap().process.as_mut().unwrap().start_ticks = 0,
-            7 => run.dispatch.as_mut().unwrap().agent_started = false,
-            8 => run.dispatch.as_mut().unwrap().launch_attempt = 0,
-            9 => run.attachment.as_mut().unwrap().shell = None,
-            10 => run.attachment.as_mut().unwrap().shell.as_mut().unwrap().argv_digest.clear(),
-            _ => run.attachment.as_mut().unwrap().shell.as_mut().unwrap().process.kernel_boot_id = Some("other".into()),
+            0 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().terminal_id = None,
+            1 => run.dispatch.as_mut().unwrap().launch_tag = Some("other".into()),
+            2 => run.dispatch.as_mut().unwrap().endpoint_identity = Some("other".into()),
+            3 => run.attachment.as_mut().unwrap().location = None,
+            4 => run.dispatch.as_mut().unwrap().launch_attempt = 0,
+            5 => run.attachment.as_mut().unwrap().process = None,
+            _ => run.attachment.as_mut().unwrap().shell = None,
         }
         let r = retirement_for_accepted(&run, RetirementTrigger::Accept, "revision", AT).unwrap();
-        assert!(r.identity.is_none());
-        assert!(matches!(r.state, RetirementState::Retained { reason: RetainReason::IdentityIncomplete, native_stopped: false, .. }));
+        assert!(matches!(r.state, RetirementState::Retained {
+            reason: RetainReason::IdentityIncomplete, stopped: false, ..
+        }), "incomplete physical proof must retain the worker without claiming it stopped");
     }
     for kind in [RunKind::Supervisor, RunKind::Adopted] {
         let mut run = worker(); run.kind = kind;
@@ -288,143 +285,48 @@ fn operator_resolution_uses_current_revision_but_not_a_different_result() {
     }
 }
 
-#[test]
-fn native_receipt_is_exact_main_authority_and_never_rewrites_location() {
-    for mismatch in 0..14 {
-        let fixture = Fixture::new(); let retirement_id = fixture.offer();
-        let mut caller = fixture.caller();
-        match mismatch {
-            0 => caller.agent_kind = Some(AgentKind::Subagent),
-            1 => caller.process = None,
-            2 => caller.process.as_mut().unwrap().pid += 1,
-            3 => caller.process.as_mut().unwrap().start_ticks += 1,
-            4 => caller.omp_session_id = Some("other".into()),
-            5 => caller.endpoint_identity = "other".into(),
-            6 => caller.terminal_id = Some("other".into()),
-            7 => caller.pane_id = "moved".into(),
-            8 => caller.workspace_id = "moved".into(),
-            9 => caller.tab_id = "moved".into(),
-            10 => caller.env_run = Some(("12345678-1234-4234-8234-123456789abd".into(), 8)),
-            11 => caller.env_run = None,
-            12 => caller.env_run = Some((ROOT.into(), 1)),
-            _ => caller.actual_agent_kind = Some(NativeAgentKind::Other("other".into())),
-        }
-        let original = fixture.run().attachment.unwrap().location.unwrap();
-        assert!(fixture.mutate(&Actor::Agent(caller), receipt(&retirement_id, NativeStopReceipt::ShutdownRequested)).is_err());
-        let after = fixture.run();
-        assert!(matches!(after.retirement.unwrap().state, RetirementState::NativeStopOffered { .. }));
-        assert!(same_launch_location(Some(&original), after.attachment.as_ref().unwrap().location.as_ref()));
-    }
-    let fixture = Fixture::new(); let retirement_id = fixture.offer();
-    assert!(fixture.mutate(&Actor::Operator(OperatorOrigin::Browser), receipt(&retirement_id, NativeStopReceipt::ShutdownRequested)).is_err());
-    assert!(fixture.mutate(&Actor::Agent(fixture.caller()), receipt("wrong-id", NativeStopReceipt::ShutdownRequested)).is_err());
-    fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, NativeStopReceipt::ShutdownRequested)).unwrap();
-    assert!(matches!(fixture.run().retirement.unwrap().state, RetirementState::NativeStopRequested { .. }));
-    assert!(fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, NativeStopReceipt::ShutdownRequested)).is_err());
-    assert!(fixture.mutate(&Actor::Agent(fixture.caller()), OrchestrationAction::Annotate { run_id: "12345678-1234-4234-8234-123456789abd".into(), text: "not admitted".into() }).is_err());
-}
 
 #[test]
-fn deferred_preserves_offer_and_refusal_reason_is_typed_not_text() {
-    let fixture = Fixture::new(); let retirement_id = fixture.offer();
-    fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, NativeStopReceipt::Deferred { reason: NativeDeferReason::EditorDraft })).unwrap();
-    assert!(matches!(fixture.run().retirement.unwrap().state, RetirementState::NativeStopDeferred { offered_at, reason: NativeDeferReason::EditorDraft, .. } if offered_at == AT));
-    fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, NativeStopReceipt::Refused { reason: NativeRefuseReason::NativeRefused, text: "UserActivity user_activity".into() })).unwrap();
-    assert!(matches!(fixture.run().retirement.unwrap().state, RetirementState::Retained { reason: RetainReason::NativeRefused, .. }));
-    assert!(fixture.service.retirement_queue().unwrap().is_empty());
-    let fixture = Fixture::new(); let retirement_id = fixture.offer();
-    assert!(fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, NativeStopReceipt::Refused { reason: NativeRefuseReason::UserActivity, text: "x".repeat(1025) })).is_err());
-}
-
-#[test]
-fn cas_and_effect_authority_fence_launch_process_and_terminal_states() {
-    for change in 0..7 {
-        let fixture = Fixture::new(); fixture.accept(); let retirement_id = fixture.run().retirement.unwrap().retirement_id;
-        assert!(fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", "wrong", RetirementStateKind::Waiting, RetirementState::NativeStopOffered { offered_at: AT.into() }).is_err());
-        assert!(fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::NativeStopped, RetirementState::CloseIntent { at: AT.into() }).is_err());
+fn cas_and_effect_authority_fence_launch_and_terminal_states() {
+    for change in 0..6 {
+        let fixture = Fixture::new();
+        fixture.accept();
+        let run_id = fixture.run().run_id;
+        let retirement_id = fixture.run().retirement.unwrap().retirement_id;
+        assert!(fixture.service.record_retirement(&run_id, "wrong", RetirementStateKind::Waiting,
+            RetirementState::CloseIntent { at: AT.into() }).is_err());
+        assert!(fixture.service.record_retirement(&run_id, &retirement_id, RetirementStateKind::Retired,
+            RetirementState::CloseIntent { at: AT.into() }).is_err());
         fixture.edit(|s| match change {
             0 => s.runs[1].attempt += 1,
             1 => s.runs[1].dispatch.as_mut().unwrap().launch_attempt += 1,
             2 => s.runs[1].attachment.as_mut().unwrap().process.as_mut().unwrap().start_ticks += 1,
-            3 => s.runs[1].attachment.as_mut().unwrap().main_session_id = Some("other".into()),
+            3 => s.runs[1].attachment.as_mut().unwrap().epoch += 1,
             4 => s.runs[1].attachment.as_mut().unwrap().location.as_mut().unwrap().pane_id = "moved".into(),
-            5 => s.runs[1].result.as_mut().unwrap().message_id = "other".into(),
-            _ => s.runs[1].attachment.as_mut().unwrap().shell.as_mut().unwrap().executable_inode = "other".into(),
+            _ => s.runs[1].result.as_mut().unwrap().message_id = "other".into(),
         });
-        fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::Waiting, RetirementState::NativeStopOffered { offered_at: AT.into() }).unwrap();
-        assert!(matches!(fixture.run().retirement.unwrap().state, RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
-        assert!(!fixture.service.retirement_effect_authorized("12345678-1234-4234-8234-123456789abd", &retirement_id).unwrap());
-        assert!(fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::Retained, RetirementState::Waiting { blockers: vec![] }).is_err());
+        fixture.service.record_retirement(&run_id, &retirement_id, RetirementStateKind::Waiting,
+            RetirementState::CloseIntent { at: AT.into() }).unwrap();
+        assert!(matches!(fixture.run().retirement.unwrap().state,
+            RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
+        assert!(fixture.service.record_retirement(&run_id, &retirement_id, RetirementStateKind::Retained,
+            RetirementState::Waiting { blockers: vec![] }).is_err());
     }
-    let fixture = Fixture::new(); let retirement_id = fixture.offer();
-    fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, NativeStopReceipt::ShutdownRequested)).unwrap();
-    fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::NativeStopRequested,
-        RetirementState::NativeStopped { at: AT.into(), evidence: NativeStopEvidence::ExitedAfterShutdownRequest }).unwrap();
-    assert!(!fixture.service.retirement_effect_authorized("12345678-1234-4234-8234-123456789abd", &retirement_id).unwrap());
-    fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::NativeStopped, RetirementState::CloseIntent { at: AT.into() }).unwrap();
-    assert!(!fixture.service.retirement_effect_authorized("12345678-1234-4234-8234-123456789abd", &retirement_id).unwrap(),
-        "a shutdown receipt, main exit and close intent do not certify all consumers stopped");
-    fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::CloseIntent,
-        RetirementState::Unknown { at: AT.into(), phase: RetirementPhase::TerminalClose, detail: "uncertain".into() }).unwrap();
-    assert!(!fixture.service.retirement_effect_authorized("12345678-1234-4234-8234-123456789abd", &retirement_id).unwrap());
-    assert_eq!(fixture.service.retirement_queue().unwrap().len(), 1);
 }
 
 #[test]
-fn descendants_and_telemetry_block_offer_and_shutdown_even_after_preflight() {
+fn open_descendant_runs_block_close_and_closed_history_does_not() {
     let fixture = Fixture::new(); fixture.accept();
     fixture.edit(|s| {
-        let mut child = new_run("child", SESSION, RunKind::Worker, "child".into(), ROOT, Some("12345678-1234-4234-8234-123456789abd".into()), None, 1);
-        child.stage = RunStage::Active; s.runs.push(child);
-        let grandchild = new_run("grandchild", SESSION, RunKind::Worker, "grandchild".into(), ROOT, Some("child".into()), None, 1);
-        s.runs.push(grandchild);
-        s.subagents.push(Subagent { run_id: "12345678-1234-4234-8234-123456789abd".into(), subagent_id: "child-native".into(), parent_subagent_id: None,
-            bound_omp_session: None, role: None, label: "child".into(), status: SubagentStatus::Running, summary: None, last_control: None, updated_at: AT.into() });
+        let child = new_run("child", SESSION, RunKind::Worker, "child".into(), ROOT,
+            Some(s.runs[1].run_id.clone()), None, 1);
+        s.runs.push(child);
     });
-    assert_eq!(fixture.service.retirement_blockers("12345678-1234-4234-8234-123456789abd").unwrap(), vec![RetirementBlocker::OpenDescendantRuns, RetirementBlocker::RunningSubagents]);
-    let retirement_id = fixture.run().retirement.unwrap().retirement_id;
-    assert!(fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::Waiting, RetirementState::NativeStopOffered { offered_at: AT.into() }).is_err());
-    fixture.edit(|s| { s.runs[2].stage = RunStage::Closed; s.runs[3].stage = RunStage::Closed; s.subagents[0].status = SubagentStatus::Done; });
-    assert!(fixture.service.retirement_blockers("12345678-1234-4234-8234-123456789abd").unwrap().is_empty());
-    fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::Waiting, RetirementState::NativeStopOffered { offered_at: AT.into() }).unwrap();
-    fixture.edit(|s| s.subagents[0].status = SubagentStatus::Running);
-    assert!(fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, NativeStopReceipt::ShutdownRequested)).is_err());
-}
-
-#[test]
-fn attach_stores_only_main_evidence_and_never_replaces_process_or_retries_unknown_launch() {
-    let fixture = Fixture::new();
-    fixture.edit(|s| { s.runs[1].attachment.as_mut().unwrap().main_session_id = None; s.runs[1].attachment.as_mut().unwrap().process = None; s.runs[1].stage = RunStage::Starting; });
-    let attach = || OrchestrationAction::RunAttach { operation_id: id(),
-        attachment_id: fixture.auth.attachment_id.clone(), expected_attachment_epoch: fixture.auth.attachment_epoch,
-        main_session_id: "native".into() };
-    let (credential, path) = credentials::stage_credential(
-        fixture.service.base(), &fixture.run(), JobRole::Child, Some("child"),
-    ).unwrap();
-    let mut subagent = fixture.caller();
-    subagent.auth = credentials::read_job_auth(&path).unwrap();
-    fixture.edit(|state| state.credentials.push(credential));
-    subagent.agent_kind = Some(AgentKind::Main);
-    subagent.subagent_id = None;
-    assert!(fixture.mutate(&Actor::Agent(subagent), attach()).is_err());
-    assert!(fixture.run().attachment.as_ref().unwrap().process.is_none());
-    fixture.mutate(&Actor::Agent(fixture.caller()), attach()).unwrap();
-    assert_eq!(fixture.run().attachment.as_ref().unwrap().process, fixture.caller().process);
-    let mut replaced = fixture.caller(); replaced.process.as_mut().unwrap().start_ticks += 1;
-    assert_eq!(fixture.mutate(&Actor::Agent(replaced), attach()).unwrap_err().code, "attachment_conflict");
-    fixture.edit(|s| s.runs[1].dispatch.as_mut().unwrap().step = DispatchStep::LaunchUnknown);
-    let before = fixture.run().attachment.unwrap();
-    let resumed = fixture.mutate(&Actor::Operator(OperatorOrigin::Browser),
-        OrchestrationAction::RunResume { run_id: fixture.run().run_id, operation_id: id(),
-            expected_attachment_epoch: Some(fixture.auth.attachment_epoch),
-            mode: ResumeMode::ReattachOrRestart, decision_id: None }).unwrap();
-    let OrchestrationActionResult::RunResumed { resume } = resumed.result else { unreachable!() };
-    assert_eq!(resume.resume.phase, ResumePhase::Blocked);
-    assert_eq!(resume.resume.cause.as_ref().unwrap().code, "writer_exit_unproven");
-    let after = fixture.run().attachment.unwrap();
-    assert_eq!(after.main_session_id, before.main_session_id);
-    assert_eq!(after.process, before.process);
-    assert_eq!(after.shell, before.shell);
+    let run_id = fixture.run().run_id;
+    assert_eq!(fixture.service.retirement_blockers(&run_id).unwrap(),
+        vec![RetirementBlocker::OpenDescendantRuns]);
+    fixture.edit(|s| s.runs[2].stage = RunStage::Closed);
+    assert!(fixture.service.retirement_blockers(&run_id).unwrap().is_empty());
 }
 
 #[test]
@@ -440,7 +342,7 @@ fn terminal_classifier_preserves_live_shells_and_excludes_shared_tabs() {
     assert_eq!(classify_terminal(&identity, &runtime, &shell), Err(TerminalDecision::Retain(RetainReason::TabRenamed)));
     runtime.panes[0].tab_label = "owned-launch".into();
     let mut busy = shell; busy.processes.push((22, "user command".into()));
-    assert_eq!(classify_terminal(&identity, &runtime, &busy), Err(TerminalDecision::Retain(RetainReason::ForegroundProcess)));
+    assert_eq!(classify_terminal(&identity, &runtime, &busy), Err(TerminalDecision::Retain(RetainReason::UserActivity)));
 }
 
 #[test]
@@ -456,21 +358,6 @@ fn close_classifier_never_retries_unknown_and_requires_same_endpoint_absence() {
     assert!(matches!(classify_close(&identity, Some(Err(error("confirmation_required", "refused"))), None), RetirementState::Retained { reason: RetainReason::HerdrRefused, .. }));
 }
 
-#[test]
-fn offer_requires_exact_process_in_pinned_pane_and_optional_evidence_is_honest() {
-    let identity = identity(); let mut runtime = runtime();
-    runtime.panes[0].agent_kind = Some("omp".into()); runtime.panes[0].native_session_id = Some("native".into());
-    let mut info = shell(); info.processes = vec![(123, "omp".into())];
-    assert_eq!(classify_offer(&identity, &runtime, Some(&info), true, Some("kernel")), OfferDecision::Offer);
-    assert_eq!(classify_offer(&identity, &runtime, Some(&info), true, Some("other")), OfferDecision::Retain(RetainReason::IdentityChanged));
-    info.processes.clear();
-    assert_eq!(classify_offer(&identity, &runtime, Some(&info), true, Some("kernel")), OfferDecision::Retain(RetainReason::ProcessPaneMismatch));
-    assert_eq!(classify_offer(&identity, &runtime, None, true, Some("kernel")), OfferDecision::Retain(RetainReason::NativeProcessUnverifiable));
-    runtime.panes[0].agent_kind = None;
-    assert_eq!(classify_offer(&identity, &runtime, None, false, Some("kernel")), OfferDecision::AlreadyExited);
-    runtime.endpoint_identity = "restarted".into();
-    assert_eq!(classify_offer(&identity, &runtime, None, false, Some("kernel")), OfferDecision::Retain(RetainReason::EndpointChanged));
-}
 
 #[test]
 fn unknown_attention_is_visible_for_closed_runs_and_retention_is_not_recovery() {
@@ -513,77 +400,30 @@ fn unknown_attention_is_visible_for_closed_runs_and_retention_is_not_recovery() 
     assert!(fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::Unknown,
         RetirementState::CloseIntent { at: AT.into() }).is_err());
     fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().state = RetirementState::Retained {
-        at: AT.into(), reason: RetainReason::SharedTab, native_stopped: true,
+        at: AT.into(), reason: RetainReason::SharedTab, stopped: false,
     });
     assert!(!project(&fixture.state()).attention.iter().any(|a| a.kind == AttentionKind::RetirementUnconfirmed));
 }
 
 #[test]
-fn closed_receipt_carve_out_does_not_admit_any_ordinary_action() {
+fn closed_worker_cannot_append_messages_or_register_again() {
     let fixture = Fixture::new();
-    let retirement_id = fixture.offer();
-    let actions = vec![
-        OrchestrationAction::TaskCreate { root_id: ROOT.into(), task_id: uuid::Uuid::new_v4().to_string(),
-            title: "x".into(), description: "x".into(), depends_on: Vec::new(), follow_up_of: None,
-            expected_doc_revision: None, source_revision: None },
-        OrchestrationAction::TaskAssign { root_id: ROOT.into(), task_id: fixture.task.task_id.clone(), title: "x".into(), description: "x".into() },
-        OrchestrationAction::TaskAssignmentResolve { root_id: ROOT.into(), task_id: fixture.task.task_id.clone(), expected_task_revision: None, assign: true },
-        OrchestrationAction::TaskUpdate { root_id: ROOT.into(), task_id: fixture.task.task_id.clone(), expected_task_revision: fixture.task.task_revision.clone(), title: None, description: None },
-        OrchestrationAction::TasksAssignIds { root_id: ROOT.into(), expected_doc_revision: "revision".into() },
-        OrchestrationAction::SupervisorStart { operation_id: id(), mode: SupervisorStartMode::Another,
-            target: None, label: None, selected_root_id: None, expected_project_key: None },
-        OrchestrationAction::RunAdopt { label: "x".into() },
-        OrchestrationAction::RunResume { run_id: fixture.run().run_id, operation_id: id(),
-            expected_attachment_epoch: Some(fixture.auth.attachment_epoch), mode: ResumeMode::ReattachOrRestart, decision_id: None },
-        OrchestrationAction::RunAttach { operation_id: id(), attachment_id: fixture.auth.attachment_id.clone(),
-            expected_attachment_epoch: fixture.auth.attachment_epoch, main_session_id: "native".into() },
-        OrchestrationAction::JobChildRegister { operation_id: id(), child_id: "child".into(),
-            child_session_id: "child-native".into(), parent_child_id: None },
-        OrchestrationAction::Report { message_id: id(), kind: ReportKind::Progress, outcome: None,
-            summary: "late history".into(), plan: None, source_output: None, to_run_id: None,
-            original_task_revision: None, original_claim_id: None },
-        OrchestrationAction::WorkerStart { operation_id: id(), root_id: ROOT.into(), task_id: fixture.task.task_id.clone(),
-            expected_task_revision: fixture.task.task_revision.clone(), expected_doc_revision: "revision".into(),
-            target: DispatchTarget::ExistingSpace { workspace_id: "space".into() },
-            label: None, brief: "x".into(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe },
-        OrchestrationAction::Accept { run_id: "12345678-1234-4234-8234-123456789abd".into(), expected_task_revision: fixture.task.task_revision.clone() },
-        OrchestrationAction::SendBack { run_id: "12345678-1234-4234-8234-123456789abd".into(), text: "x".into() },
-        OrchestrationAction::CancelRun { run_id: "12345678-1234-4234-8234-123456789abd".into() },
-        OrchestrationAction::ReconcileRun { run_id: "12345678-1234-4234-8234-123456789abd".into(), recovery: None },
-        OrchestrationAction::IntentResolve { intent_id: "x".into(), apply: true },
-        OrchestrationAction::MessageSend { message_id: id(), to_run_id: ROOT.into(), kind: MessageKind::Instruction,
-            text: "x".into(), in_reply_to: None, original_task_revision: None, original_claim_id: None },
-        OrchestrationAction::Annotate { run_id: "12345678-1234-4234-8234-123456789abd".into(), text: "x".into() },
+    fixture.accept();
+    for action in [
+        OrchestrationAction::Report {
+            message_id: id(), kind: ReportKind::Progress, outcome: None,
+            summary: "late history".into(), plan: None, source_output: None,
+            to_run_id: None, original_task_revision: None, original_claim_id: None,
+        },
+        OrchestrationAction::RunRegister { operation_id: id() },
         OrchestrationAction::InboxPull { after_seq: 0, limit: 10 },
-        OrchestrationAction::InboxWoken { through_seq: 0, omp_session_id: "native".into() },
         OrchestrationAction::InboxAck { through_seq: 0 },
-        OrchestrationAction::SubagentUpdate { subagent_id: "child".into(), parent_subagent_id: None, role: None,
-            label: "child".into(), status: SubagentStatus::Running, summary: None },
-        OrchestrationAction::SubagentControl { run_id: "12345678-1234-4234-8234-123456789abd".into(), subagent_id: "child".into(), op: SubagentOp::Cancel },
-        OrchestrationAction::SubagentControlDone { seq: 0, applied: true, error: None },
-    ];
-    for action in actions {
+        OrchestrationAction::Annotate { run_id: fixture.run().run_id, text: "late annotation".into() },
+    ] {
         let before = std::fs::read(fixture.service.base().join("state.json")).unwrap();
         assert!(fixture.mutate(&Actor::Agent(fixture.caller()), action.clone()).is_err(), "{action:?}");
         assert_eq!(std::fs::read(fixture.service.base().join("state.json")).unwrap(), before);
     }
-    // The closed-run exception admits only the exact credential-authenticated
-    // pinned main's terminal receipt, never ordinary mutation or stale reporting.
-    let mut forged = fixture.caller();
-    forged.auth.secret = super::credentials::SecretBytes::new([0; 32]);
-    let before = std::fs::read(fixture.service.base().join("state.json")).unwrap();
-    let message_count = fixture.state().messages.len();
-    assert!(fixture.mutate(&Actor::Agent(forged),
-        receipt(&retirement_id, NativeStopReceipt::Deferred { reason: NativeDeferReason::Busy })).is_err());
-    assert_eq!(std::fs::read(fixture.service.base().join("state.json")).unwrap(), before);
-    fixture.mutate(&Actor::Agent(fixture.caller()),
-        receipt(&retirement_id, NativeStopReceipt::Deferred { reason: NativeDeferReason::Busy })).unwrap();
-    assert!(matches!(fixture.run().retirement.unwrap().state, RetirementState::NativeStopDeferred { .. }));
-    assert_eq!(fixture.run().stage, RunStage::Closed);
-    assert_eq!(fixture.run().close_reason, Some(CloseReason::Accepted));
-    assert_eq!(fixture.run().attachment.unwrap().epoch, fixture.auth.attachment_epoch);
-    assert_eq!(fixture.state().messages.len(), message_count);
-    assert_eq!(fixture.run().result.unwrap().message_id, "reviewed-result");
 }
 
 #[test]
@@ -603,31 +443,30 @@ fn failed_atomic_save_persists_neither_closed_stage_nor_retirement() {
 }
 
 #[test]
-fn cancellation_has_no_retirement_record_annotation_or_receipt_authority() {
+fn cancellation_has_no_retirement_record() {
     let fixture = Fixture::new();
     fixture.mutate(&Actor::Operator(OperatorOrigin::Browser), OrchestrationAction::CancelRun { run_id: "12345678-1234-4234-8234-123456789abd".into() }).unwrap();
     let run = fixture.run();
     assert_eq!(run.close_reason, Some(CloseReason::Cancelled));
     assert!(run.retirement.is_none());
-    assert!(fixture.mutate(&Actor::Agent(fixture.caller()), receipt("absent", NativeStopReceipt::ShutdownRequested)).is_err());
 }
 
 #[test]
-fn receipt_interleaving_fences_owner_cas_and_execution_lease_is_exclusive() {
+fn execution_lease_is_exclusive_and_released_without_semantic_mutation() {
     let fixture = Fixture::new();
-    let retirement_id = fixture.offer();
+    let before = serde_json::to_value(fixture.state()).unwrap();
     let lease = fixture.service.execution_lease(ROOT).unwrap().unwrap();
     assert!(fixture.service.execution_lease(ROOT).unwrap().is_none());
-    fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, NativeStopReceipt::Deferred { reason: NativeDeferReason::Busy })).unwrap();
-    assert!(fixture.service.record_retirement("12345678-1234-4234-8234-123456789abd", &retirement_id, RetirementStateKind::NativeStopOffered,
-        RetirementState::Retained { at: AT.into(), reason: RetainReason::WorkerUnresponsive, native_stopped: false }).is_err());
     drop(lease);
     assert!(fixture.service.execution_lease(ROOT).unwrap().is_some());
+    assert_eq!(serde_json::to_value(fixture.state()).unwrap(), before);
 }
 
 #[test]
 fn terminal_preflight_fails_closed_on_every_identity_and_shell_mismatch() {
-    let identity = identity();
+    let mut identity = identity();
+    identity.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+    identity.shell.as_mut().unwrap().process = identity.process.clone().unwrap();
     for contamination in 0..10 {
         let mut runtime = runtime();
         let mut info = shell();
@@ -655,10 +494,12 @@ fn terminal_preflight_fails_closed_on_every_identity_and_shell_mismatch() {
 
 #[test]
 fn exec_replacement_at_identical_pid_and_pgid_cannot_authorize_close() {
-    let identity = identity();
+    let mut identity = identity();
+    identity.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+    identity.shell.as_mut().unwrap().process = identity.process.clone().unwrap();
     let runtime = runtime();
     let original_shell = shell();
-    assert_eq!(classify_terminal(&identity, &runtime, &original_shell), Err(TerminalDecision::Retain(RetainReason::UserActivity)));
+    assert_eq!(classify_terminal(&identity, &runtime, &original_shell), Err(TerminalDecision::Retain(RetainReason::ForegroundProcess)));
     for replacement in 0..3 {
         let mut exec = original_shell.clone();
         let current = exec.shell_identity.as_mut().unwrap();
@@ -678,7 +519,7 @@ fn exec_replacement_at_identical_pid_and_pgid_cannot_authorize_close() {
     let mut unobserved = original_shell;
     unobserved.shell_identity = None;
     assert_eq!(classify_terminal(&identity, &runtime, &unobserved),
-        Err(TerminalDecision::Retain(RetainReason::NativeProcessUnverifiable)));
+        Err(TerminalDecision::Retain(RetainReason::ForegroundProcess)));
 }
 
 #[test]
@@ -705,100 +546,17 @@ fn original_shell_builtin_activity_cannot_be_certified_idle_or_cancelled() {
 }
 
 
-#[test]
-fn shutdown_requested_does_not_fabricate_native_admission_seal_or_writer_quiescence() {
-    let fixture = Fixture::new();
-    let retirement_id = fixture.offer();
-    fixture.mutate(&Actor::Agent(fixture.caller()),
-        receipt(&retirement_id, NativeStopReceipt::ShutdownRequested)).unwrap();
-    let current = fixture.run();
-    assert!(matches!(current.retirement.as_ref().unwrap().state, RetirementState::NativeStopRequested { .. }));
-    assert!(current.retirement.as_ref().unwrap().quiescent_stop_at.is_none());
-    assert_eq!(current.attachment.as_ref().unwrap().state, AttachmentState::Quiescing);
-    assert_ne!(fixture.state().checkout_claims[0].state, claims::ClaimState::Released);
-    fixture.service.record_retirement(&current.run_id, &retirement_id, RetirementStateKind::NativeStopRequested,
-        RetirementState::NativeStopped { at: AT.into(), evidence: NativeStopEvidence::ExitedAfterShutdownRequest }).unwrap();
-    assert!(fixture.run().retirement.unwrap().quiescent_stop_at.is_none());
-}
 
 #[test]
-fn final_readiness_failure_withdraws_stop_and_clears_any_quiescent_fact() {
-    for outcome in [
-        NativeStopReceipt::Deferred { reason: NativeDeferReason::EditorDraft },
-        NativeStopReceipt::Refused { reason: NativeRefuseReason::UserActivity, text: "activity arrived".into() },
-    ] {
-        let fixture = Fixture::new();
-        let retirement_id = fixture.offer();
-        fixture.mutate(&Actor::Agent(fixture.caller()),
-            receipt(&retirement_id, NativeStopReceipt::ShutdownRequested)).unwrap();
-        fixture.edit(|state| state.runs[1].retirement.as_mut().unwrap().quiescent_stop_at = Some(AT.into()));
-        fixture.mutate(&Actor::Agent(fixture.caller()), receipt(&retirement_id, outcome)).unwrap();
-        let current = fixture.run();
-        assert!(current.retirement.as_ref().unwrap().quiescent_stop_at.is_none());
-        assert!(matches!(current.retirement.as_ref().unwrap().state,
-            RetirementState::NativeStopDeferred { .. } | RetirementState::Retained { native_stopped: false, .. }));
-        assert_eq!(current.attachment.as_ref().unwrap().state, AttachmentState::Connected);
-        assert_ne!(fixture.state().checkout_claims[0].state, claims::ClaimState::Released);
-    }
-}
-
-#[test]
-fn direct_process_retirement_requires_explicit_pinned_mode_and_exact_root_fingerprint_incarnation() {
-    for invalid in 0..5 {
-        let mut run = worker();
-        let attachment = run.attachment.as_mut().unwrap();
-        attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
-        attachment.shell.as_mut().unwrap().process = attachment.process.clone().unwrap();
-        match invalid {
-            1 => attachment.launch_mode = None,
-            2 => attachment.launch_mode = Some(AttachmentLaunchMode::ShellAgent),
-            3 => attachment.shell.as_mut().unwrap().process.start_ticks += 1,
-            4 => attachment.shell.as_mut().unwrap().process.kernel_boot_id = Some("other-boot".into()),
-            _ => {},
-        }
-        let record = retirement_for_accepted(&run, RetirementTrigger::Accept, "revision", AT).unwrap();
-        if invalid != 0 {
-            assert!(record.identity.is_none());
-            assert!(matches!(record.state, RetirementState::Retained { reason: RetainReason::IdentityIncomplete, .. }));
-            continue;
-        }
-        let pinned = record.identity.as_ref().unwrap();
-        assert_eq!(pinned.launch_mode, Some(AttachmentLaunchMode::DirectProcess));
-        assert_eq!(pinned.process, pinned.shell.process);
-        run.stage = RunStage::Closed;
-        run.close_reason = Some(CloseReason::Accepted);
-        assert!(identity_matches(&run, &record));
-        run.attachment.as_mut().unwrap().launch_mode = Some(AttachmentLaunchMode::ShellAgent);
-        assert!(!identity_matches(&run, &record));
-        assert_eq!(record.identity.as_ref().unwrap().launch_mode, Some(AttachmentLaunchMode::DirectProcess));
-    }
-}
-
-#[test]
-fn direct_empty_terminal_proves_only_pane_eligibility_not_consumer_stop() {
-    let mut direct = identity();
-    direct.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
-    direct.shell.process = direct.process.clone();
-    let empty = PaneProcessInfo { pane_id: direct.pane_id.clone(), shell_pid: Some(direct.process.pid),
-        foreground_pgid: None, processes: Vec::new(), shell_identity: None };
-    let view = runtime();
-    assert_eq!(classify_terminal(&direct, &view, &empty), Ok(()));
-    let mut unknown = direct.clone();
-    unknown.launch_mode = None;
-    assert!(classify_terminal(&unknown, &view, &empty).is_err());
-    let mut foreign = empty.clone();
-    foreign.processes.push((999, "foreign".into()));
-    assert_eq!(classify_terminal(&direct, &view, &foreign),
-        Err(TerminalDecision::Retain(RetainReason::ForegroundProcess)));
-    let mut live_root = empty.clone();
-    live_root.shell_identity = Some(direct.shell.clone());
-    assert_eq!(classify_terminal(&direct, &view, &live_root),
-        Err(TerminalDecision::Retain(RetainReason::ForegroundProcess)));
-    let mut shared = view.clone();
-    let mut sibling = shared.panes[0].clone();
-    sibling.pane_id = "foreign-pane".into();
-    sibling.terminal_id = Some("foreign-terminal".into());
-    shared.panes.push(sibling);
-    assert_eq!(classify_terminal(&direct, &shared, &empty),
-        Err(TerminalDecision::Retain(RetainReason::SharedTab)));
+fn semantic_conversation_does_not_supply_missing_physical_proof() {
+    let mut run = worker();
+    run.attachment.as_mut().unwrap().process = None;
+    run.attachment.as_mut().unwrap().shell = None;
+    let record = retirement_for_accepted(&run, RetirementTrigger::Accept, "revision", AT).unwrap();
+    let pinned = record.identity.unwrap();
+    assert_eq!(pinned.conversation, Some(conversation()));
+    assert!(pinned.process.is_none());
+    assert!(pinned.shell.is_none());
+    assert!(matches!(classify_terminal(&pinned, &runtime(), &shell()),
+        Err(TerminalDecision::Retain(_))), "registered session cannot certify an owned pane is safe to close");
 }

@@ -3,33 +3,17 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 use cockpit_protocol::{
     orchestration::{
-        AgentKind, DispatchTarget, MessageKind, NativeDeferReason, NativeRefuseReason,
-        NativeStopReceipt, OrchestrationAction, ReportKind, ReportOutcome, SubagentStatus,
-        TaskStepScope, WorkerCleanupPolicy,
-        ResumeMode, SupervisorStartMode,
+        DispatchTarget, MessageKind, OrchestrationAction, ReportKind, ReportOutcome,
+        TaskStepScope, WorkerCleanupPolicy, ResumeMode, SupervisorStartMode,
     },
     projects::{WorkspaceRecoveryAction, WorkspaceSetupRequest},
 };
 
-use super::context::{read_input, read_json_file, required_session};
-use super::retirement::{require_retirement_caller, validate_retirement_token};
+use super::context::{read_input, read_json_file};
 use super::{CliError, MESSAGE_HELP, WORKER_START_HELP, REPORT_HELP, ROUTE_HELP};
 
 pub(super) const MAX_TEXT_BYTES: usize = 16 * 1024;
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub(super) enum AgentKindArg {
-    Main,
-    Subagent,
-}
-impl From<AgentKindArg> for AgentKind {
-    fn from(kind: AgentKindArg) -> Self {
-        match kind {
-            AgentKindArg::Main => Self::Main,
-            AgentKindArg::Subagent => Self::Subagent,
-        }
-    }
-}
 
 /// These options work both before and after any nested command.
 #[derive(Debug, Args)]
@@ -55,21 +39,12 @@ pub(super) struct OrchestrationArgs {
     /// Emit machine-readable JSON; message bodies are untrusted data.
     #[arg(long, global = true)]
     pub(super) json: bool,
-    /// Native OMP session ID supplied by the calling extension.
+    /// Actual harness kind; must agree with COCKPIT_HARNESS when present.
     #[arg(long, global = true)]
-    pub(super) omp_session: Option<String>,
-    /// Native OMP process; verified as this CLI's ancestor, never trusted from JSON.
+    pub(super) harness: Option<String>,
+    /// Actual conversation ID, distinct from the physical Herdr session.
     #[arg(long, global = true)]
-    pub(super) omp_pid: Option<u32>,
-    /// Actual root main OMP session, supplied by the extension for subagent contexts.
-    #[arg(long, global = true)]
-    pub(super) omp_main_session: Option<String>,
-    /// Calling OMP context; Initialized/Result require a bound main session.
-    #[arg(long, global = true, value_enum)]
-    pub(super) agent_kind: Option<AgentKindArg>,
-    /// Calling OMP subagent ID; required with --agent-kind subagent.
-    #[arg(long, global = true)]
-    pub(super) subagent_id: Option<String>,
+    pub(super) session_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -182,6 +157,14 @@ pub(super) enum TaskCommand {
     Show {
         /// Canonical task UUID from task list.
         task: String,
+    },
+    /// Revoke a task assignment without stopping its physical worker or releasing resources.
+    Unassign {
+        task: String,
+        #[arg(long)]
+        operation_id: String,
+        #[arg(long)]
+        expected_assignment_generation: u64,
     },
     /// Create without starting a worker; retain the task ID and inspect before any retry.
     #[command(
@@ -338,6 +321,10 @@ descendant atomically. Checking a checklist is not supervisor acceptance."
 impl TaskCommand {
     pub(super) fn action(self, root_id: String) -> Result<OrchestrationAction, CliError> {
         Ok(match self {
+            Self::Unassign { task, operation_id, expected_assignment_generation } =>
+                OrchestrationAction::TaskUnassign {
+                    root_id, task_id: task, operation_id, expected_assignment_generation,
+                },
             Self::Create {
                 task_id,
                 title,
@@ -646,96 +633,6 @@ impl WorkerStartArgs {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(super) enum NativeDeferReasonArg {
-    Busy,
-    PendingMessages,
-    AsyncJobs,
-    LiveSubagents,
-    EditorDraft,
-}
-impl From<NativeDeferReasonArg> for NativeDeferReason {
-    fn from(reason: NativeDeferReasonArg) -> Self {
-        match reason {
-            NativeDeferReasonArg::Busy => Self::Busy,
-            NativeDeferReasonArg::PendingMessages => Self::PendingMessages,
-            NativeDeferReasonArg::AsyncJobs => Self::AsyncJobs,
-            NativeDeferReasonArg::LiveSubagents => Self::LiveSubagents,
-            NativeDeferReasonArg::EditorDraft => Self::EditorDraft,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(super) enum NativeRefuseReasonArg {
-    UserActivity,
-    NativeRefused,
-}
-impl From<NativeRefuseReasonArg> for NativeRefuseReason {
-    fn from(reason: NativeRefuseReasonArg) -> Self {
-        match reason {
-            NativeRefuseReasonArg::UserActivity => Self::UserActivity,
-            NativeRefuseReasonArg::NativeRefused => Self::NativeRefused,
-        }
-    }
-}
-
-#[derive(Debug, Args)]
-#[group(skip)]
-#[command(group(clap::ArgGroup::new("retirement_outcome").required(true).multiple(false).args(["shutdown_requested", "deferred", "refused"])))]
-pub(super) struct RetirementReceiptArgs {
-    /// Exact retirement_id from run retirement; native extension receipt only.
-    #[arg(long)]
-    pub(super) retirement: String,
-    /// Records intent only; does not prove that the native process stopped.
-    #[arg(long)]
-    pub(super) shutdown_requested: bool,
-    /// Actual native deferral reason; not evidence of shutdown.
-    #[arg(long, value_enum)]
-    pub(super) deferred: Option<NativeDeferReasonArg>,
-    /// Explanation only, at most 1 KiB; typed reason determines the outcome.
-    #[arg(long, requires = "refuse_reason")]
-    pub(super) refused: Option<String>,
-    /// Typed native refusal reason paired with --refused explanation.
-    #[arg(long, value_enum, requires = "refused")]
-    pub(super) refuse_reason: Option<NativeRefuseReasonArg>,
-}
-impl RetirementReceiptArgs {
-    pub(super) fn action(self) -> Result<OrchestrationAction, CliError> {
-        let outcome = match (
-            self.shutdown_requested,
-            self.deferred,
-            self.refused,
-            self.refuse_reason,
-        ) {
-            (true, None, None, None) => NativeStopReceipt::ShutdownRequested,
-            (false, Some(reason), None, None) => NativeStopReceipt::Deferred {
-                reason: reason.into(),
-            },
-            (false, None, Some(text), Some(reason)) if text.len() <= 1024 => {
-                NativeStopReceipt::Refused {
-                    reason: reason.into(),
-                    text,
-                }
-            }
-            (false, None, Some(_), Some(_)) => {
-                return Err(CliError::usage("retirement refusal exceeds 1 KiB"));
-            }
-            _ => {
-                return Err(CliError::usage(
-                    "retirement receipt requires exactly one typed outcome",
-                ));
-            }
-        };
-        Ok(OrchestrationAction::RetirementNativeReceipt {
-            retirement_id: self.retirement,
-            outcome,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
 pub(super) enum RecoveryArg {
     AcceptExistingWorktree,
 }
@@ -782,28 +679,13 @@ pub(super) enum RunCommand {
         #[arg(long)]
         decision_id: Option<String>,
     },
-    /// Register the current physical attachment without changing job authority.
-    Attach {
+    /// Register this actual conversation with the issued run capability.
+    Register {
         #[arg(long)]
         operation_id: String,
-        #[arg(long)]
-        attachment_id: String,
-        #[arg(long)]
-        expected_attachment_epoch: u64,
-        #[arg(long)]
-        main_session_id: String,
     },
-    /// Register an actual native child and stage its narrowed private credential.
-    ChildRegister {
-        #[arg(long)]
-        operation_id: String,
-        #[arg(long)]
-        child_id: String,
-        #[arg(long)]
-        child_session_id: String,
-        #[arg(long)]
-        parent_child_id: Option<String>,
-    },
+    /// Register if unbound and read role, conversation, assignment and inbox counts.
+    Context,
     /// List durable runs joined to fresh Herdr observations.
     List {
         /// Indent runs by their parent hierarchy.
@@ -816,7 +698,7 @@ pub(super) enum RunCommand {
         /// Run UUID from run list; flags do not grant control authority.
         #[arg(conflicts_with = "self_run")]
         run: Option<String>,
-        /// Select the run bound to the calling Herdr pane.
+        /// Select the run authorized by the calling private capability.
         #[arg(long = "self")]
         self_run: bool,
     },
@@ -827,7 +709,7 @@ pub(super) enum RunCommand {
     #[command(
         after_long_help = "Review the explicit successful Result with run show RUN --json and read
 task show TASK --json for the current task.task_revision. Only the fresh
-bound root main may accept a strict descendant. Idle/exited, checklist
+bound root may accept its current assigned descendant. Idle/exited, checklist
 completion and Result delivery are not acceptance. Inspect state first if an
 operation's outcome is uncertain; never repeat it blindly."
     )]
@@ -886,7 +768,7 @@ operation's outcome is uncertain; never repeat it blindly."
         /// Read a diagnostic plan from stdin (at most 16 KiB).
         #[arg(long)]
         stdin: bool,
-        /// Delivery ancestor only; subagents may name their owning main; omit for default.
+        /// Ancestor delivery recipient; omit for default parent/self delivery.
         #[arg(long)]
         to: Option<String>,
         /// Retained source task revision captured before durable outbox delivery.
@@ -932,17 +814,6 @@ operation's outcome is uncertain; never repeat it blindly."
         #[arg(long)]
         request_file: PathBuf,
     },
-    /// Read only this main session's retirement; never stops a process or closes a pane.
-    Retirement {
-        /// Wait for a retirement record change instead of reading immediately.
-        #[arg(long)]
-        wait: bool,
-        /// Maximum retirement wait in seconds (1..300), used with --wait.
-        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=300))]
-        timeout: u64,
-    },
-    /// Record self-retirement readiness; no native stop success is implied.
-    RetirementReceipt(RetirementReceiptArgs),
     /// Send a durable instruction, answer or cancel request to a descendant run.
     #[command(after_long_help = MESSAGE_HELP)]
     Message {
@@ -975,12 +846,6 @@ operation's outcome is uncertain; never repeat it blindly."
         #[arg(long)]
         text: String,
     },
-    /// Explicitly adopt an unbound current caller pane as a new root.
-    Adopt {
-        /// Label for the explicitly adopted caller root.
-        #[arg(long)]
-        label: String,
-    },
 }
 
 #[derive(Debug, Args)]
@@ -1006,11 +871,7 @@ Native delivery receipts do not grant work authority or prove resumed work."
         #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=100))]
         limit: u32,
     },
-    /// Record an underlying native delivery receipt through this recipient sequence.
-    #[command(
-        after_long_help = "Native transport operation, not an ordinary model workflow.
-A delivery receipt is never initialization, Result, acceptance or proof of resumed work."
-    )]
+    /// Capture an already Read recipient prefix; does not answer or accept work.
     Ack {
         /// Highest recipient sequence already Read and processed.
         #[arg(long)]
@@ -1021,8 +882,7 @@ A delivery receipt is never initialization, Result, acceptance or proof of resum
         after_long_help = "Read-only counts/kinds/through_seq, never message bodies or a Read receipt.
 After pending mail, use inbox list and process messages within your authority.
 An empty startup inbox does not mean the worker brief arrived.
---timeout 0 returns immediately; --with-retirement is an extension main
-session waiter, not permission to retire or stop a process."
+Use inbox list, then inbox ack --through READ_THROUGH_SEQ after capturing the bodies."
     )]
     Wait {
         /// Wait for pending recipient sequences strictly greater than this cursor.
@@ -1031,135 +891,9 @@ session waiter, not permission to retire or stop a process."
         /// Maximum wait in seconds (0..3600); zero returns immediately.
         #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(0..=3600))]
         timeout: u64,
-        /// Join own retirement into this single waiter; closed accepted runs return no mail.
-        #[arg(long)]
-        with_retirement: bool,
-        /// Opaque token returned by the previous narrow wait.
-        #[arg(long, requires = "with_retirement")]
-        after_retirement: Option<String>,
-    },
-    /// Record that a counts-only wake was delivered to the native OMP session.
-    Woken {
-        /// Highest recipient sequence included in the delivered counts-only wake.
-        #[arg(long)]
-        through: u64,
     },
 }
 
-#[derive(Debug, Args)]
-pub(crate) struct SubagentArgs {
-    #[command(flatten)]
-    pub(super) common: OrchestrationArgs,
-    #[command(subcommand)]
-    pub(super) command: SubagentCommand,
-}
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub(super) enum StatusArg {
-    Running,
-    Done,
-    Failed,
-    Cancelled,
-}
-impl From<StatusArg> for SubagentStatus {
-    fn from(value: StatusArg) -> Self {
-        match value {
-            StatusArg::Running => Self::Running,
-            StatusArg::Done => Self::Done,
-            StatusArg::Failed => Self::Failed,
-            StatusArg::Cancelled => Self::Cancelled,
-        }
-    }
-}
-#[derive(Debug, Subcommand)]
-pub(super) enum SubagentCommand {
-    /// Publish actual OMP subagent lifecycle telemetry, not inferred status.
-    Update {
-        /// Actual OMP subagent ID, not an invented lifecycle identity.
-        #[arg(long)]
-        id: String,
-        /// Actual parent subagent ID in this same run, if nested.
-        #[arg(long)]
-        parent: Option<String>,
-        /// Actual OMP subagent role, if supplied.
-        #[arg(long)]
-        role: Option<String>,
-        /// Human-readable label for this subagent.
-        #[arg(long)]
-        label: String,
-        /// Actual lifecycle status reported by OMP, never inferred from idleness.
-        #[arg(long, value_enum)]
-        status: StatusArg,
-        /// Observed lifecycle summary (at most 16 KiB), not a main Result.
-        #[arg(long)]
-        summary: Option<String>,
-    },
-    /// Read pending controls for this caller run and subagent ID without marking Read.
-    #[command(
-        after_long_help = "Owning extension: read pending controls for the bound run and subagent.
-This does not mark Read. Apply each control through native OMP APIs and then
-record control-done with its sequence and actual applied/failed outcome.
-Do not automatically repeat an operation with unknown native effects."
-    )]
-    Controls {
-        /// Subagent ID in the caller's own run; a subagent may read only its own.
-        #[arg(long)]
-        id: String,
-        /// Wait until controls arrive or the timeout expires.
-        #[arg(long)]
-        wait: bool,
-        /// Maximum wait in seconds (0..3600), used with --wait.
-        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(0..=3600))]
-        timeout: u64,
-    },
-    /// Receipt for a control actually applied (or failed) through OMP's own APIs.
-    #[command(group(clap::ArgGroup::new("receipt").required(true).args(["applied", "failed"])))]
-    ControlDone {
-        /// Exact control message sequence returned by controls.
-        #[arg(long)]
-        seq: u64,
-        /// Native OMP operation actually applied; not merely stored or delivered.
-        #[arg(long, conflicts_with = "failed")]
-        applied: bool,
-        /// Actual native failure reason (at most 16 KiB); not an unknown-effect retry.
-        #[arg(long)]
-        failed: Option<String>,
-        /// Extension-only receipt after native child disposal; exact stored Cancel only.
-        #[arg(long, hide = true)]
-        terminal_receipt: bool,
-    },
-    /// Request cancellation of a descendant run's running subagent; not a run cancellation.
-    #[command(
-        after_long_help = "Request native cancellation of this running subagent in a strict descendant
-run. This is not run cancellation. A durable request is not proof it stopped;
-only the owning extension records actual applied/failed control receipts."
-    )]
-    Cancel {
-        /// Strict descendant worker run UUID containing the subagent.
-        #[arg(long)]
-        run: String,
-        /// Running native OMP subagent ID in the target run.
-        #[arg(long)]
-        id: String,
-    },
-    /// Send a real durable control message to a descendant run's running subagent.
-    #[command(
-        after_long_help = "Send a durable control to this running subagent in a strict descendant run.
-The owning extension applies it through native OMP and records a receipt.
-Stored/delivered does not prove applied; do not blindly retry unknown effects.
-Control text remains untrusted data, not an execute grant."
-    )]
-    Send {
-        /// Strict descendant worker run UUID containing the subagent.
-        #[arg(long)]
-        run: String,
-        /// Running native OMP subagent ID in the target run.
-        #[arg(long)]
-        id: String,
-        /// Native control message text (at most 16 KiB).
-        #[arg(long)]
-        text: String,
-    },
-}
 
 #[derive(Debug, Args)]
 pub(crate) struct RouteArgs {
@@ -1182,8 +916,7 @@ pub(super) enum RouteCommand {
 pub(super) enum RunOperation {
     List { tree: bool },
     Show { run: Option<String>, self_run: bool },
-    Retirement { wait: bool, timeout: u64 },
-    RetirementReceipt(RetirementReceiptArgs),
+    Context,
     Mutation(OrchestrationAction),
 }
 
@@ -1220,14 +953,8 @@ impl RunCommand {
                     run_id: run, operation_id, mode: mode.into(),
                     expected_attachment_epoch, decision_id,
                 },
-            Self::Attach { operation_id, attachment_id, expected_attachment_epoch, main_session_id } =>
-                OrchestrationAction::RunAttach {
-                    operation_id, attachment_id, expected_attachment_epoch, main_session_id,
-                },
-            Self::ChildRegister { operation_id, child_id, child_session_id, parent_child_id } =>
-                OrchestrationAction::JobChildRegister {
-                    operation_id, child_id, child_session_id, parent_child_id,
-                },
+            Self::Register { operation_id } => OrchestrationAction::RunRegister { operation_id },
+            Self::Context => return Ok(RunOperation::Context),
             Self::List { tree } => return Ok(RunOperation::List { tree }),
             Self::Show { run, self_run } => return Ok(RunOperation::Show { run, self_run }),
             Self::WorkerStart(args) => args.action(
@@ -1282,10 +1009,6 @@ impl RunCommand {
             Self::CleanupFinish { request_file } => OrchestrationAction::CleanupFinish {
                 request: read_json_file(request_file)?,
             },
-            Self::Retirement { wait, timeout } => {
-                return Ok(RunOperation::Retirement { wait, timeout });
-            }
-            Self::RetirementReceipt(args) => return Ok(RunOperation::RetirementReceipt(args)),
             Self::Message {
                 run,
                 kind,
@@ -1311,20 +1034,11 @@ impl RunCommand {
                 run_id: run,
                 text: bounded(text)?,
             },
-            Self::Adopt { label } => OrchestrationAction::RunAdopt { label },
         };
         Ok(RunOperation::Mutation(action))
     }
 
-    pub(super) fn preflight(&self, common: &OrchestrationArgs) -> Result<(), CliError> {
-        if let Self::ChildRegister { child_id, child_session_id, .. } = self {
-            if common.subagent_id.as_ref() != Some(child_id)
-                || common.omp_session.as_ref() != Some(child_session_id)
-                || !matches!(common.agent_kind, Some(AgentKindArg::Subagent))
-            {
-                return Err(CliError::new("actor_forbidden", "Child registration requires its actual native child context"));
-            }
-        }
+    pub(super) fn preflight(&self, _common: &OrchestrationArgs) -> Result<(), CliError> {
         if let Self::Message {
             kind, in_reply_to, ..
         } = self
@@ -1344,52 +1058,14 @@ impl RunCommand {
                 (_, None) => {}
             }
         }
-        if matches!(self, Self::Retirement { .. } | Self::RetirementReceipt(_)) {
-            require_retirement_caller(common)?;
-        }
         Ok(())
     }
 
     pub(super) fn caller_required(&self) -> bool {
-        !matches!(
-            self,
-            Self::List { .. }
-                | Self::Show {
-                    self_run: false,
-                    ..
-                }
-        )
-    }
-
-    pub(super) fn physical_required(&self) -> bool {
-        matches!(self, Self::Adopt { .. } | Self::Attach { .. } | Self::ChildRegister { .. }
-            | Self::Retirement { .. } | Self::RetirementReceipt(_) | Self::CleanupFinish { .. })
+        !matches!(self, Self::Start { .. } | Self::List { .. } | Self::Show { self_run: false, .. })
     }
 }
 
-impl InboxCommand {
-    pub(super) fn preflight(&self, common: &OrchestrationArgs) -> Result<(), CliError> {
-        if let Self::Wait {
-            with_retirement,
-            after_retirement,
-            ..
-        } = self
-        {
-            if let Some(token) = after_retirement {
-                validate_retirement_token(token)?;
-                if !*with_retirement {
-                    return Err(CliError::usage(
-                        "--after-retirement requires --with-retirement",
-                    ));
-                }
-            }
-            if *with_retirement {
-                require_retirement_caller(common)?;
-            }
-        }
-        Ok(())
-    }
-}
 
 impl OrchestrationArgs {
     pub(super) fn report_action(
@@ -1406,12 +1082,6 @@ impl OrchestrationArgs {
         original_task_revision: Option<String>,
         original_claim_id: Option<String>,
     ) -> Result<OrchestrationAction, CliError> {
-        required_session(self)?;
-        if self.agent_kind.is_none() {
-            return Err(CliError::usage(
-                "run report requires --agent-kind main or subagent",
-            ));
-        }
         let plan = match plan {
             Some(plan) => Some(bounded(plan)?),
             None => read_input(plan_file, stdin)?,

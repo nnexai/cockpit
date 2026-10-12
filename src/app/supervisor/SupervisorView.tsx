@@ -19,7 +19,7 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   const [projectRootMissing, setProjectRootMissing] = useState(false);
   const rootSelectionVersion = useRef(0);
   const setRootId: Dispatch<SetStateAction<string | null>> = value => { rootSelectionVersion.current++; setProjectRootMissing(false); updateRootId(value); };
-  const supervisor = useSupervisor(client, sessionId, rootId, active);
+  const supervisor = useSupervisor(client, sessionId, rootId, active, runtimeLive);
   const stateStore = useRef<string | null>(null);
   const hydratedStore = useRef<string | null>(null);
   if (supervisor.snapshot?.session_id === sessionId) stateStore.current = supervisor.snapshot.state_store_id;
@@ -66,7 +66,7 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
     detailOpen: model.detailOpen, mode: model.mode, layout,
   });
   const navigation = useSupervisorViewNavigation({
-    scope, layout, tasks: model.tasks, rootRef: focus.rootRef, graphRef: focus.graphRef, laneRefs: focus.laneRefs,
+    scope, snapshot, layout, tasks: model.tasks, rootRef: focus.rootRef, graphRef: focus.graphRef, laneRefs: focus.laneRefs,
     selectedNode: model.selectedNode, mode: model.mode, bottomInset: panel.bottomInset,
     attentionOpen: state.attentionOpen, setAttentionOpen: state.setAttentionOpen,
     counterInvoker: focus.counterInvoker, panelInvoker: focus.panelInvoker, changed, detailInvoker: focus.detailInvoker,
@@ -88,7 +88,7 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
     taskIds: navigation.taskIds, mode: model.mode, lastTaskIds: focus.lastTaskIds, scope,
     hasRetainedDraft: model.hasRetainedDraft, changed, focusRow: navigation.focusRow, setFocusNotice: state.setFocusNotice,
     tasks: model.tasks, createdSelection: focus.createdSelection, selectedAgent: model.selectedAgent,
-    detailSubagent: model.detailSubagent, selectedNode: model.selectedNode, previousGraph: focus.previousGraph,
+    selectedNode: model.selectedNode, previousGraph: focus.previousGraph,
     model: model.model, retainedDraftTaskId: model.retainedDraftTaskId, rowElement: navigation.rowElement,
   });
   const startFlow = useStartAgentFlow({
@@ -129,14 +129,14 @@ export function SupervisorView({ client, sessionId, session, runtimeLive, active
   });
   const queue = supervisorViewQueueRows({
     attention: attention.attention, snapshot, tasks: model.tasks, question: attention.question, answer: attention.answer,
-    root: model.root, changed, busy: supervisor.busy, live: model.live, rootState: model.rootState,
+    root: model.root, changed, busy: supervisor.busy, live: model.live,
     mutateResult: supervisor.mutateResult, captureMutationScope: supervisor.captureMutationScope,
     connected: supervisor.connected, refresh: supervisor.refresh, setRootId, setNotice: state.setNotice, runtimeLive,
     editPrerequisites: sourceActions.editPrerequisites, switchView: navigation.switchView, showItem: navigation.showItem,
     attentionOpen: state.attentionOpen, setAttentionOpen: state.setAttentionOpen, select: navigation.select,
     startPending: startState.startPending, start: startFlow.start, navigate: sourceActions.navigate, restart: startFlow.restart,
     scope, mode: model.mode, rootRuns: model.rootRuns, model: model.model, selectedNode: model.selectedNode,
-    selectedTask: model.selectedTask, detailRun: model.detailRun, detailSubagent: model.detailSubagent, detailTask: model.detailTask,
+    selectedTask: model.selectedTask, detailRun: model.detailRun, detailTask: model.detailTask,
   });
   useSupervisorViewQueueLayout({
     workareaRef: focus.workareaRef, rootRef: focus.rootRef, layout, setInlineQueueCap: state.setInlineQueueCap,

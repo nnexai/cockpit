@@ -74,8 +74,90 @@ fn source_defaults_and_serialization_presence_are_preserved() {
     assert!(matches!(tab.ty, WireTy::Option(_)));
     assert_eq!(
         field("ProjectConfiguration", "orchestration").fill,
-        Some(json!({ "omp_extension": null, "model": null, "extra_args": [], "routes": [] }))
+        Some(json!({
+            "harness_kind": "omp", "command": "omp", "extra_args": [],
+            "resume_args": null, "inbox_prompt_hints": false, "routes": []
+        }))
     );
+    assert_eq!(field("OrchestrationConfiguration", "harness_kind").fill, Some(json!("omp")));
+    assert_eq!(field("OrchestrationConfiguration", "command").fill, Some(json!("omp")));
+}
+
+#[test]
+fn launch_configuration_defaults_follow_literal_source_and_reject_computation() {
+    let source = r#"
+        fn default_harness() -> String { "custom".into() }
+        impl Default for OrchestrationConfiguration {
+            fn default() -> Self {
+                Self {
+                    harness_kind: default_harness(), command: default_harness(),
+                    extra_args: Vec::new(), resume_args: None,
+                    inbox_prompt_hints: false, routes: Vec::new()
+                }
+            }
+        }
+    "#;
+    let file = syn::parse_file(source).unwrap();
+    let (configuration, harness) = super::source::orchestration_defaults(&file).unwrap();
+    assert_eq!(harness, json!("custom"));
+    assert_eq!(configuration, json!({
+        "harness_kind": "custom", "command": "custom", "extra_args": [],
+        "resume_args": null, "inbox_prompt_hints": false, "routes": []
+    }));
+    for changed in [
+        source.replace("\"custom\".into()", "std::env::var(\"HARNESS\").unwrap()"),
+        source.replace("Vec::new()", "compute_args()"),
+        source.replace("resume_args: None,", ""),
+    ] {
+        let file = syn::parse_file(&changed).unwrap();
+        assert!(super::source::orchestration_defaults(&file).is_err());
+    }
+}
+
+#[test]
+fn session_ownership_actions_and_results_are_source_grounded() {
+    assert_eq!(
+        fields("ConversationIdentity").iter().map(|field| field.name.as_str()).collect::<Vec<_>>(),
+        ["harness", "session_id"]
+    );
+    assert_eq!(field("TaskOwnership", "owner").ty, WireTy::Option(Box::new(WireTy::Named("TaskOwner".into()))));
+    assert_eq!(field("TaskOwner", "conversation").ty, WireTy::Named("ConversationIdentity".into()));
+    assert_eq!(field("ExecutionAttachment", "conversation").ty, WireTy::Option(Box::new(WireTy::Named("ConversationIdentity".into()))));
+    assert_eq!(field("RunObservation", "actual_agent").ty, WireTy::Bool);
+    assert_eq!(field("Run", "launch_config").ty, WireTy::Named("OrchestrationConfiguration".into()));
+    let (tag, actions) = tagged("OrchestrationAction");
+    assert_eq!(tag, "action");
+    let register = &actions.iter().find(|(name, _)| name == "run_register").expect("registration action").1;
+    assert_eq!(register.iter().map(|field| field.name.as_str()).collect::<Vec<_>>(), ["operation_id"]);
+    let unassign = &actions.iter().find(|(name, _)| name == "task_unassign").expect("unassign action").1;
+    assert_eq!(unassign.iter().map(|field| field.name.as_str()).collect::<Vec<_>>(),
+        ["operation_id", "root_id", "task_id", "expected_assignment_generation"]);
+    assert!(actions.iter().all(|(name, _)| !matches!(name.as_str(),
+        "job_child_register" | "retirement_native_receipt" | "inbox_woken" |
+        "subagent_update" | "subagent_control" | "subagent_control_complete")));
+    let (tag, results) = tagged("OrchestrationActionResult");
+    assert_eq!(tag, "result");
+    let registered = &results.iter().find(|(name, _)| name == "run_registered").expect("registration result").1;
+    assert_eq!(registered.iter().map(|field| field.name.as_str()).collect::<Vec<_>>(),
+        ["run_id", "conversation", "assignment_generation", "duplicate"]);
+    let unassigned = &results.iter().find(|(name, _)| name == "task_unassigned").expect("unassign result").1;
+    assert_eq!(unassigned.iter().map(|field| field.name.as_str()).collect::<Vec<_>>(),
+        ["task_id", "assignment_generation", "previous_run_id", "duplicate"]);
+    assert!(model().iter().all(|ty| !matches!(ty.name.as_str(),
+        "Subagent" | "SubagentStatus" | "ControlStage" | "SubagentControlState" | "SubagentOp" | "AgentKind")));
+}
+
+#[test]
+fn orchestration_launch_configuration_uses_cross_domain_descriptor_import() {
+    let files = super::super::validators::render(model()).expect("render source descriptors");
+    let (_, run_descriptor) = files.iter()
+        .find(|(_, content)| content.contains("export const wireRun:"))
+        .expect("run descriptor");
+    assert!(run_descriptor.lines().any(|line|
+        line.starts_with("import { ")
+            && line.contains("wireOrchestrationConfiguration")
+            && line.contains("from \"./projects")));
+    assert!(run_descriptor.contains("named(() => wireOrchestrationConfiguration)"));
 }
 
 #[test]
@@ -118,10 +200,6 @@ fn retirement_state_uses_invocation_order_and_types() {
             .collect::<Vec<_>>(),
         [
             "waiting",
-            "native_stop_offered",
-            "native_stop_deferred",
-            "native_stop_requested",
-            "native_stopped",
             "close_intent",
             "retired",
             "retained",
@@ -132,13 +210,19 @@ fn retirement_state_uses_invocation_order_and_types() {
         variants[0].1[0].ty,
         WireTy::List(Box::new(WireTy::Named("RetirementBlocker".into())))
     );
-    assert_eq!(
-        variants[4].1[1].ty,
-        WireTy::Named("NativeStopEvidence".into())
-    );
-    assert_eq!(variants[6].1[1].ty, WireTy::Named("TerminalOutcome".into()));
-    assert_eq!(variants[7].1[2].ty, WireTy::Bool);
-    assert_eq!(variants[8].1[1].ty, WireTy::Named("RetirementPhase".into()));
+    assert_eq!(variants[2].1[1].ty, WireTy::Named("TerminalOutcome".into()));
+    assert_eq!(variants[3].1[1].ty, WireTy::Named("RetainReason".into()));
+    assert_eq!(variants[4].1[1].ty, WireTy::Named("RetirementPhase".into()));
+    assert_eq!(variants[3].1[2].name, "stopped");
+    assert_eq!(variants[3].1[2].ty, WireTy::Bool);
+    for (name, child) in [
+        ("conversation", "ConversationIdentity"),
+        ("process", "NativeProcessIdentity"),
+        ("shell", "NativeShellIdentity"),
+    ] {
+        assert_eq!(field("RetirementIdentity", name).ty, WireTy::Option(Box::new(WireTy::Named(child.into()))));
+    }
+    assert!(fields("RunRetirement").iter().all(|field| field.name != "quiescent_stop_at"));
 }
 
 #[test]

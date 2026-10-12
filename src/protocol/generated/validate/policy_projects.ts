@@ -81,9 +81,11 @@ export interface WireFields {
   "ProjectConfiguration.providers": (V1.ProjectConfiguration)["providers"];
   "ProjectConfiguration.limits": (V1.ProjectConfiguration)["limits"];
   "ProjectConfiguration.orchestration": (V1.ProjectConfiguration)["orchestration"];
-  "OrchestrationConfiguration.omp_extension": (V1.OrchestrationConfiguration)["omp_extension"];
-  "OrchestrationConfiguration.model": (V1.OrchestrationConfiguration)["model"];
+  "OrchestrationConfiguration.harness_kind": (V1.OrchestrationConfiguration)["harness_kind"];
+  "OrchestrationConfiguration.command": (V1.OrchestrationConfiguration)["command"];
   "OrchestrationConfiguration.extra_args": (V1.OrchestrationConfiguration)["extra_args"];
+  "OrchestrationConfiguration.resume_args": (V1.OrchestrationConfiguration)["resume_args"];
+  "OrchestrationConfiguration.inbox_prompt_hints": (V1.OrchestrationConfiguration)["inbox_prompt_hints"];
   "OrchestrationConfiguration.routes": (V1.OrchestrationConfiguration)["routes"];
   "OrchestrationRoute.provider": (V1.OrchestrationRoute)["provider"];
   "OrchestrationRoute.instance": (V1.OrchestrationRoute)["instance"];
@@ -169,7 +171,7 @@ export interface WireFieldNames {
   "ProjectLimits": "catalog_depth" | "catalog_entries" | "git_timeout_ms" | "git_output_bytes" | "operation_timeout_ms" | "context_preview_bytes" | "context_preview_lines" | "context_directory_entries" | "context_tree_depth" | "library_folder_files" | "library_folder_bytes" | "library_file_bytes" | "library_space_pages" | "library_attachment_bytes" | "library_item_attachment_bytes" | "library_max_items";
   "ProjectProvider": "id" | "kind" | "base_url" | "executable" | "login" | "deployment";
   "ProjectConfiguration": "version" | "repository_roots" | "worktree_root" | "state_root" | "cache_root" | "library_root" | "notes_root" | "branch_template" | "checkout_template" | "providers" | "limits" | "orchestration";
-  "OrchestrationConfiguration": "omp_extension" | "model" | "extra_args" | "routes";
+  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "inbox_prompt_hints" | "routes";
   "OrchestrationRoute": "provider" | "instance" | "project_id_prefix" | "repository_id";
   "RepositoryCandidate": "repository_id" | "name" | "root" | "checkout_path" | "common_dir" | "branch" | "is_linked_worktree" | "is_detached" | "provenance";
   "ProjectDiagnostic": "code" | "message" | "path";
@@ -204,7 +206,7 @@ export interface WireCheckpointFieldNames {
   "ProjectLimits": "catalog_depth" | "catalog_entries" | "git_timeout_ms" | "git_output_bytes" | "operation_timeout_ms" | "context_preview_bytes" | "context_preview_lines" | "context_directory_entries" | "context_tree_depth" | "library_folder_files" | "library_folder_bytes" | "library_file_bytes" | "library_space_pages" | "library_attachment_bytes" | "library_item_attachment_bytes" | "library_max_items";
   "ProjectProvider": "id" | "kind" | "base_url" | "executable" | "login" | "deployment";
   "ProjectConfiguration": "version" | "repository_roots" | "worktree_root" | "state_root" | "cache_root" | "library_root" | "notes_root" | "branch_template" | "checkout_template" | "providers" | "limits" | "orchestration";
-  "OrchestrationConfiguration": "omp_extension" | "model" | "extra_args" | "routes";
+  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "inbox_prompt_hints" | "routes";
   "OrchestrationRoute": "provider" | "instance" | "project_id_prefix" | "repository_id";
   "RepositoryCandidate": "repository_id" | "name" | "root" | "checkout_path" | "common_dir" | "branch" | "is_linked_worktree" | "is_detached" | "provenance";
   "ProjectDiagnostic": "code" | "message" | "path";
@@ -225,9 +227,11 @@ export type WireOmittableField =
   | "ProjectProvider.login"
   | "ProjectProvider.deployment"
   | "ProjectConfiguration.orchestration"
-  | "OrchestrationConfiguration.omp_extension"
-  | "OrchestrationConfiguration.model"
+  | "OrchestrationConfiguration.harness_kind"
+  | "OrchestrationConfiguration.command"
   | "OrchestrationConfiguration.extra_args"
+  | "OrchestrationConfiguration.resume_args"
+  | "OrchestrationConfiguration.inbox_prompt_hints"
   | "OrchestrationConfiguration.routes"
   | "RepositoryCandidate.branch"
   | "ProjectDiagnostic.path"
@@ -263,6 +267,7 @@ export type WireListField =
   | "ProjectConfiguration.repository_roots"
   | "ProjectConfiguration.providers"
   | "OrchestrationConfiguration.extra_args"
+  | "OrchestrationConfiguration.resume_args"
   | "OrchestrationConfiguration.routes"
   | "RepositoryListResponse.repositories"
   | "RepositoryListResponse.diagnostics"

@@ -148,8 +148,8 @@ pub(in crate::orchestration) fn scope_update(
         operation_id, root_id, task_id, run_id, expected_task_revision,
         expected_doc_revision, title, description,
     } = &action else { unreachable!() };
-    // Durable identity is checked before revision or stage checks, including
-    // replay after the worker has reported or the task has been accepted.
+    // Fresh caller and exact current task owner admission precedes every replay.
+    // Root/operator receipts remain readable for the retained accepted owner.
     let notify_worker = scope_actor(ctx.state, ctx.actor, ctx.caller, ctx.session_id, root_id, task_id, run_id)?;
     let principal_key = super::resume::principal_key(ctx)?;
     if let Some(result) = super::resume::replay(ctx, operation_id,
@@ -228,19 +228,20 @@ fn scope_actor(
         || worker.task_id.as_deref() != Some(task_id) {
         return Err(error("actor_forbidden", "Scope update must identify one root and its task worker"));
     }
+    if projection::current_task_run(state, root_id, task_id).is_none_or(|current| current.run_id != run_id) {
+        return Err(error("attempt_stale", "Scope update must target the current canonical task owner"));
+    }
     match actor {
         Actor::Operator(_) => Ok(true),
         Actor::Agent(agent) => {
             let job = authenticated_task_caller(state, agent, caller)?;
             let run = &state.runs[job.run_index];
             if job.role == JobRole::Root && run.run_id == root_id { return Ok(true) }
-            if run.run_id != run_id || !matches!(job.role, JobRole::Worker | JobRole::Child) {
+            if run.run_id != run_id || job.role != JobRole::Worker {
                 return Err(error("actor_forbidden", "Only this worker, its root or operator may refine scope"));
             }
-            require_live_child(state, &job, run)?;
             Ok(false)
         }
-        Actor::Bootstrap(_) => Err(error("actor_forbidden", "Physical bootstrap cannot refine canonical scope")),
     }
 }
 
@@ -332,25 +333,14 @@ pub(super) fn active_task_root<'a>(
     Ok(root)
 }
 
-/// Ordinary task authority is durable job authority, not a native incarnation.
+/// Ordinary task authority is the registered conversation and assigned generation.
 /// Credential validation also fences the worker's current checkout claim.
 fn authenticated_task_caller(
     state: &OrchestrationState, agent: &AgentCaller, caller: Option<usize>,
 ) -> Result<AuthorizedJob, InspectionError> {
-    let job = credentials::validate_job_auth(state, &agent.auth)?;
-    let claimed_child = agent.agent_kind == Some(AgentKind::Subagent) || agent.subagent_id.is_some()
-        || agent.provenance.as_ref().is_some_and(|provenance| provenance.child_id.is_some());
-    if claimed_child && job.role != JobRole::Child {
-        return Err(error("actor_forbidden", "A child must use its narrowed credential"));
-    }
+    let job = credentials::validate_caller(state, agent)?;
     if job.run_index != required_caller(caller)? {
         return Err(error("actor_forbidden", "Caller does not match its authenticated job"));
-    }
-    let run = &state.runs[job.run_index];
-    if !(run.kind == RunKind::Adopted && run.dispatch.is_none()
-        || run.dispatch.as_ref().is_some_and(|dispatch| dispatch.agent_started))
-        || dispatch::recovery_incarnation_revoked(run) {
-        return Err(error("actor_forbidden", "The authenticated job has not started or was revoked"));
     }
     Ok(job)
 }
@@ -360,9 +350,7 @@ pub(super) fn task_root_authority(
 ) -> Result<(), InspectionError> {
     let root = active_task_root(state, session, root_id)?;
     if matches!(actor, Actor::Operator(_)) { return Ok(()) }
-    let Actor::Agent(agent) = actor else {
-        return Err(error("actor_forbidden", "Physical bootstrap cannot author canonical tasks"));
-    };
+    let Actor::Agent(agent) = actor else { unreachable!() };
     let job = authenticated_task_caller(state, agent, caller)?;
     if state.runs[job.run_index].run_id != root.run_id || job.role != JobRole::Root {
         return Err(error("actor_forbidden", "Only the authenticated root or operator may author canonical tasks"));
@@ -401,9 +389,7 @@ pub(super) fn task_content_target(
         }
         return Ok(());
     }
-    let Actor::Agent(agent) = actor else {
-        return Err(error("actor_forbidden", "Physical bootstrap cannot edit canonical tasks"));
-    };
+    let Actor::Agent(agent) = actor else { unreachable!() };
     let job = authenticated_task_caller(state, agent, caller)?;
     let run = &state.runs[job.run_index];
     if run.run_id == root_id {
@@ -415,7 +401,7 @@ pub(super) fn task_content_target(
         }
         return Ok(());
     }
-    if run.root_id != root_id || !matches!(job.role, JobRole::Worker | JobRole::Child) {
+    if run.root_id != root_id || job.role != JobRole::Worker {
         return Err(error("actor_forbidden", "Caller does not own this canonical root"));
     }
     if run.kind != RunKind::Worker || run.stage != RunStage::Working
@@ -424,22 +410,9 @@ pub(super) fn task_content_target(
     {
         return Err(error("actor_forbidden", "Only the current Working worker may edit its own canonical task"));
     }
-    require_live_child(state, &job, run)?;
     dependencies::DependencyGraph::new(&document.tasks).require(task)
 }
 
-fn require_live_child(state: &OrchestrationState, job: &AuthorizedJob, run: &Run) -> Result<(), InspectionError> {
-    if job.role == JobRole::Child {
-        let subject = job.subject_child_id.as_deref().ok_or_else(|| {
-            error("actor_forbidden", "A narrowed child credential subject is required")
-        })?;
-        if !state.subagents.iter().any(|child| child.run_id == run.run_id
-            && child.subagent_id == subject && child.status == SubagentStatus::Running) {
-            return Err(error("actor_forbidden", "An authenticated live child subject is required"));
-        }
-    }
-    Ok(())
-}
 
 pub(super) fn task_transition_target(
     state: &OrchestrationState, run: &Run, document: &tasks_md::TaskDocument<'_>,
@@ -475,6 +448,9 @@ mod tests {
             let mut root = new_run(&root_id, "task-job-auth", RunKind::Adopted,
                 "Root".into(), &root_id, None, None, 1);
             root.stage = RunStage::Active;
+            root.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
+                harness: "test".into(), session_id: "root-conversation".into(),
+            });
             let locked = store.lock().unwrap();
             let task = locked.tasks(&root_id).unwrap().create_authoring_with_id(
                 &id(), "Own task", "Own canonical content", &[], None, None, None,
@@ -486,6 +462,10 @@ mod tests {
             let mut worker = new_run(&id(), "task-job-auth", RunKind::Worker,
                 "Worker".into(), &root_id, Some(root_id.clone()), Some(task.task_id.clone()), 1);
             worker.stage = RunStage::Working;
+            worker.assignment_generation = Some(1);
+            worker.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
+                harness: "test".into(), session_id: "worker-conversation".into(),
+            });
             let mut launch = dispatch(DispatchStep::Launched);
             launch.agent_started = true;
             worker.dispatch = Some(launch);
@@ -501,23 +481,30 @@ mod tests {
                 git: None,
             };
             let mut state = OrchestrationState::default();
+            state.task_ownership.push(TaskOwnership {
+                root_id: root_id.clone(), task_id: task.task_id.clone(), generation: 1,
+                owner: Some(TaskOwner {
+                    run_id: worker.run_id.clone(),
+                    conversation: worker.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                    claim_operation_id: id(),
+                }),
+            });
             state.runs.extend([root, worker]);
             claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
             Self { directory, store, state, task, sibling }
         }
 
-        fn actor(&mut self, index: usize, role: JobRole, subject: Option<&str>) -> Actor {
-            let (record, path) = credentials::stage_credential(
-                self.store.base(), &self.state.runs[index], role, subject,
-            ).unwrap();
-            self.state.credentials.push(record);
+        fn actor(&mut self, index: usize, role: JobRole) -> Actor {
+            // These actors are already registered, not merely staged bootstrap credentials.
+            let auth = credentials::test_job_auth(&mut self.state, index, role);
             Actor::Agent(AgentCaller {
-                auth: read_job_auth(&path).unwrap(), provenance: None,
+                auth,
+                conversation: self.state.runs[index].attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                assignment_generation: self.state.runs[index].assignment_generation,
                 endpoint_identity: String::new(), session_id: String::new(),
                 workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
-                boot_id: None, terminal_id: None, native_session_id: None, env_run: None,
-                omp_session_id: None, agent_kind: None, actual_agent_kind: None,
-                subagent_id: None, main_omp_session_id: None, process: None,
+                boot_id: None, terminal_id: None, native_session_id: None,
+                actual_agent_kind: None, process: None,
             })
         }
 
@@ -545,6 +532,7 @@ mod tests {
             let service = OrchestrationService {
                 store: OrchestrationStore::open(&self.directory).unwrap(),
                 revision: watch::channel(self.state.revision).0,
+                launch_config: Default::default(),
             };
             let locked = self.store.lock().unwrap();
             locked.read().unwrap();
@@ -559,6 +547,7 @@ mod tests {
             let service = OrchestrationService {
                 store: OrchestrationStore::open(&self.directory).unwrap(),
                 revision: watch::channel(self.state.revision).0,
+                launch_config: Default::default(),
             };
             let operator = Actor::Operator(OperatorOrigin::Browser);
             let locked = self.store.lock().unwrap();
@@ -619,14 +608,11 @@ mod tests {
     }
 
     #[test]
-    fn durable_task_authority_does_not_require_native_conversation_or_process() {
+    fn registered_task_authority_requires_conversation_but_not_process() {
         let mut fixture = Fixture::new();
-        let mut actor = fixture.actor(1, JobRole::Worker, None);
+        let mut actor = fixture.actor(1, JobRole::Worker);
         fixture.content(&actor, 1, &fixture.task).unwrap();
         let Actor::Agent(caller) = &mut actor else { unreachable!() };
-        caller.omp_session_id = Some("new-conversation".into());
-        caller.main_omp_session_id = Some("other-conversation".into());
-        caller.agent_kind = Some(AgentKind::Main);
         caller.process = Some(NativeProcessIdentity {
             pid: 99, start_ticks: 100, kernel_boot_id: Some("different-boot".into()),
         });
@@ -640,64 +626,45 @@ mod tests {
     }
 
     #[test]
-    fn inherited_main_credentials_and_physical_bootstrap_cannot_author_child_tasks() {
+    fn task_authority_rejects_wrong_conversation_and_declared_generation() {
         let mut fixture = Fixture::new();
-        let mut inherited = fixture.actor(1, JobRole::Worker, None);
-        let Actor::Agent(caller) = &mut inherited else { unreachable!() };
-        caller.agent_kind = Some(AgentKind::Subagent);
-        assert!(fixture.content(&inherited, 1, &fixture.task).is_err());
-        let Actor::Agent(caller) = &mut inherited else { unreachable!() };
-        caller.agent_kind = Some(AgentKind::Main);
-        caller.provenance = Some(CallerProvenance {
-            agent_kind: Some(AgentKind::Main), child_id: Some("inherited-child".into()),
-            main_session_id: None, native_session_id: None, process: None,
-        });
-        assert!(fixture.content(&inherited, 1, &fixture.task).is_err());
-        let mut root = fixture.actor(0, JobRole::Root, None);
+        let mut worker = fixture.actor(1, JobRole::Worker);
+        let Actor::Agent(caller) = &mut worker else { unreachable!() };
+        caller.conversation.session_id = "other-conversation".into();
+        assert!(fixture.content(&worker, 1, &fixture.task).is_err());
+        let Actor::Agent(caller) = &mut worker else { unreachable!() };
+        caller.conversation.session_id = "worker-conversation".into();
+        caller.assignment_generation = Some(2);
+        assert!(fixture.content(&worker, 1, &fixture.task).is_err());
+        let mut root = fixture.actor(0, JobRole::Root);
         let Actor::Agent(caller) = &mut root else { unreachable!() };
-        caller.subagent_id = Some("inherited-root-child".into());
+        caller.assignment_generation = Some(1);
         assert!(task_root_authority(&fixture.state, &root, Some(0), "task-job-auth",
-            &fixture.state.runs[0].run_id).is_err());
-        let bootstrap = Actor::Bootstrap(BootstrapCaller {
-            endpoint_identity: String::new(), session_id: String::new(),
-            workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
-            boot_id: None, terminal_id: None, native_session_id: None,
-            omp_session_id: None, agent_kind: None, actual_agent_kind: None, process: None,
-        });
-        assert!(fixture.content(&bootstrap, 1, &fixture.task).is_err());
-        assert!(task_root_authority(&fixture.state, &bootstrap, None, "task-job-auth",
             &fixture.state.runs[0].run_id).is_err());
     }
 
     #[test]
-    fn narrowed_child_subject_is_own_task_only_even_with_main_provenance() {
+    fn worker_authority_is_own_task_and_current_generation_only() {
         let mut fixture = Fixture::new();
-        let mut child = fixture.actor(1, JobRole::Child, Some("registered-child"));
-        fixture.state.subagents.push(Subagent {
-            run_id: fixture.state.runs[1].run_id.clone(), subagent_id: "other-child".into(),
-            parent_subagent_id: None, bound_omp_session: None, role: None, label: "Child".into(),
-            status: SubagentStatus::Running, summary: None, last_control: None, updated_at: now(),
-        });
-        assert!(fixture.content(&child, 1, &fixture.task).is_err());
-        fixture.state.subagents[0].subagent_id = "registered-child".into();
-        let Actor::Agent(caller) = &mut child else { unreachable!() };
-        caller.agent_kind = Some(AgentKind::Main);
-        caller.subagent_id = Some("other-child".into());
-        fixture.content(&child, 1, &fixture.task).unwrap();
-        assert!(fixture.content(&child, 1, &fixture.sibling).is_err());
-        assert!(task_root_authority(&fixture.state, &child, Some(1), "task-job-auth",
+        let worker = fixture.actor(1, JobRole::Worker);
+        fixture.content(&worker, 1, &fixture.task).unwrap();
+        assert!(fixture.content(&worker, 1, &fixture.sibling).is_err());
+        assert!(task_root_authority(&fixture.state, &worker, Some(1), "task-job-auth",
             &fixture.state.runs[0].run_id).is_err());
-        fixture.state.subagents[0].status = SubagentStatus::Done;
-        assert!(fixture.content(&child, 1, &fixture.task).is_err());
+        fixture.state.task_ownership[0].owner = None;
+        fixture.state.task_ownership[0].generation += 1;
+        assert!(fixture.content(&worker, 1, &fixture.task).is_err());
+        assert!(projection::current_task_run(&fixture.state, &fixture.state.runs[0].run_id,
+            &fixture.task.task_id).is_none());
     }
 
     #[test]
     fn task_root_authority_is_credential_role_and_root_scoped() {
         let mut fixture = Fixture::new();
-        let root = fixture.actor(0, JobRole::Root, None);
+        let root = fixture.actor(0, JobRole::Root);
         task_root_authority(&fixture.state, &root, Some(0), "task-job-auth",
             &fixture.state.runs[0].run_id).unwrap();
-        let worker = fixture.actor(1, JobRole::Worker, None);
+        let worker = fixture.actor(1, JobRole::Worker);
         assert!(task_root_authority(&fixture.state, &worker, Some(1), "task-job-auth",
             &fixture.state.runs[0].run_id).is_err());
         assert!(task_root_authority(&fixture.state, &root, Some(1), "task-job-auth",
@@ -716,7 +683,7 @@ mod tests {
     #[test]
     fn job_credentials_do_not_bypass_current_worker_and_task_fences() {
         let mut fixture = Fixture::new();
-        let worker = fixture.actor(1, JobRole::Worker, None);
+        let worker = fixture.actor(1, JobRole::Worker);
         let original = fixture.state.runs[1].clone();
         // Neither an initialized report nor a matching permission plan is required.
         fixture.content(&worker, 1, &fixture.task).unwrap();
@@ -730,7 +697,10 @@ mod tests {
         newer.run_id = id();
         newer.attempt += 1;
         fixture.state.runs.push(newer);
+        fixture.content(&worker, 1, &fixture.task).unwrap();
+        fixture.state.task_ownership[0].owner.as_mut().unwrap().run_id = fixture.state.runs[2].run_id.clone();
         assert!(fixture.content(&worker, 1, &fixture.task).is_err());
+        fixture.state.task_ownership[0].owner.as_mut().unwrap().run_id = fixture.state.runs[1].run_id.clone();
         fixture.state.runs.pop();
         let locked = fixture.store.lock().unwrap();
         let mut document = locked.tasks(&fixture.state.runs[0].run_id).unwrap();
@@ -782,7 +752,7 @@ mod tests {
     #[test]
     fn worker_self_refinement_has_no_instruction_and_replay_is_actor_bound() {
         let mut fixture = Fixture::new();
-        let worker = fixture.actor(1, JobRole::Worker, None);
+        let worker = fixture.actor(1, JobRole::Worker);
         let action = fixture.scope_action();
         let applied = fixture.scope(&worker, Some(1), action.clone()).unwrap();
         assert_eq!(applied.state, TaskScopeUpdateState::Applied);
@@ -937,7 +907,7 @@ mod tests {
     #[test]
     fn root_liaison_updates_scope_and_instructs_its_existing_worker_once() {
         let mut fixture = Fixture::new();
-        let root = fixture.actor(0, JobRole::Root, None);
+        let root = fixture.actor(0, JobRole::Root);
         let action = fixture.scope_action();
         let update = fixture.scope(&root, Some(0), action.clone()).unwrap();
         assert_eq!(update.state, TaskScopeUpdateState::Applied);
@@ -952,7 +922,7 @@ mod tests {
     #[test]
     fn principal_local_scope_ids_do_not_resume_or_settle_another_principals_draft() {
         let mut fixture = Fixture::new();
-        let root = fixture.actor(0, JobRole::Root, None);
+        let root = fixture.actor(0, JobRole::Root);
         let operator = Actor::Operator(OperatorOrigin::Browser);
         let rejected = fixture.scope_action();
         {
@@ -978,5 +948,127 @@ mod tests {
         assert_eq!(root_replay.state, TaskScopeUpdateState::Applied);
         assert!(root_replay.duplicate);
         assert_eq!(fixture.state.messages.len(), 1);
+    }
+
+    #[test]
+    fn scope_recovery_fences_vacant_and_replacement_ownership_before_document_write() {
+        for replacement in [false, true] {
+            let mut fixture = Fixture::new();
+            fixture.journal_scope(false);
+            fixture.state.task_ownership[0].owner = None;
+            fixture.state.task_ownership[0].generation = 2;
+            if replacement {
+                let mut newer = fixture.state.runs[1].clone();
+                newer.run_id = id();
+                newer.assignment_generation = Some(3);
+                newer.attempt += 1;
+                fixture.state.task_ownership[0].generation = 3;
+                fixture.state.task_ownership[0].owner = Some(TaskOwner {
+                    run_id: newer.run_id.clone(),
+                    conversation: newer.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                    claim_operation_id: id(),
+                });
+                fixture.state.runs.push(newer);
+            }
+            let locked = fixture.store.lock().unwrap();
+            locked.save(&mut fixture.state).unwrap();
+            assert!(scope_intents::recover(&locked, &mut fixture.state).unwrap());
+            assert_eq!(fixture.state.scope_intents[0].state, IntentState::Conflict);
+            assert!(fixture.state.messages.is_empty());
+            assert_eq!(locked.tasks(&fixture.state.runs[0].run_id).unwrap()
+                .task(&fixture.task.task_id).unwrap().title, "Own task");
+        }
+    }
+
+    #[test]
+    fn worker_scope_replay_cannot_restore_unassigned_authority() {
+        let mut fixture = Fixture::new();
+        let worker = fixture.actor(1, JobRole::Worker);
+        let action = fixture.scope_action();
+        assert_eq!(fixture.scope(&worker, Some(1), action.clone()).unwrap().state, TaskScopeUpdateState::Applied);
+        fixture.state.task_ownership[0].owner = None;
+        fixture.state.task_ownership[0].generation += 1;
+        assert!(fixture.scope(&worker, Some(1), action.clone()).is_err());
+        assert_eq!(fixture.scope(&Actor::Operator(OperatorOrigin::Browser), None, action).unwrap_err().code, "attempt_stale");
+        assert!(fixture.state.messages.is_empty());
+    }
+
+    #[test]
+    fn acceptance_recovery_fences_owner_and_preserves_current_successful_result() {
+        for ownership_case in 0..3 {
+            let mut fixture = Fixture::new();
+            let result_id = id();
+            let output = SourceOutput::NonCode {
+                result_message_id: result_id.clone(), task_revision: fixture.task.task_revision.clone(),
+                artifacts: vec!["actual worker result".into()], focused_checks: Vec::new(),
+            };
+            fixture.state.runs[1].stage = RunStage::Reported;
+            fixture.state.runs[1].source_output = Some(output.clone());
+            fixture.state.runs[1].result = Some(Report {
+                message_id: result_id.clone(), kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded),
+                summary: "Completed scope".into(), plan: None, source_output: Some(output), at: now(),
+            });
+            fixture.state.task_intents.push(TaskIntent {
+                intent_id: id(), root_id: fixture.state.runs[0].run_id.clone(), task_id: fixture.task.task_id.clone(),
+                run_id: fixture.state.runs[1].run_id.clone(), expected_task_revision: fixture.task.task_revision.clone(),
+                state: IntentState::Pending, origin: Some(DecisionOrigin::Browser),
+                supervisor_run_id: None, conversation: None, result_message_id: Some(result_id),
+            });
+            if ownership_case != 0 {
+                fixture.state.task_ownership[0].owner = None;
+                fixture.state.task_ownership[0].generation = 2;
+            }
+            if ownership_case == 2 {
+                let mut newer = fixture.state.runs[1].clone();
+                newer.run_id = id();
+                newer.stage = RunStage::Working;
+                newer.result = None;
+                newer.source_output = None;
+                newer.assignment_generation = Some(3);
+                newer.attempt += 1;
+                fixture.state.task_ownership[0].generation = 3;
+                fixture.state.task_ownership[0].owner = Some(TaskOwner {
+                    run_id: newer.run_id.clone(),
+                    conversation: newer.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                    claim_operation_id: id(),
+                });
+                fixture.state.runs.push(newer);
+            }
+            {
+                let locked = fixture.store.lock().unwrap();
+                locked.save(&mut fixture.state).unwrap();
+            }
+            let service = OrchestrationService {
+                store: OrchestrationStore::open(&fixture.directory).unwrap(),
+                revision: watch::channel(fixture.state.revision).0,
+                launch_config: Default::default(),
+            };
+            service.recover_intents().unwrap();
+            let locked = fixture.store.lock().unwrap();
+            let recovered = locked.read().unwrap();
+            let document = locked.tasks(&recovered.runs[0].run_id).unwrap();
+            if ownership_case == 0 {
+                assert!(recovered.task_intents.is_empty());
+                assert_eq!(recovered.runs[1].stage, RunStage::Closed);
+                assert_eq!(recovered.runs[1].close_reason, Some(CloseReason::Accepted));
+                assert!(matches!(&recovered.runs[1].integration, Integration::NotApplicable { .. }));
+                assert!(document.task(&fixture.task.task_id).unwrap().checked);
+                assert_eq!(super::super::integration::authorize_replay(&recovered,
+                    &Actor::Operator(OperatorOrigin::Browser), "task-job-auth",
+                    &recovered.runs[1].run_id).unwrap(), 1);
+                assert_eq!(projection::current_task_run(&recovered, &recovered.runs[0].run_id,
+                    &fixture.task.task_id).unwrap().run_id, recovered.runs[1].run_id);
+                assert_eq!(task_content_target(&recovered, &Actor::Operator(OperatorOrigin::Browser),
+                    None, "task-job-auth", &recovered.runs[0].run_id, &fixture.task.task_id,
+                    &document).unwrap_err().code, "task_checked");
+            } else {
+                assert_eq!(recovered.task_intents[0].state, IntentState::Conflict);
+                assert_eq!(recovered.runs[1].stage, RunStage::Reported);
+                assert!(!document.task(&fixture.task.task_id).unwrap().checked);
+                assert_eq!(super::super::integration::authorize_replay(&recovered,
+                    &Actor::Operator(OperatorOrigin::Browser), "task-job-auth",
+                    &recovered.runs[1].run_id).unwrap_err().code, "integration_conflict");
+            }
+        }
     }
 }

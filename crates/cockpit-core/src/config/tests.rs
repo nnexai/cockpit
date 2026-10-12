@@ -809,24 +809,15 @@ fn library_root_defaults_to_xdg_data_directory() {
     let _ = fs::remove_file(path);
 }
 #[test]
-fn orchestration_options_reject_code_loading_and_auto_approval() {
-    for args in [
-        vec!["--extension".into(), "/tmp/unreviewed.ts".into()],
-        vec!["--resume".into(), "previous-session".into()],
-        vec!["--yolo".into()],
-        vec!["--thinking".into(), "off --yolo".into()],
-    ] {
-        assert_eq!(
-            validate_orchestration_args(&args).unwrap_err().code,
-            "invalid_orchestration_args"
-        );
+fn orchestration_options_use_bounded_literal_harness_arguments() {
+    assert!(validate_orchestration_args(&[
+        "--model".into(), "tiny".into(), "--custom-option".into(), "literal ; $(text)".into(),
+    ]).is_ok());
+    for args in [vec!["bad\0argument".into()], vec!["line\nbreak".into()], vec!["x".into(); 17]] {
+        assert_eq!(validate_orchestration_args(&args).unwrap_err().code, "invalid_orchestration_args");
     }
-    assert!(
-        validate_orchestration_args(&["--no-extensions".into(), "--thinking".into(), "off".into()])
-            .is_ok()
-    );
     let configuration: OrchestrationConfiguration = toml::from_str(
-        "model = 'tiny'\nextra_args = ['--no-extensions', '--no-skills', '--no-rules']\n[[routes]]\nprovider = 'jira'\ninstance = 'https://issues.example'\nproject_id_prefix = 'APP-'\nrepository_id = 'api'\n"
+        "harness_kind = 'probe'\ncommand = '/usr/bin/python3'\nextra_args = ['literal.py', '--custom']\nresume_args = ['literal.py', '--resume', '{session_id}']\n[[routes]]\nprovider = 'jira'\ninstance = 'https://issues.example'\nproject_id_prefix = 'APP-'\nrepository_id = 'api'\n"
     ).unwrap();
     assert!(validate_orchestration(&configuration).is_ok());
     let mut unsafe_route = configuration;
@@ -835,6 +826,40 @@ fn orchestration_options_reject_code_loading_and_auto_approval() {
         validate_orchestration(&unsafe_route).unwrap_err().code,
         "invalid_route_instance"
     );
+}
+
+#[test]
+fn orchestration_resume_requires_one_opaque_whole_argument_placeholder() {
+    let mut configuration = OrchestrationConfiguration::default();
+    assert_eq!(configuration.command, "omp");
+    assert_eq!(configuration.harness_kind, "omp");
+    assert!(!configuration.inbox_prompt_hints);
+    assert!(configuration.resume_args.is_none());
+    for args in [
+        vec!["--resume".into()],
+        vec!["{session_id}".into(), "{session_id}".into()],
+        vec!["--resume={session_id}".into()],
+        vec!["{session_id}".into(), "prefix{session_id}".into()],
+    ] {
+        configuration.resume_args = Some(args);
+        assert_eq!(validate_orchestration(&configuration).unwrap_err().code, "invalid_orchestration_resume_args");
+    }
+    configuration.resume_args = Some(vec!["--resume".into(), "{session_id}".into()]);
+    assert!(validate_orchestration(&configuration).is_ok());
+    configuration.command = "-command".into();
+    assert_eq!(validate_orchestration(&configuration).unwrap_err().code, "invalid_orchestration_command");
+}
+
+#[test]
+fn orchestration_configuration_rejects_removed_extension_and_model_fields() {
+    for value in ["omp_extension = '/tmp/extension.ts'", "model = 'tiny'"] {
+        assert!(toml::from_str::<OrchestrationConfiguration>(value).is_err());
+    }
+    for value in ["", "bad\nharness", &"x".repeat(513)] {
+        let mut configuration = OrchestrationConfiguration::default();
+        configuration.harness_kind = value.into();
+        assert_eq!(validate_orchestration(&configuration).unwrap_err().code, "invalid_orchestration_harness_kind");
+    }
 }
 
 #[test]

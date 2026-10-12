@@ -112,7 +112,7 @@ export function SupervisorDiagnostics({ snapshot, rootRuns, busy, connected, onI
     if (snapshot.runtime.status !== "fresh") return "Observation unavailable";
     const observed = snapshot.runtime.runs.find(item => item.run_id === runId);
     if (!observed) return "Unobserved";
-    return `${connected ? "" : "Saved · "}${observed.presence.replaceAll("_", " ")} · actual OMP ${observed.actual_omp ? "yes" : "no"}${observed.agent_status ? ` · ${observed.agent_status}` : ""}`;
+    return `${connected ? "" : "Saved · "}${observed.presence.replaceAll("_", " ")} · actual agent ${observed.actual_agent ? "yes" : "no"}${observed.agent_status ? ` · ${observed.agent_status}` : ""}`;
   };
   const identifyReason = busy ? "Wait for the current change to finish." : !connected ? "Reconnect before identifying task-file items." : null;
   return <section className="supervisor-diagnostics-panel" aria-label="Diagnostics">
@@ -125,11 +125,11 @@ export function SupervisorDiagnostics({ snapshot, rootRuns, busy, connected, onI
       <tr><th scope="row">Unidentified items</th><td>{board?.unidentified_items ?? 0}{board?.unidentified_items ? <> task-file checklist items need identity markers. <button type="button" disabled={busy || !connected} aria-describedby={identifyReason ? "supervisor-identify-reason" : undefined} onClick={() => { if (!busy && connected) onIdentify(); }}>Identify task-file items</button>{identifyReason ? <p className="supervisor-disabled-reason" id="supervisor-identify-reason">{identifyReason}</p> : null}</> : null}</td></tr>
     </tbody></table>
     <div className="supervisor-diagnostics-table-scroll"><table className="supervisor-diagnostics-summary"><caption>Run summary</caption><thead><tr><th scope="col">Run</th><th scope="col">Dispatch step</th><th scope="col">Observation</th><th scope="col">Binding</th><th scope="col">Last delivery stage</th></tr></thead>
-      <tbody>{rootRuns.map(run => <tr key={run.run_id}><th scope="row">{run.label}</th><td>{run.dispatch?.step.replaceAll("_", " ") ?? "No dispatch record"}</td><td>{observation(run.run_id)}</td><td>Bound session {run.attachment?.main_session_id ? "yes" : "no"}</td><td>{latestMessages.get(run.run_id)?.stage ?? "No delivery record"}{latestMessages.get(run.run_id)?.stale ? " · stale evidence" : ""}</td></tr>)}</tbody>
+      <tbody>{rootRuns.map(run => <tr key={run.run_id}><th scope="row">{run.label}</th><td>{run.dispatch?.step.replaceAll("_", " ") ?? "No dispatch record"}</td><td>{observation(run.run_id)}</td><td>Bound conversation {run.attachment?.conversation ? "yes" : "no"}</td><td>{latestMessages.get(run.run_id)?.stage ?? "No delivery record"}{latestMessages.get(run.run_id)?.stale ? " · stale evidence" : ""}</td></tr>)}</tbody>
     </table></div>
-    <p className="supervisor-delivery-stages">Stored ≠ woken ≠ read ≠ acked.</p>
+    <p className="supervisor-delivery-stages">Stored ≠ read ≠ acked.</p>
     <div className="supervisor-diagnostics-records">{rootRuns.map(run => <details key={run.run_id}><summary>{run.label} · exact records</summary><RunDiagnostics run={run} snapshot={snapshot} /></details>)}
-      <details><summary>Runtime and transaction records</summary><pre className="supervisor-plan">{JSON.stringify({ runtime: snapshot.runtime, intents: snapshot.intents, assignment_intents: snapshot.assignment_intents }, null, 2)}</pre></details>
+      <details><summary>Runtime and transaction records</summary><pre className="supervisor-plan">{JSON.stringify({ runtime: snapshot.runtime, task_ownership: snapshot.task_ownership, intents: snapshot.intents, assignment_intents: snapshot.assignment_intents }, null, 2)}</pre></details>
     </div>
   </section>;
 }

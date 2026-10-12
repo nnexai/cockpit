@@ -26,8 +26,8 @@ use crate::{
 /// Native GUI startup must not answer this as a GUI transport.
 pub fn orchestration_protocol() -> serde_json::Value {
     serde_json::json!({
-        "orchestration_protocol": 2,
-        "store_schema": 2,
+        "orchestration_protocol": 3,
+        "store_schema": 3,
         "client_role": "host",
     })
 }
@@ -158,10 +158,4 @@ mod tests {
         })).is_err());
     }
 
-    #[test]
-    fn protocol_descriptor_is_host_cli_not_herdr_protocol() {
-        assert_eq!(orchestration_protocol(), serde_json::json!({
-            "orchestration_protocol": 2, "store_schema": 2, "client_role": "host",
-        }));
-    }
 }

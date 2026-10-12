@@ -30,8 +30,6 @@ export type ScopeDrafts = {
   followUps: Map<string, FollowUpDraft>;
   selectedTask: string | null;
   selectedRun: string | null;
-  selectedSubagent: string | null;
-  showSubagents: boolean;
   attentionOnly: boolean;
   spaceFilter: string;
   disclosures: Record<"completed" | "history" | "diagnostics" | "archive", boolean>;
@@ -39,7 +37,7 @@ export type ScopeDrafts = {
 };
 export function newTextDraft(): TextDraft { return { text: "", operation: null, notice: null, error: null }; }
 export function newScopeDrafts(): ScopeDrafts {
-  return { messages: new Map(), edits: new Map(), steps: new Map(), relations: new Map(), followUps: new Map(), selectedTask: null, selectedRun: null, selectedSubagent: null, showSubagents: true, attentionOnly: false, spaceFilter: "", disclosures: { completed: false, history: false, diagnostics: false, archive: false }, view: { mode: "tasks", offsets: { tasks: null, graph: null, dependencies: null }, laneScroll: {}, collapsedLanes: [], detailWidth: null, sheetHeight: null, queueOpenRow: null, detailTrail: [] } };
+  return { messages: new Map(), edits: new Map(), steps: new Map(), relations: new Map(), followUps: new Map(), selectedTask: null, selectedRun: null, attentionOnly: false, spaceFilter: "", disclosures: { completed: false, history: false, diagnostics: false, archive: false }, view: { mode: "tasks", offsets: { tasks: null, graph: null, dependencies: null }, laneScroll: {}, collapsedLanes: [], detailWidth: null, sheetHeight: null, queueOpenRow: null, detailTrail: [] } };
 }
 export function messageDraft(scope: ScopeDrafts, key: string): TextDraft {
   let draft = scope.messages.get(key);
@@ -112,8 +110,6 @@ const actionSchema = union("action", {
   annotate: object({ action: "string", run_id: "string", text: "string" }),
   send_back: object({ action: "string", run_id: "string", text: "string" }),
   cleanup_finish: object({ action: "string", request: object({ operation_id: "string", root_id: "string", run_id: stringOrNull }) }),
-  subagent_control: object({ action: "string", run_id: "string", subagent_id: "string",
-    op: union("op", { send: object({ op: "string", text: "string" }), cancel: object({ op: "string" }) }) }),
 });
 const scopeSchema = object({ sessionId: "string", rootId: "string", taskId: "string" });
 const sourceSubmissionSchema = object({ submissionId: "string", scope: scopeSchema, action: actionSchema });

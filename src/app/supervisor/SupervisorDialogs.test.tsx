@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, Run, SpaceSummary, Subagent, TaskView } from "../../protocol/generated/v1";
+import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, Run, SpaceSummary, TaskView } from "../../protocol/generated/v1";
 import { SupervisorDialogs, TaskSourceDialog, type TaskSourceDialogState } from "./SupervisorDialogs";
 import type { EditDraft, FollowUpDraft, RelationDraft } from "./useSupervisorDrafts";
 import type { SourceResolution, SourceSubmission, TaskMutationOutcome } from "./useSupervisor";
@@ -17,16 +17,15 @@ async function startResponse(action: OrchestrationAction): Promise<Orchestration
   return { result: "supervisor_started", start: { root_id: "new-root", outcome: "created", operation_id: action.operation_id, resume_operation_id: null, duplicate: false } };
 }
 function run(overrides: Partial<Run> = {}): Run {
-  return { session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launch_unknown", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" }, annotations: [], project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
+  return { session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, assignment_generation: null, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] }, attempt: 1, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launch_unknown", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" }, annotations: [], project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
 }
 function task(): TaskView {
   return { task: { task_id: "task", title: "Current title", body: "Current body", description: "Current body", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "current-revision", diagnostic: null }, lane: "queued", current_run_id: null, dependencies: { state: "none", unmet: [], problems: [] } };
 }
 function snapshot(runs: Run[] = [run()], tasks: TaskView[] = [task()]): OrchestrationSnapshot {
-  return { session_id: "session", state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, revision: 1, tasks_token: "tasks", roots: [], board: { root_id: "root", path: "/state/tasks.md", doc_revision: "document", unidentified_items: 0, diagnostics: [], tasks }, runs, messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(item => ({ run_id: item.run_id, presence: "missing", actual_omp: false, workspace_id: null, workspace_label: null, tab_id: null, tab_label: null, pane_id: null, agent_status: null, state_changed_at: at })) } };
+  return { session_id: "session", state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, revision: 1, tasks_token: "tasks", roots: [], board: { root_id: "root", path: "/state/tasks.md", doc_revision: "document", unidentified_items: 0, diagnostics: [], tasks }, runs, messages: [], questions: [], task_ownership: tasks.map(item => ({ root_id: "root", task_id: item.task.task_id, generation: 0, owner: null })), intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(item => ({ run_id: item.run_id, presence: "missing", actual_agent: false, workspace_id: null, workspace_label: null, tab_id: null, tab_label: null, pane_id: null, agent_status: null, state_changed_at: at })) } };
 }
 const space: SpaceSummary = { id: "space", label: "Project", number: 1, tab_count: 1, pane_count: 1, focused: true, agent_status: "idle", git: null };
-const subagent: Subagent = { run_id: "root", subagent_id: "sub", bound_omp_session: null, parent_subagent_id: null, role: "scout", label: "Research", status: "running", summary: null, last_control: null, updated_at: at };
 let root: Root | null = null;
 let host: HTMLDivElement;
 let opener: HTMLButtonElement;
@@ -79,6 +78,16 @@ function enter(field: HTMLInputElement | HTMLSelectElement, value: string) {
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = null; host?.remove(); opener?.remove(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Supervisor dialog mutation boundaries", () => {
+  it("describes configured harness launch without native-only controls or changing the destination", async () => {
+    const fixture = await mount({ mode: "start" });
+    const dialog = document.querySelector("[role=dialog]")!;
+    expect(dialog.textContent).toContain("A supervisor using the configured harness manages tasks and delegates work for you.");
+    expect(dialog.textContent).toContain("The configured agent starts without switching terminal focus");
+    expect(dialog.textContent).not.toContain("OMP");
+    expect([...dialog.querySelectorAll("label")].map(label => label.childNodes[0].textContent)).toEqual(["Name (optional)", "Location", "Space"]);
+    expect(fixture.props.startDraft).toMatchObject({ label: "", location: "existing", spaceId: "space", directory: "" });
+    expect(fixture.props.mutateResult).not.toHaveBeenCalled();
+  });
   it("prevents invalid destinations and clears the inline error after a valid selection", async () => {
     const fixture = await mount({ mode: "start" }, { startDraft: { label: " Agent ", location: "existing", spaceId: "gone", directory: "" }, mutateResult: vi.fn(startResponse) });
     await submit();
@@ -252,19 +261,6 @@ describe("Supervisor dialog mutation boundaries", () => {
     expect(action).toEqual({ action: "reconcile_run", run_id: "root", recovery });
     expect(retainedScope).toBeUndefined();
   });
-  it("keeps a subagent running when cancellation is dismissed", async () => {
-    const fixture = await mount({ mode: "subagent_cancel", run: run(), subagent });
-    await click(button("Keep running"));
-    expect(fixture.props.mutateResult).not.toHaveBeenCalled();
-  });
-  it("sends cancellation to the selected internal subagent, not its parent run", async () => {
-    const fixture = await mount({ mode: "subagent_cancel", run: run(), subagent });
-    await click(button("Request cancellation"));
-    expect(fixture.props.mutateResult).toHaveBeenCalledTimes(1);
-    const [action, retainedScope] = vi.mocked(fixture.props.mutateResult).mock.calls[0];
-    expect(action).toEqual({ action: "subagent_control", run_id: "root", subagent_id: "sub", op: { op: "cancel" } });
-    expect(retainedScope).toBeUndefined();
-  });
   it.each(["null", "throw"])("keeps replacement nonretryable in the same dialog after %s uncertainty", async outcome => {
     const fixture = await mount({ mode: "replace", run: competingRun() }, { mutateResult: vi.fn(async () => { if (outcome === "throw") throw new Error("Transport lost"); return null; }) });
     await submit(); await submit();
@@ -290,10 +286,10 @@ describe("Supervisor dialog mutation boundaries", () => {
     expect(fixture.props.onClose).not.toHaveBeenCalled();
     expect(primary().disabled).toBe(true);
   });
-  it.each(["close", "subagent_cancel"] as const)("contains focus while every %s dialog control is disabled in flight", async mode => {
+  it("contains focus while every close dialog control is disabled in flight", async () => {
     let resolve!: (result: OrchestrationActionResult) => void;
     const promise = new Promise<OrchestrationActionResult>(accept => { resolve = accept; });
-    const dialog: Props["dialog"] = mode === "close" ? { mode, run: run() } : { mode, run: run(), subagent };
+    const dialog: Props["dialog"] = { mode: "close", run: run() };
     const fixture = await mount(dialog, { mutateResult: vi.fn(() => promise) });
     act(() => primary().focus());
     await click(primary());

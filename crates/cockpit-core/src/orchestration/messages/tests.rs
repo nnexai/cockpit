@@ -13,17 +13,15 @@ fn fixture_attachment_id(id: &str) -> String {
     fixture_uuid("attachment", id, None)
 }
 
-fn fixture_auth(id: &str, subject: Option<&str>) -> JobAuth {
+fn fixture_auth(id: &str) -> JobAuth {
     let parent = (id != "root").then_some("root");
     let run = run(id, parent, RunStage::Working);
-    let role = if subject.is_some() {
-        JobRole::Child
-    } else if parent.is_some() {
-        JobRole::Worker
-    } else {
-        JobRole::Root
-    };
-    test_job_credential(&run, role, subject).1
+    let role = if parent.is_some() { JobRole::Worker } else { JobRole::Root };
+    test_job_credential(&run, role).1
+}
+
+fn conversation(id: &str) -> ConversationIdentity {
+    ConversationIdentity { harness: "test-harness".into(), session_id: format!("conversation-{id}") }
 }
 
 fn native_process() -> NativeProcessIdentity {
@@ -50,6 +48,10 @@ fn run(id: &str, parent: Option<&str>, stage: RunStage) -> Run {
         task_id: parent.map(|_| format!("task-{id}")),
         attempt: 1,
         task_revision_at_start: None,
+        assignment_generation: parent.map(|_| 1),
+        launch_config: cockpit_protocol::projects::OrchestrationConfiguration {
+            harness_kind: "test-harness".into(), ..Default::default()
+        },
         stage,
         close_reason: None,
         dispatch: None,
@@ -71,7 +73,7 @@ fn run(id: &str, parent: Option<&str>, stage: RunStage) -> Run {
             state: AttachmentState::Connected,
             launch_mode: None,
             location: None,
-            main_session_id: Some(format!("omp-{id}")),
+            conversation: Some(conversation(id)),
             process: Some(native_process()),
             shell: None,
             machine_id: Some("test-machine".into()),
@@ -86,7 +88,6 @@ fn run(id: &str, parent: Option<&str>, stage: RunStage) -> Run {
 
 fn state() -> OrchestrationState {
     let mut state = OrchestrationState {
-        schema: 2,
         revision: 0,
         runs: vec![
             run("root", None, RunStage::Active),
@@ -95,25 +96,22 @@ fn state() -> OrchestrationState {
             run("sibling", Some("root"), RunStage::Working),
         ],
         messages: Vec::new(),
-        subagents: Vec::new(),
         task_intents: Vec::new(),
         assignment_intents: Vec::new(),
         ..OrchestrationState::default()
     };
     for index in 0..state.runs.len() {
         let role = if index == 0 { JobRole::Root } else { JobRole::Worker };
-        test_job_auth(&mut state, index, role, None);
-    }
-    for subject in ["child", "wrong-child"] {
-        test_job_auth(&mut state, 1, JobRole::Child, Some(subject));
+        test_job_auth(&mut state, index, role);
     }
     state
 }
 
 fn main_actor(run_id: &str) -> Actor {
     Actor::Agent(AgentCaller {
-        auth: fixture_auth(run_id, None),
-        provenance: None,
+        auth: fixture_auth(run_id),
+        conversation: conversation(run_id),
+        assignment_generation: (run_id != "root").then_some(1),
         endpoint_identity: "endpoint".into(),
         session_id: "herdr-session".into(),
         workspace_id: "space".into(),
@@ -122,26 +120,11 @@ fn main_actor(run_id: &str) -> Actor {
         boot_id: None,
         terminal_id: None,
         native_session_id: None,
-        env_run: Some((run_id.into(), 1)),
-        omp_session_id: Some(format!("omp-{run_id}")),
-        main_omp_session_id: Some(format!("omp-{run_id}")),
-        agent_kind: Some(AgentKind::Main),
         actual_agent_kind: Some("omp".into()),
-        subagent_id: None,
         process: Some(native_process()),
     })
 }
 
-fn subagent_actor(run_id: &str, subagent_id: &str) -> Actor {
-    let Actor::Agent(mut caller) = main_actor(run_id) else {
-        unreachable!()
-    };
-    caller.agent_kind = Some(AgentKind::Subagent);
-    caller.subagent_id = Some(subagent_id.into());
-    caller.auth = fixture_auth(run_id, Some(subagent_id));
-    caller.omp_session_id = Some(format!("sub-session-{subagent_id}"));
-    Actor::Agent(caller)
-}
 
 fn report(id: &str, kind: ReportKind, destination: Option<&str>) -> OrchestrationAction {
     OrchestrationAction::Report {
@@ -212,16 +195,6 @@ fn assert_error(
     );
 }
 
-fn update(id: &str, parent: Option<&str>) -> OrchestrationAction {
-    OrchestrationAction::SubagentUpdate {
-        subagent_id: id.into(),
-        parent_subagent_id: parent.map(str::to_owned),
-        role: Some("reviewer".into()),
-        label: id.into(),
-        status: SubagentStatus::Running,
-        summary: None,
-    }
-}
 
 #[test]
 fn answers_require_explicit_links_and_other_messages_forbid_links() {
@@ -311,43 +284,19 @@ fn answers_require_an_open_current_main_needs_input_report() {
 }
 
 #[test]
-fn subagent_and_stale_questions_cannot_replace_the_main_question() {
+fn stale_questions_cannot_replace_the_current_question() {
     let mut state = state();
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    mutation(
-        &mut state,
-        &main_actor("worker"),
-        1,
-        &report("main-question", ReportKind::NeedsInput, None),
-    );
-    mutation(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &report("child-question", ReportKind::NeedsInput, Some("worker")),
-    );
-    assert_eq!(apply(
-        &mut state,
-        &main_actor("worker"),
-        Some(1),
-        true,
-        &report("stale-question", ReportKind::NeedsInput, None),
-    ).unwrap_err().code, "attempt_stale");
-    for question in ["child-question", "stale-question"] {
-        assert_rejected_without_mutation(
-            &mut state,
-            &send("answer", MessageKind::Answer, Some(question)),
-            "question_not_current",
-        );
-    }
-    apply(
-        &mut state,
-        &Actor::Operator(OperatorOrigin::Browser),
-        None,
-        false,
-        &send("answer", MessageKind::Answer, Some("main-question")),
-    ).unwrap();
-    assert_eq!(state.runs[1].last_report.as_ref().unwrap().message_id, "main-question");
+    let actor = main_actor("worker");
+    mutation(&mut state, &actor, 1, &report("current-question", ReportKind::NeedsInput, None));
+    let before = serde_json::to_value(&state).unwrap();
+    assert_eq!(apply(&mut state, &actor, Some(1), true,
+        &report("stale-question", ReportKind::NeedsInput, None)).unwrap_err().code, "attempt_stale");
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    assert_rejected_without_mutation(&mut state,
+        &send("answer", MessageKind::Answer, Some("stale-question")), "question_not_current");
+    apply(&mut state, &Actor::Operator(OperatorOrigin::Browser), None, false,
+        &send("answer", MessageKind::Answer, Some("current-question"))).unwrap();
+    assert_eq!(state.runs[1].last_report.as_ref().unwrap().message_id, "current-question");
 }
 
 #[test]
@@ -409,7 +358,7 @@ fn dedupe_rejects_changed_payload_and_preserves_original_report_after_stage_chan
 #[test]
 fn append_keys_by_sender_and_sequences_by_recipient() {
     let mut state = state();
-    let first = append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
+    let first = append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert!(matches!(
         first,
@@ -419,7 +368,7 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
             ..
         }
     ));
-    let duplicate = append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
+    let duplicate = append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert!(matches!(
         duplicate,
@@ -431,9 +380,9 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
     ));
     append(&mut state, AppendMessage { from: ActorRef::Run {
         run_id: "root".into(),
-    }, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
+    }, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
-    append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "sibling", message_id: "other", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
+    append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "sibling", message_id: "other", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert_eq!(
         state
@@ -453,7 +402,6 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
             in_reply_to: None,
             report: None,
             stale: false,
-            from_subagent_id: None,
             escalated_from: None,
         })
         .unwrap_err()
@@ -470,7 +418,6 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
             in_reply_to: None,
             report: None,
             stale: false,
-            from_subagent_id: None,
             escalated_from: None,
         })
         .unwrap_err()
@@ -493,14 +440,13 @@ fn append_bounds_utf8_bytes_and_rejects_sequence_overflow() {
             in_reply_to: None,
             report: None,
             stale: false,
-            from_subagent_id: None,
             escalated_from: None,
         })
         .unwrap_err()
         .code,
         "message_too_large"
     );
-    append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "first", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
+    append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "first", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     state.messages[0].seq = u64::MAX;
     assert_eq!(
@@ -513,7 +459,6 @@ fn append_bounds_utf8_bytes_and_rejects_sequence_overflow() {
             in_reply_to: None,
             report: None,
             stale: false,
-            from_subagent_id: None,
             escalated_from: None,
         })
         .unwrap_err()
@@ -524,30 +469,15 @@ fn append_bounds_utf8_bytes_and_rejects_sequence_overflow() {
 }
 
 #[test]
-fn initialized_requires_main_but_does_not_gate_work() {
+fn initialized_and_result_use_registered_ownership_without_physical_proof() {
     let mut state = state();
-    let initialized = report("initialized", ReportKind::Initialized, None);
-    assert_error(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &initialized,
-        "report_requires_main",
-    );
-    let Actor::Agent(mut offline) = main_actor("worker") else {
-        unreachable!()
-    };
-    offline.omp_session_id = Some("new-conversation".into());
-    offline.main_omp_session_id = None;
-    offline.process = None;
-    offline.provenance = None;
+    let offline = disconnected_actor(main_actor("worker"));
     let attachment = state.runs[1].attachment.as_mut().unwrap();
-    attachment.main_session_id = None;
     attachment.process = None;
     attachment.state = AttachmentState::Disconnected;
-    mutation(&mut state, &Actor::Agent(offline), 1, &initialized);
+    mutation(&mut state, &offline, 1, &report("initialized", ReportKind::Initialized, None));
     assert_eq!(state.runs[1].stage, RunStage::Working);
-    mutation(&mut state, &main_actor("worker"), 1, &report("result", ReportKind::Result, None));
+    mutation(&mut state, &offline, 1, &report("result", ReportKind::Result, None));
     assert_eq!(state.runs[1].stage, RunStage::Reported);
     assert_eq!(state.runs[1].result.as_ref().unwrap().message_id, "result");
 }
@@ -626,24 +556,11 @@ fn committed_result_replays_after_state_reload_without_a_semantic_write() {
 }
 
 #[test]
-fn unchanged_telemetry_and_transport_receipts_do_not_mutate_state() {
+fn repeated_pull_and_explicit_ack_do_not_mutate_durable_receipts() {
     let mut state = state();
     let worker = main_actor("worker");
-    let telemetry = update("child", None);
-    mutation(&mut state, &worker, 1, &telemetry);
-    state.subagents[0].updated_at = "original-update".into();
-    let before = serde_json::to_value(&state).unwrap();
-    mutation(&mut state, &worker, 1, &telemetry);
-    assert_eq!(serde_json::to_value(&state).unwrap(), before);
     apply(&mut state, &Actor::Operator(OperatorOrigin::Browser), None, false,
         &send("instruction", MessageKind::Instruction, None)).unwrap();
-    let wake = OrchestrationAction::InboxWoken {
-        through_seq: 1, omp_session_id: "native-worker".into(),
-    };
-    mutation(&mut state, &worker, 1, &wake);
-    let before = serde_json::to_value(&state).unwrap();
-    mutation(&mut state, &worker, 1, &wake);
-    assert_eq!(serde_json::to_value(&state).unwrap(), before);
     let pull = OrchestrationAction::InboxPull { after_seq: 0, limit: 100 };
     mutation(&mut state, &worker, 1, &pull);
     let before = serde_json::to_value(&state).unwrap();
@@ -757,110 +674,9 @@ fn root_reports_to_operator_visible_self_inbox() {
     assert_eq!(state.runs[0].result.as_ref().unwrap().message_id, "result");
 }
 
-#[test]
-fn subagent_progress_is_tagged_without_overwriting_main_receipt() {
-    let mut state = state();
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    mutation(
-        &mut state,
-        &main_actor("worker"),
-        1,
-        &report("main", ReportKind::Progress, None),
-    );
-    mutation(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &report("child", ReportKind::NeedsInput, None),
-    );
-    assert_eq!(state.messages[1].from_subagent_id.as_deref(), Some("child"));
-    assert_eq!(
-        state.runs[1].last_report.as_ref().unwrap().message_id,
-        "main"
-    );
-}
 
 #[test]
-fn internal_subagent_reports_to_own_main_are_evidence_only_and_require_real_child_identity() {
-    let mut state = state();
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    mutation(
-        &mut state,
-        &main_actor("worker"),
-        1,
-        &report("main", ReportKind::Progress, None),
-    );
-    let main_before = serde_json::to_value(&state.runs[1]).unwrap();
-    let child = subagent_actor("worker", "child");
-    for (id, kind) in [
-        ("child-progress", ReportKind::Progress),
-        ("child-question", ReportKind::NeedsInput),
-    ] {
-        let action = report(id, kind, Some("worker"));
-        let result = mutation(&mut state, &child, 1, &action);
-        assert!(
-            matches!(result, OrchestrationActionResult::Message { ref to_run_id, stale: false, .. } if to_run_id == "worker")
-        );
-        let message = state.messages.last().unwrap();
-        assert_eq!(message.from_subagent_id.as_deref(), Some("child"));
-        assert_eq!(message.to_run_id, "worker");
-        assert_eq!(message.stage, DeliveryStage::Stored);
-        assert_eq!(serde_json::to_value(&state.runs[1]).unwrap(), main_before);
-    }
-    assert_error(
-        &mut state,
-        &main_actor("worker"),
-        1,
-        &report("main-self", ReportKind::Progress, Some("worker")),
-        "not_ancestor",
-    );
-    assert_error(
-        &mut state,
-        &child,
-        1,
-        &report("child-initialized", ReportKind::Initialized, Some("worker")),
-        "report_requires_main",
-    );
-    assert_error(
-        &mut state,
-        &child,
-        1,
-        &report("child-result", ReportKind::Result, Some("worker")),
-        "report_requires_main",
-    );
-    assert_error(
-        &mut state,
-        &child,
-        1,
-        &report("child-sibling", ReportKind::Progress, Some("sibling")),
-        "not_ancestor",
-    );
-    let Actor::Agent(mut forged_main) = child.clone() else {
-        unreachable!()
-    };
-    forged_main.agent_kind = Some(AgentKind::Main);
-    forged_main.subagent_id = None;
-    forged_main.omp_session_id = Some("omp-worker".into());
-    assert_error(
-        &mut state,
-        &Actor::Agent(forged_main.clone()),
-        1,
-        &report("forged-result", ReportKind::Result, Some("worker")),
-        "report_requires_main",
-    );
-    mutation(
-        &mut state,
-        &Actor::Agent(forged_main),
-        1,
-        &report("credential-subject", ReportKind::Progress, Some("worker")),
-    );
-    assert_eq!(state.messages.last().unwrap().from_subagent_id.as_deref(), Some("child"));
-    assert_eq!(state.messages.len(), 4);
-    assert_eq!(serde_json::to_value(&state.runs[1]).unwrap(), main_before);
-}
-
-#[test]
-fn wake_never_reads_and_ack_is_atomic_across_the_whole_prefix() {
+fn durable_pull_and_ack_are_atomic_across_the_whole_prefix() {
     let mut state = state();
     let operator = Actor::Operator(OperatorOrigin::Browser);
     for id in ["first", "second"] {
@@ -895,25 +711,6 @@ fn wake_never_reads_and_ack_is_atomic_across_the_whole_prefix() {
             .iter()
             .all(|message| message.stage == DeliveryStage::Stored)
     );
-    let wake = OrchestrationAction::InboxWoken {
-        through_seq: 2,
-        omp_session_id: "omp-worker".into(),
-    };
-    mutation(&mut state, &actor, 1, &wake);
-    mutation(&mut state, &actor, 1, &wake);
-    assert!(
-        state
-            .messages
-            .iter()
-            .all(|message| message.stage == DeliveryStage::Woken)
-    );
-    assert_error(
-        &mut state,
-        &actor,
-        1,
-        &OrchestrationAction::InboxAck { through_seq: 2 },
-        "ack_before_read",
-    );
     mutation(
         &mut state,
         &actor,
@@ -938,7 +735,7 @@ fn wake_never_reads_and_ack_is_atomic_across_the_whole_prefix() {
         &OrchestrationAction::InboxAck { through_seq: 1 },
     );
     let acked_at = state.messages[0].acked_at.clone();
-    mutation(&mut state, &actor, 1, &wake);
+    mutation(&mut state, &actor, 1, &OrchestrationAction::InboxAck { through_seq: 1 });
     assert_eq!(state.messages[0].stage, DeliveryStage::Acked);
     assert_eq!(state.messages[0].acked_at, acked_at);
     mutation(
@@ -965,10 +762,10 @@ fn wake_never_reads_and_ack_is_atomic_across_the_whole_prefix() {
 }
 
 #[test]
-fn pull_caps_at_one_hundred_and_is_scoped_to_main_inbox() {
+fn pull_caps_at_one_hundred_and_is_scoped_to_registered_run_inbox() {
     let mut state = state();
     for seq in 0..105 {
-        append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: &format!("message-{seq}"), kind: MessageKind::Instruction, text: "read", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
+        append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: &format!("message-{seq}"), kind: MessageKind::Instruction, text: "read", in_reply_to: None, report: None, stale: false, escalated_from: None })
         .unwrap();
     }
     let result = mutation(
@@ -990,26 +787,9 @@ fn pull_caps_at_one_hundred_and_is_scoped_to_main_inbox() {
     assert_eq!(messages.len(), 100);
     assert_eq!(read_through_seq, 100);
     assert_eq!(state.messages[100].stage, DeliveryStage::Stored);
-    assert_error(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &OrchestrationAction::InboxPull {
-            after_seq: 0,
-            limit: 1,
-        },
-        "actor_forbidden",
-    );
-    assert_error(
-        &mut state,
-        &main_actor("worker"),
-        1,
-        &OrchestrationAction::InboxWoken {
-            through_seq: 1,
-            omp_session_id: "".into(),
-        },
-        "invalid_session",
-    );
+    let root_inbox = mutation(&mut state, &main_actor("root"), 0,
+        &OrchestrationAction::InboxPull { after_seq: 0, limit: 100 });
+    assert!(matches!(root_inbox, OrchestrationActionResult::Inbox { ref messages, read_through_seq: 0 } if messages.is_empty()));
 }
 
 #[test]
@@ -1024,11 +804,6 @@ fn message_and_annotation_authority_is_directional_and_append_only() {
         ("root", MessageKind::Instruction, Some("actor_forbidden")),
         ("worker", MessageKind::Instruction, Some("actor_forbidden")),
         ("root", MessageKind::Answer, Some("actor_forbidden")),
-        (
-            "grandchild",
-            MessageKind::SubagentControl,
-            Some("actor_forbidden"),
-        ),
     ] {
         let action = OrchestrationAction::MessageSend {
             message_id: format!("{target}-{kind:?}"),
@@ -1100,468 +875,6 @@ fn message_and_annotation_authority_is_directional_and_append_only() {
     );
 }
 
-#[test]
-fn telemetry_upserts_validates_nesting_and_scopes_subagent_identity() {
-    let mut state = state();
-    let main = main_actor("worker");
-    mutation(&mut state, &main, 1, &update("parent", None));
-    mutation(&mut state, &main, 1, &update("child", None));
-    mutation(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &update("child", Some("parent")),
-    );
-    mutation(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &update("child", Some("parent")),
-    );
-    assert_eq!(state.subagents.len(), 2);
-    assert_error(
-        &mut state,
-        &main,
-        1,
-        &update("parent", Some("child")),
-        "invalid_subagent_parent",
-    );
-    assert_error(
-        &mut state,
-        &main,
-        1,
-        &update("self", Some("self")),
-        "invalid_subagent_parent",
-    );
-    assert_error(
-        &mut state,
-        &main,
-        1,
-        &update("unknown", Some("absent")),
-        "invalid_subagent_parent",
-    );
-    mutation(
-        &mut state,
-        &main_actor("sibling"),
-        3,
-        &update("foreign", None),
-    );
-    assert_error(
-        &mut state,
-        &main,
-        1,
-        &update("crossrun", Some("foreign")),
-        "invalid_subagent_parent",
-    );
-    assert_error(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &update("parent", None),
-        "actor_forbidden",
-    );
-    assert_eq!(state.subagents[0].parent_subagent_id, None);
-}
-
-#[test]
-fn only_authenticated_self_updates_bind_native_children() {
-    let mut state = state();
-    let main = main_actor("worker");
-    mutation(&mut state, &main, 1, &update("child", None));
-    assert_eq!(state.subagents[0].bound_omp_session, None);
-
-    let child = subagent_actor("worker", "child");
-    mutation(&mut state, &child, 1, &update("child", None));
-    assert_eq!(
-        state.subagents[0].bound_omp_session.as_deref(),
-        Some("sub-session-child")
-    );
-    mutation(&mut state, &main, 1, &update("child", None));
-    assert_eq!(
-        state.subagents[0].bound_omp_session.as_deref(),
-        Some("sub-session-child")
-    );
-
-    let Actor::Agent(mut unproven) = child else { unreachable!() };
-    unproven.process = None;
-    mutation(&mut state, &Actor::Agent(unproven.clone()), 1, &update("child", None));
-    unproven.process = Some(NativeProcessIdentity {
-        start_ticks: 74,
-        ..native_process()
-    });
-    mutation(&mut state, &Actor::Agent(unproven.clone()), 1, &update("child", None));
-    unproven.process = Some(native_process());
-    unproven.actual_agent_kind = Some("shell".into());
-    mutation(&mut state, &Actor::Agent(unproven), 1, &update("child", None));
-    assert_eq!(
-        state.subagents[0].bound_omp_session.as_deref(),
-        Some("sub-session-child")
-    );
-}
-
-#[test]
-fn lifecycle_updates_preserve_assignment_and_authoritative_child_progress() {
-    let mut state = state();
-    let main = main_actor("worker");
-    let mut assignment = update("child", None);
-    let OrchestrationAction::SubagentUpdate { summary, .. } = &mut assignment else {
-        unreachable!()
-    };
-    *summary = Some("Inspect README and report findings".into());
-    mutation(&mut state, &main, 1, &assignment);
-    mutation(&mut state, &main, 1, &update("child", None));
-    assert_eq!(
-        state.subagents[0].summary.as_deref(),
-        Some("Inspect README and report findings")
-    );
-    let main_before = serde_json::to_value(&state.runs[1]).unwrap();
-    mutation(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &report("child-finding", ReportKind::Progress, None),
-    );
-    assert_eq!(
-        state.subagents[0].summary.as_deref(),
-        Some("summary-child-finding")
-    );
-    let mut terminal = update("child", None);
-    let OrchestrationAction::SubagentUpdate { status, .. } = &mut terminal else {
-        unreachable!()
-    };
-    *status = SubagentStatus::Done;
-    mutation(&mut state, &main, 1, &terminal);
-    assert_eq!(state.subagents[0].status, SubagentStatus::Done);
-    assert_eq!(
-        state.subagents[0].summary.as_deref(),
-        Some("summary-child-finding")
-    );
-    mutation(&mut state, &main, 1, &assignment);
-    assert_eq!(
-        state.subagents[0].summary.as_deref(),
-        Some("summary-child-finding")
-    );
-    assert_eq!(serde_json::to_value(&state.runs[1]).unwrap(), main_before);
-}
-
-#[test]
-fn controls_encode_real_operation_and_done_acks_only_target_sequence() {
-    let mut state = state();
-    let main = main_actor("worker");
-    mutation(&mut state, &main, 1, &update("child", None));
-    append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "brief", kind: MessageKind::Instruction, text: "read first", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
-    .unwrap();
-    let control = OrchestrationAction::SubagentControl {
-        run_id: "worker".into(),
-        subagent_id: "child".into(),
-        op: SubagentOp::Send {
-            text: "actual payload".into(),
-        },
-    };
-    let receipt = apply(
-        &mut state,
-        &Actor::Operator(OperatorOrigin::Browser),
-        None,
-        false,
-        &control,
-    )
-    .unwrap()
-    .unwrap();
-    assert!(matches!(
-        receipt,
-        OrchestrationActionResult::Message { seq: 2, .. }
-    ));
-    let envelope: serde_json::Value = serde_json::from_str(&state.messages[1].text).unwrap();
-    assert_eq!(
-        envelope,
-        serde_json::json!({ "subagent_id": "child", "op": { "op": "send", "text": "actual payload" } })
-    );
-    assert_eq!(
-        state.subagents[0].last_control.as_ref().unwrap().stage,
-        ControlStage::Stored
-    );
-    let done = OrchestrationAction::SubagentControlDone {
-        seq: 2,
-        applied: true,
-        error: None,
-    };
-    assert_error(
-        &mut state,
-        &subagent_actor("worker", "wrong-child"),
-        1,
-        &done,
-        "actor_forbidden",
-    );
-    assert_error(
-        &mut state,
-        &main_actor("root"),
-        0,
-        &done,
-        "subagent_control_not_found",
-    );
-    mutation(&mut state, &subagent_actor("worker", "child"), 1, &done);
-    assert_eq!(state.messages[0].stage, DeliveryStage::Stored);
-    assert_eq!(state.messages[1].stage, DeliveryStage::Acked);
-    assert_eq!(state.subagents[0].status, SubagentStatus::Running);
-    assert_eq!(
-        state.subagents[0].last_control.as_ref().unwrap().stage,
-        ControlStage::Applied
-    );
-    mutation(&mut state, &main, 1, &done);
-    assert_error(
-        &mut state,
-        &main,
-        1,
-        &OrchestrationAction::SubagentControlDone {
-            seq: 2,
-            applied: false,
-            error: Some("late failure".into()),
-        },
-        "subagent_control_conflict",
-    );
-}
-
-#[test]
-fn ordinary_inbox_consumers_cannot_complete_or_starve_pending_controls() {
-    let mut state = state();
-    let main = main_actor("worker");
-    mutation(&mut state, &main, 1, &update("child", None));
-    mutation(&mut state, &subagent_actor("worker", "child"), 1, &update("child", None));
-    let operator = Actor::Operator(OperatorOrigin::Browser);
-    for _ in 0..100 {
-        apply(
-            &mut state,
-            &operator,
-            None,
-            false,
-            &OrchestrationAction::SubagentControl {
-                run_id: "worker".into(),
-                subagent_id: "child".into(),
-                op: SubagentOp::Cancel,
-            },
-        )
-        .unwrap();
-    }
-    append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "ordinary", kind: MessageKind::Instruction, text: "Handle this ordinary message", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })
-    .unwrap();
-    mutation(
-        &mut state,
-        &main,
-        1,
-        &OrchestrationAction::InboxWoken {
-            through_seq: 101,
-            omp_session_id: "omp-worker".into(),
-        },
-    );
-    assert!(
-        state.messages[..100]
-            .iter()
-            .all(|message| message.stage == DeliveryStage::Stored)
-    );
-    let result = mutation(
-        &mut state,
-        &main,
-        1,
-        &OrchestrationAction::InboxPull {
-            after_seq: 0,
-            limit: 1,
-        },
-    );
-    let OrchestrationActionResult::Inbox {
-        messages,
-        read_through_seq,
-    } = result
-    else {
-        panic!("expected inbox");
-    };
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].message_id, "ordinary");
-    assert_eq!(read_through_seq, 101);
-    mutation(
-        &mut state,
-        &main,
-        1,
-        &OrchestrationAction::InboxAck { through_seq: 101 },
-    );
-    assert_eq!(state.messages[100].stage, DeliveryStage::Acked);
-    assert!(
-        state.messages[..100]
-            .iter()
-            .all(|message| message.stage == DeliveryStage::Stored)
-    );
-    assert_eq!(
-        state.subagents[0].last_control.as_ref().unwrap().stage,
-        ControlStage::Stored
-    );
-    mutation(
-        &mut state,
-        &subagent_actor("worker", "child"),
-        1,
-        &OrchestrationAction::SubagentControlDone {
-            seq: 100,
-            applied: true,
-            error: None,
-        },
-    );
-    assert_eq!(state.messages[99].stage, DeliveryStage::Acked);
-    assert!(
-        state.messages[..99]
-            .iter()
-            .all(|message| message.stage == DeliveryStage::Stored)
-    );
-    assert_eq!(
-        state.subagents[0].last_control.as_ref().unwrap().stage,
-        ControlStage::Applied
-    );
-}
-
-#[test]
-fn control_requires_operator_or_strict_ancestor_and_retains_newer_receipt() {
-    let mut state = state();
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    let action = OrchestrationAction::SubagentControl {
-        run_id: "worker".into(),
-        subagent_id: "child".into(),
-        op: SubagentOp::Cancel,
-    };
-    assert_error(
-        &mut state,
-        &main_actor("worker"),
-        1,
-        &action,
-        "actor_forbidden",
-    );
-    assert_error(
-        &mut state,
-        &main_actor("sibling"),
-        3,
-        &action,
-        "actor_forbidden",
-    );
-    mutation(&mut state, &main_actor("root"), 0, &action);
-    mutation(&mut state, &main_actor("root"), 0, &action);
-    mutation(
-        &mut state,
-        &main_actor("worker"),
-        1,
-        &OrchestrationAction::SubagentControlDone {
-            seq: 1,
-            applied: true,
-            error: None,
-        },
-    );
-    assert_eq!(state.subagents[0].last_control.as_ref().unwrap().seq, 2);
-    assert_eq!(
-        state.subagents[0].last_control.as_ref().unwrap().stage,
-        ControlStage::Stored
-    );
-    mutation(
-        &mut state,
-        &main_actor("worker"),
-        1,
-        &OrchestrationAction::SubagentControlDone {
-            seq: 2,
-            applied: false,
-            error: Some("abort unavailable".into()),
-        },
-    );
-    assert_eq!(
-        state.subagents[0].last_control.as_ref().unwrap().stage,
-        ControlStage::Failed
-    );
-    assert_eq!(state.subagents[0].status, SubagentStatus::Cancelled);
-}
-
-#[test]
-fn child_updates_work_offline_but_cannot_manage_runs_or_other_children() {
-    let mut state = state();
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    let Actor::Agent(mut child) = subagent_actor("worker", "child") else {
-        unreachable!()
-    };
-    child.main_omp_session_id = None;
-    child.omp_session_id = None;
-    child.process = None;
-    child.provenance = None;
-    child.subagent_id = Some("forged-other-child".into());
-    let child = Actor::Agent(child);
-    mutation(&mut state, &child, 1, &update("child", None));
-    mutation(&mut state, &child, 1, &report("offline-progress", ReportKind::Progress, None));
-    assert_eq!(state.messages[0].from_subagent_id.as_deref(), Some("child"));
-    assert_eq!(state.subagents[0].bound_omp_session, None);
-    let before = serde_json::to_value(&state).unwrap();
-    for action in [
-        update("forged-other-child", None),
-        OrchestrationAction::Annotate { run_id: "worker".into(), text: "forbidden".into() },
-        OrchestrationAction::MessageSend {
-            message_id: "child-instruction".into(), to_run_id: "grandchild".into(),
-            kind: MessageKind::Instruction, text: "forbidden".into(), in_reply_to: None,
-            original_task_revision: None, original_claim_id: None,
-        },
-        OrchestrationAction::SubagentControl {
-            run_id: "grandchild".into(), subagent_id: "child".into(), op: SubagentOp::Cancel,
-        },
-    ] {
-        assert_error(&mut state, &child, 1, &action, "actor_forbidden");
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
-    }
-}
-
-#[test]
-fn main_telemetry_uses_job_authority_not_conversation_context() {
-    let mut state = state();
-    for actual_session in [None, Some("different-main-session")] {
-        let Actor::Agent(mut caller) = main_actor("worker") else {
-            unreachable!()
-        };
-        caller.omp_session_id = actual_session.map(str::to_owned);
-        mutation(&mut state, &Actor::Agent(caller), 1, &update("child", None));
-    }
-    let actor = main_actor("worker");
-    mutation(&mut state, &actor, 1, &update("direct", None));
-    mutation(&mut state, &actor, 1, &update("nested", Some("direct")));
-    assert_eq!(
-        state.subagents.iter().find(|child| child.subagent_id == "nested").unwrap().parent_subagent_id.as_deref(),
-        Some("direct")
-    );
-}
-
-#[test]
-fn terminal_cancel_receipt_requires_the_registered_child_session_before_ack() {
-    let mut state = state();
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    mutation(&mut state, &subagent_actor("worker", "child"), 1, &update("child", None));
-    mutation(
-        &mut state,
-        &main_actor("root"),
-        0,
-        &OrchestrationAction::SubagentControl {
-            run_id: "worker".into(),
-            subagent_id: "child".into(),
-            op: SubagentOp::Cancel,
-        },
-    );
-    let Actor::Agent(mut caller) = subagent_actor("worker", "child") else {
-        unreachable!()
-    };
-    caller.omp_session_id = None;
-    assert_error(
-        &mut state,
-        &Actor::Agent(caller),
-        1,
-        &OrchestrationAction::SubagentControlDone {
-            seq: 1,
-            applied: true,
-            error: None,
-        },
-        "session_mismatch",
-    );
-    assert_eq!(state.messages[0].stage, DeliveryStage::Stored);
-    assert_eq!(
-        state.subagents[0].last_control.as_ref().unwrap().stage,
-        ControlStage::Stored
-    );
-}
 
 fn disconnected_actor(actor: Actor) -> Actor {
     let Actor::Agent(mut caller) = actor else { unreachable!() };
@@ -1570,14 +883,8 @@ fn disconnected_actor(actor: Actor) -> Actor {
     caller.workspace_id.clear();
     caller.tab_id.clear();
     caller.pane_id.clear();
-    caller.env_run = None;
-    caller.omp_session_id = None;
-    caller.main_omp_session_id = None;
-    caller.agent_kind = None;
     caller.actual_agent_kind = None;
-    caller.subagent_id = None;
     caller.process = None;
-    caller.provenance = None;
     Actor::Agent(caller)
 }
 
@@ -1587,19 +894,12 @@ fn ordinary_messages_inbox_and_result_survive_disconnected_attachment() {
     for run in &mut state.runs {
         let attachment = run.attachment.as_mut().unwrap();
         attachment.state = AttachmentState::Disconnected;
-        attachment.main_session_id = None;
         attachment.process = None;
         attachment.location = None;
     }
     let root = disconnected_actor(main_actor("root"));
     let worker = disconnected_actor(main_actor("worker"));
     mutation(&mut state, &root, 0, &send("offline-instruction", MessageKind::Instruction, None));
-    mutation(
-        &mut state, &worker, 1,
-        &OrchestrationAction::InboxWoken {
-            through_seq: 1, omp_session_id: "new-conversation".into(),
-        },
-    );
     let inbox = mutation(
         &mut state, &worker, 1,
         &OrchestrationAction::InboxPull { after_seq: 0, limit: 10 },
@@ -1607,8 +907,6 @@ fn ordinary_messages_inbox_and_result_survive_disconnected_attachment() {
     assert!(matches!(inbox, OrchestrationActionResult::Inbox { ref messages, read_through_seq: 1 } if messages.len() == 1));
     mutation(&mut state, &worker, 1, &OrchestrationAction::InboxAck { through_seq: 1 });
     assert_eq!(state.messages[0].stage, DeliveryStage::Acked);
-    assert_eq!(state.messages[0].woken_omp_session.as_deref(), Some("new-conversation"));
-    mutation(&mut state, &worker, 1, &update("child", None));
     state.runs[1].stage = RunStage::Working;
     mutation(&mut state, &worker, 1, &report("offline-result", ReportKind::Result, None));
     assert_eq!(state.runs[1].stage, RunStage::Reported);
@@ -1632,10 +930,7 @@ fn invalid_credentials_and_role_forgery_leave_messages_unchanged() {
         assert_error(&mut state, &Actor::Agent(caller), 1, &action, "job_unauthorized");
         assert_eq!(serde_json::to_value(&state).unwrap(), before);
     }
-    let mut forged_root = worker;
-    forged_root.env_run = Some(("root".into(), 1));
-    forged_root.omp_session_id = Some("omp-root".into());
-    forged_root.main_omp_session_id = Some("omp-root".into());
+    let forged_root = worker;
     let before = serde_json::to_value(&state).unwrap();
     assert_error(
         &mut state, &Actor::Agent(forged_root), 1,
@@ -1654,191 +949,74 @@ fn invalid_credentials_and_role_forgery_leave_messages_unchanged() {
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
 }
 
-#[test]
-fn native_control_still_requires_current_physical_main_and_child_evidence() {
-    let mut state = state();
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    let control = OrchestrationAction::SubagentControl {
-        run_id: "worker".into(), subagent_id: "child".into(), op: SubagentOp::Send { text: "native effect".into() },
-    };
-    let before = serde_json::to_value(&state).unwrap();
-    assert_error(
-        &mut state, &disconnected_actor(main_actor("root")), 0, &control, "session_mismatch",
-    );
-    assert_eq!(serde_json::to_value(&state).unwrap(), before);
-    mutation(&mut state, &main_actor("root"), 0, &control);
-    let done = OrchestrationAction::SubagentControlDone { seq: 1, applied: true, error: None };
-    for actor in [
-        disconnected_actor(main_actor("worker")),
-        disconnected_actor(subagent_actor("worker", "child")),
-    ] {
-        let before = serde_json::to_value(&state).unwrap();
-        assert_error(&mut state, &actor, 1, &done, "session_mismatch");
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
-    }
-    mutation(&mut state, &subagent_actor("worker", "child"), 1, &done);
-    assert_eq!(state.messages[0].stage, DeliveryStage::Acked);
-}
 
 #[test]
-fn main_credentials_cannot_authorize_explicit_child_contexts() {
+fn conversation_and_assignment_generation_fence_messages_and_ack() {
     let mut state = state();
-    for run_id in ["root", "worker"] {
-        let index = if run_id == "root" { 0 } else { 1 };
-        for source in ["kind", "subject", "provenance-kind", "provenance-subject"] {
-            let Actor::Agent(mut caller) = main_actor(run_id) else { unreachable!() };
-            match source {
-                "kind" => caller.agent_kind = Some(AgentKind::Subagent),
-                "subject" => caller.subagent_id = Some("child".into()),
-                _ => caller.provenance = Some(super::super::CallerProvenance {
-                    agent_kind: (source == "provenance-kind").then_some(AgentKind::Subagent),
-                    child_id: (source == "provenance-subject").then(|| "child".into()),
-                    main_session_id: None, native_session_id: None, process: None,
-                }),
-            }
-            let before = serde_json::to_value(&state).unwrap();
-            assert_error(
-                &mut state, &Actor::Agent(caller), index,
-                &report("inherited-main-token", ReportKind::Progress, None), "actor_forbidden",
-            );
-            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    let Actor::Agent(worker) = main_actor("worker") else { unreachable!() };
+    apply(&mut state, &Actor::Operator(OperatorOrigin::Browser), None, false,
+        &send("instruction", MessageKind::Instruction, None)).unwrap();
+    mutation(&mut state, &Actor::Agent(worker.clone()), 1,
+        &OrchestrationAction::InboxPull { after_seq: 0, limit: 10 });
+    for mismatch in ["harness", "conversation", "generation", "owner"] {
+        let mut candidate = state.clone();
+        let mut caller = worker.clone();
+        match mismatch {
+            "harness" => caller.conversation.harness = "other-harness".into(),
+            "conversation" => caller.conversation.session_id = "another-chat".into(),
+            "generation" => caller.assignment_generation = Some(2),
+            _ => candidate.task_ownership.iter_mut()
+                .find(|record| record.task_id == "task-worker").unwrap().owner = None,
+        }
+        for action in [
+            report("unauthorized-progress", ReportKind::Progress, None),
+            OrchestrationAction::InboxAck { through_seq: 1 },
+        ] {
+            let before = serde_json::to_value(&candidate).unwrap();
+            assert_error(&mut candidate, &Actor::Agent(caller.clone()), 1, &action, "job_unauthorized");
+            assert_eq!(serde_json::to_value(&candidate).unwrap(), before);
         }
     }
-    let bootstrap = Actor::Bootstrap(super::super::BootstrapCaller {
-        endpoint_identity: "endpoint".into(), session_id: "herdr-session".into(),
-        workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(),
-        boot_id: None, terminal_id: None, native_session_id: None,
-        omp_session_id: Some("omp-worker".into()), agent_kind: Some(AgentKind::Main),
-        actual_agent_kind: Some("omp".into()), process: Some(native_process()),
-    });
-    let before = serde_json::to_value(&state).unwrap();
-    assert_error(
-        &mut state, &bootstrap, 1, &report("bootstrap-report", ReportKind::Progress, None),
-        "actor_forbidden",
-    );
-    assert_eq!(serde_json::to_value(&state).unwrap(), before);
 }
 
-fn terminal_cancel_fixture() -> (OrchestrationState, Actor) {
+#[test]
+fn stored_inbox_survives_reload_and_ack_captures_without_completing_work() {
     let mut state = state();
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    mutation(&mut state, &subagent_actor("worker", "child"), 1, &update("child", None));
-    mutation(
-        &mut state, &main_actor("root"), 0,
-        &OrchestrationAction::SubagentControl {
-            run_id: "worker".into(), subagent_id: "child".into(), op: SubagentOp::Cancel,
-        },
-    );
-    let Actor::Agent(mut child) = subagent_actor("worker", "child") else { unreachable!() };
-    child.process = None;
-    child.actual_agent_kind = None;
-    child.main_omp_session_id = Some("cached-old-main-conversation".into());
-    child.provenance = None;
-    (state, Actor::Agent(child))
+    let operator = Actor::Operator(OperatorOrigin::Browser);
+    apply(&mut state, &operator, None, false, &send("durable-instruction", MessageKind::Instruction, None)).unwrap();
+    let mut recovered: OrchestrationState =
+        serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    assert_eq!(recovered.messages[0].stage, DeliveryStage::Stored);
+    let actor = main_actor("worker");
+    let inbox = mutation(&mut recovered, &actor, 1,
+        &OrchestrationAction::InboxPull { after_seq: 0, limit: 10 });
+    assert!(matches!(inbox, OrchestrationActionResult::Inbox { ref messages, read_through_seq: 1 }
+        if messages.len() == 1 && messages[0].message_id == "durable-instruction"));
+    mutation(&mut recovered, &actor, 1, &OrchestrationAction::InboxAck { through_seq: 1 });
+    assert_eq!(recovered.messages[0].stage, DeliveryStage::Acked);
+    assert_eq!(recovered.runs[1].stage, RunStage::Working);
+    assert!(recovered.runs[1].result.is_none());
+    assert_eq!(recovered.task_ownership[0].generation, 1);
+    let before = serde_json::to_value(&recovered).unwrap();
+    let reread = mutation(&mut recovered, &actor, 1,
+        &OrchestrationAction::InboxPull { after_seq: 0, limit: 10 });
+    assert!(matches!(reread, OrchestrationActionResult::Inbox { ref messages, .. }
+        if messages.len() == 1 && messages[0].text == "Proceed with the approved choice"));
+    assert_eq!(serde_json::to_value(&recovered).unwrap(), before);
 }
 
 #[test]
-fn disposed_child_can_only_finish_its_registered_durable_cancel() {
-    let (mut state, child) = terminal_cancel_fixture();
-    let done = OrchestrationAction::SubagentControlDone { seq: 1, applied: true, error: None };
-    mutation(&mut state, &child, 1, &done);
-    assert_eq!(state.messages[0].stage, DeliveryStage::Acked);
-    assert_eq!(state.subagents[0].status, SubagentStatus::Cancelled);
-    assert_eq!(state.subagents[0].last_control.as_ref().unwrap().stage, ControlStage::Applied);
-    mutation(&mut state, &child, 1, &done);
-    let before = serde_json::to_value(&state).unwrap();
-    assert_error(&mut state, &child, 1, &update("child", None), "invalid_stage");
-    assert_eq!(serde_json::to_value(&state).unwrap(), before);
-    for kind in [ReportKind::Progress, ReportKind::NeedsInput] {
-        assert_error(&mut state, &child, 1, &report("cancelled-report", kind, None), "invalid_stage");
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
-    }
-    assert_error(
-        &mut state, &child, 1,
-        &OrchestrationAction::MessageSend {
-            message_id: "cancelled-observation".into(), to_run_id: "root".into(),
-            kind: MessageKind::Observation, text: "forbidden".into(), in_reply_to: None,
-            original_task_revision: None, original_claim_id: None,
-        },
-        "invalid_stage",
-    );
-    assert_eq!(serde_json::to_value(&state).unwrap(), before);
-    let mut cancelled = update("child", None);
-    let OrchestrationAction::SubagentUpdate { status, .. } = &mut cancelled else { unreachable!() };
-    *status = SubagentStatus::Cancelled;
-    mutation(&mut state, &child, 1, &cancelled);
-    assert_eq!(serde_json::to_value(&state).unwrap(), before);
-
-    let (mut failed_state, child) = terminal_cancel_fixture();
-    mutation(
-        &mut failed_state, &child, 1,
-        &OrchestrationAction::SubagentControlDone {
-            seq: 1, applied: false, error: Some("native cancellation failed".into()),
-        },
-    );
-    assert_eq!(failed_state.subagents[0].status, SubagentStatus::Running);
-    assert_eq!(failed_state.subagents[0].last_control.as_ref().unwrap().stage, ControlStage::Failed);
-    assert_eq!(failed_state.subagents[0].last_control.as_ref().unwrap().error.as_deref(), Some("native cancellation failed"));
-    assert_error(&mut failed_state, &child, 1, &cancelled, "subagent_control_conflict");
-}
-
-#[test]
-fn terminal_cancel_rejects_wrong_subject_epoch_session_sequence_or_intent() {
-    let (state, child) = terminal_cancel_fixture();
-    let Actor::Agent(child) = child else { unreachable!() };
-    for case in [
-        "subject", "epoch", "missing-session", "session", "sequence",
-        "intent-sequence", "intent-op", "payload", "unregistered",
-    ] {
-        let mut state = state.clone();
-        let mut caller = child.clone();
-        let mut seq = 1;
-        let expected = match case {
-            "subject" => {
-                caller.auth = fixture_auth("worker", Some("wrong-child"));
-                "actor_forbidden"
-            }
-            "epoch" => { caller.auth.attachment_epoch = 2; "job_unauthorized" }
-            "missing-session" => { caller.omp_session_id = None; "session_mismatch" }
-            "session" => { caller.omp_session_id = Some("wrong-session".into()); "session_mismatch" }
-            "sequence" => { seq = 2; "subagent_control_not_found" }
-            "intent-sequence" => {
-                state.subagents[0].last_control.as_mut().unwrap().seq = 2;
-                "subagent_control_conflict"
-            }
-            "intent-op" => {
-                state.subagents[0].last_control.as_mut().unwrap().op = SubagentOp::Send { text: "not cancel".into() };
-                "subagent_control_conflict"
-            }
-            "payload" => {
-                state.messages[0].text = serde_json::json!({
-                    "subagent_id": "child", "op": { "op": "send", "text": "not cancel" },
-                }).to_string();
-                "session_mismatch"
-            }
-            _ => { state.subagents.clear(); "subagent_not_found" }
-        };
-        let before = serde_json::to_value(&state).unwrap();
-        assert_error(
-            &mut state, &Actor::Agent(caller), 1,
-            &OrchestrationAction::SubagentControlDone { seq, applied: true, error: None },
-            expected,
-        );
-        assert_eq!(serde_json::to_value(&state).unwrap(), before, "{case}");
-    }
-}
-
-#[test]
-fn child_telemetry_cannot_create_registration_or_claim_unrequested_cancellation() {
+fn historical_message_replay_cannot_restore_revoked_task_ownership() {
     let mut state = state();
-    let child = subagent_actor("worker", "child");
-    assert_error(&mut state, &child, 1, &update("child", None), "subagent_not_found");
-    mutation(&mut state, &main_actor("worker"), 1, &update("child", None));
-    mutation(&mut state, &child, 1, &update("child", None));
-    let mut cancelled = update("child", None);
-    let OrchestrationAction::SubagentUpdate { status, .. } = &mut cancelled else { unreachable!() };
-    *status = SubagentStatus::Cancelled;
+    let actor = main_actor("worker");
+    let progress = report("committed-progress", ReportKind::Progress, None);
+    mutation(&mut state, &actor, 1, &progress);
+    let ownership = state.task_ownership.iter_mut()
+        .find(|record| record.task_id == "task-worker").unwrap();
+    ownership.generation += 1;
+    ownership.owner = None;
     let before = serde_json::to_value(&state).unwrap();
-    assert_error(&mut state, &child, 1, &cancelled, "subagent_control_conflict");
+    assert_error(&mut state, &actor, 1, &progress, "job_unauthorized");
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    assert_eq!(state.messages.len(), 1);
 }

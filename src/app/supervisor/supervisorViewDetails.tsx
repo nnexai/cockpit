@@ -8,7 +8,7 @@ import { stepDraft } from "./useSupervisorDrafts";
 import type { SupervisorViewRenderContext } from "./supervisorViewTypes";
 
 export function SupervisorViewDetails({ view }: { view: SupervisorViewRenderContext }) {
-  const { snapshot, active, panelKind, bounds, placement, scope, changed, rows, expandedId, focusTier, setFocusTier, closeAttention, navigateRelation, tasks, closeDetail, closePanel, detailTask, detailSubagent, detailRun, detailSection, setDetailSection, busy, live, mutateResult, captureMutationScope, setNotice, navigate, edit, setDialog, stateSentence, tier, owned, path, resumeSourceDraft, editPrerequisites, createFollowUp, detailTaskScope, taskWriteUnconfirmed, stepReadOnlyReason, submitStep, readSaved, resolveUnknown, mode, switchView, rootRuns, select, connected, setFocusNotice } = view;
+  const { snapshot, active, panelKind, bounds, placement, scope, changed, rows, expandedId, focusTier, setFocusTier, closeAttention, navigateRelation, tasks, closeDetail, closePanel, detailTask, detailRun, detailSection, setDetailSection, busy, live, mutateResult, captureMutationScope, setNotice, navigate, edit, setDialog, stateSentence, tier, owned, path, resumeSourceDraft, editPrerequisites, createFollowUp, detailTaskScope, taskWriteUnconfirmed, stepReadOnlyReason, submitStep, readSaved, resolveUnknown, mode, switchView, rootRuns, select, connected, setFocusNotice } = view;
     return snapshot && active && panelKind ? <>{bounds ? <PanelSplitter label="Resize details" controls="supervisor-detail" orientation={bounds.orientation} value={bounds.value} min={bounds.min} max={bounds.max} grow={-1} onChange={value => { if (placement === "sheet") scope.view.sheetHeight = value; else scope.view.detailWidth = value; changed(); }} onReset={() => { if (placement === "sheet") scope.view.sheetHeight = null; else scope.view.detailWidth = null; changed(); }} className={placement === "sheet" ? "supervisor-sheet-splitter" : undefined} /> : null}<aside className={`supervisor-detail-panel${placement === "sheet" ? " supervisor-sheet" : ""}`} id="supervisor-detail" aria-label={panelKind === "details" ? "Selected details" : panelKind === "attention" ? "Attention" : panelKind === "diagnostics" ? "Diagnostics" : "Activity"}>
       {panelKind === "attention" ? <AttentionQueue
         rows={rows} expandedId={expandedId}
@@ -21,7 +21,7 @@ export function SupervisorViewDetails({ view }: { view: SupervisorViewRenderCont
           <button type="button"
             aria-label={panelKind === "details" ? "Close details" : `Close ${panelKind === "activity" ? "activity" : "diagnostics"} panel`}
             onClick={panelKind === "details" ? closeDetail : closePanel}><UiIcon name="back" /></button>
-          <strong>{panelKind === "details" ? detailTask?.task.title ?? detailSubagent?.label ?? detailRun?.label ?? "Task unavailable · drafts kept" : panelKind === "activity" ? "Activity" : "Diagnostics"}</strong>
+          <strong>{panelKind === "details" ? detailTask?.task.title ?? detailRun?.label ?? "Task unavailable · drafts kept" : panelKind === "activity" ? "Activity" : "Diagnostics"}</strong>
         </header>
         {panelKind === "details" ? <>
           <nav className="supervisor-segments" aria-label="Detail sections">
@@ -32,10 +32,9 @@ export function SupervisorViewDetails({ view }: { view: SupervisorViewRenderCont
           <div className="supervisor-detail-scroll">
             <SupervisorActions
               section={detailSection} snapshot={snapshot} run={detailRun} task={detailTask}
-              subagent={detailSubagent} scope={scope} changed={changed} busy={busy} live={!!live}
+              scope={scope} changed={changed} busy={busy} live={!!live} semanticLive={connected}
               mutateResult={mutateResult} captureRequestScope={captureMutationScope} onNotice={setNotice} onTerminal={run => void navigate(run)} onEditTask={edit}
               onCloseTracking={run => setDialog({ mode: "close", run })}
-              onCancelSubagent={(run, subagent) => setDialog({ mode: "subagent_cancel", run, subagent })}
               stateBlock={{ sentence: stateSentence, tierLabel: tier ? TIER_LABEL[tier] : null, waitingSince: owned?.since ?? null }}
               path={path}
               onResumeSourceDraft={resumeSourceDraft}
@@ -52,7 +51,7 @@ export function SupervisorViewDetails({ view }: { view: SupervisorViewRenderCont
           {panelKind === "activity" ? <SupervisorActivity rows={activityRows(snapshot, rootRuns, tasks)}
             onLink={link => {
               if (link.kind === "task") select({ task: link.taskId }, null, false, true);
-              else select({ run: link.runId, subagent: null }, null, false, true);
+              else select({ run: link.runId }, null, false, true);
             }} /> : <SupervisorDiagnostics snapshot={snapshot} rootRuns={rootRuns} busy={busy} connected={connected}
             onIdentify={() => {
               if (snapshot.board) void mutateResult({ action: "tasks_assign_ids", root_id: snapshot.board.root_id, expected_doc_revision: snapshot.board.doc_revision });

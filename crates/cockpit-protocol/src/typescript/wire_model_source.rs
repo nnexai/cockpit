@@ -46,6 +46,95 @@ pub(super) fn inputs(file: &syn::File) -> Result<BTreeMap<String, DeriveInput>, 
     Ok(inputs)
 }
 
+// This is the sole recognized manual Default: literal launch configuration.
+// Resolve its expressions from the source rather than duplicating launch defaults.
+pub(super) fn orchestration_defaults(
+    file: &syn::File,
+) -> Result<(serde_json::Value, serde_json::Value), String> {
+    use serde_json::{Map, Value};
+
+    let fail = || "OrchestrationConfiguration: unsupported literal Default or default_harness".to_owned();
+    let mut functions = file.items.iter().filter_map(|item| match item {
+        Item::Fn(item) if item.sig.ident == "default_harness" => Some(item),
+        _ => None,
+    });
+    let function = functions.next().ok_or_else(fail)?;
+    if functions.next().is_some() || !function.sig.inputs.is_empty() {
+        return Err(fail());
+    }
+    let [syn::Stmt::Expr(Expr::MethodCall(convert), None)] = function.block.stmts.as_slice() else {
+        return Err(fail());
+    };
+    let Expr::Lit(literal) = convert.receiver.as_ref() else {
+        return Err(fail());
+    };
+    let syn::Lit::Str(harness) = &literal.lit else {
+        return Err(fail());
+    };
+    if convert.method != "into" || !convert.args.is_empty() || convert.turbofish.is_some() {
+        return Err(fail());
+    }
+    let harness = Value::String(harness.value());
+    let mut implementations = file.items.iter().filter_map(|item| match item {
+        Item::Impl(item)
+            if matches!(item.self_ty.as_ref(), syn::Type::Path(path)
+                if path.path.is_ident("OrchestrationConfiguration"))
+                && item.trait_.as_ref().is_some_and(|(_, path, _)| path.is_ident("Default")) =>
+        {
+            Some(item)
+        }
+        _ => None,
+    });
+    let implementation = implementations.next().ok_or_else(fail)?;
+    if implementations.next().is_some() {
+        return Err(fail());
+    }
+    let [syn::ImplItem::Fn(function)] = implementation.items.as_slice() else {
+        return Err(fail());
+    };
+    if function.sig.ident != "default" || !function.sig.inputs.is_empty() {
+        return Err(fail());
+    }
+    let [syn::Stmt::Expr(Expr::Struct(default), None)] = function.block.stmts.as_slice() else {
+        return Err(fail());
+    };
+    if !default.path.is_ident("Self") || default.rest.is_some() {
+        return Err(fail());
+    }
+    let mut values = Map::new();
+    for field in &default.fields {
+        let syn::Member::Named(name) = &field.member else {
+            return Err(fail());
+        };
+        let value = match &field.expr {
+            Expr::Call(call)
+                if call.args.is_empty() && expr_path(&call.func, &["default_harness"]) =>
+            {
+                harness.clone()
+            }
+            Expr::Call(call)
+                if call.args.is_empty() && expr_path(&call.func, &["Vec", "new"]) =>
+            {
+                Value::Array(Vec::new())
+            }
+            Expr::Path(path) if path.path.is_ident("None") => Value::Null,
+            Expr::Lit(literal) => match &literal.lit {
+                syn::Lit::Bool(value) => Value::Bool(value.value),
+                _ => return Err(fail()),
+            },
+            _ => return Err(fail()),
+        };
+        if values.insert(name.to_string(), value).is_some() {
+            return Err(fail());
+        }
+    }
+    let expected = ["command", "extra_args", "harness_kind", "inbox_prompt_hints", "resume_args", "routes"];
+    if values.len() != expected.len() || expected.iter().any(|name| !values.contains_key(*name)) {
+        return Err(fail());
+    }
+    Ok((Value::Object(values), harness))
+}
+
 // Registered expansion only; never evaluate arbitrary macros or maintain their variants here.
 pub(super) fn retirement(file: &syn::File) -> Result<DeriveInput, String> {
     let fail = || "retirement_states: unsupported macro shape".to_owned();

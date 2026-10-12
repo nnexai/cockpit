@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { agentState } from "./SupervisorActions";
 import { taskContentReason } from "./dependencies";
-import { taskRun } from "./retirementView";
+import { taskRun, taskOwnerRun } from "./retirementView";
 import { buildSupervisorGraph, selectionNodeId } from "./topology";
 import { GRAPH_GEOMETRY } from "./graphLayout";
 import { panelBounds, panelPlacement, type PanelKind, type SupervisorLayout } from "./useSupervisorLayout";
@@ -27,26 +27,25 @@ export function useSupervisorViewModel(context: Pick<SupervisorViewInputs,
   const selectedTask = tasks.find(task => task.task.task_id === scope.selectedTask) ?? null;
   const detailRun = selectedTask && snapshot ? taskRun(snapshot, selectedTask) ?? null : selectedAgent;
   const detailTask = selectedTask ?? tasks.find(task => task.task.task_id === detailRun?.task_id) ?? null;
-  const detailSubagent = !selectedTask ? snapshot?.subagents.find(agent => agent.run_id === selectedAgent?.run_id && agent.subagent_id === scope.selectedSubagent) ?? null : null;
   const hasRetainedDraft = (taskId: string) => scope.steps.has(taskId) || scope.edits.has(taskId) || scope.relations.has(taskId) || scope.followUps.has(taskId);
   const retainedDraftTaskId = scope.selectedTask && hasRetainedDraft(scope.selectedTask) ? scope.selectedTask : null;
   const detailOpen = !!selectedTask || !!selectedAgent || !!retainedDraftTaskId;
-  const stepTaskId = !detailSubagent ? detailTask?.task.task_id ?? retainedDraftTaskId : null;
+  const stepTaskId = detailTask?.task.task_id ?? retainedDraftTaskId;
   const detailTaskScope = root && stepTaskId ? { sessionId, rootId: root.run_id, taskId: stepTaskId } : null;
-  const contentReason = snapshot ? taskContentReason(snapshot, detailTask, !!live) : "The task document is unavailable.";
+  const contentReason = snapshot ? taskContentReason(snapshot, detailTask, connected) : "The task document is unavailable.";
   const stepReadOnlyReason = contentReason ?? (detailTask?.task.step_progress === null ? "The saved checklist structure is unsafe to edit. Resolve its source diagnostics first." : null);
-  const sharedSpace = hoverSpace ?? observe(selectedAgent?.run_id)?.workspace_id ?? observe(selectedTask?.current_run_id)?.workspace_id;
+  const sharedSpace = hoverSpace ?? observe(selectedAgent?.run_id)?.workspace_id ?? observe(selectedTask && snapshot ? taskOwnerRun(snapshot, selectedTask)?.run_id : null)?.workspace_id;
   const mode = scope.view.mode;
-  const model = useMemo(() => snapshot && root ? buildSupervisorGraph({ snapshot, root, rootId: root.run_id, tasks, includeSubagents: scope.showSubagents }) : null, [snapshot, root, scope.showSubagents]);
+  const model = useMemo(() => snapshot && root ? buildSupervisorGraph({ snapshot, root, rootId: root.run_id, tasks }) : null, [snapshot, root]);
   const selectedNode = selectionNodeId(scope);
-  const observedCount = rootRuns.filter(run => run.stage !== "closed" && live && observe(run.run_id)?.presence === "present" && observe(run.run_id)?.actual_omp).length;
+  const observedCount = rootRuns.filter(run => run.stage !== "closed" && live && observe(run.run_id)?.presence === "present" && observe(run.run_id)?.actual_agent).length;
   const rootSpace = observe(root?.run_id)?.workspace_id ?? (root?.target?.target === "existing_space" ? root.target.workspace_id : null);
   const restoration = snapshot?.restoration;
   const restoring = restoration && (restoration.reattached < restoration.total_attachments || restoration.cleanup_pending > 0)
     ? `Restored from saved tasks · reconnecting agents (${restoration.reattached} of ${restoration.total_attachments})${restoration.cleanup_pending ? ` · finishing cleanup for ${restoration.cleanup_pending} tasks` : ""}` : null;
   const availabilityBanner = !connected || !runtimeLive ? "Connection lost · showing saved tasks · agent may still be running" : snapshot?.runtime.status !== "fresh" ? "Cannot check agents right now · showing saved tasks" : restoring;
   const banner = [availabilityBanner, draftStorageWarning].filter(Boolean).join(" · ") || null;
-  return { root, openRoots, closedRoots, orphanedWorkers, live, destination, rootState, tasks, rootRuns, selectedAgent, observations, observe, selectedTask, detailRun, detailTask, detailSubagent, hasRetainedDraft, retainedDraftTaskId, detailOpen, stepTaskId, detailTaskScope, contentReason, stepReadOnlyReason, sharedSpace, mode, model, selectedNode, observedCount, rootSpace, banner };
+  return { root, openRoots, closedRoots, orphanedWorkers, live, destination, rootState, tasks, rootRuns, selectedAgent, observations, observe, selectedTask, detailRun, detailTask, hasRetainedDraft, retainedDraftTaskId, detailOpen, stepTaskId, detailTaskScope, contentReason, stepReadOnlyReason, sharedSpace, mode, model, selectedNode, observedCount, rootSpace, banner };
 }
 
 export function supervisorViewPanel(context: Pick<SupervisorViewInputs, "scope" | "attentionOpen" | "graphViewportHeight"> & Pick<SupervisorViewModel, "detailOpen" | "mode"> & { layout: SupervisorLayout }): SupervisorViewPanel {

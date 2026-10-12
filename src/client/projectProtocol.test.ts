@@ -6,7 +6,7 @@ function configuration(providers: unknown[]) {
   return {
     version: 1, repository_roots: [], worktree_root: "/worktrees", state_root: "/state", cache_root: "/cache",
     library_root: "/library", notes_root: "/notes", branch_template: "{task}", checkout_template: "{task}", providers,
-    orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
+    orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
     limits: {
       catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
       context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
@@ -45,7 +45,7 @@ describe("provider configuration protocol", () => {
 
   it.each([
     { cache_root: 42 },
-    { orchestration: { omp_extension: null, model: 42, extra_args: [], routes: [] } },
+    { orchestration: { harness_kind: "omp", command: 42, extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] } },
   ])("rejects malformed typed configuration fields: %j", (fields) => {
     expect(() => parseProjectConfiguration({ ...configuration([]), ...fields })).toThrow();
   });

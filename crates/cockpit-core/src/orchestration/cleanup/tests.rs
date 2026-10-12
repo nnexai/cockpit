@@ -6,6 +6,7 @@ fn worker() -> Run {
         session_id: "cleanup-test-session".into(), brief: String::new(), run_id: id(),
         kind: RunKind::Worker, label: "worker".into(), root_id: id(), parent_run_id: Some(id()),
         task_id: None, attempt: 1, task_revision_at_start: None, stage: RunStage::Closed,
+        assignment_generation: None, launch_config: Default::default(),
         close_reason: Some(CloseReason::Accepted), dispatch: None, target: None, setup: None,
         cleanup_policy: Some(WorkerCleanupPolicy::OwnedWhenSafe), last_report: None, result: None,
         source_output: None, integration: Integration::Pending, annotations: Vec::new(), project: None,
@@ -27,7 +28,7 @@ impl Fixture {
         let root = std::env::temp_dir().join(format!("cockpit-cleanup-{}", id()));
         let store = OrchestrationStore::open(&root).unwrap();
         let (revision, _) = watch::channel(0);
-        let service = OrchestrationService { store, revision };
+        let service = OrchestrationService { store, revision, launch_config: Default::default() };
         let run = worker();
         let resource = {
             let locked = service.store.lock().unwrap();

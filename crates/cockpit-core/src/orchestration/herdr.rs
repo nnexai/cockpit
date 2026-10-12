@@ -12,8 +12,8 @@ pub trait OrchestrationHerdr: Send + Sync {
         request: &AgentTabRequest,
     ) -> Result<RunLocation, InspectionError>;
     /// Create a new, unfocused tab whose PTY owns the direct command process.
-    /// Requires a persisted launch intent. An acknowledgement is not a connected
-    /// OMP attachment; uncertain effects must be reconciled, never replayed.
+    /// Requires a persisted launch intent. An acknowledgement is not conversation
+    /// registration; uncertain effects must be reconciled, never replayed.
     async fn create_direct_agent_tab(
         &self,
         _session_id: &str,
@@ -23,6 +23,12 @@ pub trait OrchestrationHerdr: Send + Sync {
             "direct_agent_launch_unsupported",
             "This Herdr adapter does not support direct agent tab creation",
         ))
+    }
+    /// One pinned terminal submission, never delivery/ACK or model-consumption proof.
+    async fn prompt_agent(
+        &self, _session_id: &str, _request: &AgentPromptRequest,
+    ) -> Result<(), InspectionError> {
+        Err(InspectionError::new("herdr_prompt_unsupported", "This Herdr adapter does not support agent.prompt"))
     }
     async fn pane_process_info(
         &self,
@@ -40,6 +46,13 @@ pub trait OrchestrationHerdr: Send + Sync {
     ) -> Result<(), InspectionError>;
 }
 #[derive(Debug, Clone)]
+pub struct AgentPromptRequest {
+    pub location: RunLocation,
+    pub harness_kind: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct AgentTabRequest {
     pub endpoint_identity: String,
     pub workspace_id: String,
@@ -48,8 +61,7 @@ pub struct AgentTabRequest {
     pub env: BTreeMap<String, String>,
     pub launch_tag: String,
 }
-/// Direct-process launch provenance is recorded on the execution attachment,
-/// separately from this location receipt and subsequent native OMP evidence.
+/// Direct-process provenance remains separate from logical conversation identity.
 #[derive(Debug, Clone)]
 pub struct DirectAgentTabRequest {
     pub endpoint_identity: String,
@@ -95,7 +107,6 @@ pub struct RuntimePane {
     pub agent_name: Option<String>,
     pub agent_kind: Option<String>,
     pub launch_pending: bool,
-    pub interactive_ready: bool,
     pub agent_status: Option<String>,
     pub state_changed_at: Option<String>,
 }

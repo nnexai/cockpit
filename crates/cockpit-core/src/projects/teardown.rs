@@ -144,7 +144,7 @@ impl ProjectService {
                     Ok(false) => Ok(CleanupEvaluation::Absent),
                     Err(error) => Ok(CleanupEvaluation::Kept(cleanup_reason(CleanupReasonClass::UserWork, error))),
                     Ok(true) => {
-                        if let Err(error) = project_teardown::owned_consumers_quiescent(resource, run) {
+                        if let Err(error) = project_teardown::owned_consumers_quiescent(resource) {
                             return Ok(CleanupEvaluation::Unknown(cleanup_reason(CleanupReasonClass::Authority, error)));
                         }
                         if let Err(error) = self.current_git_terminals_quiescent(identity).await {
@@ -187,7 +187,7 @@ impl ProjectService {
                     return Ok(CleanupEvaluation::Kept(CleanupReason { class: CleanupReasonClass::UserWork,
                         code: "space_consumers".into(), message: "current terminal, tab or agent consumers protect this Space".into() }));
                 }
-                if let Err(error) = project_teardown::owned_consumers_quiescent(resource, run) {
+                if let Err(error) = project_teardown::owned_consumers_quiescent(resource) {
                     return Ok(CleanupEvaluation::Unknown(cleanup_reason(CleanupReasonClass::Authority, error)));
                 }
                 Ok(CleanupEvaluation::Unknown(CleanupReason { class: CleanupReasonClass::Authority,

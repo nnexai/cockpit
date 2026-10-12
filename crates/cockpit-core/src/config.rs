@@ -239,10 +239,7 @@ impl ProjectSection {
                 provider.deployment = Some(resolved_deployment(provider)?);
             }
         }
-        let mut orchestration = file.orchestration.unwrap_or_default();
-        if let Some(extension) = env::var_os("COCKPIT_OMP_EXTENSION") {
-            orchestration.omp_extension = Some(path_text(Path::new(&extension), "omp_extension")?);
-        }
+        let orchestration = file.orchestration.unwrap_or_default();
         validate_orchestration(&orchestration)?;
         Ok(ProjectConfiguration {
             version: file.version.unwrap_or(CONFIG_VERSION),
@@ -527,21 +524,27 @@ fn validate_paths(paths: &[String], field: &str) -> Result<(), InspectionError> 
 fn validate_orchestration(
     configuration: &OrchestrationConfiguration,
 ) -> Result<(), InspectionError> {
-    if let Some(path) = &configuration.omp_extension {
-        validate_text(path, "omp_extension")?;
-        if !Path::new(path).is_absolute() {
-            return Err(InspectionError::new(
-                "invalid_omp_extension",
-                "omp_extension must be absolute",
-            ));
-        }
+    validate_text(&configuration.harness_kind, "orchestration_harness_kind")?;
+    if configuration.harness_kind.len() > 512 {
+        return Err(InspectionError::new(
+            "invalid_orchestration_harness_kind", "harness_kind must not exceed 512 bytes",
+        ));
     }
-    if let Some(model) = &configuration.model {
-        validate_text(model, "orchestration_model")?;
-        if model.starts_with('-') {
+    validate_text(&configuration.command, "orchestration_command")?;
+    if configuration.command.starts_with('-') {
+        return Err(InspectionError::new(
+            "invalid_orchestration_command",
+            "command must be a literal executable, not an option",
+        ));
+    }
+    if let Some(args) = &configuration.resume_args {
+        validate_orchestration_args(args)?;
+        if args.iter().filter(|arg| arg.as_str() == "{session_id}").count() != 1
+            || args.iter().any(|arg| arg.contains("{session_id}") && arg != "{session_id}")
+        {
             return Err(InspectionError::new(
-                "invalid_orchestration_model",
-                "model cannot be an option",
+                "invalid_orchestration_resume_args",
+                "resume_args must contain exactly one whole-argument {session_id} placeholder",
             ));
         }
     }
@@ -580,36 +583,16 @@ fn validate_orchestration(
     Ok(())
 }
 
-/// Only process options that do not load code, resume sessions, or bypass grants.
+/// Harness arguments are literal argv, never shell text or interpolated options.
 pub(crate) fn validate_orchestration_args(args: &[String]) -> Result<(), InspectionError> {
     if args.len() > 16 {
         return Err(InspectionError::new(
             "invalid_orchestration_args",
-            "At most 16 OMP arguments are supported",
+            "At most 16 harness arguments are supported",
         ));
     }
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--no-extensions" | "--no-skills" | "--no-rules" => {}
-            "--thinking"
-                if args.get(index + 1).is_some_and(|value| {
-                    matches!(
-                        value.as_str(),
-                        "off" | "minimal" | "low" | "medium" | "high"
-                    )
-                }) =>
-            {
-                index += 1
-            }
-            _ => {
-                return Err(InspectionError::new(
-                    "invalid_orchestration_args",
-                    "Only --no-extensions, --no-skills, --no-rules and --thinking LEVEL are supported",
-                ));
-            }
-        }
-        index += 1;
+    for arg in args {
+        validate_text(arg, "orchestration_args")?;
     }
     Ok(())
 }

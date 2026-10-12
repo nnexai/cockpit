@@ -169,7 +169,8 @@ fn worker_start_replays_without_new_writer_and_fences_changed_payload() {
     let root = fixture.root();
     let task = fixture.create_task(&root, "Single start");
     let action = fixture.start_action(&root, &task);
-    let first = fixture.operator(action.clone());
+    let supervisor = fixture.root_actor(&root);
+    let first = fixture.apply(&supervisor, action.clone()).unwrap();
     let OrchestrationActionResult::WorkerStarted { start } = first.result else { unreachable!() };
     assert!(!start.duplicate);
     let run = fixture.run(&start.run_id);
@@ -177,7 +178,7 @@ fn worker_start_replays_without_new_writer_and_fences_changed_payload() {
     assert_eq!(run.cleanup_policy, Some(WorkerCleanupPolicy::OwnedWhenSafe));
     assert_eq!(run.attachment.as_ref().unwrap().epoch, 1);
     let bytes = fixture.state_bytes();
-    let replay = fixture.operator(action.clone());
+    let replay = fixture.apply(&supervisor, action.clone()).unwrap();
     let OrchestrationActionResult::WorkerStarted { start: replay } = replay.result else { unreachable!() };
     assert!(replay.duplicate);
     assert_eq!(replay.run_id, start.run_id);
@@ -185,9 +186,9 @@ fn worker_start_replays_without_new_writer_and_fences_changed_payload() {
     let mut changed = action;
     let OrchestrationAction::WorkerStart { brief, .. } = &mut changed else { unreachable!() };
     *brief = "A different operation payload".into();
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), changed), "operation_conflict");
+    assert_code(fixture.apply(&supervisor, changed), "operation_conflict");
     assert_eq!(fixture.state_bytes(), bytes);
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
+    assert_code(fixture.apply(&supervisor,
         fixture.start_action(&root, &task)), "task_has_active_run");
     assert_eq!(fixture.state_bytes(), bytes);
 }
@@ -221,7 +222,6 @@ fn offline_ordinary_updates_use_credentials_without_physical_provenance() {
     let (task, run_id, mut actor) = fixture.working(&root);
     let before = fixture.run(&run_id);
     let caller = caller_mut(&mut actor);
-    caller.provenance = None;
     caller.endpoint_identity = "unreachable-endpoint".into();
     caller.workspace_id.clear();
     caller.tab_id.clear();
@@ -229,10 +229,6 @@ fn offline_ordinary_updates_use_credentials_without_physical_provenance() {
     caller.boot_id = None;
     caller.terminal_id = None;
     caller.native_session_id = None;
-    caller.env_run = None;
-    caller.omp_session_id = None;
-    caller.main_omp_session_id = None;
-    caller.agent_kind = None;
     caller.actual_agent_kind = None;
     caller.process = None;
     let edited = task_result(fixture.apply(&actor, OrchestrationAction::TaskUpdate {
@@ -249,31 +245,15 @@ fn offline_ordinary_updates_use_credentials_without_physical_provenance() {
 }
 
 #[test]
-fn conversation_rollover_does_not_replace_epoch_credentials_or_checkout_claim() {
+fn conversation_rollover_conflicts_without_replacing_credentials_or_checkout_claim() {
     let fixture = Fixture::new();
     let root = fixture.root();
-    let (_, run_id, mut actor) = fixture.working(&root);
-    let before = fixture.run(&run_id);
-    let caller = caller_mut(&mut actor);
-    let credential_id = caller.auth.credential_id.clone();
-    caller.omp_session_id = Some("rolled-over-main".into());
-    caller.main_omp_session_id = caller.omp_session_id.clone();
-    let action = OrchestrationAction::RunAttach {
-        operation_id: id(),
-        attachment_id: caller.auth.attachment_id.clone(),
-        expected_attachment_epoch: caller.auth.attachment_epoch,
-        main_session_id: "rolled-over-main".into(),
-    };
-    fixture.apply(&actor, action).unwrap();
-    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
-    let after = fixture.run(&run_id);
-    let attachment = after.attachment.as_ref().unwrap();
-    assert_eq!(attachment.epoch, before.attachment.as_ref().unwrap().epoch);
-    assert_eq!(attachment.attachment_id, before.attachment.as_ref().unwrap().attachment_id);
-    assert_eq!(attachment.main_session_id.as_deref(), Some("rolled-over-main"));
-    assert_eq!(after.checkout_claim_id, before.checkout_claim_id);
-    assert!(fixture.state().credentials.iter().any(|record| record.credential_id == credential_id
-        && record.state == credentials::CredentialState::Active));
+    let (_, _, mut actor) = fixture.working(&root);
+    let before = fixture.state_bytes();
+    caller_mut(&mut actor).conversation.session_id = "rolled-over-chat".into();
+    assert!(fixture.apply(&actor, OrchestrationAction::RunRegister { operation_id: id() }).is_err());
+    assert!(fixture.apply(&actor, report(ReportKind::Progress, None, None)).is_err());
+    assert_eq!(fixture.state_bytes(), before);
 }
 
 #[test]
@@ -332,7 +312,7 @@ fn bound_top_root_starts_answers_sends_back_accepts_and_cancels() {
     fixture.setup(&run_id);
     let worker = fixture.launch_and_bind(&run_id);
     assert_eq!(fixture.run(&run_id).stage, RunStage::Working);
-    let native = fixture.run(&root).attachment.unwrap().main_session_id.unwrap();
+    let native = fixture.run(&root).attachment.unwrap().conversation.unwrap();
     fixture
         .apply(&worker, report(ReportKind::NeedsInput, None, None))
         .unwrap();
@@ -451,7 +431,7 @@ fn bound_top_root_starts_answers_sends_back_accepts_and_cancels() {
     assert!(matches!(&requested.by, ActorRef::Run { run_id } if run_id == &root));
     assert!(requested.text.contains(&result_id));
     assert!(requested.text.contains(&edited.task_revision));
-    assert!(requested.text.contains(&native));
+    assert!(requested.text.contains(&native.session_id));
     assert!(accepted.annotations.iter().any(|annotation| {
         annotation.text.starts_with("Accepted Result")
             && matches!(&annotation.by, ActorRef::Run { run_id } if run_id == &root)
@@ -523,9 +503,7 @@ fn management_requires_root_credentials_not_worker_child_or_forged_identity() {
         let other_root = fixture.root();
         let outsider = fixture.launch_and_bind(&other_root);
         let (_, branch_id, branch_actor) = fixture.working(&root);
-        let mut inherited_env = branch_actor.clone();
-        caller_mut(&mut inherited_env).env_run = Some((root.clone(), 1));
-        let mut denied = vec![outsider, branch_actor.clone(), inherited_env];
+        let mut denied = vec![outsider, branch_actor.clone()];
         denied.push(worker);
         for fence in 0..3 {
             let mut actor = supervisor.clone();
@@ -538,14 +516,6 @@ fn management_requires_root_credentials_not_worker_child_or_forged_identity() {
             }
             denied.push(actor);
         }
-        let mut branch_subagent = fixture.child_actor(&branch_actor, &branch_id, "worker-child");
-        // Physical claims of being main cannot enlarge this narrowed child credential.
-        let caller = caller_mut(&mut branch_subagent);
-        caller.agent_kind = Some(AgentKind::Main);
-        caller.subagent_id = None;
-        caller.env_run = Some((root.clone(), 1));
-        caller.provenance = None;
-        denied.push(branch_subagent);
         for actor in denied {
             let bytes = fixture.state_bytes();
             let failure = fixture.apply(&actor, action.clone()).unwrap_err();
@@ -678,77 +648,6 @@ fn supervisor_recovers_only_strict_descendants() {
     assert_eq!(fixture.state_bytes(), bytes);
 }
 
-#[test]
-fn explicitly_adopted_actual_main_root_has_management_authority() {
-    let fixture = Fixture::new();
-    let seed = fixture.root();
-    let mut actor = fixture.launch_tab(&seed);
-    let caller = caller_mut(&mut actor);
-    caller.env_run = None;
-    caller.pane_id = "unclaimed-pane".into();
-    caller.tab_id = "unclaimed-tab".into();
-    caller.terminal_id = Some("unclaimed-terminal".into());
-    caller.native_session_id = Some("adopted-native".into());
-    caller.omp_session_id = Some("adopted-native".into());
-    caller.main_omp_session_id = Some("adopted-native".into());
-    caller.process = Some(live_process());
-    let Actor::Agent(caller) = &actor else { unreachable!() };
-    let bootstrap = BootstrapCaller {
-        endpoint_identity: caller.endpoint_identity.clone(), session_id: caller.session_id.clone(),
-        workspace_id: caller.workspace_id.clone(), tab_id: caller.tab_id.clone(), pane_id: caller.pane_id.clone(),
-        boot_id: caller.boot_id.clone(), terminal_id: caller.terminal_id.clone(),
-        native_session_id: caller.native_session_id.clone(), omp_session_id: caller.omp_session_id.clone(),
-        agent_kind: caller.agent_kind, actual_agent_kind: caller.actual_agent_kind.clone(), process: caller.process.clone(),
-    };
-    let mut shell = bootstrap.clone();
-    shell.actual_agent_kind = Some(NativeAgentKind::Other("shell".into()));
-    let bytes = fixture.state_bytes();
-    assert!(fixture.apply(
-        &Actor::Bootstrap(shell),
-        OrchestrationAction::RunAdopt { label: "Not OMP".into() },
-    ).is_err());
-    assert_eq!(fixture.state_bytes(), bytes);
-    let root = run_result(
-        fixture
-            .apply(
-                &Actor::Bootstrap(bootstrap),
-                OrchestrationAction::RunAdopt {
-                    label: "Actual main explicitly adopted".into(),
-                },
-            )
-            .unwrap(),
-    )
-    .0;
-    assert_eq!(fixture.run(&root).attachment.as_ref().unwrap().state, AttachmentState::Connecting);
-    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
-    caller_mut(&mut actor).env_run = Some((root.clone(), 1));
-    caller_mut(&mut actor).auth = fixture.auth(&root, JobRole::Root, None);
-    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root),
-        "Adoption and staged credentials alone do not prove a current loaded extension");
-    let Actor::Agent(caller) = &actor else { unreachable!() };
-    fixture.apply(&actor, OrchestrationAction::RunAttach {
-        operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
-        expected_attachment_epoch: caller.auth.attachment_epoch,
-        main_session_id: caller.omp_session_id.clone().unwrap(),
-    }).unwrap();
-    assert_eq!(fixture.run(&root).attachment.as_ref().unwrap().state, AttachmentState::Connected);
-    assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
-    assert_eq!(fixture.run(&root).kind, RunKind::Adopted);
-    let task = fixture.create_task(&root, "Adopted root task");
-    let run_id = run_result(fixture.apply(&actor, fixture.start_action(&root, &task)).unwrap()).0;
-    assert_eq!(fixture.run(&run_id).parent_run_id.as_deref(), Some(root.as_str()));
-    let edited = task_result(fixture.apply(&actor, OrchestrationAction::TaskUpdate {
-        root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision,
-        title: None, description: Some("Adopted native root owns canonical content".into()),
-    }).unwrap());
-    assert_eq!(edited.description, "Adopted native root owns canonical content");
-    let follow = task_result(fixture.apply(&actor, OrchestrationAction::TaskCreate {
-        root_id: root.clone(), task_id: id(), title: "Adopted root follow-up".into(), description: String::new(),
-        depends_on: vec![edited.task_id.clone()], follow_up_of: Some(edited.task_id.clone()),
-        expected_doc_revision: Some(task_document_revision(&fixture, &root)), source_revision: Some(edited.task_revision),
-    }).unwrap());
-    assert_eq!(follow.follow_up_of.as_deref(), Some(edited.task_id.as_str()));
-}
 
 
 #[test]
@@ -819,9 +718,8 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
                 terminal_id: location.terminal_id.clone(),
                 native_session_id: location.native_session_id.clone(),
                 agent_name: Some(location.launch_tag.clone()),
-                agent_kind: Some("omp".into()),
+                agent_kind: Some("service-test".into()),
                 launch_pending: false,
-                interactive_ready: false,
                 agent_status: Some("working".into()),
                 state_changed_at: None,
             }],
@@ -857,7 +755,7 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
     assert_eq!(observed.presence, Presence::Present);
     assert_eq!(observed.agent_status.as_deref(), Some("working"));
     assert!(
-        observed.actual_omp,
+        observed.actual_agent,
         "Closing tracking is not process termination"
     );
     fixture.apply(&worker, fixture.successful_result(&worker))

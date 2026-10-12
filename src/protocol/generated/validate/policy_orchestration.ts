@@ -17,6 +17,8 @@ export interface WireTypes {
   "TaskStepStatus": V1.TaskStepStatus;
   "TaskStepScope": V1.TaskStepScope;
   "TaskDependencies": V1.TaskDependencies;
+  "TaskOwnership": V1.TaskOwnership;
+  "TaskOwner": V1.TaskOwner;
   "TaskDependencyState": V1.TaskDependencyState;
   "TaskDependencyBlocker": V1.TaskDependencyBlocker;
   "TaskDependencyBlockerReason": V1.TaskDependencyBlockerReason;
@@ -41,6 +43,7 @@ export interface WireTypes {
   "CheckoutIdentity": V1.CheckoutIdentity;
   "AttachmentState": V1.AttachmentState;
   "AttachmentLaunchMode": V1.AttachmentLaunchMode;
+  "ConversationIdentity": V1.ConversationIdentity;
   "ExecutionAttachment": V1.ExecutionAttachment;
   "ResumeMode": V1.ResumeMode;
   "ResumePhase": V1.ResumePhase;
@@ -102,13 +105,9 @@ export interface WireTypes {
   "RunRetirement": V1.RunRetirement;
   "RetirementState": V1.RetirementState;
   "RetirementBlocker": V1.RetirementBlocker;
-  "NativeDeferReason": V1.NativeDeferReason;
-  "NativeStopEvidence": V1.NativeStopEvidence;
   "TerminalOutcome": V1.TerminalOutcome;
   "RetainReason": V1.RetainReason;
   "RetirementPhase": V1.RetirementPhase;
-  "NativeRefuseReason": V1.NativeRefuseReason;
-  "NativeStopReceipt": V1.NativeStopReceipt;
   "Run": V1.Run;
   "DispatchState": V1.DispatchState;
   "Annotation": V1.Annotation;
@@ -122,11 +121,6 @@ export interface WireTypes {
   "QuestionStatus": V1.QuestionStatus;
   "QuestionReceipt": V1.QuestionReceipt;
   "AnswerReceipt": V1.AnswerReceipt;
-  "SubagentStatus": V1.SubagentStatus;
-  "Subagent": V1.Subagent;
-  "ControlStage": V1.ControlStage;
-  "SubagentControlState": V1.SubagentControlState;
-  "AgentKind": V1.AgentKind;
   "IntentState": V1.IntentState;
   "TaskIntent": V1.TaskIntent;
   "TaskAssignmentIntent": V1.TaskAssignmentIntent;
@@ -151,6 +145,8 @@ export interface WireOwners {
   "TaskStep": V1.TaskStep;
   "TaskStepProgress": V1.TaskStepProgress;
   "TaskDependencies": V1.TaskDependencies;
+  "TaskOwnership": V1.TaskOwnership;
+  "TaskOwner": V1.TaskOwner;
   "TaskDependencyBlocker": V1.TaskDependencyBlocker;
   "TaskView": V1.TaskView;
   "DispatchTarget": V1.DispatchTarget;
@@ -167,6 +163,7 @@ export interface WireOwners {
   "DirectoryIdentity": V1.DirectoryIdentity;
   "CheckoutGitIdentity": V1.CheckoutGitIdentity;
   "CheckoutIdentity": V1.CheckoutIdentity;
+  "ConversationIdentity": V1.ConversationIdentity;
   "ExecutionAttachment": V1.ExecutionAttachment;
   "ResumeCause": V1.ResumeCause;
   "ResumeRecord": V1.ResumeRecord;
@@ -223,18 +220,10 @@ export interface WireOwners {
   "RunRetirement": V1.RunRetirement;
   "RetirementState": V1.RetirementState;
   "RetirementState[waiting]": Extract<V1.RetirementState, { "state": "waiting" }>;
-  "RetirementState[native_stop_offered]": Extract<V1.RetirementState, { "state": "native_stop_offered" }>;
-  "RetirementState[native_stop_deferred]": Extract<V1.RetirementState, { "state": "native_stop_deferred" }>;
-  "RetirementState[native_stop_requested]": Extract<V1.RetirementState, { "state": "native_stop_requested" }>;
-  "RetirementState[native_stopped]": Extract<V1.RetirementState, { "state": "native_stopped" }>;
   "RetirementState[close_intent]": Extract<V1.RetirementState, { "state": "close_intent" }>;
   "RetirementState[retired]": Extract<V1.RetirementState, { "state": "retired" }>;
   "RetirementState[retained]": Extract<V1.RetirementState, { "state": "retained" }>;
   "RetirementState[unknown]": Extract<V1.RetirementState, { "state": "unknown" }>;
-  "NativeStopReceipt": V1.NativeStopReceipt;
-  "NativeStopReceipt[shutdown_requested]": Extract<V1.NativeStopReceipt, { "outcome": "shutdown_requested" }>;
-  "NativeStopReceipt[deferred]": Extract<V1.NativeStopReceipt, { "outcome": "deferred" }>;
-  "NativeStopReceipt[refused]": Extract<V1.NativeStopReceipt, { "outcome": "refused" }>;
   "Run": V1.Run;
   "DispatchState": V1.DispatchState;
   "Annotation": V1.Annotation;
@@ -250,8 +239,6 @@ export interface WireOwners {
   "QuestionReceipt[answer_delivered]": Extract<V1.QuestionReceipt, { "status": "answer_delivered" }>;
   "QuestionReceipt[answer_acknowledged]": Extract<V1.QuestionReceipt, { "status": "answer_acknowledged" }>;
   "AnswerReceipt": V1.AnswerReceipt;
-  "Subagent": V1.Subagent;
-  "SubagentControlState": V1.SubagentControlState;
   "TaskIntent": V1.TaskIntent;
   "TaskAssignmentIntent": V1.TaskAssignmentIntent;
   "RunObservation": V1.RunObservation;
@@ -284,7 +271,7 @@ export interface WireFields {
   "OrchestrationSnapshot.runs": (V1.OrchestrationSnapshot)["runs"];
   "OrchestrationSnapshot.messages": (V1.OrchestrationSnapshot)["messages"];
   "OrchestrationSnapshot.questions": (V1.OrchestrationSnapshot)["questions"];
-  "OrchestrationSnapshot.subagents": (V1.OrchestrationSnapshot)["subagents"];
+  "OrchestrationSnapshot.task_ownership": (V1.OrchestrationSnapshot)["task_ownership"];
   "OrchestrationSnapshot.intents": (V1.OrchestrationSnapshot)["intents"];
   "OrchestrationSnapshot.assignment_intents": (V1.OrchestrationSnapshot)["assignment_intents"];
   "OrchestrationSnapshot.cleanup": (V1.OrchestrationSnapshot)["cleanup"];
@@ -341,6 +328,13 @@ export interface WireFields {
   "TaskDependencies.state": (V1.TaskDependencies)["state"];
   "TaskDependencies.unmet": (V1.TaskDependencies)["unmet"];
   "TaskDependencies.problems": (V1.TaskDependencies)["problems"];
+  "TaskOwnership.root_id": (V1.TaskOwnership)["root_id"];
+  "TaskOwnership.task_id": (V1.TaskOwnership)["task_id"];
+  "TaskOwnership.generation": (V1.TaskOwnership)["generation"];
+  "TaskOwnership.owner": (V1.TaskOwnership)["owner"];
+  "TaskOwner.run_id": (V1.TaskOwner)["run_id"];
+  "TaskOwner.conversation": (V1.TaskOwner)["conversation"];
+  "TaskOwner.claim_operation_id": (V1.TaskOwner)["claim_operation_id"];
   "TaskDependencyBlocker.task_id": (V1.TaskDependencyBlocker)["task_id"];
   "TaskDependencyBlocker.reason": (V1.TaskDependencyBlocker)["reason"];
   "TaskView.task": (V1.TaskView)["task"];
@@ -390,12 +384,14 @@ export interface WireFields {
   "CheckoutIdentity.path": (V1.CheckoutIdentity)["path"];
   "CheckoutIdentity.directory_identity": (V1.CheckoutIdentity)["directory_identity"];
   "CheckoutIdentity.git": (V1.CheckoutIdentity)["git"];
+  "ConversationIdentity.harness": (V1.ConversationIdentity)["harness"];
+  "ConversationIdentity.session_id": (V1.ConversationIdentity)["session_id"];
   "ExecutionAttachment.attachment_id": (V1.ExecutionAttachment)["attachment_id"];
   "ExecutionAttachment.epoch": (V1.ExecutionAttachment)["epoch"];
   "ExecutionAttachment.state": (V1.ExecutionAttachment)["state"];
   "ExecutionAttachment.launch_mode": (V1.ExecutionAttachment)["launch_mode"];
   "ExecutionAttachment.location": (V1.ExecutionAttachment)["location"];
-  "ExecutionAttachment.main_session_id": (V1.ExecutionAttachment)["main_session_id"];
+  "ExecutionAttachment.conversation": (V1.ExecutionAttachment)["conversation"];
   "ExecutionAttachment.process": (V1.ExecutionAttachment)["process"];
   "ExecutionAttachment.shell": (V1.ExecutionAttachment)["shell"];
   "ExecutionAttachment.machine_id": (V1.ExecutionAttachment)["machine_id"];
@@ -515,7 +511,6 @@ export interface WireFields {
   "ResourceRequestRecord.resource_key": (V1.ResourceRequestRecord)["resource_key"];
   "ResourceRequestRecord.source_identity": (V1.ResourceRequestRecord)["source_identity"];
   "ResourceRequestRecord.holder": (V1.ResourceRequestRecord)["holder"];
-  "ResourceRequestRecord.requester_child_id": (V1.ResourceRequestRecord)["requester_child_id"];
   "ResourceRequestRecord.state": (V1.ResourceRequestRecord)["state"];
   "ResourceRequestRecord.build_processes": (V1.ResourceRequestRecord)["build_processes"];
   "ResourceRequestRecord.machine_id": (V1.ResourceRequestRecord)["machine_id"];
@@ -633,7 +628,7 @@ export interface WireFields {
   "RetirementIdentity.pane_id": (V1.RetirementIdentity)["pane_id"];
   "RetirementIdentity.terminal_id": (V1.RetirementIdentity)["terminal_id"];
   "RetirementIdentity.herdr_boot_id": (V1.RetirementIdentity)["herdr_boot_id"];
-  "RetirementIdentity.omp_session_id": (V1.RetirementIdentity)["omp_session_id"];
+  "RetirementIdentity.conversation": (V1.RetirementIdentity)["conversation"];
   "RetirementIdentity.process": (V1.RetirementIdentity)["process"];
   "RetirementIdentity.shell": (V1.RetirementIdentity)["shell"];
   "RunRetirement.retirement_id": (V1.RunRetirement)["retirement_id"];
@@ -641,30 +636,19 @@ export interface WireFields {
   "RunRetirement.result_message_id": (V1.RunRetirement)["result_message_id"];
   "RunRetirement.task_revision": (V1.RunRetirement)["task_revision"];
   "RunRetirement.identity": (V1.RunRetirement)["identity"];
-  "RunRetirement.quiescent_stop_at": (V1.RunRetirement)["quiescent_stop_at"];
   "RunRetirement.state": (V1.RunRetirement)["state"];
   "RunRetirement.created_at": (V1.RunRetirement)["created_at"];
   "RunRetirement.updated_at": (V1.RunRetirement)["updated_at"];
   "RetirementState[waiting].blockers": (Extract<V1.RetirementState, { "state": "waiting" }>)["blockers"];
-  "RetirementState[native_stop_offered].offered_at": (Extract<V1.RetirementState, { "state": "native_stop_offered" }>)["offered_at"];
-  "RetirementState[native_stop_deferred].offered_at": (Extract<V1.RetirementState, { "state": "native_stop_deferred" }>)["offered_at"];
-  "RetirementState[native_stop_deferred].reason": (Extract<V1.RetirementState, { "state": "native_stop_deferred" }>)["reason"];
-  "RetirementState[native_stop_deferred].at": (Extract<V1.RetirementState, { "state": "native_stop_deferred" }>)["at"];
-  "RetirementState[native_stop_requested].at": (Extract<V1.RetirementState, { "state": "native_stop_requested" }>)["at"];
-  "RetirementState[native_stopped].at": (Extract<V1.RetirementState, { "state": "native_stopped" }>)["at"];
-  "RetirementState[native_stopped].evidence": (Extract<V1.RetirementState, { "state": "native_stopped" }>)["evidence"];
   "RetirementState[close_intent].at": (Extract<V1.RetirementState, { "state": "close_intent" }>)["at"];
   "RetirementState[retired].at": (Extract<V1.RetirementState, { "state": "retired" }>)["at"];
   "RetirementState[retired].terminal": (Extract<V1.RetirementState, { "state": "retired" }>)["terminal"];
   "RetirementState[retained].at": (Extract<V1.RetirementState, { "state": "retained" }>)["at"];
   "RetirementState[retained].reason": (Extract<V1.RetirementState, { "state": "retained" }>)["reason"];
-  "RetirementState[retained].native_stopped": (Extract<V1.RetirementState, { "state": "retained" }>)["native_stopped"];
+  "RetirementState[retained].stopped": (Extract<V1.RetirementState, { "state": "retained" }>)["stopped"];
   "RetirementState[unknown].at": (Extract<V1.RetirementState, { "state": "unknown" }>)["at"];
   "RetirementState[unknown].phase": (Extract<V1.RetirementState, { "state": "unknown" }>)["phase"];
   "RetirementState[unknown].detail": (Extract<V1.RetirementState, { "state": "unknown" }>)["detail"];
-  "NativeStopReceipt[deferred].reason": (Extract<V1.NativeStopReceipt, { "outcome": "deferred" }>)["reason"];
-  "NativeStopReceipt[refused].reason": (Extract<V1.NativeStopReceipt, { "outcome": "refused" }>)["reason"];
-  "NativeStopReceipt[refused].text": (Extract<V1.NativeStopReceipt, { "outcome": "refused" }>)["text"];
   "Run.session_id": (V1.Run)["session_id"];
   "Run.brief": (V1.Run)["brief"];
   "Run.run_id": (V1.Run)["run_id"];
@@ -674,6 +658,8 @@ export interface WireFields {
   "Run.parent_run_id": (V1.Run)["parent_run_id"];
   "Run.task_id": (V1.Run)["task_id"];
   "Run.attempt": (V1.Run)["attempt"];
+  "Run.assignment_generation": (V1.Run)["assignment_generation"];
+  "Run.launch_config": (V1.Run)["launch_config"];
   "Run.task_revision_at_start": (V1.Run)["task_revision_at_start"];
   "Run.stage": (V1.Run)["stage"];
   "Run.close_reason": (V1.Run)["close_reason"];
@@ -723,9 +709,7 @@ export interface WireFields {
   "Message.report": (V1.Message)["report"];
   "Message.stale": (V1.Message)["stale"];
   "Message.escalated_from": (V1.Message)["escalated_from"];
-  "Message.from_subagent_id": (V1.Message)["from_subagent_id"];
   "Message.stage": (V1.Message)["stage"];
-  "Message.woken_omp_session": (V1.Message)["woken_omp_session"];
   "Message.created_at": (V1.Message)["created_at"];
   "Message.acked_at": (V1.Message)["acked_at"];
   "QuestionStatus.run_id": (V1.QuestionStatus)["run_id"];
@@ -740,21 +724,6 @@ export interface WireFields {
   "AnswerReceipt.stage": (V1.AnswerReceipt)["stage"];
   "AnswerReceipt.created_at": (V1.AnswerReceipt)["created_at"];
   "AnswerReceipt.acked_at": (V1.AnswerReceipt)["acked_at"];
-  "Subagent.run_id": (V1.Subagent)["run_id"];
-  "Subagent.subagent_id": (V1.Subagent)["subagent_id"];
-  "Subagent.parent_subagent_id": (V1.Subagent)["parent_subagent_id"];
-  "Subagent.bound_omp_session": (V1.Subagent)["bound_omp_session"];
-  "Subagent.role": (V1.Subagent)["role"];
-  "Subagent.label": (V1.Subagent)["label"];
-  "Subagent.status": (V1.Subagent)["status"];
-  "Subagent.summary": (V1.Subagent)["summary"];
-  "Subagent.last_control": (V1.Subagent)["last_control"];
-  "Subagent.updated_at": (V1.Subagent)["updated_at"];
-  "SubagentControlState.seq": (V1.SubagentControlState)["seq"];
-  "SubagentControlState.op": (V1.SubagentControlState)["op"];
-  "SubagentControlState.stage": (V1.SubagentControlState)["stage"];
-  "SubagentControlState.error": (V1.SubagentControlState)["error"];
-  "SubagentControlState.at": (V1.SubagentControlState)["at"];
   "TaskIntent.intent_id": (V1.TaskIntent)["intent_id"];
   "TaskIntent.root_id": (V1.TaskIntent)["root_id"];
   "TaskIntent.task_id": (V1.TaskIntent)["task_id"];
@@ -763,14 +732,14 @@ export interface WireFields {
   "TaskIntent.state": (V1.TaskIntent)["state"];
   "TaskIntent.origin": (V1.TaskIntent)["origin"];
   "TaskIntent.supervisor_run_id": (V1.TaskIntent)["supervisor_run_id"];
-  "TaskIntent.omp_session_id": (V1.TaskIntent)["omp_session_id"];
+  "TaskIntent.conversation": (V1.TaskIntent)["conversation"];
   "TaskIntent.result_message_id": (V1.TaskIntent)["result_message_id"];
   "TaskAssignmentIntent.root_id": (V1.TaskAssignmentIntent)["root_id"];
   "TaskAssignmentIntent.task_id": (V1.TaskAssignmentIntent)["task_id"];
   "TaskAssignmentIntent.state": (V1.TaskAssignmentIntent)["state"];
   "RunObservation.run_id": (V1.RunObservation)["run_id"];
   "RunObservation.presence": (V1.RunObservation)["presence"];
-  "RunObservation.actual_omp": (V1.RunObservation)["actual_omp"];
+  "RunObservation.actual_agent": (V1.RunObservation)["actual_agent"];
   "RunObservation.workspace_id": (V1.RunObservation)["workspace_id"];
   "RunObservation.workspace_label": (V1.RunObservation)["workspace_label"];
   "RunObservation.tab_id": (V1.RunObservation)["tab_id"];
@@ -795,7 +764,7 @@ export interface WireFieldNames {
   "OrchestrationWaitResponse": "revision" | "tasks_token" | "changed";
   "OrchestrationMutationRequest": "session_id" | "expected_revision" | "action";
   "OrchestrationMutationResponse": "revision" | "result";
-  "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "subagents" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
+  "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "task_ownership" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
   "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at";
   "RootSummary": "root_id" | "label" | "kind" | "open_runs" | "needs_you";
   "TaskBoard": "root_id" | "path" | "doc_revision" | "unidentified_items" | "diagnostics" | "tasks";
@@ -803,6 +772,8 @@ export interface WireFieldNames {
   "TaskStep": "step_id" | "parent_step_id" | "depth" | "title" | "checked" | "status" | "line" | "source_offset" | "diagnostic";
   "TaskStepProgress": "done" | "total";
   "TaskDependencies": "state" | "unmet" | "problems";
+  "TaskOwnership": "root_id" | "task_id" | "generation" | "owner";
+  "TaskOwner": "run_id" | "conversation" | "claim_operation_id";
   "TaskDependencyBlocker": "task_id" | "reason";
   "TaskView": "task" | "lane" | "current_run_id" | "dependencies";
   "DispatchTarget": never;
@@ -819,7 +790,8 @@ export interface WireFieldNames {
   "DirectoryIdentity": "device" | "inode";
   "CheckoutGitIdentity": "common_dir" | "worktree_git_dir";
   "CheckoutIdentity": "key" | "machine_id" | "path" | "directory_identity" | "git";
-  "ExecutionAttachment": "attachment_id" | "epoch" | "state" | "launch_mode" | "location" | "main_session_id" | "process" | "shell" | "machine_id" | "launch_attempt" | "updated_at";
+  "ConversationIdentity": "harness" | "session_id";
+  "ExecutionAttachment": "attachment_id" | "epoch" | "state" | "launch_mode" | "location" | "conversation" | "process" | "shell" | "machine_id" | "launch_attempt" | "updated_at";
   "ResumeCause": "code" | "message" | "class";
   "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
   "ProjectRootLookupRequest": "session_id" | "workspace_id" | "selected_root_id";
@@ -846,7 +818,7 @@ export interface WireFieldNames {
   "IntegrationRecordResult": "operation_id" | "run_id" | "integration" | "checks" | "duplicate";
   "ResourceSourceIdentity": "checkout_key" | "source_commit" | "source_tree" | "input_configuration" | "toolchain_fingerprint";
   "ResourceRequest": "operation_id" | "resource_key" | "source_identity" | "holder";
-  "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "requester_child_id" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
+  "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
   "ResourceRelease": "request_id" | "expected_holder";
   "ResourceBuildRegistration": "request_id" | "expected_holder" | "process";
   "OwnedGitIdentity": "creation_operation_id" | "machine_id" | "repository_key" | "repository_root" | "repository_device" | "repository_inode" | "common_dir" | "common_device" | "common_inode" | "checkout_path" | "checkout_device" | "checkout_inode" | "checkout_key" | "branch_ref" | "creation_tip";
@@ -871,23 +843,15 @@ export interface WireFieldNames {
   "RunCleanupSummary": "run_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count";
   "RestorationSummary": "reattached" | "total_attachments" | "cleanup_pending";
   "NativeShellIdentity": "process" | "executable_device" | "executable_inode" | "argv_digest";
-  "RetirementIdentity": "attachment_id" | "attachment_epoch" | "launch_mode" | "run_attempt" | "launch_attempt" | "launch_tag" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "herdr_boot_id" | "omp_session_id" | "process" | "shell";
-  "RunRetirement": "retirement_id" | "trigger" | "result_message_id" | "task_revision" | "identity" | "quiescent_stop_at" | "state" | "created_at" | "updated_at";
+  "RetirementIdentity": "attachment_id" | "attachment_epoch" | "launch_mode" | "run_attempt" | "launch_attempt" | "launch_tag" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "herdr_boot_id" | "conversation" | "process" | "shell";
+  "RunRetirement": "retirement_id" | "trigger" | "result_message_id" | "task_revision" | "identity" | "state" | "created_at" | "updated_at";
   "RetirementState": never;
   "RetirementState[waiting]": "blockers";
-  "RetirementState[native_stop_offered]": "offered_at";
-  "RetirementState[native_stop_deferred]": "offered_at" | "reason" | "at";
-  "RetirementState[native_stop_requested]": "at";
-  "RetirementState[native_stopped]": "at" | "evidence";
   "RetirementState[close_intent]": "at";
   "RetirementState[retired]": "at" | "terminal";
-  "RetirementState[retained]": "at" | "reason" | "native_stopped";
+  "RetirementState[retained]": "at" | "reason" | "stopped";
   "RetirementState[unknown]": "at" | "phase" | "detail";
-  "NativeStopReceipt": never;
-  "NativeStopReceipt[shutdown_requested]": never;
-  "NativeStopReceipt[deferred]": "reason";
-  "NativeStopReceipt[refused]": "reason" | "text";
-  "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
+  "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "assignment_generation" | "launch_config" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
   "DispatchState": "launch_tag" | "endpoint_identity" | "recovery" | "agent_started" | "step" | "launch_attempt" | "error" | "updated_at";
   "Annotation": "by" | "text" | "at";
   "ActorRef": never;
@@ -895,18 +859,16 @@ export interface WireFieldNames {
   "ActorRef[run]": "run_id";
   "ActorRef[dispatcher]": never;
   "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "at";
-  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "stale" | "escalated_from" | "from_subagent_id" | "stage" | "woken_omp_session" | "created_at" | "acked_at";
+  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
   "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "receipt";
   "QuestionReceipt": never;
   "QuestionReceipt[unresolved]": never;
   "QuestionReceipt[answer_delivered]": "answer";
   "QuestionReceipt[answer_acknowledged]": "answer";
   "AnswerReceipt": "sender" | "message_id" | "seq" | "stage" | "created_at" | "acked_at";
-  "Subagent": "run_id" | "subagent_id" | "parent_subagent_id" | "bound_omp_session" | "role" | "label" | "status" | "summary" | "last_control" | "updated_at";
-  "SubagentControlState": "seq" | "op" | "stage" | "error" | "at";
-  "TaskIntent": "intent_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "state" | "origin" | "supervisor_run_id" | "omp_session_id" | "result_message_id";
+  "TaskIntent": "intent_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "state" | "origin" | "supervisor_run_id" | "conversation" | "result_message_id";
   "TaskAssignmentIntent": "root_id" | "task_id" | "state";
-  "RunObservation": "run_id" | "presence" | "actual_omp" | "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_status" | "state_changed_at";
+  "RunObservation": "run_id" | "presence" | "actual_agent" | "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_status" | "state_changed_at";
   "RuntimeObservation": never;
   "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs";
   "RuntimeObservation[unavailable]": "error";
@@ -920,6 +882,8 @@ export interface WireChildNames {
   "OrchestrationSnapshot.restoration": "RestorationSummary";
   "OrchestrationSnapshot.runtime": "RuntimeObservation";
   "Task.step_progress": "TaskStepProgress";
+  "TaskOwnership.owner": "TaskOwner";
+  "TaskOwner.conversation": "ConversationIdentity";
   "TaskView.task": "Task";
   "TaskView.dependencies": "TaskDependencies";
   "DispatchTarget.request": "WorkspaceSetupRequest";
@@ -928,6 +892,7 @@ export interface WireChildNames {
   "CheckoutIdentity.directory_identity": "DirectoryIdentity";
   "CheckoutIdentity.git": "CheckoutGitIdentity";
   "ExecutionAttachment.location": "RunLocation";
+  "ExecutionAttachment.conversation": "ConversationIdentity";
   "ExecutionAttachment.process": "NativeProcessIdentity";
   "ExecutionAttachment.shell": "NativeShellIdentity";
   "ResumeRecord.cause": "ResumeCause";
@@ -961,10 +926,12 @@ export interface WireChildNames {
   "ResourceRegister.resource": "OwnedResourceIdentity";
   "CleanupResourceSummary.cleanup": "CleanupItem";
   "NativeShellIdentity.process": "NativeProcessIdentity";
+  "RetirementIdentity.conversation": "ConversationIdentity";
   "RetirementIdentity.process": "NativeProcessIdentity";
   "RetirementIdentity.shell": "NativeShellIdentity";
   "RunRetirement.identity": "RetirementIdentity";
   "RunRetirement.state": "RetirementState";
+  "Run.launch_config": "OrchestrationConfiguration";
   "Run.dispatch": "DispatchState";
   "Run.target": "DispatchTarget";
   "Run.setup": "SetupSummary";
@@ -987,8 +954,7 @@ export interface WireChildNames {
   "QuestionReceipt[answer_delivered].answer": "AnswerReceipt";
   "QuestionReceipt[answer_acknowledged].answer": "AnswerReceipt";
   "AnswerReceipt.sender": "ActorRef";
-  "Subagent.last_control": "SubagentControlState";
-  "SubagentControlState.op": "SubagentOp";
+  "TaskIntent.conversation": "ConversationIdentity";
   "RuntimeObservation.error": "ErrorResponse";
   "RuntimeObservation[unavailable].error": "ErrorResponse";
 }
@@ -1020,18 +986,10 @@ export interface WireTagNames {
   "OwnedResourceIdentity[fixture_set]": "kind";
   "RetirementState": "state";
   "RetirementState[waiting]": "state";
-  "RetirementState[native_stop_offered]": "state";
-  "RetirementState[native_stop_deferred]": "state";
-  "RetirementState[native_stop_requested]": "state";
-  "RetirementState[native_stopped]": "state";
   "RetirementState[close_intent]": "state";
   "RetirementState[retired]": "state";
   "RetirementState[retained]": "state";
   "RetirementState[unknown]": "state";
-  "NativeStopReceipt": "outcome";
-  "NativeStopReceipt[shutdown_requested]": "outcome";
-  "NativeStopReceipt[deferred]": "outcome";
-  "NativeStopReceipt[refused]": "outcome";
   "ActorRef": "type";
   "ActorRef[operator]": "type";
   "ActorRef[run]": "type";
@@ -1051,7 +1009,7 @@ export interface WireCheckpointFieldNames {
   "OrchestrationWaitResponse": "revision" | "tasks_token" | "changed";
   "OrchestrationMutationRequest": "session_id" | "expected_revision" | "action";
   "OrchestrationMutationResponse": "revision" | "result";
-  "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "subagents" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
+  "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "task_ownership" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
   "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at";
   "RootSummary": "root_id" | "label" | "kind" | "open_runs" | "needs_you";
   "TaskBoard": "root_id" | "path" | "doc_revision" | "unidentified_items" | "diagnostics" | "tasks";
@@ -1059,6 +1017,8 @@ export interface WireCheckpointFieldNames {
   "TaskStep": "step_id" | "parent_step_id" | "depth" | "title" | "checked" | "status" | "line" | "source_offset" | "diagnostic";
   "TaskStepProgress": "done" | "total";
   "TaskDependencies": "state" | "unmet" | "problems";
+  "TaskOwnership": "root_id" | "task_id" | "generation" | "owner";
+  "TaskOwner": "run_id" | "conversation" | "claim_operation_id";
   "TaskDependencyBlocker": "task_id" | "reason";
   "TaskView": "task" | "lane" | "current_run_id" | "dependencies";
   "DispatchTarget": "base_ref" | "branch" | "request" | "target" | "workspace_id";
@@ -1075,7 +1035,8 @@ export interface WireCheckpointFieldNames {
   "DirectoryIdentity": "device" | "inode";
   "CheckoutGitIdentity": "common_dir" | "worktree_git_dir";
   "CheckoutIdentity": "key" | "machine_id" | "path" | "directory_identity" | "git";
-  "ExecutionAttachment": "attachment_id" | "epoch" | "state" | "launch_mode" | "location" | "main_session_id" | "process" | "shell" | "machine_id" | "launch_attempt" | "updated_at";
+  "ConversationIdentity": "harness" | "session_id";
+  "ExecutionAttachment": "attachment_id" | "epoch" | "state" | "launch_mode" | "location" | "conversation" | "process" | "shell" | "machine_id" | "launch_attempt" | "updated_at";
   "ResumeCause": "code" | "message" | "class";
   "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
   "ProjectRootLookupRequest": "session_id" | "workspace_id" | "selected_root_id";
@@ -1102,7 +1063,7 @@ export interface WireCheckpointFieldNames {
   "IntegrationRecordResult": "operation_id" | "run_id" | "integration" | "checks" | "duplicate";
   "ResourceSourceIdentity": "checkout_key" | "source_commit" | "source_tree" | "input_configuration" | "toolchain_fingerprint";
   "ResourceRequest": "operation_id" | "resource_key" | "source_identity" | "holder";
-  "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "requester_child_id" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
+  "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
   "ResourceRelease": "request_id" | "expected_holder";
   "ResourceBuildRegistration": "request_id" | "expected_holder" | "process";
   "OwnedGitIdentity": "creation_operation_id" | "machine_id" | "repository_key" | "repository_root" | "repository_device" | "repository_inode" | "common_dir" | "common_device" | "common_inode" | "checkout_path" | "checkout_device" | "checkout_inode" | "checkout_key" | "branch_ref" | "creation_tip";
@@ -1127,23 +1088,15 @@ export interface WireCheckpointFieldNames {
   "RunCleanupSummary": "run_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count";
   "RestorationSummary": "reattached" | "total_attachments" | "cleanup_pending";
   "NativeShellIdentity": "process" | "executable_device" | "executable_inode" | "argv_digest";
-  "RetirementIdentity": "attachment_id" | "attachment_epoch" | "launch_mode" | "run_attempt" | "launch_attempt" | "launch_tag" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "herdr_boot_id" | "omp_session_id" | "process" | "shell";
-  "RunRetirement": "retirement_id" | "trigger" | "result_message_id" | "task_revision" | "identity" | "quiescent_stop_at" | "state" | "created_at" | "updated_at";
-  "RetirementState": "at" | "blockers" | "detail" | "evidence" | "native_stopped" | "offered_at" | "phase" | "reason" | "state" | "terminal";
+  "RetirementIdentity": "attachment_id" | "attachment_epoch" | "launch_mode" | "run_attempt" | "launch_attempt" | "launch_tag" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "herdr_boot_id" | "conversation" | "process" | "shell";
+  "RunRetirement": "retirement_id" | "trigger" | "result_message_id" | "task_revision" | "identity" | "state" | "created_at" | "updated_at";
+  "RetirementState": "at" | "blockers" | "detail" | "phase" | "reason" | "state" | "stopped" | "terminal";
   "RetirementState[waiting]": "blockers" | "state";
-  "RetirementState[native_stop_offered]": "offered_at" | "state";
-  "RetirementState[native_stop_deferred]": "offered_at" | "reason" | "at" | "state";
-  "RetirementState[native_stop_requested]": "at" | "state";
-  "RetirementState[native_stopped]": "at" | "evidence" | "state";
   "RetirementState[close_intent]": "at" | "state";
   "RetirementState[retired]": "at" | "terminal" | "state";
-  "RetirementState[retained]": "at" | "reason" | "native_stopped" | "state";
+  "RetirementState[retained]": "at" | "reason" | "stopped" | "state";
   "RetirementState[unknown]": "at" | "phase" | "detail" | "state";
-  "NativeStopReceipt": "outcome" | "reason" | "text";
-  "NativeStopReceipt[shutdown_requested]": "outcome";
-  "NativeStopReceipt[deferred]": "reason" | "outcome";
-  "NativeStopReceipt[refused]": "reason" | "text" | "outcome";
-  "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
+  "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "assignment_generation" | "launch_config" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
   "DispatchState": "launch_tag" | "endpoint_identity" | "recovery" | "agent_started" | "step" | "launch_attempt" | "error" | "updated_at";
   "Annotation": "by" | "text" | "at";
   "ActorRef": "run_id" | "type";
@@ -1151,18 +1104,16 @@ export interface WireCheckpointFieldNames {
   "ActorRef[run]": "run_id" | "type";
   "ActorRef[dispatcher]": "type";
   "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "at";
-  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "stale" | "escalated_from" | "from_subagent_id" | "stage" | "woken_omp_session" | "created_at" | "acked_at";
+  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
   "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "receipt";
   "QuestionReceipt": "answer" | "status";
   "QuestionReceipt[unresolved]": "status";
   "QuestionReceipt[answer_delivered]": "answer" | "status";
   "QuestionReceipt[answer_acknowledged]": "answer" | "status";
   "AnswerReceipt": "sender" | "message_id" | "seq" | "stage" | "created_at" | "acked_at";
-  "Subagent": "run_id" | "subagent_id" | "parent_subagent_id" | "bound_omp_session" | "role" | "label" | "status" | "summary" | "last_control" | "updated_at";
-  "SubagentControlState": "seq" | "op" | "stage" | "error" | "at";
-  "TaskIntent": "intent_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "state" | "origin" | "supervisor_run_id" | "omp_session_id" | "result_message_id";
+  "TaskIntent": "intent_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "state" | "origin" | "supervisor_run_id" | "conversation" | "result_message_id";
   "TaskAssignmentIntent": "root_id" | "task_id" | "state";
-  "RunObservation": "run_id" | "presence" | "actual_omp" | "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_status" | "state_changed_at";
+  "RunObservation": "run_id" | "presence" | "actual_agent" | "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_status" | "state_changed_at";
   "RuntimeObservation": "endpoint_identity" | "error" | "observed_at" | "runs" | "status";
   "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs" | "status";
   "RuntimeObservation[unavailable]": "error" | "status";
@@ -1184,6 +1135,7 @@ export type WireOmittableField =
   | "TaskStep.step_id"
   | "TaskStep.parent_step_id"
   | "TaskStep.diagnostic"
+  | "TaskOwnership.owner"
   | "TaskView.current_run_id"
   | "DispatchTarget[space_worktree].branch"
   | "DispatchTarget[space_worktree].base_ref"
@@ -1204,7 +1156,7 @@ export type WireOmittableField =
   | "CheckoutIdentity.git"
   | "ExecutionAttachment.launch_mode"
   | "ExecutionAttachment.location"
-  | "ExecutionAttachment.main_session_id"
+  | "ExecutionAttachment.conversation"
   | "ExecutionAttachment.process"
   | "ExecutionAttachment.shell"
   | "ExecutionAttachment.machine_id"
@@ -1223,7 +1175,6 @@ export type WireOmittableField =
   | "CheckOutcome.evidence"
   | "CheckOutcome.limitation"
   | "IntegrationMapping.explanation"
-  | "ResourceRequestRecord.requester_child_id"
   | "ResourceRequestRecord.blocked_reason"
   | "OwnedGitIdentity.branch_ref"
   | "CleanupEffectReceipt.evidence"
@@ -1236,10 +1187,13 @@ export type WireOmittableField =
   | "RetirementIdentity.attachment_epoch"
   | "RetirementIdentity.launch_mode"
   | "RetirementIdentity.herdr_boot_id"
+  | "RetirementIdentity.conversation"
+  | "RetirementIdentity.process"
+  | "RetirementIdentity.shell"
   | "RunRetirement.identity"
-  | "RunRetirement.quiescent_stop_at"
   | "Run.parent_run_id"
   | "Run.task_id"
+  | "Run.assignment_generation"
   | "Run.task_revision_at_start"
   | "Run.close_reason"
   | "Run.dispatch"
@@ -1266,19 +1220,11 @@ export type WireOmittableField =
   | "Message.in_reply_to"
   | "Message.report"
   | "Message.escalated_from"
-  | "Message.from_subagent_id"
-  | "Message.woken_omp_session"
   | "Message.acked_at"
   | "AnswerReceipt.acked_at"
-  | "Subagent.parent_subagent_id"
-  | "Subagent.bound_omp_session"
-  | "Subagent.role"
-  | "Subagent.summary"
-  | "Subagent.last_control"
-  | "SubagentControlState.error"
   | "TaskIntent.origin"
   | "TaskIntent.supervisor_run_id"
-  | "TaskIntent.omp_session_id"
+  | "TaskIntent.conversation"
   | "TaskIntent.result_message_id"
   | "RunObservation.workspace_id"
   | "RunObservation.workspace_label"
@@ -1300,7 +1246,7 @@ export type WireListField =
   | "OrchestrationSnapshot.runs"
   | "OrchestrationSnapshot.messages"
   | "OrchestrationSnapshot.questions"
-  | "OrchestrationSnapshot.subagents"
+  | "OrchestrationSnapshot.task_ownership"
   | "OrchestrationSnapshot.intents"
   | "OrchestrationSnapshot.assignment_intents"
   | "OrchestrationSnapshot.cleanup"

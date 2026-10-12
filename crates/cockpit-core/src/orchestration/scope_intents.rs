@@ -146,7 +146,7 @@ pub(super) fn resume(
         messages::append(state, messages::AppendMessage {
             from: intent.from, to_run_id: &intent.run_id, message_id: &message_id,
             kind: MessageKind::Instruction, text: &text, in_reply_to: None,
-            report: None, stale: false, from_subagent_id: None, escalated_from: None,
+            report: None, stale: false, escalated_from: None,
         })?;
         Some(message_id)
     } else { None };

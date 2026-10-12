@@ -63,15 +63,30 @@ pub struct ProjectProvider {
     pub deployment: Option<ProviderDeployment>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct OrchestrationConfiguration {
-    pub omp_extension: Option<String>,
-    pub model: Option<String>,
+    #[serde(default = "default_harness")]
+    pub harness_kind: String,
+    #[serde(default = "default_harness")]
+    pub command: String,
     #[serde(default)]
     pub extra_args: Vec<String>,
+    pub resume_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub inbox_prompt_hints: bool,
     #[serde(default)]
     pub routes: Vec<OrchestrationRoute>,
+}
+
+fn default_harness() -> String { "omp".into() }
+
+impl Default for OrchestrationConfiguration {
+    fn default() -> Self {
+        Self { harness_kind: default_harness(), command: default_harness(),
+            extra_args: Vec::new(), resume_args: None, inbox_prompt_hints: false,
+            routes: Vec::new() }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

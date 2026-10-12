@@ -34,7 +34,7 @@ pub(in crate::orchestration) fn send_back(
     state.runs[index].source_output = None;
     state.runs[index].integration = Integration::Pending;
     let from = actor_ref(actor, caller, state);
-    messages::append(state, messages::AppendMessage { from: from, to_run_id: &run_id, message_id: &format!("sendback-{}", id()), kind: MessageKind::Answer, text: &text, in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })?;
+    messages::append(state, messages::AppendMessage { from: from, to_run_id: &run_id, message_id: &format!("sendback-{}", id()), kind: MessageKind::Answer, text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     state.runs[index].annotations.push(annotation);
     Ok(Applied::Machine(OrchestrationActionResult::Done))
 }

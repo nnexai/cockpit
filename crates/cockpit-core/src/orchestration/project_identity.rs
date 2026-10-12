@@ -106,8 +106,8 @@ pub async fn replacement_consumers_preflight(herdr: &dyn super::herdr::Orchestra
     for pane in panes {
         if pane.launch_pending
             || pane.workspace_id != location.workspace_id
-            || pane.agent_kind.as_deref().is_some_and(|kind| !super::NativeAgentKind::is_omp(kind))
-            || pane.native_session_id.as_ref().is_some_and(|id| attachment.main_session_id.as_ref() != Some(id)) {
+            || pane.agent_kind.as_deref().is_some_and(|kind| kind != run.launch_config.harness_kind)
+            || !super::optional_available(&location.native_session_id, &pane.native_session_id) {
             return Err(protected());
         }
         let info = herdr.pane_process_info(&run.session_id, &runtime.endpoint_identity, &pane.pane_id)
@@ -149,7 +149,7 @@ pub(crate) fn same_location(left: Option<&RunLocation>, right: Option<&RunLocati
 pub(crate) fn same_root_attachment(a: &ExecutionAttachment, b: &ExecutionAttachment) -> bool {
     a.attachment_id == b.attachment_id && a.epoch == b.epoch && a.state == b.state
         && a.process == b.process && a.shell == b.shell && a.machine_id == b.machine_id
-        && a.main_session_id == b.main_session_id && a.launch_mode == b.launch_mode
+        && a.conversation == b.conversation && a.launch_mode == b.launch_mode
         && a.launch_attempt == b.launch_attempt && same_location(a.location.as_ref(), b.location.as_ref())
 }
 
@@ -174,9 +174,8 @@ fn root_recovery_target(state: &super::store::OrchestrationState, run: &Run) -> 
     }
     let attachment = run.attachment.as_ref().ok_or_else(root_unproven)?;
     if matches!(attachment.state, AttachmentState::Quiescing | AttachmentState::Revoked)
-        || attachment.main_session_id.as_deref().is_none_or(str::is_empty)
-        || attachment.location.as_ref().is_none_or(|location| location.session_id != run.session_id
-            || location.native_session_id.as_ref().is_some_and(|native| attachment.main_session_id.as_ref() != Some(native)))
+        || attachment.conversation.is_none()
+        || attachment.location.as_ref().is_none_or(|location| location.session_id != run.session_id)
         || run.dispatch.as_ref().is_some_and(|dispatch|
             matches!(dispatch.step, DispatchStep::SetupRunning | DispatchStep::SetupUnknown
                 | DispatchStep::LaunchIntent | DispatchStep::LaunchPending | DispatchStep::LaunchUnknown)
@@ -287,7 +286,7 @@ fn owned_root_pane<'a>(runtime: &'a super::herdr::RuntimeView, run: &Run, allow_
     let mut candidates = runtime.panes.iter().filter(|pane|
         location.terminal_id.as_ref().is_some_and(|id| pane.terminal_id.as_ref() == Some(id))
         || exact_layout(pane)
-        || attachment.main_session_id.as_ref().is_some_and(|id| pane.native_session_id.as_ref() == Some(id))
+        || location.native_session_id.as_ref().is_some_and(|id| pane.native_session_id.as_ref() == Some(id))
         || (!location.launch_tag.is_empty() && (pane.tab_label == location.launch_tag
             || pane.agent_name.as_deref() == Some(location.launch_tag.as_str()))));
     let Some(pane) = candidates.next() else { return Ok(None) };
@@ -348,8 +347,8 @@ impl OrchestrationService {
             if info.pane_id != pane.pane_id { return Err(root_container_unproven()); }
             if alive {
                 let process = attachment.process.as_ref().ok_or_else(root_unproven)?;
-                if !pane.agent_kind.as_deref().is_some_and(super::NativeAgentKind::is_omp)
-                    || pane.native_session_id.as_ref().is_some_and(|id| attachment.main_session_id.as_ref() != Some(id))
+                if pane.agent_kind.as_deref().is_some_and(|kind| kind != expected.launch_config.harness_kind)
+                    || attachment.location.as_ref().is_some_and(|location| !super::optional_available(&location.native_session_id, &pane.native_session_id))
                     || !info.processes.iter().any(|(pid, _)| *pid == process.pid)
                     || !matches!(process_identity::incarnation_foreground(process.pid as i32, process.start_ticks), Ok(true)) {
                     return Err(root_container_unproven());
@@ -367,8 +366,8 @@ impl OrchestrationService {
             } else {
                 // Cached native identity is not current occupancy. A genuine
                 // shell-only foreground fingerprint, not its label, proves idle.
-                if pane.agent_kind.as_deref().is_some_and(|kind| !super::NativeAgentKind::is_omp(kind))
-                    || pane.native_session_id.as_ref().is_some_and(|id| attachment.main_session_id.as_ref() != Some(id)) {
+                if pane.agent_kind.as_deref().is_some_and(|kind| kind != expected.launch_config.harness_kind)
+                    || attachment.location.as_ref().is_some_and(|location| !super::optional_available(&location.native_session_id, &pane.native_session_id)) {
                     return Err(root_container_unproven());
                 }
                 let shell = info.shell_identity.as_ref().ok_or_else(root_container_unproven)?;

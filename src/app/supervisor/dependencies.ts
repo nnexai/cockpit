@@ -29,14 +29,15 @@ export function dependencyCandidateReason(tasks: readonly TaskView[], taskId: st
   }
   return null;
 }
-export function taskContentReason(snapshot: OrchestrationSnapshot, task: TaskView | null, live: boolean): string | null {
-  if (!live) return "Reconnect and check current agent status before changing task content.";
+export function taskContentReason(snapshot: OrchestrationSnapshot, task: TaskView | null, connected: boolean): string | null {
+  if (!connected) return "Reconnect to Cockpit before changing task content.";
   if (!task) return "The canonical task is unavailable.";
   if (snapshot.runs.find(run => run.run_id === snapshot.board?.root_id)?.stage === "closed") return "Tracking is closed; tasks are read-only.";
   if (task.task.checked) return "Task is complete; its content and steps are read-only.";
   if (task.task.diagnostic) return "Resolve the canonical task diagnostic before editing.";
   if (snapshot.intents.some(intent => intent.root_id === snapshot.board?.root_id && intent.task_id === task.task.task_id)) return "Resolve the pending acceptance decision before editing task content.";
-  if (snapshot.runs.some(run => run.root_id === snapshot.board?.root_id && run.task_id === task.task.task_id && run.stage !== "closed" && run.stage !== "reported")) return "Work is active. Wait for the worker's Result before editing task content.";
+  const ownership = snapshot.task_ownership.find(item => item.root_id === snapshot.board?.root_id && item.task_id === task.task.task_id);
+  if (snapshot.runs.some(run => run.root_id === snapshot.board?.root_id && (ownership?.owner ? run.run_id === ownership.owner.run_id : run.task_id === task.task.task_id && run.assignment_generation === (ownership?.generation ?? 0) + 1) && run.stage !== "closed" && run.stage !== "reported")) return "Work is active. Wait for the worker's Result before editing task content.";
   return null;
 }
 export function dependentCount(view: TaskView, tasks: readonly TaskView[]): number {

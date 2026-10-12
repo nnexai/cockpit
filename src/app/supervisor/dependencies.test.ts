@@ -20,6 +20,7 @@ function resultRun(taskId: string): Run {
   return {
     session_id: "session", brief: "", run_id: "worker", kind: "worker", label: "Worker", root_id: "root",
     parent_run_id: "root", task_id: taskId, attempt: 1, task_revision_at_start: `revision-${taskId}`,
+    assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
     stage: "reported", close_reason: null, dispatch: null, target: null, setup: null,
     cleanup_policy: null, last_report: result, result, source_output: null, integration: { state: "pending" }, annotations: [],
     project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null,

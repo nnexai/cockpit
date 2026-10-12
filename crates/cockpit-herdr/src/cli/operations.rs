@@ -25,6 +25,8 @@ pub(crate) fn request_is_mutating(method: &str) -> bool {
             | "pane.close"
             | "pane.focus"
             | "agent.focus"
+            | "agent.prompt"
+            | "layout.apply"
             | "pane.send_text"
             | "command.invoke"
     )
@@ -246,5 +248,13 @@ mod tests {
         assert!(request_is_safe_to_dispatch_before_identity("worktree.list"));
         assert!(!request_is_safe_to_dispatch_before_identity("pane.send_text"));
         assert!(!request_is_safe_to_dispatch_before_identity("unknown.future_method"));
+    }
+
+    #[test]
+    fn orchestration_prompt_and_direct_launch_are_uncertain_mutations() {
+        for method in ["agent.prompt", "layout.apply"] {
+            assert!(super::request_is_mutating(method));
+            assert!(!super::request_is_safe_to_dispatch_before_identity(method));
+        }
     }
 }

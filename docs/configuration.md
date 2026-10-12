@@ -52,11 +52,65 @@ catalog_depth = 3
 
 ## Endpoint and CLI selection
 
-Herdr-addressed `widget`, `context`, `browser`, `notes` and orchestration commands share [endpoint.rs](../crates/cockpit-host/src/bin/cockpit/endpoint.rs). Explicit session/socket selectors take precedence; otherwise launch `COCKPIT_SESSION_ID` pairs with the pane's `HERDR_SOCKET_PATH`, then native Herdr inheritance. Socket layout identifies `herdr.sock` as `default` and `sessions/<name>/herdr.sock` as a named session. An explicit session never borrows another session's inherited socket; a stale selected socket fails rather than falling back.
+Herdr-addressed `widget`, `context`, `browser`, `notes` and orchestration commands share [endpoint.rs](../crates/cockpit-host/src/bin/cockpit/endpoint.rs). Explicit `--herdr-session`/`--herdr-socket` selectors take precedence; otherwise launch `COCKPIT_HERDR_SESSION` pairs with the pane's `HERDR_SOCKET_PATH`, then native Herdr inheritance. Socket layout identifies `herdr.sock` as `default` and `sessions/<name>/herdr.sock` as a named session. An explicit Herdr session never borrows another session's inherited socket; a stale selected socket fails rather than falling back. This physical session is separate from the agent conversation's `COCKPIT_SESSION_ID`.
 
-The extension uses launch-selected `COCKPIT_CLI_PATH` and configuration, not an ambient-PATH replacement. Host role may use itself. Native role selects sibling `cockpit-cli` when the installed GUI is named `cockpit`, never the GUI executable; debug `cockpit-tauri` may use the distinct sibling `cockpit` host. The installed pair needs no override. Direct inbox CLI calls remain supported with the correct binary/configuration and fresh native caller evidence.
+Agent launches receive the selected `COCKPIT_CLI_PATH` and configuration, not an ambient-PATH replacement. Host role may use itself. Native role selects sibling `cockpit-cli` when the installed GUI is named `cockpit`, never the GUI executable; debug `cockpit-tauri` may use the distinct sibling `cockpit` host. The installed pair needs no override. Direct agent CLI calls use an issued role capability and current conversation; physical commands separately require fresh target evidence.
 
 New context terminals receive `COCKPIT_LIBRARY_ROOT`. Existing terminals are not retrofitted: `cockpit-cli context --current` reports the originating Space, Library root, selected `items[].path`, `checkout_path` and `repository_paths` for direct reads. Explicit targeting uses `--herdr-session ID --herdr-socket PATH --space ID`; `--config PATH` selects configuration. Writable task notes belong in Space Notes, not managed Library content.
+
+## Supervisor launch and conversation identity
+
+The existing configuration file selects the supervisor/worker harness; the Start dialog does not add a per-launch picker. These are trusted local executable/argv values, not agent-provided shell text:
+
+```toml
+[orchestration]
+harness_kind = "omp"
+command = "omp"
+extra_args = []
+inbox_prompt_hints = false
+# Optional OMP same-chat resume; omit to leave resume launch unconfigured.
+# resume_args = ["--resume", "{session_id}"]
+```
+
+`harness_kind` and `command` default to `omp`; fresh launches use literal `extra_args` (default empty). Optional `resume_args` replaces, rather than appends to, fresh-start arguments for same-chat resume. Exactly one argument must be the whole string `{session_id}`; only that argument is replaced by the opaque registered conversation ID. Missing, embedded or duplicate placeholders fail; there is no shell expansion, general interpolation, automatic `--continue` or fallback harness. `harness_kind` is nonempty printable and at most 512 bytes. Each argv list permits at most 16 nonempty printable arguments, each at most 4096 bytes; `command` is nonempty printable, at most 4096 bytes and not an option. NUL is rejected. For the default `omp` harness and `omp` command only, launch appends the stable per-run `--session-dir`; it never sets a fabricated conversation ID. Existing `routes` remain task-destination routing, not harness selection. Resolved launch settings are retained with each durable launch intent.
+
+There is no mandatory OMP extension, `omp_extension`, `COCKPIT_OMP_EXTENSION`, orchestration `model` or OMP-only argument allowlist. This is a clean cutover, not configuration migration: obsolete aliases are unsupported and incompatible orchestration store schemas are rejected without discarding stored bytes. The separate [OMP quota executable](#omp-quota-executable) is unchanged.
+
+Every agent interaction supplies a resumable conversation's `--harness KIND` and `--session-id ID`. Explicit values take selection precedence over `COCKPIT_HARNESS`/`COCKPIT_SESSION_ID`, but independently present conflicting identities fail rather than silently selecting stale context. For harness `omp`, absent a direct session ID, `PI_SESSION_FILE` supplies the actual session-header ID. The bounded reader searches header records within 64 KiB; it does not infer identity from a filename or parse/log the full journal. Explicit non-OMP identity needs no OMP journal. Launch sets the harness kind, never invents or freezes a conversation ID.
+
+With the issued capability and generic context environment, begin with:
+
+```sh
+cockpit-cli run context
+# To supply identity explicitly:
+cockpit-cli --harness KIND --session-id ID run context
+cockpit-cli run register --operation-id UUID
+```
+
+Context registers an unbound capability and returns run/root/role/conversation, assignment generation and pending inbox counts; later calls still verify identity. Root registration pins the root conversation. Worker registration atomically claims the authorized vacant task generation; a pending launch is not an owner. Implicit registration uses the credential UUID, so concurrent CLI calls do not create competing claims. Conflicts do not trigger a new UUID retry, and registration without an issued capability is unavailable. Worker commands use the credential's pinned generation, not a fresh task lookup.
+
+Only the owning active supervisor can perform:
+
+```sh
+cockpit-cli task unassign TASK_ID --operation-id UUID --expected-assignment-generation N
+```
+
+This clears the exact current owner or pending authorization, increments generation and revokes semantic credentials/launch authorization. A stale generation conflicts; accepted tasks cannot be unassigned. Operator UI sends an instruction to the supervisor, not this mutation directly. Reports/history and physical checkout/resource claims remain: unassignment does not stop a worker or authorize same-checkout replacement or cleanup.
+
+### Inbox pull, capture and optional prompt hints
+
+CLI waiting is the baseline, including non-OMP harnesses:
+
+```sh
+cockpit-cli inbox wait --after N --timeout 300
+cockpit-cli inbox list --after N --json
+# After retaining the returned bodies/cursor durably:
+cockpit-cli inbox ack --through N
+```
+
+ACK accepts an already Read prefix and records capture only, not model processing, an Answer, resumed work or ownership change. Answers still name the exact current NeedsInput question. Preserve original operation identity/payload on unknown outcomes and inspect saved receipts before another submission.
+
+`inbox_prompt_hints = false` is the default. A new owned-pane bootstrap uses a fixed context/pull instruction after supported harness-ready observation; regular automatic counts-only hints require explicit opt-in. Both use identity-checked Herdr `agent.prompt`, which submits text plus Enter to the owned pane; this is not a paste-only notice. Hints never contain inbox message bodies or target a name/focused pane. Busy, blocked, unready, departed or contradictory targets defer; unsupported transport is explicit and unknown submission is retained without blind replay or raw-key fallback. Where empty-draft evidence is unavailable, enabling hints authorizes terminal submission and does not guarantee preservation of an unknown draft. Waiting, registration and explicit ACK do not require hint transport.
 
 ## Durable Space Notes
 
@@ -161,11 +215,9 @@ Background pacing defaults to one request per 10 seconds, one in flight and a ro
 
 Attachments are metadata-only by default; downloads are explicit. Jira's bounded attachment list reports `source_attachments_partial` for malformed or beyond-256 entries. PNG/JPEG previews are supported; PDF has no active renderer and SVG/HTML never execute. Attachment identity and removal behavior remain in [DECISIONS](../DECISIONS.md).
 
-## OMP quota and extension paths
+## OMP quota executable
 
 `COCKPIT_OMP_EXECUTABLE` overrides `[quota] omp_executable`. With neither, Cockpit finds executable `omp` through `PATH`, then `$HOME/.local/bin`, `$HOME/.bun/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`, then falls back to bare `omp`. Discovery never overrides an explicit selection, modifies `PATH` or runs shell startup files. Existing `PI_CODING_AGENT_DIR` authentication overrides are inherited by the child. Restart Cockpit after configuration changes; usage-source-not-found means launch failure, not a JSON parse failure.
-
-The embedded integration defaults to a private `<state_root>/orchestration/omp/` materialization. `COCKPIT_OMP_EXTENSION` overrides `[orchestration] omp_extension`, which must be absolute. Installer receipts separately own the distributed extension artifact; launches select it per process with `-e`. No global OMP configuration/authentication mutation is implied. [native-install](native-install.md) owns installation instructions; [DECISIONS](../DECISIONS.md) owns caller, startup and grant authority.
 
 ## Native window and Browser settings
 

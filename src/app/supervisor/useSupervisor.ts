@@ -26,6 +26,14 @@ const LOCAL_FENCES: Partial<Record<OrchestrationAction["action"], true>> = {
   worker_start: true, task_scope_update: true, supervisor_start: true, run_resume: true,
   accept: true, message_send: true, annotate: true, cleanup_finish: true,
 };
+// Canonical state and durable messages do not require physical agent observation.
+// Unknown action kinds retain the existing fresh-runtime guard.
+const SEMANTIC_ACTIONS: Partial<Record<OrchestrationAction["action"], true>> = {
+  task_assign: true, task_assignment_resolve: true, tasks_assign_ids: true,
+  task_scope_update: true, task_unassign: true, run_register: true,
+  accept: true, intent_resolve: true, send_back: true, cancel_run: true,
+  report: true, message_send: true, annotate: true, inbox_pull: true, inbox_ack: true,
+};
 // Only codes whose core paths guarantee refusal BEFORE publication belong here.
 const PREPUBLICATION_REFUSALS: Partial<Record<string, true>> = {
   actor_forbidden: true, caller_unbound: true, caller_mismatch: true, attempt_stale: true,
@@ -57,7 +65,7 @@ export function acceptsSupervisorSnapshot(next: OrchestrationSnapshot, sessionId
 }
 
 /** One writer for the mounted workarea; uncertainty belongs to the original task. */
-export function useSupervisor(client: CockpitClient, sessionId: string, rootId: string | null, active: boolean) {
+export function useSupervisor(client: CockpitClient, sessionId: string, rootId: string | null, active: boolean, sessionLive: boolean) {
   const [snapshot, setSnapshot] = useState<OrchestrationSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [observationError, setObservationError] = useState<string | null>(null);
@@ -66,9 +74,10 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
   const [refreshToken, setRefreshToken] = useState(0);
   const [, uncertaintyChanged] = useState(0);
   const generation = useRef(0), scopeGeneration = useRef(0), floor = useRef(0), pending = useRef(false);
-  const identity = useRef({ client, sessionId, rootId, active, connected });
+  const usableConnection = connected && sessionLive;
+  const identity = useRef({ client, sessionId, rootId, active, connected: usableConnection });
   if (identity.current.client !== client || identity.current.sessionId !== sessionId || identity.current.rootId !== rootId) scopeGeneration.current++;
-  identity.current = { client, sessionId, rootId, active, connected };
+  identity.current = { client, sessionId, rootId, active, connected: usableConnection };
   const current = useRef<OrchestrationSnapshot | null>(null);
   const unknown = useRef(new Map<string, UnknownRecord>());
   const unknownStore = useRef<string | null>(null);
@@ -82,7 +91,7 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
     let cancelled = false, timer = 0;
     const sleep = () => new Promise<void>(resolve => { timer = window.setTimeout(resolve, 1500); });
     const live = () => !cancelled && generation.current === scope;
-    if (!active) { setConnected(false); return () => { cancelled = true; }; }
+    if (!active || !sessionLive) { setConnected(false); return () => { cancelled = true; }; }
     const observe = async () => {
       while (live()) {
         try {
@@ -102,7 +111,7 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
     };
     void observe();
     return () => { cancelled = true; generation.current++; window.clearTimeout(timer); };
-  }, [client, sessionId, rootId, active, refreshToken]);
+  }, [client, sessionId, rootId, active, sessionLive, refreshToken]);
   const captureMutationScope = useCallback((action: OrchestrationAction): MutationRequestScope | null => {
     const observed = current.current;
     if (!observed) return null;
@@ -111,7 +120,7 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
   }, []);
   const mutateResult = useCallback(async (action: OrchestrationAction, retainedScope?: MutationRequestScope): Promise<OrchestrationActionResult | null> => {
     const observed = current.current;
-    if (!identity.current.active || !identity.current.connected || !observed || observed.runtime.status !== "fresh" || pending.current) return null;
+    if (!identity.current.active || !identity.current.connected || !observed || observed.runtime.status !== "fresh" && !SEMANTIC_ACTIONS[action.action] || pending.current) return null;
     const requestScope = retainedScope ?? captureMutationScope(action)!;
     if (requestScope.stateStoreId !== observed.state_store_id || requestScope.sessionId !== identity.current.sessionId || action.action !== "supervisor_start" && requestScope.rootId !== identity.current.rootId) {
       setError("Return to the original supervisor and reconnect before retrying. Your original request is kept.");
@@ -140,7 +149,7 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
     if (!captured.active || !observed || observed.session_id !== submitted.scope.sessionId || observed.board?.root_id !== submitted.scope.rootId || captured.sessionId !== submitted.scope.sessionId || captured.rootId !== submitted.scope.rootId) return { kind: "not_sent", reason: "Return to the original task and reconnect before saving." };
     if (pending.current) return { kind: "not_sent", reason: "Wait for the current operation." };
     if (unknown.current.has(key) && unknown.current.get(key) !== replacing) return { kind: "not_sent", reason: "A change to this task is unconfirmed. Read and explicitly resolve it first." };
-    if (!captured.connected || observed.runtime.status !== "fresh") return { kind: "not_sent", reason: "Reconnect and check current agent status before saving." };
+    if (!captured.connected) return { kind: "not_sent", reason: "Reconnect to the task state before saving." };
     const target = uniqueTask(observed.board?.tasks ?? [], submitted.scope.taskId);
     if ("action" in submitted && (submitted.action.root_id !== submitted.scope.rootId || submitted.action.task_id !== submitted.scope.taskId)) return { kind: "not_sent", reason: "The source operation must target its original task and root." };
     if (kind === "steps" && target?.task.step_progress === null) return { kind: "not_sent", reason: "The saved checklist structure is unsafe to edit. Resolve its source diagnostics first." };
@@ -242,7 +251,7 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
       if (!unknown.current.has(key)) unknown.current.set(key, { kind, stateStoreId, payload: JSON.stringify(submitted), read: null, readSerial: 0, missingRead: false, client });
     }
   };
-  return { snapshot, error: error ?? observationError, connected, busy, mutateResult, captureMutationScope, hydrateDraftUncertainty, refresh,
+  return { snapshot, error: error ?? observationError, connected: usableConnection, busy, mutateResult, captureMutationScope, hydrateDraftUncertainty, refresh,
     submitStep: (submitted: StepSubmission) => submit(submitted, "steps", stepAction(submitted)),
     submitTask: (submitted: SourceSubmission) => submit(submitted, "source", submitted.action),
     readSaved, resolveUnknown, resolveSourceUnknown,

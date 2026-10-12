@@ -8,16 +8,27 @@ use super::herdr::RuntimeView;
 use super::store::OrchestrationState;
 use crate::InspectionError;
 
-/// The same canonical-attempt selection used by the board.
-/// Historical superseded attempts never own content.
+/// Projects the durable task owner, or its still-pending next-generation launch.
+/// Historical attempts never become current merely because an owner was cleared.
 pub(crate) fn current_task_run<'a>(
     state: &'a OrchestrationState,
     root_id: &str,
     task_id: &str,
 ) -> Option<&'a Run> {
+    let ownership = state.task_ownership.iter()
+        .find(|ownership| ownership.root_id == root_id && ownership.task_id == task_id)?;
+    if let Some(owner) = &ownership.owner {
+        return state.runs.iter().find(|run| run.run_id == owner.run_id
+            && run.root_id == root_id && run.task_id.as_deref() == Some(task_id)
+            && run.assignment_generation == Some(ownership.generation));
+    }
+    let generation = ownership.generation.checked_add(1)?;
     state.runs.iter()
         .filter(|run| run.root_id == root_id && run.task_id.as_deref() == Some(task_id)
-            && run.close_reason != Some(CloseReason::Superseded))
+            && run.kind == RunKind::Worker && run.stage != RunStage::Closed
+            && run.assignment_generation == Some(generation)
+            && run.attachment.as_ref().is_some_and(|attachment|
+                attachment.state != AttachmentState::Revoked && attachment.conversation.is_none()))
         .max_by(|left, right| attempt_order(left).cmp(&attempt_order(right)))
 }
 
@@ -35,7 +46,6 @@ pub(crate) fn question_status(run: &Run, inbox: &[&Message], events: &[Message])
             message.to_run_id == run.run_id
                 && message.kind == MessageKind::Answer
                 && !message.stale
-                && message.from_subagent_id.is_none()
                 && message.in_reply_to.as_deref() == Some(report.message_id.as_str())
         })
         .max_by_key(|message| message.seq);
@@ -49,7 +59,7 @@ pub(crate) fn question_status(run: &Run, inbox: &[&Message], events: &[Message])
             acked_at: message.acked_at.clone(),
         };
         match message.stage {
-            DeliveryStage::Stored | DeliveryStage::Woken | DeliveryStage::Read => {
+            DeliveryStage::Stored | DeliveryStage::Read => {
                 QuestionReceipt::AnswerDelivered { answer }
             }
             DeliveryStage::Acked => QuestionReceipt::AnswerAcknowledged { answer },
@@ -135,7 +145,7 @@ pub(crate) fn snapshot(
     let (attention, questions) = project_attention(
         &runs, &inboxes, &observations, &intents, &run_by_id, &state.messages, clock, now,
     );
-    let board = project_board(boards, selected_root, &runs, &intents)?;
+    let board = project_board(boards, selected_root, state, &intents)?;
     let mut open_counts: HashMap<&str, u32> = HashMap::new();
     for run in &runs {
         if run.stage != RunStage::Closed {
@@ -176,10 +186,10 @@ pub(crate) fn snapshot(
         }).collect(),
         messages: messages.into_iter().cloned().collect(),
         questions,
-        subagents: state
-            .subagents
+        task_ownership: state
+            .task_ownership
             .iter()
-            .filter(|agent| run_by_id.contains_key(agent.run_id.as_str()))
+            .filter(|ownership| root_ids.contains(ownership.root_id.as_str()))
             .cloned()
             .collect(),
         intents: intents.into_iter().cloned().collect(),
@@ -249,26 +259,9 @@ fn project_attention(
 fn project_board(
     boards: Vec<TaskBoard>,
     selected_root: Option<&str>,
-    runs: &[&Run],
+    state: &OrchestrationState,
     intents: &[&TaskIntent],
 ) -> Result<Option<TaskBoard>, InspectionError> {
-    let mut current_runs: HashMap<(&str, &str), &Run> = HashMap::new();
-    for run in runs {
-        let Some(task_id) = run.task_id.as_deref() else {
-            continue;
-        };
-        if run.close_reason == Some(CloseReason::Superseded) {
-            continue;
-        }
-        let key = (run.root_id.as_str(), task_id);
-        match current_runs.get_mut(&key) {
-            Some(current) if attempt_order(run) > attempt_order(current) => *current = run,
-            Some(_) => {}
-            None => {
-                current_runs.insert(key, run);
-            }
-        }
-    }
     let intent_runs: HashSet<&str> = intents
         .iter()
         .map(|intent| intent.run_id.as_str())
@@ -286,9 +279,7 @@ fn project_board(
                     )
                 })?;
             for view in &mut board.tasks {
-                let current = current_runs
-                    .get(&(root_id, view.task.task_id.as_str()))
-                    .copied();
+                let current = current_task_run(state, root_id, &view.task.task_id);
                 view.current_run_id = current.map(|run| run.run_id.clone());
                 view.lane = lane(&view.task, current, &intent_runs);
                 if let Some(code) = view.task.diagnostic.as_deref() {
@@ -373,7 +364,7 @@ fn observe(
             run_id: run.run_id.clone(), presence: Presence::Unobserved,
             workspace_id: None, workspace_label: None, tab_id: None, tab_label: None,
             pane_id: None, agent_status: None, state_changed_at: None,
-            actual_omp: false,
+            actual_agent: false,
         };
         let Some(attachment) = run.attachment.as_ref() else { return observation };
         let Some(location) = attachment.location.as_ref() else { return observation };
@@ -389,16 +380,13 @@ fn observe(
         let mut pane = direct.filter(|pane| {
             identity_matches(location.terminal_id.as_deref(), pane.terminal_id.as_deref())
                 && optional_evidence_matches(location.native_session_id.as_deref(), pane.native_session_id.as_deref())
-                && optional_evidence_matches(attachment.main_session_id.as_deref(), pane.native_session_id.as_deref())
         });
         if pane.is_none() {
             // A fresh, unique terminal match is runtime observation, not mutation authority.
             // Check native session too when Herdr exposes it; older Herdr omits this field.
-            if let (Some(terminal), Some(session)) =
-                (location.terminal_id.as_deref(), attachment.main_session_id.as_deref()) {
+            if let Some(terminal) = location.terminal_id.as_deref() {
                 let mut candidates = view.panes.iter().filter(|candidate| {
                     candidate.terminal_id.as_deref() == Some(terminal)
-                        && optional_evidence_matches(Some(session), candidate.native_session_id.as_deref())
                         && optional_evidence_matches(location.native_session_id.as_deref(), candidate.native_session_id.as_deref())
                 });
                 let candidate = candidates.next();
@@ -414,7 +402,7 @@ fn observe(
         };
         matched.insert(pane.pane_id.as_str());
         observation.presence = Presence::Present;
-        observation.actual_omp = actual_omp(run, pane, &mut kernel_boot_id, &mut machine_id);
+        observation.actual_agent = actual_agent(run, pane, &mut kernel_boot_id, &mut machine_id);
         observation.workspace_id = Some(pane.workspace_id.clone());
         observation.workspace_label = Some(pane.workspace_label.clone());
         observation.tab_id = Some(pane.tab_id.clone());
@@ -456,9 +444,9 @@ fn observe(
     )
 }
 
-/// Shared fresh occupant proof for projection and unresolved-launch escalation.
+/// Fresh configured-harness occupant evidence, never semantic authorization.
 /// Endpoint and available boot/native receipt fences are checked by the caller.
-pub(super) fn actual_omp(
+pub(super) fn actual_agent(
     run: &Run,
     pane: &super::herdr::RuntimePane,
     kernel_boot_id: &mut Option<Option<String>>,
@@ -468,15 +456,16 @@ pub(super) fn actual_omp(
     let Some(location) = attachment.location.as_ref() else { return false };
     run.stage != RunStage::Closed
         && !matches!(attachment.state, AttachmentState::Reserved | AttachmentState::Revoked)
-        && attachment.main_session_id.as_deref().is_some_and(|s| !s.is_empty())
-        && pane.agent_kind.as_deref().is_some_and(super::NativeAgentKind::is_omp) && !pane.launch_pending
+        && pane.agent_kind.as_deref() == Some(run.launch_config.harness_kind.as_str())
+        && !pane.launch_pending
         && (run.kind == RunKind::Adopted
             || (run.dispatch.as_ref().is_some_and(|dispatch| dispatch.launch_attempt == attachment.launch_attempt)
                 && super::launch_receipt_coherent(run)))
         && pane.pane_id == location.pane_id
         && pane.workspace_id == location.workspace_id && pane.tab_id == location.tab_id
         && location.terminal_id.is_some() && pane.terminal_id == location.terminal_id
-        && (pane.native_session_id.as_deref() == attachment.main_session_id.as_deref()
+        && (location.native_session_id.as_ref().is_some_and(|native|
+                pane.native_session_id.as_ref() == Some(native))
             || (pane.native_session_id.is_none()
                 && attachment.process.as_ref().is_some_and(|process| {
                     process.kernel_boot_id.is_some()
@@ -556,7 +545,7 @@ fn derive_attention(
     let work = latest(MessageKind::WorkBrief);
     if let Some(brief) = work {
         let since = brief.created_at.as_str();
-        if matches!(brief.stage, DeliveryStage::Stored | DeliveryStage::Woken)
+        if brief.stage == DeliveryStage::Stored
             && older_than(clock, since, 120)
         {
             add(AttentionKind::BriefUnread, since, Some(brief.seq));
@@ -655,6 +644,8 @@ mod tests {
             parent_run_id: Some(ROOT.into()),
             task_id: Some(TASK.into()),
             attempt: 1,
+            assignment_generation: Some(1),
+            launch_config: cockpit_protocol::projects::OrchestrationConfiguration::default(),
             task_revision_at_start: Some("item-revision".into()),
             stage,
             close_reason: None,
@@ -694,7 +685,7 @@ mod tests {
                     pane_id: "pane".into(),
                     launch_tag: "launch".into(),
                 }),
-                main_session_id: None,
+                conversation: Some(conversation()),
                 process: None,
                 shell: None,
                 machine_id: None,
@@ -709,16 +700,28 @@ mod tests {
         }
     }
 
+    fn conversation() -> ConversationIdentity {
+        ConversationIdentity { harness: "omp".into(), session_id: "opaque-chat".into() }
+    }
+
     fn state(run: Run) -> OrchestrationState {
         let mut root = worker(RunStage::Active);
         root.run_id = ROOT.into();
         root.kind = RunKind::Supervisor;
         root.parent_run_id = None;
         root.task_id = None;
+        root.assignment_generation = None;
         root.attachment = None;
         root.dispatch = None;
         let mut state = OrchestrationState {
             runs: vec![root, run],
+            task_ownership: vec![TaskOwnership {
+                root_id: ROOT.into(), task_id: TASK.into(), generation: 1,
+                owner: Some(TaskOwner {
+                    run_id: WORKER.into(), conversation: conversation(),
+                    claim_operation_id: "claim".into(),
+                }),
+            }],
             revision: 7,
             ..Default::default()
         };
@@ -789,7 +792,6 @@ mod tests {
                 agent_status: Some(status.into()),
                 agent_kind: Some("omp".into()),
                 launch_pending: false,
-                interactive_ready: false,
                 state_changed_at: Some(START.into()),
             }],
         }
@@ -807,9 +809,7 @@ mod tests {
             report: None,
             stale: false,
             escalated_from: None,
-            from_subagent_id: None,
             stage,
-            woken_omp_session: None,
             created_at: START.into(),
             acked_at: None,
         }
@@ -899,6 +899,84 @@ mod tests {
             .any(|attention| attention.kind == kind)
     }
 
+    fn registered_unclassified_harness() -> (OrchestrationState, RuntimeView) {
+        let mut run = worker(RunStage::Working);
+        run.launch_config.harness_kind = "probe".into();
+        run.launch_config.command = "python3".into();
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.conversation = Some(ConversationIdentity { harness: "probe".into(), session_id: "worker-chat".into() });
+        let location = attachment.location.as_mut().unwrap();
+        location.workspace_id = "live-space".into();
+        location.tab_id = "live-tab".into();
+        location.terminal_id = Some("worker-terminal".into());
+        location.native_session_id = Some("physical-worker".into());
+        let mut durable = state(run);
+        let mut root_attachment = durable.runs[1].attachment.clone().unwrap();
+        root_attachment.attachment_id = ROOT.into();
+        root_attachment.conversation = Some(ConversationIdentity { harness: "probe".into(), session_id: "root-chat".into() });
+        let root_location = root_attachment.location.as_mut().unwrap();
+        root_location.pane_id = "root-pane".into();
+        root_location.tab_id = "root-tab".into();
+        root_location.terminal_id = Some("root-terminal".into());
+        root_location.native_session_id = None;
+        root_location.launch_tag = "root-launch".into();
+        durable.runs[0].attachment = Some(root_attachment);
+        durable.runs[0].launch_config = durable.runs[1].launch_config.clone();
+        super::super::credentials::test_job_auth(&mut durable, 0, super::super::JobRole::Root);
+        super::super::credentials::test_job_auth(&mut durable, 1, super::super::JobRole::Worker);
+        let mut live = runtime("working");
+        live.panes[0].terminal_id = Some("worker-terminal".into());
+        live.panes[0].native_session_id = Some("physical-worker".into());
+        live.panes[0].agent_kind = None;
+        live.panes[0].agent_status = None;
+        live.panes[0].agent_name = None;
+        let mut root_pane = live.panes[0].clone();
+        root_pane.pane_id = "root-pane".into();
+        root_pane.tab_id = "root-tab".into();
+        root_pane.terminal_id = Some("root-terminal".into());
+        root_pane.native_session_id = None;
+        live.panes.push(root_pane);
+        (durable, live)
+    }
+
+    #[test]
+    fn registered_present_harness_without_detector_does_not_create_recovery_attention() {
+        let (durable, live) = registered_unclassified_harness();
+        assert!(durable.runs.iter().all(|run| super::super::has_current_binding(&durable, run)));
+        let before = serde_json::to_value(&durable).unwrap();
+        let projected = project(&durable, Ok(live));
+        let RuntimeObservation::Fresh { runs, .. } = &projected.runtime else { panic!("fresh observation") };
+        assert!(runs.iter().all(|run| run.presence == Presence::Present && !run.actual_agent));
+        assert!(projected.attention.is_empty());
+        assert_eq!(projected.runs[0].stage, RunStage::Active);
+        assert_eq!(projected.runs[1].stage, RunStage::Working);
+        let task = &projected.board.as_ref().unwrap().tasks[0];
+        assert_eq!(task.current_run_id.as_deref(), Some(WORKER));
+        assert_eq!(task.lane, TaskLane::Working);
+        assert_eq!(serde_json::to_value(&durable).unwrap(), before);
+    }
+
+    #[test]
+    fn unclassified_registered_harness_preserves_absence_conflict_blocked_and_dispatch_attention() {
+        for mismatch in 0..6 {
+            let (mut durable, mut live) = registered_unclassified_harness();
+            let expected = match mismatch {
+                0 => { live.panes.remove(0); AttentionKind::ExitedWithoutReport }
+                1 => { live.panes[0].terminal_id = Some("foreign-terminal".into()); AttentionKind::ExitedWithoutReport }
+                2 => { live.panes[0].native_session_id = Some("foreign-occupant".into()); AttentionKind::ExitedWithoutReport }
+                3 => { live.endpoint_identity = "foreign-endpoint".into(); AttentionKind::DispatchUnknown }
+                4 => { live.panes[0].agent_status = Some("blocked".into()); AttentionKind::RuntimeBlocked }
+                _ => {
+                    durable.runs[1].dispatch.as_mut().unwrap().step = DispatchStep::NeedsReview;
+                    AttentionKind::DispatchUnknown
+                }
+            };
+            let projected = project(&durable, Ok(live));
+            assert!(projected.attention.iter().any(|attention|
+                attention.run_id.as_deref() == Some(WORKER) && attention.kind == expected), "mismatch {mismatch}");
+        }
+    }
+
     #[test]
     fn unanswered_current_main_question_is_projected_without_changing_durable_facts() {
         let durable = state(asking());
@@ -919,7 +997,6 @@ mod tests {
     fn linked_answer_projects_each_actual_delivery_stage_and_receipt() {
         for stage in [
             DeliveryStage::Stored,
-            DeliveryStage::Woken,
             DeliveryStage::Read,
             DeliveryStage::Acked,
         ] {
@@ -979,19 +1056,17 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_stale_subagent_and_other_inbox_messages_do_not_resolve_question() {
+    fn unrelated_stale_and_other_inbox_messages_do_not_resolve_question() {
         let baseline = answer(DeliveryStage::Acked);
         let mut old_question = baseline.clone();
         old_question.in_reply_to = Some("old-ask".into());
         let mut stale = baseline.clone();
         stale.stale = true;
-        let mut subagent = baseline.clone();
-        subagent.from_subagent_id = Some("internal-child".into());
         let mut instruction = baseline.clone();
         instruction.kind = MessageKind::Instruction;
         let mut other_inbox = baseline;
         other_inbox.to_run_id = ROOT.into();
-        for mut message in [old_question, stale, subagent, instruction, other_inbox] {
+        for mut message in [old_question, stale, instruction, other_inbox] {
             message.created_at = NOW.into();
             let mut durable = state(asking());
             durable.messages.push(message);
@@ -1044,24 +1119,23 @@ mod tests {
     }
 
     #[test]
-    fn report_messages_do_not_replace_the_current_main_question_receipt() {
+    fn another_run_report_does_not_replace_the_current_question_receipt() {
         let mut durable = state(asking());
         durable.messages.push(answer(DeliveryStage::Acked));
-        let mut subagent_report = brief(MessageKind::Report, DeliveryStage::Stored);
-        subagent_report.message_id = "child-ask".into();
-        subagent_report.from = ActorRef::Run { run_id: WORKER.into() };
-        subagent_report.to_run_id = ROOT.into();
-        subagent_report.from_subagent_id = Some("child".into());
-        subagent_report.report = Some(Report {
-            message_id: "child-ask".into(),
+        let mut other_report = brief(MessageKind::Report, DeliveryStage::Stored);
+        other_report.message_id = "other-ask".into();
+        other_report.from = ActorRef::Run { run_id: "other-worker".into() };
+        other_report.to_run_id = ROOT.into();
+        other_report.report = Some(Report {
+            message_id: "other-ask".into(),
             kind: ReportKind::NeedsInput,
             outcome: None,
-            summary: "A separate subagent question".into(),
+            summary: "A separate worker question".into(),
             plan: None,
             source_output: None,
             at: NOW.into(),
         });
-        durable.messages.push(subagent_report);
+        durable.messages.push(other_report);
         let projected = project(&durable, Ok(runtime("working")));
         assert_eq!(projected.questions.len(), 1);
         assert_eq!(projected.questions[0].question_message_id, "ask");
@@ -1099,11 +1173,11 @@ mod tests {
         let mut durable = state(worker(RunStage::Working));
         durable
             .messages
-            .push(brief(MessageKind::WorkBrief, DeliveryStage::Woken));
+            .push(brief(MessageKind::WorkBrief, DeliveryStage::Stored));
         let unread = project(&durable, Ok(runtime("working")));
         assert!(has(&unread, AttentionKind::BriefUnread));
         assert_eq!(unread.board.unwrap().tasks[0].lane, TaskLane::Working);
-        assert_eq!(durable.messages[0].stage, DeliveryStage::Woken);
+        assert_eq!(durable.messages[0].stage, DeliveryStage::Stored);
         for delivered in [DeliveryStage::Read, DeliveryStage::Acked] {
             durable.messages[0].stage = delivered;
             let read = project(&durable, Ok(runtime("working")));
@@ -1153,6 +1227,10 @@ mod tests {
         let mut replacement = worker(RunStage::Starting);
         replacement.run_id = "55555555-5555-4555-8555-555555555555".into();
         replacement.attempt = 2;
+        replacement.assignment_generation = Some(3);
+        replacement.attachment.as_mut().unwrap().conversation = None;
+        durable.task_ownership[0].owner = None;
+        durable.task_ownership[0].generation = 2;
         replacement.attachment.as_mut().unwrap().location = None;
         durable.runs.push(replacement);
         let old = project(&durable, Ok(runtime("working")));
@@ -1175,6 +1253,124 @@ mod tests {
     }
 
     #[test]
+    fn current_owner_wins_over_newer_history_and_missing_owner_never_falls_back() {
+        let mut durable = state(worker(RunStage::Working));
+        let mut newer = worker(RunStage::Reported);
+        newer.run_id = "newer-history".into();
+        newer.attempt = 20;
+        newer.assignment_generation = Some(2);
+        durable.runs.push(newer);
+        assert_eq!(current_task_run(&durable, ROOT, TASK).unwrap().run_id, WORKER);
+        let projected = project(&durable, Ok(runtime("working")));
+        let task = &projected.board.as_ref().unwrap().tasks[0];
+        assert_eq!(task.current_run_id.as_deref(), Some(WORKER));
+        assert_eq!(task.lane, TaskLane::Working);
+        assert_eq!(projected.runs.len(), 3);
+        durable.task_ownership[0].owner.as_mut().unwrap().run_id = "missing-owner".into();
+        assert!(current_task_run(&durable, ROOT, TASK).is_none());
+        let projected = project(&durable, Ok(runtime("working")));
+        assert!(projected.board.as_ref().unwrap().tasks[0].current_run_id.is_none());
+        assert_eq!(projected.board.unwrap().tasks[0].lane, TaskLane::Queued);
+    }
+
+    #[test]
+    fn vacant_ownership_never_projects_old_open_or_closed_attempts_as_current() {
+        for stage in [RunStage::Starting, RunStage::Working, RunStage::Reported, RunStage::Closed] {
+            let mut durable = state(worker(stage));
+            durable.task_ownership[0].owner = None;
+            durable.task_ownership[0].generation = 2;
+            let before = serde_json::to_value(&durable).unwrap();
+            assert!(current_task_run(&durable, ROOT, TASK).is_none());
+            let projected = project(&durable, Ok(runtime("working")));
+            let task = &projected.board.as_ref().unwrap().tasks[0];
+            assert!(task.current_run_id.is_none());
+            assert_eq!(task.lane, TaskLane::Queued);
+            assert_eq!(projected.runs.len(), 2);
+            assert_eq!(projected.task_ownership[0].generation, 2);
+            assert!(projected.task_ownership[0].owner.is_none());
+            assert_eq!(serde_json::to_value(&durable).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn pending_selection_requires_next_generation_open_unbound_nonrevoked_attempt() {
+        let mut pending = worker(RunStage::Starting);
+        pending.assignment_generation = Some(3);
+        pending.attachment.as_mut().unwrap().conversation = None;
+        let mut durable = state(pending);
+        durable.task_ownership[0].owner = None;
+        durable.task_ownership[0].generation = 2;
+        assert_eq!(current_task_run(&durable, ROOT, TASK).unwrap().run_id, WORKER);
+        for invalid in 0..7 {
+            let mut invalid_state = durable.clone();
+            match invalid {
+                0 => invalid_state.runs[1].assignment_generation = Some(2),
+                1 => invalid_state.runs[1].stage = RunStage::Closed,
+                2 => invalid_state.runs[1].attachment.as_mut().unwrap().state = AttachmentState::Revoked,
+                3 => invalid_state.runs[1].attachment.as_mut().unwrap().conversation = Some(conversation()),
+                4 => invalid_state.runs[1].attachment = None,
+                5 => invalid_state.task_ownership.clear(),
+                _ => invalid_state.task_ownership[0].generation = u64::MAX,
+            }
+            assert!(current_task_run(&invalid_state, ROOT, TASK).is_none(), "invalid pending {invalid}");
+        }
+    }
+
+    #[test]
+    fn accepted_owner_remains_current_and_projection_is_read_only() {
+        let mut accepted = worker(RunStage::Closed);
+        accepted.close_reason = Some(CloseReason::Accepted);
+        let mut durable = state(accepted);
+        let mut historical = worker(RunStage::Reported);
+        historical.run_id = "later-history".into();
+        historical.attempt = 2;
+        historical.assignment_generation = Some(2);
+        durable.runs.push(historical);
+        let before = serde_json::to_value(&durable).unwrap();
+        let mut checked = board();
+        checked.tasks[0].task.checked = true;
+        let projected = snapshot(
+            &OrchestrationSnapshotRequest { session_id: "session".into(), root_id: None },
+            &durable, "token".into(), vec![checked], Ok(runtime("working")), NOW, "test-store",
+        ).unwrap();
+        assert_eq!(current_task_run(&durable, ROOT, TASK).unwrap().run_id, WORKER);
+        let task = &projected.board.as_ref().unwrap().tasks[0];
+        assert_eq!(task.current_run_id.as_deref(), Some(WORKER));
+        assert_eq!(task.lane, TaskLane::Accepted);
+        assert_eq!(projected.runs.len(), 3);
+        assert_eq!(projected.task_ownership[0].owner.as_ref().unwrap().run_id, WORKER);
+        assert_eq!(serde_json::to_value(&durable).unwrap(), before);
+    }
+
+    #[test]
+    fn fresh_physical_agent_observation_cannot_claim_vacant_semantic_ownership() {
+        let mut run = worker(RunStage::Working);
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.conversation = None;
+        let location = attachment.location.as_mut().unwrap();
+        location.workspace_id = "live-space".into();
+        location.tab_id = "live-tab".into();
+        location.terminal_id = Some("terminal".into());
+        location.native_session_id = Some("physical-session".into());
+        let mut durable = state(run);
+        durable.task_ownership[0].owner = None;
+        durable.task_ownership[0].generation = 2;
+        let before = serde_json::to_value(&durable).unwrap();
+        let mut live = runtime("working");
+        live.panes[0].terminal_id = Some("terminal".into());
+        live.panes[0].native_session_id = Some("physical-session".into());
+        let projected = project(&durable, Ok(live));
+        let RuntimeObservation::Fresh { runs, .. } = &projected.runtime else {
+            panic!("fresh observation")
+        };
+        assert!(runs[1].actual_agent);
+        assert!(projected.board.as_ref().unwrap().tasks[0].current_run_id.is_none());
+        assert_eq!(projected.board.unwrap().tasks[0].lane, TaskLane::Queued);
+        assert!(projected.task_ownership[0].owner.is_none());
+        assert_eq!(serde_json::to_value(&durable).unwrap(), before);
+    }
+
+    #[test]
     fn intent_conflict_stays_in_review_and_markdown_check_wins() {
         let mut run = worker(RunStage::Closed);
         run.close_reason = Some(CloseReason::Accepted);
@@ -1188,7 +1384,7 @@ mod tests {
             state: IntentState::Conflict,
             origin: None,
             supervisor_run_id: None,
-            omp_session_id: None,
+            conversation: None,
             result_message_id: None,
         });
         let conflicted = project(&durable, Ok(runtime("idle")));
@@ -1244,6 +1440,10 @@ mod tests {
         foreign.parent_run_id = None;
         foreign.task_id = None;
         durable.runs.push(foreign);
+        durable.task_ownership.push(TaskOwnership {
+            root_id: "foreign-root".into(), task_id: "foreign-task".into(),
+            generation: 8, owner: None,
+        });
         let mut foreign_message = brief(MessageKind::SupervisorBrief, DeliveryStage::Stored);
         foreign_message.to_run_id = "foreign-root".into();
         durable.messages.push(foreign_message);
@@ -1252,6 +1452,8 @@ mod tests {
         assert_eq!(scoped.roots[0].open_runs, 2);
         assert_eq!(scoped.roots[0].needs_you, 1);
         assert_eq!(scoped.runs.len(), 2);
+        assert_eq!(scoped.task_ownership.len(), 1);
+        assert_eq!(scoped.task_ownership[0].root_id, ROOT);
         assert!(scoped.messages.is_empty());
         assert_eq!(scoped.board.unwrap().tasks[0].lane, TaskLane::Review);
         let foreign_root = snapshot(
@@ -1270,11 +1472,10 @@ mod tests {
     }
 
     #[test]
-    fn moved_pane_uses_unique_terminal_and_bound_session_without_mutating_receipt() {
+    fn moved_pane_uses_unique_physical_terminal_without_mutating_receipt() {
         let mut run = worker(RunStage::Working);
         run.attachment.as_mut().unwrap().location.as_mut().unwrap().terminal_id = Some("terminal".into());
         run.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id = Some("omp-session".into());
-        run.attachment.as_mut().unwrap().main_session_id = Some("omp-session".into());
         let durable = state(run);
         let mut live = runtime("working");
         live.panes[0].pane_id = "moved-pane".into();
@@ -1315,10 +1516,9 @@ mod tests {
     }
 
     #[test]
-    fn bound_main_with_unavailable_optional_runtime_fields_is_managed_at_exact_location() {
+    fn bound_conversation_with_unavailable_optional_runtime_fields_is_managed_at_exact_location() {
         for receipt_has_optional_evidence in [false, true] {
             let mut run = worker(RunStage::Working);
-            run.attachment.as_mut().unwrap().main_session_id = Some("omp-session".into());
             let location = run.attachment.as_mut().unwrap().location.as_mut().unwrap();
             location.terminal_id = Some("terminal".into());
             if receipt_has_optional_evidence {
@@ -1340,7 +1540,6 @@ mod tests {
     #[test]
     fn moved_terminal_is_observed_when_herdr_omits_optional_native_session() {
         let mut run = worker(RunStage::Working);
-        run.attachment.as_mut().unwrap().main_session_id = Some("omp-session".into());
         run.attachment.as_mut().unwrap().location.as_mut().unwrap().terminal_id = Some("terminal".into());
         let mut live = runtime("working");
         live.panes[0].terminal_id = Some("terminal".into());
@@ -1355,21 +1554,22 @@ mod tests {
     }
 
     #[test]
-    fn actual_omp_requires_current_native_identity_not_a_display_name() {
+    fn actual_agent_requires_configured_harness_and_physical_identity_not_a_display_name() {
         let mut run = worker(RunStage::Working);
-        run.attachment.as_mut().unwrap().main_session_id = Some("native-main".into());
+        run.launch_config.harness_kind = "neutral-harness".into();
         let location = run.attachment.as_mut().unwrap().location.as_mut().unwrap();
         location.workspace_id = "live-space".into();
         location.tab_id = "live-tab".into();
         location.terminal_id = Some("terminal".into());
+        location.native_session_id = Some("native-main".into());
         for name in [None, Some("renamed"), Some("launch")] {
             for (kind, pending, native, expected) in [
-                (Some("omp"), false, None, false),
-                (Some("omp"), false, Some("native-main"), true),
-                (Some("omp"), true, Some("native-main"), false),
+                (Some("neutral-harness"), false, None, false),
+                (Some("neutral-harness"), false, Some("native-main"), true),
+                (Some("neutral-harness"), true, Some("native-main"), false),
                 (None, false, Some("native-main"), false),
-                (Some("claude"), false, Some("native-main"), false),
-                (Some("omp"), false, Some("other-main"), false),
+                (Some("omp"), false, Some("native-main"), false),
+                (Some("neutral-harness"), false, Some("other-main"), false),
             ] {
                 let mut live = runtime("working");
                 live.panes[0].agent_name = name.map(str::to_owned);
@@ -1381,16 +1581,17 @@ mod tests {
                 let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
                     panic!("fresh observation")
                 };
-                assert_eq!(runs[1].actual_omp, expected);
+                assert_eq!(runs[1].actual_agent, expected);
             }
         }
         for mismatch in 0..6 {
             let mut run = run.clone();
             let mut live = runtime("working");
             live.panes[0].terminal_id = Some("terminal".into());
+            live.panes[0].agent_kind = Some("neutral-harness".into());
             live.panes[0].native_session_id = Some("native-main".into());
             match mismatch {
-                0 => run.attachment.as_mut().unwrap().main_session_id = None,
+                0 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id = None,
                 1 => live.panes[0].terminal_id = Some("replacement-terminal".into()),
                 2 => live.panes[0].pane_id = "replacement-pane".into(),
                 3 => live.panes[0].workspace_id = "replacement-space".into(),
@@ -1401,30 +1602,30 @@ mod tests {
             let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
                 panic!("fresh observation")
             };
-            assert!(!runs[1].actual_omp, "mismatch {mismatch}");
+            assert!(!runs[1].actual_agent, "mismatch {mismatch}");
         }
     }
 
     #[test]
-    fn actual_omp_requires_current_attachment_proof_not_a_durable_job_or_old_launch() {
+    fn actual_agent_requires_current_attachment_proof_not_a_durable_job_or_old_launch() {
         let mut run = worker(RunStage::Working);
         let attachment = run.attachment.as_mut().unwrap();
-        attachment.main_session_id = Some("native-main".into());
         let location = attachment.location.as_mut().unwrap();
         location.workspace_id = "live-space".into();
         location.tab_id = "live-tab".into();
         location.terminal_id = Some("terminal".into());
+        location.native_session_id = Some("native-main".into());
         let mut live = runtime("working");
         live.panes[0].terminal_id = Some("terminal".into());
         live.panes[0].native_session_id = Some("native-main".into());
-        assert!(actual_omp(&run, &live.panes[0], &mut None, &mut None));
+        assert!(actual_agent(&run, &live.panes[0], &mut None, &mut None));
 
         // Connection state is not an authorization or absence proof: an exact
         // disconnected/quiescing incarnation can still be freshly observed.
         for state in [AttachmentState::Disconnected, AttachmentState::Quiescing] {
             let mut current = run.clone();
             current.attachment.as_mut().unwrap().state = state;
-            assert!(actual_omp(&current, &live.panes[0], &mut None, &mut None));
+            assert!(actual_agent(&current, &live.panes[0], &mut None, &mut None));
         }
         for missing in 0..6 {
             let mut current = run.clone();
@@ -1442,7 +1643,7 @@ mod tests {
                 _ => {
                     let replacement = current.attachment.as_mut().unwrap();
                     replacement.epoch += 1;
-                    replacement.main_session_id = None;
+                    replacement.location.as_mut().unwrap().native_session_id = None;
                     replacement.process = None;
                 }
             }
@@ -1450,7 +1651,7 @@ mod tests {
             let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
                 panic!("fresh observation")
             };
-            assert!(!runs[1].actual_omp, "unproven attachment {missing}");
+            assert!(!runs[1].actual_agent, "unproven attachment {missing}");
         }
     }
 
@@ -1473,7 +1674,7 @@ mod tests {
         replacement.epoch += 1;
         replacement.state = AttachmentState::Reserved;
         replacement.location = None;
-        replacement.main_session_id = None;
+        replacement.conversation = None;
         replacement.process = None;
         replacement.shell = None;
         let dispatch = durable.runs[1].dispatch.as_mut().unwrap();
@@ -1493,7 +1694,7 @@ mod tests {
         assert!(!super::super::escalation::recovered(&mut durable, 1).unwrap());
         let attachment = durable.runs[1].attachment.as_mut().unwrap();
         attachment.state = AttachmentState::Connected;
-        attachment.main_session_id = Some("replacement-main".into());
+        attachment.conversation = Some(conversation());
         assert!(super::super::escalation::recovered(&mut durable, 1).unwrap());
         assert!(!super::super::escalation::recovered(&mut durable, 1).unwrap());
         assert_eq!(durable.messages.len(), 3);
@@ -1501,10 +1702,9 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn actual_omp_without_native_session_rejects_stale_bound_process_identity() {
+    fn actual_agent_without_native_session_rejects_stale_bound_process_identity() {
         use cockpit_protocol::orchestration::NativeProcessIdentity;
         let mut run = worker(RunStage::Active);
-        run.attachment.as_mut().unwrap().main_session_id = Some("native-main".into());
         let location = run.attachment.as_mut().unwrap().location.as_mut().unwrap();
         location.workspace_id = "live-space".into();
         location.tab_id = "live-tab".into();
@@ -1533,16 +1733,16 @@ mod tests {
             let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
                 panic!("fresh observation")
             };
-            assert!(!runs[1].actual_omp, "mismatch {mismatch}");
+            assert!(!runs[1].actual_agent, "mismatch {mismatch}");
         }
     }
 
     #[test]
-    fn unmanaged_agents_exclude_pending_registrations_and_include_detected_unnamed_omp() {
+    fn unmanaged_agents_exclude_pending_launches_and_include_detected_unnamed_harness() {
         for (kind, pending, name, count) in [
             (None, false, Some("registered-name"), 0),
-            (Some("omp"), true, Some("pending-name"), 0),
-            (Some("omp"), false, None, 1),
+            (Some("neutral-harness"), true, Some("pending-name"), 0),
+            (Some("neutral-harness"), false, None, 1),
         ] {
             let mut live = runtime("working");
             live.panes[0].pane_id = "unmanaged-pane".into();
@@ -1552,7 +1752,7 @@ mod tests {
             let observed = project(&state(worker(RunStage::Working)), Ok(live));
             assert_eq!(observed.unmanaged_agents.len(), count);
             if count != 0 {
-                assert_eq!(observed.unmanaged_agents[0].agent_name, "omp");
+                assert_eq!(observed.unmanaged_agents[0].agent_name, "neutral-harness");
             }
         }
     }

@@ -78,7 +78,7 @@ fn next_steps(run: &Run) -> (&'static str, &'static [&'static str], Option<&'sta
         return ("unknown", &["show", "reconcile_accept_existing_worktree", "operator"], Some("Only checkout-proven recovery is supervisor-owned; environment retry needs the operator"));
     }
     if run.attachment.as_ref().is_some_and(|attachment| {
-        attachment.main_session_id.is_some() && attachment.process.is_none()
+        attachment.conversation.is_some() && attachment.process.is_none()
     }) {
         return ("unknown", &["show", "reconcile", "operator"], Some("Original OMP process identity was not recorded; only the operator can decide a restart"));
     }
@@ -106,7 +106,7 @@ fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool
     if state.messages.iter().any(|message| {
         dispatcher_message(message, &run.root_id) && (message.message_id == key
             || semantic.as_ref().is_some_and(|prefix| message.message_id.starts_with(prefix)
-                && matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken)))
+                && message.stage == DeliveryStage::Stored))
     }) {
         return Ok(false);
     }
@@ -123,18 +123,14 @@ fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool
         "effect": effect, "next": next, "operator_reason": operator_reason,
     }).to_string();
     let root = run.root_id.clone();
-    messages::append(state, messages::AppendMessage {
-        from: ActorRef::Dispatcher,
-        to_run_id: &root,
-        message_id: &key,
-        kind: MessageKind::Observation,
-        text: &text,
-        in_reply_to: None,
-        report: None,
-        stale: false,
-        from_subagent_id: None,
-        escalated_from: None,
-    })?;
+    messages::append(state, messages::AppendMessage { from: ActorRef::Dispatcher,
+    to_run_id: &root,
+    message_id: &key,
+    kind: MessageKind::Observation,
+    text: &text,
+    in_reply_to: None,
+    report: None,
+    stale: false, escalated_from: None, })?;
     Ok(true)
 }
 
@@ -164,7 +160,7 @@ pub(super) fn recovered(state: &mut OrchestrationState, index: usize) -> Result<
             || run.attachment.as_ref().is_none_or(|attachment| {
                 matches!(attachment.state, AttachmentState::Reserved | AttachmentState::Revoked)
                     || attachment.launch_attempt != dispatch.launch_attempt
-                    || attachment.main_session_id.as_deref().is_none_or(str::is_empty)
+                    || attachment.conversation.is_none()
             })
     }) {
         return Ok(false);
@@ -184,18 +180,14 @@ pub(super) fn recovered(state: &mut OrchestrationState, index: usize) -> Result<
     let text = serde_json::json!({"event": "dispatch_recovered", "run_id": run.run_id,
         "run_attempt": run.attempt, "launch_attempt": dispatch.launch_attempt, "step": dispatch.step}).to_string();
     let root = run.root_id.clone();
-    messages::append(state, messages::AppendMessage {
-        from: ActorRef::Dispatcher,
-        to_run_id: &root,
-        message_id: &key,
-        kind: MessageKind::Observation,
-        text: &text,
-        in_reply_to: None,
-        report: None,
-        stale: false,
-        from_subagent_id: None,
-        escalated_from: None,
-    })?;
+    messages::append(state, messages::AppendMessage { from: ActorRef::Dispatcher,
+    to_run_id: &root,
+    message_id: &key,
+    kind: MessageKind::Observation,
+    text: &text,
+    in_reply_to: None,
+    report: None,
+    stale: false, escalated_from: None, })?;
     Ok(true)
 }
 
@@ -214,7 +206,7 @@ fn freshly_proven(
     { return false; }
     runtime.panes.iter().any(|pane| {
         super::optional_available(&location.native_session_id, &pane.native_session_id)
-            && super::projection::actual_omp(run, pane, kernel_boot_id, machine_id)
+            && super::projection::actual_agent(run, pane, kernel_boot_id, machine_id)
     })
 }
 

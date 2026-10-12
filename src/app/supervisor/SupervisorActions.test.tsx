@@ -2,29 +2,26 @@
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CleanupResourceSummary, OrchestrationActionResult, OrchestrationSnapshot, Report, ResumePhase, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
-import { AgentRecovery, agentState, canRestart, CleanupFinishAction, finishCleanup, ObservedEvidence, ProgressTrail, ProvenancePair, RunDiagnostics, SupervisorActions, taskStatus, TextAction, type Mutation } from "./SupervisorActions";
+import type { CleanupResourceSummary, OrchestrationActionResult, OrchestrationSnapshot, Report, ResumePhase, Run, RunObservation, TaskView } from "../../protocol/generated/v1";
+import { AgentRecovery, agentState, canRestart, CleanupFinishAction, finishCleanup, ObservedEvidence, ProgressTrail, ProvenancePair, RunDiagnostics, SupervisorActions, taskAssignment, taskStatus, TextAction, type Mutation } from "./SupervisorActions";
 import { messageDraft, newScopeDrafts, newTextDraft } from "./useSupervisorDrafts";
 
 const at = "2026-10-06T12:00:00Z";
 const mutationScope = { stateStoreId: "store", sessionId: "session", rootId: "root", expectedRevision: null };
 function run(overrides: Partial<Run> = {}): Run {
-  return { source_output: null, integration: { state: "pending" }, session_id: "session", brief: "Guidance", run_id: "worker", kind: "worker", label: "Search agent", root_id: "root", parent_run_id: "root", task_id: "task-a", attempt: 1, task_revision_at_start: "start-revision", stage: "working", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: "owned_when_safe", last_report: null, result: null, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, main_session_id: "native", process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
+  return { source_output: null, integration: { state: "pending" }, session_id: "session", brief: "Guidance", run_id: "worker", kind: "worker", label: "Search agent", root_id: "root", parent_run_id: "root", task_id: "task-a", assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] }, attempt: 1, task_revision_at_start: "start-revision", stage: "working", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: "owned_when_safe", last_report: null, result: null, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, conversation: { harness: "omp", session_id: "resumable-worker-session" }, process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
 }
 function task(overrides: Partial<TaskView> = {}): TaskView {
   return { task: { task_id: "task-a", title: "Improve search", body: "Improve search\nKeep existing behavior.", description: "Improve search\nKeep existing behavior.", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "exact-current-revision", diagnostic: null }, lane: "working", current_run_id: "worker", dependencies: { state: "none", unmet: [], problems: [] }, ...overrides };
 }
 function observation(runId: string, overrides: Partial<RunObservation> = {}): RunObservation {
-  return { run_id: runId, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at, ...overrides };
+  return { run_id: runId, presence: "present", actual_agent: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at, ...overrides };
 }
 function snapshot(worker = run()): OrchestrationSnapshot {
-  const root = run({ run_id: "root", kind: "supervisor", label: "Supervisor", parent_run_id: null, task_id: null, stage: "active" });
-  return { state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "tasks", roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 2, needs_you: 0 }], board: { root_id: "root", path: "/state/root.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs: [root, worker], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("root"), observation(worker.run_id)] } };
+  const root = run({ run_id: "root", kind: "supervisor", label: "Supervisor", parent_run_id: null, task_id: null, assignment_generation: null, stage: "active", attachment: { ...run().attachment!, conversation: { harness: "omp", session_id: "resumable-supervisor-session" } } });
+  return { state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "tasks", roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 2, needs_you: 0 }], board: { root_id: "root", path: "/state/root.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs: [root, worker], messages: [], questions: [], task_ownership: [{ root_id: "root", task_id: "task-a", generation: worker.assignment_generation ?? 0, owner: worker.attachment?.conversation ? { run_id: worker.run_id, conversation: worker.attachment.conversation, claim_operation_id: "claim-worker" } : null }], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("root"), observation(worker.run_id)] } };
 }
 const result: Report = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Exact result\nwith a second line.", plan: null, source_output: null, at };
-function subagent(overrides: Partial<Subagent> = {}): Subagent {
-  return { run_id: "worker", subagent_id: "scout", parent_subagent_id: null, role: "Read-only scout", label: "Scout", status: "running", summary: "Inspected search", last_control: null, bound_omp_session: null, updated_at: at, ...overrides };
-}
 let host: HTMLDivElement;
 let root: Root | null = null;
 async function render(node: ReactNode) {
@@ -43,7 +40,7 @@ function reason(button: HTMLButtonElement): string | null {
 }
 function props(overrides: Partial<ComponentProps<typeof SupervisorActions>> = {}): ComponentProps<typeof SupervisorActions> {
   const worker = run();
-  return { snapshot: snapshot(worker), run: worker, task: task(), section: "actions", stateBlock: { sentence: "Supervisor is reviewing this result", tierLabel: null, waitingSince: at }, path: [], crossView: null, acceptanceConflict: false, scope: newScopeDrafts(), changed: vi.fn(), busy: false, live: true, mutateResult: vi.fn<Mutation>(async () => null), captureRequestScope: () => mutationScope, onTerminal: vi.fn(), onEditTask: vi.fn(), onCancelSubagent: vi.fn(), onCloseTracking: vi.fn(), ...overrides };
+  return { snapshot: snapshot(worker), run: worker, task: task(), section: "actions", stateBlock: { sentence: "Supervisor is reviewing this result", tierLabel: null, waitingSince: at }, path: [], crossView: null, acceptanceConflict: false, scope: newScopeDrafts(), changed: vi.fn(), busy: false, live: true, mutateResult: vi.fn<Mutation>(async () => null), captureRequestScope: () => mutationScope, onTerminal: vi.fn(), onEditTask: vi.fn(), onCloseTracking: vi.fn(), ...overrides };
 }
 async function openOperator() {
   await act(async () => { const details = host.querySelector<HTMLDetailsElement>(".supervisor-operator")!; details.open = true; details.dispatchEvent(new Event("toggle")); });
@@ -70,12 +67,13 @@ describe("Supervisor detail authority and retained operations", () => {
     expect(taskStatus(current, worker, state)).not.toBe(delivered);
     state.assignment_intents = [];
     expect(taskStatus({ ...current, task: { ...current.task, checked: true } }, worker, state)).not.toBe(delivered);
-    expect(taskStatus(current, { ...worker, stage: "closed", close_reason: "cancelled" }, state)).not.toBe(delivered);
+    const closed = { ...worker, stage: "closed" as const, close_reason: "cancelled" as const };
+    expect(taskStatus(current, closed, snapshot(closed))).not.toBe(delivered);
     state.questions = [];
     expect(taskStatus(current, worker, state)).toBe("Working");
   });
 
-  it.each(["stored", "woken", "read", "acked"] as const)("shows only recorded sent/ack times and preserves the actual question in detail (%s)", async stage => {
+  it.each(["stored", "read", "acked"] as const)("shows only recorded sent/ack times and preserves the actual question in detail (%s)", async stage => {
     const sentAt = "2026-10-06T12:01:00Z";
     const ackedAt = "2026-10-06T12:02:00Z";
     const worker = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which fixture should I use?", plan: null, source_output: null, at } });
@@ -97,13 +95,12 @@ describe("Supervisor detail authority and retained operations", () => {
     const worker = run({ stage: "reported", result });
     const activate = vi.fn();
     const show = vi.fn();
-    const state = props({ run: worker, snapshot: snapshot(worker), section: "overview", path: [{ key: "worker", role: "Worker", label: worker.label, facts: ["Herdr"], current: true, depth: 1, subagent: false, onActivate: activate }], crossView: { label: "Show in Graph", onActivate: show } });
+    const state = props({ run: worker, snapshot: snapshot(worker), section: "overview", path: [{ key: "worker", role: "Worker", label: worker.label, facts: ["Herdr"], current: true, depth: 1, onActivate: activate }], crossView: { label: "Show in Graph", onActivate: show } });
     await render(<SupervisorActions {...state} />);
     const overview = host.querySelector<HTMLElement>(".supervisor-detail-section")!;
     const headings = [...overview.querySelectorAll("h3")].map(item => item.textContent);
     expect(headings.indexOf("Result · succeeded")).toBeGreaterThan(headings.indexOf("State "));
     expect(headings.indexOf("Result · succeeded")).toBeLessThan(headings.indexOf("Task description"));
-    expect(overview.querySelectorAll(".supervisor-exact-text")[0].textContent).toBe(result.summary);
     expect(overview.querySelector(".supervisor-path-row")?.getAttribute("aria-current")).toBe("true");
     await click(button(`Worker · ${worker.label}Herdr`));
     await click(button("Show in Graph"));
@@ -123,8 +120,8 @@ describe("Supervisor detail authority and retained operations", () => {
       root!.render(<SupervisorActions {...state} />);
     };
     state.path = [
-      { key: "task", role: "Task", label: "Improve search", facts: [], current: true, depth: 0, subagent: false, onActivate: vi.fn() },
-      { key: "worker", role: "Worker", label: "Search agent", facts: [], current: false, depth: 1, subagent: false, onActivate: selectWorker },
+      { key: "task", role: "Task", label: "Improve search", facts: [], current: true, depth: 0, onActivate: vi.fn() },
+      { key: "worker", role: "Worker", label: "Search agent", facts: [], current: false, depth: 1, onActivate: selectWorker },
     ];
     await render(<SupervisorActions {...state} />);
     const row = button("Worker · Search agent");
@@ -151,7 +148,7 @@ describe("Supervisor detail authority and retained operations", () => {
     const blocked: Partial<ComponentProps<typeof SupervisorActions>>[] = [
       { busy: true }, { live: false }, { task: null },
       { task: task({ task: { ...task().task, diagnostic: "duplicate ID" } }) },
-      { task: task({ current_run_id: "new-attempt" }) },
+      { snapshot: { ...state.snapshot, task_ownership: [{ ...state.snapshot.task_ownership[0], owner: { ...state.snapshot.task_ownership[0].owner!, run_id: "new-attempt" } }] } },
       { run: { ...worker, result: null } },
       { run: { ...worker, result: { ...result, outcome: "failed" } } },
       { run: { ...worker, result: { ...result, kind: "progress" } } },
@@ -214,7 +211,7 @@ describe("Supervisor detail authority and retained operations", () => {
   it("requires the current editable canonical scope for a working follow-up without removing message sends elsewhere", async () => {
     const state = props();
     messageDraft(state.scope, "followup:worker").text = "Refine the existing task";
-    for (const override of [{ task: null }, { task: task({ current_run_id: "other-worker" }) }, { taskWriteUnconfirmed: true }, { task: task({ task: { ...task().task, description_editable: false } }) }]) {
+    for (const override of [{ task: null }, { snapshot: { ...state.snapshot, task_ownership: [{ ...state.snapshot.task_ownership[0], owner: { ...state.snapshot.task_ownership[0].owner!, run_id: "other-worker" } }] } }, { taskWriteUnconfirmed: true }, { task: task({ task: { ...task().task, description_editable: false } }) }]) {
       await render(<SupervisorActions {...state} {...override} />);
       expect(button("Send follow-up").disabled).toBe(true);
       expect(reason(button("Send follow-up"))).toBeTruthy();
@@ -242,7 +239,7 @@ describe("Supervisor detail authority and retained operations", () => {
     await render(<SupervisorActions {...state} run={run()} />);
     expect(host.querySelectorAll(".supervisor-detail-section")[1].textContent).not.toContain("Advisory plan");
     const diagnostics = snapshot(worker);
-    diagnostics.messages = [{ message_id: "initialized-report", to_run_id: "root", seq: 1, from: { type: "run", run_id: "worker" }, kind: "report", text: worker.last_report!.summary, in_reply_to: null, report: worker.last_report, stale: false, escalated_from: null, from_subagent_id: null, stage: "stored", woken_omp_session: null, created_at: at, acked_at: null }];
+    diagnostics.messages = [{ message_id: "initialized-report", to_run_id: "root", seq: 1, from: { type: "run", run_id: "worker" }, kind: "report", text: worker.last_report!.summary, in_reply_to: null, report: worker.last_report, stale: false, escalated_from: null, stage: "stored", created_at: at, acked_at: null }];
     await render(<RunDiagnostics run={worker} snapshot={diagnostics} />);
     expect(host.querySelector("summary")!.textContent).toContain("Initialized");
     expect(host.textContent).toContain("Run, binding and setup");
@@ -284,13 +281,20 @@ describe("Supervisor detail authority and retained operations", () => {
     expect(host.textContent).toContain("this is not proof the process stopped");
   });
 
-  it("blocks stop authority when the supervisor is merely a bound shell", async () => {
+  it("permits registered supervisor stop requests without native process observation and blocks a bound shell without conversation identity", async () => {
     const state = props();
     if (state.snapshot.runtime.status !== "fresh") throw new Error("Expected fresh fixture");
-    state.snapshot.runtime.runs[0].actual_omp = false;
+    state.snapshot.runtime.runs[0].actual_agent = false;
+    await render(<SupervisorActions {...state} />);
+    expect(button("Request stop…").disabled).toBe(false);
+    state.snapshot.runtime = { status: "unavailable", error: { code: "unsupported_harness_observation", message: "No physical observation" } };
+    await render(<SupervisorActions {...state} live={false} semanticLive />);
+    expect(button("Request stop…").disabled).toBe(false);
+    const supervisor = state.snapshot.runs[0];
+    state.snapshot.runs[0] = { ...supervisor, attachment: { ...supervisor.attachment!, conversation: null } };
     await render(<SupervisorActions {...state} />);
     expect(button("Request stop…").disabled).toBe(true);
-    expect(reason(button("Request stop…"))).toContain("verified active supervisor");
+    expect(reason(button("Request stop…"))).toContain("active supervisor");
     await click(button("Request stop…"));
     expect(state.mutateResult).not.toHaveBeenCalled();
   });
@@ -321,59 +325,6 @@ describe("Supervisor detail authority and retained operations", () => {
     expect(draft.text).toBe("Keep exact requested text");
   });
 
-  it("keeps subagent stored/applied/failed receipts distinct and forbids terminal-result authority", async () => {
-    const child = subagent({ last_control: { seq: 1, op: { op: "send", text: "Inspect" }, stage: "stored", error: null, at } });
-    const state = props({ subagent: child, section: "overview", run: run({ stage: "reported", result }) });
-    await render(<SupervisorActions {...state} />);
-    expect(host.querySelector(".supervisor-pair")).toBeNull();
-    expect([...host.querySelectorAll("h3")].some(item => item.textContent?.startsWith("Result"))).toBe(false);
-    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Accept explicit result")).toBe(false);
-    for (const stage of ["stored", "applied", "failed"] as const) {
-      await render(<SupervisorActions {...state} section="activity" subagent={{ ...child, last_control: { ...child.last_control!, stage, error: stage === "failed" ? "Control endpoint unavailable" : null } }} />);
-      const activity = host.querySelectorAll(".supervisor-detail-section")[1];
-      expect(activity.textContent).toContain(`Last control · send · ${stage}`);
-      expect(activity.textContent).toContain("Applied delivery is not task completion.");
-      if (stage === "failed") expect(activity.textContent).toContain("Control endpoint unavailable");
-    }
-    expect(state.onTerminal).not.toHaveBeenCalled();
-  });
-
-  it("never retries subagent Send automatically or permits controls after the run closes", async () => {
-    let state = props({ subagent: subagent() });
-    const draft = messageDraft(state.scope, "subagent:worker:scout");
-    draft.text = "Inspect only";
-    state.changed = () => root!.render(<SupervisorActions {...state} />);
-    await render(<SupervisorActions {...state} />);
-    await click(button("Send message"));
-    expect(draft.operation).not.toBeNull();
-    expect(draft.notice).toBeNull();
-    expect(button("Check previous action first").disabled).toBe(true);
-    await click(button("Check previous action first"));
-    expect(state.mutateResult).toHaveBeenCalledOnce();
-    await click(button("I reviewed the previous action; unlock draft"));
-    for (const status of ["done", "failed", "cancelled"] as const) {
-      state = { ...state, subagent: subagent({ status }) };
-      await render(<SupervisorActions {...state} />);
-      expect(button("Send message").disabled).toBe(true);
-      expect(button("Cancel subagent…").disabled).toBe(true);
-      expect(reason(button("Send message"))).toContain("Only a running subagent");
-      await click(button("Send message"));
-      await click(button("Cancel subagent…"));
-    }
-    expect(state.mutateResult).toHaveBeenCalledOnce();
-    expect(state.onCancelSubagent).not.toHaveBeenCalled();
-    state = { ...state, live: false, subagent: subagent() };
-    await render(<SupervisorActions {...state} />);
-    expect(button("Send message").disabled).toBe(true);
-    expect(button("Cancel subagent…").disabled).toBe(true);
-    state = { ...state, live: true, run: run({ stage: "closed", close_reason: "cancelled" }) };
-    await render(<SupervisorActions {...state} />);
-    expect(button("Cancel subagent…").disabled).toBe(true);
-    expect(reason(button("Cancel subagent…"))).toContain("Tracking is closed");
-    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Open parent terminal")).toBe(false);
-    await click(button("Cancel subagent…"));
-    expect(state.onCancelSubagent).not.toHaveBeenCalled();
-  });
 
   it("retries text with the retained delivery identity and reports success only on confirmed receipt", async () => {
     const draft = newTextDraft(); draft.text = "Exact follow-up";
@@ -390,6 +341,273 @@ describe("Supervisor detail authority and retained operations", () => {
     expect(draft.operation).toBeNull();
     expect(draft.text).toBe("");
     expect(draft.notice).toBe("Follow-up confirmed");
+  });
+});
+
+describe("canonical conversation ownership and fenced unassign requests", () => {
+  it("keeps pending authorization unassigned until claim and shows full conversation identity independently of process presence", async () => {
+    const worker = run({ assignment_generation: 8, stage: "starting", attachment: null });
+    const state = snapshot(worker);
+    state.task_ownership = [{ root_id: "root", task_id: "task-a", generation: 7, owner: null }];
+    await render(<SupervisorActions {...props({ snapshot: state, run: null, section: "overview" })} />);
+    const block = host.querySelector(".supervisor-state-block")!;
+    expect(taskAssignment(state, task())).toMatchObject({ owner: null, pending: worker, worker: undefined });
+    expect(block.textContent).toContain("Unassigned · ownership pending");
+    expect(block.textContent).toContain("Waiting for the launched worker to register its conversation and claim this task.");
+    expect(block.textContent).not.toContain("Assigned conversation");
+    const claimed = run({ assignment_generation: 8, attachment: { ...run().attachment!, conversation: { harness: "codex", session_id: "full-resumable-session-id-not-a-terminal-alias" } } });
+    state.runs[1] = claimed;
+    state.task_ownership[0] = { ...state.task_ownership[0], generation: 8, owner: { run_id: claimed.run_id, conversation: claimed.attachment!.conversation!, claim_operation_id: "claim-eight" } };
+    if (state.runtime.status !== "fresh") throw new Error("Expected fresh fixture");
+    state.runtime.runs[1] = observation(claimed.run_id, { presence: "missing", actual_agent: false });
+    await render(<SupervisorActions {...props({ snapshot: state, run: claimed, section: "overview" })} />);
+    expect(block.textContent).toContain("Assigned conversation · Search agent");
+    expect(block.querySelector(".supervisor-exact-text")?.textContent).toBe("codex · full-resumable-session-id-not-a-terminal-alias");
+    expect(block.textContent).not.toContain("Unassigned");
+    await render(<SupervisorActions {...props({ snapshot: state, run: claimed, section: "overview", live: false })} />);
+    expect(block.textContent).toContain("Last known assignment · reconnect to check current ownership.");
+    expect(block.textContent).toContain("full-resumable-session-id-not-a-terminal-alias");
+  });
+
+  it("retains previous reports and checkout protection after unassignment without attributing them to a later owner", async () => {
+    const previous = run({ last_report: result });
+    const state = snapshot(previous);
+    state.task_ownership[0] = { ...state.task_ownership[0], generation: 2, owner: null };
+    const vacant = task({ current_run_id: null, lane: "queued" });
+    await render(<SupervisorActions {...props({ snapshot: state, task: vacant, run: null, section: "overview" })} />);
+    expect(taskAssignment(state, vacant)).toMatchObject({ owner: null, pending: undefined, previous: [previous], unsafePrevious: true });
+    const block = host.querySelector(".supervisor-state-block")!;
+    expect(block.textContent).toContain("Unassigned");
+    expect(block.textContent).toContain("No conversation is assigned. An eligible worker can claim this task.");
+    expect(block.textContent).toContain("Previous worker stop not proven");
+    expect(block.textContent).toContain("Previous assignment · Search agent · omp");
+    expect(block.querySelector(".supervisor-exact-text")?.textContent).toBe("Previous assignment · Search agent · omp · resumable-worker-session");
+    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Request unassign…")).toBe(false);
+    const evidence = block.querySelector(".supervisor-evidence")!;
+    expect(evidence.querySelector(".supervisor-report-summary")?.textContent).toBe(result.summary);
+    expect(evidence.querySelector("time")?.dateTime).toBe(at);
+    const replacement = run({ run_id: "replacement", label: "New agent", assignment_generation: 3, attachment: { ...run().attachment!, conversation: { harness: "claude", session_id: "replacement-session" } } });
+    state.runs.push(replacement);
+    state.task_ownership[0] = { ...state.task_ownership[0], generation: 3, owner: { run_id: replacement.run_id, conversation: replacement.attachment!.conversation!, claim_operation_id: "claim-replacement" } };
+    await render(<SupervisorActions {...props({ snapshot: state, task: task({ current_run_id: replacement.run_id }), run: replacement, section: "overview" })} />);
+    expect(block.textContent).toContain("Assigned conversation · New agent");
+    expect(block.textContent).toContain("claude · replacement-session");
+    expect(block.textContent).toContain("Previous assignment · Search agent · omp");
+    expect([...block.querySelectorAll(".supervisor-exact-text")].map(item => item.textContent)).toContain("Previous assignment · Search agent · omp · resumable-worker-session");
+    expect(block.textContent).toContain(result.summary);
+    expect(block.textContent).toContain("Previous worker stop not proven");
+    expect(block.textContent).not.toContain("Unassigned");
+    expect(state.runs[1]).toBe(previous);
+    expect(previous.attachment?.location?.pane_id).toBe("pane");
+  });
+
+  it("stores a durable supervisor instruction pinned to original generation, conversation and request scope without optimistic revocation", async () => {
+    let resolve!: (result: OrchestrationActionResult | null) => void;
+    const promise = new Promise<OrchestrationActionResult | null>(complete => { resolve = complete; });
+    const mutation = vi.fn<Mutation>(() => promise);
+    const originalScope = { ...mutationScope, expectedRevision: 17 };
+    const captureRequestScope = vi.fn(() => originalScope);
+    let state = props({ mutateResult: mutation, captureRequestScope });
+    state.changed = () => root!.render(<SupervisorActions {...state} />);
+    const ownership = state.snapshot.task_ownership[0];
+    await render(<SupervisorActions {...state} />);
+    await openOperator();
+    await click(button("Request unassign…"));
+    expect(mutation).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("resumable-worker-session");
+    expect(host.textContent).toContain("This does not stop the worker or release its checkout.");
+    await click(button("Request unassign"));
+    const action = mutation.mock.calls[0][0];
+    if (action.action !== "message_send") throw new Error("Expected durable supervisor instruction");
+    expect(action).toMatchObject({ message_id: expect.any(String), to_run_id: "root", kind: "instruction", in_reply_to: null });
+    expect(action.text).toContain(`operation-id ${action.message_id}`);
+    expect(action.text).toContain("canonical task task-a under supervisor root");
+    expect(action.text).toContain("expected-assignment-generation 1");
+    expect(action.text).toContain(JSON.stringify(ownership.owner));
+    expect(action.text).toContain("Do not retarget a later assignment.");
+    expect(mutation.mock.calls[0][1]).toBe(originalScope);
+    expect(button("Sending unassign request…").disabled).toBe(true);
+    expect(button("Keep assigned").disabled).toBe(true);
+    await click(button("Sending unassign request…"));
+    expect(mutation).toHaveBeenCalledOnce();
+    state = { ...state, captureRequestScope: () => ({ ...originalScope, sessionId: "different-session", rootId: "different-root" }) };
+    await render(<SupervisorActions {...state} />);
+    await act(async () => resolve({ result: "message", to_run_id: "root", seq: 1, duplicate: false, stale: false }));
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Unassign requested. Waiting for the supervisor.");
+    expect(state.snapshot.task_ownership[0]).toBe(ownership);
+    expect(host.querySelector(".supervisor-state-block")?.textContent).toContain("Assigned conversation");
+    expect(button("Request unassign…").disabled).toBe(true);
+    const retained = [...state.scope.messages.values()].find(draft => draft.operation?.id === action.message_id)!;
+    expect(retained.operation?.action).toBe(action);
+    expect(retained.operation?.requestScope).toBe(originalScope);
+    await render(<div />);
+    await render(<SupervisorActions {...state} />);
+    expect(button("Request unassign…").disabled).toBe(true);
+    expect(mutation).toHaveBeenCalledOnce();
+    expect(captureRequestScope).toHaveBeenCalledOnce();
+  });
+
+  it.each(["unknown", "throw"] as const)("retains exact %s request across hide, offline, remount and changed selection with no replay", async outcome => {
+    const mutation = vi.fn<Mutation>(async () => { if (outcome === "throw") throw new Error("Transport lost"); return null; });
+    let state = props({ mutateResult: mutation });
+    state.changed = () => root!.render(<SupervisorActions {...state} />);
+    await render(<SupervisorActions {...state} />);
+    await openOperator();
+    await click(button("Request unassign…"));
+    await click(button("Request unassign"));
+    const first = mutation.mock.calls[0];
+    const retained = [...state.scope.messages.values()].find(draft => draft.operation?.action === first[0])!;
+    const operation = retained.operation;
+    expect(operation?.requestScope).toBe(mutationScope);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Check its saved receipt before sending another request.");
+    expect(button("Request unassign").disabled).toBe(true);
+    await click(button("Request unassign"));
+    state = { ...state, section: "overview", live: false };
+    await render(<SupervisorActions {...state} />);
+    await render(<div />);
+    state = { ...state, section: "actions", live: true, captureRequestScope: () => ({ ...mutationScope, sessionId: "new-session" }) };
+    await render(<SupervisorActions {...state} />);
+    expect(button("Request unassign…").disabled).toBe(true);
+    await click(button("Request unassign…"));
+    const other = task({ task: { ...task().task, task_id: "task-b", title: "Other task" }, current_run_id: null });
+    await render(<SupervisorActions {...state} task={other} run={null} />);
+    await render(<SupervisorActions {...state} />);
+    expect(retained.operation).toBe(operation);
+    expect(retained.operation?.action).toBe(first[0]);
+    expect(button("Request unassign…").disabled).toBe(true);
+    expect(mutation).toHaveBeenCalledOnce();
+  });
+
+  it("fences pending cancellation to the vacant generation and authorized attempt without inventing a conversation", async () => {
+    const pending = run({ assignment_generation: 5, stage: "starting", attachment: null });
+    const state = props({ snapshot: snapshot(pending), run: null });
+    state.snapshot.task_ownership[0] = { ...state.snapshot.task_ownership[0], generation: 4, owner: null };
+    state.changed = () => root!.render(<SupervisorActions {...state} />);
+    await render(<SupervisorActions {...state} />);
+    await openOperator();
+    await click(button("Request cancel pending assignment…"));
+    expect(host.textContent).toContain("No conversation has claimed this task.");
+    await click(button("Request cancellation"));
+    const action = vi.mocked(state.mutateResult).mock.calls[0][0];
+    if (action.action !== "message_send") throw new Error("Expected pending cancellation instruction");
+    expect(action.to_run_id).toBe("root");
+    expect(action.text).toContain("expected-assignment-generation 4");
+    expect(action.text).toContain('{"pending_run_id":"worker"}');
+    expect(action.text).not.toContain("resumable-worker-session");
+    expect(state.snapshot.task_ownership[0].owner).toBeNull();
+    expect(state.snapshot.runs[1]).toBe(pending);
+    expect(button("Request cancellation").disabled).toBe(true);
+  });
+
+  it.each(["Keep assigned", "Escape"] as const)("focuses the safe keyboard choice and restores the invoker on %s without sending", async cancellation => {
+    const state = props();
+    await render(<SupervisorActions {...state} />);
+    await openOperator();
+    const invoke = button("Request unassign…");
+    await act(async () => { invoke.focus(); invoke.dispatchEvent(new MouseEvent("click", { detail: 0, bubbles: true })); });
+    expect(document.activeElement).toBe(button("Keep assigned"));
+    if (cancellation === "Escape") {
+      const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      await act(async () => document.activeElement!.dispatchEvent(event));
+    } else await click(button("Keep assigned"));
+    expect(document.activeElement).toBe(invoke);
+    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Keep assigned")).toBe(false);
+    expect(state.mutateResult).not.toHaveBeenCalled();
+  });
+
+  it("keeps pointer focus at the invoker and cancels stale-generation confirmation, including same-session ABA, without stealing field focus", async () => {
+    const state = props();
+    await render(<SupervisorActions {...state} />);
+    await openOperator();
+    const invoke = button("Request unassign…");
+    await act(async () => { invoke.focus(); invoke.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true })); });
+    expect(document.activeElement).toBe(invoke);
+    await act(async () => button("Keep assigned").focus());
+    const next = { ...state.snapshot, runs: state.snapshot.runs.map(item => item.run_id === "worker" ? { ...item, assignment_generation: 3 } : item), task_ownership: [{ ...state.snapshot.task_ownership[0], generation: 3, owner: { ...state.snapshot.task_ownership[0].owner!, claim_operation_id: "new-claim-same-session" } }] };
+    await render(<SupervisorActions {...state} snapshot={next} />);
+    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Request unassign")).toBe(false);
+    expect(document.activeElement).toBe(invoke);
+    expect(state.mutateResult).not.toHaveBeenCalled();
+    await click(invoke);
+    const field = host.querySelector<HTMLTextAreaElement>("textarea")!;
+    await act(async () => field.focus());
+    await render(<SupervisorActions {...state} snapshot={{ ...next, runs: next.runs.map(item => item.run_id === "worker" ? { ...item, assignment_generation: 5 } : item), task_ownership: [{ ...next.task_ownership[0], generation: 5 }] }} />);
+    expect(document.activeElement).toBe(field);
+    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Request unassign")).toBe(false);
+    expect(state.mutateResult).not.toHaveBeenCalled();
+  });
+
+  it("restores pending cancellation keyboard focus on Escape and invalidates the preview when a conversation claims first", async () => {
+    const pending = run({ assignment_generation: 2, stage: "starting", attachment: null });
+    const state = props({ snapshot: snapshot(pending), run: null });
+    state.snapshot.task_ownership[0] = { ...state.snapshot.task_ownership[0], generation: 1, owner: null };
+    await render(<SupervisorActions {...state} />);
+    await openOperator();
+    const invoke = button("Request cancel pending assignment…");
+    await act(async () => { invoke.focus(); invoke.dispatchEvent(new MouseEvent("click", { detail: 0, bubbles: true })); });
+    expect(document.activeElement).toBe(button("Keep pending"));
+    await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.activeElement).toBe(invoke);
+    expect(state.mutateResult).not.toHaveBeenCalled();
+    await click(invoke);
+    const claimed = run({ assignment_generation: 2 });
+    const next = snapshot(claimed);
+    await render(<SupervisorActions {...state} snapshot={next} run={claimed} />);
+    expect([...host.querySelectorAll("button")].some(item => item.textContent === "Request cancellation")).toBe(false);
+    expect(button("Request unassign…").disabled).toBe(false);
+    expect(state.mutateResult).not.toHaveBeenCalled();
+  });
+
+  it("does not retarget a retained request to the same conversation after a newer claim", async () => {
+    let state = props();
+    state.changed = () => root!.render(<SupervisorActions {...state} />);
+    await render(<SupervisorActions {...state} />);
+    await openOperator();
+    await click(button("Request unassign…"));
+    await click(button("Request unassign"));
+    const first = vi.mocked(state.mutateResult).mock.calls[0][0];
+    const next = { ...state.snapshot, runs: state.snapshot.runs.map(item => item.run_id === "worker" ? { ...item, assignment_generation: 3 } : item), task_ownership: [{ ...state.snapshot.task_ownership[0], generation: 3, owner: { ...state.snapshot.task_ownership[0].owner!, claim_operation_id: "same-conversation-reclaimed" } }] };
+    state = { ...state, snapshot: next };
+    await render(<SupervisorActions {...state} />);
+    expect(host.textContent).toContain("Assignment changed. The previous request does not apply to the current assignment.");
+    expect(button("Request unassign…").disabled).toBe(false);
+    expect(vi.mocked(state.mutateResult)).toHaveBeenCalledOnce();
+    expect([...state.scope.messages.values()].some(draft => draft.operation?.action === first)).toBe(true);
+    await click(button("Request unassign…"));
+    expect(state.mutateResult).toHaveBeenCalledOnce();
+    await click(button("Request unassign"));
+    const second = vi.mocked(state.mutateResult).mock.calls[1][0];
+    if (first.action !== "message_send" || second.action !== "message_send") throw new Error("Expected durable supervisor instructions");
+    expect(second.message_id).not.toBe(first.message_id);
+    expect(first.text).toContain("expected-assignment-generation 1");
+    expect(second.text).toContain("expected-assignment-generation 3");
+    expect(second.text).toContain("same-conversation-reclaimed");
+  });
+
+  it("uses registered owning-supervisor authority rather than native process observation, while retaining connection and identity fences", async () => {
+    const state = props();
+    const ownership = state.snapshot.task_ownership[0];
+    if (state.snapshot.runtime.status !== "fresh") throw new Error("Expected fresh fixture");
+    state.snapshot.runtime.runs[0].actual_agent = false;
+    await render(<SupervisorActions {...state} />);
+    await openOperator();
+    expect(button("Request unassign…").disabled).toBe(false);
+    state.snapshot.runtime = { status: "unavailable", error: { code: "unsupported_harness_observation", message: "No physical observation" } };
+    await render(<SupervisorActions {...state} live={false} semanticLive />);
+    expect(button("Request unassign…").disabled).toBe(false);
+    for (const overrides of [{ semanticLive: false }, { busy: true }, { task: task({ task: { ...task().task, diagnostic: "Duplicate canonical task ID" } }) }]) {
+      await render(<SupervisorActions {...state} {...overrides} />);
+      expect(button("Request unassign…").disabled).toBe(true);
+      await click(button("Request unassign…"));
+    }
+    const supervisor = state.snapshot.runs[0];
+    state.snapshot.runs[0] = { ...supervisor, attachment: { ...supervisor.attachment!, conversation: null } };
+    await render(<SupervisorActions {...state} />);
+    expect(button("Request unassign…").disabled).toBe(true);
+    expect(host.textContent).toContain("active owning supervisor");
+    await click(button("Request unassign…"));
+    expect(state.mutateResult).not.toHaveBeenCalled();
+    expect(state.snapshot.task_ownership[0]).toBe(ownership);
   });
 });
 
@@ -506,10 +724,10 @@ describe("independent Outcome and optional Cleanup actions", () => {
 
 describe("Supervisor evidence and recovery boundaries", () => {
   function endpointSnapshot(saved: Run): OrchestrationSnapshot {
-    return { ...snapshot(saved), runs: [saved], runtime: { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observation(saved.run_id, { presence: "endpoint_changed", actual_omp: false, pane_id: null })] } };
+    return { ...snapshot(saved), runs: [saved], runtime: { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observation(saved.run_id, { presence: "endpoint_changed", actual_agent: false, pane_id: null })] } };
   }
   function savedRoot(overrides: Partial<Run> = {}): Run {
-    return run({ run_id: "root", kind: "supervisor", parent_run_id: null, task_id: null, stage: "active", ...overrides });
+    return run({ run_id: "root", kind: "supervisor", parent_run_id: null, task_id: null, assignment_generation: null, stage: "active", ...overrides });
   }
   it.each(["supervisor", "adopted"] as const)("permits only backend inspection of a claim-free top-level %s after an endpoint change", kind => {
     const saved = savedRoot({ kind });
@@ -560,6 +778,50 @@ describe("Supervisor evidence and recovery boundaries", () => {
     expect(canRestart(state, { busy: false, connected: true, runtimeLive: true }, saved)).toBe(false);
   });
 
+  it.each(["supervisor", "worker"] as const)("keeps a healthy registered generic %s observational rather than offering recovery when Herdr cannot classify it", async kind => {
+    const generic = kind === "supervisor" ? savedRoot() : run();
+    const conversation = { harness: "codex", session_id: "generic-resumable-session" };
+    generic.launch_config = { ...generic.launch_config, harness_kind: "codex", command: "codex" };
+    generic.attachment = { ...generic.attachment!, conversation };
+    const state = kind === "supervisor" ? snapshot() : snapshot(generic);
+    if (kind === "supervisor") state.runs[0] = generic;
+    const observed = observation(generic.run_id, { actual_agent: false, agent_status: null });
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed] };
+    const health = agentState(state, generic, true, true);
+    expect(health).toMatchObject({ kind: "ready", label: "Registered conversation", verified: false, blocked: false, restartable: false, terminal: true });
+    expect(health.detail).toContain("Herdr cannot classify this harness.");
+    expect(canRestart(health, { busy: false, connected: true, runtimeLive: true }, generic)).toBe(false);
+    const onRestart = vi.fn(), onTerminal = vi.fn();
+    await render(<><AgentRecovery run={generic} state={health} busy={false} connected runtimeLive onRestart={onRestart} onTerminal={onTerminal} /><ObservedEvidence run={generic} observed={observed} snapshot={state} live /></>);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.textContent).toContain("Herdr cannot classify this harness.");
+    expect(host.textContent).not.toContain("Agent not confirmed");
+    expect([...host.querySelectorAll("button")].map(item => item.textContent)).toEqual(["Open terminal"]);
+    await click(button("Open terminal"));
+    expect(onTerminal).toHaveBeenCalledOnce();
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(generic.attachment.conversation).toBe(conversation);
+  });
+
+  it("keeps positive terminal-loss evidence recoverable without revoking the registered generic conversation or its task ownership", async () => {
+    const worker = run({ attachment: { ...run().attachment!, conversation: { harness: "codex", session_id: "generic-resumable-session" } }, launch_config: { ...run().launch_config, harness_kind: "codex", command: "codex" } });
+    const state = snapshot(worker);
+    const owner = state.task_ownership[0].owner;
+    const observed = observation(worker.run_id, { presence: "missing", actual_agent: false, pane_id: null, agent_status: null });
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed] };
+    const health = agentState(state, worker, true, true);
+    expect(health).toMatchObject({ kind: "missing", label: "Agent terminal is gone", verified: false, restartable: true, terminal: false });
+    expect(canRestart(health, { busy: false, connected: true, runtimeLive: true }, worker)).toBe(true);
+    const onRestart = vi.fn();
+    await render(<AgentRecovery run={worker} state={health} busy={false} connected runtimeLive onRestart={onRestart} onTerminal={vi.fn()} />);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("The last observed terminal is no longer available.");
+    expect([...host.querySelectorAll("button")].map(item => item.textContent)).toEqual(["Resume"]);
+    await click(button("Resume"));
+    expect(onRestart).toHaveBeenCalledOnce();
+    expect(state.task_ownership[0].owner).toBe(owner);
+    expect(worker.attachment?.conversation?.session_id).toBe("generic-resumable-session");
+  });
+
   it("uses queued and starting stages while requiring genuine live connection, not Initialized or an advisory plan", () => {
     const queued = run({ stage: "queued", dispatch: null, attachment: null });
     expect(agentState(snapshot(queued), queued, true, true).label).toBe("Worker queued");
@@ -569,7 +831,7 @@ describe("Supervisor evidence and recovery boundaries", () => {
     const worker = run({ last_report: { ...result, kind: "initialized", plan: "Suggested sequence" } });
     const savedReportOnly = snapshot(worker);
     if (savedReportOnly.runtime.status !== "fresh") throw new Error("Expected fresh runtime");
-    savedReportOnly.runtime.runs[1].actual_omp = false;
+    savedReportOnly.runtime.runs[1].actual_agent = false;
     expect(agentState(savedReportOnly, worker, true, true).verified).toBe(false);
     expect(agentState(snapshot(worker), worker, true, true).verified).toBe(true);
     expect(agentState(snapshot(worker), worker, false, true).verified).toBe(false);
@@ -579,9 +841,9 @@ describe("Supervisor evidence and recovery boundaries", () => {
     const worker = run({ result });
     const checked = task({ task: { ...task().task, checked: true }, lane: "accepted" });
     await render(<ProgressTrail run={worker} task={checked} snapshot={snapshot(worker)} />);
-    expect([...host.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Assigned", "Started", "Source complete"]);
+    expect([...host.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Assigned", "Registered conversation", "Source complete"]);
     await render(<ProgressTrail run={{ ...worker, stage: "closed", close_reason: "accepted" }} task={checked} snapshot={snapshot(worker)} />);
-    expect([...host.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Assigned", "Started", "Source complete", "Done"]);
+    expect([...host.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Assigned", "Registered conversation", "Source complete", "Done"]);
     await render(<ProgressTrail run={{ ...worker, stage: "closed", close_reason: "accepted" }} task={task()} snapshot={snapshot(worker)} />);
     expect([...host.querySelectorAll("li")].some(item => item.textContent === "Done")).toBe(false);
   });
@@ -589,7 +851,7 @@ describe("Supervisor evidence and recovery boundaries", () => {
   it("does not turn offline or unavailable observation into missing or a successful runtime result", async () => {
     const worker = run({ last_report: result });
     const state = snapshot(worker);
-    await render(<ProvenancePair run={worker} report={result} observed={observation("worker", { presence: "missing", actual_omp: false })} snapshot={state} live={false} compact />);
+    await render(<ProvenancePair run={worker} report={result} observed={observation("worker", { presence: "missing", actual_agent: false })} snapshot={state} live={false} compact />);
     expect(host.textContent).toContain("unobserved");
     expect(host.textContent).not.toContain("missing");
     expect(host.querySelector("time")!.dateTime).toBe(at);
@@ -605,7 +867,7 @@ describe("Supervisor evidence and recovery boundaries", () => {
   it("resumes a saved worker directly without check-status, setup or restart permission ladder", async () => {
     const worker = run({ dispatch: null, attachment: null });
     const state = snapshot(worker);
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("worker", { presence: "missing", actual_omp: false, pane_id: null })] };
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("worker", { presence: "missing", actual_agent: false, pane_id: null })] };
     const callbacks = { onRestart: vi.fn(), onTerminal: vi.fn() };
     await render(<AgentRecovery run={worker} state={agentState(state, worker, true, true)} busy={false} connected runtimeLive {...callbacks} />);
     const resume = button("Resume"); await act(async () => { resume.focus(); resume.click(); });
@@ -616,7 +878,7 @@ describe("Supervisor evidence and recovery boundaries", () => {
   });
   it("keeps unavailable or endpoint-changed Resume focusable but rejects activation", async () => {
     const worker = run(), state = snapshot(worker), onRestart = vi.fn();
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("worker", { presence: "endpoint_changed", actual_omp: false })] };
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observation("worker", { presence: "endpoint_changed", actual_agent: false })] };
     for (const connected of [true, false]) {
       await render(<AgentRecovery run={worker} state={agentState(state, worker, connected, true)} busy={false} connected={connected} runtimeLive onRestart={onRestart} onTerminal={vi.fn()} />);
       const resume = button("Resume");

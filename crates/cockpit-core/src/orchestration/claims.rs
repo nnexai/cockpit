@@ -132,7 +132,8 @@ pub(crate) fn revoke_and_reserve_replacement(state: &mut OrchestrationState, cla
         || old_boot != Some(&proof.previous_kernel_boot_id) || proof.previous_kernel_boot_id.is_empty() || proof.observed_kernel_boot_id.is_empty()
         || !proof.all_consumers_absent || proof.previous_kernel_boot_id == proof.observed_kernel_boot_id
         || replacement.epoch != epoch || replacement.attachment_id == old.attachment_id
-        || replacement.state != AttachmentState::Reserved || replacement.process.is_some() || replacement.shell.is_some() || replacement.location.is_some() {
+        || replacement.state != AttachmentState::Reserved || replacement.process.is_some() || replacement.shell.is_some()
+        || replacement.location.is_some() || replacement.conversation != old.conversation {
         return Err(refusal("writer_exit_unproven", "replacement requires current same-machine proof covering every protected writer"));
     }
     super::tasks_md::validate_uuid(&replacement.attachment_id)?;
@@ -165,7 +166,7 @@ pub(crate) fn revoke_root_and_reserve_replacement(state: &mut OrchestrationState
         .ok_or_else(|| refusal("orchestration_state_full", "launch attempt exhausted"))?;
     if replacement.epoch != epoch || replacement.attachment_id == old.attachment_id
         || replacement.state != AttachmentState::Reserved || replacement.process.is_some() || replacement.shell.is_some()
-        || replacement.location.is_some() || replacement.main_session_id.is_some()
+        || replacement.location.is_some() || replacement.conversation != old.conversation
         || replacement.machine_id.is_some() || replacement.launch_mode.is_some() || replacement.launch_attempt != attempt {
         return Err(refusal("root_main_exit_unproven", "Root replacement must reserve exactly the next main attachment"));
     }
@@ -256,7 +257,9 @@ mod tests {
         attachment.state = AttachmentState::Disconnected;
         attachment.launch_attempt = 1;
         attachment.machine_id = crate::process_identity::machine_id();
-        attachment.main_session_id = Some("native".into());
+        attachment.conversation = Some(cockpit_protocol::orchestration::ConversationIdentity {
+            harness: "omp".into(), session_id: "root-conversation".into(),
+        });
         attachment.process = Some(NativeProcessIdentity { pid: i32::MAX as u32, start_ticks: 1,
             kernel_boot_id: crate::process_identity::kernel_boot_id() });
         attachment.location = Some(RunLocation {
@@ -292,11 +295,14 @@ mod tests {
                 _ => unreachable!(),
             }
             let before = serde_json::to_vec(&state).unwrap();
+            let mut replacement = super::super::reserved_attachment(2, 2);
+            replacement.conversation = proof.attachment.conversation.clone();
             let result = revoke_root_and_reserve_replacement(&mut state, &proof,
-                super::super::reserved_attachment(2, 2), &Uuid::new_v4().to_string());
+                replacement, &Uuid::new_v4().to_string());
             if fence == 0 {
                 result.unwrap();
                 assert_eq!(state.runs[0].attachment.as_ref().unwrap().epoch, 2);
+                assert_eq!(state.runs[0].attachment.as_ref().unwrap().conversation, proof.attachment.conversation);
                 assert_eq!(serde_json::to_value(&state.runs[1]).unwrap(), serde_json::to_value(&original.runs[1]).unwrap());
                 assert_eq!(serde_json::to_value(&state.checkout_claims).unwrap(), serde_json::to_value(&original.checkout_claims).unwrap());
             } else {

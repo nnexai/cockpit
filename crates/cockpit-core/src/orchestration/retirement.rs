@@ -1,10 +1,6 @@
 use super::*;
 use super::herdr::{PaneProcessInfo, RuntimeView};
 
-pub(crate) const OFFER_RESPONSE_TIMEOUT_SECS: i64 = 120;
-pub(crate) const BUSY_TIMEOUT_SECS: i64 = 30 * 60;
-pub(crate) const NATIVE_STOP_TIMEOUT_SECS: i64 = 120;
-pub(crate) const OBSERVATION_TIMEOUT_SECS: i64 = 10 * 60;
 pub(crate) const OBSERVATION_RETRY_SECS: u64 = 30;
 
 pub(crate) fn terminal(state: &RetirementState) -> bool {
@@ -16,42 +12,16 @@ pub(super) fn identity_for(run: &Run) -> Option<RetirementIdentity> {
     let attachment = run.attachment.as_ref()?;
     let location = attachment.location.as_ref()?;
     let dispatch = run.dispatch.as_ref()?;
-    let process = attachment.process.as_ref()?;
-    let shell = attachment.shell.as_ref()?;
-    let omp_session_id = attachment.main_session_id.as_ref()?;
     let terminal_id = location.terminal_id.as_ref()?;
-    let process_layout_matches = match attachment.launch_mode {
-        Some(AttachmentLaunchMode::DirectProcess) => shell.process == *process
-            && process.kernel_boot_id.as_deref().is_some_and(|boot| !boot.is_empty()),
-        Some(AttachmentLaunchMode::ShellAgent) => shell.process.pid != process.pid,
-        None => false,
-    };
-    if run.attempt == 0 || attachment.epoch == 0 || attachment.attachment_id.is_empty()
-        || attachment.launch_attempt != dispatch.launch_attempt
-        || dispatch.launch_attempt == 0 || !dispatch.agent_started
-        || process.pid == 0 || process.pid > i32::MAX as u32 || process.start_ticks == 0 || process.start_ticks > MAX_SAFE_COUNTER
-        || shell.process.pid == 0 || shell.process.pid > i32::MAX as u32
-        || !process_layout_matches || shell.process.start_ticks == 0 || shell.process.start_ticks > MAX_SAFE_COUNTER
-        || [&shell.executable_device, &shell.executable_inode].iter().any(|value|
-            value.parse::<u64>().is_err() || !value.bytes().all(|byte| byte.is_ascii_digit())
-            || (value.len() > 1 && value.starts_with('0')))
-        || shell.argv_digest.len() != 64
-        || !shell.argv_digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || !optional_available(&shell.process.kernel_boot_id, &process.kernel_boot_id)
-        || [omp_session_id, terminal_id, &location.endpoint_identity, &location.session_id,
-            &location.workspace_id, &location.tab_id, &location.pane_id].iter().any(|s| s.is_empty()) {
-        return None;
-    }
+    if terminal_id.is_empty() || attachment.launch_attempt != dispatch.launch_attempt { return None; }
     Some(RetirementIdentity {
         attachment_id: Some(attachment.attachment_id.clone()), attachment_epoch: Some(attachment.epoch),
-        launch_mode: attachment.launch_mode,
-        run_attempt: run.attempt, launch_attempt: dispatch.launch_attempt,
+        launch_mode: attachment.launch_mode, run_attempt: run.attempt, launch_attempt: dispatch.launch_attempt,
         launch_tag: location.launch_tag.clone(), endpoint_identity: location.endpoint_identity.clone(),
         session_id: location.session_id.clone(), workspace_id: location.workspace_id.clone(),
-        tab_id: location.tab_id.clone(), pane_id: location.pane_id.clone(),
-        terminal_id: terminal_id.clone(), herdr_boot_id: location.boot_id.clone(),
-        omp_session_id: omp_session_id.clone(), process: process.clone(),
-        shell: shell.clone(),
+        tab_id: location.tab_id.clone(), pane_id: location.pane_id.clone(), terminal_id: terminal_id.clone(),
+        herdr_boot_id: location.boot_id.clone(), conversation: attachment.conversation.clone(),
+        process: attachment.process.clone(), shell: attachment.shell.clone(),
     })
 }
 
@@ -60,18 +30,15 @@ pub(crate) fn retirement_for_accepted(run: &Run, trigger: RetirementTrigger, tas
     let result = run.result.as_ref()?;
     if result.outcome != Some(ReportOutcome::Succeeded) { return None; }
     let identity = identity_for(run);
-    let state = if identity.is_some() { RetirementState::Waiting { blockers: Vec::new() } }
-        else { RetirementState::Retained { at: at.into(), reason: RetainReason::IdentityIncomplete, native_stopped: false } };
-    Some(RunRetirement {
-        retirement_id: id(), trigger, result_message_id: result.message_id.clone(), task_revision: task_revision.into(),
-        identity, quiescent_stop_at: None, state, created_at: at.into(), updated_at: at.into(),
-    })
+    let state = if identity.as_ref().is_some_and(|identity| identity.process.is_some() && identity.shell.is_some()) { RetirementState::Waiting { blockers: Vec::new() } }
+        else { RetirementState::Retained { at: at.into(), reason: RetainReason::IdentityIncomplete, stopped: false } };
+    Some(RunRetirement { retirement_id: id(), trigger, result_message_id: result.message_id.clone(),
+        task_revision: task_revision.into(), identity, state, created_at: at.into(), updated_at: at.into() })
 }
 
 pub(crate) fn close_accepted(state: &mut OrchestrationState, index: usize, trigger: RetirementTrigger, task_revision: &str) {
     let at = now();
     let run = &mut state.runs[index];
-    // Recovery must not backfill retirement for an acceptance already committed.
     let already_closed = run.stage == RunStage::Closed;
     run.stage = RunStage::Closed;
     run.close_reason = Some(CloseReason::Accepted);
@@ -80,154 +47,23 @@ pub(crate) fn close_accepted(state: &mut OrchestrationState, index: usize, trigg
         run.retirement = retirement_for_accepted(run, trigger, task_revision, &at);
         if let Some(retirement) = &run.retirement {
             run.annotations.push(Annotation { at, by: ActorRef::Dispatcher,
-                text: format!("Accepted-worker retirement {} created for Result {} at task revision {}: {:?}.",
-                    retirement.retirement_id, retirement.result_message_id, retirement.task_revision, retirement.state) });
+                text: format!("Physical retirement {} recorded; logical acceptance is not consumer-exit proof.", retirement.retirement_id) });
         }
     }
 }
 
 pub(crate) fn blockers(state: &OrchestrationState, run: &Run) -> Vec<RetirementBlocker> {
-    let mut result = Vec::new();
     if state.runs.iter().any(|child| child.stage != RunStage::Closed && is_ancestor(state, &run.run_id, &child.run_id)) {
-        result.push(RetirementBlocker::OpenDescendantRuns);
-    }
-    if state.subagents.iter().any(|child| child.run_id == run.run_id && child.status == SubagentStatus::Running) {
-        result.push(RetirementBlocker::RunningSubagents);
-    }
-    result
+        vec![RetirementBlocker::OpenDescendantRuns]
+    } else { Vec::new() }
 }
 
 pub(crate) fn identity_matches(run: &Run, retirement: &RunRetirement) -> bool {
-    let (Some(identity), Some(attachment), Some(dispatch)) =
-        (&retirement.identity, &run.attachment, &run.dispatch) else { return false; };
-    let Some(location) = attachment.location.as_ref() else { return false; };
     run.kind == RunKind::Worker && run.stage == RunStage::Closed
         && run.close_reason == Some(CloseReason::Accepted)
         && run.result.as_ref().is_some_and(|result| result.outcome == Some(ReportOutcome::Succeeded)
             && result.message_id == retirement.result_message_id)
-        && launch_receipt_coherent(run) && dispatch.agent_started
-        && identity.attachment_id.as_deref() == Some(attachment.attachment_id.as_str())
-        && identity.attachment_epoch == Some(attachment.epoch)
-        && identity.launch_mode.is_some() && attachment.launch_mode == identity.launch_mode
-        && attachment.launch_attempt == identity.launch_attempt
-        && run.attempt == identity.run_attempt && dispatch.launch_attempt == identity.launch_attempt
-        && location.launch_tag == identity.launch_tag && location.endpoint_identity == identity.endpoint_identity
-        && location.session_id == identity.session_id && location.workspace_id == identity.workspace_id
-        && location.tab_id == identity.tab_id && location.pane_id == identity.pane_id
-        && location.terminal_id.as_deref() == Some(identity.terminal_id.as_str())
-        && location.boot_id == identity.herdr_boot_id
-        && attachment.main_session_id.as_deref() == Some(identity.omp_session_id.as_str())
-        && attachment.process.as_ref() == Some(&identity.process)
-        && attachment.shell.as_ref() == Some(&identity.shell)
-}
-
-pub(crate) fn caller_location_matches(run: &Run, caller: &AgentCaller) -> bool {
-    run.retirement.as_ref().and_then(|r| r.identity.as_ref()).is_some_and(|identity|
-        caller.endpoint_identity == identity.endpoint_identity && caller.session_id == identity.session_id
-        && caller.workspace_id == identity.workspace_id && caller.tab_id == identity.tab_id
-        && caller.pane_id == identity.pane_id && caller.terminal_id.as_deref() == Some(identity.terminal_id.as_str())
-        && optional_available(&identity.herdr_boot_id, &caller.boot_id))
-}
-
-pub(crate) fn apply_native_receipt(run: &mut Run, caller: &AgentCaller, retirement_id: &str, outcome: NativeStopReceipt) -> Result<(), InspectionError> {
-    let retirement = run.retirement.as_ref().ok_or_else(|| error("retirement_not_found", "No retirement record"))?;
-    let identity = retirement.identity.as_ref().ok_or_else(|| error("caller_mismatch", "Retirement identity is incomplete"))?;
-    if caller.agent_kind != Some(AgentKind::Main) || caller.actual_agent_kind != Some(NativeAgentKind::Omp)
-        || identity.attachment_id.as_deref() != Some(caller.auth.attachment_id.as_str())
-        || identity.attachment_epoch != Some(caller.auth.attachment_epoch)
-        || !caller.env_run.as_ref().is_some_and(|(run_id, attempt)| run_id == &run.run_id && *attempt == identity.run_attempt)
-        || !identity_matches(run, retirement) || !caller_location_matches(run, caller)
-        || caller.omp_session_id.as_deref() != Some(identity.omp_session_id.as_str())
-        || caller.process.as_ref() != Some(&identity.process) {
-        return Err(error("caller_mismatch", "Only the exact pinned main process may report retirement"));
-    }
-    if retirement.retirement_id != retirement_id {
-        return Err(error("retirement_state_changed", "Retirement incarnation changed"));
-    }
-    let offered_at = match &retirement.state {
-        RetirementState::NativeStopOffered { offered_at } | RetirementState::NativeStopDeferred { offered_at, .. } => offered_at,
-        RetirementState::NativeStopRequested { .. } if !matches!(&outcome, NativeStopReceipt::ShutdownRequested) =>
-            &retirement.created_at,
-        _ => return Err(error("retirement_state_changed", "Retirement no longer admits a native receipt")),
-    };
-    let at = now();
-    let shutdown_requested = matches!(&outcome, NativeStopReceipt::ShutdownRequested);
-    let (next, explanation) = match outcome {
-        NativeStopReceipt::ShutdownRequested => (RetirementState::NativeStopRequested { at: at.clone() }, None),
-        NativeStopReceipt::Deferred { reason } => (RetirementState::NativeStopDeferred { offered_at: offered_at.clone(), reason, at: at.clone() }, None),
-        NativeStopReceipt::Refused { reason, text } => {
-            bounded(&text, 1024)?;
-            (RetirementState::Retained { at: at.clone(), native_stopped: false,
-                reason: match reason { NativeRefuseReason::UserActivity => RetainReason::UserActivity, NativeRefuseReason::NativeRefused => RetainReason::NativeRefused } }, Some(text))
-        },
-    };
-    set_state(run, next, &at);
-    // This receipt precedes ctx.shutdown and does not prove sealed native
-    // admissions. A crash in that gap must not become writer-exit authority.
-    run.retirement.as_mut().expect("retirement checked").quiescent_stop_at = None;
-    if let Some(attachment) = &mut run.attachment {
-        if shutdown_requested { attachment.state = AttachmentState::Quiescing; }
-        else if attachment.state == AttachmentState::Quiescing { attachment.state = AttachmentState::Connected; }
-    }
-    if let Some(text) = explanation {
-        run.annotations.push(Annotation { at, by: ActorRef::Dispatcher, text: format!("Native retirement refusal explanation: {text}") });
-    }
-    Ok(())
-}
-
-fn set_state(run: &mut Run, next: RetirementState, at: &str) {
-    let retirement = run.retirement.as_mut().expect("retirement checked");
-    run.annotations.push(Annotation { at: at.into(), by: ActorRef::Dispatcher,
-        text: format!("Retirement {}: {:?} → {:?}.", retirement.retirement_id, retirement.state, next) });
-    retirement.state = next;
-    retirement.updated_at = at.into();
-    run.updated_at = at.into();
-}
-
-#[derive(Clone, Copy)]
-enum TransitionGuard {
-    Any,
-    Evidence(NativeStopEvidence),
-    NativeStopped(bool),
-    Terminal(TerminalOutcome),
-    Phase(RetirementPhase),
-}
-
-impl TransitionGuard {
-    fn allows(self, next: &RetirementState) -> bool {
-        match (self, next) {
-            (Self::Any, _) => true,
-            (Self::Evidence(expected), RetirementState::NativeStopped { evidence, .. }) => expected == *evidence,
-            (Self::NativeStopped(expected), RetirementState::Retained { native_stopped, .. }) => expected == *native_stopped,
-            (Self::Terminal(expected), RetirementState::Retired { terminal, .. }) => expected == *terminal,
-            (Self::Phase(expected), RetirementState::Unknown { phase, .. }) => expected == *phase,
-            _ => false,
-        }
-    }
-}
-
-// Owner effects only: native receipts have their own payload and caller fences.
-const OWNER_TRANSITIONS: &[(RetirementStateKind, RetirementStateKind, TransitionGuard)] = &[
-    (RetirementStateKind::Waiting, RetirementStateKind::Waiting, TransitionGuard::Any),
-    (RetirementStateKind::Waiting, RetirementStateKind::NativeStopOffered, TransitionGuard::Any),
-    (RetirementStateKind::Waiting, RetirementStateKind::NativeStopped, TransitionGuard::Evidence(NativeStopEvidence::AlreadyExited)),
-    (RetirementStateKind::Waiting, RetirementStateKind::Retained, TransitionGuard::NativeStopped(false)),
-    (RetirementStateKind::NativeStopOffered, RetirementStateKind::Retained, TransitionGuard::NativeStopped(false)),
-    (RetirementStateKind::NativeStopDeferred, RetirementStateKind::Retained, TransitionGuard::NativeStopped(false)),
-    (RetirementStateKind::NativeStopRequested, RetirementStateKind::NativeStopped, TransitionGuard::Evidence(NativeStopEvidence::ExitedAfterShutdownRequest)),
-    (RetirementStateKind::NativeStopRequested, RetirementStateKind::Unknown, TransitionGuard::Phase(RetirementPhase::NativeStop)),
-    (RetirementStateKind::NativeStopped, RetirementStateKind::CloseIntent, TransitionGuard::Any),
-    (RetirementStateKind::NativeStopped, RetirementStateKind::Retired, TransitionGuard::Terminal(TerminalOutcome::AlreadyAbsent)),
-    (RetirementStateKind::NativeStopped, RetirementStateKind::Retained, TransitionGuard::NativeStopped(true)),
-    (RetirementStateKind::CloseIntent, RetirementStateKind::Retired, TransitionGuard::Any),
-    (RetirementStateKind::CloseIntent, RetirementStateKind::Retained, TransitionGuard::NativeStopped(true)),
-    (RetirementStateKind::CloseIntent, RetirementStateKind::Unknown, TransitionGuard::Phase(RetirementPhase::TerminalClose)),
-];
-
-fn owner_transition(from: RetirementStateKind, next: &RetirementState) -> bool {
-    let next_kind = next.kind();
-    OWNER_TRANSITIONS.iter().any(|&(source, target, guard)|
-        source == from && target == next_kind && guard.allows(next))
+        && identity_for(run).as_ref() == retirement.identity.as_ref() && retirement.identity.is_some()
 }
 
 impl OrchestrationService {
@@ -238,91 +74,41 @@ impl OrchestrationService {
                 && run.close_reason == Some(CloseReason::Accepted))).collect())
     }
 
-    /// Read-only physical fence immediately before the extension acknowledges
-    /// its cooperative shutdown. Never a PID signal or a Herdr stop command.
-    pub async fn retirement_shutdown_preflight(&self, herdr: &dyn herdr::OrchestrationHerdr,
-        run_id: &str, retirement_id: &str) -> Result<(), InspectionError> {
-        let run = {
-            let state = self.store.lock()?.read()?;
-            let run = &state.runs[run_index(&state, run_id)?];
-            if !blockers(&state, run).is_empty() {
-                return Err(error("retirement_state_changed", "Writer has open descendants or running subagents"));
-            }
-            run.clone()
-        };
-        let record = run.retirement.as_ref().ok_or_else(|| error("retirement_state_changed", "Stop intent is absent"))?;
-        if record.retirement_id != retirement_id || !identity_matches(&run, record)
-            || !matches!(record.state, RetirementState::NativeStopOffered { .. } | RetirementState::NativeStopDeferred { .. }) {
-            return Err(error("retirement_state_changed", "Stop intent no longer matches the current writer"));
-        }
-        let identity = record.identity.as_ref().ok_or_else(|| error("retirement_state_changed", "Stop identity is incomplete"))?;
-        let runtime = herdr.runtime(&identity.session_id).await?;
-        let info = herdr.pane_process_info(&identity.session_id, &identity.endpoint_identity, &identity.pane_id).await?;
-        let boot_id = crate::process_identity::kernel_boot_id();
-        let running = super::retire::exact_running(&identity.process, boot_id.as_deref())
-            .map_err(|_| error("retirement_unverifiable", "The pinned native incarnation cannot be observed"))?;
-        let decision = classify_offer(identity, &runtime, Some(&info), running, boot_id.as_deref());
-        if decision != OfferDecision::Offer {
-            return Err(error("retirement_state_changed", format!("Cooperative shutdown preflight refused: {decision:?}")));
-        }
-        let state = self.store.lock()?.read()?;
-        let fresh = &state.runs[run_index(&state, run_id)?];
-        if !blockers(&state, fresh).is_empty() || fresh.retirement.as_ref().is_none_or(|current|
-            current.retirement_id != retirement_id || !identity_matches(fresh, current)
-                || current.identity != record.identity
-                || !matches!(current.state, RetirementState::NativeStopOffered { .. } | RetirementState::NativeStopDeferred { .. })) {
-            return Err(error("retirement_state_changed", "Writer authority changed during shutdown preflight"));
-        }
-        Ok(())
-    }
-
     pub(crate) fn retirement_blockers(&self, run_id: &str) -> Result<Vec<RetirementBlocker>, InspectionError> {
         let state = self.store.lock()?.read()?;
         Ok(blockers(&state, &state.runs[run_index(&state, run_id)?]))
     }
 
-    pub(crate) fn retirement_effect_authorized(&self, run_id: &str, retirement_id: &str) -> Result<bool, InspectionError> {
-        let state = self.store.lock()?.read()?;
-        let run = &state.runs[run_index(&state, run_id)?];
-        Ok(blockers(&state, run).is_empty() && run.retirement.as_ref().is_some_and(|r| r.retirement_id == retirement_id
-            && r.quiescent_stop_at.is_some()
-            && matches!(r.state, RetirementState::CloseIntent { .. }) && identity_matches(run, r)))
-    }
 
     pub(crate) fn record_retirement(&self, run_id: &str, retirement_id: &str, expected: RetirementStateKind, next: RetirementState) -> Result<u64, InspectionError> {
         let locked = self.store.lock()?;
         let mut state = locked.read()?;
         let index = run_index(&state, run_id)?;
-        if matches!(next, RetirementState::NativeStopOffered { .. } | RetirementState::CloseIntent { .. })
-            && !blockers(&state, &state.runs[index]).is_empty() {
-            return Err(error("retirement_state_changed", "Worker has open descendants or running subagents"));
+        if matches!(next, RetirementState::CloseIntent { .. }) && !blockers(&state, &state.runs[index]).is_empty() {
+            return Err(error("retirement_state_changed", "Worker has open descendant runs"));
         }
         let run = &mut state.runs[index];
         let retirement = run.retirement.as_ref().ok_or_else(|| error("retirement_state_changed", "Retirement is absent"))?;
-        let reconciling_unknown = matches!((&retirement.state, &next),
-            (RetirementState::Unknown { phase: RetirementPhase::NativeStop, .. },
-                RetirementState::NativeStopped { evidence: NativeStopEvidence::ExitedAfterShutdownRequest, .. })
-            | (RetirementState::Unknown { phase: RetirementPhase::TerminalClose, .. },
-                RetirementState::Retired { terminal: TerminalOutcome::AbsentAfterUncertainClose, .. }));
-        if retirement.retirement_id != retirement_id || retirement.state.kind() != expected
-            || (terminal(&retirement.state) && !reconciling_unknown) {
-            return Err(error("retirement_state_changed", "Retirement state or incarnation changed"));
-        }
-        if !reconciling_unknown && !owner_transition(expected, &next) {
-            return Err(error("retirement_state_changed", "Unauthorized retirement transition"));
-        }
-        // Read-only absence of the pinned historical close target can reconcile
-        // an old receipt even after attachment refresh. It grants no new effect.
-        let observed_close_absence = matches!(expected, RetirementStateKind::CloseIntent | RetirementStateKind::Unknown)
+        let absence = matches!(expected, RetirementStateKind::CloseIntent | RetirementStateKind::Unknown)
             && matches!(next, RetirementState::Retired { terminal: TerminalOutcome::AbsentAfterUncertainClose, .. });
-        if reconciling_unknown && !observed_close_absence && !identity_matches(run, retirement) {
-            return Err(error("retirement_state_changed", "Unknown shutdown remains pinned to an unverified historical writer"));
-        }
-        let next = if observed_close_absence || identity_matches(run, retirement) { next } else {
-            RetirementState::Retained { at: now(), reason: RetainReason::IdentityChanged,
-                native_stopped: matches!(expected, RetirementStateKind::NativeStopped | RetirementStateKind::CloseIntent) }
+        let valid_transition = match expected {
+            RetirementStateKind::Waiting => matches!(next, RetirementState::Waiting { .. } | RetirementState::CloseIntent { .. } | RetirementState::Retired { .. } | RetirementState::Retained { .. }),
+            RetirementStateKind::CloseIntent => matches!(next, RetirementState::Retired { .. } | RetirementState::Retained { .. } | RetirementState::Unknown { .. }),
+            RetirementStateKind::Unknown => absence,
+            _ => false,
         };
-        set_state(run, next, &now());
+        if retirement.retirement_id != retirement_id || retirement.state.kind() != expected || !valid_transition {
+            return Err(error("retirement_state_changed", "Physical retirement state changed"));
+        }
+        let next = if absence || identity_matches(run, retirement) { next } else {
+            RetirementState::Retained { at: now(), reason: RetainReason::IdentityChanged, stopped: false }
+        };
+        let at = now();
+        let retirement = run.retirement.as_mut().expect("retirement");
+        retirement.state = next;
+        retirement.updated_at = at.clone();
+        run.updated_at = at;
+        // A pane-local close never releases checkout or detached-build claims.
         super::cleanup::sync_retirement_receipts(&mut state, index);
         let revision = locked.save(&mut state)?;
         self.revision.send_replace(revision);
@@ -330,8 +116,6 @@ impl OrchestrationService {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum OfferDecision { Offer, AlreadyExited, Retain(RetainReason) }
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TerminalDecision { Absent, Retain(RetainReason) }
 
@@ -341,104 +125,50 @@ fn runtime_fence(identity: &RetirementIdentity, runtime: &RuntimeView) -> Result
     Ok(())
 }
 
-fn pinned_pane<'a>(identity: &RetirementIdentity, runtime: &'a RuntimeView) -> Result<&'a herdr::RuntimePane, TerminalDecision> {
-    let by_id = runtime.panes.iter().find(|p| p.pane_id == identity.pane_id);
-    let by_terminal = runtime.panes.iter().find(|p| p.terminal_id.as_deref() == Some(identity.terminal_id.as_str()));
-    let Some(pane) = by_id else {
-        return Err(if by_terminal.is_none() { TerminalDecision::Absent } else { TerminalDecision::Retain(RetainReason::PaneMoved) });
-    };
-    if pane.terminal_id.as_deref() != Some(identity.terminal_id.as_str())
-        || pane.workspace_id != identity.workspace_id || pane.tab_id != identity.tab_id
-        || runtime.panes.iter().filter(|p| p.terminal_id.as_deref() == Some(identity.terminal_id.as_str())).count() != 1 {
-        return Err(TerminalDecision::Retain(RetainReason::PaneMoved));
-    }
-    Ok(pane)
-}
-
-pub(crate) fn classify_offer(identity: &RetirementIdentity, runtime: &RuntimeView, info: Option<&PaneProcessInfo>, running: bool, kernel_boot_id: Option<&str>) -> OfferDecision {
-    if let Err(reason) = runtime_fence(identity, runtime) { return OfferDecision::Retain(reason); }
-    if matches!((&identity.process.kernel_boot_id, kernel_boot_id), (Some(expected), Some(actual)) if expected != actual) {
-        return OfferDecision::Retain(RetainReason::IdentityChanged);
-    }
-    if identity.process.kernel_boot_id.is_some() && kernel_boot_id.is_none() {
-        return OfferDecision::Retain(RetainReason::NativeProcessUnverifiable);
-    }
-    let pane = match pinned_pane(identity, runtime) {
-        Ok(pane) => pane,
-        Err(TerminalDecision::Absent) if !running => return OfferDecision::AlreadyExited,
-        Err(TerminalDecision::Absent) => return OfferDecision::Retain(RetainReason::ProcessPaneMismatch),
-        Err(TerminalDecision::Retain(reason)) => return OfferDecision::Retain(reason),
-    };
-    if !running {
-        return if pane.agent_kind.as_deref().is_some_and(NativeAgentKind::is_omp) || pane.launch_pending { OfferDecision::Retain(RetainReason::ProcessPaneMismatch) }
-            else { OfferDecision::AlreadyExited };
-    }
-    if !pane.agent_kind.as_deref().is_some_and(NativeAgentKind::is_omp) || pane.launch_pending
-        || pane.native_session_id.as_ref().is_some_and(|s| s != &identity.omp_session_id) {
-        return OfferDecision::Retain(RetainReason::ProcessPaneMismatch);
-    }
-    match info {
-        Some(info) if info.pane_id == identity.pane_id && info.processes.iter().any(|(pid, _)| *pid == identity.process.pid) => OfferDecision::Offer,
-        Some(_) => OfferDecision::Retain(RetainReason::ProcessPaneMismatch),
-        None => OfferDecision::Retain(RetainReason::NativeProcessUnverifiable),
-    }
-}
-
-/// Pane-local ownership checks, not a certificate that all writer consumers
-/// stopped. Effect authorization separately requires sealed native admissions.
-/// An original interactive shell still has no supported idle attestation.
 pub(crate) fn classify_terminal(identity: &RetirementIdentity, runtime: &RuntimeView, info: &PaneProcessInfo) -> Result<(), TerminalDecision> {
     runtime_fence(identity, runtime).map_err(TerminalDecision::Retain)?;
-    let pane = pinned_pane(identity, runtime)?;
+    let pane = runtime.panes.iter().find(|pane| pane.pane_id == identity.pane_id);
+    let same_terminal = runtime.panes.iter().filter(|pane| pane.terminal_id.as_deref() == Some(identity.terminal_id.as_str())).count();
+    let Some(pane) = pane else {
+        return Err(if same_terminal == 0 { TerminalDecision::Absent } else { TerminalDecision::Retain(RetainReason::PaneMoved) });
+    };
+    if same_terminal != 1 || pane.terminal_id.as_deref() != Some(identity.terminal_id.as_str())
+        || pane.workspace_id != identity.workspace_id || pane.tab_id != identity.tab_id {
+        return Err(TerminalDecision::Retain(RetainReason::PaneMoved));
+    }
     if pane.tab_label != identity.launch_tag { return Err(TerminalDecision::Retain(RetainReason::TabRenamed)); }
-    if runtime.panes.iter().any(|p| p.pane_id != pane.pane_id && p.workspace_id == pane.workspace_id && p.tab_id == pane.tab_id) {
+    if runtime.panes.iter().any(|other| other.pane_id != pane.pane_id && other.workspace_id == pane.workspace_id && other.tab_id == pane.tab_id) {
         return Err(TerminalDecision::Retain(RetainReason::SharedTab));
     }
-    if identity.launch_mode == Some(AttachmentLaunchMode::DirectProcess) {
-        // A direct argv pane does not respawn an interactive shell. Empty
-        // foreground evidence is only pane-local eligibility; it never proves
-        // detached or asynchronous consumers drained or admissions sealed.
-        let recognized_metadata = pane.agent_kind.is_none()
-            || (pane.agent_kind.as_deref().is_some_and(NativeAgentKind::is_omp)
-                && pane.native_session_id.as_deref() == Some(identity.omp_session_id.as_str()));
-        if identity.shell.process != identity.process || !recognized_metadata || pane.launch_pending
-            || info.pane_id != identity.pane_id || !info.processes.is_empty() || info.shell_identity.is_some()
-            || info.shell_pid.is_some_and(|pid| pid != identity.process.pid)
-            || info.foreground_pgid.is_some_and(|pid| pid != identity.process.pid) {
-            return Err(TerminalDecision::Retain(RetainReason::ForegroundProcess));
-        }
-        return Ok(());
+    if identity.launch_mode != Some(AttachmentLaunchMode::DirectProcess) {
+        return Err(TerminalDecision::Retain(RetainReason::UserActivity));
     }
-    if pane.agent_kind.is_some() || pane.launch_pending { return Err(TerminalDecision::Retain(RetainReason::ForegroundProcess)); }
-    if info.pane_id != identity.pane_id || info.shell_pid.is_none() || info.foreground_pgid != info.shell_pid
-        || info.processes.is_empty() || info.processes.iter().any(|(pid, _)| Some(*pid) != info.shell_pid) {
+    let process = identity.process.as_ref().ok_or(TerminalDecision::Retain(RetainReason::NativeProcessUnverifiable))?;
+    let shell = identity.shell.as_ref().ok_or(TerminalDecision::Retain(RetainReason::NativeProcessUnverifiable))?;
+    if shell.process != *process || pane.launch_pending || info.pane_id != identity.pane_id
+        || pane.agent_kind.as_ref().is_some_and(|kind|
+            identity.conversation.as_ref().is_none_or(|conversation| kind != &conversation.harness))
+        || !info.processes.is_empty() || info.shell_identity.is_some()
+        || info.shell_pid.is_some_and(|pid| pid != process.pid)
+        || info.foreground_pgid.is_some_and(|pid| pid != process.pid) {
         return Err(TerminalDecision::Retain(RetainReason::ForegroundProcess));
     }
-    let shell = info.shell_identity.as_ref()
-        .ok_or(TerminalDecision::Retain(RetainReason::NativeProcessUnverifiable))?;
-    if info.shell_pid != Some(identity.shell.process.pid) || shell != &identity.shell {
-        // PID/PGID alone survive exec. Require the pinned original executable and
-        // full argv fingerprint, including command arguments such as bash -c.
-        return Err(TerminalDecision::Retain(RetainReason::ForegroundProcess));
-    }
-    Err(TerminalDecision::Retain(RetainReason::UserActivity))
+    Ok(())
 }
 
 pub(crate) fn classify_close(identity: &RetirementIdentity, response: Option<Result<(), InspectionError>>, fresh: Option<&RuntimeView>) -> RetirementState {
     let at = now();
     let absence = fresh.filter(|runtime| runtime_fence(identity, runtime).is_ok()).map(|runtime|
-        !runtime.panes.iter().any(|p| p.pane_id == identity.pane_id || p.terminal_id.as_deref() == Some(identity.terminal_id.as_str())));
+        !runtime.panes.iter().any(|pane| pane.pane_id == identity.pane_id || pane.terminal_id.as_deref() == Some(identity.terminal_id.as_str())));
     match response {
         Some(Err(error)) if error.code != "herdr_outcome_unknown" && error.code != "pane_not_found" =>
-            RetirementState::Retained { at, reason: RetainReason::HerdrRefused, native_stopped: true },
-        Some(Err(error)) if error.code == "pane_not_found" && absence == Some(false) =>
-            RetirementState::Retained { at, reason: RetainReason::PaneMoved, native_stopped: true },
+            RetirementState::Retained { at, reason: RetainReason::HerdrRefused, stopped: true },
         response if absence == Some(true) => RetirementState::Retired { at, terminal: match response {
             Some(Ok(())) => TerminalOutcome::ClosedByCockpit,
             Some(Err(error)) if error.code == "pane_not_found" => TerminalOutcome::AlreadyAbsent,
             _ => TerminalOutcome::AbsentAfterUncertainClose,
         } },
         _ => RetirementState::Unknown { at, phase: RetirementPhase::TerminalClose,
-            detail: "A single read-only close verification could not confirm terminal absence; pane.close will not be retried.".into() },
+            detail: "Terminal absence could not be confirmed; pane.close will not be retried.".into() },
     }
 }

@@ -20,62 +20,22 @@ fn advance_worker(fixture: &Fixture, _run_id: &str, actor: &Actor, stage: RunSta
 }
 
 #[test]
-fn healthy_physical_review_retains_missing_extension_until_actual_run_attach() {
+fn registration_activates_neutral_root_without_runtime_or_launch_ack() {
     let fixture = Fixture::new();
-    let run_id = fixture.root();
-    fixture.setup(&run_id);
-    let actor = fixture.launch_tab(&run_id);
-    fixture.service.record_launch_pending(&fixture.run(&run_id)).unwrap();
-    let Actor::Agent(caller) = &actor else { unreachable!() };
-    // Host-observed main provenance exists before the extension commits RunAttach.
-    fixture.seed_run(&run_id, |run| {
-        let attachment = run.attachment.as_mut().unwrap();
-        attachment.main_session_id = caller.omp_session_id.clone();
-        attachment.process = caller.process.clone();
-    });
-    let attachment = fixture.run(&run_id).attachment.unwrap();
-    fixture.service.record_launch_verified(&fixture.run(&run_id)).unwrap();
-    let retained = fixture.run(&run_id);
-    assert_eq!(retained.stage, RunStage::Starting);
-    let current = retained.attachment.as_ref().unwrap();
-    assert_eq!(current.attachment_id, attachment.attachment_id);
-    assert_eq!(current.epoch, attachment.epoch);
-    assert_eq!(current.process, attachment.process);
-    assert_eq!(current.state, AttachmentState::Disconnected);
-    assert_eq!(retained.dispatch.as_ref().unwrap().error.as_ref().unwrap().code, "current_extension_unavailable");
-    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&run_id));
-    let messages = serde_json::to_value(fixture.state().messages).unwrap();
-    fixture.service.record_launch_verified(&retained).unwrap();
-    let observed_again = fixture.run(&run_id);
-    let current = observed_again.attachment.as_ref().unwrap();
-    assert_eq!(observed_again.stage, RunStage::Starting);
-    assert_eq!(current.state, AttachmentState::Disconnected);
-    assert_eq!(current.attachment_id, attachment.attachment_id);
-    assert_eq!(current.epoch, attachment.epoch);
-    assert_eq!(current.process, attachment.process);
-    assert_eq!(current.shell, attachment.shell);
-    assert_eq!(observed_again.dispatch.as_ref().unwrap().launch_attempt,
-        retained.dispatch.as_ref().unwrap().launch_attempt);
-    assert_eq!(observed_again.dispatch.as_ref().unwrap().launch_tag,
-        retained.dispatch.as_ref().unwrap().launch_tag);
-    assert_eq!(observed_again.dispatch.as_ref().unwrap().error.as_ref().unwrap().code,
-        "current_extension_unavailable");
-    assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&run_id));
-    assert_eq!(serde_json::to_value(fixture.state().messages).unwrap(), messages);
-    fixture.apply(&actor, OrchestrationAction::RunAttach {
-        operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
-        expected_attachment_epoch: caller.auth.attachment_epoch,
-        main_session_id: caller.omp_session_id.clone().unwrap(),
+    let root = fixture.root();
+    let actor = fixture.neutral_actor(&root);
+    assert!(fixture.run(&root).attachment.as_ref().unwrap().conversation.is_none());
+    fixture.apply(&actor, OrchestrationAction::RunRegister {
+        operation_id: caller_auth(&actor).credential_id.clone(),
     }).unwrap();
-    let reattached = fixture.run(&run_id);
-    assert_eq!(reattached.stage, RunStage::Active);
-    assert_eq!(reattached.attachment.as_ref().unwrap().state, AttachmentState::Connected);
-    assert_eq!(reattached.attachment.as_ref().unwrap().attachment_id, attachment.attachment_id);
-    assert_eq!(reattached.attachment.as_ref().unwrap().epoch, attachment.epoch);
-    assert!(reattached.dispatch.as_ref().unwrap().error.is_none());
-    assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&run_id));
+    let registered = fixture.run(&root);
+    assert_eq!(registered.stage, RunStage::Active);
+    assert!(registered.attachment.as_ref().unwrap().location.is_none());
+    assert!(registered.attachment.as_ref().unwrap().process.is_none());
+    assert_eq!(registered.launch_config.harness_kind, "service-test");
+    assert_eq!(registered.launch_config.command, "test-agent");
     assert_eq!(fixture.state().messages.iter().filter(|message|
-        message.to_run_id == run_id && message.kind == MessageKind::SupervisorBrief).count(), 1);
+        message.to_run_id == root && message.kind == MessageKind::SupervisorBrief).count(), 1);
 }
 
 #[test]
@@ -101,13 +61,10 @@ fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_
             .service
             .record_launch_pending(&fixture.run(&run_id))
             .unwrap();
-        let Actor::Agent(caller) = &actor else {
-            unreachable!();
-        };
         fixture
             .apply(
                 &actor,
-                OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
+                OrchestrationAction::RunRegister { operation_id: id() },
             )
             .unwrap();
         let reviewed = fixture.run(&run_id);
@@ -119,10 +76,9 @@ fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_
                 RunStage::Working
             };
         });
-        if stage == RunStage::Active {
-            fixture.apply(&actor, fixture.successful_result(&actor))
-                .unwrap();
-        } else {
+        if stage != RunStage::Active {
+            // The registered worker is the current assigned task owner; a
+            // supervisor has no task source Result to report.
             advance_worker(&fixture, &run_id, &actor, stage);
         }
         let before = fixture.run(&run_id);
@@ -146,24 +102,17 @@ fn first_launch_proof_preserves_fast_same_launch_progress_and_repeated_proof_is_
         assert_eq!(after_attachment.attachment_id, before_attachment.attachment_id);
         assert_eq!(after_attachment.epoch, before_attachment.epoch);
         assert_eq!(after_attachment.process, before_attachment.process);
-        assert_eq!(after_attachment.main_session_id, before_attachment.main_session_id);
+        assert_eq!(after_attachment.conversation, before_attachment.conversation);
         assert_eq!(after_attachment.state, AttachmentState::Connected);
         assert!(after.dispatch.as_ref().unwrap().agent_started);
         assert_eq!(
             after.dispatch.as_ref().unwrap().step,
             DispatchStep::Launched
         );
-        let kind = if stage == RunStage::Active {
-            MessageKind::SupervisorBrief
-        } else {
-            MessageKind::WorkBrief
-        };
-        let messages = fixture.state().messages;
-        let retained: Vec<_> = messages
-            .into_iter()
-            .filter(|message| !(message.to_run_id == run_id && message.kind == kind))
-            .collect();
-        assert_eq!(serde_json::to_value(retained).unwrap(), original_messages);
+        let kind = if stage == RunStage::Active { MessageKind::SupervisorBrief } else { MessageKind::WorkBrief };
+        assert_eq!(serde_json::to_value(fixture.state().messages).unwrap(), original_messages);
+        assert_eq!(fixture.state().messages.iter().filter(|message|
+            message.to_run_id == run_id && message.kind == kind).count(), 1);
         // Repeated physical proof never reissues or reinitializes launch work.
         let revision = fixture.state().revision;
         let bytes = fixture.state_bytes();
@@ -199,91 +148,34 @@ fn assert_proof_discarded(fixture: &Fixture, reviewed: &Run) {
 }
 
 #[test]
-fn pending_launch_ack_and_independent_bind_do_not_promote_root_or_worker() {
+fn registration_promotes_root_and_worker_directly_without_herdr_or_omp() {
     for worker in [false, true] {
         let fixture = Fixture::new();
         let root = fixture.root();
         let run_id = if worker {
-            let task = fixture.create_task(&root, "Pending initialization");
-            let run_id = fixture.start(&root, &task);
-            fixture.setup(&run_id);
-            run_id
+            let task = fixture.create_task(&root, "Neutral worker");
+            fixture.start(&root, &task)
         } else {
             root
         };
-        let actor = fixture.launch_tab(&run_id);
-        let unbound = fixture.run(&run_id);
-        assert_eq!(unbound.stage, RunStage::Starting);
-        assert!(unbound.attachment.as_ref().unwrap().main_session_id.is_none());
-        assert_proof_discarded(&fixture, &unbound);
-        let Actor::Agent(caller) = &actor else {
-            unreachable!()
-        };
-        fixture
-            .apply(
-                &actor,
-                OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
-            )
-            .unwrap();
-        assert_eq!(fixture.run(&run_id).stage, RunStage::Starting);
-        let revision = fixture.state().revision;
-        // SDK binding can win the race with accepted agent.start ACK. The old
-        // unbound request may record Pending, but is never sufficient proof.
-        assert_eq!(
-            fixture.service.record_launch_pending(&unbound).unwrap(),
-            revision + 1
-        );
-        let pending = fixture.run(&run_id);
-        assert_eq!(
-            pending.dispatch.as_ref().unwrap().step,
-            DispatchStep::LaunchPending
-        );
-        assert!(!pending.dispatch.as_ref().unwrap().agent_started);
-        assert_eq!(pending.stage, RunStage::Starting);
-        assert_eq!(pending.attachment.as_ref().unwrap().main_session_id, caller.omp_session_id);
-        assert!(fixture.state().messages.iter().all(|message| {
-            message.to_run_id != run_id
-                || !matches!(
-                    message.kind,
-                    MessageKind::SupervisorBrief | MessageKind::WorkBrief
-                )
-        }));
-        assert_proof_discarded(&fixture, &unbound);
-        let revision = fixture.state().revision;
-        fixture.service.record_launch_verified(&pending).unwrap();
-        let proven = fixture.run(&run_id);
-        assert_eq!(fixture.state().revision, revision + 1);
-        assert_eq!(
-            proven.stage,
-            if worker {
-                RunStage::Working
-            } else {
-                RunStage::Active
-            }
-        );
-        assert!(proven.dispatch.as_ref().unwrap().agent_started);
-        assert_eq!(
-            proven.dispatch.as_ref().unwrap().step,
-            DispatchStep::Launched
-        );
-        let kind = if worker {
-            MessageKind::WorkBrief
-        } else {
-            MessageKind::SupervisorBrief
-        };
-        let messages = fixture.state().messages;
-        let briefs: Vec<_> = messages
-            .iter()
-            .filter(|message| message.to_run_id == run_id && message.kind == kind)
-            .collect();
-        assert_eq!(briefs.len(), 1);
-        assert_eq!(briefs[0].text, proven.brief);
-        assert_proof_discarded(&fixture, &proven);
+        let actor = fixture.neutral_actor(&run_id);
+        fixture.apply(&actor, OrchestrationAction::RunRegister {
+            operation_id: caller_auth(&actor).credential_id.clone(),
+        }).unwrap();
+        let run = fixture.run(&run_id);
+        assert_eq!(run.stage, if worker { RunStage::Working } else { RunStage::Active });
+        assert!(run.attachment.as_ref().unwrap().location.is_none());
+        assert!(run.attachment.as_ref().unwrap().process.is_none());
+        assert_eq!(run.attachment.as_ref().unwrap().conversation.as_ref(),
+            match &actor { Actor::Agent(caller) => Some(&caller.conversation), _ => unreachable!() });
+        let kind = if worker { MessageKind::WorkBrief } else { MessageKind::SupervisorBrief };
+        assert_eq!(fixture.state().messages.iter().filter(|message|
+            message.to_run_id == run_id && message.kind == kind).count(), 1);
     }
 }
 
 #[test]
-fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
+fn launch_proof_fences_target_task_attachment_and_every_physical_receipt_field() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let task = fixture.create_task(&root, "Exact launch proof");
@@ -294,13 +186,10 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
         .service
         .record_launch_pending(&fixture.run(&run_id))
         .unwrap();
-    let Actor::Agent(caller) = &actor else {
-        unreachable!()
-    };
     fixture
         .apply(
             &actor,
-            OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
+            OrchestrationAction::RunRegister { operation_id: id() },
         )
         .unwrap();
     let reviewed = fixture.run(&run_id);
@@ -317,9 +206,9 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
                 stale.dispatch.as_mut().unwrap().endpoint_identity =
                     Some("different-endpoint".into())
             }
-            7 => stale.attachment.as_mut().unwrap().main_session_id = None,
-            8 => stale.attachment.as_mut().unwrap().main_session_id = Some(String::new()),
-            9 => stale.attachment.as_mut().unwrap().main_session_id = Some("other-native-main".into()),
+            7 => stale.attachment.as_mut().unwrap().attachment_id = id(),
+            8 => stale.attachment.as_mut().unwrap().epoch += 1,
+            9 => stale.attachment.as_mut().unwrap().launch_attempt += 1,
             10 => stale.attachment.as_mut().unwrap().location = None,
             11 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().boot_id = Some("different-boot".into()),
             12 => stale.attachment.as_mut().unwrap().location.as_mut().unwrap().terminal_id = Some("different-terminal".into()),
@@ -337,20 +226,15 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
         assert_proof_discarded(&fixture, &stale);
     }
     // Even matching captured/current corrupt receipts are not valid proof.
-    for fence in 0..5 {
+    for fence in 0..3 {
         fixture.seed_run(&run_id, |run| {
             *run = reviewed.clone();
             match fence {
-                0 => run.attachment.as_mut().unwrap().main_session_id = Some(String::new()),
+                0 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().launch_tag.clear(),
                 1 => {
-                    run.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id =
-                        Some("conflicting-native".into())
-                }
-                2 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().launch_tag.clear(),
-                3 => {
                     run.dispatch.as_mut().unwrap().endpoint_identity = Some("wrong-endpoint".into())
                 }
-                4 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().session_id = "wrong-session".into(),
+                2 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().session_id = "wrong-session".into(),
                 _ => unreachable!(),
             }
         });
@@ -369,7 +253,7 @@ fn launch_proof_fences_target_task_native_binding_and_every_receipt_field() {
 }
 
 #[test]
-fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
+fn late_initial_physical_proof_cannot_revive_cancel_retry_registration_or_move() {
     for race in 0..4 {
         let fixture = Fixture::new();
         let root = fixture.root();
@@ -378,14 +262,11 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
             .service
             .record_launch_pending(&fixture.run(&root))
             .unwrap();
-        let Actor::Agent(caller) = &actor else {
-            unreachable!()
-        };
         if race != 2 {
             fixture
                 .apply(
                     &actor,
-                    OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
+                    OrchestrationAction::RunRegister { operation_id: id() },
                 )
                 .unwrap();
         }
@@ -418,7 +299,7 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
                 fixture
                     .apply(
                         &actor,
-                        OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() },
+                        OrchestrationAction::RunRegister { operation_id: id() },
                     )
                     .unwrap();
             }
@@ -433,13 +314,8 @@ fn late_initial_proof_cannot_revive_cancel_retry_native_bind_or_move() {
             _ => unreachable!(),
         }
         assert_proof_discarded(&fixture, &reviewed);
-        assert!(
-            fixture
-                .state()
-                .messages
-                .iter()
-                .all(|message| message.kind != MessageKind::SupervisorBrief)
-        );
+        assert_eq!(fixture.state().messages.iter().filter(|message|
+            message.to_run_id == root && message.kind == MessageKind::SupervisorBrief).count(), 1);
     }
 }
 
@@ -475,10 +351,6 @@ fn dispatch_failure_wakes_root_once_with_typed_next_steps() {
         "error": {"code": "endpoint_unavailable", "message": "Herdr endpoint is unavailable"},
         "automatic": "none", "effect": "none", "next": ["show", "reconcile"], "operator_reason": null,
     }));
-    fixture.apply(&supervisor, OrchestrationAction::InboxWoken {
-        omp_session_id: caller_mut(&mut supervisor.clone()).omp_session_id.clone().unwrap(),
-        through_seq: events[0].seq,
-    }).unwrap();
     fixture.service.record_dispatch(&worker, failure()).unwrap();
     assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 1);
     fixture.apply(&supervisor, OrchestrationAction::InboxPull { after_seq: 0, limit: 100 }).unwrap();
@@ -550,6 +422,9 @@ fn launch_review_failure_classifies_effect_and_operator_cases() {
 }
 
 fn observed_root_pane(fixture: &Fixture, root: &str) -> herdr::RuntimePane {
+    if fixture.run(root).attachment.as_ref().unwrap().location.is_none() {
+        fixture.launch_and_bind(root);
+    }
     let location = fixture.run(root).attachment.unwrap().location.unwrap();
     herdr::RuntimePane {
         workspace_id: location.workspace_id,
@@ -560,9 +435,8 @@ fn observed_root_pane(fixture: &Fixture, root: &str) -> herdr::RuntimePane {
         terminal_id: location.terminal_id,
         native_session_id: location.native_session_id,
         agent_name: None,
-        agent_kind: Some("omp".into()),
+        agent_kind: Some("service-test".into()),
         launch_pending: false,
-        interactive_ready: true,
         agent_status: Some("working".into()),
         state_changed_at: None,
     }
@@ -580,7 +454,7 @@ fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
             launch_tag: format!("launch-{worker}-1"), launch_attempt: 1, endpoint_identity: "endpoint-one".into(),
         }).unwrap();
         fixture.service.record_launch_review(&fixture.run(&worker), DispatchStep::LaunchUnknown, Some(ErrorResponse {
-            code: "omp_start_unobserved".into(), message: "OMP start was not observed before its deadline".into(),
+            code: "agent_start_unobserved".into(), message: "Agent start was not observed before its deadline".into(),
         })).unwrap();
         assert!(dispatch_events(&fixture, &root, "dispatch_failure").is_empty());
         let runtime = herdr::RuntimeView {
@@ -618,8 +492,7 @@ fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
         }
         // A late actual-main bind and proof resolves this same launch incarnation.
         let actor = fixture.launch_tab(&worker);
-        let Actor::Agent(caller) = &actor else { unreachable!() };
-        fixture.apply(&actor, OrchestrationAction::RunAttach { operation_id: id(), attachment_id: caller.auth.attachment_id.clone(), expected_attachment_epoch: caller.auth.attachment_epoch, main_session_id: caller.omp_session_id.clone().unwrap() }).unwrap();
+        fixture.apply(&actor, OrchestrationAction::RunRegister { operation_id: id() }).unwrap();
         let reviewed = fixture.run(&worker);
         fixture.service.record_launch_verified(&reviewed).unwrap();
         let notices = dispatch_events(&fixture, &root, "dispatch_recovered");
@@ -670,7 +543,7 @@ fn supervisor_recovery_preserves_machine_cas_and_automatic_launch_ownership() {
 }
 
 #[test]
-fn old_unknown_launch_with_fresh_bound_omp_proof_stays_quiet_before_reconcile() {
+fn old_unknown_launch_with_fresh_bound_agent_proof_stays_quiet_before_reconcile() {
     for evidence in 0..5 {
         let fixture = Fixture::new();
         let root = fixture.root();
@@ -683,7 +556,7 @@ fn old_unknown_launch_with_fresh_bound_omp_proof_stays_quiet_before_reconcile() 
             dispatch.step = DispatchStep::LaunchUnknown;
             dispatch.agent_started = false;
             dispatch.error = Some(ErrorResponse {
-                code: "omp_start_unobserved".into(), message: "Prior installation did not recognize this bound launch".into(),
+                code: "agent_start_unobserved".into(), message: "Prior installation did not recognize this bound launch".into(),
             });
             dispatch.updated_at = (time::OffsetDateTime::now_utc() - time::Duration::hours(2))
                 .format(&time::format_description::well_known::Rfc3339).unwrap();
@@ -698,8 +571,8 @@ fn old_unknown_launch_with_fresh_bound_omp_proof_stays_quiet_before_reconcile() 
                 terminal_id: location.terminal_id.clone(),
                 native_session_id: if evidence == 4 { Some("replacement-native-session".into()) } else { location.native_session_id.clone() },
                 agent_name: if evidence == 1 { Some("changed-display-name".into()) } else { None },
-                agent_kind: if evidence == 3 { None } else { Some("omp".into()) },
-                launch_pending: evidence == 2, interactive_ready: false,
+                agent_kind: if evidence == 3 { None } else { Some("service-test".into()) },
+                launch_pending: evidence == 2,
                 agent_status: Some("working".into()), state_changed_at: None,
             }, observed_root_pane(&fixture, &root)],
         };

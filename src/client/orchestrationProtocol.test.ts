@@ -38,7 +38,7 @@ const attachment: ExecutionAttachment = {
   attachment_id: assignmentTaskId, epoch: 1, state: "connected", launch_mode: "shell_agent",
   location: { endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane",
     launch_tag: "launch", boot_id: "boot", terminal_id: "terminal", native_session_id: null },
-  main_session_id: "omp", process: processIdentity, shell: shellIdentity, machine_id: "machine",
+  conversation: { harness: "omp", session_id: "opaque-conversation" }, process: processIdentity, shell: shellIdentity, machine_id: "machine",
   launch_attempt: 1, updated_at: at,
 };
 const resume: ResumeRecord = {
@@ -74,17 +74,11 @@ const retirementIdentity: RetirementIdentity = {
   attachment_id: assignmentTaskId, attachment_epoch: 1, launch_mode: "shell_agent",
   run_attempt: 1, launch_attempt: 1, launch_tag: "launch", endpoint_identity: "endpoint",
   session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane",
-  terminal_id: "terminal", herdr_boot_id: "boot", omp_session_id: "omp", process: processIdentity, shell: shellIdentity,
+  terminal_id: "terminal", herdr_boot_id: "boot", conversation: attachment.conversation, process: processIdentity, shell: shellIdentity,
 };
 const retirementStates: RetirementState[] = [
   { state: "waiting", blockers: [] },
-  { state: "waiting", blockers: ["open_descendant_runs", "running_subagents"] },
-  { state: "native_stop_offered", offered_at: at },
-  ...(["busy", "pending_messages", "async_jobs", "live_subagents", "editor_draft"] as const)
-    .map(reason => ({ state: "native_stop_deferred" as const, offered_at: at, reason, at })),
-  { state: "native_stop_requested", at },
-  ...(["exited_after_shutdown_request", "already_exited"] as const)
-    .map(evidence => ({ state: "native_stopped" as const, at, evidence })),
+  { state: "waiting", blockers: ["open_descendant_runs"] },
   { state: "close_intent", at },
   ...(["closed_by_cockpit", "already_absent", "absent_after_uncertain_close"] as const)
     .map(terminal => ({ state: "retired" as const, at, terminal })),
@@ -92,16 +86,15 @@ const retirementStates: RetirementState[] = [
     "identity_incomplete", "identity_changed", "endpoint_changed", "native_process_unverifiable",
     "process_pane_mismatch", "worker_unresponsive", "worker_busy_timeout", "user_activity", "native_refused",
     "shared_tab", "tab_renamed", "pane_moved", "foreground_process", "observation_unavailable", "herdr_refused",
-  ] as const).flatMap(reason => [false, true].map(native_stopped => ({
-    state: "retained" as const, at, reason, native_stopped,
+  ] as const).flatMap(reason => [false, true].map(stopped => ({
+    state: "retained" as const, at, reason, stopped,
   }))),
-  ...(["native_stop", "terminal_close"] as const)
-    .map(phase => ({ state: "unknown" as const, at, phase, detail: "Unconfirmed" })),
+  { state: "unknown", at, phase: "terminal_close", detail: "Unconfirmed" },
 ];
 function retirementRecord(state: RetirementState, identity: RetirementIdentity | null = retirementIdentity): RunRetirement {
   return {
     retirement_id: assignmentTaskId, trigger: "accept", result_message_id: "result",
-    task_revision: hash, identity, quiescent_stop_at: null, state, created_at: at, updated_at: at,
+    task_revision: hash, identity, state, created_at: at, updated_at: at,
   };
 }
 const target = { target: "setup" as const, request: { operation: "open" as const, path: "/repo", label: null, task_name: null, focus: false } };
@@ -155,7 +148,7 @@ const resourceRequest = {
 };
 const resourceRecord: ResourceRequestRecord = {
   request_id: parentStepId, sequence: 1, resource_key: resourceRequest.resource_key, source_identity: resourceRequest.source_identity,
-  holder: resourceRequest.holder, requester_child_id: null, state: "held", build_processes: [shellIdentity],
+  holder: resourceRequest.holder, state: "held", build_processes: [shellIdentity],
   machine_id: "machine", blocked_reason: null, updated_at: at,
 };
 const ownedGit: OwnedGitIdentity = {
@@ -191,8 +184,8 @@ const cleanupFinished: CleanupFinishResult = {
 };
 const message = {
   message_id: "message", to_run_id: "run", seq: 1, from: { type: "run" as const, run_id: "root" },
-  kind: "report" as const, text: "Initialized", in_reply_to: null, report, stale: false, escalated_from: null, from_subagent_id: null,
-  stage: "read" as const, woken_omp_session: "omp", created_at: at, acked_at: null,
+  kind: "report" as const, text: "Initialized", in_reply_to: null, report, stale: false, escalated_from: null,
+  stage: "read" as const, created_at: at, acked_at: null,
 };
 const snapshot: OrchestrationSnapshot = {
   state_store_id: hash, cleanup: [], restoration: { reattached: 1, total_attachments: 1, cleanup_pending: 0 },
@@ -203,6 +196,7 @@ const snapshot: OrchestrationSnapshot = {
   runs: [{
     session_id: "session", brief: "Implement the assigned task", run_id: "run", kind: "worker", label: "Worker", root_id: "root",
     parent_run_id: "root", task_id: "task", attempt: 1, task_revision_at_start: hash, stage: "working", close_reason: null,
+    assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
     dispatch: { step: "launched", launch_attempt: 1, error: { code: "launch_unknown", message: "Review" }, updated_at: at,
       launch_tag: "launch", endpoint_identity: "endpoint", recovery: "retry_environment", agent_started: true },
     target, setup: { operation_id: "operation", generation: 1, workspace_id: "space", checkout_path: "/repo", repository_id: "repo",
@@ -214,14 +208,13 @@ const snapshot: OrchestrationSnapshot = {
     created_at: at, updated_at: at,
   }],
   messages: [message],
-  subagents: [{ run_id: "run", subagent_id: "child", parent_subagent_id: null, bound_omp_session: "omp", role: "coder", label: "Child", status: "running", summary: "Working",
-    last_control: { seq: 1, op: { op: "send", text: "Report" }, stage: "applied", error: null, at }, updated_at: at }],
+  task_ownership: [{ root_id: "root", task_id: "task", generation: 1, owner: { run_id: "run", conversation: attachment.conversation!, claim_operation_id: prerequisiteId } }],
   intents: [{ intent_id: "intent", root_id: "root", task_id: "task", run_id: "run", expected_task_revision: hash, state: "pending",
-    origin: null, supervisor_run_id: null, omp_session_id: null, result_message_id: null }],
+    origin: null, supervisor_run_id: null, conversation: null, result_message_id: null }],
   assignment_intents: [{ root_id: "root", task_id: assignmentTaskId, state: "conflict" }],
   questions: [{ run_id: "run", question_message_id: "question", asked_at: at, receipt: { status: "unresolved" } }],
   runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at,
-    runs: [{ run_id: "run", presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Worker", pane_id: "moved-pane", agent_status: "idle", state_changed_at: at }] },
+    runs: [{ run_id: "run", presence: "present", actual_agent: true, workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Worker", pane_id: "moved-pane", agent_status: "idle", state_changed_at: at }] },
   unmanaged_agents: [{ workspace_id: "space", workspace_label: "Space", tab_id: "other-tab", tab_label: "Unmanaged", pane_id: "other-pane",
     agent_name: "omp", agent_status: "idle", state_changed_at: at }],
   attention: [{ kind: "to_accept", run_id: "run", task_id: "task", message_seq: 1, since: at }],
@@ -245,13 +238,10 @@ const actions: OrchestrationAction[] = [
   { action: "tasks_assign_ids", root_id: "root", expected_doc_revision: hash },
   startAction,
   { action: "run_resume", run_id: "run", operation_id: prerequisiteId, expected_attachment_epoch: 1, mode: "reattach_or_restart", decision_id: null },
-  { action: "run_attach", operation_id: prerequisiteId, attachment_id: assignmentTaskId, expected_attachment_epoch: 1, main_session_id: "omp" },
-  { action: "job_child_register", operation_id: prerequisiteId, child_id: "child", child_session_id: "native-child", parent_child_id: null },
-  { action: "retirement_native_receipt", retirement_id: assignmentTaskId, outcome: { outcome: "shutdown_requested" } },
-  { action: "retirement_native_receipt", retirement_id: assignmentTaskId, outcome: { outcome: "deferred", reason: "editor_draft" } },
-  { action: "retirement_native_receipt", retirement_id: assignmentTaskId, outcome: { outcome: "refused", reason: "user_activity", text: "Later input" } },
-  { action: "retirement_native_receipt", retirement_id: assignmentTaskId, outcome: { outcome: "refused", reason: "native_refused", text: "Cannot verify" } },
-  { action: "run_adopt", label: "Adopted" },
+  { action: "run_attach", operation_id: prerequisiteId, attachment_id: assignmentTaskId, expected_attachment_epoch: 1, conversation: attachment.conversation! },
+  { action: "run_register", operation_id: prerequisiteId },
+  { action: "task_unassign", operation_id: prerequisiteId, root_id: "root", task_id: "task", expected_assignment_generation: 1 },
+  { action: "run_adopt", label: "Adopted", location: attachment.location! },
   workerStartAction,
   scopeUpdateAction,
   { action: "accept", run_id: "run", expected_task_revision: hash },
@@ -269,11 +259,7 @@ const actions: OrchestrationAction[] = [
   { action: "message_send", message_id: "message", to_run_id: "run", kind: "instruction", text: "Work", in_reply_to: null },
   { action: "annotate", run_id: "run", text: "Note" },
   { action: "inbox_pull", after_seq: 0, limit: 100 },
-  { action: "inbox_woken", through_seq: 1, omp_session_id: "omp" },
   { action: "inbox_ack", through_seq: 1 },
-  { action: "subagent_update", subagent_id: "child", parent_subagent_id: null, role: null, label: "Child", status: "done", summary: null },
-  { action: "subagent_control", run_id: "run", subagent_id: "child", op: { op: "cancel" } },
-  { action: "subagent_control_done", seq: 1, applied: false, error: "Failed" },
 ];
 
 // Exercise required fields recursively, including required-nullable fields in every
@@ -362,6 +348,40 @@ describe("orchestration protocol boundary", () => {
       ["result", "resource", "identity", "identity", "checkout_path"], ""))).toThrow(CockpitClientError);
     expect(() => parseOrchestrationMutationResponse(replaceField(response,
       ["result", "resource", "identity", "identity", "creation_operation_id"], ""))).toThrow(CockpitClientError);
+  });
+  it("decodes canonical ownership and neutral registration without inferring process presence", () => {
+    const conversation = { harness: "custom", session_id: "resumable/non-uuid-session" };
+    const ownership = { ...snapshot.task_ownership[0]!, owner: { ...snapshot.task_ownership[0]!.owner!, conversation } };
+    const dto = { ...snapshot, task_ownership: [ownership], runtime: { status: "unavailable" as const, error: { code: "offline", message: "Unavailable" } } };
+    expect(parseOrchestrationSnapshot(dto).task_ownership).toEqual([ownership]);
+    expect(parseOrchestrationSnapshot({ ...dto, task_ownership: [{ ...ownership, generation: 2, owner: null }] }).task_ownership[0]!.owner).toBeNull();
+    const registered = { revision: 3, result: { result: "run_registered", run_id: "run", conversation, assignment_generation: 1, duplicate: false } };
+    const unassigned = { revision: 4, result: { result: "task_unassigned", task_id: "task", assignment_generation: 2, previous_run_id: "run", duplicate: false } };
+    expect(parseOrchestrationMutationResponse(registered)).toEqual(registered);
+    expect(parseOrchestrationMutationResponse(unassigned)).toEqual(unassigned);
+    for (const path of [["task_ownership", 0, "generation"], ["runs", 0, "assignment_generation"]]) {
+      for (const invalid of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1"]) {
+        expect(() => parseOrchestrationSnapshot(replaceField(dto, path, invalid))).toThrow(CockpitClientError);
+      }
+    }
+    for (const field of ["harness", "session_id"]) {
+      for (const invalid of ["", "bad\nidentity", "é".repeat(257), null]) {
+        expect(() => parseOrchestrationSnapshot(replaceField(dto, ["task_ownership", 0, "owner", "conversation", field], invalid))).toThrow(CockpitClientError);
+      }
+    }
+    expect(() => parseOrchestrationSnapshot(replaceField(dto, ["task_ownership", 0, "owner", "claim_operation_id"], "not-a-uuid"))).toThrow(CockpitClientError);
+  });
+
+  it("keeps configured launch argv literal with one whole resume placeholder", () => {
+    const config = { ...snapshot.runs[0]!.launch_config, harness_kind: "custom", command: "/usr/bin/custom-agent", extra_args: ["--literal", "value with spaces"], resume_args: ["resume", "{session_id}"] };
+    const dto = replaceField(snapshot, ["runs", 0, "launch_config"], config);
+    expect(parseOrchestrationSnapshot(dto).runs[0]!.launch_config).toEqual(config);
+    for (const invalid of [[], ["resume"], ["{session_id}", "{session_id}"], ["--resume={session_id}"], ["{session_id}", "bad\0arg"], Array(17).fill("{session_id}")]) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "launch_config", "resume_args"], invalid))).toThrow(CockpitClientError);
+    }
+    for (const removed of [{ omp_extension: "/extension" }, { model: "old-model" }]) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "launch_config"], { ...config, ...removed }))).toThrow(CockpitClientError);
+    }
   });
 
   it("decodes independent cleanup states with exact counters and retains typed reasons without raw summary evidence", () => {
@@ -600,7 +620,7 @@ describe("orchestration protocol boundary", () => {
     const question = { run_id: "run", question_message_id: "question", asked_at: at, receipt: { status: "unresolved" } };
     const receipts = [
       { status: "unresolved" },
-      ...(["stored", "woken", "read"] as const).map(stage => ({ status: "answer_delivered", answer: { ...answer, stage } })),
+      ...(["stored", "read"] as const).map(stage => ({ status: "answer_delivered", answer: { ...answer, stage } })),
       { status: "answer_acknowledged", answer: { ...answer, stage: "acked", acked_at: at } },
       { status: "answer_acknowledged", answer: { ...answer, stage: "acked" } },
     ];
@@ -738,14 +758,14 @@ describe("orchestration protocol boundary", () => {
 
   it("keeps converted unknown identities nullable without inventing connection evidence", () => {
     const converted: ExecutionAttachment = {
-      ...attachment, state: "disconnected", launch_mode: null, location: null, main_session_id: null,
+      ...attachment, state: "disconnected", launch_mode: null, location: null, conversation: null,
       process: null, shell: null, machine_id: null, launch_attempt: 0,
     };
     const run = { ...snapshot.runs[0]!, project: null, checkout: null, checkout_claim_id: null, resume: null, attachment: converted };
     const dto = { ...snapshot, runs: [run], runtime: { status: "unavailable", error: { code: "offline", message: "Offline" } } };
     expect(parseOrchestrationSnapshot(dto).runs[0]).toEqual(run);
     expect(parseOrchestrationSnapshot({ ...dto, runs: [{ ...run, attachment: null }] }).runs[0]!.attachment).toBeNull();
-    for (const field of ["launch_mode", "location", "main_session_id", "process", "shell", "machine_id"] as const) {
+    for (const field of ["launch_mode", "location", "conversation", "process", "shell", "machine_id"] as const) {
       expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "attachment", field], null))
         .runs[0]!.attachment![field]).toBeNull();
     }
@@ -764,7 +784,7 @@ describe("orchestration protocol boundary", () => {
     for (const path of [
       ["project"], ["checkout"], ["attachment"], ["checkout_claim_id"], ["resume"],
       ["project", "repository_id"], ["project", "source_workspace_id"], ["checkout", "git"],
-      ["attachment", "location"], ["attachment", "main_session_id"], ["attachment", "process"],
+      ["attachment", "location"], ["attachment", "conversation"], ["attachment", "process"],
       ["attachment", "shell"], ["attachment", "machine_id"], ["attachment", "launch_mode"],
       ["attachment", "location", "boot_id"], ["attachment", "location", "terminal_id"],
       ["attachment", "location", "native_session_id"], ["attachment", "process", "kernel_boot_id"],
@@ -786,7 +806,7 @@ describe("orchestration protocol boundary", () => {
     expect(observed.runtime).toMatchObject({ status: "fresh", runs: [{ pane_id: "moved-pane" }] });
     for (const presence of ["missing", "endpoint_changed", "unobserved"] as const) {
       const changed = replaceField(replaceField(dto, ["runtime", "runs", 0, "presence"], presence),
-        ["runtime", "runs", 0, "actual_omp"], false);
+        ["runtime", "runs", 0, "actual_agent"], false);
       expect(parseOrchestrationSnapshot(changed).runs[0]!.attachment).toEqual(attachment);
     }
     const replacement = { ...attachment, attachment_id: childStepId, epoch: 2, location: { ...attachment.location!, pane_id: "replacement" } };
@@ -798,7 +818,7 @@ describe("orchestration protocol boundary", () => {
 
   it("rejects removed top-level physical mirrors even when null or consistent with the attachment", () => {
     for (const [field, value] of [
-      ["location", attachment.location], ["bound_omp_session", attachment.main_session_id],
+      ["location", attachment.location], ["bound_omp_session", attachment.conversation],
       ["bound_omp_process", attachment.process], ["launch_shell_identity", attachment.shell],
     ] as const) {
       for (const mirror of [value, null]) {
@@ -831,7 +851,7 @@ describe("orchestration protocol boundary", () => {
       [["checkout", "directory_identity", "device"], "-1"], [["checkout", "directory_identity", "inode"], ""],
       [["checkout", "git", "common_dir"], ""], [["checkout", "git", "worktree_git_dir"], "../repo"],
       [["attachment", "attachment_id"], "not-a-uuid"], [["attachment", "state"], "alive"],
-      [["attachment", "main_session_id"], ""], [["attachment", "machine_id"], "bad\nid"],
+      [["attachment", "conversation", "session_id"], ""], [["attachment", "conversation", "harness"], "bad\nid"], [["attachment", "machine_id"], "bad\nid"],
       [["attachment", "updated_at"], "yesterday"], [["attachment", "launch_attempt"], 0x100000000],
       [["attachment", "launch_attempt"], -1], [["attachment", "process", "pid"], 0x100000000],
       [["attachment", "process", "start_ticks"], Number.MAX_SAFE_INTEGER + 1],
@@ -865,7 +885,7 @@ describe("orchestration protocol boundary", () => {
   });
 
   it("validates wave-one action identities and epochs without accepting caller auth", () => {
-    const waveOne = actions.filter(value => ["supervisor_start", "run_resume", "run_attach", "job_child_register"].includes(value.action));
+    const waveOne = actions.filter(value => ["supervisor_start", "run_resume", "run_attach", "run_register", "task_unassign"].includes(value.action));
     for (const action of waveOne) {
       for (const field of ["operation_id", ...action.action === "run_attach" ? ["attachment_id"] : []]) {
         for (const value of ["", "not-a-uuid", "é".repeat(257)]) {
@@ -891,10 +911,7 @@ describe("orchestration protocol boundary", () => {
       { action: "run_resume", run_id: "run", operation_id: assignmentTaskId, expected_attachment_epoch: null, mode: "unknown", decision_id: null },
       { action: "run_resume", run_id: "", operation_id: assignmentTaskId, expected_attachment_epoch: null, mode: "replace_existing", decision_id: null },
       { action: "run_resume", run_id: "run", operation_id: assignmentTaskId, expected_attachment_epoch: null, mode: "replace_existing", decision_id: "bad" },
-      { action: "run_attach", operation_id: assignmentTaskId, attachment_id: prerequisiteId, expected_attachment_epoch: 1, main_session_id: "" },
-      { action: "job_child_register", operation_id: assignmentTaskId, child_id: "", child_session_id: "native", parent_child_id: null },
-      { action: "job_child_register", operation_id: assignmentTaskId, child_id: "child", child_session_id: "", parent_child_id: null },
-      { action: "job_child_register", operation_id: assignmentTaskId, child_id: "child", child_session_id: "native", parent_child_id: "" },
+      { action: "run_attach", operation_id: assignmentTaskId, attachment_id: prerequisiteId, expected_attachment_epoch: 1, conversation: { harness: "omp", session_id: "" } },
     ]) expect(() => parseOrchestrationAction(invalid)).toThrow(CockpitClientError);
   });
 
@@ -1020,14 +1037,6 @@ describe("orchestration protocol boundary", () => {
       { ...dependencies, problems: [{ code: "dependency_cycle", message: 4 }] },
     ]) expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["board", "tasks", 0, "dependencies"], facts)))
       .toThrow(CockpitClientError);
-    const bindingPath = ["subagents", 0, "bound_omp_session"];
-    expect(parseOrchestrationSnapshot(replaceField(snapshot, bindingPath, null)).subagents[0]!.bound_omp_session).toBeNull();
-    for (const invalid of ["", 1, {}]) expect(() => parseOrchestrationSnapshot(replaceField(snapshot, bindingPath, invalid)))
-      .toThrow(CockpitClientError);
-    expect(() => parseOrchestrationSnapshot(replaceField(snapshot, bindingPath, undefined, true))).toThrow(CockpitClientError);
-    expect(() => parseOrchestrationAction({ action: "subagent_update", subagent_id: "child",
-      parent_subagent_id: null, bound_omp_session: "spoofed", role: null, label: "Child", status: "running", summary: null }))
-      .toThrow(CockpitClientError);
   });
 
   it("requires stable creation identity and revision fences and rejects writable canonical body aliases", () => {
@@ -1120,21 +1129,20 @@ describe("orchestration protocol boundary", () => {
     expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "attachment", "process"], null)).runs[0]!.attachment!.process).toBeNull();
   });
 
-  it("preserves explicit launch mode and quiescence evidence without backfilling unknown retirement identity", () => {
-    const retirement = retirementRecord({ state: "native_stopped", at, evidence: "already_exited" });
+  it("preserves explicit launch mode without backfilling unknown retirement identity", () => {
+    const retirement = retirementRecord({ state: "retained", at, reason: "user_activity", stopped: false });
     const dto = replaceField(snapshot, ["runs", 0, "retirement"], retirement);
-    expect(parseOrchestrationSnapshot(dto).runs[0]!.retirement!.quiescent_stop_at).toBeNull();
     for (const launch_mode of ["direct_process", "shell_agent", null]) {
       expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "attachment", "launch_mode"], launch_mode))
         .runs[0]!.attachment!.launch_mode).toBe(launch_mode);
       expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "identity", "launch_mode"], launch_mode))
         .runs[0]!.retirement!.identity!.launch_mode).toBe(launch_mode);
     }
-    const converted = { ...retirement, trigger: "accept_recovery", quiescent_stop_at: at,
+    const converted = { ...retirement, trigger: "accept_recovery",
       identity: { ...retirementIdentity, attachment_id: null, attachment_epoch: null, launch_mode: null } };
     expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement"], converted))
       .runs[0]!.retirement).toEqual(converted);
-    for (const path of [["identity", "attachment_id"], ["identity", "attachment_epoch"], ["identity", "launch_mode"], ["quiescent_stop_at"]]) {
+    for (const path of [["identity", "attachment_id"], ["identity", "attachment_epoch"], ["identity", "launch_mode"], ["identity", "conversation"], ["identity", "process"], ["identity", "shell"]]) {
       const nullable = replaceField(dto, ["runs", 0, "retirement", ...path], null);
       expect(parseOrchestrationSnapshot(nullable)).toBeDefined();
       expect(() => parseOrchestrationSnapshot(replaceField(nullable, ["runs", 0, "retirement", ...path], undefined, true)))
@@ -1150,8 +1158,7 @@ describe("orchestration protocol boundary", () => {
       [["identity", "attachment_id"], "not-a-uuid"], [["identity", "attachment_epoch"], 0],
       [["identity", "attachment_epoch"], -1], [["identity", "attachment_epoch"], 1.5],
       [["identity", "attachment_epoch"], Number.MAX_SAFE_INTEGER + 1],
-      [["identity", "attachment_epoch"], "1"], [["quiescent_stop_at"], "yesterday"],
-      [["quiescent_stop_at"], ""], [["quiescent_stop_at"], "bad\0timestamp"],
+      [["identity", "attachment_epoch"], "1"],
     ] as const) expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], value)))
       .toThrow(CockpitClientError);
     expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "identity", "attachment_epoch"], Number.MAX_SAFE_INTEGER)))
@@ -1159,7 +1166,7 @@ describe("orchestration protocol boundary", () => {
   });
 
   it("validates retirement identity counters, timestamps and tagged enum members", () => {
-    const retirement = retirementRecord({ state: "native_stop_deferred", offered_at: at, reason: "busy", at });
+    const retirement = retirementRecord({ state: "retained", at, reason: "user_activity", stopped: false });
     const dto = replaceField(snapshot, ["runs", 0, "retirement"], retirement);
     for (const [path, bad] of [
       [["retirement_id"], "not-a-uuid"], [["trigger"], "unknown"], [["task_revision"], "bad"],
@@ -1170,14 +1177,14 @@ describe("orchestration protocol boundary", () => {
       [["identity", "process", "start_ticks"], -1], [["identity", "process", "start_ticks"], 1.5],
       [["identity", "process", "start_ticks"], "1234"],
       [["created_at"], "yesterday"], [["updated_at"], ""],
-      [["state", "offered_at"], "yesterday"], [["state", "at"], null], [["state", "reason"], "unknown"],
+      [["state", "at"], null], [["state", "reason"], "unknown"], [["state", "stopped"], "yes"],
     ] as const) {
       expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], bad)), path.join("."))
         .toThrow(CockpitClientError);
     }
     for (const state of [
-      { state: "waiting", blockers: ["unknown"] }, { state: "native_stopped", at, evidence: "acknowledged" },
-      { state: "retired", at, terminal: "unknown" }, { state: "retained", at, reason: "unknown", native_stopped: true },
+      { state: "waiting", blockers: ["unknown"] },
+      { state: "retired", at, terminal: "unknown" }, { state: "retained", at, reason: "unknown", stopped: true },
       { state: "unknown", at, phase: "unknown", detail: "Unconfirmed" },
     ]) expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "state"], state))).toThrow(CockpitClientError);
     const maxProcess = { pid: 0xffffffff, start_ticks: Number.MAX_SAFE_INTEGER, kernel_boot_id: null };
@@ -1214,31 +1221,14 @@ describe("orchestration protocol boundary", () => {
         ...shellIdentity, executable_device: "0", executable_inode: "9007199254740993",
       }))).toBeDefined();
     }
-    expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "identity", "shell"], null)))
-      .toThrow(CockpitClientError);
+    expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "identity", "shell"], null))
+      .runs[0]!.retirement!.identity!.shell).toBeNull();
     expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "identity", "shell"], undefined, true)))
       .toThrow(CockpitClientError);
     expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "attachment", "shell"], null))
       .runs[0]!.attachment!.shell).toBeNull();
   });
 
-  it("requires typed native refusal and byte-bounded explanation without authority spoofing", () => {
-    const action = {
-      action: "retirement_native_receipt", retirement_id: assignmentTaskId,
-      outcome: { outcome: "refused", reason: "native_refused", text: "user_activity is diagnostic text only" },
-    };
-    expect(parseOrchestrationAction(action)).toEqual(action);
-    for (const outcome of [
-      { outcome: "refused", text: "user_activity" },
-      { outcome: "refused", reason: "unknown", text: "user_activity" },
-      { outcome: "refused", reason: "native_refused", text: "é".repeat(513) },
-      { outcome: "refused", reason: "native_refused", text: "bad\0text" },
-      { outcome: "shutdown_requested", reason: "busy" },
-      { outcome: "deferred", reason: "unknown" }, { outcome: "unknown" },
-    ]) expect(() => parseOrchestrationAction({ ...action, outcome })).toThrow(CockpitClientError);
-    expect(parseOrchestrationAction({ ...action, outcome: { ...action.outcome, text: "é".repeat(512) } })).toBeDefined();
-    expect(() => parseOrchestrationAction({ ...action, retirement_id: "not-a-uuid" })).toThrow(CockpitClientError);
-  });
 
   it.each([
     ["roots", 0, "kind"], ["board", "tasks", 0, "lane"], ["runs", 0, "kind"], ["runs", 0, "stage"],
@@ -1247,7 +1237,6 @@ describe("orchestration protocol boundary", () => {
     ["runs", 0, "cleanup_policy"], ["runs", 0, "annotations", 0, "by", "type"],
     ["messages", 0, "from", "type"], ["messages", 0, "kind"], ["messages", 0, "stage"],
     ["messages", 0, "report", "kind"], ["messages", 0, "report", "outcome"],
-    ["subagents", 0, "status"], ["subagents", 0, "last_control", "op", "op"], ["subagents", 0, "last_control", "stage"],
     ["intents", 0, "state"], ["runtime", "status"], ["runtime", "runs", 0, "presence"], ["attention", 0, "kind"],
     ["intents", 0, "origin"], ["assignment_intents", 0, "state"],
   ])("rejects unknown nested enum at %s", (...path) => {
@@ -1258,7 +1247,7 @@ describe("orchestration protocol boundary", () => {
     for (const origin of ["browser", "native", "supervisor"] as const) {
       const provenance = {
         origin, supervisor_run_id: origin === "supervisor" ? "root" : null,
-        omp_session_id: origin === "supervisor" ? "actual-omp" : null,
+        conversation: origin === "supervisor" ? attachment.conversation : null,
       };
       const intent = { ...snapshot.intents[0]!, ...provenance, result_message_id: "exact-result" };
       const dto = { ...snapshot, intents: [intent] };
@@ -1269,33 +1258,33 @@ describe("orchestration protocol boundary", () => {
 
   it("rejects incomplete, foreign-root or fabricated supervisor provenance", () => {
     const badProvenances = [
-      { origin: "supervisor", supervisor_run_id: null, omp_session_id: null },
-      { origin: "supervisor", supervisor_run_id: "root", omp_session_id: null },
-      { origin: "supervisor", supervisor_run_id: null, omp_session_id: "actual-omp" },
-      { origin: "supervisor", supervisor_run_id: "other-root", omp_session_id: "actual-omp" },
-      { origin: "supervisor", supervisor_run_id: "root", omp_session_id: "" },
-      { origin: "browser", supervisor_run_id: "root", omp_session_id: "actual-omp" },
-      { origin: "native", supervisor_run_id: null, omp_session_id: "actual-omp" },
-      { origin: "native", supervisor_run_id: "root", omp_session_id: null },
-      { origin: "unknown", supervisor_run_id: null, omp_session_id: null },
+      { origin: "supervisor", supervisor_run_id: null, conversation: null },
+      { origin: "supervisor", supervisor_run_id: "root", conversation: null },
+      { origin: "supervisor", supervisor_run_id: null, conversation: attachment.conversation },
+      { origin: "supervisor", supervisor_run_id: "other-root", conversation: attachment.conversation },
+      { origin: "supervisor", supervisor_run_id: "root", conversation: { harness: "omp", session_id: "" } },
+      { origin: "browser", supervisor_run_id: "root", conversation: attachment.conversation },
+      { origin: "native", supervisor_run_id: null, conversation: attachment.conversation },
+      { origin: "native", supervisor_run_id: "root", conversation: null },
+      { origin: "unknown", supervisor_run_id: null, conversation: null },
     ];
     for (const provenance of badProvenances) {
       const intent = { ...snapshot.intents[0]!, ...provenance };
       expect(() => parseOrchestrationSnapshot({ ...snapshot, intents: [intent] })).toThrow(CockpitClientError);
     }
     for (const provenance of [
-      { origin: null, supervisor_run_id: "root", omp_session_id: null },
-      { origin: null, supervisor_run_id: null, omp_session_id: "actual-omp" },
+      { origin: null, supervisor_run_id: "root", conversation: null },
+      { origin: null, supervisor_run_id: null, conversation: attachment.conversation },
     ]) expect(() => parseOrchestrationSnapshot({ ...snapshot, intents: [{ ...snapshot.intents[0]!, ...provenance }] })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["intents", 0, "result_message_id"], ""))).toThrow(CockpitClientError);
   });
 
-  it("decodes pending launches and refuses live OMP proof on absent panes", () => {
+  it("decodes pending launches and refuses live agent proof on absent panes", () => {
     expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "dispatch", "step"], "launch_pending"))).toBeDefined();
     for (const presence of ["missing", "endpoint_changed", "unobserved"]) {
       const dto = replaceField(snapshot, ["runtime", "runs", 0, "presence"], presence);
       expect(() => parseOrchestrationSnapshot(dto)).toThrow(CockpitClientError);
-      expect(parseOrchestrationSnapshot(replaceField(dto, ["runtime", "runs", 0, "actual_omp"], false))).toBeDefined();
+      expect(parseOrchestrationSnapshot(replaceField(dto, ["runtime", "runs", 0, "actual_agent"], false))).toBeDefined();
     }
   });
 
@@ -1359,7 +1348,6 @@ describe("orchestration protocol boundary", () => {
     }
     for (const bad of [null, [], { action: "unknown" }, { action: "__proto__" }]) expect(() => parseOrchestrationAction(bad)).toThrow(CockpitClientError);
     expect(() => parseOrchestrationAction({ action: "inbox_pull", after_seq: 0, limit: 101 })).toThrow(CockpitClientError);
-    expect(() => parseOrchestrationAction({ action: "subagent_control", run_id: "run", subagent_id: "child", op: { op: "cancel", text: "extra" } })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationMutationRequest({ session_id: "session", expected_revision: 2, action: actions[0], origin: "native" })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationSnapshotRequest({ session_id: "../session", root_id: null })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationSnapshotRequest({ session_id: "session" })).toThrow(CockpitClientError);
@@ -1494,7 +1482,7 @@ describe("orchestration protocol boundary", () => {
       [attached, ["attach", "attachment", "epoch"], Number.MAX_SAFE_INTEGER + 1],
       [attached, ["attach", "attachment", "state"], "live"],
       [attached, ["attach", "attachment", "launch_attempt"], 0x100000000],
-      [attached, ["attach", "attachment", "main_session_id"], ""],
+      [attached, ["attach", "attachment", "conversation", "session_id"], ""],
       [attached, ["attach", "attachment", "machine_id"], "é".repeat(257)],
       [attached, ["attach", "attachment", "updated_at"], "yesterday"],
       [attached, ["attach", "attachment", "location", "session_id"], "../session"],
@@ -1507,7 +1495,7 @@ describe("orchestration protocol boundary", () => {
     expect(parseOrchestrationMutationResponse({ revision: 2, result: { ...resumed,
       resume: { ...resumed.resume, resume: { ...resume, previous_attachment_epoch: null, cause: null, decision_id: null } } } })).toBeDefined();
     expect(parseOrchestrationMutationResponse({ revision: 2, result: { ...attached, attach: { ...attached.attach,
-      attachment: { ...attachment, location: null, main_session_id: null, process: null, shell: null, machine_id: null } } } })).toBeDefined();
+      attachment: { ...attachment, location: null, conversation: null, process: null, shell: null, machine_id: null } } } })).toBeDefined();
   });
 
   it("validates long-poll timeouts and invalidation tokens", () => {

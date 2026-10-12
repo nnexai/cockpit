@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import { CockpitClientError } from "../../client/CockpitClient";
 import type { CleanupState, OwnedResourceKind, OrchestrationMutationResponse, OrchestrationSnapshot, OrchestrationWaitResponse, Run, RunCleanupSummary, RunObservation, SessionSnapshotResponse, TaskBoard, TaskView } from "../../protocol/generated/v1";
-import { agentState, taskStatus } from "./SupervisorActions";
+import { agentState, questionLabel, taskStatus } from "./SupervisorActions";
 import { SupervisorView } from "./SupervisorView";
 
 const at = "2026-10-06T12:00:00Z";
 let fixtureSequence = 0;
 let stateStoreId: string;
 function run(overrides: Partial<Run> = {}): Run {
-  return { source_output: null, integration: { state: "pending" }, session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, main_session_id: "native", process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
+  return { source_output: null, integration: { state: "pending" }, session_id: "session", brief: "Guidance", run_id: "root", kind: "supervisor", label: "Project supervisor", root_id: "root", parent_run_id: null, task_id: null, attempt: 1, assignment_generation: overrides.kind === "worker" ? 1 : null, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] }, task_revision_at_start: null, stage: "active", close_reason: null, dispatch: { launch_tag: "tag", endpoint_identity: "endpoint", recovery: null, agent_started: true, step: "launched", launch_attempt: 1, error: null, updated_at: at }, target: { target: "existing_space", workspace_id: "space" }, setup: null, cleanup_policy: null, last_report: null, result: null, annotations: [], project: null, checkout: null, attachment: { attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "connected", launch_mode: null, location: { boot_id: "boot", terminal_id: "terminal", native_session_id: "native", endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane", launch_tag: "tag" }, conversation: { harness: "omp", session_id: overrides.run_id ?? "root-conversation" }, process: null, shell: null, machine_id: null, launch_attempt: 1, updated_at: at }, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at, ...overrides };
 }
 function acceptedWorker(): Run {
   return run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "closed", close_reason: "accepted",
@@ -26,7 +26,7 @@ function cleanup(state: CleanupState, kind: OwnedResourceKind = "worker_terminal
   };
 }
 function observed(runId = "root", overrides: Partial<RunObservation> = {}): RunObservation {
-  return { run_id: runId, presence: "present", actual_omp: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at, ...overrides };
+  return { run_id: runId, presence: "present", actual_agent: true, workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Agent", pane_id: "pane", agent_status: "working", state_changed_at: at, ...overrides };
 }
 function task(overrides: Partial<TaskView> = {}): TaskView {
   return { task: { task_id: "task-a", title: "Improve search", body: "Improve search\nKeep existing behavior.", description: "Improve search\nKeep existing behavior.", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: "task-revision", diagnostic: null }, lane: "working", current_run_id: "worker", dependencies: { state: "none", unmet: [], problems: [] }, ...overrides };
@@ -38,10 +38,10 @@ function snapshot(runs: Run[] = [run()], tasks: TaskView[] = []): OrchestrationS
   const messages = runs.flatMap<OrchestrationSnapshot["messages"][number]>((run, index) => run.last_report ? [{
     message_id: run.last_report.message_id, to_run_id: run.root_id, seq: index + 1,
     from: { type: "run", run_id: run.run_id }, kind: "report", text: run.last_report.summary,
-    in_reply_to: null, report: run.last_report, stale: false, escalated_from: null, from_subagent_id: null,
-    stage: "acked", woken_omp_session: null, created_at: run.last_report.at, acked_at: run.last_report.at,
+    in_reply_to: null, report: run.last_report, stale: false, escalated_from: null,
+    stage: "acked", created_at: run.last_report.at, acked_at: run.last_report.at,
   }] : []);
-  return { state_store_id: stateStoreId, cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => !run.parent_run_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: board("root", tasks), runs, messages, questions: runs.filter(run => run.stage !== "closed" && run.last_report?.kind === "needs_input").map(run => ({ run_id: run.run_id, question_message_id: run.last_report!.message_id, asked_at: run.last_report!.at, receipt: { status: "unresolved" } })), subagents: [], intents: [], assignment_intents: [], attention: runs.filter(run => run.run_id === run.root_id && run.last_report?.kind === "needs_input").map(run => ({ kind: "needs_input", run_id: run.run_id, task_id: null, message_seq: 1, since: at })), unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => observed(run.run_id)) } };
+  return { state_store_id: stateStoreId, cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "tasks", roots: runs.filter(run => !run.parent_run_id).map(run => ({ root_id: run.run_id, label: run.label, kind: run.kind, open_runs: 1, needs_you: 0 })), board: board("root", tasks), runs, messages, questions: runs.filter(run => run.stage !== "closed" && run.last_report?.kind === "needs_input").map(run => ({ run_id: run.run_id, question_message_id: run.last_report!.message_id, asked_at: run.last_report!.at, receipt: { status: "unresolved" } })), task_ownership: tasks.map(task => { const worker = runs.find(run => run.run_id === task.current_run_id && run.stage !== "closed"); return { root_id: "root", task_id: task.task.task_id, generation: worker?.assignment_generation ?? 0, owner: worker?.attachment?.conversation ? { run_id: worker.run_id, conversation: worker.attachment.conversation, claim_operation_id: `claim:${worker.run_id}` } : null }; }), intents: [], assignment_intents: [], attention: runs.filter(run => run.run_id === run.root_id && run.last_report?.kind === "needs_input").map(run => ({ kind: "needs_input", run_id: run.run_id, task_id: null, message_seq: 1, since: at })), unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: runs.map(run => observed(run.run_id)) } };
 }
 const session: SessionSnapshotResponse = { session_id: "session", server_instance: "server", version: "fixture", protocol: 20, focused_space_id: "space", focused_tab_id: "tab", focused_pane_id: "pane", spaces: [{ id: "space", label: "Project", number: 1, tab_count: 1, pane_count: 1, focused: true, agent_status: "working", git: null }], tabs: [], panes: [], agents: [] };
 let host: HTMLDivElement;
@@ -141,11 +141,11 @@ afterEach(async () => {
 });
 
 describe("Supervisor authority and retained operations", () => {
-  it("does not turn a historical binding or ACK into fresh OMP proof", () => {
+  it("does not turn a historical binding or ACK into fresh agent proof", () => {
     const saved = run(), state = snapshot([saved]);
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { actual_omp: false })] };
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { actual_agent: false })] };
     expect(agentState(state, saved, true, true).verified).toBe(false);
-    state.runtime.runs[0].actual_omp = true;
+    state.runtime.runs[0].actual_agent = true;
     expect(agentState(state, saved, true, true).verified).toBe(true);
     expect(agentState(state, saved, false, true).verified).toBe(false);
     expect(agentState(state, saved, true, false).verified).toBe(false);
@@ -294,6 +294,72 @@ describe("Supervisor authority and retained operations", () => {
     expect(fixture.mutation).not.toHaveBeenCalled();
     expect(fixture.onTerminal).not.toHaveBeenCalled();
   });
+  it.each(["present", "missing", "blocked"] as const)("distinguishes a registered %s generic conversation from detector support without inventing recovery", async condition => {
+    const registered = run();
+    registered.launch_config = { ...registered.launch_config, harness_kind: "generic", command: "generic-agent" };
+    registered.attachment!.conversation = { harness: "generic", session_id: "registered-conversation" };
+    const state = snapshot([registered]);
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: condition === "missing" ? "missing" : "present", actual_agent: false, agent_status: condition === "blocked" ? "blocked" : "working" })] };
+    if (condition === "blocked") state.attention = [{ kind: "runtime_blocked", run_id: "root", task_id: null, message_seq: null, since: at }];
+    const fixture = await mount(state);
+    if (condition === "present") {
+      expect(host.querySelector(".supervisor-summary-shortcut")).toBeNull();
+      expect(host.querySelector(".supervisor-queue-row.is-recover")).toBeNull();
+      expect(host.querySelector(".supervisor-summary-state")?.textContent).toContain("Registered conversation");
+      expect(host.querySelector(".supervisor-summary-state")?.textContent).not.toContain("Managing tasks");
+    } else if (condition === "missing") {
+      expect(host.querySelector(".supervisor-summary-shortcut button")?.textContent).toBe("Resume");
+      expect(host.querySelector(".supervisor-queue-row.is-recover")).not.toBeNull();
+    } else {
+      expect(host.querySelector(".supervisor-summary-shortcut")).toBeNull();
+      expect(host.querySelector(".supervisor-queue-row.is-recover")).not.toBeNull();
+    }
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(fixture.mutation).not.toHaveBeenCalled();
+  });
+  it.each(["unobserved", "unavailable"] as const)("delivers an answer to a registered active supervisor with %s physical agent observation", async observation => {
+    const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
+    const state = snapshot([supervisor]);
+    state.runtime = observation === "unobserved"
+      ? { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { actual_agent: false })] }
+      : { status: "unavailable", error: { code: "offline", message: "Physical observation unavailable" } };
+    const fixture = await mount(state);
+    const field = host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')!;
+    enter(field, "Use the existing checkout");
+    expect(button("Send answer").disabled).toBe(false);
+    act(() => button("Send answer").click()); await settle();
+    expect(fixture.mutation.mock.calls[0][0].action).toMatchObject({ action: "message_send", kind: "answer", to_run_id: "root", text: "Use the existing checkout", in_reply_to: "question" });
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("keeps canonical task source editing available without physical agent observations", async () => {
+    const original = task({ lane: "queued", current_run_id: null });
+    const state = snapshot([run()], [original]);
+    state.runtime = { status: "unavailable", error: { code: "offline", message: "Physical observation unavailable" } };
+    const fixture = await mount(state);
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!.click()); await settle();
+    act(() => button("Actions").click()); await settle();
+    act(() => button("Edit task…").click()); await settle();
+    enter(document.querySelector<HTMLInputElement>('[role="dialog"] input')!, "Updated canonical task");
+    expect(button("Save task").disabled).toBe(false);
+    fixture.mutation.mockResolvedValueOnce({ revision: 2, result: { result: "task", task: { ...original.task, title: "Updated canonical task", task_revision: "saved-revision" } } });
+    act(() => button("Save task").click()); await settle();
+    expect(fixture.mutation.mock.calls[0][0].action).toMatchObject({ action: "task_update", root_id: "root", task_id: "task-a", title: "Updated canonical task", expected_task_revision: "task-revision" });
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("keeps assignment requests available for a registered active supervisor without physical observation", async () => {
+    const state = snapshot([run()], [task({ lane: "queued", current_run_id: null })]);
+    state.runtime = { status: "unavailable", error: { code: "offline", message: "Physical observation unavailable" } };
+    state.assignment_intents = [{ root_id: "root", task_id: "task-a", state: "conflict" }];
+    const fixture = await mount(state);
+    await expandQueue();
+    expect(button("Assign current task").disabled).toBe(false);
+    act(() => button("Assign current task").click()); await settle();
+    expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "task_assignment_resolve", root_id: "root", task_id: "task-a", expected_task_revision: "task-revision", assign: true });
+    expect(button("Keep unassigned").disabled).toBe(false);
+    act(() => button("Keep unassigned").click()); await settle();
+    expect(fixture.mutation.mock.calls[1][0].action).toEqual({ action: "task_assignment_resolve", root_id: "root", task_id: "task-a", expected_task_revision: null, assign: false });
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
   it("retains an unknown answer and retries the identical operation, without consuming textarea Escape", async () => {
     const supervisor = run({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which checkout?", plan: null, source_output: null, at } });
     const fixture = await mount(snapshot([supervisor]));
@@ -410,7 +476,7 @@ describe("Supervisor authority and retained operations", () => {
     expect(host.querySelector('[aria-label="Needs you"]')).toBeNull();
     expect(host.querySelector(".supervisor-summary-counter.is-decide")).toBeNull();
     const summary = host.querySelector(".supervisor-summary")!.textContent;
-    expect(summary).toContain(taskStatus(task(), supervisor, state));
+    expect(summary).toContain(questionLabel(state.questions[0]!));
     const chip = host.querySelector<HTMLButtonElement>(".supervisor-strip-chips .supervisor-strip-chip")!;
     const observedFacts = chip.getAttribute("aria-label");
     act(() => chip.click());
@@ -419,12 +485,12 @@ describe("Supervisor authority and retained operations", () => {
     expect(host.querySelector(".supervisor-state-block time[datetime='2026-10-06T12:01:00Z']")).not.toBeNull();
     state.questions[0]!.receipt = { status: "answer_acknowledged", answer: { ...answer, stage: "acked", acked_at: "2026-10-06T12:02:00Z" } };
     await fixture.push({ ...state, revision: 3 });
-    expect(host.querySelector(".supervisor-summary")!.textContent).toContain(taskStatus(task(), supervisor, state));
+    expect(host.querySelector(".supervisor-summary")!.textContent).toContain(questionLabel(state.questions[0]!));
     expect(host.querySelector(".supervisor-state-block time[datetime='2026-10-06T12:02:00Z']")).not.toBeNull();
     expect(chip.getAttribute("aria-label")).toBe(observedFacts);
     state.questions[0]!.receipt = { status: "answer_delivered", answer: { ...answer, seq: 2 } };
     await fixture.push({ ...state, revision: 4 });
-    expect(host.querySelector(".supervisor-summary")!.textContent).toContain(taskStatus(task(), supervisor, state));
+    expect(host.querySelector(".supervisor-summary")!.textContent).toContain(questionLabel(state.questions[0]!));
     expect(host.querySelector(".supervisor-state-block time[datetime='2026-10-06T12:02:00Z']")).toBeNull();
     const next = run({ last_report: { ...supervisor.last_report!, message_id: "q2" } });
     await fixture.push({ ...snapshot([next]), revision: 5 });
@@ -441,7 +507,7 @@ describe("Supervisor authority and retained operations", () => {
     const state = snapshot([supervisor]);
     state.questions[0]!.receipt = { status: "answer_delivered", answer: { sender: { type: "operator" }, message_id: "answer", seq: 1, stage: "stored", created_at: at, acked_at: null } };
     state.attention = condition === "recover" ? [{ kind: "runtime_blocked", run_id: "root", task_id: null, message_seq: null, since: at }] : [];
-    if (state.runtime.status === "fresh") state.runtime.runs[0] = observed("root", condition === "missing" ? { presence: "missing", actual_omp: false } : condition === "blocked" ? { agent_status: "blocked" } : {});
+    if (state.runtime.status === "fresh") state.runtime.runs[0] = observed("root", condition === "missing" ? { presence: "missing", actual_agent: false } : condition === "blocked" ? { agent_status: "blocked" } : {});
     await mount(state);
     if (condition === "offline") await rerender(true, false);
     expect(host.querySelector(".supervisor-summary")!.textContent).not.toContain(taskStatus(task(), supervisor, state));
@@ -491,7 +557,7 @@ describe("Supervisor authority and retained operations", () => {
     act(() => button("Send answer").click()); await settle();
     const original = fixture.mutation.mock.calls[0][0].action;
     act(() => field.focus());
-    const replacement = run({ ...supervisor, attachment: { ...supervisor.attachment!, attachment_id: "00000000-0000-4000-8000-000000000002", epoch: 2, main_session_id: "replacement-conversation" } });
+    const replacement = run({ ...supervisor, attachment: { ...supervisor.attachment!, attachment_id: "00000000-0000-4000-8000-000000000002", epoch: 2, conversation: { harness: "omp", session_id: "replacement-conversation" } } });
     await fixture.push({ ...snapshot([replacement]), revision: 2 });
     expect(document.activeElement).toBe(field);
     expect(field.value).toBe("Retained exact answer");
@@ -509,7 +575,7 @@ describe("Supervisor authority and retained operations", () => {
     expect(fixture.mutation.mock.calls[0][0].action).toEqual({ action: "task_assignment_resolve", root_id: "root", task_id: "task-a", expected_task_revision: "task-revision", assign: true });
     act(() => button("Keep unassigned").click()); await settle();
     expect(fixture.mutation.mock.calls[1][0].action).toEqual({ action: "task_assignment_resolve", root_id: "root", task_id: "task-a", expected_task_revision: null, assign: false });
-    const next = { ...state, revision: 4, assignment_intents: [], intents: [{ intent_id: "exact-intent", root_id: "root", task_id: "task-a", run_id: "root", expected_task_revision: "old-revision", state: "conflict" as const, origin: null, supervisor_run_id: null, omp_session_id: null, result_message_id: null }], attention: [{ kind: "intent_conflict" as const, run_id: "root", task_id: "task-a", message_seq: null, since: at }] };
+    const next = { ...state, revision: 4, assignment_intents: [], intents: [{ intent_id: "exact-intent", root_id: "root", task_id: "task-a", run_id: "root", expected_task_revision: "old-revision", state: "conflict" as const, origin: null, supervisor_run_id: null, conversation: null, result_message_id: null }], attention: [{ kind: "intent_conflict" as const, run_id: "root", task_id: "task-a", message_seq: null, since: at }] };
     fixture.replace(next); await rerender(false); await rerender(true); await expandQueue();
     act(() => button("Apply acceptance to current task").click()); await settle();
     expect(fixture.mutation.mock.calls[2][0].action).toEqual({ action: "intent_resolve", intent_id: "exact-intent", apply: true });
@@ -517,7 +583,7 @@ describe("Supervisor authority and retained operations", () => {
   });
   it("resumes directly without a dialog and retains the original operation and scope on uncertain retry", async () => {
     const original = run(), state = snapshot([original]);
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_omp: false, pane_id: null })] };
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_agent: false, pane_id: null })] };
     const fixture = await mount(state);
     fixture.mutation.mockResolvedValueOnce({ revision: 1, result: { result: "done" } });
     act(() => host.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")!.click()); await settle();
@@ -531,7 +597,7 @@ describe("Supervisor authority and retained operations", () => {
   });
   it("does not steal later user focus when an explicitly requested Resume reconnects", async () => {
     const original = run(), state = snapshot([original]);
-    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_omp: false, pane_id: null })] };
+    state.runtime = { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [observed("root", { presence: "missing", actual_agent: false, pane_id: null })] };
     const fixture = await mount(state);
     const other = document.createElement("textarea"); document.body.append(other);
     act(() => host.querySelector<HTMLButtonElement>(".supervisor-summary-shortcut button")!.click()); await settle();
@@ -548,7 +614,7 @@ describe("Supervisor authority and retained operations", () => {
       resume: { operation_id: "blocked-operation", run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause: { code: "endpoint_changed", message: "The server identity changed.", class: "recover" }, decision_id: null, replacement_attachment_epoch: null, updated_at: at },
     });
     const state = snapshot([original]);
-    state.runtime = { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "endpoint_changed", actual_omp: false, pane_id: null })] };
+    state.runtime = { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "endpoint_changed", actual_agent: false, pane_id: null })] };
     // Blocked records are not members of the phase-only restoration cohort.
     state.restoration = { reattached: 0, total_attachments: 0, cleanup_pending: 0 };
     const fixture = await mount(state);
@@ -587,10 +653,10 @@ describe("Supervisor authority and retained operations", () => {
     const launching = run({
       ...reconciling, stage: "starting",
       dispatch: { ...original.dispatch!, endpoint_identity: "replacement-endpoint", launch_attempt: 2, step: "launch_pending", agent_started: false },
-      attachment: { ...original.attachment!, attachment_id: "00000000-0000-4000-8000-000000000002", epoch: 2, state: "connecting", launch_attempt: 2, main_session_id: null, location: { ...original.attachment!.location!, endpoint_identity: "replacement-endpoint", terminal_id: "replacement-terminal", pane_id: "replacement-pane", native_session_id: null } },
+      attachment: { ...original.attachment!, attachment_id: "00000000-0000-4000-8000-000000000002", epoch: 2, state: "connecting", launch_attempt: 2, conversation: null, location: { ...original.attachment!.location!, endpoint_identity: "replacement-endpoint", terminal_id: "replacement-terminal", pane_id: "replacement-pane", native_session_id: null } },
       resume: { ...reconciling.resume!, phase: "launching", replacement_attachment_epoch: 2 },
     });
-    const pending = { ...inspecting, revision: 3, runs: [launching], runtime: { status: "fresh" as const, endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "present", actual_omp: false, pane_id: "replacement-pane" })] } };
+    const pending = { ...inspecting, revision: 3, runs: [launching], runtime: { status: "fresh" as const, endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "present", actual_agent: false, pane_id: "replacement-pane" })] } };
     await fixture.push(pending);
     expect(host.querySelector(".supervisor-summary-state")?.textContent).toContain("Resuming…");
     expect(resume.getAttribute("aria-disabled")).toBe("true");
@@ -599,7 +665,7 @@ describe("Supervisor authority and retained operations", () => {
     expect(host.querySelector(".supervisor-queue-row.is-recover")).toBeNull();
     expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Needs you"] textarea')?.value).toBe("Keep this exact checkout choice");
     expect(fixture.onTerminal).not.toHaveBeenCalled();
-    const connected = run({ ...launching, stage: "active", dispatch: { ...launching.dispatch!, step: "launched", agent_started: true }, attachment: { ...launching.attachment!, state: "connected", main_session_id: "replacement-conversation", location: { ...launching.attachment!.location!, native_session_id: "replacement-conversation" } }, resume: { ...launching.resume!, phase: "connected" } });
+    const connected = run({ ...launching, stage: "active", dispatch: { ...launching.dispatch!, step: "launched", agent_started: true }, attachment: { ...launching.attachment!, state: "connected", conversation: { harness: "omp", session_id: "replacement-conversation" }, location: { ...launching.attachment!.location!, native_session_id: "replacement-conversation" } }, resume: { ...launching.resume!, phase: "connected" } });
     const ready = { ...pending, revision: 4, runs: [connected], restoration: { reattached: 1, total_attachments: 1, cleanup_pending: 0 }, runtime: { ...pending.runtime, runs: [observed("root", { pane_id: "replacement-pane" })] } };
     await fixture.push(ready);
     expect(host.querySelector(".supervisor-summary-state")?.textContent).toContain("Managing tasks");
@@ -614,7 +680,7 @@ describe("Supervisor authority and retained operations", () => {
   it.each(["supervisor", "adopted"] as const)("shows a surviving endpoint-changed %s reconnecting and then freshly observed", async kind => {
     const original = run({ kind, dispatch: kind === "adopted" ? null : run().dispatch, attachment: { ...run().attachment!, state: "disconnected" } });
     const state = snapshot([original]);
-    state.runtime = { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "endpoint_changed", actual_omp: false, pane_id: null })] };
+    state.runtime = { status: "fresh", endpoint_identity: "replacement-endpoint", observed_at: at, runs: [observed("root", { presence: "endpoint_changed", actual_agent: false, pane_id: null })] };
     const fixture = await mount(state);
     fixture.mutation.mockImplementationOnce(async request => {
       if (request.action.action !== "run_resume") throw new Error("Expected root inspection");
@@ -723,19 +789,66 @@ describe("Supervisor selection, scroll and panel transitions", () => {
     expect(document.activeElement).toBe(target);
     expect(fixture.onTerminal).not.toHaveBeenCalled(); expect(fixture.mutation).not.toHaveBeenCalled();
   });
-  it("keeps a visible-node click at the same graph offsets, and subagent-off selects its worker", async () => {
+  it("keeps a canonical worker click at the same graph offsets without native-child controls", async () => {
     const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
     const state = snapshot([run(), worker], [task()]);
-    state.subagents = [{ run_id: "worker", subagent_id: "child", parent_subagent_id: null, role: "Researcher", label: "Research child", status: "running", summary: null, last_control: null, bound_omp_session: null, updated_at: at }];
     const fixture = await mount(state);
     act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
     const graph = host.querySelector<HTMLDivElement>(".supervisor-graph-scroll")!; graph.scrollLeft = 150; graph.scrollTop = 60;
-    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="sub:worker:child"]')!.click()); await settle();
+    act(() => host.querySelector<HTMLButtonElement>('[data-row-id="run:worker"]')!.click()); await settle();
     expect(graph.scrollLeft).toBe(150); expect(graph.scrollTop).toBe(60);
-    act(() => host.querySelector<HTMLInputElement>(".supervisor-graph-subagents input")!.click()); await settle();
+    expect(host.querySelector(".supervisor-graph-subagents")).toBeNull();
     expect(host.querySelector('[data-row-id="run:worker"]')?.getAttribute("aria-expanded")).toBe("true");
-    expect(document.activeElement).toBe(host.querySelector('[data-row-id="run:worker"]'));
     expect(fixture.onTerminal).not.toHaveBeenCalled();
+  });
+  it("uses canonical ownership rather than a historical current_run_id for task and graph details", async () => {
+    const previous = run({ kind: "worker", run_id: "worker", label: "Previous worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const current = run({ kind: "worker", run_id: "replacement", label: "Current worker", parent_run_id: "root", task_id: "task-a", stage: "working", assignment_generation: 3 });
+    const state = snapshot([run(), previous, current], [task()]);
+    state.task_ownership = [{ root_id: "root", task_id: "task-a", generation: 3, owner: { run_id: current.run_id, conversation: current.attachment!.conversation!, claim_operation_id: "replacement-claim" } }];
+    const fixture = await mount(state);
+    const row = host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!;
+    expect(row.textContent).toContain("Current worker");
+    act(() => row.click()); await settle();
+    const detail = host.querySelector('aside[aria-label="Selected details"]')!;
+    expect(detail.textContent).toContain("Current worker");
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    expect(host.querySelector('[data-row-id="run:replacement"]')).not.toBeNull();
+    expect(host.querySelector('[data-row-id="task:task-a"]')).not.toBeNull();
+    expect(host.querySelector(".supervisor-graph-subagents")).toBeNull();
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(fixture.mutation).not.toHaveBeenCalled();
+  });
+  it("keeps an unassigned canonical task selectable and source-editable while its previous run remains saved", async () => {
+    const previous = run({ kind: "worker", run_id: "worker", label: "Previous worker", parent_run_id: "root", task_id: "task-a", stage: "working" });
+    const state = snapshot([run(), previous], [task({ lane: "queued" })]);
+    state.task_ownership = [{ root_id: "root", task_id: "task-a", generation: 2, owner: null }];
+    const fixture = await mount(state);
+    const row = host.querySelector<HTMLButtonElement>('[data-row-id="task-a"]')!;
+    expect(row.textContent).toContain("Unassigned");
+    act(() => row.click()); await settle();
+    act(() => button("Actions").click()); await settle();
+    act(() => button("Edit task…").click()); await settle();
+    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("Improve search");
+    act(() => button("Cancel").click()); await settle();
+    act(() => host.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')!.click()); await settle();
+    expect(host.querySelector('[data-row-id="task:task-a"]')).not.toBeNull();
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(fixture.mutation).not.toHaveBeenCalled();
+  });
+  it("opens a retained historical run from attention without selecting the replacement assignment", async () => {
+    const previous = run({ kind: "worker", run_id: "worker", label: "Previous worker", parent_run_id: "root", task_id: "task-a", stage: "working", last_report: { message_id: "previous-progress", kind: "progress", outcome: null, summary: "Previous assignment evidence", plan: null, source_output: null, at } });
+    const current = run({ kind: "worker", run_id: "replacement", label: "Current worker", parent_run_id: "root", task_id: "task-a", stage: "working", assignment_generation: 3 });
+    const state = snapshot([run(), previous, current], [task()]);
+    state.task_ownership = [{ root_id: "root", task_id: "task-a", generation: 3, owner: { run_id: current.run_id, conversation: current.attachment!.conversation!, claim_operation_id: "replacement-claim" } }];
+    state.attention = [{ kind: "runtime_blocked", run_id: previous.run_id, task_id: "task-a", message_seq: null, since: at }];
+    const fixture = await mount(state);
+    await expandQueue();
+    act(() => button("View saved worker details").click()); await settle();
+    expect(host.querySelector('[data-row-id="task-a"]')?.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector('aside[aria-label="Selected details"]')?.textContent).toContain("Previous assignment evidence");
+    expect(fixture.onTerminal).not.toHaveBeenCalled();
+    expect(fixture.mutation).not.toHaveBeenCalled();
   });
   it("uses the same core Recover item for card, filter and queue without auto-switching or stealing focus", async () => {
     const worker = run({ kind: "worker", run_id: "worker", parent_run_id: "root", task_id: "task-a", stage: "working" });

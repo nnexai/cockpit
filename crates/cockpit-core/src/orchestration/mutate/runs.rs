@@ -51,7 +51,7 @@ pub(in crate::orchestration) fn supervisor_start(
                         && observed.epoch == current.epoch && observed.process == current.process
                         && observed.shell == current.shell && observed.machine_id == current.machine_id
                         && observed.launch_mode == current.launch_mode
-                        && observed.main_session_id == current.main_session_id
+                        && observed.conversation == current.conversation
                         && observed.launch_attempt == current.launch_attempt
                         && project_identity::same_location(observed.location.as_ref(), current.location.as_ref())
                         && !matches!(current.state, AttachmentState::Quiescing | AttachmentState::Revoked)
@@ -105,6 +105,7 @@ pub(in crate::orchestration) fn supervisor_start(
         }
     };
     let mut run = new_run(&run_id, ctx.session_id, RunKind::Supervisor, label, &run_id, None, None, 1);
+    run.launch_config = ctx.service.launch_config.clone();
     run.target = Some(target);
     run.project = resolved_project;
     run.checkout = checkout;
@@ -122,69 +123,37 @@ pub(in crate::orchestration) fn supervisor_start(
 }
 
 pub(in crate::orchestration) fn adopt(
-    ctx: &mut MutationCtx<'_>,
-    label: String,
+    ctx: &mut MutationCtx<'_>, label: String, location: RunLocation,
 ) -> Result<Applied, InspectionError> {
-    let actor = ctx.actor;
-    let caller = ctx.caller;
-    let session_id = ctx.session_id;
-    let state = &mut *ctx.state;
-    let Actor::Bootstrap(agent) = actor else {
-        return Err(error(
-            "actor_forbidden",
-            "Only a real agent pane can adopt itself",
-        ));
-    };
-    if caller.is_some() {
-        return Err(error("caller_mismatch", "Pane already belongs to a run"));
-    }
-    if agent.agent_kind != Some(AgentKind::Main)
-        || agent.omp_session_id.as_ref().is_none_or(|s| s.is_empty())
-        || agent.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp)
-    {
-        return Err(error(
-            "report_requires_main",
-            "Adoption requires the main OMP native session",
-        ));
-    }
+    operator(ctx.actor)?;
     bounded(&label, 256)?;
-    let id = id();
-    let mut run = new_run(
-        &id,
-        session_id,
-        RunKind::Adopted,
-        label,
-        &id,
-        None,
-        None,
-        1,
-    );
-    run.stage = RunStage::Active;
+    if location.session_id != ctx.session_id || location.terminal_id.is_none()
+        || ctx.state.runs.iter().any(|run| run.attachment.as_ref().and_then(|a| a.location.as_ref())
+            .is_some_and(|owned| owned.endpoint_identity == location.endpoint_identity
+                && owned.terminal_id == location.terminal_id)) {
+        return Err(error("attachment_conflict", "Adoption requires an exact unowned terminal"));
+    }
+    let observed = ctx.resolved.and_then(|r| r.attachment_observation.as_ref())
+        .ok_or_else(|| error("attachment_observation_unavailable", "Adoption requires fresh exact physical placement"))?;
+    if !project_identity::same_location(observed.location.as_ref(), Some(&location)) {
+        return Err(error("attachment_conflict", "Selected adoption placement changed"));
+    }
+    let run_id = id();
+    let mut run = new_run(&run_id, ctx.session_id, RunKind::Adopted, label, &run_id, None, None, 1);
+    run.launch_config = ctx.service.launch_config.clone();
+    run.stage = RunStage::Starting;
     run.project = ctx.resolved.and_then(|r| r.project.clone());
     run.checkout = ctx.resolved.and_then(|r| r.checkout.clone());
-    let attachment = run.attachment.as_mut().expect("new adopted attachment");
-    attachment.main_session_id = agent.omp_session_id.clone();
-    attachment.process = agent.process.clone();
-    attachment.machine_id = crate::process_identity::machine_id();
+    let attachment = run.attachment.as_mut().expect("adopted attachment");
+    attachment.location = Some(location);
+    attachment.process = observed.process.clone();
+    attachment.shell = observed.shell.clone();
+    attachment.machine_id = observed.machine_id.clone();
     attachment.state = AttachmentState::Connecting;
-    attachment.location = Some(RunLocation {
-        boot_id: agent.boot_id.clone(),
-        terminal_id: agent.terminal_id.clone(),
-        native_session_id: agent.native_session_id.clone(),
-        endpoint_identity: agent.endpoint_identity.clone(),
-        session_id: agent.session_id.clone(),
-        workspace_id: agent.workspace_id.clone(),
-        tab_id: agent.tab_id.clone(),
-        pane_id: agent.pane_id.clone(),
-        launch_tag: String::new(),
-    });
-    let (credential, _) = credentials::stage_credential(ctx.service.base(), &run, JobRole::Root, None)?;
-    state.credentials.push(credential);
-    state.runs.push(run);
-    Ok(Applied::Machine(OrchestrationActionResult::Run {
-        run_id: id,
-        attempt: 1,
-    }))
+    let (credential, _) = credentials::stage_credential(ctx.service.base(), &run, JobRole::Root)?;
+    ctx.state.credentials.push(credential);
+    ctx.state.runs.push(run);
+    Ok(Applied::Machine(OrchestrationActionResult::Run { run_id, attempt: 1 }))
 }
 
 pub(in crate::orchestration) fn worker_start(
@@ -197,6 +166,12 @@ pub(in crate::orchestration) fn worker_start(
         target, label, brief, cleanup_policy,
     } = &action else { unreachable!() };
     task_root_authority(ctx.state, ctx.actor, ctx.caller, ctx.session_id, root_id)?;
+    let Actor::Agent(agent) = ctx.actor else {
+        return Err(error("actor_forbidden", "Only the owning supervisor may authorize a worker"));
+    };
+    if credentials::validate_caller(ctx.state, agent)?.role != JobRole::Root {
+        return Err(error("actor_forbidden", "Only the owning supervisor may authorize a worker"));
+    }
     if let Some(result) = super::resume::replay(ctx, operation_id, DurableOperationKind::WorkerStart, &action)? {
         return Ok(Applied::Document(result));
     }
@@ -222,6 +197,24 @@ pub(in crate::orchestration) fn worker_start(
     bounded(&label, 256)?;
     let mut run = new_run(&run_id, ctx.session_id, RunKind::Worker, label, root_id,
         Some(root_id.clone()), Some(task.task_id.clone()), attempt);
+    run.launch_config = ctx.service.launch_config.clone();
+    let ownership_index = match ctx.state.task_ownership.iter().position(|record|
+        record.root_id == *root_id && record.task_id == *task_id) {
+        Some(index) => index,
+        None => {
+            ctx.state.task_ownership.push(TaskOwnership { root_id: root_id.clone(),
+                task_id: task_id.clone(), generation: 0, owner: None });
+            ctx.state.task_ownership.len() - 1
+        }
+    };
+    let ownership = &ctx.state.task_ownership[ownership_index];
+    if ownership.owner.is_some() {
+        return Err(error("task_assigned", "Task already has a session owner"));
+    }
+    let generation = ownership.generation.checked_add(1)
+        .ok_or_else(|| error("invalid_counter", "Task assignment generation exhausted"))?;
+    safe_counter(generation)?;
+    run.assignment_generation = Some(generation);
     run.target = Some(unfocused(target.clone()));
     run.brief = brief.clone();
     run.task_revision_at_start = Some(task.task_revision.clone());
@@ -256,7 +249,7 @@ pub(in crate::orchestration) fn cancel(
     state.runs[index].stage = RunStage::Closed;
     state.runs[index].close_reason = Some(CloseReason::Cancelled);
     let from = actor_ref(actor, caller, state);
-    messages::append(state, messages::AppendMessage { from: from, to_run_id: &run_id, message_id: &format!("cancel-{}", id()), kind: MessageKind::CancelRequest, text: "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.", in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })?;
+    messages::append(state, messages::AppendMessage { from: from, to_run_id: &run_id, message_id: &format!("cancel-{}", id()), kind: MessageKind::CancelRequest, text: "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.", in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     let annotation = decision_annotation(
         actor_ref(actor, caller, state),
         &provenance,

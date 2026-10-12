@@ -21,7 +21,7 @@ impl AmbientEndpoint {
                 .filter(|value| !value.trim().is_empty())
         };
         Self {
-            launch_session: nonempty("COCKPIT_SESSION_ID"),
+            launch_session: nonempty("COCKPIT_HERDR_SESSION"),
             inherited_socket: std::env::var_os("HERDR_SOCKET_PATH")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from),

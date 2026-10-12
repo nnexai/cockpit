@@ -4,9 +4,14 @@ export type CleanupView = { label: string; detail: string; tier: "notice" | "rec
 export function cleanupForRun(snapshot: OrchestrationSnapshot, runId: string): RunCleanupSummary | undefined {
   return snapshot.cleanup?.find(summary => summary.run_id === runId);
 }
-/** Canonical task status may retain its accepted worker after the current-run pointer is cleared. */
+/** Only the canonical owner identifies a task's current worker. */
+export function taskOwnerRun(snapshot: OrchestrationSnapshot, task: TaskView): Run | undefined {
+  const owner = snapshot.task_ownership.find(ownership => ownership.root_id === snapshot.board?.root_id && ownership.task_id === task.task.task_id)?.owner;
+  return owner ? snapshot.runs.find(run => run.run_id === owner.run_id && run.root_id === snapshot.board?.root_id) : undefined;
+}
+/** Accepted tasks retain their historical accepted worker after ownership is cleared. */
 export function taskRun(snapshot: OrchestrationSnapshot, task: TaskView): Run | undefined {
-  const current = snapshot.runs.find(run => run.run_id === task.current_run_id && run.root_id === snapshot.board?.root_id && run.task_id === task.task.task_id);
+  const current = taskOwnerRun(snapshot, task);
   if (current || task.lane !== "accepted" || !task.task.checked) return current;
   let accepted: Run | undefined;
   for (const run of snapshot.runs) {

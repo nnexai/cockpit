@@ -1,4 +1,4 @@
-use crate::projects::{WorkspaceCheckoutOwnership, WorkspaceRecoveryAction, WorkspaceSetupRequest};
+use crate::projects::{OrchestrationConfiguration, WorkspaceCheckoutOwnership, WorkspaceRecoveryAction, WorkspaceSetupRequest};
 use crate::v1::ErrorResponse;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -54,7 +54,7 @@ pub struct OrchestrationSnapshot {
     pub runs: Vec<Run>,      // every run under roots of this session
     pub messages: Vec<Message>, // for those runs; bodies included (≤16 KiB each)
     pub questions: Vec<QuestionStatus>,
-    pub subagents: Vec<Subagent>,
+    pub task_ownership: Vec<TaskOwnership>,
     pub intents: Vec<TaskIntent>,
     pub assignment_intents: Vec<TaskAssignmentIntent>,
     pub cleanup: Vec<RunCleanupSummary>,
@@ -353,6 +353,31 @@ pub enum AttachmentLaunchMode {
     DirectProcess,
     ShellAgent,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationIdentity {
+    pub harness: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TaskOwnership {
+    pub root_id: String,
+    pub task_id: String,
+    #[ts(type = "number")]
+    pub generation: u64,
+    pub owner: Option<TaskOwner>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TaskOwner {
+    pub run_id: String,
+    pub conversation: ConversationIdentity,
+    pub claim_operation_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionAttachment {
@@ -362,7 +387,7 @@ pub struct ExecutionAttachment {
     pub state: AttachmentState,
     pub launch_mode: Option<AttachmentLaunchMode>,
     pub location: Option<RunLocation>,
-    pub main_session_id: Option<String>,
+    pub conversation: Option<ConversationIdentity>,
     pub process: Option<NativeProcessIdentity>,
     pub shell: Option<NativeShellIdentity>,
     pub machine_id: Option<String>,
@@ -609,7 +634,6 @@ pub struct ResourceRequestRecord {
     pub resource_key: String,
     pub source_identity: ResourceSourceIdentity,
     pub holder: AttachmentReference,
-    pub requester_child_id: Option<String>,
     pub state: ResourceRequestState,
     pub build_processes: Vec<NativeShellIdentity>,
     pub machine_id: String,
@@ -832,9 +856,9 @@ pub struct RetirementIdentity {
     pub pane_id: String,
     pub terminal_id: String,
     pub herdr_boot_id: Option<String>,
-    pub omp_session_id: String,
-    pub process: NativeProcessIdentity,
-    pub shell: NativeShellIdentity,
+    pub conversation: Option<ConversationIdentity>,
+    pub process: Option<NativeProcessIdentity>,
+    pub shell: Option<NativeShellIdentity>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct RunRetirement {
@@ -843,9 +867,6 @@ pub struct RunRetirement {
     pub result_message_id: String,
     pub task_revision: String,
     pub identity: Option<RetirementIdentity>,
-    /// Independently confirmed native writer-admission seal after consumer
-    /// drain. A shutdown request or observed PID absence alone is not proof.
-    pub quiescent_stop_at: Option<String>,
     pub state: RetirementState,
     pub created_at: String,
     pub updated_at: String,
@@ -879,21 +900,6 @@ retirement_states! {
     Waiting {
         blockers: Vec<RetirementBlocker>,
     },
-    NativeStopOffered {
-        offered_at: String,
-    },
-    NativeStopDeferred {
-        offered_at: String,
-        reason: NativeDeferReason,
-        at: String,
-    },
-    NativeStopRequested {
-        at: String,
-    },
-    NativeStopped {
-        at: String,
-        evidence: NativeStopEvidence,
-    },
     CloseIntent {
         at: String,
     },
@@ -904,7 +910,7 @@ retirement_states! {
     Retained {
         at: String,
         reason: RetainReason,
-        native_stopped: bool,
+        stopped: bool,
     },
     Unknown {
         at: String,
@@ -916,22 +922,6 @@ retirement_states! {
 #[serde(rename_all = "snake_case")]
 pub enum RetirementBlocker {
     OpenDescendantRuns,
-    RunningSubagents,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeDeferReason {
-    Busy,
-    PendingMessages,
-    AsyncJobs,
-    LiveSubagents,
-    EditorDraft,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeStopEvidence {
-    ExitedAfterShutdownRequest,
-    AlreadyExited,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -962,27 +952,7 @@ pub enum RetainReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RetirementPhase {
-    NativeStop,
     TerminalClose,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeRefuseReason {
-    UserActivity,
-    NativeRefused,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-#[ts(tag = "outcome", rename_all = "snake_case")]
-pub enum NativeStopReceipt {
-    ShutdownRequested,
-    Deferred {
-        reason: NativeDeferReason,
-    },
-    Refused {
-        reason: NativeRefuseReason,
-        text: String,
-    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -996,6 +966,9 @@ pub struct Run {
     pub parent_run_id: Option<String>,
     pub task_id: Option<String>,
     pub attempt: u32,
+    #[ts(type = "number | null")]
+    pub assignment_generation: Option<u64>,
+    pub launch_config: OrchestrationConfiguration,
     pub task_revision_at_start: Option<String>,
     pub stage: RunStage,
     pub close_reason: Option<CloseReason>,
@@ -1079,7 +1052,6 @@ pub enum MessageKind {
     Instruction,
     Answer,
     CancelRequest,
-    SubagentControl,
     Report,
     Observation,
 }
@@ -1087,7 +1059,6 @@ pub enum MessageKind {
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryStage {
     Stored,
-    Woken,
     Read,
     Acked,
 }
@@ -1104,9 +1075,7 @@ pub struct Message {
     pub report: Option<Report>, // kind == Report
     pub stale: bool,            // sender attempt superseded / caller mismatch evidence
     pub escalated_from: Option<String>,
-    pub from_subagent_id: Option<String>, // report sent from an OMP subagent context of the sending run
     pub stage: DeliveryStage,
-    pub woken_omp_session: Option<String>,
     pub created_at: String,
     pub acked_at: Option<String>,
 }
@@ -1135,49 +1104,6 @@ pub struct AnswerReceipt {
     pub created_at: String,
     pub acked_at: Option<String>,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum SubagentStatus {
-    Running,
-    Done,
-    Failed,
-    Cancelled,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct Subagent {
-    pub run_id: String,
-    pub subagent_id: String,                // subagent_id = OMP ctx.agent.id
-    pub parent_subagent_id: Option<String>, // OMP ctx.agent.parentId; None = child of the run's main session
-    pub bound_omp_session: Option<String>,
-    pub role: Option<String>,
-    pub label: String,
-    pub status: SubagentStatus,
-    pub summary: Option<String>,
-    pub last_control: Option<SubagentControlState>,
-    pub updated_at: String,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum ControlStage {
-    Stored,
-    Applied,
-    Failed,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct SubagentControlState {
-    #[ts(type = "number")]
-    pub seq: u64,
-    pub op: SubagentOp,
-    pub stage: ControlStage,
-    pub error: Option<String>,
-    pub at: String,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentKind {
-    Main,
-    Subagent,
-} // from OMP ctx.agent.kind, supplied by the extension
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -1195,7 +1121,7 @@ pub struct TaskIntent {
     pub state: IntentState,
     pub origin: Option<DecisionOrigin>,
     pub supervisor_run_id: Option<String>,
-    pub omp_session_id: Option<String>,
+    pub conversation: Option<ConversationIdentity>,
     pub result_message_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1217,7 +1143,7 @@ pub enum Presence {
 pub struct RunObservation {
     pub run_id: String,
     pub presence: Presence,
-    pub actual_omp: bool,
+    pub actual_agent: bool,
     pub workspace_id: Option<String>,
     pub workspace_label: Option<String>,
     pub tab_id: Option<String>,
@@ -1366,26 +1292,25 @@ pub enum OrchestrationAction {
         mode: ResumeMode,
         decision_id: Option<String>,
     },
+    RunRegister { operation_id: String },
+    TaskUnassign {
+        operation_id: String,
+        root_id: String,
+        task_id: String,
+        #[ts(type = "number")]
+        expected_assignment_generation: u64,
+    },
     RunAttach {
         operation_id: String,
         attachment_id: String,
         #[ts(type = "number")]
         expected_attachment_epoch: u64,
-        main_session_id: String,
+        conversation: ConversationIdentity,
     },
-    JobChildRegister {
-        operation_id: String,
-        child_id: String,
-        child_session_id: String,
-        parent_child_id: Option<String>,
-    },
-    RetirementNativeReceipt {
-        retirement_id: String,
-        outcome: NativeStopReceipt,
-    }, // bound main session of the accepted retiring worker only
     RunAdopt {
         label: String,
-    }, // unbound agent: binds caller pane as Adopted root
+        location: RunLocation,
+    }, // operator-authorized exact selected placement, never agent self-election
     // worker lifecycle
     WorkerStart {
         operation_id: String,
@@ -1470,48 +1395,31 @@ pub enum OrchestrationAction {
         after_seq: u64,
         limit: u32,
     }, // agent: returns messages, marks them Read
-    InboxWoken {
-        #[ts(type = "number")]
-        through_seq: u64,
-        omp_session_id: String,
-    }, // agent extension
     InboxAck {
         #[ts(type = "number")]
         through_seq: u64,
     }, // agent
-    SubagentUpdate {
-        subagent_id: String,
-        parent_subagent_id: Option<String>,
-        role: Option<String>,
-        label: String,
-        status: SubagentStatus,
-        summary: Option<String>,
-    }, // agent extension
-    SubagentControl {
-        run_id: String,
-        subagent_id: String,
-        op: SubagentOp,
-    }, // operator or ancestor run
-    SubagentControlDone {
-        #[ts(type = "number")]
-        seq: u64,
-        applied: bool,
-        error: Option<String>,
-    }, // extension that executed the control
 }
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(tag = "op", rename_all = "snake_case")]
-#[ts(tag = "op", rename_all = "snake_case")]
-pub enum SubagentOp {
-    Cancel,
-    Send { text: String },
-} // tag = "op"
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "result", rename_all = "snake_case")]
 #[ts(tag = "result", rename_all = "snake_case")]
 pub enum OrchestrationActionResult {
     // tag = "result"
+    RunRegistered {
+        run_id: String,
+        conversation: ConversationIdentity,
+        #[ts(type = "number | null")]
+        assignment_generation: Option<u64>,
+        duplicate: bool,
+    },
+    TaskUnassigned {
+        task_id: String,
+        #[ts(type = "number")]
+        assignment_generation: u64,
+        previous_run_id: Option<String>,
+        duplicate: bool,
+    },
     WorkerStarted {
         start: WorkerStartResult,
     },
@@ -1582,7 +1490,7 @@ mod tests {
         assert!(serde_json::from_value::<OrchestrationAction>(forged).is_err());
         let forged = json!({
             "action": "run_attach", "operation_id": "operation", "attachment_id": "attachment",
-            "expected_attachment_epoch": 7, "main_session_id": "conversation", "secret": "not-action-input",
+            "expected_attachment_epoch": 7, "conversation": {"harness":"probe","session_id":"chat"}, "secret": "not-action-input",
         });
         assert!(serde_json::from_value::<OrchestrationAction>(forged).is_err());
     }
@@ -1601,51 +1509,25 @@ mod tests {
     }
 
     #[test]
-    fn native_stop_evidence_round_trips_without_receipt_inference() {
-        for evidence in ["exited_after_shutdown_request", "already_exited"] {
-            let value = json!({
-                "state": "native_stopped", "at": "2026-10-05T12:00:00Z", "evidence": evidence,
-            });
-            let state: RetirementState = serde_json::from_value(value.clone()).unwrap();
-            assert_eq!(serde_json::to_value(state).unwrap(), value);
+    fn removed_native_actions_and_states_are_rejected() {
+        for action in ["job_child_register", "subagent_update", "subagent_control", "subagent_control_done", "retirement_native_receipt", "inbox_woken"] {
+            assert!(serde_json::from_value::<OrchestrationAction>(json!({"action":action})).is_err());
         }
-        assert!(
-            serde_json::from_value::<RetirementState>(json!({
-                "state": "native_stopped", "at": "2026-10-05T12:00:00Z",
-                "evidence": "shutdown_requested",
-            }))
-            .is_err()
-        );
+        assert!(serde_json::from_value::<RetirementState>(json!({"state":"native_stopped","at":"now","evidence":"already_exited"})).is_err());
     }
 
     #[test]
-    fn native_refusal_requires_a_typed_reason_separate_from_text() {
-        let value = json!({
-            "action": "retirement_native_receipt",
-            "retirement_id": "7b613f19-4a52-41fa-8864-a880cd69ef50",
-            "outcome": {
-                "outcome": "refused", "reason": "native_refused",
-                "text": "user_activity is diagnostic text only",
-            },
-        });
+    fn registration_and_unassignment_have_one_neutral_wire_contract() {
+        let value = json!({"action":"run_register","operation_id":"operation"});
         let action: OrchestrationAction = serde_json::from_value(value.clone()).unwrap();
-        assert!(matches!(
-            &action,
-            OrchestrationAction::RetirementNativeReceipt {
-                outcome: NativeStopReceipt::Refused {
-                    reason: NativeRefuseReason::NativeRefused,
-                    ..
-                },
-                ..
-            }
-        ));
         assert_eq!(serde_json::to_value(action).unwrap(), value);
-        let mut missing = value.clone();
-        missing["outcome"].as_object_mut().unwrap().remove("reason");
-        assert!(serde_json::from_value::<OrchestrationAction>(missing).is_err());
-        let mut unknown = value;
-        unknown["outcome"]["reason"] = json!("unknown");
-        assert!(serde_json::from_value::<OrchestrationAction>(unknown).is_err());
+        assert!(serde_json::from_value::<OrchestrationAction>(json!({
+            "action":"run_register", "operation_id":"operation", "session_id":"forged"
+        })).is_err());
+        let value = json!({"action":"task_unassign","operation_id":"operation","root_id":"root",
+            "task_id":"task","expected_assignment_generation":7});
+        let action: OrchestrationAction = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(action).unwrap(), value);
     }
 
     #[test]

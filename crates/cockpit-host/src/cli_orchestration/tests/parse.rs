@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use cockpit_protocol::orchestration::{
-    DispatchTarget, NativeRefuseReason, NativeStopReceipt, OrchestrationAction, TaskStepScope,
+    DispatchTarget, OrchestrationAction, TaskStepScope,
 };
 
 use super::super::{
     CliError,
-    args::{MAX_TEXT_BYTES, NativeRefuseReasonArg, RecoveryArg, RetirementReceiptArgs, RunCommand},
+    args::{MAX_TEXT_BYTES, RecoveryArg, RunCommand},
     context::read_bounded,
     task_submission_error,
 };
@@ -250,10 +250,10 @@ fn global_evidence_is_available_after_nested_commands() {
         "dedupe",
         "--summary",
         "Checkout inspected",
-        "--omp-session",
-        "native",
-        "--agent-kind",
-        "main",
+        "--harness",
+        "generic",
+        "--session-id",
+        "actual conversation",
         "--herdr-session",
         "fixture",
         "--herdr-socket",
@@ -266,7 +266,7 @@ fn global_evidence_is_available_after_nested_commands() {
     let TestCommand::Run(args) = parsed.command else {
         panic!("expected run")
     };
-    assert_eq!(args.common.omp_session.as_deref(), Some("native"));
+    assert_eq!(args.common.session_id.as_deref(), Some("actual conversation"));
     assert!(args.common.json);
     assert_eq!(args.common.config, Some(PathBuf::from("/tmp/fixture.toml")));
 }
@@ -276,7 +276,7 @@ fn removed_aliases_and_missing_dedupe_are_rejected() {
     let cli = <TestCli as clap::CommandFactory>::command();
     let run = cli.find_subcommand("run").unwrap();
     for command in ["propose", "prepare", "execute", "bind", "bind-session", "retry-launch",
-        "grant-prepare", "grant-execute"] {
+        "grant-prepare", "grant-execute", "attach", "child-register", "adopt", "retirement", "retirement-receipt"] {
         assert!(run.find_subcommand(command).is_none(), "{command} must not remain registered");
         assert!(TestCli::try_parse_from(["test", "run", command]).is_err());
     }
@@ -310,7 +310,7 @@ fn removed_aliases_and_missing_dedupe_are_rejected() {
 #[test]
 fn initialized_is_diagnostic_and_ready_is_not_a_report_kind() {
     let prefix = ["test", "run", "report", "--message-id", "message", "--summary", "Checkout inspected",
-        "--omp-session", "main", "--agent-kind", "main"];
+        "--harness", "generic", "--session-id", "actual"];
     let TestCommand::Run(args) = TestCli::try_parse_from(
         prefix.into_iter().chain(["--kind", "initialized"]),
     ).unwrap().command else { panic!("expected run"); };
@@ -538,28 +538,8 @@ fn scope_update_preserves_live_run_exact_fences_and_optional_prose() {
 }
 
 #[test]
-fn native_control_receipt_groups_are_exclusive() {
-    assert!(TestCli::try_parse_from(["test", "subagent", "control-done", "--seq", "1"]).is_err());
-    assert!(TestCli::try_parse_from([
-        "test", "subagent", "control-done", "--seq", "1", "--applied", "--failed", "failure",
-    ]).is_err());
-}
-
-#[test]
 fn limits_are_enforced_at_parser_and_input_boundary() {
     assert!(TestCli::try_parse_from(["test", "inbox", "wait", "--timeout", "3601"]).is_err());
-    assert!(
-        TestCli::try_parse_from([
-            "test",
-            "subagent",
-            "controls",
-            "--id",
-            "sub",
-            "--timeout",
-            "3601"
-        ])
-        .is_err()
-    );
     assert!(TestCli::try_parse_from(["test", "inbox", "list", "--limit", "101"]).is_err());
     assert_eq!(
         read_bounded(std::io::Cursor::new(vec![b'a'; MAX_TEXT_BYTES]))
@@ -606,155 +586,11 @@ fn literal_inputs_and_main_session_evidence_are_discoverable() {
     let mut flags = worker_flags();
     flags.extend(["--space", "workspace"]);
     assert!(TestCli::try_parse_from(flags).is_ok());
-    let parsed = TestCli::try_parse_from([
-        "test",
-        "subagent",
-        "controls",
-        "--id",
-        "child",
-        "--wait",
-        "--agent-kind",
-        "subagent",
-        "--subagent-id",
-        "child",
-        "--omp-session",
-        "child-native",
-        "--omp-main-session",
-        "root-native",
-    ])
-    .unwrap();
-    let TestCommand::Subagent(args) = parsed.command else {
-        panic!("expected subagent")
-    };
-    assert_eq!(args.common.omp_main_session.as_deref(), Some("root-native"));
-    assert!(args.common.validate_identity().is_ok());
-}
-
-#[test]
-fn retirement_receipt_requires_one_typed_bounded_outcome() {
-    let parsed = TestCli::try_parse_from([
-        "test",
-        "run",
-        "retirement",
-        "--omp-pid",
-        "1234",
-        "--wait",
-        "--timeout",
-        "30",
-    ])
-    .unwrap();
-    let TestCommand::Run(args) = parsed.command else {
-        panic!("expected run")
-    };
-    assert_eq!(args.common.omp_pid, Some(1234));
-    assert!(matches!(
-        args.command,
-        RunCommand::Retirement {
-            wait: true,
-            timeout: 30
-        }
-    ));
-    for reason in [
-        "busy",
-        "pending_messages",
-        "async_jobs",
-        "live_subagents",
-        "editor_draft",
-    ] {
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "run",
-                "retirement-receipt",
-                "--retirement",
-                "id",
-                "--deferred",
-                reason,
-            ])
-            .is_ok()
-        );
-    }
-    for reason in ["user_activity", "native_refused"] {
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "run",
-                "retirement-receipt",
-                "--retirement",
-                "id",
-                "--refused",
-                "Explanation",
-                "--refuse-reason",
-                reason,
-            ])
-            .is_ok()
-        );
-    }
-    for flags in [
-        vec![],
-        vec!["--shutdown-requested", "--deferred", "busy"],
-        vec!["--refused", "user_activity"],
-        vec!["--refuse-reason", "native_refused"],
-    ] {
-        let mut argv = vec!["test", "run", "retirement-receipt", "--retirement", "id"];
-        argv.extend(flags);
-        assert!(TestCli::try_parse_from(argv).is_err());
-    }
-    let action = RetirementReceiptArgs {
-        retirement: "id".into(),
-        shutdown_requested: false,
-        deferred: None,
-        refused: Some("user_activity appears here but has no authority".into()),
-        refuse_reason: Some(NativeRefuseReasonArg::NativeRefused),
-    }
-    .action()
-    .unwrap();
-    assert!(matches!(
-        action,
-        OrchestrationAction::RetirementNativeReceipt {
-            outcome: NativeStopReceipt::Refused {
-                reason: NativeRefuseReason::NativeRefused,
-                ..
-            },
-            ..
-        }
-    ));
-    assert!(
-        RetirementReceiptArgs {
-            retirement: "id".into(),
-            shutdown_requested: false,
-            deferred: None,
-            refused: Some("é".repeat(513)),
-            refuse_reason: Some(NativeRefuseReasonArg::UserActivity),
-        }
-        .action()
-        .is_err()
-    );
-}
-
-#[tokio::test]
-async fn retirement_commands_reject_missing_native_main_before_endpoint_access() {
-    for mut argv in [
-        vec!["test", "run", "retirement"],
-        vec![
-            "test",
-            "run",
-            "retirement-receipt",
-            "--retirement",
-            "id",
-            "--shutdown-requested",
-        ],
-    ] {
-        let TestCommand::Run(args) = TestCli::try_parse_from(&argv).unwrap().command else {
-            panic!("expected run");
-        };
-        assert_eq!(args.run().await.unwrap_err().code, "orchestration_usage");
-        argv.extend(["--omp-pid", "1234", "--agent-kind", "main"]);
-        let TestCommand::Run(args) = TestCli::try_parse_from(argv).unwrap().command else {
-            panic!("expected run");
-        };
-        assert_eq!(args.run().await.unwrap_err().code, "orchestration_usage");
-    }
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "context", "--harness", "generic", "--session-id", "actual",
+    ]).unwrap().command else { panic!("expected run"); };
+    assert_eq!(args.common.harness.as_deref(), Some("generic"));
+    assert_eq!(args.common.session_id.as_deref(), Some("actual"));
 }
 
 #[test]
@@ -765,12 +601,7 @@ fn durable_lifecycle_commands_preserve_explicit_operation_payloads() {
             "--selected-root-id", "root", "--expected-project-key", "project"], "supervisor_start"),
         (vec!["resume", "run", "--operation-id", id, "--mode", "replace-existing",
             "--expected-attachment-epoch", "7", "--decision-id", "decision"], "run_resume"),
-        (vec!["attach", "--operation-id", id, "--attachment-id", "attachment",
-            "--expected-attachment-epoch", "7", "--main-session-id", "main"], "run_attach"),
-        (vec!["child-register", "--operation-id", id, "--child-id", "child",
-            "--child-session-id", "child-session", "--parent-child-id", "parent",
-            "--agent-kind", "subagent", "--subagent-id", "child", "--omp-session", "child-session",
-            "--omp-main-session", "main"], "job_child_register"),
+        (vec!["register", "--operation-id", id], "run_register"),
     ];
     for (flags, expected) in cases {
         let TestCommand::Run(args) = TestCli::try_parse_from(
@@ -800,21 +631,10 @@ fn durable_lifecycle_commands_preserve_explicit_operation_payloads() {
         vec!["start", "--mode", "another"],
         vec!["start", "--operation-id", id],
         vec!["resume", "run", "--operation-id", id],
-        vec!["attach", "--operation-id", id, "--attachment-id", "attachment", "--main-session-id", "main"],
+        vec!["register"],
     ] {
         assert!(TestCli::try_parse_from(["test", "run"].into_iter().chain(flags)).is_err());
     }
-}
-
-#[test]
-fn child_registration_rejects_forged_child_context_before_endpoint_access() {
-    let TestCommand::Run(args) = TestCli::try_parse_from([
-        "test", "run", "child-register", "--operation-id", "operation",
-        "--child-id", "child", "--child-session-id", "child-session",
-        "--agent-kind", "subagent", "--subagent-id", "different",
-        "--omp-session", "child-session", "--omp-main-session", "main",
-    ]).unwrap().command else { panic!("expected run"); };
-    assert_eq!(args.command.preflight(&args.common).unwrap_err().code, "actor_forbidden");
 }
 
 #[test]
@@ -848,52 +668,23 @@ async fn protocol_probe_needs_no_herdr_or_job_identity() {
     let TestCommand::Orchestration(args) = TestCli::try_parse_from([
         "test", "orchestration", "protocol", "--json",
     ]).unwrap().command else { panic!("expected protocol command"); };
-    let descriptor = cockpit_host::transport::operations::orchestration::orchestration_protocol();
-    assert_eq!(descriptor, serde_json::json!({
-        "orchestration_protocol": 2, "store_schema": 2, "client_role": "host",
-    }));
     args.run().await.unwrap();
     assert!(TestCli::try_parse_from([
         "test", "orchestration", "protocol", "--credential", "secret",
     ]).is_err());
 }
 
-#[tokio::test]
-async fn terminal_cancel_receipt_is_explicit_child_only_and_not_action_authority() {
-    let TestCommand::Subagent(args) = TestCli::try_parse_from([
-        "test", "subagent", "control-done", "--seq", "3", "--applied", "--terminal-receipt",
-        "--agent-kind", "main",
-    ]).unwrap().command else { panic!("expected subagent"); };
-    assert_eq!(args.run().await.unwrap_err().code, "actor_forbidden");
-    for outcome in [vec!["--applied"], vec!["--failed", "native refusal"]] {
-        let TestCommand::Subagent(args) = TestCli::try_parse_from(
-            ["test", "subagent", "control-done", "--seq", "3", "--terminal-receipt",
-                "--agent-kind", "subagent", "--subagent-id", "child", "--omp-session", "child-session",
-                "--omp-main-session", "main"].into_iter().chain(outcome),
-        ).unwrap().command else { panic!("expected subagent"); };
-        assert!(matches!(args.command, super::super::args::SubagentCommand::ControlDone {
-            terminal_receipt: true, seq: 3, ..
-        }));
-    }
-    let TestCommand::Subagent(args) = TestCli::try_parse_from([
-        "test", "subagent", "control-done", "--seq", "3", "--applied",
-    ]).unwrap().command else { panic!("expected subagent"); };
-    assert!(matches!(args.command, super::super::args::SubagentCommand::ControlDone {
-        terminal_receipt: false, ..
-    }));
-}
-
 #[test]
 fn structured_report_integration_and_resource_files_use_current_cli_names() {
     let path = std::env::temp_dir().join(format!("cockpit-cli-metadata-{}.json", uuid::Uuid::new_v4()));
     let holder = serde_json::json!({"run_id":"worker","attachment_id":"attachment","attachment_epoch":2});
-    let (mut retired, caller) = super::retirement_fixture();
-    super::accept_retirement(&mut retired, &caller);
-    let terminal_identity = retired.retirement.unwrap().identity.unwrap();
     let cases = [
         ("resource-register", "--request-file", serde_json::json!({
             "operation_id":"creation","run_id":"worker",
-            "resource":{"kind":"worker_terminal","identity":terminal_identity}
+            "resource":{"kind":"space","identity":{
+                "creation_operation_id":"creation","endpoint_identity":"endpoint",
+                "session_id":"physical","workspace_id":"space","checkout_path":"/tmp/project"
+            }}
         }), "resource_register"),
         ("cleanup-finish", "--request-file", serde_json::json!({
             "operation_id":"cleanup","root_id":"root","run_id":"worker"
@@ -920,7 +711,6 @@ fn structured_report_integration_and_resource_files_use_current_cli_names() {
         let TestCommand::Run(args) = TestCli::try_parse_from([
             "test", "run", command, flag, path.to_str().unwrap(),
         ]).unwrap().command else { panic!("expected run"); };
-        assert_eq!(args.command.physical_required(), command == "cleanup-finish");
         let super::super::args::RunOperation::Mutation(action) = args.command.operation(&args.common).unwrap()
             else { panic!("expected mutation"); };
         assert_eq!(serde_json::to_value(action).unwrap()["action"], action_kind);
@@ -932,7 +722,7 @@ fn structured_report_integration_and_resource_files_use_current_cli_names() {
     let TestCommand::Run(args) = TestCli::try_parse_from([
         "test", "run", "report", "--kind", "result", "--outcome", "succeeded",
         "--message-id", "result", "--summary", "Artifact ready", "--source-output-file", path.to_str().unwrap(),
-        "--omp-session", "main", "--agent-kind", "main",
+        "--harness", "generic", "--session-id", "actual",
         "--original-task-revision", "revision", "--original-claim-id", "claim",
     ]).unwrap().command else { panic!("expected run"); };
     let super::super::args::RunOperation::Mutation(action) = args.command.operation(&args.common).unwrap()
@@ -945,4 +735,26 @@ fn structured_report_integration_and_resource_files_use_current_cli_names() {
     assert_eq!(super::super::context::read_json_file::<serde_json::Value>(path.clone()).unwrap_err().code,
         "message_too_large");
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn unassign_requires_exact_generation_and_operation_fences() {
+    assert!(parsed_task_action(&["unassign", "task", "--operation-id", "operation"]).is_err());
+    assert!(parsed_task_action(&["unassign", "task", "--expected-assignment-generation", "7"]).is_err());
+    assert!(matches!(parsed_task_action(&[
+        "unassign", "task", "--operation-id", "operation", "--expected-assignment-generation", "7",
+    ]).unwrap(), OrchestrationAction::TaskUnassign {
+        root_id, task_id, operation_id, expected_assignment_generation: 7,
+    } if root_id == "root" && task_id == "task" && operation_id == "operation"));
+}
+
+#[test]
+fn native_identity_and_delivery_paths_have_no_aliases() {
+    for flag in ["--omp-session", "--omp-pid", "--omp-main-session", "--agent-kind", "--subagent-id"] {
+        assert!(TestCli::try_parse_from(["test", "run", "context", flag, "old"]).is_err());
+    }
+    assert!(TestCli::try_parse_from(["test", "subagent", "controls"]).is_err());
+    assert!(TestCli::try_parse_from(["test", "inbox", "woken", "--through", "1"]).is_err());
+    assert!(TestCli::try_parse_from(["test", "inbox", "wait", "--with-retirement"]).is_err());
+    assert!(TestCli::try_parse_from(["test", "inbox", "ack", "--through", "1"]).is_ok());
 }

@@ -6,6 +6,7 @@ const at = "2026-10-07T12:00:00Z";
 function run(runId: string, rootId = "root", taskId: string | null = null): Run {
   return { session_id: "session", run_id: runId, root_id: rootId, parent_run_id: runId === rootId ? null : rootId,
     kind: runId === rootId ? "supervisor" : "worker", label: runId, brief: "", task_id: taskId, attempt: 1,
+    assignment_generation: runId === rootId ? null : 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
     task_revision_at_start: null, stage: "working", close_reason: null, dispatch: null, target: null, setup: null,
     cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" },
     annotations: [], project: null, checkout: null, attachment: null, checkout_claim_id: null, resume: null, retirement: null, created_at: at, updated_at: at };
@@ -18,7 +19,8 @@ function snapshot(attention: Attention[], runs = [run("root"), run("worker", "ro
     const question = attention.find(item => item.kind === "needs_input" && item.run_id === run.run_id);
     return question ? { ...run, last_report: { message_id: `question-${run.run_id}`, kind: "needs_input" as const, outcome: null, summary: "Which checkout?", plan: null, source_output: null, at: question.since } } : run;
   });
-  return { state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "token", roots: [], board: null, runs: currentRuns, messages: [], subagents: [],
+  return { state_store_id: "store", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 }, session_id: "session", revision: 1, tasks_token: "token", roots: [], board: { root_id: "root", path: "/tasks/root.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks: [task()] }, runs: currentRuns, messages: [],
+    task_ownership: currentRuns.filter(run => run.kind === "worker" && run.task_id && run.stage !== "closed").map(run => ({ root_id: run.root_id, task_id: run.task_id!, generation: run.assignment_generation!, owner: { run_id: run.run_id, conversation: { harness: "omp", session_id: `conversation-${run.run_id}` }, claim_operation_id: `claim-${run.run_id}` } })),
     questions: currentRuns.filter(run => run.stage !== "closed" && run.last_report?.kind === "needs_input").map(run => ({ run_id: run.run_id, question_message_id: run.last_report!.message_id, asked_at: run.last_report!.at, receipt: { status: "unresolved" } })),
     intents: [], assignment_intents: [], attention, unmanaged_agents: [], runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at, runs: [] } };
 }
@@ -27,7 +29,7 @@ const retirementIdentity: RetirementIdentity = {
   attachment_id: null, attachment_epoch: null, launch_mode: null,
   run_attempt: 1, launch_attempt: 1, launch_tag: "launch", endpoint_identity: "endpoint", session_id: "session",
   workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", herdr_boot_id: "boot",
-  omp_session_id: "omp", process: { pid: 101, start_ticks: 1000, kernel_boot_id: "kernel-boot" },
+  conversation: { harness: "omp", session_id: "opaque-conversation" }, process: { pid: 101, start_ticks: 1000, kernel_boot_id: "kernel-boot" },
   shell: { process: { pid: 202, start_ticks: 2000, kernel_boot_id: "fictional-shell-boot" }, executable_device: "8", executable_inode: "9003", argv_digest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
 };
 
@@ -148,7 +150,6 @@ describe("Supervisor attention boundaries", () => {
     worker.retirement = {
       retirement_id: "retirement", trigger: "accept", result_message_id: "result", task_revision: "revision",
       identity: retirementIdentity, state: { state: "unknown", at, phase: "terminal_close", detail: "Closure outcome unknown" },
-      quiescent_stop_at: null,
       created_at: at, updated_at: at,
     };
     const checked = task();
@@ -191,6 +192,26 @@ describe("Supervisor attention boundaries", () => {
     expect(model.items[0].sources).toHaveLength(2);
     expect(model.itemsForTask({ ...task(), current_run_id: null })).toEqual(model.itemsForRun("worker"));
   });
+  it("keeps previous-run recovery inspectable without marking an unassigned task as currently owned", () => {
+    const state = snapshot([entry("runtime_blocked", "worker", at, "task")]);
+    state.task_ownership = [{ root_id: "root", task_id: "task", generation: 2, owner: null }];
+    const model = deriveAttention({ snapshot: state, rootId: "root", local: [] });
+    expect(model.tierForRun("worker")).toBe("recover");
+    expect(model.itemsForTask(task())).toEqual([]);
+    expect(model.tierForTask(task())).toBeNull();
+  });
+
+  it("maps current task attention through the canonical owner rather than historical task or run fields", () => {
+    const state = snapshot([
+      entry("runtime_blocked", "worker", at, "task"),
+      entry("idle_without_report", "replacement"),
+    ], [run("root"), run("worker", "root", "task"), run("replacement")]);
+    state.task_ownership = [{ root_id: "root", task_id: "task", generation: 3, owner: { run_id: "replacement", conversation: { harness: "other", session_id: "replacement-conversation" }, claim_operation_id: "replacement-claim" } }];
+    const model = deriveAttention({ snapshot: state, rootId: "root", local: [] });
+    expect(model.itemsForTask(task())).toEqual(model.itemsForRun("replacement"));
+    expect(model.tierForTask(task())).toBe("notice");
+    expect(model.tierForRun("worker")).toBe("recover");
+  });
 
   it("keeps explicit orphan recovery without a selected root and uses collision-safe subject ids", () => {
     const state = snapshot([], [run("a:b%", "closed", "task:%")]);
@@ -198,7 +219,8 @@ describe("Supervisor attention boundaries", () => {
       { kind: "orphaned_worker", runId: "a:b%" }, { kind: "assignment", taskId: "task:%", state: "pending" },
     ] });
     expect(model.items.map(item => item.id)).toEqual(["recover:run:a%3Ab%25", "notice:task:task%3A%25"]);
-    expect(model.tierForTask(task("task:%", "a:b%"))).toBe("recover");
-    expect(model.itemsForTask(task("task:%", "a:b%")).length).toBe(2);
+    expect(model.tierForRun("a:b%")).toBe("recover");
+    expect(model.tierForTask(task("task:%", "a:b%"))).toBe("notice");
+    expect(model.itemsForTask(task("task:%", "a:b%")).length).toBe(1);
   });
 });

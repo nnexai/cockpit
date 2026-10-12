@@ -17,7 +17,6 @@ export type SupervisorGraphProps = {
   selectedNodeId: string | null; highlightedRunId: string | null;
   tierFor(node: TopologyNode): AttentionTier | null;
   dimFor(node: TopologyNode): string | null;
-  showSubagents: boolean; onShowSubagents(next: boolean): void;
   sharedSpace: string | null | undefined;
   bottomInset: number; scrollRef: RefObject<HTMLDivElement | null>;
   onSelect(node: TopologyNode): void;
@@ -27,7 +26,7 @@ export type SupervisorGraphProps = {
 
 /** Observation and selection only. No terminal or orchestration control callback is accepted. */
 export function SupervisorGraph({ model, snapshot, live, connected, runtimeLive, selectedNodeId, highlightedRunId, tierFor, dimFor,
-  showSubagents, onShowSubagents, sharedSpace, bottomInset, scrollRef, onSelect, onHover, onEscape }: SupervisorGraphProps) {
+  sharedSpace, bottomInset, scrollRef, onSelect, onHover, onEscape }: SupervisorGraphProps) {
   const headingId = useId();
   const fresh = live && connected && runtimeLive && snapshot.runtime.status === "fresh";
   const observations = useMemo(() => new Map(fresh && snapshot.runtime.status === "fresh" ? snapshot.runtime.runs.map(run => [run.run_id, run]) : []), [fresh, snapshot.runtime]);
@@ -38,7 +37,7 @@ export function SupervisorGraph({ model, snapshot, live, connected, runtimeLive,
     return ids;
   }, [model, selectedNodeId, highlightedRunId]);
   const roving = useRovingList({ rowIds: model.layout.order, selectedId: selectedNodeId });
-  const connectedCount = model.nodes.filter(node => node.kind !== "subagent" && node.run && observations.get(node.run.run_id)?.presence === "present" && observations.get(node.run.run_id)?.actual_omp).length;
+  const connectedCount = model.nodes.filter(node => node.run && observations.get(node.run.run_id)?.presence === "present" && observations.get(node.run.run_id)?.actual_agent).length;
   const kept = keptTaskCount(snapshot, snapshot.board?.tasks ?? []);
   const onGraphKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const id = (event.target as HTMLElement).dataset.rowId;
@@ -66,14 +65,13 @@ export function SupervisorGraph({ model, snapshot, live, connected, runtimeLive,
       element.focus({ preventScroll: true });
     }
   };
-  const columnLabels = ["Supervisor", "Tasks", "Workers", "Subagents"];
+  const columnLabels = ["Supervisor", "Tasks", "Workers"];
   return <section className="supervisor-graph-band" aria-labelledby={headingId}>
     <div className="supervisor-graph-heading">
       <h2 id={headingId} title="Up/Down moves through nodes, Left/Right along the chain">
-        Agents · {fresh ? `${connectedCount} connected` : "unobserved"} · {model.counts.subagents} subagents · {model.counts.tasks} tasks
+        Agents · {fresh ? `${connectedCount} connected` : "unobserved"} · {model.counts.tasks} tasks
       </h2>
       {model.hiddenCompletedTasks > 0 ? <span className="supervisor-graph-hidden-completed">{model.hiddenCompletedTasks} completed tasks hidden{kept ? ` · ${kept} kept` : ""}</span> : null}
-      <label className="supervisor-graph-subagents"><input type="checkbox" checked={showSubagents} onChange={event => onShowSubagents(event.target.checked)} />Subagents</label>
     </div>
     {model.counts.workers === 0 && model.counts.supervisors > 0 ? <p className="supervisor-graph-empty">No worker agents yet</p> : null}
     <div className="supervisor-graph-scroll" role="region" aria-label="Agent graph, scrollable" ref={element => { roving.listRef.current = element; scrollRef.current = element; }}
@@ -97,7 +95,7 @@ export function SupervisorGraph({ model, snapshot, live, connected, runtimeLive,
             const observed = observations.get(node.run?.run_id ?? node.assignedRunId ?? "");
             const shared = observed?.presence === "present" && !!sharedSpace && observed.workspace_id === sharedSpace;
             const name = [facts.title, facts.role, facts.status, facts.provenance, facts.relation, tier ? TIER_LABEL[tier] : null, dim ? `dimmed by ${dim}` : null].filter(Boolean).join(", ");
-            const detail = node.subagent ? node.subagent.summary : node.run ? agentState(snapshot, node.run, connected, runtimeLive).detail : null;
+            const detail = node.run ? agentState(snapshot, node.run, connected, runtimeLive).detail : null;
             return <button key={node.id} type="button" data-row-id={node.id} data-node-kind={node.kind} tabIndex={roving.tabIndexFor(node.id)}
               aria-expanded={selected} aria-label={name} title={`${name}${detail ? `\n${detail}` : ""}`} className={`supervisor-graph-node is-${node.kind}${selected ? " is-selected" : ""}${highlighted.has(node.id) ? " is-highlighted" : ""}${node.unassigned ? " is-unassigned" : ""}${dim ? " is-dimmed" : ""}`}
               style={{ left: position.x, top: position.y, width: position.width, height: position.height }}

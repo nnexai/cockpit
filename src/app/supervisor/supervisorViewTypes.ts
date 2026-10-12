@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction, RefObject, FocusEvent, KeyboardEvent } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { OrchestrationSnapshot, Run, SessionSnapshotResponse, TaskView, RootSummary, RunObservation, Subagent, Report, TaskLane } from "../../protocol/generated/v1";
+import type { OrchestrationSnapshot, Run, SessionSnapshotResponse, TaskView, RootSummary, RunObservation, Report, TaskLane } from "../../protocol/generated/v1";
 import type { ScopeDrafts, TextDraft, SupervisorLifecycleDrafts } from "./useSupervisorDrafts";
 import type { SourceSubmission, SourceResolution, SourceResolutionOutcome, TaskMutationOutcome, MutationRequestScope } from "./useSupervisor";
 import type { StepScope, StepSubmission, StepReadOutcome, StepUnknownResolution, StepResolutionOutcome } from "./stepInteractions";
@@ -66,7 +66,7 @@ export type SupervisorViewModel = {
   live: boolean; destination: SessionSnapshotResponse["spaces"][number] | undefined; rootState: AgentState | null;
   tasks: TaskView[]; rootRuns: Run[]; selectedAgent: Run | null; observations: RunObservation[];
   observe(runId: string | null | undefined): RunObservation | undefined;
-  selectedTask: TaskView | null; detailRun: Run | null; detailTask: TaskView | null; detailSubagent: Subagent | null;
+  selectedTask: TaskView | null; detailRun: Run | null; detailTask: TaskView | null;
   hasRetainedDraft(taskId: string): boolean; retainedDraftTaskId: string | null; detailOpen: boolean; stepTaskId: string | null;
   detailTaskScope: StepScope | null; contentReason: string | null; stepReadOnlyReason: string | null;
   sharedSpace: string | null | undefined; mode: "tasks" | "graph" | "dependencies";

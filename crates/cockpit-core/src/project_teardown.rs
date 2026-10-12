@@ -145,36 +145,14 @@ pub(crate) fn integrated_owned_head<'a>(
 
 pub(crate) fn owned_consumers_quiescent(
     resource: &cockpit_protocol::orchestration::OwnedResourceRecord,
-    run: &cockpit_protocol::orchestration::Run,
 ) -> Result<(), InspectionError> {
     if !resource.consumers.is_empty() {
         return Err(InspectionError::new("resource_consumers", "registered consumers still retain this resource"));
     }
-    let retirement = run.retirement.as_ref().ok_or_else(|| {
-        InspectionError::new("consumer_proof_missing", "no independently sealed consumer-drain receipt")
-    })?;
-    if retirement.quiescent_stop_at.as_deref().is_none_or(str::is_empty) {
-        return Err(InspectionError::new("consumer_proof_missing", "root or shell disappearance is not exhaustive consumer quiescence"));
-    }
-    let identity = retirement.identity.as_ref().ok_or_else(|| {
-        InspectionError::new("consumer_proof_missing", "sealed drain lacks pinned process identity")
-    })?;
-    let root_pid = i32::try_from(identity.process.pid).map_err(|_| {
-        InspectionError::new("consumer_proof_stale", "root PID cannot be observed by the process identity adapter")
-    })?;
-    let shell_pid = i32::try_from(identity.shell.process.pid).map_err(|_| {
-        InspectionError::new("consumer_proof_stale", "shell PID cannot be observed by the process identity adapter")
-    })?;
-    let boot = crate::process_identity::kernel_boot_id();
-    if !matches!((identity.process.kernel_boot_id.as_deref(), boot.as_deref()),
-        (Some(expected), Some(actual)) if !expected.is_empty() && expected == actual)
-        || identity.shell.process.kernel_boot_id.as_deref() != boot.as_deref()
-        || crate::process_identity::incarnation_running(root_pid, identity.process.start_ticks).unwrap_or(true)
-        || crate::process_identity::incarnation_running(shell_pid, identity.shell.process.start_ticks).unwrap_or(true)
-    {
-        return Err(InspectionError::new("consumer_proof_stale", "sealed drain no longer has fresh same-boot process absence"));
-    }
-    Ok(())
+    Err(InspectionError::new(
+        "consumer_proof_missing",
+        "exhaustive consumer quiescence is unavailable; unassignment and process disappearance are not stop proof",
+    ))
 }
 
 
@@ -631,6 +609,8 @@ mod tests {
         let mut run: Run = serde_json::from_value(serde_json::json!({
             "session_id":"session","brief":"work","run_id":"run","kind":"worker","label":"worker",
             "root_id":"root","parent_run_id":null,"task_id":null,"attempt":1,"task_revision_at_start":null,
+            "launch_config":cockpit_protocol::projects::OrchestrationConfiguration::default(),
+            "assignment_generation":null,
             "stage":"closed","close_reason":"accepted","dispatch":null,"target":null,"setup":null,
             "cleanup_policy":null,"last_report":null,"result":{"message_id":"result","kind":"result","outcome":"succeeded",
                 "summary":"accepted","plan":null,"source_output":source,"at":"0"},

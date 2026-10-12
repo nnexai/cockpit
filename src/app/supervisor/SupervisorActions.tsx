@@ -1,5 +1,5 @@
-import { useId, useRef, useState } from "react";
-import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, QuestionStatus, Report, Run, RunObservation, Subagent, TaskView } from "../../protocol/generated/v1";
+import { useId, useLayoutEffect, useRef, useState } from "react";
+import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot, QuestionStatus, Report, Run, RunObservation, TaskOwnership, TaskOwner, TaskView } from "../../protocol/generated/v1";
 import { StateGlyph, type GlyphShape } from "../sidebar/StateGlyph";
 import { UiIcon } from "../UiIcon";
 import { messageDraft, type ScopeDrafts, type TextDraft } from "./useSupervisorDrafts";
@@ -37,8 +37,8 @@ export function agentState(snapshot: OrchestrationSnapshot, run: Run, connected:
   if (step === "setup_unknown") return state("unknown", "Agent setup is unconfirmed", `${run.dispatch?.error?.message ?? "Setup could not be confirmed."} Existing resources are kept. Review recovery before launching.`);
   if (["launch_unknown", "needs_review"].includes(step ?? "")) return state("unknown", "Agent start is unconfirmed", `${run.dispatch?.error?.message ? `${run.dispatch.error.message} ` : ""}Startup is not confirmed. Another launch could create a duplicate.`);
   const attachment = run.attachment;
-  const verified = !!observed?.actual_omp && observed.presence === "present"
-    && attachment?.state === "connected" && !!attachment.main_session_id
+  const verified = !!observed?.actual_agent && observed.presence === "present"
+    && attachment?.state === "connected" && !!attachment.conversation
     && (step === "launched" || run.kind === "adopted" && !run.dispatch);
   if (verified) {
     const board = snapshot.board?.root_id === run.root_id ? snapshot.board : null;
@@ -46,11 +46,14 @@ export function agentState(snapshot: OrchestrationSnapshot, run: Run, connected:
       || snapshot.runs.some(child => child.root_id === run.root_id && child.run_id !== run.run_id && child.stage !== "closed")
       || snapshot.assignment_intents.some(intent => intent.root_id === run.root_id)
       || run.last_report?.kind === "needs_input";
-    const rootLabel = hasWork ? "Managing tasks" : board ? "Ready for a task" : "OMP connected";
-    return state("ready", observed?.agent_status === "blocked" ? "Agent blocked" : run.kind === "worker" ? "Agent connected" : rootLabel, "OMP is connected. The supervisor manages work and reviews results.", true);
+    const rootLabel = hasWork ? "Managing tasks" : board ? "Ready for a task" : "Agent connected";
+    return state("ready", observed?.agent_status === "blocked" ? "Agent blocked" : run.kind === "worker" ? "Agent connected" : rootLabel, "The agent is connected. The supervisor manages work and reviews results.", true);
   }
-  if (run.stage === "starting" || step === "launch_pending" || step === "launch_intent") return state("starting", "Starting…", "Waiting for OMP to start and connect.");
-  return state("unknown", "Cannot confirm the agent", "No fresh, bound OMP process is confirmed. Saved reports are not live process evidence.");
+  if (observed?.presence === "present" && !observed.actual_agent && attachment?.conversation && ["active", "working", "reported"].includes(run.stage)) {
+    return { ...state("ready", "Registered conversation", `Herdr cannot classify this harness. Conversation registration is recorded; no detected agent status is inferred.${observed.agent_status === "blocked" ? " Herdr reports this pane blocked." : ""}`), blocked: observed.agent_status === "blocked", restartable: false };
+  }
+  if (run.stage === "starting" || step === "launch_pending" || step === "launch_intent") return state("starting", "Starting…", "Waiting for the configured agent to start and register its conversation.");
+  return state("unknown", "Cannot confirm the agent", "No fresh, bound agent process is confirmed. Saved reports are not live process evidence.");
 }
 export function questionForRun(snapshot: OrchestrationSnapshot, run: Run): QuestionStatus | null {
   return run.stage === "closed" ? null : snapshot.questions.find(question => question.run_id === run.run_id) ?? null;
@@ -62,10 +65,31 @@ export function questionLabel(question: QuestionStatus): string {
     case "answer_acknowledged": return "Answer acknowledged · awaiting report";
   }
 }
+export function taskAssignment(snapshot: OrchestrationSnapshot, task: TaskView, rootId = snapshot.board?.root_id): {
+  ownership: TaskOwnership | undefined; owner: TaskOwner | null; pending: Run | undefined;
+  worker: Run | undefined; previous: Run[]; unsafePrevious: boolean;
+} {
+  const ownership = snapshot.task_ownership.find(item => item.root_id === rootId && item.task_id === task.task.task_id);
+  const owner = ownership?.owner ?? null;
+  const attempts = snapshot.runs.filter(run => run.root_id === rootId && run.task_id === task.task.task_id);
+  const worker = owner ? snapshot.runs.find(run => run.root_id === rootId && run.run_id === owner.run_id) : undefined;
+  const pending = !owner ? attempts.find(run => run.stage !== "closed" && run.assignment_generation === (ownership?.generation ?? 0) + 1) : undefined;
+  const previous = attempts.filter(run => run.run_id !== owner?.run_id && run.run_id !== pending?.run_id);
+  const unsafePrevious = previous.some(run => {
+    if (!run.attachment?.location && !run.checkout_claim_id) return false;
+    const retirement = run.retirement;
+    const scoped = retirement?.identity?.attachment_id === run.attachment?.attachment_id && retirement?.identity?.attachment_epoch === run.attachment?.epoch;
+    const stopped = scoped && (retirement?.state.state === "retired" || retirement?.state.state === "retained" && retirement.state.stopped);
+    return !stopped && !cleanupForRun(snapshot, run.run_id)?.items.some(item => item.kind === "worker_terminal" && item.cleanup.state === "removed");
+  });
+  return { ownership, owner, pending, worker, previous, unsafePrevious };
+}
 export function taskStatus(task: TaskView, run: Run | undefined, snapshot: OrchestrationSnapshot): string {
-  run ??= taskRun(snapshot, task);
+  const ownership = taskAssignment(snapshot, task);
+  run = task.task.checked ? taskRun(snapshot, task) : ownership.worker;
   const assignment = snapshot.assignment_intents.find(intent => intent.root_id === snapshot.board?.root_id && intent.task_id === task.task.task_id);
-  if (assignment) return assignment.state === "conflict" ? "Not assigned · task changed elsewhere" : "Assignment pending";
+  if (assignment) return assignment.state === "conflict" ? "Assignment request · task changed elsewhere" : "Assignment request pending";
+  if (ownership.pending && !task.task.checked) return "Unassigned · ownership pending";
   if (task.task.checked) {
     const outcome = run?.stage === "closed" && run.close_reason === "accepted" && task.lane === "accepted" ? outcomeView(run) : null;
     return outcome ? outcome.label === "Done" ? "Done" : `Done · ${outcome.label}` : "Marked complete in task file";
@@ -78,17 +102,17 @@ export function taskStatus(task: TaskView, run: Run | undefined, snapshot: Orche
   if (task.lane === "starting") return "Starting";
   if (!run && task.dependencies.state === "invalid") return "Queued · prerequisites need fixing";
   if (!run && task.dependencies.state === "blocked") return `Queued · waiting on ${task.dependencies.unmet.length} prerequisites`;
-  return run ? "Queued" : snapshot.messages.some(message => message.message_id === `assign-${task.task.task_id}` && message.to_run_id === snapshot.board?.root_id) ? "Assigned · waiting for agent" : "Queued · not assigned";
+  return run ? "Queued" : "Queued · unassigned";
 }
 export type StateBlockView = { sentence: string; tierLabel: "Decide" | "Recover" | "Notice" | null; waitingSince: string | null };
-export type PathRowView = { key: string; role: string; label: string; facts: string[]; current: boolean; depth: number; subagent: boolean; onActivate(): void };
+export type PathRowView = { key: string; role: string; label: string; facts: string[]; current: boolean; depth: number; onActivate(): void };
 export type CrossView = { label: "Show in Graph" | "Show in Tasks" | "Show in Dependencies"; onActivate(): void } | null;
 export function reportAge(report: Pick<Report, "at">): string {
   const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(report.at)) / 60_000));
   return minutes < 1 ? "just now" : minutes < 60 ? `${minutes}m ago` : minutes < 1440 ? `${Math.floor(minutes / 60)}h ago` : `${Math.floor(minutes / 1440)}d ago`;
 }
 export function observedStatus(run: Run, observed: RunObservation | undefined, snapshot: OrchestrationSnapshot, live: boolean): { word: string; glyph: GlyphShape } {
-  const raw = run.stage !== "closed" && live && snapshot.runtime.status === "fresh" ? observed?.presence === "present" ? observed.actual_omp ? observed.agent_status ?? "unknown" : "OMP not confirmed" : observed?.presence ?? "unobserved" : "unobserved";
+  const raw = run.stage !== "closed" && live && snapshot.runtime.status === "fresh" ? observed?.presence === "present" ? observed.actual_agent ? observed.agent_status ?? "unknown" : run.attachment?.conversation ? "Herdr cannot classify this harness" : "Agent not confirmed" : observed?.presence ?? "unobserved" : "unobserved";
   return { word: raw.replaceAll("_", " "), glyph: raw === "working" || raw === "idle" || raw === "blocked" || raw === "done" ? raw : "unknown" };
 }
 export function ProvenancePair({ run, report, observed, snapshot, live, compact = false }: {
@@ -108,11 +132,11 @@ export function ProvenancePair({ run, report, observed, snapshot, live, compact 
     {!compact ? <><ReportedEvidence report={report} source={run.label} showBody /><ObservedEvidence run={run} observed={observed} snapshot={snapshot} live={live} /></> : null}
   </div>;
 }
-export function ProgressTrail({ run, task }: { run: Run; task: TaskView | null; snapshot: OrchestrationSnapshot }) {
+export function ProgressTrail({ run, task, snapshot }: { run: Run; task: TaskView | null; snapshot: OrchestrationSnapshot }) {
   const accepted = run.close_reason === "accepted" && task?.task.checked && task.lane === "accepted";
   return <section className="supervisor-detail-group supervisor-trail" aria-label="Progress trail"><h3>Progress trail</h3><ol>
-    {task?.current_run_id === run.run_id ? <li>Assigned</li> : null}
-    {run.attachment?.main_session_id ? <li>Started</li> : null}
+    {task && taskAssignment(snapshot, task).owner?.run_id === run.run_id ? <li>Assigned</li> : null}
+    {run.attachment?.conversation ? <li>Registered conversation</li> : null}
     {run.result?.outcome === "succeeded" ? <li>Source complete</li> : run.result ? <li>Result reported · {run.result.outcome ?? "reported"}</li> : null}
     {accepted ? <li>Done</li> : null}
   </ol></section>;
@@ -152,7 +176,7 @@ function AnswerEvidence({ question, snapshot }: { question: QuestionStatus; snap
   const answer = question.receipt.answer;
   const sender = answer.sender.type === "operator" ? "You" : answer.sender.type === "dispatcher" ? "Dispatcher"
     : snapshot.runs.find(run => answer.sender.type === "run" && run.run_id === answer.sender.run_id)?.label ?? "Agent";
-  const stage = { stored: "stored", woken: "agent notified", read: "read by agent, not yet acknowledged", acked: "acknowledged" }[answer.stage];
+  const stage = { stored: "stored", read: "read by agent, not yet acknowledged", acked: "acknowledged" }[answer.stage];
   return <>
     <p className="supervisor-evidence"><span>Answered · {sender}</span><time dateTime={answer.created_at} title={new Date(answer.created_at).toLocaleString()}>{reportAge({ at: answer.created_at })}</time><span>· {stage}</span>{answer.stage === "acked" && answer.acked_at ? <time dateTime={answer.acked_at} title={new Date(answer.acked_at).toLocaleString()}>{reportAge({ at: answer.acked_at })}</time> : null}</p>
     {question.receipt.status === "answer_acknowledged" ? <p className="supervisor-muted">A receipt, not proof that work resumed.</p> : null}
@@ -208,7 +232,7 @@ export function AgentRecovery({ run, state, busy, connected, runtimeLive, onRest
   const recovery = ["failure", "missing", "unknown"].includes(state.kind);
   return <section className={`supervisor-agent-status is-${state.kind}`} aria-label={`${run.label} status`}>
     <div className="supervisor-status-heading"><strong>{run.label}</strong><span className="supervisor-state"><StateGlyph shape={state.blocked ? "blocked" : state.verified ? "live" : "unknown"} tone={recovery ? "warning" : state.kind === "offline" || state.kind === "closed" ? "muted" : undefined} />{state.label}</span></div>
-    {state.kind !== "ready" ? <p role={recovery ? "alert" : undefined}>{state.detail}</p> : null}
+    {state.kind !== "ready" || !state.verified ? <p role={recovery ? "alert" : undefined}>{state.detail}</p> : null}
     <div className="supervisor-action-row">
       {recoveryActions(run, state, flags).map(action => {
         const descriptionId = `${id}-${action.kind}`;
@@ -298,48 +322,115 @@ function RequestStop({ task, supervisor, scope, changed, busy, mutateResult, des
   };
   return <section>{confirm ? <><p>Ask the supervisor to stop this task? Existing files and Spaces stay.</p><button type="button" disabled={busy} aria-describedby={describedBy} onClick={() => void request()}>{draft.operation ? "Retry same stop request" : "Request stop"}</button><button type="button" disabled={busy} onClick={() => setConfirm(false)}>Keep working</button></> : <button type="button" disabled={busy} aria-describedby={describedBy} onClick={() => setConfirm(true)}>Request stop…</button>}{draft.notice ? <p>{draft.notice}</p> : null}{draft.error ? <p className="supervisor-error" role="alert">{draft.error}</p> : null}</section>;
 }
-export function SupervisorActions({ snapshot, run, task, subagent, section = "overview", stateBlock, path, crossView, crossViews = [], acceptanceConflict, scope, changed, busy, live, mutateResult, captureRequestScope, onNotice, steps, taskWriteUnconfirmed = false, onNavigateTask, onEditPrerequisites, onCreateFollowUp, onResumeSourceDraft, onTerminal, onEditTask, onCancelSubagent, onCloseTracking }: {
-  snapshot: OrchestrationSnapshot; run: Run | null; task: TaskView | null; subagent?: Subagent | null; section?: "overview" | "activity" | "actions";
+function RequestUnassign({ snapshot, task, supervisor, scope, changed, busy, mutateResult, captureRequestScope, onNotice }: {
+  snapshot: OrchestrationSnapshot; task: TaskView; supervisor: Run; scope: ScopeDrafts;
+  changed(): void; busy: boolean; mutateResult: Mutation; captureRequestScope?: CaptureRequestScope; onNotice?(text: string): void;
+}) {
+  const assignment = taskAssignment(snapshot, task);
+  const generation = assignment.ownership?.generation ?? 0;
+  const target = assignment.owner ?? assignment.pending;
+  const key = JSON.stringify(["unassign", supervisor.run_id, task.task.task_id, generation, assignment.owner ?? assignment.pending?.run_id]);
+  const draft = messageDraft(scope, key);
+  const [confirm, setConfirm] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const invoker = useRef<HTMLButtonElement>(null);
+  const preview = useRef<HTMLElement>(null);
+  const container = useRef<HTMLElement>(null);
+  const safe = useRef<HTMLButtonElement>(null);
+  const restoreFocus = () => (invoker.current && !invoker.current.disabled ? invoker.current : container.current?.closest("details")?.querySelector("summary"))?.focus();
+  const cancel = () => { setConfirm(null); restoreFocus(); };
+  useLayoutEffect(() => {
+    if (confirm && confirm !== key) {
+      const hadFocus = preview.current?.contains(document.activeElement);
+      setConfirm(null);
+      if (hadFocus) restoreFocus();
+    }
+  }, [confirm, key]);
+  const cancellation = !assignment.owner;
+  const label = cancellation ? "cancel pending assignment" : "unassign";
+  const reason = busy ? "A verified active owning supervisor and current connection are required to request unassign." : !target ? "No current assignment is available." : null;
+  const request = async () => {
+    if (reason || pending || confirm !== key || draft.operation || draft.notice) return;
+    const id = crypto.randomUUID();
+    const text = `Request ${label} for canonical task ${task.task.task_id} under supervisor ${supervisor.run_id}. Execute task unassign with operation-id ${id} and expected-assignment-generation ${generation} only if this exact assignment still matches: ${JSON.stringify(assignment.owner ?? { pending_run_id: assignment.pending!.run_id })}. Do not retarget a later assignment. Reports, history, files, Spaces and physical checkout protection stay; unassignment does not stop any process or release its checkout.`;
+    const action: OrchestrationAction = { action: "message_send", message_id: id, to_run_id: supervisor.run_id, kind: "instruction", text, in_reply_to: null };
+    const requestScope = captureRequestScope?.(action);
+    if (!requestScope) { draft.error = "Reconnect before sending. No ownership change confirmed."; changed(); return; }
+    draft.operation = { id, text, action, requestScope };
+    draft.error = null; setPending(true); changed();
+    try {
+      const result = await mutateResult(action, requestScope);
+      if (result?.result === "message" && result.to_run_id === supervisor.run_id) {
+        draft.notice = cancellation ? "Cancellation requested. Waiting for the supervisor." : "Unassign requested. Waiting for the supervisor.";
+        const hadFocus = preview.current?.contains(document.activeElement);
+        onNotice?.(draft.notice); setConfirm(null);
+        if (hadFocus) restoreFocus();
+      } else draft.error = `${cancellation ? "Cancellation" : "Unassign"} request not confirmed. Check its saved receipt before sending another request. No ownership change confirmed.`;
+    } catch { draft.error = "Request not confirmed. Check its saved receipt before sending another request. No ownership change confirmed."; }
+    finally { setPending(false); changed(); }
+  };
+  const previousRequests = [...scope.messages].filter(([savedKey, saved]) => savedKey.startsWith('["unassign",') && savedKey !== key && saved.operation?.action?.action === "message_send" && saved.operation.action.text.includes(`canonical task ${task.task.task_id} under supervisor ${supervisor.run_id}.`));
+  const reasonId = useId();
+  return <section ref={container}>
+    {previousRequests.length ? <><p>Assignment changed. The previous request does not apply to the current assignment. Review the current conversation before requesting unassign again.</p>{previousRequests.map(([savedKey, saved]) => <details key={savedKey}><summary>Previous assignment request · saved receipt</summary><p>{saved.error ?? saved.notice}</p><pre className="supervisor-plan">{JSON.stringify(saved.operation, null, 2)}</pre></details>)}</> : null}
+    {target && !task.task.checked ? <button ref={invoker} type="button" aria-describedby={reason ? reasonId : undefined} disabled={!!reason || pending || !!draft.operation || !!draft.notice} onClick={event => {
+      setConfirm(key);
+      if (event.detail === 0) queueMicrotask(() => safe.current?.focus());
+    }}>{cancellation ? "Request cancel pending assignment…" : "Request unassign…"}</button> : null}
+    {reason && target ? <p id={reasonId} className="supervisor-disabled-reason">{reason}</p> : null}
+    {confirm ? <section ref={preview} onKeyDown={event => { if (event.key === "Escape" && !pending) { event.stopPropagation(); cancel(); } }}>
+      <p>Ask the supervisor to {cancellation ? "cancel the pending assignment" : "unassign this conversation"} from “{task.task.title}”?</p>
+      <p className="supervisor-exact-text">{assignment.owner ? `${assignment.worker?.label ?? ""} · ${assignment.owner.conversation.harness} · ${assignment.owner.conversation.session_id}` : `${assignment.pending?.label} · ${assignment.pending?.launch_config.harness_kind}`}</p>
+      <p>Reports, history, files and Spaces stay. This does not stop the worker or release its checkout. {cancellation ? "No conversation has claimed this task. This revokes launch authorization." : "A later worker must claim the task itself."}</p>
+      <div className="supervisor-action-row"><button type="button" disabled={!!reason || pending || confirm !== key || !!draft.operation} onClick={() => void request()}>{pending ? `Sending ${cancellation ? "cancellation" : "unassign"} request…` : cancellation ? "Request cancellation" : "Request unassign"}</button><button type="button" ref={safe} disabled={pending} onClick={cancel}>{cancellation ? "Keep pending" : "Keep assigned"}</button></div>
+    </section> : null}
+    {draft.notice ? <p role="status">{draft.notice}</p> : null}
+    {draft.error ? <p className="supervisor-error" role="alert">{draft.error}</p> : null}
+    {draft.operation ? <details><summary>Saved request receipt</summary><pre className="supervisor-plan">{JSON.stringify(draft.operation, null, 2)}</pre></details> : null}
+  </section>;
+}
+export function SupervisorActions({ snapshot, run, task, section = "overview", stateBlock, path, crossView, crossViews = [], acceptanceConflict, scope, changed, busy, live, semanticLive = live, mutateResult, captureRequestScope, onNotice, steps, taskWriteUnconfirmed = false, onNavigateTask, onEditPrerequisites, onCreateFollowUp, onResumeSourceDraft, onTerminal, onEditTask, onCloseTracking }: {
+  snapshot: OrchestrationSnapshot; run: Run | null; task: TaskView | null; section?: "overview" | "activity" | "actions";
   stateBlock: StateBlockView; path: readonly PathRowView[]; crossView: CrossView; acceptanceConflict: boolean;
-  scope: ScopeDrafts; changed(): void; busy: boolean; live: boolean; mutateResult: Mutation;
+  scope: ScopeDrafts; changed(): void; busy: boolean; live: boolean; semanticLive?: boolean; mutateResult: Mutation;
   captureRequestScope?: CaptureRequestScope;
   onNotice?(text: string): void;
-  onTerminal(run: Run): void; onEditTask(task: TaskView): void; onCancelSubagent(run: Run, subagent: Subagent): void; onCloseTracking(run: Run): void;
+  onTerminal(run: Run): void; onEditTask(task: TaskView): void; onCloseTracking(run: Run): void;
   steps?: SupervisorStepsProps; taskWriteUnconfirmed?: boolean; crossViews?: Exclude<CrossView, null>[];
   onNavigateTask?(taskId: string): void; onEditPrerequisites?(task: TaskView): void; onCreateFollowUp?(task: TaskView): void;
   onResumeSourceDraft?(taskId: string, kind: "edit" | "relations" | "follow_up"): void;
 }) {
   const id = useId();
   const [operatorOpen, setOperatorOpen] = useState(false);
+  const assignment = task ? taskAssignment(snapshot, task) : null;
   const observed = snapshot.runtime.status === "fresh" && live && run ? snapshot.runtime.runs.find(item => item.run_id === run.run_id) : undefined;
   const canTerminal = run?.stage !== "closed" && observed?.presence === "present" && !!observed.pane_id;
-  const controls = !!run && run.stage !== "closed" && live;
   const supervisor = snapshot.runs.find(root => root.run_id === snapshot.board?.root_id && root.stage === "active");
-  const canRequestStop = supervisor && agentState(snapshot, supervisor, live, live).verified && task && !task.task.checked && (!run || run.stage !== "closed");
-  const childDraft = run && subagent ? messageDraft(scope, `subagent:${run.run_id}:${subagent.subagent_id}`) : null;
-  const unavailableReason = busy ? "Wait for the current operation." : !live ? "Check connection and current agent status first." : null;
-  const contentReason = taskContentReason(snapshot, task, live);
+  const canRequestStop = supervisor?.attachment?.conversation && task && !task.task.checked && (!run || run.stage !== "closed");
+  const unavailableReason = busy ? "Wait for the current operation." : !semanticLive ? "Reconnect before sending a durable request." : null;
+  const contentReason = taskContentReason(snapshot, task, semanticLive);
   const editReason = unavailableReason ?? (taskWriteUnconfirmed ? "A task change is unconfirmed. Read and resolve the original operation first." : contentReason ?? (!task?.task.description_editable ? task?.task.description_diagnostic ?? "The description cannot be safely edited." : null));
   const relationReason = unavailableReason ?? (taskWriteUnconfirmed ? "A task change is unconfirmed. Resolve it before changing prerequisites." : snapshot.runs.find(root => root.run_id === snapshot.board?.root_id)?.stage === "closed" ? "Tracking is closed; tasks cannot be changed." : task?.task.checked ? "Task is complete; prerequisites are read-only." : task?.task.diagnostic ? "Resolve the canonical task diagnostic before editing." : acceptanceConflict ? "Resolve the pending acceptance decision before changing prerequisites." : null);
   const createReason = unavailableReason ?? (snapshot.runs.find(root => root.run_id === snapshot.board?.root_id)?.stage === "closed" ? "Tracking is closed; tasks cannot be created." : null);
   const followupDraft = run ? messageDraft(scope, `followup:${run.run_id}`) : null;
   const workingFollowup = run?.kind === "worker" && run.stage === "working";
-  let followupReason = unavailableReason ?? (run?.stage === "closed" ? "Tracking is closed; follow-up is unavailable." : null);
+  let followupReason = unavailableReason ?? (run?.kind === "worker" && (assignment?.owner?.run_id !== run.run_id || assignment?.ownership?.generation !== run.assignment_generation) ? "Draft kept for previous assignment. This conversation no longer owns the task." : run?.stage === "closed" ? "Tracking is closed; follow-up is unavailable." : null);
   if (!followupReason && run && workingFollowup && !followupDraft?.operation) {
     if (!task || snapshot.board?.root_id !== run.root_id) followupReason = "The canonical task is unavailable.";
-    else if (task.current_run_id !== run.run_id || task.task.task_id !== run.task_id) followupReason = "This is not the task's current worker.";
+    else if (assignment?.owner?.run_id !== run.run_id || task.task.task_id !== run.task_id) followupReason = "This is not the task's current worker.";
     else if (taskWriteUnconfirmed || acceptanceConflict) followupReason = "Resolve the unconfirmed task change or acceptance decision first.";
     else if (task.task.checked) followupReason = "Task is complete; its scope is read-only.";
     else if (task.task.diagnostic) followupReason = task.task.diagnostic;
     else if (!task.task.description_editable) followupReason = task.task.description_diagnostic ?? "The description cannot be safely edited.";
   }
   const stopReason = unavailableReason ?? (!canRequestStop ? "A verified active supervisor is required to request stop." : null);
-  const acceptReason = unavailableReason ?? (!task ? "The canonical task is unavailable." : taskWriteUnconfirmed ? "Resolve the unconfirmed task change before acceptance." : task.dependencies.state === "blocked" || task.dependencies.state === "invalid" ? "Acceptance waits until every prerequisite is uniquely identified and checked in this task file. A Result alone does not satisfy it." : task.task.diagnostic ? "Resolve the canonical task diagnostic before acceptance." : task.current_run_id !== run?.run_id ? "This is not the task's current run." : run?.result?.kind !== "result" || run.result.outcome !== "succeeded" ? "Acceptance requires an explicit successful Result, not runtime Done." : null);
-  const childReason = unavailableReason ?? (!controls ? "Tracking is closed; subagent controls are unavailable." : subagent?.status !== "running" ? "Only a running subagent can receive controls." : null);
+  const acceptReason = unavailableReason ?? (!task ? "The canonical task is unavailable." : taskWriteUnconfirmed ? "Resolve the unconfirmed task change before acceptance." : task.dependencies.state === "blocked" || task.dependencies.state === "invalid" ? "Acceptance waits until every prerequisite is uniquely identified and checked in this task file. A Result alone does not satisfy it." : task.task.diagnostic ? "Resolve the canonical task diagnostic before acceptance." : assignment?.owner?.run_id !== run?.run_id ? "This is not the task's current run." : run?.result?.kind !== "result" || run.result.outcome !== "succeeded" ? "Acceptance requires an explicit successful Result, not runtime Done." : null);
   const forcedOperatorOpen = acceptanceConflict;
-  const cleanupSummary = run && !subagent ? cleanupForRun(snapshot, run.run_id) : undefined;
+  const cleanupSummary = run ? cleanupForRun(snapshot, run.run_id) : undefined;
   const cleanup = cleanupView(cleanupSummary);
-  const outcome = run && !subagent ? outcomeView(run) : null;
+  const outcome = run ? outcomeView(run) : null;
+  const previousAssignment = !!run && run.kind === "worker" && !!assignment && assignment.owner?.run_id !== run.run_id && run.close_reason !== "accepted";
+  const reviewReason = unavailableReason ?? (previousAssignment ? "Draft kept for previous assignment. This result cannot change the current owner." : null);
   const detailTier = cleanup?.tier === "notice" ? "Notice" : cleanup?.tier === "recover" ? "Recover" : stateBlock.tierLabel;
   const hasCleanup = !!run && (snapshot.cleanup?.some(summary => {
     if (!summary.items.length) return false;
@@ -351,44 +442,46 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
     }
     return false;
   }) || !!scope.messages.get(`cleanup:${run.root_id}:${run.run_id}`)?.operation);
-  const finishCleanup = run && !subagent && hasCleanup ? <CleanupFinishAction rootId={run.root_id} runId={run.run_id} scope={scope} changed={changed} busy={busy} live={live && snapshot.runtime.status === "fresh"} mutateResult={mutateResult} captureRequestScope={captureRequestScope} onNotice={onNotice} /> : null;
-  const question = run && !subagent ? questionForRun(snapshot, run) : null;
+  const finishCleanup = run && hasCleanup ? <CleanupFinishAction rootId={run.root_id} runId={run.run_id} scope={scope} changed={changed} busy={busy} live={live && snapshot.runtime.status === "fresh"} mutateResult={mutateResult} captureRequestScope={captureRequestScope} onNotice={onNotice} /> : null;
+  const question = run ? questionForRun(snapshot, run) : null;
   return <div className="supervisor-task-detail">
     <div className="supervisor-detail-section" hidden={section !== "overview"}>
-      {subagent && run ? <p>{subagent.role ?? "OMP subagent"} · In {run.label} · no terminal of its own</p> : null}
       <section className="supervisor-detail-group supervisor-state-block">
         <h3>State {detailTier ? <span className="supervisor-attention-badge">{detailTier}</span> : null}</h3>
         <p>{outcome ? `${run?.close_reason === "accepted" && outcome.label !== "Done" ? "Done · " : ""}${outcome.label}` : stateBlock.sentence}</p>
-        {task && run && !subagent && (task.dependencies.state === "blocked" || task.dependencies.state === "invalid") ? <p className="supervisor-muted">A prerequisite is still open or needs repair. This does not stop the running agent.</p> : null}
+        {assignment ? <>
+          {assignment.owner ? <><p>Assigned conversation · {assignment.worker?.label ?? assignment.owner.conversation.harness}</p><p className="supervisor-exact-text">{assignment.owner.conversation.harness} · {assignment.owner.conversation.session_id}</p></> : <><p>Unassigned{assignment.pending ? " · ownership pending" : ""}</p><p>{assignment.pending ? "Waiting for the launched worker to register its conversation and claim this task." : "No conversation is assigned. An eligible worker can claim this task."}</p></>}
+          {!semanticLive ? <p>Last known assignment · reconnect to check current ownership.</p> : null}
+          {assignment.unsafePrevious ? <p>Previous worker stop not proven. Its checkout remains protected until existing safety checks prove otherwise.</p> : null}
+          {assignment.previous.map(previous => <div key={previous.run_id}><p className="supervisor-exact-text">Previous assignment · {previous.label} · {previous.attachment?.conversation ? `${previous.attachment.conversation.harness} · ${previous.attachment.conversation.session_id}` : `${previous.launch_config.harness_kind} · conversation not registered`}</p>{previous.last_report ? <ReportedEvidence report={previous.last_report} source={`Previous assignment · ${previous.label} · ${previous.attachment?.conversation?.harness ?? previous.launch_config.harness_kind}`} showBody /> : null}</div>)}
+        </> : null}
+        {task && run && (task.dependencies.state === "blocked" || task.dependencies.state === "invalid") ? <p className="supervisor-muted">A prerequisite is still open or needs repair. This does not stop the running agent.</p> : null}
         {!outcome && stateBlock.waitingSince ? <p className="supervisor-muted">Since <time dateTime={stateBlock.waitingSince} title={new Date(stateBlock.waitingSince).toLocaleString()}>{reportAge({ at: stateBlock.waitingSince })}</time></p> : null}
         {question ? <AnswerEvidence question={question} snapshot={snapshot} /> : null}
-        {run ? subagent ? <>
-          <p>OMP events · {subagent.status} · <time dateTime={subagent.updated_at}>{new Date(subagent.updated_at).toLocaleString()}</time></p>
-          <p className="supervisor-exact-text">{subagent.summary ?? "No summary reported."}</p>
-        </> : <>
-          <ProvenancePair run={run} report={run.last_report} observed={observed} snapshot={snapshot} live={live} />
-          {run.stage === "closed" ? <ReportedEvidence report={run.last_report} source={run.label} showBody /> : null}
+        {run ? <>
+          {previousAssignment ? <ReportedEvidence report={run.last_report} source={`Previous assignment · ${run.label} · ${run.attachment?.conversation?.harness ?? run.launch_config.harness_kind}`} showBody /> : <ProvenancePair run={run} report={run.last_report} observed={observed} snapshot={snapshot} live={live} />}
+          {run.stage === "closed" && !previousAssignment ? <ReportedEvidence report={run.last_report} source={run.label} showBody /> : null}
         </> : <p>No worker progress reported yet.</p>}
       </section>
-      {outcome ? <section className="supervisor-detail-group" aria-label="Outcome"><h3>Outcome</h3><p>{outcome.label}</p><p>{outcome.detail}</p></section> : null}
-      {run && !subagent && (cleanupSummary || hasCleanup || run.close_reason === "accepted") ? <section className="supervisor-detail-group">
+      {outcome ? <section className="supervisor-detail-group" aria-label="Outcome"><h3>{previousAssignment ? "Previous assignment outcome" : "Outcome"}</h3><p>{outcome.label}</p><p>{previousAssignment ? "Retained historical result; not the current assignment's Result awaiting acceptance." : outcome.detail}</p></section> : null}
+      {run && (cleanupSummary || hasCleanup || run.close_reason === "accepted") ? <section className="supervisor-detail-group">
         <h3>Cleanup</h3>
         {cleanup ? <p role={cleanup.tier === "recover" ? "alert" : undefined}>{cleanup.label}</p> : <p>Cleanup not observed yet</p>}
         {cleanupSummary?.items.length ? <ul aria-label="Cleanup">{cleanupSummary.items.map(item => <li key={item.resource_id}>{cleanupResourceLabel(item)} · {cleanupItemView(item.cleanup)}</li>)}</ul> : null}
         {finishCleanup}
       </section> : null}
-      {task && !subagent && !run && (task.dependencies.state === "blocked" || task.dependencies.state === "invalid") && onNavigateTask && onEditPrerequisites ? <DependenciesSection view={task} tasks={snapshot.board?.tasks ?? []} snapshot={snapshot} onNavigate={onNavigateTask} onEdit={onEditPrerequisites} writable={!relationReason} /> : null}
-      {!subagent && steps ? <StepsSection {...steps} /> : null}
-      {run && !subagent && run.result ? <section className="supervisor-detail-group">
+      {task && !run && (task.dependencies.state === "blocked" || task.dependencies.state === "invalid") && onNavigateTask && onEditPrerequisites ? <DependenciesSection view={task} tasks={snapshot.board?.tasks ?? []} snapshot={snapshot} onNavigate={onNavigateTask} onEdit={onEditPrerequisites} writable={!relationReason} /> : null}
+      {steps ? <StepsSection {...steps} /> : null}
+      {run && run.result ? <section className="supervisor-detail-group">
         <h3>Result · {run.result.outcome ?? "reported"}</h3>
         <p className="supervisor-exact-text">{run.result.summary}</p>
-        <p>Explicit report from {run.label} · <time dateTime={run.result.at}>{new Date(run.result.at).toLocaleString()}</time>{run.close_reason === "accepted" ? " · Accepted" : " · Awaiting review"}</p>
+        <p>Explicit report from {run.label} · <time dateTime={run.result.at}>{new Date(run.result.at).toLocaleString()}</time>{run.close_reason === "accepted" ? " · Accepted" : assignment && assignment.owner?.run_id !== run.run_id ? " · Previous assignment" : " · Awaiting review"}</p>
       </section> : null}
-      {run && !subagent ? <ProgressTrail run={run} task={task} snapshot={snapshot} /> : null}
-      {task && !subagent && (run || task.dependencies.state !== "blocked" && task.dependencies.state !== "invalid") && onNavigateTask && onEditPrerequisites ? <DependenciesSection view={task} tasks={snapshot.board?.tasks ?? []} snapshot={snapshot} onNavigate={onNavigateTask} onEdit={onEditPrerequisites} writable={!relationReason} /> : null}
+      {run ? <ProgressTrail run={run} task={task} snapshot={snapshot} /> : null}
+      {task && (run || task.dependencies.state !== "blocked" && task.dependencies.state !== "invalid") && onNavigateTask && onEditPrerequisites ? <DependenciesSection view={task} tasks={snapshot.board?.tasks ?? []} snapshot={snapshot} onNavigate={onNavigateTask} onEdit={onEditPrerequisites} writable={!relationReason} /> : null}
       {path.length ? <section className="supervisor-detail-group supervisor-path" aria-label="Relationship path">
         <h3>Relationship path</h3>
-        <ol>{path.map(row => <li key={row.key} style={{ paddingInlineStart: `${row.depth * 16}px` }}><button type="button" className={`supervisor-path-row${row.subagent ? " is-subagent" : ""}`} aria-current={row.current ? "true" : undefined} onClick={row.onActivate}>
+        <ol>{path.map(row => <li key={row.key} style={{ paddingInlineStart: `${row.depth * 16}px` }}><button type="button" className="supervisor-path-row" aria-current={row.current ? "true" : undefined} onClick={row.onActivate}>
           <strong>{row.role} · {row.label}</strong>{row.facts.length ? <span>{row.facts.join(" · ")}</span> : null}
         </button></li>)}</ol>
       </section> : null}
@@ -398,9 +491,7 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
       {task ? <section className="supervisor-detail-group"><h3>Task description</h3><p className="supervisor-exact-text">{task.task.description}</p>{task.task.description_diagnostic ? <p className="supervisor-warning">{task.task.description_diagnostic}</p> : null}{task.task.diagnostic ? <p className="supervisor-error">{task.task.diagnostic}</p> : null}</section> : null}
     </div>
     <div className="supervisor-detail-section" hidden={section !== "activity"}>
-      {run ? subagent ? <section className="supervisor-detail-group">
-        {subagent.last_control ? <><h3>Last control · {subagent.last_control.op.op} · {subagent.last_control.stage}</h3><p>A stored request is not applied control. Applied delivery is not task completion.</p>{subagent.last_control.op.op === "send" ? <p className="supervisor-exact-text">{subagent.last_control.op.text}</p> : null}{subagent.last_control.error ? <p className="supervisor-error">{subagent.last_control.error}</p> : null}<time dateTime={subagent.last_control.at}>{new Date(subagent.last_control.at).toLocaleString()}</time></> : <><h3>Last control</h3><p>No control receipt.</p></>}
-      </section> : <>
+      {run ? <>
         {run.last_report?.plan ? <section className="supervisor-detail-group"><h3>Advisory plan</h3><p className="supervisor-exact-text">{run.last_report.plan}</p><p>Reported by {run.label}; not a permission gate.</p></section> : null}
         {run.last_report?.kind === "initialized" ? <section className="supervisor-detail-group"><h3>Initialized</h3><p className="supervisor-exact-text">{run.last_report.summary}</p><p>Reported by {run.label} · {run.last_report.at}</p></section> : null}
       </> : null}
@@ -408,13 +499,8 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
     <div className="supervisor-detail-section" hidden={section !== "actions"}>
       <section className="supervisor-detail-group supervisor-routine" aria-label="Routine">
         <h3>Routine</h3>
-        {run && canTerminal ? <button type="button" disabled={busy || !live} onClick={() => onTerminal(run)}>{subagent ? "Open parent terminal" : "Open terminal"}</button> : null}
+        {run && canTerminal ? <button type="button" disabled={busy || !live} onClick={() => onTerminal(run)}>Open terminal</button> : null}
         {finishCleanup}
-        {run && subagent && childDraft ? <>
-          <TextAction onNotice={onNotice} key={`subagent:${run.run_id}:${subagent.subagent_id}`} label="Message to subagent" submitLabel="Send message" draft={childDraft} changed={changed} busy={busy || !controls || subagent.status !== "running"} describedBy={childReason ? `${id}-child` : undefined} createAction={text => ({ action: "subagent_control", run_id: run.run_id, subagent_id: subagent.subagent_id, op: { op: "send", text } })} captureRequestScope={captureRequestScope} submit={(_text, _id, action, requestScope) => mutateResult(action!, requestScope)} success="Control request stored. Check its receipt for applied delivery." retryable={false} />
-          <button type="button" disabled={busy || !controls || subagent.status !== "running"} aria-describedby={childReason ? `${id}-child` : undefined} onClick={() => onCancelSubagent(run, subagent)}>Cancel subagent…</button>
-          {childReason ? <p className="supervisor-disabled-reason" id={`${id}-child`}>{childReason}</p> : null}
-        </> : <>
           {run ? <>
             <TextAction onNotice={onNotice} key={`followup:${run.run_id}`} label="Follow-up to agent" submitLabel="Send follow-up" draft={followupDraft!} changed={changed} busy={!!followupReason} describedBy={followupReason ? `${id}-followup` : undefined} createAction={(text, operation_id) => workingFollowup && task && snapshot.board ? { action: "task_scope_update", operation_id, root_id: run.root_id, task_id: task.task.task_id, run_id: run.run_id, expected_task_revision: task.task.task_revision, expected_doc_revision: snapshot.board.doc_revision, title: null, description: `${task.task.description}\n\n${text}` } : { action: "message_send", message_id: operation_id, to_run_id: run.run_id, kind: "instruction", text, in_reply_to: null }} captureRequestScope={captureRequestScope} submit={(_text, _id, action, requestScope) => mutateResult(action!, requestScope)} success={workingFollowup || followupDraft?.operation?.action?.action === "task_scope_update" ? "Update sent · task description updated" : "Follow-up sent. Waiting for the agent."} />
             {followupReason ? <p className="supervisor-disabled-reason" id={`${id}-followup`}>{followupReason}</p> : null}
@@ -433,31 +519,32 @@ export function SupervisorActions({ snapshot, run, task, subagent, section = "ov
             {scope.followUps.has(steps.scope.taskId) ? <button type="button" disabled={busy} onClick={() => onResumeSourceDraft(steps.scope.taskId, "follow_up")}>Review kept follow-up draft…</button> : null}
           </> : null}
           {task && !task.task.checked && (!run || run.stage !== "closed") ? <>
-            {supervisor ? <RequestStop key={JSON.stringify([supervisor.run_id, task.task.task_id])} task={task} supervisor={supervisor} scope={scope} changed={changed} busy={busy || !live || !canRequestStop} mutateResult={mutateResult} captureRequestScope={captureRequestScope} onNotice={onNotice} describedBy={stopReason ? `${id}-stop` : undefined} /> : <button type="button" disabled aria-describedby={`${id}-stop`}>Request stop…</button>}
+            {supervisor ? <RequestStop key={JSON.stringify([supervisor.run_id, task.task.task_id])} task={task} supervisor={supervisor} scope={scope} changed={changed} busy={busy || !semanticLive || !canRequestStop} mutateResult={mutateResult} captureRequestScope={captureRequestScope} onNotice={onNotice} describedBy={stopReason ? `${id}-stop` : undefined} /> : <button type="button" disabled aria-describedby={`${id}-stop`}>Request stop…</button>}
             {stopReason ? <p className="supervisor-disabled-reason" id={`${id}-stop`}>{stopReason}</p> : null}
           </> : null}
           {run ? <>
-            <TextAction onNotice={onNotice} key={`note:${run.run_id}`} label="Durable note" submitLabel="Save note" draft={messageDraft(scope, `note:${run.run_id}`)} changed={changed} busy={busy || !live} describedBy={unavailableReason ? `${id}-note` : undefined} createAction={text => ({ action: "annotate", run_id: run.run_id, text })} captureRequestScope={captureRequestScope} submit={(_text, _id, action, requestScope) => mutateResult(action!, requestScope)} success="Note saved." doneResult retryable={false} />
+            <TextAction onNotice={onNotice} key={`note:${run.run_id}`} label="Durable note" submitLabel="Save note" draft={messageDraft(scope, `note:${run.run_id}`)} changed={changed} busy={busy || !semanticLive} describedBy={unavailableReason ? `${id}-note` : undefined} createAction={text => ({ action: "annotate", run_id: run.run_id, text })} captureRequestScope={captureRequestScope} submit={(_text, _id, action, requestScope) => mutateResult(action!, requestScope)} success="Note saved." doneResult retryable={false} />
             {unavailableReason ? <p className="supervisor-disabled-reason" id={`${id}-note`}>{unavailableReason}</p> : null}
           </> : null}
-        </>}
       </section>
-      {run && !subagent ? <details className="supervisor-operator" open={operatorOpen || forcedOperatorOpen} onToggle={event => {
+      {run || task ? <details className="supervisor-operator" open={operatorOpen || forcedOperatorOpen} onToggle={event => {
         if (forcedOperatorOpen && !event.currentTarget.open) event.currentTarget.open = true;
         setOperatorOpen(event.currentTarget.open);
       }}>
         <summary>Advanced</summary>
-        {run.stage === "reported" ? <section className="supervisor-detail-group">
+        {task && supervisor && !task.task.checked && (assignment?.owner || assignment?.pending || [...scope.messages.keys()].some(key => key.startsWith('["unassign",'))) ? <RequestUnassign snapshot={snapshot} task={task} supervisor={supervisor} scope={scope} changed={changed} busy={busy || !semanticLive || !supervisor.attachment?.conversation || !!task.task.diagnostic} mutateResult={mutateResult} captureRequestScope={captureRequestScope} onNotice={onNotice} /> : null}
+        {task && !supervisor && !task.task.checked && (assignment?.owner || assignment?.pending) ? <><button type="button" disabled aria-describedby={`${id}-unassign`}>Request unassign…</button><p id={`${id}-unassign`} className="supervisor-disabled-reason">A verified active owning supervisor is required to request unassign.</p></> : null}
+        {run?.stage === "reported" ? <section className="supervisor-detail-group">
           <p>The supervisor normally reviews this result. Acceptance uses the exact current canonical task revision, not runtime Done.</p>
           <button type="button" disabled={!!acceptReason} aria-describedby={acceptReason ? `${id}-accept` : undefined} onClick={() => {
             if (!acceptReason && task && run.result?.outcome === "succeeded") void mutateResult({ action: "accept", run_id: run.run_id, expected_task_revision: task.task.task_revision });
           }}>Accept explicit result</button>
           {acceptReason ? <p className="supervisor-disabled-reason" id={`${id}-accept`}>{acceptReason}</p> : null}
-          <TextAction onNotice={onNotice} key={`sendback:${run.run_id}`} label="Requested changes" submitLabel="Send back" draft={messageDraft(scope, `sendback:${run.run_id}`)} changed={changed} busy={busy || !live} describedBy={unavailableReason ? `${id}-review` : undefined} createAction={text => ({ action: "send_back", run_id: run.run_id, text })} captureRequestScope={captureRequestScope} submit={(_text, _id, action, requestScope) => mutateResult(action!, requestScope)} success="Changes sent back." doneResult retryable={false} />
-          {unavailableReason ? <p className="supervisor-disabled-reason" id={`${id}-review`}>{unavailableReason}</p> : null}
+          <TextAction onNotice={onNotice} key={`sendback:${run.run_id}`} label="Requested changes" submitLabel="Send back" draft={messageDraft(scope, `sendback:${run.run_id}`)} changed={changed} busy={!!reviewReason} describedBy={reviewReason ? `${id}-review` : undefined} createAction={text => ({ action: "send_back", run_id: run.run_id, text })} captureRequestScope={captureRequestScope} submit={(_text, _id, action, requestScope) => mutateResult(action!, requestScope)} success="Changes sent back." doneResult retryable={false} />
+          {reviewReason ? <p className="supervisor-disabled-reason" id={`${id}-review`}>{reviewReason}</p> : null}
         </section> : null}
-        {run.stage !== "closed" ? <section className="supervisor-detail-group">
-          <button type="button" className="supervisor-quiet" disabled={busy || !live} aria-describedby={unavailableReason ? `${id}-close` : undefined} onClick={() => onCloseTracking(run)}>Close agent tracking…</button>
+        {run && run.stage !== "closed" ? <section className="supervisor-detail-group">
+          <button type="button" className="supervisor-quiet" disabled={busy || !semanticLive} aria-describedby={unavailableReason ? `${id}-close` : undefined} onClick={() => onCloseTracking(run)}>Close agent tracking…</button>
           {unavailableReason ? <p className="supervisor-disabled-reason" id={`${id}-close`}>{unavailableReason}</p> : null}
         </section> : null}
       </details> : null}

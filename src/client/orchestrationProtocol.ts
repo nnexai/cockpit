@@ -26,6 +26,7 @@ const epoch = (value: number | null) => value === null || (Number.isSafeInteger(
 const hash = (value: string) => /^[a-f0-9]{64}$/.test(value);
 const gitObject = (value: string) => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
 const nonemptyText = (max: number) => (value: string) => boundedText(max)(value) && value.trim().length > 0;
+const launchText = (value: string) => nonemptyText(4096)(value) && !/[\x00-\x1f\x7f]/.test(value);
 const relativePath = (value: string) => path(value) && value.length > 0 && !value.startsWith("/")
   && !value.split("/").some(part => part === "" || part === "." || part === "..");
 const sameStrings = (left: readonly string[], right: readonly string[]) =>
@@ -112,7 +113,7 @@ const POLICY = definePolicy({
     complete: new Set(["OrchestrationMutationRequest",
       "Run", "RunLocation", "NativeProcessIdentity", "NativeShellIdentity", "RetirementIdentity", "RunRetirement",
       "ProjectIdentity", "ProjectSource", "CheckoutIdentity", "DirectoryIdentity", "CheckoutGitIdentity",
-      "ExecutionAttachment", "ResumeRecord", "ResumeCause", "SupervisorStartResult", "RunResumeResult", "RunAttachResult",
+      "ExecutionAttachment", "ConversationIdentity", "TaskOwnership", "TaskOwner", "OrchestrationConfiguration", "ResumeRecord", "ResumeCause", "SupervisorStartResult", "RunResumeResult", "RunAttachResult",
       "WorkerStartResult", "TaskScopeUpdateResult",
       "Report", "SetupSummary", "AttachmentReference", "CheckOutcome", "IntegrationMapping", "IntegrationRecord", "IntegrationRecordResult",
       "SourceOutput[code]", "SourceOutput[non_code]", "Integration[pending]", "Integration[not_applicable]", "Integration[integrated]",
@@ -129,18 +130,17 @@ const POLICY = definePolicy({
       "OrchestrationActionResult[resource_registered]", "OrchestrationActionResult[cleanup_finished]",
       "ProjectRootLookupRequest", "ProjectRootLookupResponse", "ProjectRootCandidate",
       "OrchestrationAction[supervisor_start]", "OrchestrationAction[run_resume]", "OrchestrationAction[run_attach]",
-      "OrchestrationAction[worker_start]", "OrchestrationAction[task_scope_update]",
-      "OrchestrationAction[job_child_register]", "OrchestrationActionResult[supervisor_started]",
-      "OrchestrationActionResult[worker_started]", "OrchestrationActionResult[task_scope_updated]",
-      "OrchestrationActionResult[run_resumed]", "OrchestrationActionResult[run_attached]"]),
+      "OrchestrationAction[worker_start]", "OrchestrationAction[task_scope_update]", "OrchestrationAction[run_register]", "OrchestrationAction[task_unassign]",
+      "OrchestrationActionResult[supervisor_started]", "OrchestrationActionResult[worker_started]", "OrchestrationActionResult[task_scope_updated]",
+      "OrchestrationActionResult[run_resumed]", "OrchestrationActionResult[run_attached]", "OrchestrationActionResult[run_registered]", "OrchestrationActionResult[task_unassigned]"]),
     raw: new Set(["OrchestrationAction", "OrchestrationSnapshotRequest", "OrchestrationMutationRequest", "OrchestrationSnapshot",
       "OrchestrationMutationResponse", "OrchestrationWaitRequest", "OrchestrationWaitResponse", "ProjectRootLookupRequest", "ProjectRootLookupResponse"]),
     exact: new Set(["OrchestrationAction", "OrchestrationSnapshotRequest", "OrchestrationMutationRequest", "OrchestrationWaitRequest",
       "OrchestrationSnapshot", "OrchestrationMutationResponse", "OrchestrationActionResult", "OrchestrationWaitResponse",
-      "DispatchTarget", "WorkspaceSetupRequest", "SubagentOp", "NativeProcessIdentity", "NativeShellIdentity", "RetirementIdentity",
-      "RetirementState", "RunRetirement", "NativeStopReceipt", "AnswerReceipt", "QuestionReceipt", "QuestionStatus", "TaskAssignmentIntent",
+      "DispatchTarget", "WorkspaceSetupRequest", "NativeProcessIdentity", "NativeShellIdentity", "RetirementIdentity",
+      "RetirementState", "RunRetirement", "AnswerReceipt", "QuestionReceipt", "QuestionStatus", "TaskAssignmentIntent",
       "Run", "RunLocation", "ProjectIdentity", "ProjectSource", "CheckoutIdentity", "DirectoryIdentity", "CheckoutGitIdentity",
-      "ExecutionAttachment", "ResumeRecord", "ResumeCause", "SupervisorStartResult", "RunResumeResult", "RunAttachResult",
+      "ExecutionAttachment", "ConversationIdentity", "TaskOwnership", "TaskOwner", "OrchestrationConfiguration", "ResumeRecord", "ResumeCause", "SupervisorStartResult", "RunResumeResult", "RunAttachResult",
       "WorkerStartResult", "TaskScopeUpdateResult",
       "AttachmentReference", "CheckOutcome", "SourceOutput", "Integration", "IntegrationMapping", "IntegrationRecord", "IntegrationRecordResult",
       "ResourceSourceIdentity", "ResourceRequest", "ResourceRequestRecord", "ResourceRelease", "ResourceBuildRegistration",
@@ -150,7 +150,7 @@ const POLICY = definePolicy({
       "ProjectRootLookupRequest", "ProjectRootLookupResponse", "ProjectRootCandidate",
       "ErrorResponse", "RootSummary", "TaskBoard", "TaskView", "Task", "TaskStep", "TaskStepProgress", "TaskDependencies",
       "TaskDependencyBlocker", "SetupSummary", "DispatchState", "Annotation", "ActorRef", "Report",
-      "Message", "Subagent", "SubagentControlState", "TaskIntent", "RunObservation", "RuntimeObservation", "Attention", "UnmanagedAgent"]),
+      "Message", "TaskIntent", "RunObservation", "RuntimeObservation", "Attention", "UnmanagedAgent"]),
     order: {
       OrchestrationMutationRequest: ["session_id", "expected_revision", "action", "keys"],
       OrchestrationMutationResponse: ["revision", "result:shallow", "result", "keys"],
@@ -161,6 +161,8 @@ const POLICY = definePolicy({
       "SourceOutput[code].focused_checks": { max: 128 }, "SourceOutput[non_code].focused_checks": { max: 128 },
       "SourceOutput[non_code].artifacts": { max: 256 }, "Integration[integrated].checks": { max: 128 },
       "Integration[integrated].mappings": { max: 256 }, "IntegrationRecordResult.checks": { max: 128 },
+      "OrchestrationConfiguration.extra_args": { max: 16 }, "OrchestrationConfiguration.resume_args": { max: 16 },
+      "OrchestrationConfiguration.routes": { max: 256 },
     },
     fields: {
       ...refine(id, {
@@ -170,11 +172,11 @@ const POLICY = definePolicy({
         TaskDependencyBlocker: ["task_id"], TaskBoard: ["root_id"], TaskView: ["current_run_id"],
         SetupSummary: ["operation_id", "workspace_id", "repository_id", "project_workspace_id"],
         RunLocation: ["endpoint_identity", "workspace_id", "tab_id", "pane_id", "launch_tag", "boot_id", "terminal_id", "native_session_id"],
-        NativeProcessIdentity: ["kernel_boot_id"], RetirementIdentity: ["launch_tag", "endpoint_identity", "workspace_id", "tab_id", "pane_id", "terminal_id", "herdr_boot_id", "omp_session_id"],
+        NativeProcessIdentity: ["kernel_boot_id"], RetirementIdentity: ["launch_tag", "endpoint_identity", "workspace_id", "tab_id", "pane_id", "terminal_id", "herdr_boot_id"],
         RunRetirement: ["result_message_id"],
         Run: ["run_id", "root_id", "parent_run_id", "task_id"], DispatchState: ["launch_tag", "endpoint_identity"],
         ProjectIdentity: ["key", "machine_id", "repository_id", "source_workspace_id"], CheckoutIdentity: ["key", "machine_id"],
-        ExecutionAttachment: ["main_session_id", "machine_id"], ResumeRecord: ["run_id"], ResumeCause: ["code"],
+        ExecutionAttachment: ["machine_id"], ConversationIdentity: ["harness", "session_id"], TaskOwnership: ["root_id", "task_id"], TaskOwner: ["run_id"], "OrchestrationActionResult[run_registered]": ["run_id"], "OrchestrationActionResult[task_unassigned]": ["task_id", "previous_run_id"], ResumeRecord: ["run_id"], ResumeCause: ["code"],
         ProjectRootLookupRequest: ["workspace_id"], "ProjectRootLookupResponse[unavailable]": ["code"],
         SupervisorStartResult: ["root_id"], RunResumeResult: ["run_id"], RunAttachResult: ["run_id"],
         TaskScopeUpdateResult: ["instruction_message_id"],
@@ -183,18 +185,17 @@ const POLICY = definePolicy({
         "Integration[not_applicable]": ["result_message_id"],
         "Integration[integrated]": ["accepted_result_message_id", "target_repository_key", "integrator_run_id"],
         IntegrationRecord: ["run_id", "expected_result_message_id"], IntegrationRecordResult: ["run_id"],
-        ResourceRequest: ["resource_key"], ResourceRequestRecord: ["resource_key", "requester_child_id", "machine_id"],
+        ResourceRequest: ["resource_key"], ResourceRequestRecord: ["resource_key", "machine_id"],
         ResourceSourceIdentity: ["checkout_key"],
         OwnedSpaceIdentity: ["endpoint_identity", "workspace_id"],
         OwnedFilesystemIdentity: ["machine_id"], CleanupReason: ["code"],
         OwnedResourceRecord: ["root_id", "run_id", "creation_operation_id", "integration_result_id"],
         ResourceRegister: ["run_id"], CleanupFinish: ["root_id", "run_id"], RunCleanupSummary: ["run_id"],
         "OrchestrationAction[supervisor_start]": ["selected_root_id", "expected_project_key"],
-        "OrchestrationAction[run_resume]": ["run_id"], "OrchestrationAction[run_attach]": ["main_session_id"],
-        "OrchestrationAction[job_child_register]": ["child_id", "child_session_id", "parent_child_id"],
-        Message: ["message_id", "to_run_id", "in_reply_to", "escalated_from", "from_subagent_id", "woken_omp_session"],
-        AnswerReceipt: ["message_id"], QuestionStatus: ["run_id", "question_message_id"], Subagent: ["run_id", "subagent_id", "parent_subagent_id", "bound_omp_session"],
-        TaskIntent: ["intent_id", "root_id", "task_id", "run_id", "supervisor_run_id", "omp_session_id", "result_message_id"], TaskAssignmentIntent: ["root_id"],
+        "OrchestrationAction[run_resume]": ["run_id"], "OrchestrationAction[task_unassign]": ["root_id", "task_id"],
+        Message: ["message_id", "to_run_id", "in_reply_to", "escalated_from"],
+        AnswerReceipt: ["message_id"], QuestionStatus: ["run_id", "question_message_id"],
+        TaskIntent: ["intent_id", "root_id", "task_id", "run_id", "supervisor_run_id", "result_message_id"], TaskAssignmentIntent: ["root_id"],
         RunObservation: ["run_id", "workspace_id", "pane_id", "tab_id"], "RuntimeObservation[fresh]": ["endpoint_identity"], Attention: ["run_id", "task_id"],
         RootSummary: ["root_id"], UnmanagedAgent: ["workspace_id", "tab_id", "pane_id"], OrchestrationSnapshotRequest: ["root_id"],
         "OrchestrationAction[task_create]": ["root_id"], "OrchestrationAction[task_assign]": ["root_id"], "OrchestrationAction[task_assignment_resolve]": ["root_id"],
@@ -204,24 +205,23 @@ const POLICY = definePolicy({
         "OrchestrationAction[tasks_assign_ids]": ["root_id"],
         "OrchestrationAction[accept]": ["run_id"], "OrchestrationAction[send_back]": ["run_id"], "OrchestrationAction[cancel_run]": ["run_id"],
         "OrchestrationAction[reconcile_run]": ["run_id"], "OrchestrationAction[intent_resolve]": ["intent_id"], "OrchestrationAction[report]": ["message_id", "to_run_id"],
-        "OrchestrationAction[message_send]": ["message_id", "to_run_id", "in_reply_to"], "OrchestrationAction[annotate]": ["run_id"], "OrchestrationAction[inbox_woken]": ["omp_session_id"],
-        "OrchestrationAction[subagent_update]": ["subagent_id", "parent_subagent_id"], "OrchestrationAction[subagent_control]": ["run_id", "subagent_id"],
+        "OrchestrationAction[message_send]": ["message_id", "to_run_id", "in_reply_to"], "OrchestrationAction[annotate]": ["run_id"],
         "OrchestrationActionResult[run]": ["run_id"], "OrchestrationActionResult[task_assigned]": ["to_run_id"], "OrchestrationActionResult[message]": ["to_run_id"],
       }),
       ...refine(text, {
         ErrorResponse: ["message"], ResumeCause: ["message"], "ProjectRootLookupResponse[unavailable]": ["message"],
         Report: ["summary", "plan"], Run: ["brief"], Annotation: ["text"], Message: ["text"],
-        "SubagentOp[send]": ["text"], Subagent: ["summary"], SubagentControlState: ["error"], "RetirementState[unknown]": ["detail"],
+        "RetirementState[unknown]": ["detail"],
         "OrchestrationAction[task_create]": ["description"], "OrchestrationAction[task_assign]": ["description"], "OrchestrationAction[task_update]": ["description"],
         "OrchestrationAction[worker_start]": ["brief"], "OrchestrationAction[task_scope_update]": ["description"], "OrchestrationAction[send_back]": ["text"],
-        "OrchestrationAction[report]": ["summary", "plan"], "OrchestrationAction[message_send]": ["text"], "OrchestrationAction[annotate]": ["text"], "OrchestrationAction[subagent_update]": ["summary"], "OrchestrationAction[subagent_control_done]": ["error"],
+        "OrchestrationAction[report]": ["summary", "plan"], "OrchestrationAction[message_send]": ["text"], "OrchestrationAction[annotate]": ["text"],
         CheckOutcome: ["evidence"], IntegrationMapping: ["explanation"], ResourceRequestRecord: ["blocked_reason"],
         CleanupReason: ["message"], CleanupEffectReceipt: ["evidence"],
       }),
       ...refine(label, {
-        Run: ["label"], Subagent: ["role", "label"], RootSummary: ["label"], "OrchestrationAction[task_create]": ["title"], "OrchestrationAction[task_assign]": ["title"],
+        Run: ["label"], RootSummary: ["label"], "OrchestrationAction[task_create]": ["title"], "OrchestrationAction[task_assign]": ["title"],
         "OrchestrationAction[task_update]": ["title"], "OrchestrationAction[supervisor_start]": ["label"], "OrchestrationAction[run_adopt]": ["label"],
-        "OrchestrationAction[worker_start]": ["label"], "OrchestrationAction[task_scope_update]": ["title"], "OrchestrationAction[subagent_update]": ["role", "label"],
+        "OrchestrationAction[worker_start]": ["label"], "OrchestrationAction[task_scope_update]": ["title"],
       }),
       ...refine(path, { TaskBoard: ["path"], SetupSummary: ["checkout_path", "branch", "base"], "DispatchTarget[space_worktree]": ["branch", "base_ref"] }),
       ...refine(absolutePath, {
@@ -265,7 +265,7 @@ const POLICY = definePolicy({
       ...refine(uuid, {
         RunRetirement: ["retirement_id"], TaskAssignmentIntent: ["task_id"], "OrchestrationAction[task_create]": ["task_id", "follow_up_of"], "OrchestrationAction[task_assign]": ["task_id"], "OrchestrationAction[task_assignment_resolve]": ["task_id"],
         "OrchestrationAction[task_step_add]": ["step_id", "parent_step_id", "before_step_id"], "OrchestrationAction[task_step_rename]": ["step_id"], "OrchestrationAction[task_step_set_checked]": ["step_id"],
-        "OrchestrationAction[task_step_move]": ["step_id", "parent_step_id", "before_step_id"], "OrchestrationAction[task_step_remove]": ["step_id"], "OrchestrationAction[retirement_native_receipt]": ["retirement_id"],
+        "OrchestrationAction[task_step_move]": ["step_id", "parent_step_id", "before_step_id"], "OrchestrationAction[task_step_remove]": ["step_id"],
         Run: ["checkout_claim_id"], ExecutionAttachment: ["attachment_id"], ResumeRecord: ["operation_id", "decision_id"],
         SupervisorStartResult: ["operation_id", "resume_operation_id"],
         WorkerStartResult: ["operation_id", "run_id"], TaskScopeUpdateResult: ["operation_id"],
@@ -282,16 +282,15 @@ const POLICY = definePolicy({
         ProjectRootLookupRequest: ["selected_root_id"], ProjectRootCandidate: ["root_id"],
         "ProjectRootLookupResponse[resolved]": ["preferred_root_id"],
         "OrchestrationAction[supervisor_start]": ["operation_id"], "OrchestrationAction[run_resume]": ["operation_id", "decision_id"],
-        "OrchestrationAction[run_attach]": ["operation_id", "attachment_id"], "OrchestrationAction[job_child_register]": ["operation_id"],
+        "OrchestrationAction[run_attach]": ["operation_id", "attachment_id"], "OrchestrationAction[run_register]": ["operation_id"], "OrchestrationAction[task_unassign]": ["operation_id"], TaskOwner: ["claim_operation_id"],
         "OrchestrationAction[worker_start]": ["operation_id", "root_id", "task_id"],
         "OrchestrationAction[task_scope_update]": ["operation_id", "root_id", "task_id", "run_id"],
       }),
       ...refine(timestamp, {
-        Report: ["at"], RunRetirement: ["created_at", "updated_at", "quiescent_stop_at"],
+        Report: ["at"], RunRetirement: ["created_at", "updated_at"],
         Run: ["created_at", "updated_at"], DispatchState: ["updated_at"], Annotation: ["at"],
-        Message: ["created_at", "acked_at"], AnswerReceipt: ["created_at", "acked_at"], QuestionStatus: ["asked_at"], Subagent: ["updated_at"], SubagentControlState: ["at"],
+        Message: ["created_at", "acked_at"], AnswerReceipt: ["created_at", "acked_at"], QuestionStatus: ["asked_at"],
         RunObservation: ["state_changed_at"], "RuntimeObservation[fresh]": ["observed_at"], Attention: ["since"], UnmanagedAgent: ["state_changed_at"],
-        "RetirementState[native_stop_offered]": ["offered_at"], "RetirementState[native_stop_deferred]": ["offered_at", "at"], "RetirementState[native_stop_requested]": ["at"], "RetirementState[native_stopped]": ["at"],
         "RetirementState[close_intent]": ["at"], "RetirementState[retired]": ["at"], "RetirementState[retained]": ["at"], "RetirementState[unknown]": ["at"],
         ExecutionAttachment: ["updated_at"], ResumeRecord: ["updated_at"], ProjectRootCandidate: ["updated_at"],
         "Integration[integrated]": ["verified_at"], ResourceRequestRecord: ["updated_at"],
@@ -304,6 +303,10 @@ const POLICY = definePolicy({
       "ExecutionAttachment.epoch": epoch,
       "RetirementIdentity.attachment_epoch": epoch,
       "ResumeRecord.previous_attachment_epoch": epoch, "ResumeRecord.replacement_attachment_epoch": epoch,
+      "OrchestrationConfiguration.harness_kind": launchText,
+      "OrchestrationConfiguration.command": value => launchText(value) && !value.startsWith("-"),
+      "OrchestrationConfiguration.extra_args": values => values.every(launchText),
+      "OrchestrationConfiguration.resume_args": values => values === null || values.every(launchText),
       "OrchestrationAction[run_resume].expected_attachment_epoch": epoch, "OrchestrationAction[run_attach].expected_attachment_epoch": epoch,
       "WorkerStartResult.attempt": value => value > 0,
       "AttachmentReference.attachment_epoch": value => epoch(value),
@@ -316,7 +319,6 @@ const POLICY = definePolicy({
       "Task.depends_on": values => values.every(id), "SetupSummary.effects": values => values.every(text), "SetupSummary.warnings": values => values.every(text),
       "OrchestrationAction[task_create].depends_on": values => values.every(uuid), "OrchestrationAction[task_dependencies_set].depends_on": values => values.every(uuid),
       "OrchestrationAction[inbox_pull].limit": value => value <= 100, "OrchestrationWaitRequest.timeout_ms": value => value <= 30_000,
-      "NativeStopReceipt[refused].text": boundedText(1024),
       "DispatchTarget[setup].request": value => {
         try {
           const request = parseWorkspaceSetupRequest(value);
@@ -329,6 +331,9 @@ const POLICY = definePolicy({
     },
     checks: {
       TaskStepProgress: { progress: value => value.done <= value.total },
+      OrchestrationConfiguration: { resume_args: value => value.resume_args === null
+        || (value.resume_args.filter(arg => arg === "{session_id}").length === 1
+          && value.resume_args.every(arg => !arg.includes("{session_id}") || arg === "{session_id}")) },
       Run: {
         resume_identity: value => value.resume === null || value.resume.run_id === value.run_id,
         output_identity: value => value.source_output === null ? value.result?.source_output == null
@@ -403,11 +408,11 @@ const POLICY = definePolicy({
       "QuestionReceipt[answer_delivered]": { stage: value => value.answer.stage !== "acked" }, "QuestionReceipt[answer_acknowledged]": { stage: value => value.answer.stage === "acked" },
       TaskIntent: {
         provenance: value => value.origin === "supervisor"
-          ? value.supervisor_run_id !== null && value.omp_session_id !== null
-          : value.supervisor_run_id === null && value.omp_session_id === null,
+          ? value.supervisor_run_id !== null && value.conversation !== null
+          : value.supervisor_run_id === null && value.conversation === null,
         root: value => value.origin !== "supervisor" || value.supervisor_run_id === value.root_id,
       },
-      RunObservation: { presence: value => !value.actual_omp || value.presence === "present" },
+      RunObservation: { presence: value => !value.actual_agent || value.presence === "present" },
       "OrchestrationAction[task_assignment_resolve]": { assignment_revision: value => !value.assign || value.expected_task_revision !== null },
       "OrchestrationAction[task_scope_update]": { scope: value => value.title !== null || value.description !== null },
       "OrchestrationAction[message_send]": { answer_correlation: value => value.kind === "answer" ? value.in_reply_to !== null : value.in_reply_to === null },

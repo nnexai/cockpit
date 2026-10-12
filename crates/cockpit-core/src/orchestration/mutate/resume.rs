@@ -12,10 +12,9 @@ pub(in crate::orchestration) fn principal_key(ctx: &MutationCtx<'_>) -> Result<S
     let Actor::Agent(agent) = ctx.actor else { return Ok("operator".into()) };
     let credential = ctx.state.credentials.iter().find(|c| c.credential_id == agent.auth.credential_id)
         .ok_or_else(|| error("job_auth_invalid", "Authenticated operation principal is missing"))?;
-    // Stable job incarnation and subject, never an ephemeral conversation or
-    // credential locator. Distinct local children cannot share a receipt/grant.
+    // Stable capability incarnation plus pinned assignment; session does not confer authority.
     let bytes = serde_json::to_vec(&(&credential.run_id, &credential.attachment_id,
-        credential.attachment_epoch, credential.role, &credential.subject_child_id))
+        credential.attachment_epoch, credential.role, credential.assignment_generation))
         .map_err(|_| error("orchestration_state_invalid", "Cannot encode operation principal"))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
@@ -50,6 +49,8 @@ pub(in crate::orchestration) fn replay(ctx: &MutationCtx<'_>, operation_id: &str
         OrchestrationActionResult::TaskScopeUpdated { update } => update.duplicate = true,
         OrchestrationActionResult::RunResumed { resume } => resume.duplicate = true,
         OrchestrationActionResult::RunAttached { attach } => attach.duplicate = true,
+        OrchestrationActionResult::RunRegistered { duplicate, .. }
+        | OrchestrationActionResult::TaskUnassigned { duplicate, .. } => *duplicate = true,
         OrchestrationActionResult::IntegrationRecorded { receipt } => receipt.duplicate = true,
         OrchestrationActionResult::Resource { request, duplicate } => {
             *request = ctx.state.resource_requests.iter().find(|r| r.request_id == request.request_id)
@@ -110,13 +111,12 @@ fn resume_target(ctx: &MutationCtx<'_>, run_id: &str) -> Result<usize, Inspectio
     match ctx.actor {
         Actor::Operator(_) => {}
         Actor::Agent(agent) => {
-            let job = credentials::validate_job_auth(ctx.state, &agent.auth)?;
-            if job.role == JobRole::Child || (job.run_index != index && (job.role != JobRole::Root
-                || !is_ancestor(ctx.state, &ctx.state.runs[job.run_index].run_id, run_id))) {
+            let job = credentials::validate_caller(ctx.state, agent)?;
+            if job.run_index != index && (job.role != JobRole::Root
+                || !is_ancestor(ctx.state, &ctx.state.runs[job.run_index].run_id, run_id)) {
                 return Err(error("actor_forbidden", "Only this job or its root may request resume"));
             }
         }
-        Actor::Bootstrap(_) => return Err(error("actor_forbidden", "Bootstrap cannot resume a job")),
     }
     Ok(index)
 }
@@ -211,7 +211,7 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         }
         if observed.attachment_id != current.attachment_id || observed.epoch != current.epoch
             || observed.process != current.process || observed.shell != current.shell
-            || observed.main_session_id != current.main_session_id || observed.launch_attempt != current.launch_attempt
+            || observed.conversation != current.conversation || observed.launch_attempt != current.launch_attempt
             || observed.launch_mode != current.launch_mode
             || current.machine_id.as_ref().is_some_and(|m| observed.machine_id.as_ref() != Some(m))
             || observed.machine_id.is_none() || observed.process.is_none()
@@ -244,8 +244,8 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         }
         if !has_current_binding(state, &state.runs[index]) {
             state.runs[index].attachment.as_mut().expect("observed attachment").state = AttachmentState::Disconnected;
-            return block(state, index, "current_extension_unavailable",
-                "The live incarnation is preserved, but no current-epoch credential-authenticated attachment proves a compatible loaded extension", false);
+            return block(state, index, "run_unregistered",
+                "The live incarnation is preserved but its current capability has no matching registered conversation", false);
         }
         let resume = state.runs[index].resume.as_mut().expect("matched resume");
         resume.phase = if resume.replacement_attachment_epoch == Some(observed.epoch) {
@@ -275,11 +275,15 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
             return block(state, index, "resume_effect_unknown", "Unsettled setup must be reconciled before replacement", false);
         }
         let current = state.runs[index].attachment.as_ref().ok_or_else(|| error("writer_exit_unproven", "No recorded incarnation to replace"))?;
+        if current.conversation.is_some() && state.runs[index].launch_config.resume_args.is_none() {
+            return block(state, index, "harness_resume_unsupported", "The configured harness has no same-conversation resume arguments; the existing attachment is preserved", false);
+        }
         let receipts = effects(&state.runs[index]);
         let epoch = current.epoch.checked_add(1).filter(|n| *n <= MAX_SAFE_COUNTER).ok_or_else(|| error("orchestration_state_full", "Attachment epoch exhausted"))?;
         let launch_attempt = state.runs[index].dispatch.as_ref().map(|d| d.launch_attempt).unwrap_or(current.launch_attempt).checked_add(1)
             .ok_or_else(|| error("orchestration_state_full", "Launch attempt exhausted"))?;
-        let replacement = reserved_attachment(epoch, launch_attempt);
+        let mut replacement = reserved_attachment(epoch, launch_attempt);
+        replacement.conversation = current.conversation.clone();
         if state.runs[index].kind == RunKind::Worker {
             let claim_id = state.runs[index].checkout_claim_id.clone().ok_or_else(|| error("writer_exit_unproven", "Worker checkout is not reconciled"))?;
             claims::revoke_and_reserve_replacement(state, &claim_id, writer_proof.expect("worker proof validated"), replacement, operation_id)?;
@@ -318,7 +322,7 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
     }
     if mode == ResumeMode::ReplaceExisting {
         return block(state, index, "same_boot_replacement_unsupported",
-            "This OMP runtime cannot prove all same-boot checkout consumers stopped; the current attachment and claim are preserved", true);
+            "This harness cannot prove all same-boot checkout consumers stopped; the current attachment and claim are preserved", true);
     }
     if let Some(cause) = resolved.and_then(|r| r.observation_cause.as_ref()) {
         let decision = cause.class == ResumeCauseClass::Decision;
@@ -339,177 +343,44 @@ fn block(state: &mut OrchestrationState, index: usize, code: &str, message: &str
 }
 
 pub(super) fn attach(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
-    let OrchestrationAction::RunAttach { operation_id, attachment_id, expected_attachment_epoch, main_session_id } = &action else { unreachable!() };
-    let Actor::Agent(agent) = ctx.actor else { return Err(error("actor_forbidden", "Attachment registration requires a job credential")) };
-    let job = credentials::validate_job_auth(ctx.state, &agent.auth)?;
-    if job.role == JobRole::Child { return Err(error("report_requires_main", "A child cannot attach its parent job")) }
+    operator(ctx.actor)?;
+    let OrchestrationAction::RunAttach { operation_id, attachment_id, expected_attachment_epoch, conversation } = &action else { unreachable!() };
     if let Some(result) = replay(ctx, operation_id, DurableOperationKind::RunAttach, &action)? { return Ok(Applied::Document(result)); }
-    validate_identity(main_session_id)?;
-    if job.attachment_id != *attachment_id || job.attachment_epoch != *expected_attachment_epoch {
-        return Err(error("attachment_conflict", "Attachment registration does not match the current job epoch"));
+    let index = ctx.state.runs.iter().position(|run| run.session_id == ctx.session_id
+        && run.attachment.as_ref().is_some_and(|a| a.attachment_id == *attachment_id && a.epoch == *expected_attachment_epoch))
+        .ok_or_else(|| error("attachment_conflict", "Physical attachment epoch changed"))?;
+    let run = &ctx.state.runs[index];
+    let current = run.attachment.as_ref().expect("selected attachment");
+    let observed = ctx.resolved.and_then(|r| r.attachment_observation.as_ref())
+        .ok_or_else(|| error("attachment_observation_unavailable", "Physical attach requires fresh exact evidence"))?;
+    if current.conversation.as_ref() != Some(conversation)
+        || observed.conversation != current.conversation || observed.attachment_id != current.attachment_id
+        || observed.epoch != current.epoch || observed.process != current.process
+        || observed.shell != current.shell || observed.machine_id != current.machine_id
+        || observed.launch_mode != current.launch_mode || observed.launch_attempt != current.launch_attempt
+        || observed.state != AttachmentState::Connected || run.stage == RunStage::Closed {
+        return Err(error("attachment_conflict", "Physical observation differs from the registered incarnation"));
     }
-    let run = &ctx.state.runs[job.run_index];
-    if dispatch::recovery_incarnation_revoked(run) { return Err(error("attempt_stale", "This launch was revoked")); }
-    let current = run.attachment.as_ref().expect("authorized attachment");
-    let observed = ctx.resolved.and_then(|r| r.attachment_observation.as_ref());
-    let process = observed.and_then(|a| a.process.as_ref()).or(agent.process.as_ref());
-    if agent.agent_kind != Some(AgentKind::Main) || agent.subagent_id.is_some()
-        || agent.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp)
-        || agent.omp_session_id.as_deref() != Some(main_session_id.as_str()) || process.is_none()
-        || current.process.as_ref().is_some_and(|p| process != Some(p))
-        || observed.is_some_and(|a| a.attachment_id != *attachment_id || a.epoch != *expected_attachment_epoch
-            || a.shell != current.shell || a.machine_id != current.machine_id
-            || a.launch_mode != current.launch_mode) {
-        return Err(error("attachment_conflict", "A different or unobserved process requires owner Resume proof"));
-    }
-    let process = process.cloned();
-    let run_id = run.run_id.clone();
     let root_id = run.root_id.clone();
-    let attachment = ctx.state.runs[job.run_index].attachment.as_mut().expect("authorized attachment");
-    if let Some(observed) = observed { attachment.location = observed.location.clone(); }
-    attachment.process = process;
-    if attachment.machine_id.is_none() {
-        attachment.machine_id = attachment.process.as_ref().and_then(crate::process_identity::verified_machine_id);
-    }
-    attachment.main_session_id = Some(main_session_id.clone());
-    attachment.updated_at = now();
-    // Dispatch launch acknowledgement alone must not become connected/Working.
-    if ctx.state.runs[job.run_index].dispatch.as_ref().is_some_and(|d| d.agent_started && d.step == DispatchStep::Launched)
-        || ctx.state.runs[job.run_index].kind == RunKind::Adopted {
-        ctx.state.runs[job.run_index].attachment.as_mut().expect("attachment").state = AttachmentState::Connected;
-    } else {
-        ctx.state.runs[job.run_index].attachment.as_mut().expect("attachment").state = AttachmentState::Connecting;
-    }
-    if let Some(claim_id) = &job.checkout_claim_id {
-        let claim = ctx.state.checkout_claims.iter().find(|c| &c.claim_id == claim_id).expect("authorized claim");
-        let revision = claim.revision;
-        let holder = claims::AttachmentReference { run_id: run_id.clone(), attachment_id: attachment_id.clone(), attachment_epoch: *expected_attachment_epoch };
-        claims::hold_claim(ctx.state, claim_id, &holder, revision)?;
-    }
-    let result = OrchestrationActionResult::RunAttached { attach: RunAttachResult { run_id, attachment: ctx.state.runs[job.run_index].attachment.clone().expect("attachment"), duplicate: false } };
+    let run_id = run.run_id.clone();
+    ctx.state.runs[index].attachment = Some(observed.clone());
+    let result = OrchestrationActionResult::RunAttached { attach: RunAttachResult {
+        run_id, attachment: observed.clone(), duplicate: false,
+    }};
     record(ctx, operation_id.clone(), DurableOperationKind::RunAttach, &action, root_id, result.clone(), Vec::new())?;
-    let run = &mut ctx.state.runs[job.run_index];
-    let initial = run.attachment.as_ref().is_some_and(|attachment| attachment.state == AttachmentState::Connected)
-        && matches!(run.stage, RunStage::Starting | RunStage::Queued);
-    if initial {
-        run.stage = if run.kind == RunKind::Worker { RunStage::Working } else { RunStage::Active };
-    }
-    // The private binding resolves only the missing-bridge diagnostic, not
-    // arbitrary setup, launch or physical-owner failures.
-    let binding_recovered = run.attachment.as_ref().is_some_and(|attachment| attachment.state == AttachmentState::Connected)
-        && run.dispatch.as_ref().is_some_and(|dispatch| dispatch.step == DispatchStep::Launched && dispatch.agent_started
-            && dispatch.error.as_ref().is_some_and(|error| matches!(error.code.as_str(),
-                "current_extension_unavailable" | "omp_bridge_unbound")));
-    if binding_recovered {
-        let dispatch = run.dispatch.as_mut().expect("proven launch binding");
-        dispatch.error = None;
-        dispatch.updated_at = now();
-        run.updated_at = dispatch.updated_at.clone();
-    }
-    if run.attachment.as_ref().is_some_and(|a| a.state == AttachmentState::Connected)
-        && run.resume.as_ref().is_some_and(|r| r.phase == ResumePhase::Blocked
-            && r.cause.as_ref().is_some_and(|c| c.code == "current_extension_unavailable")) {
-        let resume = run.resume.as_mut().expect("matched blocked binding");
-        resume.phase = if resume.replacement_attachment_epoch == Some(*expected_attachment_epoch) {
-            ResumePhase::Connected
-        } else {
-            ResumePhase::Reattached
-        };
-        resume.cause = None;
-        resume.updated_at = now();
-    }
-    if initial {
-        let kind = if run.kind == RunKind::Worker { MessageKind::WorkBrief } else { MessageKind::SupervisorBrief };
-        if run.parent_run_id.is_none() && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted) {
-            run.brief = supervisor_guidance().into();
-        }
-        let text = run.brief.clone();
-        let run_id = run.run_id.clone();
-        let phase = format!("launch-{}-{}", run.attempt,
-            run.dispatch.as_ref().map(|dispatch| dispatch.launch_attempt).unwrap_or(0));
-        brief(ctx.state, &run_id, kind, &text, &phase)?;
-    }
-    if initial || binding_recovered {
-        escalation::recovered(ctx.state, job.run_index)?;
-    }
-    Ok(Applied::Machine(result))
-}
-
-pub(super) fn register_child(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
-    let OrchestrationAction::JobChildRegister { operation_id, child_id, child_session_id, parent_child_id } = &action else { unreachable!() };
-    let Actor::Agent(agent) = ctx.actor else { return Err(error("actor_forbidden", "Child registration requires a main job credential")) };
-    let job = credentials::validate_job_auth(ctx.state, &agent.auth)?;
-    if job.role != JobRole::Worker { return Err(error("actor_forbidden", "Only a worker main credential can narrow a local child")) }
-    if let Some(result) = replay(ctx, operation_id, DurableOperationKind::JobChildRegister, &action)? { return Ok(Applied::Document(result)); }
-    validate_identity(child_id)?;
-    validate_identity(child_session_id)?;
-    let run = &ctx.state.runs[job.run_index];
-    let attachment = run.attachment.as_ref().expect("authorized attachment");
-    if agent.agent_kind != Some(AgentKind::Subagent) || agent.subagent_id.as_ref() != Some(child_id)
-        || agent.omp_session_id.as_ref() != Some(child_session_id)
-        || agent.main_omp_session_id != attachment.main_session_id
-        || agent.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp)
-        || agent.process != attachment.process || attachment.process.is_none() {
-        return Err(error("child_identity_unproven", "Registration requires actual native child provenance under this main incarnation"));
-    }
-    if let Some(parent) = parent_child_id {
-        if parent == child_id || !ctx.state.subagents.iter().any(|c| c.run_id == run.run_id && c.subagent_id == *parent && c.status == SubagentStatus::Running) {
-            return Err(error("child_identity_unproven", "Registered parent child is not current"));
-        }
-    }
-    let run_id = run.run_id.clone();
-    let root_id = run.root_id.clone();
-    if let Some(child) = ctx.state.subagents.iter_mut().find(|c| c.run_id == run_id && c.subagent_id == *child_id) {
-        if child.parent_subagent_id != *parent_child_id || child.bound_omp_session.as_ref().is_some_and(|s| s != child_session_id) {
-            return Err(error("child_identity_unproven", "Child identity changed within the current epoch"));
-        }
-        child.bound_omp_session = Some(child_session_id.clone());
-        child.status = SubagentStatus::Running;
-        child.updated_at = now();
-    } else {
-        ctx.state.subagents.push(Subagent { run_id: run_id.clone(), subagent_id: child_id.clone(), parent_subagent_id: parent_child_id.clone(), role: None,
-            label: child_id.clone(), status: SubagentStatus::Running, summary: None, bound_omp_session: Some(child_session_id.clone()), last_control: None, updated_at: now() });
-    }
-    if !ctx.state.credentials.iter().any(|c| c.run_id == run_id && c.role == JobRole::Child && c.subject_child_id.as_ref() == Some(child_id)
-        && c.attachment_id == job.attachment_id && c.attachment_epoch == job.attachment_epoch && c.state == credentials::CredentialState::Active) {
-        let (record, _) = credentials::stage_credential(ctx.service.base(), &ctx.state.runs[job.run_index], JobRole::Child, Some(child_id))?;
-        ctx.state.credentials.push(record);
-    }
-    let result = OrchestrationActionResult::Done;
-    record(ctx, operation_id.clone(), DurableOperationKind::JobChildRegister, &action, root_id, result.clone(), Vec::new())?;
     Ok(Applied::Machine(result))
 }
 
 impl OrchestrationService {
-    /// Private transport receipt: the token bytes never enter a public DTO.
-    pub fn job_child_credential_file(&self, caller: &AgentCaller, child_id: &str) -> Result<std::path::PathBuf, InspectionError> {
+    /// Operator-only bootstrap transport, scoped to the exact borrowed placement.
+    pub fn job_adoption_credential_file(&self, actor: &Actor, session_id: &str, run_id: &str, location: &RunLocation) -> Result<std::path::PathBuf, InspectionError> {
+        operator(actor)?;
         let state = self.store.lock()?.read()?;
-        let job = credentials::validate_job_auth(&state, &caller.auth)?;
-        if job.role == JobRole::Child { return Err(error("actor_forbidden", "Child cannot retrieve credentials")); }
-        let record = state.credentials.iter().find(|c| c.run_id == state.runs[job.run_index].run_id && c.role == JobRole::Child
-            && c.subject_child_id.as_deref() == Some(child_id) && c.attachment_id == job.attachment_id
-            && c.attachment_epoch == job.attachment_epoch && c.state == credentials::CredentialState::Active)
-            .ok_or_else(|| error("child_identity_unproven", "No current narrowed child credential"))?;
-        credentials::credential_path(self.base(), record)
-    }
-
-    pub fn job_bootstrap_credential_file(&self, caller: &BootstrapCaller, run_id: &str) -> Result<std::path::PathBuf, InspectionError> {
-        let state = self.store.lock()?.read()?;
-        let run = &state.runs[scoped_index(&state, &caller.session_id, run_id)?];
-        let attachment = run.attachment.as_ref().ok_or_else(|| error("caller_mismatch", "Adopted attachment is unavailable"))?;
-        let location = attachment.location.as_ref().ok_or_else(|| error("caller_mismatch", "Adopted location is unavailable"))?;
-        if run.kind != RunKind::Adopted || run.stage != RunStage::Active
-            || caller.agent_kind != Some(AgentKind::Main)
-            || caller.actual_agent_kind.as_ref() != Some(&NativeAgentKind::Omp)
-            || caller.process != attachment.process || caller.process.is_none()
-            || caller.omp_session_id != attachment.main_session_id
-            || location.endpoint_identity != caller.endpoint_identity
-            || location.workspace_id != caller.workspace_id || location.tab_id != caller.tab_id
-            || location.pane_id != caller.pane_id || location.terminal_id != caller.terminal_id
-            || caller.terminal_id.is_none()
-            || caller.process.as_ref().is_none_or(|p| !matches!(retire::exact_running(p,
-                crate::process_identity::kernel_boot_id().as_deref()), Ok(true))) {
-            return Err(error("caller_mismatch", "Bootstrap receipt requires the exact live adopted main incarnation"));
+        let run = &state.runs[scoped_index(&state, session_id, run_id)?];
+        let attachment = run.attachment.as_ref().ok_or_else(|| error("attachment_conflict", "Adopted attachment missing"))?;
+        if run.kind != RunKind::Adopted || run.stage == RunStage::Closed
+            || !project_identity::same_location(attachment.location.as_ref(), Some(location)) {
+            return Err(error("attachment_conflict", "Adoption credential requires the exact current placement"));
         }
         let record = state.credentials.iter().find(|c| c.run_id == run.run_id && c.role == JobRole::Root
             && c.attachment_id == attachment.attachment_id && c.attachment_epoch == attachment.epoch

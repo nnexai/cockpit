@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import type { DispatchTarget, OrchestrationAction, OrchestrationSnapshot, Run, SpaceSummary, Subagent, Task, TaskView } from "../../protocol/generated/v1";
+import type { DispatchTarget, OrchestrationAction, OrchestrationSnapshot, Run, SpaceSummary, Task, TaskView } from "../../protocol/generated/v1";
 import { copyText } from "../library/clipboard";
 import { ErrorSlot } from "../ErrorSlot";
 import { UiIcon } from "../UiIcon";
@@ -16,7 +16,7 @@ import "../projects/setup.css";
 export type StartDraft = { label: string; location: "existing" | "directory" | "dedicated"; spaceId: string; directory: string; intent?: "reuse_or_resume" | "another"; operation?: Extract<OrchestrationAction, { action: "supervisor_start" }>; requestScope?: MutationRequestScope };
 export type TaskSourceDialogState = { mode: "edit"; task: TaskView; draft: EditDraft; scope: StepScope } | { mode: "relations"; task: TaskView; draft: RelationDraft; scope: StepScope } | { mode: "follow_up"; task: TaskView; draft: FollowUpDraft; scope: StepScope };
 export type ResumeAction = Extract<OrchestrationAction, { action: "run_resume" }>;
-type RuntimeDialogState = { mode: "start" } | { mode: "replace"; run: Run; operation?: ResumeAction; requestScope?: MutationRequestScope } | { mode: "close" | "setup_recovery"; run: Run } | { mode: "subagent_cancel"; run: Run; subagent: Subagent };
+type RuntimeDialogState = { mode: "start" } | { mode: "replace"; run: Run; operation?: ResumeAction; requestScope?: MutationRequestScope } | { mode: "close" | "setup_recovery"; run: Run };
 export type SupervisorDialogState = RuntimeDialogState | TaskSourceDialogState;
 export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, changed, busy, available, mutateResult, captureMutationScope, onResumeOperation, onStarted, onStartUnconfirmed, onReturnFocus, onClose }: {
   dialog: RuntimeDialogState; snapshot: OrchestrationSnapshot; spaces: SpaceSummary[]; startDraft: StartDraft;
@@ -67,7 +67,7 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
   const chosenSpace = spaces.find(space => space.id === startDraft.spaceId);
   const destination = startDraft.location === "existing" ? chosenSpace ? `New tab in ${chosenSpace.label}` : "Choose a Space for the new tab" : startDraft.location === "directory" ? startDraft.directory.trim() ? `Opens ${startDraft.directory.trim()}` : "Choose an absolute directory" : "Dedicated agent folder";
   const primaryReason = locked ? "Wait for the current operation to finish." : !available ? "Reconnect before applying this change." : unconfirmed ? "Check current status before requesting another action." : null;
-  const title = mode === "start" ? startDraft.intent === "another" ? "Start another agent…" : "Start agent" : mode === "replace" ? "Another agent is still running here" : mode === "close" ? "Close tracking" : mode === "setup_recovery" ? "Recover setup" : "Cancel subagent";
+  const title = mode === "start" ? startDraft.intent === "another" ? "Start another agent…" : "Start agent" : mode === "replace" ? "Another agent is still running here" : mode === "close" ? "Close tracking" : "Recover setup";
   useLayoutEffect(() => {
     const invoker = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     const section = ref.current;
@@ -138,8 +138,7 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
       }
       action = startDraft.operation ??= { action: "supervisor_start", operation_id: crypto.randomUUID(), mode: startDraft.intent ?? "reuse_or_resume", target, label: startDraft.label.trim() || null, selected_root_id: snapshot.board?.root_id ?? null, expected_project_key: null };
       startDraft.requestScope = captureMutationScope(action) ?? undefined;
-    } else if (dialog.mode === "subagent_cancel") action = { action: "subagent_control", run_id: dialog.run.run_id, subagent_id: dialog.subagent.subagent_id, op: { op: "cancel" } };
-    else if (dialog.mode === "setup_recovery") action = { action: "reconcile_run", run_id: dialog.run.run_id, recovery: dialog.run.dispatch?.recovery ?? null };
+    } else if (dialog.mode === "setup_recovery") action = { action: "reconcile_run", run_id: dialog.run.run_id, recovery: dialog.run.dispatch?.recovery ?? null };
     else if (dialog.mode === "replace") {
       if (!dialog.operation) {
         if (dialog.run.resume?.phase !== "blocked" || dialog.run.resume.cause?.class !== "decision" || !dialog.run.resume.decision_id || latestRun?.resume?.decision_id !== dialog.run.resume.decision_id || latestRun.attachment?.epoch !== dialog.run.attachment?.epoch) { setError("Existing agent kept · the replacement decision changed. Close this dialog and review the current decision."); return; }
@@ -185,7 +184,7 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
   return createPortal(<div className="setup-overlay" role="presentation"><section ref={ref} className="supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={locked} tabIndex={-1} onKeyDown={keys}>
     <header className="supervisor-dialog-header"><span className="supervisor-dialog-icon"><UiIcon name={mode === "start" ? "plus" : mode === "replace" || mode === "setup_recovery" ? "refresh" : mode === "close" ? "close" : "stop"} /></span><h2 id={titleId}>{title}</h2></header><form id={formId} onSubmit={event => { event.preventDefault(); void submit(); }}>
       {dialog.mode === "start" ? <>
-        <p>An OMP supervisor manages tasks and delegates work for you.</p>
+        <p>A supervisor using the configured harness manages tasks and delegates work for you.</p>
         <label>Name (optional)<input value={startDraft.label} disabled={startFieldsLocked} onChange={event => { startDraft.label = event.target.value; changed(); }} /></label>
         <label>Location<select data-initial value={startDraft.location} disabled={startFieldsLocked} onChange={event => { startDraft.location = event.target.value as StartDraft["location"]; setFieldError(null); changed(); }}><option value="existing">Existing Space</option><option value="directory">Directory</option><option value="dedicated">Dedicated agent folder</option></select></label>
         {startDraft.location === "existing" ? <>
@@ -201,18 +200,18 @@ export function SupervisorDialogs({ dialog, snapshot, spaces, startDraft, change
       </> : dialog.mode === "close" ? <>
         <p>Close tracking for {dialog.run.label}?</p><p>Tasks, history, Spaces and worktrees are kept. This does not guarantee the agent or its workers stop.</p>
         {descendants.length ? <><ul className="supervisor-dialog-descendants">{descendants.slice(0, 3).map(run => <li key={run.run_id}>{run.label}</li>)}</ul>{descendants.length > 3 ? <p>and {descendants.length - 3} more</p> : null}<p>Live descendants will still need supervision.</p></> : null}
-      </> : dialog.mode === "subagent_cancel" ? <p>Request cancellation of {dialog.subagent.label}. Its OMP control receipt, not this request, confirms whether it stopped.</p> : <>
+      </> : <>
         <p>Setup for {dialog.run.label} needs review before launch. Existing resources are kept.</p><p>{dialog.run.dispatch?.recovery === "accept_existing_worktree" ? "Confirm using the existing worktree receipt rather than creating another worktree." : dialog.run.dispatch?.recovery === "retry_environment" ? "Explicitly retry the uncertain setup operation after reviewing its recorded effects." : "Check and reconcile the existing setup only. No new launch is requested by this confirmation."}</p>
         {dialog.run.setup ? <><p>{dialog.run.setup.checkout_path}</p><ul>{dialog.run.setup.effects.map((effect, index) => <li key={index}>{effect}</li>)}</ul>{dialog.run.setup.warnings.map((warning, index) => <p className="supervisor-warning" key={index}>{warning}</p>)}</> : null}
       </>}
     </form>
-    {mode === "start" ? <p className="supervisor-dialog-destination">{destination} · OMP starts without switching terminal focus</p> : null}
+    {mode === "start" ? <p className="supervisor-dialog-destination">{destination} · The configured agent starts without switching terminal focus</p> : null}
     <ErrorSlot placement="dialog" message={error} className={`supervisor-dialog-error-slot${error ? "" : " is-empty"}`} />
     {copyStatus ? <p className="supervisor-dialog-observed" role="status">{copyStatus}</p> : null}
     {primaryReason ? <p id={primaryReasonId} className="supervisor-dialog-unavailable">{primaryReason}{!available ? " You can keep editing or close this dialog without losing your draft." : ""}</p> : null}
     <footer>
-      <button type="button" data-initial={mode !== "start" || undefined} disabled={locked} onClick={close}>{mode === "close" ? "Keep tracking" : mode === "replace" ? "Keep existing" : mode === "subagent_cancel" ? "Keep running" : "Cancel"}</button>
-      <button type="submit" form={formId} data-primary aria-disabled={locked || !available || unconfirmed || !!copyStatus} aria-describedby={primaryReason ? primaryReasonId : undefined} disabled={locked || !available || unconfirmed || !!copyStatus}>{pending ? "Working…" : dialog.mode === "replace" ? "Replace existing" : dialog.mode === "subagent_cancel" ? "Request cancellation" : dialog.mode === "setup_recovery" ? dialog.run.dispatch?.recovery === "accept_existing_worktree" ? "Use existing worktree" : dialog.run.dispatch?.recovery === "retry_environment" ? "Retry setup" : "Check setup" : title}</button>
+      <button type="button" data-initial={mode !== "start" || undefined} disabled={locked} onClick={close}>{mode === "close" ? "Keep tracking" : mode === "replace" ? "Keep existing" : "Cancel"}</button>
+      <button type="submit" form={formId} data-primary aria-disabled={locked || !available || unconfirmed || !!copyStatus} aria-describedby={primaryReason ? primaryReasonId : undefined} disabled={locked || !available || unconfirmed || !!copyStatus}>{pending ? "Working…" : dialog.mode === "replace" ? "Replace existing" : dialog.mode === "setup_recovery" ? dialog.run.dispatch?.recovery === "accept_existing_worktree" ? "Use existing worktree" : dialog.run.dispatch?.recovery === "retry_environment" ? "Retry setup" : "Check setup" : title}</button>
     </footer>
   </section></div>, document.body);
 }

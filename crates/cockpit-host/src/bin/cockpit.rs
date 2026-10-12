@@ -37,11 +37,11 @@ use cockpit_host::{
 mod cli_orchestration;
 
 const ROOT_HELP: &str = "Agent workflows:
+  cockpit-cli run context        Register current session and read scoped authority
   cockpit-cli notes --help       Durable Notes, todos, Kanban and decisions
   cockpit-cli task --help        Canonical supervisor tasks and revision fences
   cockpit-cli run --help         Worker lifecycle, plans, reports and questions
   cockpit-cli inbox --help       Read messages, then acknowledge processed mail
-  cockpit-cli subagent --help    Actual OMP child lifecycle and control
   cockpit-cli route --help       Read configured project-routing evidence
   cockpit-cli skills --help      Read or explicitly install portable CLI skills
 
@@ -49,7 +49,9 @@ Use <command> <subcommand> --help for payloads, selectors and examples.
 Prefer COCKPIT_CLI_PATH when supplied by a Cockpit-launched agent.
 Help and skills commands do not connect to Herdr or modify Notes.
 Notes UUID-pinned content and routine credential-scoped orchestration work
-without Herdr; physical attach/adopt/stop/control still require fresh evidence.";
+without Herdr. Agent calls use actual --harness/--session-id or generic
+COCKPIT_HARNESS/COCKPIT_SESSION_ID; physical routing uses COCKPIT_HERDR_SESSION.
+Cleanup and replacement retain separate fresh physical-safety evidence.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -99,12 +101,9 @@ pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     /// Start task workers and report or message within the run forest.
     #[command(after_long_help = cli_orchestration::RUN_HELP)]
     Run(cli_orchestration::RunArgs),
-    /// Pull durable inbox messages and inspect native delivery receipts.
+    /// Pull, capture and wait for durable inbox messages.
     #[command(after_long_help = cli_orchestration::INBOX_HELP)]
     Inbox(cli_orchestration::InboxArgs),
-    /// Publish and control OMP subagents.
-    #[command(after_long_help = cli_orchestration::SUBAGENT_HELP)]
-    Subagent(cli_orchestration::SubagentArgs),
     /// Resolve configured artifact-to-project routing without guessing focus.
     #[command(after_long_help = cli_orchestration::ROUTE_HELP)]
     Route(cli_orchestration::RouteArgs),
@@ -529,7 +528,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Notes(_) => unreachable!("Notes commands use their own exit-status contract"),
         Command::Skills(_) => unreachable!("skills commands use their own exit-status contract"),
         Command::Context(args) => run_context(args).await,
-        Command::Orchestration(_) | Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Subagent(_) | Command::Route(_) =>
+        Command::Orchestration(_) | Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Route(_) =>
             unreachable!("orchestration commands preserve their structured error contract"),
     }
 }
@@ -1071,7 +1070,6 @@ async fn main() -> ExitCode {
         Command::Task(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Run(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Inbox(args) => args.run().await.map(|()| 0).map_err(CliError::from),
-        Command::Subagent(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Route(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Notes(args) => return ExitCode::from(notes_cli::run(args).await),
         Command::Skills(args) => return ExitCode::from(skills_cli::run(args).await),

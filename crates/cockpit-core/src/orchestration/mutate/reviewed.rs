@@ -1,17 +1,17 @@
 use super::super::*;
 use cockpit_protocol::orchestration::{
-    AttachmentState, NativeProcessIdentity, NativeShellIdentity, ResumeCause, ResumeCauseClass, ResumePhase,
+    AttachmentState, NativeProcessIdentity, NativeShellIdentity, ResumePhase,
 };
 
-const CURRENT_EXTENSION_UNAVAILABLE: &str =
-    "The live incarnation is preserved, but no current-epoch credential-authenticated attachment proves a compatible loaded extension";
+const REGISTRATION_UNAVAILABLE: &str =
+    "The physical launch is preserved, but its issued capability has not registered the current conversation";
 
 fn physical_location(run: &Run) -> Option<&RunLocation> {
     run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())
 }
 
 fn physical_session(run: &Run) -> Option<&str> {
-    run.attachment.as_ref().and_then(|attachment| attachment.main_session_id.as_deref())
+    physical_location(run).and_then(|location| location.native_session_id.as_deref())
 }
 
 fn physical_process(run: &Run) -> Option<&NativeProcessIdentity> {
@@ -169,131 +169,37 @@ impl OrchestrationService {
         Ok(applied.revision())
     }
 
-    /// Caller supplies fresh runtime proof. Commit only that exact bound incarnation.
+    /// Physical readiness cannot grant semantic authority or initialize a task.
     pub(crate) fn record_launch_verified(&self, reviewed: &Run) -> Result<u64, InspectionError> {
         let applied = self.with_reviewed_run(
-            reviewed,
-            RunLookup::Required,
-            |state, current| {
-                let request_matches = match (current.dispatch.as_ref(), reviewed.dispatch.as_ref()) {
-                    (Some(actual), Some(expected)) => {
-                        actual.step == expected.step
-                            && actual.updated_at == expected.updated_at
-                            && actual.recovery == expected.recovery
+            reviewed, RunLookup::Required,
+            |_, current| {
+                Ok(same_launch_incarnation(current, reviewed)
+                    && current.stage != RunStage::Closed && physical_location(current).is_some()
+                    && current.attachment.as_ref().is_some_and(|attachment|
+                        !matches!(attachment.state, AttachmentState::Quiescing | AttachmentState::Revoked))
+                    && launch_receipt_coherent(current)
+                    && current.dispatch.as_ref().zip(reviewed.dispatch.as_ref()).is_some_and(|(actual, expected)|
+                        actual.step == expected.step && actual.updated_at == expected.updated_at
                             && actual.agent_started == expected.agent_started
-                    }
-                    _ => false,
-                };
-                if !same_launch_incarnation(current, reviewed)
-                    || !request_matches
-                    || physical_session(current).is_none_or(str::is_empty)
-                    || physical_process(current).is_none()
-                    || physical_location(current).is_none()
-                    || current.attachment.as_ref().is_none_or(|attachment| {
-                        matches!(attachment.state, AttachmentState::Quiescing | AttachmentState::Revoked)
-                    })
-                    || !launch_receipt_coherent(current)
-                    || current.dispatch.as_ref().is_none_or(|d| {
-                        !matches!(
-                            d.step,
-                            DispatchStep::LaunchIntent
-                                | DispatchStep::LaunchPending
-                                | DispatchStep::LaunchUnknown
-                                | DispatchStep::NeedsReview
-                                | DispatchStep::Launched
-                        )
-                    })
-                {
-                    return Ok(false);
-                }
-                let connected = has_current_binding(state, current);
-                let connection_state = if connected { AttachmentState::Connected } else { AttachmentState::Disconnected };
-                let resume_settled = current.resume.as_ref().is_none_or(|resume| {
-                    resume.replacement_attachment_epoch != current.attachment.as_ref().map(|attachment| attachment.epoch)
-                        || (connected && resume.phase == ResumePhase::Connected)
-                        || (!connected && resume.phase == ResumePhase::Blocked
-                            && resume.cause.as_ref().is_some_and(|cause| cause.code == "current_extension_unavailable"))
-                });
-                if current.dispatch.as_ref().is_some_and(|dispatch| {
-                    dispatch.step == DispatchStep::Launched && dispatch.agent_started
-                        && if connected { dispatch.error.is_none() } else {
-                            dispatch.error.as_ref().is_some_and(|error| error.code == "current_extension_unavailable")
-                        }
-                }) && current.stage != RunStage::Starting && resume_settled
-                    && current.attachment.as_ref().is_some_and(|attachment| attachment.state == connection_state)
-                {
-                    return Ok(false);
-                }
-                Ok(true)
+                            && !(actual.step == DispatchStep::Launched && actual.agent_started)))
             },
             |state, index| {
                 let connected = has_current_binding(state, &state.runs[index]);
                 let run = &mut state.runs[index];
                 let dispatch = run.dispatch.as_mut().expect("fenced launch");
-                let initial = run.stage == RunStage::Starting && connected;
                 dispatch.step = DispatchStep::Launched;
                 dispatch.agent_started = true;
                 dispatch.error = if connected { None } else {
-                    Some(ErrorResponse {
-                        code: "current_extension_unavailable".into(),
-                        message: CURRENT_EXTENSION_UNAVAILABLE.into(),
-                    })
+                    Some(ErrorResponse { code: "run_unregistered".into(), message: REGISTRATION_UNAVAILABLE.into() })
                 };
                 dispatch.updated_at = now();
-                let attachment = run.attachment.as_mut().expect("fenced launch attachment");
+                let attachment = run.attachment.as_mut().expect("fenced attachment");
                 attachment.state = if connected { AttachmentState::Connected } else { AttachmentState::Disconnected };
-                attachment.launch_attempt = dispatch.launch_attempt;
                 attachment.updated_at = dispatch.updated_at.clone();
-                if let Some(resume) = run.resume.as_mut().filter(|resume| {
-                    matches!(resume.phase, ResumePhase::Launching | ResumePhase::Connected)
-                        || (resume.phase == ResumePhase::Blocked
-                            && resume.cause.as_ref().is_some_and(|cause| cause.code == "current_extension_unavailable"))
-                }).filter(|resume| {
-                    resume.replacement_attachment_epoch == Some(attachment.epoch)
-                }) {
-                    resume.phase = if connected { ResumePhase::Connected } else { ResumePhase::Blocked };
-                    resume.cause = if connected { None } else {
-                        Some(ResumeCause {
-                            code: "current_extension_unavailable".into(),
-                            message: "The live incarnation is preserved until its current extension registers with the reserved credential epoch".into(),
-                            class: ResumeCauseClass::Recover,
-                        })
-                    };
-                    resume.updated_at = dispatch.updated_at.clone();
-                }
-                if initial {
-                    run.stage = if run.kind == RunKind::Worker {
-                        RunStage::Working
-                    } else {
-                        RunStage::Active
-                    };
-                }
                 run.updated_at = dispatch.updated_at.clone();
-                let kind = if run.kind == RunKind::Worker {
-                    MessageKind::WorkBrief
-                } else {
-                    MessageKind::SupervisorBrief
-                };
-                // Generated root policy is delivered when this launch is first proven,
-                // even if its pending intent predates the installed CLI capabilities.
-                // A historical Launched review must not rewrite or replay the policy.
-                if initial
-                    && run.parent_run_id.is_none()
-                    && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
-                {
-                    run.brief = supervisor_guidance().into();
-                }
-                let text = run.brief.clone();
-                let phase = format!("launch-{}-{}", run.attempt, dispatch.launch_attempt);
-                // Historical launched reviews must never replay the work brief.
-                if initial {
-                    brief(state, &reviewed.run_id, kind, &text, &phase)?;
-                }
-                if connected {
-                    escalation::recovered(state, index)?;
-                } else {
-                    escalation::failure(state, index)?;
-                }
+                if connected { escalation::recovered(state, index)?; }
+                else { escalation::failure(state, index)?; }
                 Ok(())
             },
         )?;
@@ -347,7 +253,7 @@ impl OrchestrationService {
                 }
                 let connected = has_current_binding(state, current);
                 let desired_error = if step == DispatchStep::Launched && !connected {
-                    Some(("current_extension_unavailable", CURRENT_EXTENSION_UNAVAILABLE))
+                    Some(("run_unregistered", REGISTRATION_UNAVAILABLE))
                 } else {
                     error.as_ref().map(|error| (error.code.as_str(), error.message.as_str()))
                 };
@@ -367,8 +273,8 @@ impl OrchestrationService {
                 dispatch.step = step;
                 dispatch.error = if step == DispatchStep::Launched && !connected {
                     Some(ErrorResponse {
-                        code: "current_extension_unavailable".into(),
-                        message: CURRENT_EXTENSION_UNAVAILABLE.into(),
+                        code: "run_unregistered".into(),
+                        message: REGISTRATION_UNAVAILABLE.into(),
                     })
                 } else {
                     error.clone()
@@ -458,7 +364,7 @@ pub(super) fn reset_launch_metadata_after_resume(
     let resume = run.resume.as_ref()
         .ok_or_else(|| error("resume_required", "Launch reset requires the recorded owner Resume"))?;
     if attachment.state != AttachmentState::Reserved || attachment.location.is_some()
-        || attachment.main_session_id.is_some() || attachment.process.is_some() || attachment.shell.is_some()
+        || attachment.process.is_some() || attachment.shell.is_some()
         || resume.phase != ResumePhase::Launching
         || resume.replacement_attachment_epoch != Some(attachment.epoch)
         || resume.previous_attachment_epoch.is_none_or(|previous| previous >= attachment.epoch)
@@ -527,6 +433,7 @@ fn same_launch_request(current: &Run, reviewed: &Run) -> bool {
         && current.root_id == reviewed.root_id
         && current.task_id == reviewed.task_id
         && current.attempt == reviewed.attempt
+        && current.assignment_generation == reviewed.assignment_generation
         && same_attachment_epoch(current, reviewed)
         && actual.launch_attempt == expected.launch_attempt
         && actual.launch_tag == expected.launch_tag

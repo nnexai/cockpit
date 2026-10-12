@@ -12,7 +12,6 @@ use crate::{process_identity, space_git};
 pub struct ResourceSourceFacts {
     request_digest: String,
     holder: AttachmentReference,
-    child_id: Option<String>,
     checkout: CheckoutIdentity,
     resource_key: String,
 }
@@ -21,7 +20,7 @@ fn job(state: &OrchestrationState, actor: &Actor) -> Result<AuthorizedJob, Inspe
     let Actor::Agent(agent) = actor else {
         return Err(error("actor_forbidden", "Resource operations require a current job credential"));
     };
-    credentials::validate_job_auth(state, &agent.auth)
+    credentials::validate_caller(state, agent)
 }
 
 fn holder(state: &OrchestrationState, job: &AuthorizedJob) -> AttachmentReference {
@@ -30,10 +29,9 @@ fn holder(state: &OrchestrationState, job: &AuthorizedJob) -> AttachmentReferenc
 }
 
 fn fence(record: &ResourceRequestRecord, expected: &AttachmentReference,
-    current: &AttachmentReference, child: Option<&str>) -> Result<(), InspectionError> {
-    if &record.holder != expected || expected != current
-        || record.requester_child_id.as_deref() != child {
-        return Err(error("resource_holder_conflict", "Resource request belongs to a different current holder or child subject"));
+    current: &AttachmentReference) -> Result<(), InspectionError> {
+    if &record.holder != expected || expected != current {
+        return Err(error("resource_holder_conflict", "Resource request belongs to a different current holder"));
     }
     Ok(())
 }
@@ -52,7 +50,7 @@ fn authorize_request(state: &OrchestrationState, job: &AuthorizedJob,
         return Err(error("resource_holder_conflict", "Request must name the authenticated current attachment"));
     }
     if let Some(record) = state.resource_requests.iter().find(|r| r.request_id == request.operation_id) {
-        fence(record, &request.holder, &current, job.subject_child_id.as_deref())?;
+        fence(record, &request.holder, &current)?;
     }
     Ok(())
 }
@@ -152,7 +150,7 @@ impl OrchestrationService {
         request: &OrchestrationMutationRequest) -> Result<Option<ResourceSourceFacts>, InspectionError> {
         let OrchestrationAction::ResourceRequest { request: resource } = &request.action else { return Ok(None) };
         validate_source(&resource.source_identity)?;
-        let (checkout, current, child_id) = {
+        let (checkout, current) = {
             let state = self.store.lock()?.read()?;
             let job = job(&state, actor)?;
             if state.runs[job.run_index].session_id != request.session_id {
@@ -160,12 +158,12 @@ impl OrchestrationService {
             }
             let current = holder(&state, &job);
             if current != resource.holder { return Err(error("resource_holder_conflict", "Resource holder is not current")); }
-            (checkout_for(&state, &job, &resource.source_identity.checkout_key)?, current, job.subject_child_id)
+            (checkout_for(&state, &job, &resource.source_identity.checkout_key)?, current)
         };
         verify_checkout_source(&checkout, &resource.source_identity).await?;
         let resource_key = canonical_resource(&resource.resource_key)?;
         Ok(Some(ResourceSourceFacts { request_digest: resume::request_digest(&request.action, &request.session_id)?,
-            holder: current, child_id, checkout, resource_key }))
+            holder: current, checkout, resource_key }))
     }
 
     /// Called by the existing owner revision/periodic observation loop. Unknown
@@ -217,12 +215,12 @@ pub(in crate::orchestration) fn apply(ctx: &mut MutationCtx<'_>, action: Orchest
                 .ok_or_else(|| error("resource_source_unverified", "Resource request requires fresh core source observation"))?;
             let checkout = checkout_for(ctx.state, &job, &request.source_identity.checkout_key)?;
             if facts.request_digest != resume::request_digest(&action, ctx.session_id)?
-                || facts.holder != current || facts.child_id != job.subject_child_id || facts.checkout != checkout
+                || facts.holder != current || facts.checkout != checkout
                 || facts.resource_key != canonical_resource(&request.resource_key)? {
                 return Err(error("resource_source_changed", "Source observation no longer belongs to this request or holder"));
             }
             project_identity::revalidate_checkout(&checkout)?;
-            let record = enqueue(ctx.state, request, job.subject_child_id.clone(), checkout.machine_id)?;
+            let record = enqueue(ctx.state, request, checkout.machine_id)?;
             let result = OrchestrationActionResult::Resource { request: record, duplicate: false };
             let root_id = ctx.state.runs[job.run_index].root_id.clone();
             resume::record(ctx, request.operation_id.clone(), DurableOperationKind::ResourceRequest,
@@ -231,7 +229,7 @@ pub(in crate::orchestration) fn apply(ctx: &mut MutationCtx<'_>, action: Orchest
         }
         OrchestrationAction::ResourceRelease { release } => {
             let index = request_index(ctx.state, &release.request_id)?;
-            fence(&ctx.state.resource_requests[index], &release.expected_holder, &current, job.subject_child_id.as_deref())?;
+            fence(&ctx.state.resource_requests[index], &release.expected_holder, &current)?;
             let duplicate = ctx.state.resource_requests[index].state == ResourceRequestState::Released;
             release_request(&mut ctx.state.resource_requests[index], &mut native_running)?;
             let result = OrchestrationActionResult::Resource { request: ctx.state.resource_requests[index].clone(), duplicate };
@@ -240,7 +238,7 @@ pub(in crate::orchestration) fn apply(ctx: &mut MutationCtx<'_>, action: Orchest
         OrchestrationAction::ResourceBuildRegister { registration } => {
             let index = request_index(ctx.state, &registration.request_id)?;
             let record = &ctx.state.resource_requests[index];
-            fence(record, &registration.expected_holder, &current, job.subject_child_id.as_deref())?;
+            fence(record, &registration.expected_holder, &current)?;
             if record.state != ResourceRequestState::Held {
                 return Err(error("resource_not_held", "A build may register only against its granted resource"));
             }
@@ -274,13 +272,13 @@ fn request_index(state: &OrchestrationState, id: &str) -> Result<usize, Inspecti
 }
 
 fn enqueue(state: &mut OrchestrationState, request: &ResourceRequest,
-    child_id: Option<String>, machine_id: String) -> Result<ResourceRequestRecord, InspectionError> {
+    machine_id: String) -> Result<ResourceRequestRecord, InspectionError> {
     tasks_md::validate_uuid(&request.operation_id)?;
     let sequence = state.resource_sequence.checked_add(1).filter(|s| *s <= MAX_SAFE_COUNTER)
         .ok_or_else(|| error("resource_sequence_exhausted", "JSON-safe resource request sequence is exhausted"))?;
     let record = ResourceRequestRecord { request_id: request.operation_id.clone(), sequence,
         resource_key: request.resource_key.clone(), source_identity: request.source_identity.clone(),
-        holder: request.holder.clone(), requester_child_id: child_id, state: ResourceRequestState::Queued,
+        holder: request.holder.clone(), state: ResourceRequestState::Queued,
         build_processes: Vec::new(), machine_id, blocked_reason: None, updated_at: now() };
     state.resource_sequence = sequence;
     state.resource_requests.push(record.clone());
@@ -308,28 +306,20 @@ fn compatible(state: &OrchestrationState, record: &ResourceRequestRecord) -> boo
 fn current_requester(state: &OrchestrationState, record: &ResourceRequestRecord) -> bool {
     let Some(run) = state.runs.iter().find(|run| run.run_id == record.holder.run_id) else { return false };
     let Some(attachment) = &run.attachment else { return false };
-    if run.stage == RunStage::Closed || attachment.attachment_id != record.holder.attachment_id
-        || attachment.epoch != record.holder.attachment_epoch
-        || matches!(attachment.state, AttachmentState::Revoked | AttachmentState::Quiescing) { return false; }
+    if !has_current_binding(state, run) || attachment.attachment_id != record.holder.attachment_id
+        || attachment.epoch != record.holder.attachment_epoch { return false; }
     if state.runs.iter().filter(|ancestor| ancestor.run_id == run.root_id
         || is_ancestor(state, &ancestor.run_id, &run.run_id)).any(|ancestor|
             ancestor.stage == RunStage::Closed || ancestor.attachment.as_ref().is_none_or(|a|
                 matches!(a.state, AttachmentState::Revoked | AttachmentState::Quiescing))) { return false; }
-    state.credentials.iter().any(|c| c.run_id == run.run_id
-        && c.attachment_id == record.holder.attachment_id && c.attachment_epoch == record.holder.attachment_epoch
-        && c.subject_child_id == record.requester_child_id && c.state == credentials::CredentialState::Active
-        && matches!((run.kind, c.role, c.subject_child_id.as_deref()),
-            (RunKind::Supervisor | RunKind::Adopted, JobRole::Root, None)
-            | (RunKind::Worker, JobRole::Worker, None)
-            | (RunKind::Worker, JobRole::Child, Some(_))))
-        && (run.parent_run_id.is_none() || run.checkout_claim_id.as_ref().is_some_and(|id|
+    run.parent_run_id.is_none() || run.checkout_claim_id.as_ref().is_some_and(|id|
             state.checkout_claims.iter().any(|c| &c.claim_id == id
                 && matches!(c.state, ClaimState::Held | ClaimState::Reserved)
                 && c.holder.as_ref() == Some(&record.holder)
                 && run.checkout.as_ref() == Some(&c.checkout)
                 && !state.checkout_claims.iter().any(|other| other.claim_id != c.claim_id
                     && other.state != ClaimState::Released
-                    && claims::checkouts_conflict(&other.checkout, &c.checkout)))))
+                    && claims::checkouts_conflict(&other.checkout, &c.checkout))))
 }
 
 fn native_running(record: &ResourceRequestRecord, evidence: &NativeShellIdentity) -> std::io::Result<bool> {
@@ -387,7 +377,7 @@ fn reconcile(state: &mut OrchestrationState,
         let record = &state.resource_requests[index];
         let waiting = occupied(state, record);
         let reason = if !current_requester(state, record) {
-            Some("Requester attachment, epoch or subject is no longer current")
+            Some("Requester attachment, conversation or assignment generation is no longer current")
         } else if !compatible(state, record) {
             Some("Output root contains incompatible checkout/source/input/toolchain artifacts; request an isolated output root")
         } else if !waiting && !source_current(state, record) {
@@ -423,11 +413,11 @@ fn notify_grant(state: &mut OrchestrationState, index: usize) -> Result<(), Insp
     let id = record.request_id.clone();
     let run_id = run.run_id.clone();
     let root_id = run.root_id.clone();
-    let text = format!("Build resource granted: request_id={id}; output_root={}; child_subject={}. Register the owned build process before treating this grant as running.",
-        record.resource_key, record.requester_child_id.as_deref().unwrap_or("main"));
+    let text = format!("Build resource granted: request_id={id}; output_root={}. Register the owned build process before treating this grant as running.",
+        record.resource_key);
     messages::append(state, messages::AppendMessage { from: ActorRef::Run { run_id: root_id },
         to_run_id: &run_id, message_id: &message_id, kind: MessageKind::Instruction, text: &text,
-        in_reply_to: None, report: None, stale: false, from_subagent_id: None, escalated_from: None })?;
+        in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     Ok(())
 }
 
@@ -438,8 +428,8 @@ mod tests {
 
     struct Fixture {
         state: OrchestrationState,
-        first: AuthorizedJob,
-        second: AuthorizedJob,
+        worker: AuthorizedJob,
+        actor: Actor,
     }
     impl Fixture {
         fn new() -> Self {
@@ -448,19 +438,31 @@ mod tests {
             let mut root = new_run(&root_id, "test", RunKind::Supervisor,
                 "root".into(), &root_id, None, None, 1);
             root.stage = RunStage::Active;
+            root.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
+                harness: root.launch_config.harness_kind.clone(), session_id: "root-chat".into(),
+            });
             let mut worker = new_run(&worker_id, "test", RunKind::Worker,
                 "worker".into(), &root_id, Some(root_id.clone()), Some(id()), 1);
             worker.stage = RunStage::Working;
+            worker.assignment_generation = Some(1);
+            worker.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
+                harness: worker.launch_config.harness_kind.clone(), session_id: "worker-chat".into(),
+            });
             let mut state = OrchestrationState { runs: vec![root, worker], ..Default::default() };
-            credentials::test_job_auth(&mut state, 0, JobRole::Root, None);
-            let a = credentials::test_job_auth(&mut state, 1, JobRole::Child, Some("child-a"));
-            let b = credentials::test_job_auth(&mut state, 1, JobRole::Child, Some("child-b"));
-            let first = credentials::validate_job_auth(&state, &a).unwrap();
-            let second = credentials::validate_job_auth(&state, &b).unwrap();
-            Self { state, first, second }
+            credentials::test_job_auth(&mut state, 0, JobRole::Root);
+            let auth = credentials::test_job_auth(&mut state, 1, JobRole::Worker);
+            let actor = Actor::Agent(AgentCaller {
+                auth, conversation: state.runs[1].attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                assignment_generation: Some(1),
+                endpoint_identity: String::new(), session_id: String::new(),
+                workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
+                boot_id: None, terminal_id: None, native_session_id: None,
+                actual_agent_kind: None, process: None,
+            });
+            let worker = job(&state, &actor).unwrap();
+            Self { state, worker, actor }
         }
-        fn enqueue(&mut self, operation: u128, second: bool) -> usize {
-            let job = if second { &self.second } else { &self.first };
+        fn enqueue(&mut self, operation: u128) -> usize {
             let request = ResourceRequest { operation_id: Uuid::from_u128(operation).to_string(),
                 resource_key: "/output/build".into(),
                 source_identity: ResourceSourceIdentity {
@@ -468,8 +470,8 @@ mod tests {
                     source_commit: "a".repeat(40), source_tree: "b".repeat(40),
                     input_configuration: "dirty-input/config-fingerprint".into(),
                     toolchain_fingerprint: "actual-toolchain-fingerprint".into(),
-                }, holder: holder(&self.state, job) };
-            enqueue(&mut self.state, &request, job.subject_child_id.clone(), "machine".into()).unwrap();
+                }, holder: holder(&self.state, &self.worker) };
+            enqueue(&mut self.state, &request, "machine".into()).unwrap();
             self.state.resource_requests.len() - 1
         }
         fn tick(&mut self, reader: &mut FakeProcesses) -> bool {
@@ -493,9 +495,9 @@ mod tests {
     }
 
     #[test]
-    fn two_child_builds_serialize_and_emit_one_notification_per_grant() {
+    fn worker_builds_serialize_and_emit_one_notification_per_grant() {
         let mut f = Fixture::new();
-        let a = f.enqueue(10, false); let b = f.enqueue(11, true);
+        let a = f.enqueue(10); let b = f.enqueue(11);
         let mut reader = FakeProcesses::default();
         assert!(f.tick(&mut reader));
         assert_eq!(f.state.resource_requests[a].state, ResourceRequestState::Held);
@@ -523,7 +525,7 @@ mod tests {
     #[test]
     fn owner_loss_unknown_process_and_unregistered_gap_never_release_or_steal() {
         let mut f = Fixture::new();
-        let a = f.enqueue(10, false); let b = f.enqueue(11, true);
+        let a = f.enqueue(10); let b = f.enqueue(11);
         let mut reader = FakeProcesses::default();
         f.tick(&mut reader);
         assert!(release_request(&mut f.state.resource_requests[a], &mut |r, p| reader.read(r, p)).is_err());
@@ -543,31 +545,33 @@ mod tests {
     }
 
     #[test]
-    fn subject_and_epoch_fences_prevent_shared_parent_grants() {
+    fn holder_and_epoch_fences_prevent_retargeting_resource_requests() {
         let mut f = Fixture::new();
-        let a = f.enqueue(10, false);
+        let a = f.enqueue(10);
+        let root_auth = credentials::test_job_auth(&mut f.state, 0, JobRole::Root);
+        let root = credentials::validate_job_auth(&f.state, &root_auth).unwrap();
         let record = &f.state.resource_requests[a];
-        let current = holder(&f.state, &f.second);
-        assert_eq!(record.holder, current, "both children share a parent attachment");
-        assert!(fence(record, &current, &current, f.second.subject_child_id.as_deref()).is_err());
-        assert!(fence(record, &current, &current, f.first.subject_child_id.as_deref()).is_ok());
+        let current = holder(&f.state, &f.worker);
+        let other = holder(&f.state, &root);
+        assert!(fence(record, &current, &other).is_err());
+        assert!(fence(record, &current, &current).is_ok());
         let mut stale = current.clone(); stale.attachment_epoch += 1;
-        assert!(fence(record, &stale, &current, f.first.subject_child_id.as_deref()).is_err());
+        assert!(fence(record, &stale, &current).is_err());
         let same_operation = ResourceRequest {
             operation_id: record.request_id.clone(), resource_key: record.resource_key.clone(),
             source_identity: record.source_identity.clone(), holder: current,
         };
-        assert!(authorize_request(&f.state, &f.first, &same_operation).is_ok());
-        assert!(authorize_request(&f.state, &f.second, &same_operation).is_err());
+        assert!(authorize_request(&f.state, &f.worker, &same_operation).is_ok());
+        assert!(authorize_request(&f.state, &root, &same_operation).is_err());
     }
 
     #[test]
     fn incompatible_source_waits_for_isolated_output_and_cancel_is_before_grant_only() {
         let mut f = Fixture::new();
-        let a = f.enqueue(10, false);
-        let cancelled = f.enqueue(11, true);
+        let a = f.enqueue(10);
+        let cancelled = f.enqueue(11);
         release_request(&mut f.state.resource_requests[cancelled], &mut |_, _| panic!("queued abort needs no process proof")).unwrap();
-        let b = f.enqueue(12, true);
+        let b = f.enqueue(12);
         f.state.resource_requests[b].source_identity.input_configuration = "different-dirty-input".into();
         let mut reader = FakeProcesses::default();
         f.tick(&mut reader);
@@ -578,7 +582,7 @@ mod tests {
         release_request(&mut f.state.resource_requests[a], &mut |r, p| reader.read(r, p)).unwrap();
         f.tick(&mut reader);
         assert_eq!(f.state.resource_requests[b].state, ResourceRequestState::Blocked, "release cannot erase incompatible artifacts");
-        let isolated = f.enqueue(13, true);
+        let isolated = f.enqueue(13);
         f.state.resource_requests[isolated].resource_key = "/output/isolated".into();
         f.state.resource_requests[isolated].source_identity.toolchain_fingerprint = "new-toolchain".into();
         f.tick(&mut reader);
@@ -588,19 +592,19 @@ mod tests {
     #[test]
     fn fifo_ready_uses_uuid_tie_break_and_never_wakes_root() {
         let mut f = Fixture::new();
-        let b = f.enqueue(20, true); let a = f.enqueue(10, false);
+        let b = f.enqueue(20); let a = f.enqueue(10);
         f.state.resource_requests[a].sequence = f.state.resource_requests[b].sequence;
         let mut reader = FakeProcesses::default();
         f.tick(&mut reader);
         assert_eq!(f.state.resource_requests[a].state, ResourceRequestState::Held);
         assert_eq!(f.state.resource_requests[b].state, ResourceRequestState::Queued);
-        let root_auth = credentials::test_job_auth(&mut f.state, 0, JobRole::Root, None);
+        let root_auth = credentials::test_job_auth(&mut f.state, 0, JobRole::Root);
         let root = credentials::validate_job_auth(&f.state, &root_auth).unwrap();
         let root_request = ResourceRequest { operation_id: Uuid::from_u128(30).to_string(),
             resource_key: "/output/verification".into(), source_identity: f.state.resource_requests[a].source_identity.clone(),
             holder: holder(&f.state, &root) };
         let index = f.state.resource_requests.len();
-        enqueue(&mut f.state, &root_request, None, "machine".into()).unwrap();
+        enqueue(&mut f.state, &root_request, "machine".into()).unwrap();
         let before = f.state.messages.len();
         f.tick(&mut reader);
         assert_eq!(f.state.resource_requests[index].state, ResourceRequestState::Held);
@@ -610,7 +614,7 @@ mod tests {
     #[test]
     fn durable_restart_keeps_fifo_holder_and_one_grant_event() {
         let mut f = Fixture::new();
-        let a = f.enqueue(10, false); let b = f.enqueue(11, true);
+        let a = f.enqueue(10); let b = f.enqueue(11);
         let mut reader = FakeProcesses::default();
         f.tick(&mut reader);
         f.state.resource_requests[a].build_processes.push(process(41));
@@ -623,7 +627,7 @@ mod tests {
         f.tick(&mut reader);
         assert_eq!(f.state.resource_requests[b].state, ResourceRequestState::Held);
         assert_eq!(f.state.messages.len(), 2);
-        let c = f.enqueue(12, false);
+        let c = f.enqueue(12);
         assert!(f.state.resource_requests[c].sequence > f.state.resource_requests[b].sequence);
     }
 
@@ -631,7 +635,7 @@ mod tests {
     fn every_source_input_and_overlapping_output_root_fences_artifact_reuse() {
         for field in 0..5 {
             let mut f = Fixture::new();
-            let a = f.enqueue(10, false); let b = f.enqueue(11, true);
+            let a = f.enqueue(10); let b = f.enqueue(11);
             let source = &mut f.state.resource_requests[b].source_identity;
             match field {
                 0 => source.checkout_key.push_str("-other-checkout"),
@@ -652,11 +656,105 @@ mod tests {
     #[test]
     fn stale_source_observation_cannot_grant_and_unchanged_block_does_not_tick() {
         let mut f = Fixture::new();
-        let a = f.enqueue(10, false);
+        let a = f.enqueue(10);
         let mut reader = FakeProcesses::default();
         assert!(reconcile(&mut f.state, &mut |r, p| reader.read(r, p), &|_, _| false).unwrap());
         assert_eq!(f.state.resource_requests[a].state, ResourceRequestState::Blocked);
         assert!(f.state.messages.is_empty());
         assert!(!reconcile(&mut f.state, &mut |r, p| reader.read(r, p), &|_, _| false).unwrap());
+    }
+
+    #[test]
+    fn stale_conversation_or_generation_rejects_resource_mutations_and_replay() {
+        for invalid in 0..8 {
+            let mut f = Fixture::new();
+            let index = f.enqueue(10);
+            f.state.resource_requests[index].state = ResourceRequestState::Held;
+            let record = f.state.resource_requests[index].clone();
+            let request = OrchestrationMutationRequest {
+                session_id: "test".into(), expected_revision: None,
+                action: OrchestrationAction::ResourceRequest { request: ResourceRequest {
+                    operation_id: record.request_id.clone(), resource_key: record.resource_key.clone(),
+                    source_identity: record.source_identity.clone(), holder: record.holder.clone(),
+                } },
+            };
+            assert!(authorize_request_replay(&f.state, &f.actor, &request).is_ok());
+            match invalid {
+                0 => f.state.task_ownership[0].generation += 1,
+                1 => f.state.task_ownership[0].owner = None,
+                2 => f.state.task_ownership[0].owner.as_mut().unwrap().conversation.session_id.push_str("-other"),
+                3 => f.state.runs[1].assignment_generation = Some(2),
+                4 => f.state.runs[1].attachment.as_mut().unwrap().conversation.as_mut().unwrap().session_id.push_str("-other"),
+                5 => {
+                    let Actor::Agent(caller) = &mut f.actor else { unreachable!() };
+                    caller.assignment_generation = Some(2);
+                }
+                6 => {
+                    let Actor::Agent(caller) = &mut f.actor else { unreachable!() };
+                    caller.conversation.session_id.push_str("-other");
+                }
+                _ => {
+                    let run_id = &f.state.runs[1].run_id;
+                    f.state.credentials.iter_mut().find(|c| &c.run_id == run_id).unwrap().assignment_generation = Some(2);
+                }
+            }
+            assert!(job(&f.state, &f.actor).is_err());
+            assert!(authorize_request_replay(&f.state, &f.actor, &request).is_err());
+            let directory = std::env::temp_dir().join(format!("cockpit-resource-admission-{}", id()));
+            let service = OrchestrationService {
+                store: OrchestrationStore::open(&directory).unwrap(),
+                revision: watch::channel(f.state.revision).0,
+                launch_config: Default::default(),
+            };
+            let locked = service.store.lock().unwrap();
+            let actions = [
+                request.action,
+                OrchestrationAction::ResourceRelease { release: ResourceRelease {
+                    request_id: record.request_id.clone(), expected_holder: record.holder.clone(),
+                } },
+                OrchestrationAction::ResourceBuildRegister { registration: ResourceBuildRegistration {
+                    request_id: record.request_id.clone(), expected_holder: record.holder.clone(),
+                    process: process(41).process,
+                } },
+            ];
+            let before = serde_json::to_value(&f.state).unwrap();
+            for action in actions {
+                let mut ctx = MutationCtx { service: &service, locked: &locked,
+                    state: &mut f.state, actor: &f.actor, caller: Some(1),
+                    session_id: "test", resolved: None };
+                assert!(apply(&mut ctx, action).is_err());
+                assert_eq!(serde_json::to_value(&f.state).unwrap(), before);
+            }
+            drop(locked);
+            drop(service);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn unassign_preserves_held_consumers_and_blocks_queued_grants() {
+        for registered in [false, true] {
+            let mut f = Fixture::new();
+            let held = f.enqueue(10); let queued = f.enqueue(11);
+            let mut reader = FakeProcesses::default();
+            f.tick(&mut reader);
+            if registered {
+                f.state.resource_requests[held].build_processes.push(process(41));
+                reader.observations.insert(41, Some(false));
+            }
+            f.state.task_ownership[0].owner = None;
+            f.state.task_ownership[0].generation += 1;
+            f.state.runs[1].stage = RunStage::Closed;
+            for credential in f.state.credentials.iter_mut().filter(|c| c.run_id == f.state.runs[1].run_id) {
+                credential.state = credentials::CredentialState::Revoked;
+            }
+            f.tick(&mut reader);
+            assert_eq!(f.state.resource_requests[held].state, ResourceRequestState::Held,
+                "logical revocation is not physical release, even after observed process exit");
+            assert_eq!(f.state.resource_requests[queued].state, ResourceRequestState::Blocked);
+            assert_eq!(f.state.messages.len(), 1);
+            assert_eq!(f.state.checkout_claims[0].state, ClaimState::Held);
+            assert!(!f.tick(&mut reader));
+        }
     }
 }

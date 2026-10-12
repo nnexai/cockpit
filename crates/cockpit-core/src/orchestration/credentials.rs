@@ -16,16 +16,14 @@ use super::{AuthorizedJob, claims::{ClaimState, checkouts_conflict}, store::Orch
 use crate::{InspectionError, project_store::open_dir_nofollow_absolute};
 
 const CREDENTIAL_DIRECTORY: &str = "credentials";
-const ENVELOPE_SCHEMA: u32 = 1;
+const ENVELOPE_SCHEMA: u32 = 2;
 const MAX_CREDENTIAL_BYTES: u64 = 4096;
-const MAX_CHILD_ID_BYTES: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum JobRole {
     Root,
     Worker,
-    Child,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +40,8 @@ pub(crate) struct JobCredentialRecord {
     pub(crate) run_id: String,
     pub(crate) root_id: String,
     pub(crate) role: JobRole,
-    pub(crate) subject_child_id: Option<String>,
+    pub(crate) assignment_generation: Option<u64>,
+    pub(crate) conversation: Option<cockpit_protocol::orchestration::ConversationIdentity>,
     pub(crate) attachment_id: String,
     pub(crate) attachment_epoch: u64,
     pub(crate) secret_digest: String,
@@ -57,7 +56,7 @@ impl fmt::Debug for JobCredentialRecord {
             .field("run_id", &self.run_id)
             .field("root_id", &self.root_id)
             .field("role", &self.role)
-            .field("subject_child_id", &self.subject_child_id)
+            .field("assignment_generation", &self.assignment_generation)
             .field("attachment_id", &self.attachment_id)
             .field("attachment_epoch", &self.attachment_epoch)
             .field("secret_digest", &"[REDACTED]")
@@ -90,6 +89,7 @@ pub struct JobAuth {
     pub secret: SecretBytes,
     pub attachment_id: String,
     pub attachment_epoch: u64,
+    pub assignment_generation: Option<u64>,
 }
 
 impl fmt::Debug for JobAuth {
@@ -99,13 +99,12 @@ impl fmt::Debug for JobAuth {
             .field("secret", &self.secret)
             .field("attachment_id", &self.attachment_id)
             .field("attachment_epoch", &self.attachment_epoch)
+            .field("assignment_generation", &self.assignment_generation)
             .finish()
     }
 }
 
-// All fields are mandatory, including an explicit null for non-child subjects.
-// Keeping the envelope separate prevents secret-bearing Serialize from escaping
-// into JobAuth or the machine store.
+// Keep secret-bearing serialization confined to the immutable private envelope.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CredentialEnvelope {
@@ -114,18 +113,12 @@ struct CredentialEnvelope {
     run_id: String,
     root_id: String,
     role: JobRole,
-    #[serde(deserialize_with = "deserialize_subject")]
-    subject_child_id: Option<String>,
+    assignment_generation: Option<u64>,
     attachment_id: String,
     attachment_epoch: u64,
     secret: String,
 }
 
-fn deserialize_subject<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error> {
-    Option::<String>::deserialize(deserializer)
-}
 
 /// Make one immutable, durable epoch file. The caller must publish the returned
 /// digest under the orchestration lock; a staged, unreferenced file grants nothing.
@@ -133,9 +126,8 @@ pub(crate) fn stage_credential(
     base: &Path,
     run: &Run,
     role: JobRole,
-    subject_child_id: Option<&str>,
 ) -> Result<(JobCredentialRecord, PathBuf), InspectionError> {
-    validate_role(run, role, subject_child_id)?;
+    validate_role(run, role)?;
     valid_uuid(&run.run_id)?;
     valid_uuid(&run.root_id)?;
     let attachment = run.attachment.as_ref().ok_or_else(unauthorized)?;
@@ -155,7 +147,8 @@ pub(crate) fn stage_credential(
         run_id: run.run_id.clone(),
         root_id: run.root_id.clone(),
         role,
-        subject_child_id: subject_child_id.map(str::to_owned),
+        assignment_generation: run.assignment_generation,
+        conversation: None,
         attachment_id: attachment.attachment_id.clone(),
         attachment_epoch: attachment.epoch,
         secret_digest: format!("{:x}", Sha256::digest(secret.0)),
@@ -168,7 +161,7 @@ pub(crate) fn stage_credential(
         run_id: run.run_id.clone(),
         root_id: run.root_id.clone(),
         role,
-        subject_child_id: record.subject_child_id.clone(),
+        assignment_generation: record.assignment_generation,
         attachment_id: record.attachment_id.clone(),
         attachment_epoch: record.attachment_epoch,
         secret: STANDARD.encode(secret.0),
@@ -205,6 +198,7 @@ pub fn read_job_auth(path: &Path) -> Result<JobAuth, InspectionError> {
         secret,
         attachment_id: envelope.attachment_id,
         attachment_epoch: envelope.attachment_epoch,
+        assignment_generation: envelope.assignment_generation,
     })
 }
 
@@ -227,7 +221,7 @@ pub(crate) fn credential_path(
     ));
     let (envelope, secret) = read_envelope(&path)?;
     if envelope.run_id != record.run_id || envelope.root_id != record.root_id
-        || envelope.role != record.role || envelope.subject_child_id != record.subject_child_id
+        || envelope.role != record.role || envelope.assignment_generation != record.assignment_generation
         || !matches_digest(&secret, &record.secret_digest)
     {
         return Err(unauthorized());
@@ -268,8 +262,7 @@ fn read_envelope(path: &Path) -> Result<(CredentialEnvelope, SecretBytes), Inspe
     valid_uuid(&envelope.root_id).map_err(|_| invalid_file())?;
     valid_uuid(&envelope.attachment_id).map_err(|_| invalid_file())?;
     valid_epoch(envelope.attachment_epoch).map_err(|_| invalid_file())?;
-    validate_subject(envelope.role, envelope.subject_child_id.as_deref())
-        .map_err(|_| invalid_file())?;
+    validate_generation(envelope.role, envelope.assignment_generation).map_err(|_| invalid_file())?;
     if (envelope.role == JobRole::Root) != (envelope.run_id == envelope.root_id)
         || name != credential_name(&envelope.attachment_id, envelope.attachment_epoch, &envelope.credential_id)
         || envelope.secret.len() != 44
@@ -294,16 +287,84 @@ pub(crate) fn validate_job_auth(
     validate_auth(state, auth, AuthPurpose::Ordinary)
 }
 
-/// Credential admission solely for the separately pinned physical retirement
-/// receipt path. The caller MUST fence its exact RetirementIdentity and purpose;
-/// this result never admits ordinary task/messages or serves as their fallback.
-/// Only a worker credential qualifies; the caller fences acceptance and physical identity.
-pub(crate) fn validate_retirement_job_auth(
-    state: &OrchestrationState,
-    auth: &JobAuth,
+pub(crate) fn validate_registration(
+    state: &OrchestrationState, caller: &super::AgentCaller,
 ) -> Result<AuthorizedJob, InspectionError> {
-    validate_auth(state, auth, AuthPurpose::Retirement)
+    super::validate_identity(&caller.conversation.harness)?;
+    super::validate_identity(&caller.conversation.session_id)?;
+    let job = validate_auth(state, &caller.auth, AuthPurpose::Registration)?;
+    let record = state.credentials.iter().find(|record| record.credential_id == caller.auth.credential_id).expect("validated capability");
+    if record.conversation.as_ref().is_some_and(|bound| bound != &caller.conversation) {
+        return Err(unauthorized());
+    }
+    let run = &state.runs[job.run_index];
+    if caller.assignment_generation != job.assignment_generation
+        || run.assignment_generation != job.assignment_generation
+        || run.launch_config.harness_kind != caller.conversation.harness {
+        return Err(unauthorized());
+    }
+    let attachment = run.attachment.as_ref().ok_or_else(unauthorized)?;
+    if let Some(bound) = &attachment.conversation {
+        if bound != &caller.conversation { return Err(unauthorized()); }
+        validate_assignment(state, caller, &job)?;
+    } else if job.role == JobRole::Worker {
+        let generation = job.assignment_generation.ok_or_else(unauthorized)?;
+        let task_id = run.task_id.as_ref().ok_or_else(unauthorized)?;
+        let ownership = state.task_ownership.iter()
+            .find(|record| record.root_id == run.root_id && &record.task_id == task_id)
+            .ok_or_else(unauthorized)?;
+        if ownership.owner.is_some()
+            || ownership.generation.checked_add(1) != Some(generation) {
+            return Err(unauthorized());
+        }
+    }
+    Ok(job)
 }
+
+pub(crate) fn validate_caller(
+    state: &OrchestrationState, caller: &super::AgentCaller,
+) -> Result<AuthorizedJob, InspectionError> {
+    let job = validate_job_auth(state, &caller.auth)?;
+    validate_current_assignment(state, caller, &job)?;
+    Ok(job)
+}
+
+pub(crate) fn validate_current_assignment(
+    state: &OrchestrationState, caller: &super::AgentCaller, job: &AuthorizedJob,
+) -> Result<(), InspectionError> {
+    if state.credentials.iter().find(|record| record.credential_id == caller.auth.credential_id)
+        .and_then(|record| record.conversation.as_ref()) != Some(&caller.conversation) {
+        return Err(unauthorized());
+    }
+    validate_assignment(state, caller, job)
+}
+
+fn validate_assignment(
+    state: &OrchestrationState, caller: &super::AgentCaller, job: &AuthorizedJob,
+) -> Result<(), InspectionError> {
+    super::validate_identity(&caller.conversation.harness)?;
+    super::validate_identity(&caller.conversation.session_id)?;
+    let run = &state.runs[job.run_index];
+    if run.attachment.as_ref().and_then(|a| a.conversation.as_ref()) != Some(&caller.conversation)
+        || caller.assignment_generation != job.assignment_generation {
+        return Err(unauthorized());
+    }
+    if job.role == JobRole::Worker {
+        let ownership = state.task_ownership.iter().find(|record|
+            record.root_id == run.root_id && Some(&record.task_id) == run.task_id.as_ref())
+            .ok_or_else(unauthorized)?;
+        let owner = ownership.owner.as_ref().ok_or_else(unauthorized)?;
+        if Some(ownership.generation) != job.assignment_generation
+            || run.assignment_generation != job.assignment_generation
+            || owner.run_id != run.run_id || owner.conversation != caller.conversation {
+            return Err(unauthorized());
+        }
+    } else if caller.assignment_generation.is_some() {
+        return Err(unauthorized());
+    }
+    Ok(())
+}
+
 
 /// Scheduling only: existing owned-resource cleanup, never source writes,
 /// resource registration or retirement. The caller fences exact request scope.
@@ -332,7 +393,7 @@ pub(crate) fn validate_committed_result_auth(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum AuthPurpose { Ordinary, Retirement, CommittedResult, Cleanup }
+enum AuthPurpose { Ordinary, Registration, CommittedResult, Cleanup }
 
 fn validate_auth(
     state: &OrchestrationState,
@@ -345,24 +406,25 @@ fn validate_auth(
     let mut records = state.credentials.iter().filter(|record| record.credential_id == auth.credential_id);
     let record = records.next().ok_or_else(unauthorized)?;
     if records.next().is_some() || record.state != CredentialState::Active
-        || (matches!(purpose, AuthPurpose::Retirement | AuthPurpose::CommittedResult) && record.role != JobRole::Worker)
-        || (purpose == AuthPurpose::Cleanup && record.role == JobRole::Child)
+        || (purpose == AuthPurpose::CommittedResult && record.role != JobRole::Worker)
     {
         return Err(unauthorized());
     }
     if !matches_digest(&auth.secret, &record.secret_digest)
         || record.attachment_id != auth.attachment_id
         || record.attachment_epoch != auth.attachment_epoch
+        || record.assignment_generation != auth.assignment_generation
     {
         return Err(unauthorized());
     }
     let mut matching_runs = state.runs.iter().enumerate().filter(|(_, run)| run.run_id == record.run_id);
     let (run_index, run) = matching_runs.next().ok_or_else(unauthorized)?;
-    if matching_runs.next().is_some() || run.root_id != record.root_id {
+    if matching_runs.next().is_some() || run.root_id != record.root_id
+        || run.assignment_generation != record.assignment_generation {
         return Err(unauthorized());
     }
-    validate_run_role(run, record.role, record.subject_child_id.as_deref())?;
-    if purpose == AuthPurpose::Ordinary && run.stage == RunStage::Closed {
+    validate_run_role(run, record.role)?;
+    if matches!(purpose, AuthPurpose::Ordinary | AuthPurpose::Registration) && run.stage == RunStage::Closed {
         return Err(unauthorized());
     }
     if purpose == AuthPurpose::Cleanup && record.role == JobRole::Root && run.stage != RunStage::Active {
@@ -380,10 +442,6 @@ fn validate_auth(
     let checkout_claim_id = if purpose == AuthPurpose::Cleanup {
         // No task/claim writer authority is returned by cleanup admission.
         None
-    } else if purpose == AuthPurpose::Retirement {
-        // A conflicting/released writer claim must not prevent stopping this
-        // exact still-current process. It grants no source-writer authority.
-        run.checkout_claim_id.clone()
     } else { match record.role {
         JobRole::Root => {
             if run.checkout_claim_id.is_some() {
@@ -391,7 +449,7 @@ fn validate_auth(
             }
             None
         }
-        JobRole::Worker | JobRole::Child => {
+        JobRole::Worker => {
             let claim_id = run.checkout_claim_id.as_ref().ok_or_else(unauthorized)?;
             let mut claims = state.checkout_claims.iter().filter(|claim| &claim.claim_id == claim_id);
             let claim = claims.next().ok_or_else(unauthorized)?;
@@ -417,7 +475,7 @@ fn validate_auth(
     Ok(AuthorizedJob {
         run_index,
         role: record.role,
-        subject_child_id: record.subject_child_id.clone(),
+        assignment_generation: record.assignment_generation,
         attachment_id: record.attachment_id.clone(),
         attachment_epoch: record.attachment_epoch,
         checkout_claim_id,
@@ -431,7 +489,7 @@ fn validate_root_chain(state: &OrchestrationState, run: &Run) -> Result<(), Insp
             return Err(unauthorized());
         }
         if current.run_id == run.root_id {
-            return validate_run_role(current, JobRole::Root, None);
+            return validate_run_role(current, JobRole::Root);
         }
         if current.kind != RunKind::Worker {
             return Err(unauthorized());
@@ -446,34 +504,33 @@ fn validate_root_chain(state: &OrchestrationState, run: &Run) -> Result<(), Insp
     Err(unauthorized())
 }
 
-fn validate_role(run: &Run, role: JobRole, subject: Option<&str>) -> Result<(), InspectionError> {
-    validate_run_role(run, role, subject)?;
+fn validate_role(run: &Run, role: JobRole) -> Result<(), InspectionError> {
+    validate_run_role(run, role)?;
     if run.stage == RunStage::Closed {
         return Err(unauthorized());
     }
     Ok(())
 }
 
-fn validate_run_role(run: &Run, role: JobRole, subject: Option<&str>) -> Result<(), InspectionError> {
-    validate_subject(role, subject)?;
+fn validate_run_role(run: &Run, role: JobRole) -> Result<(), InspectionError> {
+    validate_generation(role, run.assignment_generation)?;
     match role {
         JobRole::Root if matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
             && run.run_id == run.root_id && run.parent_run_id.is_none() => Ok(()),
-        JobRole::Worker | JobRole::Child if run.kind == RunKind::Worker
+        JobRole::Worker if run.kind == RunKind::Worker
             && run.run_id != run.root_id && run.parent_run_id.is_some() => Ok(()),
         _ => Err(unauthorized()),
     }
 }
 
-fn validate_subject(role: JobRole, subject: Option<&str>) -> Result<(), InspectionError> {
-    match (role, subject) {
-        (JobRole::Root | JobRole::Worker, None) => Ok(()),
-        (JobRole::Child, Some(subject)) if !subject.is_empty()
-            && subject.len() <= MAX_CHILD_ID_BYTES
-            && !subject.chars().any(char::is_control) => Ok(()),
+fn validate_generation(role: JobRole, generation: Option<u64>) -> Result<(), InspectionError> {
+    match (role, generation) {
+        (JobRole::Root, None) => Ok(()),
+        (JobRole::Worker, Some(value)) if value > 0 && value <= super::MAX_SAFE_COUNTER => Ok(()),
         _ => Err(unauthorized()),
     }
 }
+
 
 fn valid_uuid(value: &str) -> Result<(), InspectionError> {
     Uuid::parse_str(value).map(|_| ()).map_err(|_| unauthorized())
@@ -631,7 +688,6 @@ pub(crate) fn test_job_auth(
     state: &mut OrchestrationState,
     index: usize,
     role: JobRole,
-    subject: Option<&str>,
 ) -> JobAuth {
     use cockpit_protocol::orchestration::{CheckoutIdentity, DirectoryIdentity, ExecutionAttachment};
     use super::claims::{AttachmentReference, CheckoutClaim};
@@ -642,7 +698,7 @@ pub(crate) fn test_job_auth(
         epoch: 1,
         state: AttachmentState::Connected,
         location: None,
-        main_session_id: None,
+        conversation: None,
         process: None,
         shell: None,
         machine_id: None,
@@ -650,7 +706,7 @@ pub(crate) fn test_job_auth(
         launch_mode: None,
         updated_at: super::now(),
     });
-    let (record, auth) = test_job_credential(run, role, subject);
+    let (record, auth) = test_job_credential(run, role);
     if role == JobRole::Root {
         run.checkout_claim_id = None;
     } else {
@@ -680,6 +736,16 @@ pub(crate) fn test_job_auth(
         } else {
             state.checkout_claims.push(claim);
         }
+        if let (Some(generation), Some(conversation), Some(task_id)) = (
+            run.assignment_generation, run.attachment.as_ref().and_then(|a| a.conversation.clone()), run.task_id.clone()) {
+            let ownership = cockpit_protocol::orchestration::TaskOwnership { root_id: run.root_id.clone(), task_id,
+                generation, owner: Some(cockpit_protocol::orchestration::TaskOwner { run_id: run.run_id.clone(),
+                    conversation, claim_operation_id: auth.credential_id.clone() }) };
+            if let Some(existing) = state.task_ownership.iter_mut().find(|record|
+                record.root_id == ownership.root_id && record.task_id == ownership.task_id) {
+                *existing = ownership;
+            } else { state.task_ownership.push(ownership); }
+        }
     }
     if let Some(existing) = state.credentials.iter_mut().find(|existing| existing.credential_id == record.credential_id) {
         *existing = record;
@@ -696,7 +762,6 @@ pub(crate) fn test_job_auth(
 pub(crate) fn test_job_credential(
     run: &Run,
     role: JobRole,
-    subject: Option<&str>,
 ) -> (JobCredentialRecord, JobAuth) {
     let attachment = run.attachment.as_ref().expect("credential test run has an attachment");
     let mut identity = Sha256::new();
@@ -707,7 +772,7 @@ pub(crate) fn test_job_credential(
     }
     identity.update(attachment.epoch.to_le_bytes());
     identity.update([role as u8]);
-    identity.update(subject.unwrap_or("").as_bytes());
+    identity.update(run.assignment_generation.unwrap_or(0).to_le_bytes());
     let digest = identity.finalize();
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&digest[..16]);
@@ -716,13 +781,15 @@ pub(crate) fn test_job_credential(
         secret: SecretBytes::new([0xa7; 32]),
         attachment_id: attachment.attachment_id.clone(),
         attachment_epoch: attachment.epoch,
+        assignment_generation: run.assignment_generation,
     };
     let record = JobCredentialRecord {
         credential_id: auth.credential_id.clone(),
         run_id: run.run_id.clone(),
         root_id: run.root_id.clone(),
         role,
-        subject_child_id: subject.map(str::to_owned),
+        assignment_generation: run.assignment_generation,
+        conversation: attachment.conversation.clone(),
         attachment_id: auth.attachment_id.clone(),
         attachment_epoch: auth.attachment_epoch,
         secret_digest: format!("{:x}", Sha256::digest(auth.secret.0)),

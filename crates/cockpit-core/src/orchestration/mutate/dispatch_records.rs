@@ -19,7 +19,7 @@ impl OrchestrationService {
                 && current.run_id == current.root_id && current.task_id.is_none()
                 && current.run_id == expected.run_id && current.root_id == expected.root_id
                 && current.session_id == expected.session_id && current.attempt == expected.attempt
-                && current.attachment.as_ref().and_then(|a| a.main_session_id.as_ref()) == expected.attachment.as_ref().and_then(|a| a.main_session_id.as_ref())
+                && current.attachment.as_ref().and_then(|a| a.conversation.as_ref()) == expected.attachment.as_ref().and_then(|a| a.conversation.as_ref())
                 && current.attachment.as_ref().and_then(|a| a.process.as_ref()) == expected.attachment.as_ref().and_then(|a| a.process.as_ref())
                 && same_launch_location(current.attachment.as_ref().and_then(|a| a.location.as_ref()), expected.attachment.as_ref().and_then(|a| a.location.as_ref())));
         }
@@ -162,6 +162,9 @@ impl OrchestrationService {
                     let attachment = run.attachment.as_mut().ok_or_else(|| error("attachment_missing", "Tab receipt has no reserved attachment"))?;
                     attachment.machine_id = launch_shell_identity.as_ref().and_then(|shell| crate::process_identity::verified_machine_id(&shell.process));
                     attachment.location = Some(location);
+                    if attachment.launch_mode == Some(AttachmentLaunchMode::DirectProcess) && attachment.process.is_none() {
+                        attachment.process = launch_shell_identity.as_ref().map(|shell| shell.process.clone());
+                    }
                     attachment.shell = launch_shell_identity;
                     attachment.updated_at = now();
                 }
@@ -189,7 +192,7 @@ impl OrchestrationService {
         let index = run_index(&state, &expected.run_id)?;
         if state.runs[index].stage == RunStage::Closed
             || !same_launch_incarnation(&state.runs[index], expected)
-            || state.runs[index].attachment.as_ref().is_some_and(|a| a.process.is_some() || a.main_session_id.is_some()) {
+            || state.runs[index].attachment.as_ref().is_some_and(|a| a.process.is_some()) {
             return Err(error("attachment_conflict", "Run changed before writer reservation"));
         }
         if let Some(saved) = &state.runs[index].checkout
@@ -215,7 +218,7 @@ impl OrchestrationService {
         if state.runs[index].attachment.is_none() {
             state.runs[index].attachment = Some(ExecutionAttachment {
                 attachment_id: Uuid::new_v4().to_string(), epoch: 1, state: AttachmentState::Reserved,
-                location: None, main_session_id: None, process: None, shell: None,
+                location: None, conversation: None, process: None, shell: None,
                 machine_id: None, launch_mode: None, launch_attempt: 0, updated_at: now(),
             });
         }
@@ -239,11 +242,12 @@ impl OrchestrationService {
         }
         let existing = state.credentials.iter().find(|c| c.run_id == reference.run_id
             && c.attachment_id == reference.attachment_id && c.attachment_epoch == reference.attachment_epoch
-            && c.role == role && c.subject_child_id.is_none() && c.state == credentials::CredentialState::Active);
+            && c.role == role && c.assignment_generation == state.runs[index].assignment_generation
+            && c.state == credentials::CredentialState::Active);
         let credential_file = if let Some(record) = existing {
             credentials::credential_path(self.base(), record)?
         } else {
-            let (record, path) = credentials::stage_credential(self.base(), &state.runs[index], role, None)?;
+            let (record, path) = credentials::stage_credential(self.base(), &state.runs[index], role)?;
             state.credentials.push(record);
             path
         };

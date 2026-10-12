@@ -76,13 +76,18 @@ pub(crate) fn validate_report_output(
         if source_output.is_some() { return Err(error("invalid_source_output", "Only Result carries source output")); }
         return Ok(());
     }
+    let run = &state.runs[index];
+    if run.kind != RunKind::Worker || run.task_id.as_deref().is_none_or(|task_id|
+        projection::current_task_run(state, &run.root_id, task_id)
+            .is_none_or(|current| current.run_id != run.run_id)) {
+        return Err(error("attempt_stale", "Result source must belong to the current task owner"));
+    }
     let Some(output) = source_output else {
         return if *outcome == Some(ReportOutcome::Succeeded) {
             Err(error("source_output_required", "Successful Result requires actual source output"))
         } else { Ok(()) };
     };
     validate_checks(checks(output))?;
-    let run = &state.runs[index];
     let (result_id, revision) = output_identity(output);
     if result_id != message_id || revision.is_empty() {
         return Err(error("source_output_conflict", "Source output must identify this Result and the worker's current scope"));
@@ -131,13 +136,19 @@ fn validate_proof(state: &OrchestrationState, run: &Run, action: &OrchestrationA
 
 pub(in crate::orchestration) fn authorize_replay(state: &OrchestrationState, actor: &Actor, session_id: &str, run_id: &str) -> Result<usize, InspectionError> {
     let index = scoped_index(state, session_id, run_id)?;
+    let run = &state.runs[index];
+    if run.kind != RunKind::Worker || run.task_id.as_deref().is_none_or(|task_id|
+        projection::current_task_run(state, &run.root_id, task_id)
+            .is_none_or(|current| current.run_id != run.run_id)) {
+        return Err(error("integration_conflict", "Integration source must be the current canonical task owner"));
+    }
     if let Actor::Operator(_) = actor { return Ok(index); }
-    let Actor::Agent(agent) = actor else { return Err(error("actor_forbidden", "Bootstrap cannot record integration")); };
-    let job = credentials::validate_job_auth(state, &agent.auth)?;
+    let Actor::Agent(agent) = actor else { unreachable!() };
+    let job = credentials::validate_caller(state, agent)?;
     let root = &state.runs[job.run_index];
     if job.role != JobRole::Root || root.stage != RunStage::Active || root.parent_run_id.is_some()
         || state.runs[index].root_id != root.run_id || !is_ancestor(state, &root.run_id, run_id) {
-        return Err(error("actor_forbidden", "Only the current root main or operator may record accepted worker integration"));
+        return Err(error("actor_forbidden", "Only the current root or operator may record accepted worker integration"));
     }
     Ok(index)
 }
@@ -164,10 +175,10 @@ fn accepted_identity(ctx: &MutationCtx<'_>, record: &IntegrationRecord, index: u
 pub(super) fn apply(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
     let OrchestrationAction::IntegrationRecord { record } = &action else { unreachable!() };
     let index = authorize_replay(ctx.state, ctx.actor, ctx.session_id, &record.run_id)?;
+    accepted_identity(ctx, record, index)?;
     if let Some(result) = resume::replay(ctx, &record.operation_id, DurableOperationKind::IntegrationRecord, &action)? {
         return Ok(Applied::Document(result));
     }
-    accepted_identity(ctx, record, index)?;
     let run = &ctx.state.runs[index];
     let source = run.source_output.as_ref().expect("accepted source");
     let mut retained_checks = Vec::new();
@@ -211,9 +222,11 @@ impl OrchestrationService {
             let state = locked.read()?;
             let (index, source, target) = match &request.action {
                 OrchestrationAction::Report { kind: ReportKind::Result, source_output: Some(source @ SourceOutput::Code { .. }), .. } => {
-                    let Actor::Agent(agent) = actor else { return Err(error("actor_forbidden", "Only job main reports code output")); };
-                    let job = credentials::validate_job_auth(&state, &agent.auth)?;
-                    if job.role == JobRole::Child { return Err(error("actor_forbidden", "Child cannot submit the main Result")); }
+                    let Actor::Agent(agent) = actor else { return Err(error("actor_forbidden", "Only the current worker reports code output")); };
+                    let job = credentials::validate_caller(&state, agent)?;
+                    if job.role != JobRole::Worker || state.runs[job.run_index].stage != RunStage::Working {
+                        return Err(error("actor_forbidden", "Only the current Working worker can submit Result source"));
+                    }
                     (job.run_index, source.clone(), None)
                 }
                 OrchestrationAction::IntegrationRecord { record } if matches!(record.integration, Integration::Integrated { .. }) => {
@@ -222,7 +235,7 @@ impl OrchestrationService {
                     let Integration::Integrated { target_repository_key, integrator_run_id, .. } = &record.integration else { unreachable!() };
                     let integrator = &state.runs[scoped_index(&state, &request.session_id, integrator_run_id)?];
                     if let Actor::Agent(agent) = actor {
-                        if state.runs[credentials::validate_job_auth(&state, &agent.auth)?.run_index].run_id != *integrator_run_id {
+                        if state.runs[credentials::validate_caller(&state, agent)?.run_index].run_id != *integrator_run_id {
                             return Err(error("actor_forbidden", "Integrator identity must be the authenticated job"));
                         }
                     }
@@ -542,15 +555,27 @@ mod tests {
     fn successful_result_uses_current_scope_not_original_launch_revision() {
         let mut run = new_run("worker", "session", RunKind::Worker, "worker".into(), "root", Some("root".into()), Some("task".into()), 1);
         run.task_revision_at_start = Some("original launch scope".into());
+        run.assignment_generation = Some(1);
+        let conversation = ConversationIdentity { harness: "test".into(), session_id: "worker-conversation".into() };
+        run.attachment.as_mut().unwrap().conversation = Some(conversation.clone());
         let output = SourceOutput::NonCode { result_message_id: "current-result".into(),
             task_revision: "updated canonical scope".into(), artifacts: vec!["actual analysis result".into()],
             focused_checks: Vec::new() };
-        let state = OrchestrationState { runs: vec![run], ..Default::default() };
+        let mut state = OrchestrationState { runs: vec![run], task_ownership: vec![TaskOwnership {
+            root_id: "root".into(), task_id: "task".into(), generation: 1,
+            owner: Some(TaskOwner { run_id: "worker".into(), conversation, claim_operation_id: id() }),
+        }], ..Default::default() };
         let mut action = OrchestrationAction::Report { message_id: "current-result".into(),
             kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded), summary: "Updated scope completed".into(),
             plan: None, source_output: Some(output), to_run_id: None,
             original_task_revision: Some("updated canonical scope".into()), original_claim_id: None };
         assert!(validate_report_output(&state, 0, &action, None, "session", Some("updated canonical scope")).is_ok());
+        let owner = state.task_ownership[0].owner.take();
+        state.task_ownership[0].generation = 2;
+        assert_eq!(validate_report_output(&state, 0, &action, None, "session",
+            Some("updated canonical scope")).unwrap_err().code, "attempt_stale");
+        state.task_ownership[0].owner = owner;
+        state.task_ownership[0].generation = 1;
         if let OrchestrationAction::Report { source_output: Some(SourceOutput::NonCode { task_revision, .. }), .. } = &mut action {
             *task_revision = "original launch scope".into();
         }

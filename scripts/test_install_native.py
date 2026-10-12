@@ -86,36 +86,48 @@ class NativeInstallTests(unittest.TestCase):
         self.assertEqual(receipt["schema"], 3)
         self.assertEqual(receipt["status"], "installed")
         self.assertEqual(receipt["artifact_sha256"]["cli_binary"], installer.sha256(self.paths.cli_binary))
-        self.assertEqual(self.paths.omp_extension.stat().st_mode & 0o777, 0o644)
-        self.assertEqual(receipt["artifact_sha256"]["omp_extension"], installer.sha256(self.paths.omp_extension))
-
-    def test_modified_extension_is_never_overwritten_or_removed(self) -> None:
-        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
-        self.paths.omp_extension.write_text("local extension modifications\n", encoding="utf-8")
-        with self.assertRaisesRegex(installer.InstallError, "modified installed files: omp_extension"):
-            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
-        self.assertFalse(installer.uninstall(self.paths))
-        self.assertEqual(self.paths.omp_extension.read_text(encoding="utf-8"), "local extension modifications\n")
-
-    def test_pre_extension_receipt_migrates_without_claiming_foreign_file(self) -> None:
-        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
-        receipt = json.loads(self.paths.receipt.read_text(encoding="utf-8"))
-        del receipt["paths"]["omp_extension"]
-        del receipt["artifact_sha256"]["omp_extension"]
-        self.paths.receipt.write_text(json.dumps(receipt), encoding="utf-8")
-        with self.assertRaisesRegex(installer.InstallError, "unowned OMP extension"):
-            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
-        self.paths.omp_extension.unlink()
-        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
-        self.assertTrue(self.paths.omp_extension.is_file())
-
-    def test_uninstall_removes_owned_extension_without_managing_omp_configuration(self) -> None:
-        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
-        configuration = self.root / "omp-config.yml"
-        configuration.write_text("extensions: []\n", encoding="utf-8")
+        self.assertNotIn("omp_extension", receipt["paths"])
+        self.assertNotIn("omp_extension", receipt["artifact_sha256"])
+        self.assertFalse((self.paths.app_root / "omp").exists())
         self.assertTrue(installer.uninstall(self.paths))
-        self.assertFalse(self.paths.omp_extension.exists())
-        self.assertEqual(configuration.read_text(encoding="utf-8"), "extensions: []\n")
+        self.assertFalse(self.paths.app_root.exists())
+
+    def test_install_and_uninstall_leave_foreign_omp_paths_untouched(self) -> None:
+        for kind in ("empty_directory", "extension_directory", "file"):
+            with self.subTest(kind=kind):
+                base_paths = installer.install_paths(self.root / kind)
+                paths = installer.InstallPaths(base_paths.data_home, base_paths.bin_home, application=None)
+                foreign = paths.app_root / "omp"
+                foreign.parent.mkdir(parents=True)
+                if kind == "file":
+                    foreign.write_bytes(b"foreign omp file")
+                else:
+                    foreign.mkdir()
+                    if kind == "extension_directory":
+                        (foreign / "cockpit-orchestration.ts").write_bytes(b"foreign extension")
+                original = foreign.stat()
+
+                def assert_foreign_untouched() -> None:
+                    current = foreign.stat()
+                    self.assertEqual((current.st_ino, current.st_mode, current.st_mtime_ns), (original.st_ino, original.st_mode, original.st_mtime_ns))
+                    if kind == "file":
+                        self.assertEqual(foreign.read_bytes(), b"foreign omp file")
+                    elif kind == "extension_directory":
+                        self.assertEqual(sorted(path.name for path in foreign.iterdir()), ["cockpit-orchestration.ts"])
+                        self.assertEqual((foreign / "cockpit-orchestration.ts").read_bytes(), b"foreign extension")
+                    else:
+                        self.assertEqual(list(foreign.iterdir()), [])
+
+                installer.install(paths, self.binary, self.cli_binary, self.icon)
+                receipt = json.loads(paths.receipt.read_text(encoding="utf-8"))
+                self.assertNotIn("omp_extension", receipt["paths"])
+                self.assertNotIn("omp_extension", receipt["artifact_sha256"])
+                assert_foreign_untouched()
+                installer.install(paths, self.binary, self.cli_binary, self.icon)
+                assert_foreign_untouched()
+                self.assertTrue(installer.uninstall(paths))
+                self.assertFalse(paths.receipt.exists())
+                assert_foreign_untouched()
 
     def test_macos_install_copies_complete_bundle_and_records_manifest(self) -> None:
         paths = self.mac_paths()
@@ -134,6 +146,9 @@ class NativeInstallTests(unittest.TestCase):
         self.assertNotIn("binary", receipt["paths"])
         self.assertEqual(receipt["artifact_manifests"]["application"], installer.bundle_manifest(paths.application))
         self.assertEqual(receipt["artifact_sha256"]["application"], installer.sha256_bundle(paths.application))
+        self.assertNotIn("omp_extension", receipt["paths"])
+        self.assertNotIn("omp_extension", receipt["artifact_sha256"])
+        self.assertFalse((paths.app_root / "omp").exists())
 
     def test_macos_update_refuses_modified_bundle_and_preserves_it(self) -> None:
         paths = self.mac_paths()

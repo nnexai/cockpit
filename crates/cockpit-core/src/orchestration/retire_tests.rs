@@ -39,7 +39,7 @@ impl Fixture {
         run.cleanup_policy = Some(WorkerCleanupPolicy::OwnedWhenSafe);
         run.attachment = Some(ExecutionAttachment {
             attachment_id: uuid::Uuid::new_v4().to_string(), epoch: 1,
-            state: AttachmentState::Connected, location: None, main_session_id: None,
+            state: AttachmentState::Connected, location: None, conversation: None,
             launch_mode: Some(AttachmentLaunchMode::ShellAgent),
             process: None, shell: None, machine_id: crate::process_identity::machine_id(),
             launch_attempt: 1, updated_at: now(),
@@ -49,7 +49,9 @@ impl Fixture {
             tab_id: "tab".into(), pane_id: "pane".into(), terminal_id: Some("terminal".into()),
             launch_tag: "tag".into(), boot_id: None, native_session_id: None,
         });
-        run.attachment.as_mut().unwrap().main_session_id = Some("native".into());
+        run.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
+            harness: "omp".into(), session_id: "conversation".into(),
+        });
         run.attachment.as_mut().unwrap().process = Some(process());
         run.attachment.as_mut().unwrap().shell = Some(shell_identity());
         let mut launch = dispatch(DispatchStep::Launched);
@@ -99,12 +101,17 @@ fn change_run(service: &OrchestrationService, id: &str, f: impl FnOnce(&mut Run)
     locked.save(&mut state).unwrap();
 }
 fn process() -> NativeProcessIdentity {
-    NativeProcessIdentity { pid: std::process::id(),
-        start_ticks: crate::process_identity::start_identity(std::process::id() as i32).unwrap(),
+    NativeProcessIdentity { pid: i32::MAX as u32, start_ticks: 1,
         kernel_boot_id: crate::process_identity::kernel_boot_id() }
 }
-fn stopped() -> RetirementState {
-    RetirementState::NativeStopped { at: now(), evidence: NativeStopEvidence::AlreadyExited }
+fn waiting() -> RetirementState {
+    RetirementState::Waiting { blockers: Vec::new() }
+}
+fn pin_direct(run: &mut Run) {
+    let attachment = run.attachment.as_mut().unwrap();
+    attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+    attachment.shell.as_mut().unwrap().process = attachment.process.clone().unwrap();
+    run.retirement.as_mut().unwrap().identity = retirement::identity_for(run);
 }
 fn old() -> String {
     (time::OffsetDateTime::now_utc() - time::Duration::hours(1))
@@ -116,7 +123,7 @@ fn runtime(agent: bool) -> RuntimeView {
             tab_id: "tab".into(), tab_label: "tag".into(), pane_id: "pane".into(),
             terminal_id: Some("terminal".into()), native_session_id: Some("native".into()),
             agent_name: agent.then(|| "tag".into()), agent_kind: agent.then(|| "omp".into()),
-            launch_pending: false, interactive_ready: false, agent_status: None, state_changed_at: None }], }
+            launch_pending: false, agent_status: None, state_changed_at: None }], }
 }
 fn absent() -> RuntimeView { let mut r = runtime(false); r.panes.clear(); r }
 fn shell_identity() -> NativeShellIdentity {
@@ -137,6 +144,7 @@ struct Script {
     infos: VecDeque<PaneProcessInfo>,
     events: Vec<&'static str>,
     close_count: usize,
+    allow_close: bool,
     runtime_hook: Option<(usize, Box<dyn FnOnce() + Send>)>,
 }
 struct FakeHerdr { script: Mutex<Script> }
@@ -146,6 +154,7 @@ impl FakeHerdr {
             runtimes: reads.into_iter().map(Ok).collect(), info: original_shell_info(), info_error: false,
             events: vec![], close_count: 0, runtime_hook: None,
             infos: VecDeque::new(),
+            allow_close: false,
         }) }
     }
     fn closes(&self) -> usize { self.script.lock().close_count }
@@ -172,8 +181,10 @@ impl OrchestrationHerdr for FakeHerdr {
     }
     async fn close_pane(&self, session: &str, endpoint: &str, pane: &str) -> Result<(), InspectionError> {
         assert_eq!((session, endpoint, pane), ("fixture", "endpoint", "pane"));
-        self.script.lock().close_count += 1;
-        panic!("unproven native consumers must never be cancelled")
+        let mut script = self.script.lock();
+        assert!(script.allow_close, "unproven physical consumers must never be cancelled");
+        script.close_count += 1;
+        Ok(())
     }
     async fn create_agent_tab(&self, _: &str, _: &AgentTabRequest) -> Result<RunLocation, InspectionError> {
         panic!("retirement cannot create or broadly close tabs/workspaces")
@@ -181,15 +192,15 @@ impl OrchestrationHerdr for FakeHerdr {
 }
 
 #[tokio::test]
-async fn original_shell_and_unproven_consumers_keep_final_owned_pane_and_history() {
-    let f = Fixture::new(stopped());
+async fn original_shell_keeps_final_owned_pane_and_history() {
+    let f = Fixture::new(waiting());
     let original = f.current();
     let h = FakeHerdr::new(&f, vec![runtime(false)]);
     let b = ObservationBackoff::default();
     f.step(&h, &b).await.unwrap();
     let retained = f.current();
     assert!(matches!(retained.retirement.as_ref().unwrap().state,
-        RetirementState::Retained { reason: RetainReason::UserActivity, native_stopped: true, .. }));
+        RetirementState::Retained { reason: RetainReason::UserActivity, .. }));
     assert_eq!(serde_json::to_value(&retained.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
     assert_eq!(serde_json::to_value(&retained.result).unwrap(), serde_json::to_value(&original.result).unwrap());
     assert_eq!(retained.checkout_claim_id, original.checkout_claim_id);
@@ -204,7 +215,7 @@ async fn original_shell_and_unproven_consumers_keep_final_owned_pane_and_history
 #[tokio::test]
 async fn siblings_in_other_tabs_survive_but_shared_tab_and_contamination_are_retained() {
     for shared in [false, true] {
-        let f = Fixture::new(stopped());
+        let f = Fixture::new(waiting());
         let mut view = runtime(false);
         let mut sibling = view.panes[0].clone();
         sibling.pane_id = "user-pane".into(); sibling.terminal_id = Some("user-terminal".into());
@@ -214,11 +225,11 @@ async fn siblings_in_other_tabs_survive_but_shared_tab_and_contamination_are_ret
         f.step(&h, &ObservationBackoff::default()).await.unwrap();
         assert_eq!(h.closes(), 0);
         assert!(matches!(f.current().retirement.unwrap().state,
-            RetirementState::Retained { reason, native_stopped: true, .. }
+            RetirementState::Retained { reason, .. }
             if reason == if shared { RetainReason::SharedTab } else { RetainReason::UserActivity }));
     }
     for change in 0..5 {
-        let f = Fixture::new(stopped());
+        let f = Fixture::new(waiting());
         let mut contaminated = runtime(false);
         match change {
             0 => contaminated.panes[0].tab_label = "User renamed".into(),
@@ -231,19 +242,20 @@ async fn siblings_in_other_tabs_survive_but_shared_tab_and_contamination_are_ret
         f.step(&h, &ObservationBackoff::default()).await.unwrap();
         assert_eq!(h.closes(), 0);
         assert!(matches!(f.current().retirement.unwrap().state,
-            RetirementState::Retained { native_stopped: true, .. }));
+            RetirementState::Retained { .. }));
     }
 }
 
 #[tokio::test]
 async fn foreground_process_never_authorizes_terminal_cancellation() {
-    let f = Fixture::new(stopped());
+    let f = Fixture::new(waiting());
+    f.change(pin_direct);
     let h = FakeHerdr::new(&f, vec![runtime(false)]);
     h.script.lock().info.foreground_pgid = Some(999);
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
     assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::Retained { reason: RetainReason::ForegroundProcess, native_stopped: true, .. }));
+        RetirementState::Retained { reason: RetainReason::ForegroundProcess, .. }));
 }
 
 #[tokio::test]
@@ -283,48 +295,21 @@ async fn recovered_close_intent_performs_one_read_only_reclassification() {
 #[tokio::test]
 async fn unavailable_reads_are_bounded_and_eventually_visible() {
     assert!(retirement::OBSERVATION_RETRY_SECS >= 30);
-    for waiting in [false, true] {
-        let f = Fixture::new(if waiting { RetirementState::Waiting { blockers: vec![] } } else { stopped() });
-        let h = FakeHerdr::new(&f, vec![]);
-        let b = ObservationBackoff::default();
-        for _ in 0..1000 { f.step(&h, &b).await.unwrap(); }
-        assert_eq!(h.runtime_calls(), 1);
-        assert_eq!(h.closes(), 0);
-        f.change(|r| {
-            let record = r.retirement.as_mut().unwrap();
-            record.created_at = old();
-            if !waiting { record.state = RetirementState::NativeStopped { at: old(), evidence: NativeStopEvidence::AlreadyExited }; }
-        });
-        // Simulate a fresh owner after the deadline; unavailable evidence
-        // cannot leave an invisible retry loop running forever.
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
-        assert!(matches!(f.current().retirement.unwrap().state,
-            RetirementState::Retained { reason: RetainReason::ObservationUnavailable, .. }));
-    }
+    let f = Fixture::new(waiting());
+    let h = FakeHerdr::new(&f, vec![]);
+    let b = ObservationBackoff::default();
+    for _ in 0..1000 { f.step(&h, &b).await.unwrap(); }
+    assert_eq!(h.runtime_calls(), 1);
+    assert_eq!(h.closes(), 0);
+    f.change(|r| r.retirement.as_mut().unwrap().created_at = old());
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert!(matches!(f.current().retirement.unwrap().state,
+        RetirementState::Retained { reason: RetainReason::ObservationUnavailable, .. }));
 }
 
-#[tokio::test]
-async fn offer_uses_exact_process_pane_session_endpoint_and_fresh_read() {
-    for mismatch in 0..5 {
-        let f = Fixture::new(RetirementState::Waiting { blockers: vec![] });
-        let mut view = runtime(true);
-        match mismatch {
-            1 => view.endpoint_identity = "replacement".into(),
-            2 => view.panes[0].terminal_id = Some("replacement".into()),
-            3 => view.panes[0].native_session_id = Some("replacement".into()),
-            _ => {},
-        }
-        let h = FakeHerdr::new(&f, vec![view]);
-        h.script.lock().info.processes = vec![(if mismatch == 4 { 999 } else { process().pid }, "omp".into())];
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
-        assert_eq!(h.closes(), 0);
-        if mismatch == 0 { assert!(matches!(f.current().retirement.unwrap().state, RetirementState::NativeStopOffered { .. })); }
-        else { assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Retained { native_stopped: false, .. })); }
-    }
-}
 
 #[tokio::test]
-async fn open_native_descendants_block_offer_without_runtime_reads() {
+async fn open_descendant_runs_block_close_after_read_only_observation() {
     let f = Fixture::new(RetirementState::Waiting { blockers: vec![] });
     let mut child = new_run("child", "fixture", RunKind::Worker, "Child".into(), &f.run.run_id,
         Some(f.run.run_id.clone()), None, 1);
@@ -333,63 +318,28 @@ async fn open_native_descendants_block_offer_without_runtime_reads() {
     let mut state = locked.read().unwrap(); state.runs.push(child); locked.save(&mut state).unwrap(); drop(locked);
     let h = FakeHerdr::new(&f, vec![runtime(true)]);
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert_eq!(h.runtime_calls(), 0); assert_eq!(h.closes(), 0);
+    assert_eq!(h.runtime_calls(), 1); assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Waiting { blockers } if blockers.contains(&RetirementBlocker::OpenDescendantRuns)));
 }
 
-#[tokio::test]
-async fn native_ack_and_missing_pane_are_not_exit_proof_and_timeout_is_unknown() {
-    let f = Fixture::new(RetirementState::NativeStopRequested { at: now() });
-    let h = FakeHerdr::new(&f, vec![absent()]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert!(matches!(f.current().retirement.unwrap().state, RetirementState::NativeStopRequested { .. }));
-    assert_eq!(h.runtime_calls(), 0); assert_eq!(h.closes(), 0);
-    f.change(|r| r.retirement.as_mut().unwrap().state = RetirementState::NativeStopRequested { at: old() });
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::Unknown { phase: RetirementPhase::NativeStop, .. }));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn spawned_exact_incarnation_must_exit_before_native_stopped() {
-    let mut child = tokio::process::Command::new("sleep").arg("60")
-        .kill_on_drop(true).spawn().unwrap();
-    let pid = child.id().unwrap();
-    let identity = NativeProcessIdentity { pid,
-        start_ticks: crate::process_identity::start_identity(pid as i32).unwrap(),
-        kernel_boot_id: crate::process_identity::kernel_boot_id() };
-    let f = Fixture::new(RetirementState::NativeStopRequested { at: now() });
-    f.change(|r| { r.attachment.as_mut().unwrap().process = Some(identity.clone());
-        r.retirement.as_mut().unwrap().identity.as_mut().unwrap().process = identity; });
-    let h = FakeHerdr::new(&f, vec![]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert!(matches!(f.current().retirement.unwrap().state, RetirementState::NativeStopRequested { .. }));
-    child.kill().await.unwrap(); child.wait().await.unwrap();
-    h.script.lock().info_error = true;
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::NativeStopped { evidence: NativeStopEvidence::ExitedAfterShutdownRequest, .. }));
-    assert_eq!(h.closes(), 0);
-}
 
 #[tokio::test]
 async fn lease_and_durable_identity_change_fence_retirement_observation() {
-    let f = Fixture::new(stopped());
+    let f = Fixture::new(waiting());
     let h = FakeHerdr::new(&f, vec![runtime(false)]);
     let svc = Arc::clone(&f.service); let id = f.run.run_id.clone();
     h.script.lock().runtime_hook = Some((1, Box::new(move || {
-        change_run(&svc, &id, |r| r.attachment.as_mut().unwrap().main_session_id = Some("replaced".into()));
+        change_run(&svc, &id, |r| r.attachment.as_mut().unwrap().epoch += 1);
     })));
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
     let retained = f.current().retirement.unwrap();
     assert!(matches!(retained.state,
-        RetirementState::Retained { reason: RetainReason::IdentityChanged, native_stopped: true, .. }));
+        RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
     assert_eq!(f.current().retirement.unwrap(), retained);
     assert_eq!(h.closes(), 0);
-    let f = Fixture::new(stopped());
+    let f = Fixture::new(waiting());
     let h = FakeHerdr::new(&f, vec![runtime(false)]);
     let lease = f.service.execution_lease(&f.run.run_id).unwrap().unwrap();
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
@@ -399,40 +349,6 @@ async fn lease_and_durable_identity_change_fence_retirement_observation() {
     assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Retained { .. }));
 }
 
-#[tokio::test]
-async fn offered_and_deferred_deadlines_do_not_issue_native_or_terminal_effects() {
-    for deferred in [false, true] {
-        let f = Fixture::new(if deferred {
-            RetirementState::NativeStopDeferred { offered_at: old(), reason: NativeDeferReason::Busy, at: now() }
-        } else {
-            RetirementState::NativeStopOffered { offered_at:
-                (time::OffsetDateTime::now_utc() - time::Duration::seconds(121))
-                    .format(&time::format_description::well_known::Rfc3339).unwrap() }
-        });
-        let h = FakeHerdr::new(&f, vec![]);
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
-        assert_eq!(h.runtime_calls(), 0); assert_eq!(h.closes(), 0);
-        assert!(matches!(f.current().retirement.unwrap().state,
-            RetirementState::Retained { reason, native_stopped: false, .. }
-            if reason == if deferred { RetainReason::WorkerBusyTimeout } else { RetainReason::WorkerUnresponsive }));
-    }
-}
-
-#[tokio::test]
-async fn running_subagent_telemetry_blocks_offer_without_external_observation() {
-    let f = Fixture::new(RetirementState::Waiting { blockers: vec![] });
-    let locked = f.service.store.lock().unwrap();
-    let mut state = locked.read().unwrap();
-    state.subagents.push(Subagent { run_id: f.run.run_id.clone(), subagent_id: "child".into(),
-        parent_subagent_id: None, bound_omp_session: None, role: None, label: "Child".into(), status: SubagentStatus::Running,
-        summary: None, last_control: None, updated_at: now() });
-    locked.save(&mut state).unwrap(); drop(locked);
-    let h = FakeHerdr::new(&f, vec![]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert_eq!(h.runtime_calls(), 0); assert_eq!(h.closes(), 0);
-    assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Waiting { blockers }
-        if blockers == vec![RetirementBlocker::RunningSubagents]));
-}
 
 #[tokio::test]
 async fn failed_close_verification_stays_unknown_across_owner_restart() {
@@ -446,48 +362,28 @@ async fn failed_close_verification_stays_unknown_across_owner_restart() {
 }
 
 #[tokio::test]
-async fn identity_change_before_offer_and_replaced_retirement_queue_hint_are_fenced() {
+async fn identity_change_and_replaced_retirement_queue_hint_are_fenced() {
     let f = Fixture::new(RetirementState::Waiting { blockers: vec![] });
     let h = FakeHerdr::new(&f, vec![runtime(true)]);
     h.script.lock().info.processes = vec![(process().pid, "omp".into())];
     let svc = Arc::clone(&f.service); let id = f.run.run_id.clone();
     h.script.lock().runtime_hook = Some((1, Box::new(move || {
-        change_run(&svc, &id, |r| r.attachment.as_mut().unwrap().main_session_id = Some("replacement".into()));
+        change_run(&svc, &id, |r| r.attachment.as_mut().unwrap().epoch += 1);
     })));
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
     assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::Retained { reason: RetainReason::IdentityChanged, native_stopped: false, .. }));
+        RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
     assert_eq!(h.closes(), 0);
-    let f = Fixture::new(stopped());
+    let f = Fixture::new(waiting());
     f.change(|r| r.retirement.as_mut().unwrap().retirement_id = uuid::Uuid::new_v4().to_string());
     let h = FakeHerdr::new(&f, vec![]);
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
     assert_eq!(h.runtime_calls(), 0); assert_eq!(h.closes(), 0);
 }
 
-#[tokio::test]
-async fn old_process_incarnation_absence_is_distinct_from_pane_disappearance() {
-    let f = Fixture::new(RetirementState::Waiting { blockers: vec![] });
-    f.change(|r| {
-        let mut previous = r.attachment.as_mut().unwrap().process.clone().unwrap();
-        previous.start_ticks += 1;
-        r.attachment.as_mut().unwrap().process = Some(previous.clone());
-        r.retirement.as_mut().unwrap().identity.as_mut().unwrap().process = previous;
-    });
-    let h = FakeHerdr::new(&f, vec![runtime(false)]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::NativeStopped { evidence: NativeStopEvidence::AlreadyExited, .. }));
-    assert_eq!(h.closes(), 0);
-    let f = Fixture::new(RetirementState::Waiting { blockers: vec![] });
-    let h = FakeHerdr::new(&f, vec![absent()]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::Retained { reason: RetainReason::ProcessPaneMismatch, native_stopped: false, .. }));
-}
 
 #[tokio::test]
-async fn newly_running_descendant_during_offer_preflight_cannot_be_offered_shutdown() {
+async fn newly_running_descendant_during_close_preflight_cannot_be_closed() {
     let f = Fixture::new(RetirementState::Waiting { blockers: vec![] });
     let h = FakeHerdr::new(&f, vec![runtime(true)]);
     h.script.lock().info.processes = vec![(process().pid, "omp".into())];
@@ -500,8 +396,7 @@ async fn newly_running_descendant_during_offer_preflight_cannot_be_offered_shutd
         child.stage = RunStage::Working; state.runs.push(child);
         locked.save(&mut state).unwrap();
     })));
-    assert_eq!(f.step(&h, &ObservationBackoff::default()).await.unwrap_err().code,
-        "retirement_state_changed");
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
     assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Waiting { .. }));
     assert_eq!(h.closes(), 0);
 }
@@ -509,7 +404,8 @@ async fn newly_running_descendant_during_offer_preflight_cannot_be_offered_shutd
 #[tokio::test]
 async fn missing_or_changed_shell_fingerprint_never_authorizes_close() {
     for missing in [false, true] {
-        let f = Fixture::new(stopped());
+        let f = Fixture::new(waiting());
+        f.change(pin_direct);
         let h = FakeHerdr::new(&f, vec![runtime(false)]);
         let mut changed = original_shell_info();
         if missing { changed.shell_identity = None; }
@@ -518,8 +414,7 @@ async fn missing_or_changed_shell_fingerprint_never_authorizes_close() {
         f.step(&h, &ObservationBackoff::default()).await.unwrap();
         assert_eq!(h.closes(), 0);
         assert!(matches!(f.current().retirement.unwrap().state,
-            RetirementState::Retained { reason, native_stopped: true, .. }
-            if reason == if missing { RetainReason::NativeProcessUnverifiable } else { RetainReason::ForegroundProcess }));
+            RetirementState::Retained { reason: RetainReason::ForegroundProcess, .. }));
     }
 }
 
@@ -558,10 +453,13 @@ async fn real_same_pid_exec_sleep_and_exec_bash_are_not_the_original_launch_shel
             } else {
                 assert_ne!(fresh.executable_inode, baseline.executable_inode);
             }
-            let f = Fixture::new(stopped());
+            let f = Fixture::new(waiting());
             f.change(|r| {
-                r.attachment.as_mut().unwrap().shell = Some(baseline.clone());
-                r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell = baseline.clone();
+                let attachment = r.attachment.as_mut().unwrap();
+                attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+                attachment.shell = Some(baseline.clone());
+                attachment.process = Some(baseline.process.clone());
+                r.retirement.as_mut().unwrap().identity = retirement::identity_for(r);
             });
             let info = |identity: NativeShellIdentity| PaneProcessInfo {
                 pane_id: "pane".into(), shell_pid: Some(pid), foreground_pgid: Some(pid),
@@ -581,7 +479,7 @@ async fn real_same_pid_exec_sleep_and_exec_bash_are_not_the_original_launch_shel
             result.unwrap();
             assert_eq!(h.closes(), 0);
             assert!(matches!(f.current().retirement.unwrap().state,
-                RetirementState::Retained { native_stopped: true, .. }));
+                RetirementState::Retained { .. }));
             assert_eq!(serde_json::to_value(f.current().attachment).unwrap(),
                 serde_json::to_value(&original.attachment).unwrap());
             assert_eq!(serde_json::to_value(f.current().result).unwrap(),
@@ -592,10 +490,9 @@ async fn real_same_pid_exec_sleep_and_exec_bash_are_not_the_original_launch_shel
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn original_shell_builtin_work_is_preserved_after_native_root_exit() {
+async fn original_shell_builtin_work_is_preserved() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-    // Builtin work keeps the original shell fingerprint. Neither native root
-    // exit nor unchanged shell provenance provides an idle/consumer-stop proof.
+    // Unchanged shell provenance does not certify absence of user activity.
     let mut child = tokio::process::Command::new("bash").arg("-c")
         .arg("printf 'ready\\n'; read -r gate; printf 'builtin-running\\n'; read -r second_gate")
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
@@ -616,10 +513,10 @@ async fn original_shell_builtin_work_is_preserved_after_native_root_exit() {
     assert_eq!(line.trim(), "builtin-running");
     let fresh = crate::process_identity::executable_identity(pid as i32, start).unwrap();
     assert_eq!(fresh, baseline);
-    let f = Fixture::new(stopped());
+    let f = Fixture::new(waiting());
     f.change(|r| {
         r.attachment.as_mut().unwrap().shell = Some(baseline.clone());
-        r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell = baseline;
+        r.retirement.as_mut().unwrap().identity.as_mut().unwrap().shell = Some(baseline);
     });
     let mut view = runtime(false);
     let mut sibling = view.panes[0].clone();
@@ -634,29 +531,10 @@ async fn original_shell_builtin_work_is_preserved_after_native_root_exit() {
     result.unwrap();
     assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::Retained { reason: RetainReason::UserActivity, native_stopped: true, .. }));
+        RetirementState::Retained { reason: RetainReason::UserActivity, .. }));
 }
 
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn unknown_shutdown_reconciles_main_absence_without_reoffering_or_closing_accepted_worker() {
-    let f = Fixture::new(RetirementState::Unknown {
-        at: old(), phase: RetirementPhase::NativeStop, detail: "shutdown outcome unknown".into(),
-    });
-    f.change(|run| {
-        let mut old_process = run.attachment.as_ref().unwrap().process.clone().unwrap();
-        old_process.start_ticks += 1;
-        run.attachment.as_mut().unwrap().process = Some(old_process.clone());
-        run.retirement.as_mut().unwrap().identity.as_mut().unwrap().process = old_process;
-    });
-    let h = FakeHerdr::new(&f, vec![]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::NativeStopped { evidence: NativeStopEvidence::ExitedAfterShutdownRequest, .. }));
-    assert_eq!(h.runtime_calls(), 0);
-    assert_eq!(h.closes(), 0);
-}
 
 #[tokio::test]
 async fn unknown_close_reconciles_later_absence_without_resending_close() {
@@ -672,34 +550,6 @@ async fn unknown_close_reconciles_later_absence_without_resending_close() {
 }
 
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn shutdown_receipt_preflight_rechecks_descendants_and_attachment_after_physical_reads() {
-    for changed_epoch in [false, true] {
-        let f = Fixture::new(RetirementState::NativeStopOffered { offered_at: now() });
-        let h = FakeHerdr::new(&f, vec![runtime(true)]);
-        h.script.lock().info.processes.push((process().pid, "omp".into()));
-        let service = Arc::clone(&f.service);
-        let run_id = f.run.run_id.clone();
-        h.script.lock().runtime_hook = Some((1, Box::new(move || {
-            let locked = service.store.lock().unwrap();
-            let mut state = locked.read().unwrap();
-            if changed_epoch {
-                state.runs.iter_mut().find(|run| run.run_id == run_id).unwrap()
-                    .attachment.as_mut().unwrap().epoch += 1;
-            } else {
-                state.subagents.push(Subagent { run_id: run_id.clone(), subagent_id: "racing-child".into(),
-                    parent_subagent_id: None, bound_omp_session: None, role: None, label: "child".into(),
-                    status: SubagentStatus::Running, summary: None, last_control: None, updated_at: now() });
-            }
-            locked.save(&mut state).unwrap();
-        })));
-        let retirement_id = &f.run.retirement.as_ref().unwrap().retirement_id;
-        assert!(f.service.retirement_shutdown_preflight(&h, &f.run.run_id, retirement_id).await.is_err());
-        assert!(matches!(f.current().retirement.unwrap().state, RetirementState::NativeStopOffered { .. }));
-        assert_eq!(h.closes(), 0);
-    }
-}
 
 #[tokio::test]
 async fn historical_unknown_close_retains_pinned_identity_across_attachment_refresh() {
@@ -723,52 +573,48 @@ async fn historical_unknown_close_retains_pinned_identity_across_attachment_refr
     assert_eq!(h.closes(), 0);
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn accepted_direct_empty_pane_stays_protected_without_native_consumer_certificate() {
-    let mut f = Fixture::new(stopped());
-    f.change(|run| {
-        let attachment = run.attachment.as_mut().unwrap();
-        attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
-        let mut root = attachment.process.clone().unwrap();
-        root.start_ticks += 1;
-        attachment.process = Some(root.clone());
-        attachment.shell.as_mut().unwrap().process = root;
-        let pinned = retirement::retirement_for_accepted(run, RetirementTrigger::Accept, "reviewed-revision", &now())
-            .unwrap().identity;
-        run.retirement.as_mut().unwrap().identity = pinned;
-    });
-    f.run = f.current();
-    let h = FakeHerdr::new(&f, vec![runtime(false), runtime(false), absent()]);
-    h.script.lock().info = PaneProcessInfo { pane_id: "pane".into(),
-        shell_pid: Some(process().pid), foreground_pgid: None, processes: Vec::new(), shell_identity: None };
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
-    assert_eq!(h.closes(), 0);
-    assert!(matches!(f.current().retirement.as_ref().unwrap().state,
-        RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable, native_stopped: true, .. }));
-    assert_eq!(serde_json::to_value(f.current().attachment).unwrap(), serde_json::to_value(&f.run.attachment).unwrap());
-    assert_eq!(serde_json::to_value(f.current().result).unwrap(), serde_json::to_value(&f.run.result).unwrap());
-    assert!(f.current().retirement.unwrap().quiescent_stop_at.is_none());
-}
 
-#[cfg(target_os = "linux")]
 #[tokio::test]
-async fn direct_metadata_or_old_stop_receipt_never_substitutes_for_fresh_native_absence() {
-    let mut f = Fixture::new(stopped());
-    f.change(|run| {
-        let attachment = run.attachment.as_mut().unwrap();
-        attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
-        attachment.shell.as_mut().unwrap().process = attachment.process.clone().unwrap();
-        let pinned = retirement::retirement_for_accepted(run, RetirementTrigger::Accept, "reviewed-revision", &now())
-            .unwrap().identity;
-        run.retirement.as_mut().unwrap().identity = pinned;
-    });
-    f.run = f.current();
-    let h = FakeHerdr::new(&f, vec![runtime(false)]);
-    h.script.lock().info = PaneProcessInfo { pane_id: "pane".into(), shell_pid: None,
-        foreground_pgid: None, processes: Vec::new(), shell_identity: None };
+async fn main_exit_and_empty_foreground_do_not_prove_unknown_pty_consumers_drained() {
+    let f = Fixture::new(waiting());
+    f.change(pin_direct);
+    let original = f.current();
+    let h = FakeHerdr::new(&f, vec![runtime(false), runtime(false), absent()]);
+    {
+        let mut script = h.script.lock();
+        script.allow_close = true;
+        script.info = PaneProcessInfo {
+            pane_id: "pane".into(), shell_pid: Some(process().pid), foreground_pgid: None,
+            processes: Vec::new(), shell_identity: None,
+        };
+    }
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
     assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state,
-        RetirementState::Retained { reason: RetainReason::ForegroundProcess, native_stopped: true, .. }));
+        RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable, stopped: true, .. }));
+    let current = f.current();
+    assert_eq!(serde_json::to_value(current.attachment).unwrap(), serde_json::to_value(original.attachment).unwrap());
+    assert_eq!(serde_json::to_value(current.result).unwrap(), serde_json::to_value(original.result).unwrap());
+    assert_eq!(current.checkout_claim_id, original.checkout_claim_id);
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert_eq!(h.closes(), 0);
+}
+
+#[tokio::test]
+async fn registered_chat_without_process_proof_retains_its_physical_pane() {
+    let f = Fixture::new(waiting());
+    f.change(|run| {
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.process = None;
+        attachment.shell = None;
+        run.retirement.as_mut().unwrap().identity = retirement::identity_for(run);
+    });
+    let original = f.current();
+    let h = FakeHerdr::new(&f, vec![runtime(false)]);
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert_eq!(h.closes(), 0);
+    assert!(matches!(f.current().retirement.unwrap().state,
+        RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable, stopped: false, .. }));
+    assert_eq!(serde_json::to_value(f.current().attachment).unwrap(), serde_json::to_value(original.attachment).unwrap());
+    assert_eq!(serde_json::to_value(f.current().result).unwrap(), serde_json::to_value(original.result).unwrap());
 }

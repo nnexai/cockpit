@@ -641,7 +641,7 @@ describe("mounted App mutation and session ordering", () => {
     vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
       version: 1, repository_roots: [], worktree_root: "", state_root: "", cache_root: "",
       library_root: "/data/cockpit/library", notes_root: "/data/cockpit/notes", branch_template: "", checkout_template: "", providers: [],
-      orchestration: { omp_extension: null, model: null, extra_args: [], routes: [] },
+      orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
         context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
         library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,
@@ -1234,7 +1234,7 @@ describe("merged local workarea lifecycle", () => {
     vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
       state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      roots: [], board: null, runs: [], messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "fresh", endpoint_identity: "fixture-endpoint", observed_at: "2026-10-06T12:00:00Z", runs: [] },
     });
     vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
@@ -1273,7 +1273,7 @@ describe("merged local workarea lifecycle", () => {
     vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
       state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      roots: [], board: null, runs: [], messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "No runtime observation" } },
     });
     vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
@@ -1338,7 +1338,7 @@ describe("merged local workarea lifecycle", () => {
     observation.resolve({
       state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
       session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], questions: [], subagents: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      roots: [], board: null, runs: [], messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "Late observation" } },
     });
     await settle();

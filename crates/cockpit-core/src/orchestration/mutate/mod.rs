@@ -5,7 +5,7 @@ pub(super) mod tasks;
 pub(super) mod runs;
 pub(super) mod resume;
 pub(super) mod grants;
-pub(super) mod retirement;
+mod ownership;
 pub(super) mod intents;
 pub(super) mod reviewed;
 mod dispatch_records;
@@ -90,11 +90,9 @@ pub(super) fn apply(
             resume::resume(ctx, action),
         action @ OrchestrationAction::RunAttach { .. } =>
             resume::attach(ctx, action),
-        action @ OrchestrationAction::JobChildRegister { .. } =>
-            resume::register_child(ctx, action),
-        OrchestrationAction::RunAdopt { label } => runs::adopt(ctx, label),
-        OrchestrationAction::RetirementNativeReceipt { retirement_id, outcome } =>
-            retirement::native_receipt(ctx, retirement_id, outcome),
+        action @ OrchestrationAction::RunRegister { .. } => ownership::register(ctx, action),
+        action @ OrchestrationAction::TaskUnassign { .. } => ownership::unassign(ctx, action),
+        OrchestrationAction::RunAdopt { label, location } => runs::adopt(ctx, label, location),
         action @ OrchestrationAction::WorkerStart { .. } => runs::worker_start(ctx, action),
         action @ OrchestrationAction::TaskScopeUpdate { .. } => tasks::scope_update(ctx, action),
         action @ OrchestrationAction::IntegrationRecord { .. } => integration::apply(ctx, action),

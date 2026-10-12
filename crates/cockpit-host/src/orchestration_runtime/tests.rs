@@ -7,6 +7,7 @@ use cockpit_core::{
     project_adapter::*,
 };
 use cockpit_protocol::v1 as wire;
+use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
 
 #[derive(Clone)]
 struct ObservedHerdr(Option<RuntimeView>);
@@ -74,13 +75,16 @@ fn reviewed() -> Run {
         "session_id":"fixture","brief":"","run_id":"run","kind":"supervisor",
         "label":"Supervisor","root_id":"run","attempt":1,"stage":"active",
         "task_revision_at_start":null,"cleanup_policy":null,
+        "assignment_generation":null,
+        "launch_config":{"harness_kind":"test-harness","command":"test-agent","extra_args":[],
+            "resume_args":["--resume","{session_id}"],"inbox_prompt_hints":false,"routes":[]},
         "dispatch":{"launch_tag":"tag","endpoint_identity":"endpoint","agent_started":false,
             "step":"launch_unknown","launch_attempt":0,"updated_at":"2026-10-06T00:00:00Z"},
         "annotations":[],
         "attachment":{"attachment_id":"attachment","epoch":1,"state":"disconnected",
             "location":{"endpoint_identity":"endpoint","session_id":"fixture","workspace_id":"space",
                 "tab_id":"tab","pane_id":"pane","launch_tag":"tag","terminal_id":"terminal"},
-            "main_session_id":null,"process":null,"shell":null,"machine_id":null,
+            "conversation":null,"process":null,"shell":null,"machine_id":null,
             "launch_mode":"shell_agent",
             "launch_attempt":0,"updated_at":"2026-10-06T00:00:00Z"},
         "created_at":"2026-10-06T00:00:00Z","updated_at":"2026-10-06T00:00:00Z"
@@ -101,9 +105,8 @@ fn observed() -> RuntimeView {
             terminal_id: Some("terminal".into()),
             native_session_id: None,
             agent_name: Some("tag".into()),
-            agent_kind: Some("omp".into()),
+            agent_kind: Some("test-harness".into()),
             launch_pending: false,
-            interactive_ready: false,
             agent_status: Some("working".into()),
             state_changed_at: None,
         }],
@@ -124,7 +127,9 @@ impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("cockpit-resume-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        let service = OrchestrationService::open(&ProjectConfiguration::for_tests(&root)).unwrap();
+        let mut configuration = ProjectConfiguration::for_tests(&root);
+        configuration.orchestration = reviewed().launch_config;
+        let service = OrchestrationService::open(&configuration).unwrap();
         Self { root, service }
     }
     fn projects(&self, inventory: Option<ProjectInventory>) -> ProjectService {
@@ -136,9 +141,10 @@ impl Fixture {
     }
     fn publish_with_claims(&self, runs: &[Run], claims: &[serde_json::Value]) {
         let state = serde_json::json!({
-            "schema":2,"revision":7,"runs":runs,"messages":[],"subagents":[],
+            "schema":3,"revision":7,"runs":runs,"messages":[],"task_ownership":[],"inbox_hints":[],
             "task_intents":[],"scope_intents":[],"assignment_intents":[],"credentials":[],
-            "checkout_claims":claims,"operations":[]
+            "checkout_claims":claims,"operations":[],
+            "resource_requests":[],"resource_sequence":0,"owned_resources":[]
         });
         let mut file = OpenOptions::new().create(true).truncate(true).write(true)
             .mode(0o600).open(self.service.base().join("state.json")).unwrap();
@@ -157,6 +163,40 @@ impl Drop for Fixture {
     fn drop(&mut self) { fs::remove_dir_all(&self.root).unwrap(); }
 }
 
+#[test]
+fn runtime_constructor_accepts_generic_configuration_without_extension_or_launch() {
+    let fixture = Fixture::new();
+    let mut configuration = ProjectConfiguration::for_tests(&fixture.root);
+    configuration.orchestration = cockpit_protocol::projects::OrchestrationConfiguration {
+        harness_kind: "independent-harness".into(),
+        command: fixture.root.join("not-installed-agent").to_string_lossy().into_owned(),
+        extra_args: vec!["--literal-harness-option".into(), "value with spaces".into()],
+        resume_args: Some(vec!["resume".into(), "{session_id}".into()]),
+        inbox_prompt_hints: false,
+        routes: Vec::new(),
+    };
+    let sources = Arc::new(cockpit_core::sources::SourceService::new(&configuration, Vec::new()).unwrap());
+    let library = Arc::new(LibraryService::new(configuration.clone(), sources));
+    let herdr = Arc::new(HerdrCliAdapter::new(
+        cockpit_herdr::HerdrCliConfig::from_options_with_environment(
+            Some(fixture.root.join("not-installed-herdr")), Some("fixture".into()),
+            Some(fixture.root.join("not-running.sock")), &Default::default(),
+        ).unwrap(),
+    ));
+    let projects = Arc::new(ProjectService::new(configuration.clone(), herdr.clone()).unwrap());
+    let runtime = OrchestrationRuntime::new(
+        &configuration, herdr, projects, library, Some(fixture.root.join("config.toml")),
+        CliProcessRole::Host,
+    ).unwrap();
+    assert!(runtime.dispatcher.try_lock().unwrap().is_some());
+    assert!(runtime.task.try_lock().unwrap().is_none());
+    assert!(!runtime.shutdown.is_cancelled());
+    assert!(!runtime.service.base().join("state.json").exists());
+    assert!(!configuration.orchestration.inbox_prompt_hints);
+    assert!(!fixture.root.join("not-installed-agent").exists());
+    assert!(!fixture.root.join("not-running.sock").exists());
+}
+
 
 #[cfg(target_os = "linux")]
 fn bind_process(run: &mut Run, pid: u32) {
@@ -166,7 +206,9 @@ fn bind_process(run: &mut Run, pid: u32) {
         kernel_boot_id: cockpit_core::process_identity::kernel_boot_id(),
     };
     let attachment = run.attachment.as_mut().unwrap();
-    attachment.main_session_id = Some("native".into());
+    attachment.conversation = Some(ConversationIdentity {
+        harness: run.launch_config.harness_kind.clone(), session_id: "conversation".into(),
+    });
     attachment.machine_id = verified_machine_id(&process);
     attachment.process = Some(process);
     run.dispatch.as_mut().unwrap().agent_started = true;
@@ -345,7 +387,7 @@ async fn resume_reattaches_live_process_before_inspecting_missing_checkout_or_en
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn resume_rebooted_root_uses_main_proof_and_unknown_roots_stay_protected() {
+async fn resume_rebooted_root_uses_process_proof_and_unknown_roots_stay_protected() {
     let fixture = Fixture::new();
     let mut run = root_with_process(std::process::id());
     run.kind = RunKind::Adopted;
@@ -518,7 +560,7 @@ async fn resume_root_refuses_pending_foreign_ambiguous_and_different_live_pid_oc
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resume_live_root_reattaches_restored_endpoint_with_current_authenticated_binding() {
-    use cockpit_core::orchestration::{AgentCaller, BootstrapCaller, NativeAgentKind, read_job_auth};
+    use cockpit_core::orchestration::{AgentCaller, NativeAgentKind, read_job_auth};
     let fixture = Fixture::new();
     let process = ForegroundPty::new();
     let mut original = process.herdr(false);
@@ -526,42 +568,41 @@ async fn resume_live_root_reattaches_restored_endpoint_with_current_authenticate
         workspace_id: "space".into(), label: "Project".into(),
         cwd: fixture.root.to_string_lossy().into_owned(),
     });
-    let bootstrap = BootstrapCaller {
-        endpoint_identity: "endpoint".into(), session_id: "fixture".into(),
-        workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(),
-        boot_id: None, terminal_id: Some("terminal".into()), native_session_id: Some("native".into()),
-        omp_session_id: Some("native".into()), agent_kind: Some(AgentKind::Main),
-        actual_agent_kind: Some(NativeAgentKind::Omp), process: Some(process.shell.process.clone()),
-    };
-    // Adoption stages a real credential; ordinary RunAttach commits the
-    // authenticated receipt. Never fabricate has_current_binding's inputs.
-    let actor = Actor::Bootstrap(bootstrap.clone());
+    let mut location = reviewed().attachment.unwrap().location.unwrap();
+    location.native_session_id = Some("native".into());
+    // Operator adoption issues the capability; registration pins its conversation.
+    // Physical recovery evidence comes from the real disposable PTY, not registration.
+    let actor = Actor::Operator(OperatorOrigin::Browser);
     let request = OrchestrationMutationRequest {
         session_id: "fixture".into(), expected_revision: None,
-        action: OrchestrationAction::RunAdopt { label: "Root".into() },
+        action: OrchestrationAction::RunAdopt { label: "Root".into(), location: location.clone() },
     };
-    let resolved = resolve_mutation_input(&fixture.service, &fixture.projects(None), &original, &actor, &request)
+    let mut resolved = resolve_mutation_input(&fixture.service, &fixture.projects(None), &original, &actor, &request)
         .await.unwrap();
+    let attachment = resolved.attachment_observation.as_mut().unwrap();
+    attachment.process = Some(process.shell.process.clone());
+    attachment.machine_id = verified_machine_id(&process.shell.process);
     let response = fixture.service.mutate_resolved(&actor, request, &resolved).unwrap();
     let OrchestrationActionResult::Run { run_id, .. } = response.result else { panic!("adopted root"); };
-    let path = fixture.service.job_bootstrap_credential_file(&bootstrap, &run_id).unwrap();
+    let path = fixture.service.job_adoption_credential_file(&actor, "fixture", &run_id, &location).unwrap();
     let auth = read_job_auth(&path).unwrap();
+    let conversation = ConversationIdentity { harness: "test-harness".into(), session_id: "opaque/chat:one".into() };
     let agent = AgentCaller {
-        auth, provenance: None, endpoint_identity: bootstrap.endpoint_identity,
-        session_id: bootstrap.session_id, workspace_id: bootstrap.workspace_id,
-        tab_id: bootstrap.tab_id, pane_id: bootstrap.pane_id, boot_id: bootstrap.boot_id,
-        terminal_id: bootstrap.terminal_id, native_session_id: bootstrap.native_session_id,
-        env_run: Some((run_id.clone(), 1)), omp_session_id: bootstrap.omp_session_id,
-        agent_kind: bootstrap.agent_kind, actual_agent_kind: bootstrap.actual_agent_kind,
-        subagent_id: None, main_omp_session_id: Some("native".into()), process: bootstrap.process,
+        auth, conversation: conversation.clone(), assignment_generation: None,
+        endpoint_identity: location.endpoint_identity.clone(),
+        session_id: location.session_id.clone(), workspace_id: location.workspace_id.clone(),
+        tab_id: location.tab_id.clone(), pane_id: location.pane_id.clone(), boot_id: location.boot_id.clone(),
+        terminal_id: location.terminal_id.clone(), native_session_id: location.native_session_id.clone(),
+        actual_agent_kind: Some(NativeAgentKind::Other("test-harness".into())),
+        process: Some(process.shell.process.clone()),
     };
-    fixture.service.mutate_resolved(&Actor::Agent(agent.clone()), OrchestrationMutationRequest {
+    let registration = fixture.service.mutate_resolved(&Actor::Agent(agent.clone()), OrchestrationMutationRequest {
         session_id: "fixture".into(), expected_revision: None,
-        action: OrchestrationAction::RunAttach {
-            operation_id: uuid::Uuid::new_v4().to_string(), attachment_id: agent.auth.attachment_id.clone(),
-            expected_attachment_epoch: agent.auth.attachment_epoch, main_session_id: "native".into(),
-        },
+        action: OrchestrationAction::RunRegister { operation_id: uuid::Uuid::new_v4().to_string() },
     }, &ResolvedMutationInput::default()).unwrap();
+    assert!(matches!(registration.result, OrchestrationActionResult::RunRegistered {
+        conversation: registered, assignment_generation: None, duplicate: false, ..
+    } if registered == conversation));
     let run = fixture.service.run_for_review("fixture", &run_id).unwrap();
     assert!(fixture.service.recorded_runs_with_bindings("fixture").unwrap().2.contains_key(&run_id));
     let restored = process.herdr(true);
@@ -755,7 +796,7 @@ async fn lookup_matches_saved_project_roots_and_uses_selected_then_latest() {
     selected.root_id = "a".into();
     selected.project = Some(project.clone());
     bind_process(&mut selected, std::process::id());
-    // Physical liveness, even a saved Connected flag, is not current SDK authentication.
+    // Physical liveness, even a saved Connected flag, is not current registration.
     selected.attachment.as_mut().unwrap().state = AttachmentState::Connected;
     let mut latest = selected.clone();
     latest.run_id = "b".into();
@@ -789,9 +830,9 @@ async fn lookup_matches_saved_project_roots_and_uses_selected_then_latest() {
         assert_eq!(lookup_revision, 7);
         assert_eq!(preferred_root_id.as_deref(), Some(preferred));
         assert_eq!(roots.len(), 2);
-        let legacy = roots.iter().find(|r| r.root_id == "a").unwrap();
-        assert_eq!(legacy.connection, RootConnection::Unknown);
-        assert_eq!(legacy.resume, RootResumeAvailability::Blocked);
+        let unregistered = roots.iter().find(|r| r.root_id == "a").unwrap();
+        assert_eq!(unregistered.connection, RootConnection::Unknown);
+        assert_eq!(unregistered.resume, RootResumeAvailability::Blocked);
         assert_eq!(roots.iter().find(|r| r.root_id == "b").unwrap().connection, RootConnection::Unknown);
     }
     assert_eq!(before, fs::read(fixture.service.base().join("state.json")).unwrap());
@@ -868,10 +909,10 @@ fn living_process_without_current_authenticated_attachment_is_not_connected() {
     attachment.process = Some(NativeProcessIdentity { pid, start_ticks, kernel_boot_id: Some(boot) });
     attachment.machine_id = Some(machine);
     attachment.state = AttachmentState::Connected;
-    let legacy = root_candidate(&run, false);
-    assert_eq!(legacy.connection, RootConnection::Unknown);
-    assert_eq!(legacy.resume, RootResumeAvailability::Blocked);
-    assert!(legacy.cause.is_some());
+    let unregistered = root_candidate(&run, false);
+    assert_eq!(unregistered.connection, RootConnection::Unknown);
+    assert_eq!(unregistered.resume, RootResumeAvailability::Blocked);
+    assert!(unregistered.cause.is_some());
 }
 
 fn start_request(target: Option<DispatchTarget>, mode: SupervisorStartMode) -> OrchestrationMutationRequest {
@@ -1010,7 +1051,7 @@ async fn no_target_start_binds_created_dedicated_directory_in_core() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn start_preserves_selected_legacy_live_root_without_retargeting_or_new_writer() {
+async fn start_preserves_selected_unregistered_live_root_without_retargeting_or_new_writer() {
     let fixture = Fixture::new();
     let projects = fixture.projects(None);
     let (project, checkout) = resolve_directory(&fixture.root, None, None).await.unwrap();
@@ -1024,8 +1065,8 @@ async fn start_preserves_selected_legacy_live_root_without_retargeting_or_new_wr
         cwd: fixture.root.to_string_lossy().into_owned(),
     });
     run.attachment.as_mut().unwrap().state = AttachmentState::Connected;
-    // This fixture has no authenticated RunAttach; preserving its living writer
-    // must not become permission to launch a replacement or report SDK connection.
+    // This fixture has no authenticated RunRegister; preserving its living writer
+    // must not become permission to launch a replacement or report registration.
     fixture.publish(&[run.clone()]);
     let actor = Actor::Operator(OperatorOrigin::Browser);
     let mut request = start_request(Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }),
@@ -1075,43 +1116,159 @@ async fn start_preserves_selected_legacy_live_root_without_retargeting_or_new_wr
     assert_eq!(before, fs::read(fixture.service.base().join("state.json")).unwrap());
 }
 
-#[cfg(target_os = "linux")]
 #[tokio::test]
-async fn adopt_resolves_only_fresh_exact_caller_pane_workspace() {
+async fn operator_adopt_resolves_exact_pane_with_generic_harness_without_process_evidence() {
     let fixture = Fixture::new();
     let projects = fixture.projects(None);
-    let mut run = reviewed();
-    bind_process(&mut run, std::process::id());
-    let caller = cockpit_core::orchestration::BootstrapCaller {
-        endpoint_identity: "endpoint".into(), session_id: "fixture".into(), workspace_id: "space".into(),
-        tab_id: "tab".into(), pane_id: "pane".into(), boot_id: None, terminal_id: Some("terminal".into()),
-        native_session_id: Some("native".into()), omp_session_id: Some("native".into()),
-        agent_kind: Some(AgentKind::Main), actual_agent_kind: Some(cockpit_core::orchestration::NativeAgentKind::Omp),
-        process: run.attachment.unwrap().process,
-    };
-    let actor = Actor::Bootstrap(caller);
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let location = reviewed().attachment.unwrap().location.unwrap();
     let request = OrchestrationMutationRequest {
         session_id: "fixture".into(), expected_revision: None,
-        action: OrchestrationAction::RunAdopt { label: "Adopted".into() },
+        action: OrchestrationAction::RunAdopt { label: "Adopted".into(), location: location.clone() },
     };
     let mut runtime = fixture.runtime();
-    runtime.0.as_mut().unwrap().panes[0].native_session_id = Some("native".into());
+    runtime.0.as_mut().unwrap().panes[0].agent_kind = Some("independent-harness".into());
     let resolved = resolve_mutation_input(&fixture.service, &projects, &runtime, &actor, &request).await.unwrap();
-    assert_eq!(resolved.checkout.unwrap().path, fixture.root.to_string_lossy());
+    assert_eq!(resolved.checkout.as_ref().unwrap().path, fixture.root.to_string_lossy());
+    let attachment = resolved.attachment_observation.as_ref().unwrap();
+    assert_eq!(serde_json::to_value(&attachment.location).unwrap(), serde_json::to_value(Some(&location)).unwrap());
+    assert!(attachment.conversation.is_none());
+    assert!(attachment.process.is_none());
+    assert!(attachment.shell.is_none());
+    assert!(attachment.machine_id.is_none());
+    let response = fixture.service.mutate_resolved(&actor, request.clone(), &resolved).unwrap();
+    let OrchestrationActionResult::Run { run_id, .. } = response.result else { panic!("adopted root"); };
+    let adopted = fixture.service.run_for_review("fixture", &run_id).unwrap();
+    assert_eq!(adopted.kind, RunKind::Adopted);
+    assert!(adopted.assignment_generation.is_none());
+    assert!(adopted.attachment.as_ref().unwrap().process.is_none());
+    assert!(fixture.service.recorded_runs_with_bindings("fixture").unwrap().2.is_empty());
+    let path = fixture.service.job_adoption_credential_file(&actor, "fixture", &run_id, &location).unwrap();
+    let caller = cockpit_core::orchestration::AgentCaller {
+        auth: cockpit_core::orchestration::read_job_auth(&path).unwrap(),
+        conversation: ConversationIdentity { harness: "test-harness".into(), session_id: "opaque/session:without-pid".into() },
+        assignment_generation: None,
+        endpoint_identity: location.endpoint_identity.clone(), session_id: location.session_id.clone(),
+        workspace_id: location.workspace_id.clone(), tab_id: location.tab_id.clone(),
+        pane_id: location.pane_id.clone(), boot_id: None, terminal_id: location.terminal_id.clone(),
+        native_session_id: None, actual_agent_kind: None, process: None,
+    };
+    let agent = Actor::Agent(caller.clone());
+    let registration_request = OrchestrationMutationRequest {
+        session_id: "fixture".into(), expected_revision: None,
+        action: OrchestrationAction::RunRegister { operation_id: uuid::Uuid::new_v4().to_string() },
+    };
+    let registration_input = resolve_mutation_input(
+        &fixture.service, &projects, &ObservedHerdr(None), &agent, &registration_request,
+    ).await.unwrap();
+    assert!(registration_input.attachment_observation.is_none());
+    assert!(registration_input.writer_exit_proof.is_none());
+    let registered = fixture.service.mutate_resolved(&agent, registration_request, &registration_input).unwrap();
+    assert!(matches!(registered.result, OrchestrationActionResult::RunRegistered {
+        conversation, assignment_generation: None, duplicate: false, ..
+    } if conversation == caller.conversation));
+    let registered = fixture.service.run_for_review("fixture", &run_id).unwrap();
+    let attachment = registered.attachment.as_ref().unwrap();
+    assert_eq!(attachment.conversation.as_ref(), Some(&caller.conversation));
+    assert!(attachment.process.is_none());
+    assert!(attachment.shell.is_none());
+    assert!(attachment.machine_id.is_none());
+    assert_eq!(resolve_mutation_input(&fixture.service, &projects, &runtime, &agent, &request)
+        .await.unwrap_err().code, "actor_forbidden");
     let mut unavailable = runtime.clone();
     unavailable.0.as_mut().unwrap().workspaces[0].cwd = ".".into();
     let unbound = resolve_mutation_input(&fixture.service, &projects, &unavailable, &actor, &request)
         .await.unwrap();
     assert!(unbound.project.is_none());
     assert!(unbound.checkout.is_none());
-    runtime.0.as_mut().unwrap().panes[0].native_session_id = Some("foreign".into());
-    assert_eq!(resolve_mutation_input(&fixture.service, &projects, &runtime, &actor, &request)
+    assert!(unbound.attachment_observation.unwrap().process.is_none());
+}
+
+#[tokio::test]
+async fn operator_adopt_refuses_changed_or_ambiguous_pinned_endpoint_pane_terminal() {
+    let fixture = Fixture::new();
+    let projects = fixture.projects(None);
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let location = reviewed().attachment.unwrap().location.unwrap();
+    let request = OrchestrationMutationRequest {
+        session_id: "fixture".into(), expected_revision: None,
+        action: OrchestrationAction::RunAdopt { label: "Adopted".into(), location },
+    };
+    for change in 0..9 {
+        let mut runtime = fixture.runtime();
+        let view = runtime.0.as_mut().unwrap();
+        match change {
+            0 => view.endpoint_identity = "replacement-endpoint".into(),
+            1 => view.panes[0].workspace_id = "different-space".into(),
+            2 => view.panes[0].tab_id = "different-tab".into(),
+            3 => view.panes[0].pane_id = "different-pane".into(),
+            4 => view.panes[0].terminal_id = Some("different-terminal".into()),
+            5 => view.panes[0].terminal_id = None,
+            6 => view.panes.clear(),
+            7 => view.panes.push(view.panes[0].clone()),
+            _ => {
+                let mut duplicate_terminal = view.panes[0].clone();
+                duplicate_terminal.pane_id = "other-pane".into();
+                view.panes.push(duplicate_terminal);
+            }
+        }
+        assert_eq!(resolve_mutation_input(&fixture.service, &projects, &runtime, &actor, &request)
+            .await.unwrap_err().code, "caller_mismatch", "change {change}");
+    }
+    let mut missing_terminal = request.clone();
+    let OrchestrationAction::RunAdopt { location, .. } = &mut missing_terminal.action else { unreachable!() };
+    location.terminal_id = None;
+    assert_eq!(resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &missing_terminal)
         .await.unwrap_err().code, "caller_mismatch");
+    let mut empty_terminal = request.clone();
+    let OrchestrationAction::RunAdopt { location, .. } = &mut empty_terminal.action else { unreachable!() };
+    location.terminal_id = Some(String::new());
+    let mut empty_runtime = fixture.runtime();
+    empty_runtime.0.as_mut().unwrap().panes[0].terminal_id = Some(String::new());
+    assert_eq!(resolve_mutation_input(&fixture.service, &projects, &empty_runtime, &actor, &empty_terminal)
+        .await.unwrap_err().code, "caller_mismatch");
+    let mut wrong_session = request;
+    let OrchestrationAction::RunAdopt { location, .. } = &mut wrong_session.action else { unreachable!() };
+    location.session_id = "other-physical-session".into();
+    assert_eq!(resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &wrong_session)
+        .await.unwrap_err().code, "caller_mismatch");
+    assert!(!fixture.service.base().join("state.json").exists());
+}
+
+#[tokio::test]
+async fn operator_adopt_checks_optional_pinned_boot_and_native_receipts_without_requiring_them() {
+    let fixture = Fixture::new();
+    let projects = fixture.projects(None);
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let mut location = reviewed().attachment.unwrap().location.unwrap();
+    location.boot_id = Some("boot".into());
+    location.native_session_id = Some("physical-receipt".into());
+    let request = OrchestrationMutationRequest {
+        session_id: "fixture".into(), expected_revision: None,
+        action: OrchestrationAction::RunAdopt { label: "Adopted".into(), location },
+    };
+    let mut runtime = fixture.runtime();
+    runtime.0.as_mut().unwrap().boot_id = Some("boot".into());
+    runtime.0.as_mut().unwrap().panes[0].native_session_id = Some("physical-receipt".into());
+    runtime.0.as_mut().unwrap().panes[0].agent_kind = None;
+    assert!(resolve_mutation_input(&fixture.service, &projects, &runtime, &actor, &request).await.is_ok());
+    for change in 0..4 {
+        let mut mismatched = runtime.clone();
+        let view = mismatched.0.as_mut().unwrap();
+        match change {
+            0 => view.boot_id = None,
+            1 => view.boot_id = Some("other-boot".into()),
+            2 => view.panes[0].native_session_id = None,
+            _ => view.panes[0].native_session_id = Some("other-receipt".into()),
+        }
+        assert_eq!(resolve_mutation_input(&fixture.service, &projects, &mismatched, &actor, &request)
+            .await.unwrap_err().code, "caller_mismatch", "change {change}");
+    }
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn legacy_worker_process_machine_is_observed_only_with_exact_fresh_native_pane() {
+async fn worker_process_machine_is_observed_only_with_exact_fresh_pane() {
     let fixture = Fixture::new();
     let mut run = reviewed();
     bind_process(&mut run, std::process::id());
@@ -1134,6 +1291,52 @@ async fn legacy_worker_process_machine_is_observed_only_with_exact_fresh_native_
     let refused = resolve_resume_input(&fixture.service, &runtime, &run).await.unwrap();
     assert!(refused.attachment_observation.is_none());
     assert!(refused.writer_exit_proof.is_none());
+}
+
+#[test]
+fn exact_saved_pane_requires_unique_physical_identity_and_configured_harness() {
+    let mut run = reviewed();
+    let location = run.attachment.as_mut().unwrap().location.as_mut().unwrap();
+    location.boot_id = Some("boot".into());
+    location.native_session_id = Some("physical-receipt".into());
+    let mut runtime = observed();
+    runtime.boot_id = Some("boot".into());
+    runtime.panes[0].native_session_id = Some("physical-receipt".into());
+    assert!(exact_saved_pane(&runtime, &run));
+    let mut unobserved_boot = runtime.clone();
+    unobserved_boot.boot_id = None;
+    assert!(exact_saved_pane(&unobserved_boot, &run));
+    for change in 0..12 {
+        let mut mismatched = runtime.clone();
+        match change {
+            0 => mismatched.endpoint_identity = "other-endpoint".into(),
+            1 => mismatched.boot_id = Some("other-boot".into()),
+            2 => mismatched.panes[0].workspace_id = "other-space".into(),
+            3 => mismatched.panes[0].tab_id = "other-tab".into(),
+            4 => mismatched.panes[0].pane_id = "other-pane".into(),
+            5 => mismatched.panes[0].terminal_id = Some("other-terminal".into()),
+            6 => mismatched.panes[0].native_session_id = None,
+            7 => mismatched.panes[0].native_session_id = Some("other-receipt".into()),
+            8 => mismatched.panes[0].agent_kind = Some("other-harness".into()),
+            9 => mismatched.panes[0].launch_pending = true,
+            10 => {
+                let mut duplicate_pane = mismatched.panes[0].clone();
+                duplicate_pane.terminal_id = Some("other-terminal".into());
+                mismatched.panes.push(duplicate_pane);
+            }
+            _ => {
+                let mut duplicate_terminal = mismatched.panes[0].clone();
+                duplicate_terminal.pane_id = "other-pane".into();
+                mismatched.panes.push(duplicate_terminal);
+            }
+        }
+        assert!(!exact_saved_pane(&mismatched, &run), "change {change}");
+    }
+    let location = run.attachment.as_mut().unwrap().location.as_mut().unwrap();
+    location.boot_id = None;
+    location.native_session_id = None;
+    runtime.panes[0].native_session_id = None;
+    assert!(exact_saved_pane(&runtime, &run), "Absent optional evidence is not a contradiction");
 }
 
 #[test]

@@ -47,13 +47,15 @@ export const wireProjectConfiguration: WireDescriptor<V1.ProjectConfiguration> =
   "checkout_template": req(str),
   "providers": req(list(named(() => wireProjectProvider))),
   "limits": req(named(() => wireProjectLimits)),
-  "orchestration": req(named(() => wireOrchestrationConfiguration), { fill: () => ({"extra_args":[],"model":null,"omp_extension":null,"routes":[]}) }),
+  "orchestration": req(named(() => wireOrchestrationConfiguration), { fill: () => ({"command":"omp","extra_args":[],"harness_kind":"omp","inbox_prompt_hints":false,"resume_args":null,"routes":[]}) }),
 });
 
 export const wireOrchestrationConfiguration: WireDescriptor<V1.OrchestrationConfiguration> = struct<V1.OrchestrationConfiguration>("OrchestrationConfiguration", {
-  "omp_extension": req(nullable(str), { fill: null }),
-  "model": req(nullable(str), { fill: null }),
+  "harness_kind": req(str, { fill: "omp" }),
+  "command": req(str, { fill: "omp" }),
   "extra_args": req(list(str), { fill: () => ([]) }),
+  "resume_args": req(nullable(list(str)), { fill: null }),
+  "inbox_prompt_hints": req(bool, { fill: false }),
   "routes": req(list(named(() => wireOrchestrationRoute)), { fill: () => ([]) }),
 });
 

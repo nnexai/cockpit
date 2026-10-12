@@ -3,7 +3,6 @@ import type * as V1 from "../v1";
 
 export interface WireTypes {
   "OrchestrationAction": V1.OrchestrationAction;
-  "SubagentOp": V1.SubagentOp;
   "OrchestrationActionResult": V1.OrchestrationActionResult;
 }
 
@@ -22,9 +21,9 @@ export interface WireOwners {
   "OrchestrationAction[tasks_assign_ids]": Extract<V1.OrchestrationAction, { "action": "tasks_assign_ids" }>;
   "OrchestrationAction[supervisor_start]": Extract<V1.OrchestrationAction, { "action": "supervisor_start" }>;
   "OrchestrationAction[run_resume]": Extract<V1.OrchestrationAction, { "action": "run_resume" }>;
+  "OrchestrationAction[run_register]": Extract<V1.OrchestrationAction, { "action": "run_register" }>;
+  "OrchestrationAction[task_unassign]": Extract<V1.OrchestrationAction, { "action": "task_unassign" }>;
   "OrchestrationAction[run_attach]": Extract<V1.OrchestrationAction, { "action": "run_attach" }>;
-  "OrchestrationAction[job_child_register]": Extract<V1.OrchestrationAction, { "action": "job_child_register" }>;
-  "OrchestrationAction[retirement_native_receipt]": Extract<V1.OrchestrationAction, { "action": "retirement_native_receipt" }>;
   "OrchestrationAction[run_adopt]": Extract<V1.OrchestrationAction, { "action": "run_adopt" }>;
   "OrchestrationAction[worker_start]": Extract<V1.OrchestrationAction, { "action": "worker_start" }>;
   "OrchestrationAction[task_scope_update]": Extract<V1.OrchestrationAction, { "action": "task_scope_update" }>;
@@ -43,15 +42,10 @@ export interface WireOwners {
   "OrchestrationAction[message_send]": Extract<V1.OrchestrationAction, { "action": "message_send" }>;
   "OrchestrationAction[annotate]": Extract<V1.OrchestrationAction, { "action": "annotate" }>;
   "OrchestrationAction[inbox_pull]": Extract<V1.OrchestrationAction, { "action": "inbox_pull" }>;
-  "OrchestrationAction[inbox_woken]": Extract<V1.OrchestrationAction, { "action": "inbox_woken" }>;
   "OrchestrationAction[inbox_ack]": Extract<V1.OrchestrationAction, { "action": "inbox_ack" }>;
-  "OrchestrationAction[subagent_update]": Extract<V1.OrchestrationAction, { "action": "subagent_update" }>;
-  "OrchestrationAction[subagent_control]": Extract<V1.OrchestrationAction, { "action": "subagent_control" }>;
-  "OrchestrationAction[subagent_control_done]": Extract<V1.OrchestrationAction, { "action": "subagent_control_done" }>;
-  "SubagentOp": V1.SubagentOp;
-  "SubagentOp[cancel]": Extract<V1.SubagentOp, { "op": "cancel" }>;
-  "SubagentOp[send]": Extract<V1.SubagentOp, { "op": "send" }>;
   "OrchestrationActionResult": V1.OrchestrationActionResult;
+  "OrchestrationActionResult[run_registered]": Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>;
+  "OrchestrationActionResult[task_unassigned]": Extract<V1.OrchestrationActionResult, { "result": "task_unassigned" }>;
   "OrchestrationActionResult[worker_started]": Extract<V1.OrchestrationActionResult, { "result": "worker_started" }>;
   "OrchestrationActionResult[task_scope_updated]": Extract<V1.OrchestrationActionResult, { "result": "task_scope_updated" }>;
   "OrchestrationActionResult[integration_recorded]": Extract<V1.OrchestrationActionResult, { "result": "integration_recorded" }>;
@@ -138,17 +132,17 @@ export interface WireFields {
   "OrchestrationAction[run_resume].expected_attachment_epoch": (Extract<V1.OrchestrationAction, { "action": "run_resume" }>)["expected_attachment_epoch"];
   "OrchestrationAction[run_resume].mode": (Extract<V1.OrchestrationAction, { "action": "run_resume" }>)["mode"];
   "OrchestrationAction[run_resume].decision_id": (Extract<V1.OrchestrationAction, { "action": "run_resume" }>)["decision_id"];
+  "OrchestrationAction[run_register].operation_id": (Extract<V1.OrchestrationAction, { "action": "run_register" }>)["operation_id"];
+  "OrchestrationAction[task_unassign].operation_id": (Extract<V1.OrchestrationAction, { "action": "task_unassign" }>)["operation_id"];
+  "OrchestrationAction[task_unassign].root_id": (Extract<V1.OrchestrationAction, { "action": "task_unassign" }>)["root_id"];
+  "OrchestrationAction[task_unassign].task_id": (Extract<V1.OrchestrationAction, { "action": "task_unassign" }>)["task_id"];
+  "OrchestrationAction[task_unassign].expected_assignment_generation": (Extract<V1.OrchestrationAction, { "action": "task_unassign" }>)["expected_assignment_generation"];
   "OrchestrationAction[run_attach].operation_id": (Extract<V1.OrchestrationAction, { "action": "run_attach" }>)["operation_id"];
   "OrchestrationAction[run_attach].attachment_id": (Extract<V1.OrchestrationAction, { "action": "run_attach" }>)["attachment_id"];
   "OrchestrationAction[run_attach].expected_attachment_epoch": (Extract<V1.OrchestrationAction, { "action": "run_attach" }>)["expected_attachment_epoch"];
-  "OrchestrationAction[run_attach].main_session_id": (Extract<V1.OrchestrationAction, { "action": "run_attach" }>)["main_session_id"];
-  "OrchestrationAction[job_child_register].operation_id": (Extract<V1.OrchestrationAction, { "action": "job_child_register" }>)["operation_id"];
-  "OrchestrationAction[job_child_register].child_id": (Extract<V1.OrchestrationAction, { "action": "job_child_register" }>)["child_id"];
-  "OrchestrationAction[job_child_register].child_session_id": (Extract<V1.OrchestrationAction, { "action": "job_child_register" }>)["child_session_id"];
-  "OrchestrationAction[job_child_register].parent_child_id": (Extract<V1.OrchestrationAction, { "action": "job_child_register" }>)["parent_child_id"];
-  "OrchestrationAction[retirement_native_receipt].retirement_id": (Extract<V1.OrchestrationAction, { "action": "retirement_native_receipt" }>)["retirement_id"];
-  "OrchestrationAction[retirement_native_receipt].outcome": (Extract<V1.OrchestrationAction, { "action": "retirement_native_receipt" }>)["outcome"];
+  "OrchestrationAction[run_attach].conversation": (Extract<V1.OrchestrationAction, { "action": "run_attach" }>)["conversation"];
   "OrchestrationAction[run_adopt].label": (Extract<V1.OrchestrationAction, { "action": "run_adopt" }>)["label"];
+  "OrchestrationAction[run_adopt].location": (Extract<V1.OrchestrationAction, { "action": "run_adopt" }>)["location"];
   "OrchestrationAction[worker_start].operation_id": (Extract<V1.OrchestrationAction, { "action": "worker_start" }>)["operation_id"];
   "OrchestrationAction[worker_start].root_id": (Extract<V1.OrchestrationAction, { "action": "worker_start" }>)["root_id"];
   "OrchestrationAction[worker_start].task_id": (Extract<V1.OrchestrationAction, { "action": "worker_start" }>)["task_id"];
@@ -201,22 +195,15 @@ export interface WireFields {
   "OrchestrationAction[annotate].text": (Extract<V1.OrchestrationAction, { "action": "annotate" }>)["text"];
   "OrchestrationAction[inbox_pull].after_seq": (Extract<V1.OrchestrationAction, { "action": "inbox_pull" }>)["after_seq"];
   "OrchestrationAction[inbox_pull].limit": (Extract<V1.OrchestrationAction, { "action": "inbox_pull" }>)["limit"];
-  "OrchestrationAction[inbox_woken].through_seq": (Extract<V1.OrchestrationAction, { "action": "inbox_woken" }>)["through_seq"];
-  "OrchestrationAction[inbox_woken].omp_session_id": (Extract<V1.OrchestrationAction, { "action": "inbox_woken" }>)["omp_session_id"];
   "OrchestrationAction[inbox_ack].through_seq": (Extract<V1.OrchestrationAction, { "action": "inbox_ack" }>)["through_seq"];
-  "OrchestrationAction[subagent_update].subagent_id": (Extract<V1.OrchestrationAction, { "action": "subagent_update" }>)["subagent_id"];
-  "OrchestrationAction[subagent_update].parent_subagent_id": (Extract<V1.OrchestrationAction, { "action": "subagent_update" }>)["parent_subagent_id"];
-  "OrchestrationAction[subagent_update].role": (Extract<V1.OrchestrationAction, { "action": "subagent_update" }>)["role"];
-  "OrchestrationAction[subagent_update].label": (Extract<V1.OrchestrationAction, { "action": "subagent_update" }>)["label"];
-  "OrchestrationAction[subagent_update].status": (Extract<V1.OrchestrationAction, { "action": "subagent_update" }>)["status"];
-  "OrchestrationAction[subagent_update].summary": (Extract<V1.OrchestrationAction, { "action": "subagent_update" }>)["summary"];
-  "OrchestrationAction[subagent_control].run_id": (Extract<V1.OrchestrationAction, { "action": "subagent_control" }>)["run_id"];
-  "OrchestrationAction[subagent_control].subagent_id": (Extract<V1.OrchestrationAction, { "action": "subagent_control" }>)["subagent_id"];
-  "OrchestrationAction[subagent_control].op": (Extract<V1.OrchestrationAction, { "action": "subagent_control" }>)["op"];
-  "OrchestrationAction[subagent_control_done].seq": (Extract<V1.OrchestrationAction, { "action": "subagent_control_done" }>)["seq"];
-  "OrchestrationAction[subagent_control_done].applied": (Extract<V1.OrchestrationAction, { "action": "subagent_control_done" }>)["applied"];
-  "OrchestrationAction[subagent_control_done].error": (Extract<V1.OrchestrationAction, { "action": "subagent_control_done" }>)["error"];
-  "SubagentOp[send].text": (Extract<V1.SubagentOp, { "op": "send" }>)["text"];
+  "OrchestrationActionResult[run_registered].run_id": (Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>)["run_id"];
+  "OrchestrationActionResult[run_registered].conversation": (Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>)["conversation"];
+  "OrchestrationActionResult[run_registered].assignment_generation": (Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>)["assignment_generation"];
+  "OrchestrationActionResult[run_registered].duplicate": (Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>)["duplicate"];
+  "OrchestrationActionResult[task_unassigned].task_id": (Extract<V1.OrchestrationActionResult, { "result": "task_unassigned" }>)["task_id"];
+  "OrchestrationActionResult[task_unassigned].assignment_generation": (Extract<V1.OrchestrationActionResult, { "result": "task_unassigned" }>)["assignment_generation"];
+  "OrchestrationActionResult[task_unassigned].previous_run_id": (Extract<V1.OrchestrationActionResult, { "result": "task_unassigned" }>)["previous_run_id"];
+  "OrchestrationActionResult[task_unassigned].duplicate": (Extract<V1.OrchestrationActionResult, { "result": "task_unassigned" }>)["duplicate"];
   "OrchestrationActionResult[worker_started].start": (Extract<V1.OrchestrationActionResult, { "result": "worker_started" }>)["start"];
   "OrchestrationActionResult[task_scope_updated].update": (Extract<V1.OrchestrationActionResult, { "result": "task_scope_updated" }>)["update"];
   "OrchestrationActionResult[integration_recorded].receipt": (Extract<V1.OrchestrationActionResult, { "result": "integration_recorded" }>)["receipt"];
@@ -260,10 +247,10 @@ export interface WireFieldNames {
   "OrchestrationAction[tasks_assign_ids]": "root_id" | "expected_doc_revision";
   "OrchestrationAction[supervisor_start]": "operation_id" | "mode" | "target" | "label" | "selected_root_id" | "expected_project_key";
   "OrchestrationAction[run_resume]": "run_id" | "operation_id" | "expected_attachment_epoch" | "mode" | "decision_id";
-  "OrchestrationAction[run_attach]": "operation_id" | "attachment_id" | "expected_attachment_epoch" | "main_session_id";
-  "OrchestrationAction[job_child_register]": "operation_id" | "child_id" | "child_session_id" | "parent_child_id";
-  "OrchestrationAction[retirement_native_receipt]": "retirement_id" | "outcome";
-  "OrchestrationAction[run_adopt]": "label";
+  "OrchestrationAction[run_register]": "operation_id";
+  "OrchestrationAction[task_unassign]": "operation_id" | "root_id" | "task_id" | "expected_assignment_generation";
+  "OrchestrationAction[run_attach]": "operation_id" | "attachment_id" | "expected_attachment_epoch" | "conversation";
+  "OrchestrationAction[run_adopt]": "label" | "location";
   "OrchestrationAction[worker_start]": "operation_id" | "root_id" | "task_id" | "expected_task_revision" | "expected_doc_revision" | "target" | "label" | "brief" | "cleanup_policy";
   "OrchestrationAction[task_scope_update]": "operation_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "expected_doc_revision" | "title" | "description";
   "OrchestrationAction[accept]": "run_id" | "expected_task_revision";
@@ -281,15 +268,10 @@ export interface WireFieldNames {
   "OrchestrationAction[message_send]": "message_id" | "to_run_id" | "kind" | "text" | "in_reply_to" | "original_task_revision" | "original_claim_id";
   "OrchestrationAction[annotate]": "run_id" | "text";
   "OrchestrationAction[inbox_pull]": "after_seq" | "limit";
-  "OrchestrationAction[inbox_woken]": "through_seq" | "omp_session_id";
   "OrchestrationAction[inbox_ack]": "through_seq";
-  "OrchestrationAction[subagent_update]": "subagent_id" | "parent_subagent_id" | "role" | "label" | "status" | "summary";
-  "OrchestrationAction[subagent_control]": "run_id" | "subagent_id" | "op";
-  "OrchestrationAction[subagent_control_done]": "seq" | "applied" | "error";
-  "SubagentOp": never;
-  "SubagentOp[cancel]": never;
-  "SubagentOp[send]": "text";
   "OrchestrationActionResult": never;
+  "OrchestrationActionResult[run_registered]": "run_id" | "conversation" | "assignment_generation" | "duplicate";
+  "OrchestrationActionResult[task_unassigned]": "task_id" | "assignment_generation" | "previous_run_id" | "duplicate";
   "OrchestrationActionResult[worker_started]": "start";
   "OrchestrationActionResult[task_scope_updated]": "update";
   "OrchestrationActionResult[integration_recorded]": "receipt";
@@ -309,8 +291,8 @@ export interface WireFieldNames {
 }
 
 export interface WireChildNames {
-  "OrchestrationAction.op": "SubagentOp";
-  "OrchestrationAction.outcome": "NativeStopReceipt";
+  "OrchestrationAction.conversation": "ConversationIdentity";
+  "OrchestrationAction.location": "RunLocation";
   "OrchestrationAction.record": "IntegrationRecord";
   "OrchestrationAction.registration": "ResourceBuildRegistration";
   "OrchestrationAction.release": "ResourceRelease";
@@ -318,7 +300,8 @@ export interface WireChildNames {
   "OrchestrationAction.source_output": "SourceOutput";
   "OrchestrationAction.target": "DispatchTarget";
   "OrchestrationAction[supervisor_start].target": "DispatchTarget";
-  "OrchestrationAction[retirement_native_receipt].outcome": "NativeStopReceipt";
+  "OrchestrationAction[run_attach].conversation": "ConversationIdentity";
+  "OrchestrationAction[run_adopt].location": "RunLocation";
   "OrchestrationAction[worker_start].target": "DispatchTarget";
   "OrchestrationAction[integration_record].record": "IntegrationRecord";
   "OrchestrationAction[resource_request].request": "ResourceRequest";
@@ -327,9 +310,9 @@ export interface WireChildNames {
   "OrchestrationAction[resource_register].request": "ResourceRegister";
   "OrchestrationAction[cleanup_finish].request": "CleanupFinish";
   "OrchestrationAction[report].source_output": "SourceOutput";
-  "OrchestrationAction[subagent_control].op": "SubagentOp";
   "OrchestrationActionResult.attach": "RunAttachResult";
   "OrchestrationActionResult.cleanup": "CleanupFinishResult";
+  "OrchestrationActionResult.conversation": "ConversationIdentity";
   "OrchestrationActionResult.receipt": "IntegrationRecordResult";
   "OrchestrationActionResult.request": "ResourceRequestRecord";
   "OrchestrationActionResult.resource": "OwnedResourceRecord";
@@ -337,6 +320,7 @@ export interface WireChildNames {
   "OrchestrationActionResult.start": "SupervisorStartResult" | "WorkerStartResult";
   "OrchestrationActionResult.task": "Task";
   "OrchestrationActionResult.update": "TaskScopeUpdateResult";
+  "OrchestrationActionResult[run_registered].conversation": "ConversationIdentity";
   "OrchestrationActionResult[worker_started].start": "WorkerStartResult";
   "OrchestrationActionResult[task_scope_updated].update": "TaskScopeUpdateResult";
   "OrchestrationActionResult[integration_recorded].receipt": "IntegrationRecordResult";
@@ -365,9 +349,9 @@ export interface WireTagNames {
   "OrchestrationAction[tasks_assign_ids]": "action";
   "OrchestrationAction[supervisor_start]": "action";
   "OrchestrationAction[run_resume]": "action";
+  "OrchestrationAction[run_register]": "action";
+  "OrchestrationAction[task_unassign]": "action";
   "OrchestrationAction[run_attach]": "action";
-  "OrchestrationAction[job_child_register]": "action";
-  "OrchestrationAction[retirement_native_receipt]": "action";
   "OrchestrationAction[run_adopt]": "action";
   "OrchestrationAction[worker_start]": "action";
   "OrchestrationAction[task_scope_update]": "action";
@@ -386,15 +370,10 @@ export interface WireTagNames {
   "OrchestrationAction[message_send]": "action";
   "OrchestrationAction[annotate]": "action";
   "OrchestrationAction[inbox_pull]": "action";
-  "OrchestrationAction[inbox_woken]": "action";
   "OrchestrationAction[inbox_ack]": "action";
-  "OrchestrationAction[subagent_update]": "action";
-  "OrchestrationAction[subagent_control]": "action";
-  "OrchestrationAction[subagent_control_done]": "action";
-  "SubagentOp": "op";
-  "SubagentOp[cancel]": "op";
-  "SubagentOp[send]": "op";
   "OrchestrationActionResult": "result";
+  "OrchestrationActionResult[run_registered]": "result";
+  "OrchestrationActionResult[task_unassigned]": "result";
   "OrchestrationActionResult[worker_started]": "result";
   "OrchestrationActionResult[task_scope_updated]": "result";
   "OrchestrationActionResult[integration_recorded]": "result";
@@ -414,7 +393,7 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
-  "OrchestrationAction": "action" | "after_seq" | "applied" | "apply" | "assign" | "attachment_id" | "before_step_id" | "brief" | "checked" | "child_id" | "child_session_id" | "cleanup_policy" | "decision_id" | "depends_on" | "description" | "error" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_project_key" | "expected_task_revision" | "follow_up_of" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "main_session_id" | "message_id" | "mode" | "omp_session_id" | "op" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_child_id" | "parent_step_id" | "parent_subagent_id" | "plan" | "record" | "recovery" | "registration" | "release" | "request" | "retirement_id" | "role" | "root_id" | "run_id" | "scope" | "selected_root_id" | "seq" | "source_output" | "source_revision" | "status" | "step_id" | "subagent_id" | "summary" | "target" | "task_id" | "text" | "through_seq" | "title" | "to_run_id";
+  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "brief" | "checked" | "cleanup_policy" | "conversation" | "decision_id" | "depends_on" | "description" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_project_key" | "expected_task_revision" | "follow_up_of" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "mode" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "through_seq" | "title" | "to_run_id";
   "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision" | "action";
   "OrchestrationAction[task_assign]": "root_id" | "task_id" | "title" | "description" | "action";
   "OrchestrationAction[task_assignment_resolve]": "root_id" | "task_id" | "expected_task_revision" | "assign" | "action";
@@ -428,10 +407,10 @@ export interface WireCheckpointFieldNames {
   "OrchestrationAction[tasks_assign_ids]": "root_id" | "expected_doc_revision" | "action";
   "OrchestrationAction[supervisor_start]": "operation_id" | "mode" | "target" | "label" | "selected_root_id" | "expected_project_key" | "action";
   "OrchestrationAction[run_resume]": "run_id" | "operation_id" | "expected_attachment_epoch" | "mode" | "decision_id" | "action";
-  "OrchestrationAction[run_attach]": "operation_id" | "attachment_id" | "expected_attachment_epoch" | "main_session_id" | "action";
-  "OrchestrationAction[job_child_register]": "operation_id" | "child_id" | "child_session_id" | "parent_child_id" | "action";
-  "OrchestrationAction[retirement_native_receipt]": "retirement_id" | "outcome" | "action";
-  "OrchestrationAction[run_adopt]": "label" | "action";
+  "OrchestrationAction[run_register]": "operation_id" | "action";
+  "OrchestrationAction[task_unassign]": "operation_id" | "root_id" | "task_id" | "expected_assignment_generation" | "action";
+  "OrchestrationAction[run_attach]": "operation_id" | "attachment_id" | "expected_attachment_epoch" | "conversation" | "action";
+  "OrchestrationAction[run_adopt]": "label" | "location" | "action";
   "OrchestrationAction[worker_start]": "operation_id" | "root_id" | "task_id" | "expected_task_revision" | "expected_doc_revision" | "target" | "label" | "brief" | "cleanup_policy" | "action";
   "OrchestrationAction[task_scope_update]": "operation_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "expected_doc_revision" | "title" | "description" | "action";
   "OrchestrationAction[accept]": "run_id" | "expected_task_revision" | "action";
@@ -449,15 +428,10 @@ export interface WireCheckpointFieldNames {
   "OrchestrationAction[message_send]": "message_id" | "to_run_id" | "kind" | "text" | "in_reply_to" | "original_task_revision" | "original_claim_id" | "action";
   "OrchestrationAction[annotate]": "run_id" | "text" | "action";
   "OrchestrationAction[inbox_pull]": "after_seq" | "limit" | "action";
-  "OrchestrationAction[inbox_woken]": "through_seq" | "omp_session_id" | "action";
   "OrchestrationAction[inbox_ack]": "through_seq" | "action";
-  "OrchestrationAction[subagent_update]": "subagent_id" | "parent_subagent_id" | "role" | "label" | "status" | "summary" | "action";
-  "OrchestrationAction[subagent_control]": "run_id" | "subagent_id" | "op" | "action";
-  "OrchestrationAction[subagent_control_done]": "seq" | "applied" | "error" | "action";
-  "SubagentOp": "op" | "text";
-  "SubagentOp[cancel]": "op";
-  "SubagentOp[send]": "text" | "op";
-  "OrchestrationActionResult": "assigned" | "attach" | "attempt" | "cleanup" | "doc_revision" | "duplicate" | "messages" | "read_through_seq" | "receipt" | "request" | "resource" | "result" | "resume" | "run_id" | "seq" | "stale" | "start" | "task" | "to_run_id" | "update";
+  "OrchestrationActionResult": "assigned" | "assignment_generation" | "attach" | "attempt" | "cleanup" | "conversation" | "doc_revision" | "duplicate" | "messages" | "previous_run_id" | "read_through_seq" | "receipt" | "request" | "resource" | "result" | "resume" | "run_id" | "seq" | "stale" | "start" | "task" | "task_id" | "to_run_id" | "update";
+  "OrchestrationActionResult[run_registered]": "run_id" | "conversation" | "assignment_generation" | "duplicate" | "result";
+  "OrchestrationActionResult[task_unassigned]": "task_id" | "assignment_generation" | "previous_run_id" | "duplicate" | "result";
   "OrchestrationActionResult[worker_started]": "start" | "result";
   "OrchestrationActionResult[task_scope_updated]": "update" | "result";
   "OrchestrationActionResult[integration_recorded]": "receipt" | "result";
@@ -493,7 +467,6 @@ export type WireOmittableField =
   | "OrchestrationAction[supervisor_start].expected_project_key"
   | "OrchestrationAction[run_resume].expected_attachment_epoch"
   | "OrchestrationAction[run_resume].decision_id"
-  | "OrchestrationAction[job_child_register].parent_child_id"
   | "OrchestrationAction[worker_start].label"
   | "OrchestrationAction[task_scope_update].title"
   | "OrchestrationAction[task_scope_update].description"
@@ -507,10 +480,8 @@ export type WireOmittableField =
   | "OrchestrationAction[message_send].in_reply_to"
   | "OrchestrationAction[message_send].original_task_revision"
   | "OrchestrationAction[message_send].original_claim_id"
-  | "OrchestrationAction[subagent_update].parent_subagent_id"
-  | "OrchestrationAction[subagent_update].role"
-  | "OrchestrationAction[subagent_update].summary"
-  | "OrchestrationAction[subagent_control_done].error"
+  | "OrchestrationActionResult[run_registered].assignment_generation"
+  | "OrchestrationActionResult[task_unassigned].previous_run_id"
   | never;
 
 export type WireOptionalField =

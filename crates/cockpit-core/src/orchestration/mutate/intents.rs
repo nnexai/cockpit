@@ -62,7 +62,7 @@ pub(in crate::orchestration) fn accept(
         state: IntentState::Pending,
         origin: Some(provenance.origin),
         supervisor_run_id: provenance.supervisor_run_id.clone(),
-        omp_session_id: provenance.omp_session_id.clone(),
+        conversation: provenance.conversation.clone(),
         result_message_id: state.runs[index]
             .result
             .as_ref()
@@ -72,7 +72,7 @@ pub(in crate::orchestration) fn accept(
         at: now(),
         by: actor_ref(actor, caller, state),
         text: format!(
-            "Acceptance requested for Result {} at task revision {}; origin {:?}, main session {:?}.",
+            "Acceptance requested for Result {} at task revision {}; origin {:?}, conversation {:?}.",
             state.runs[index]
                 .result
                 .as_ref()
@@ -80,7 +80,7 @@ pub(in crate::orchestration) fn accept(
                 .message_id,
             expected_task_revision,
             provenance.origin,
-            provenance.omp_session_id
+            provenance.conversation
         ),
     };
     state.runs[index].annotations.push(annotation);
@@ -219,6 +219,8 @@ impl OrchestrationService {
             let run = &state.runs[index];
             let valid_receipt = run.root_id == intent.root_id
                 && run.task_id.as_ref() == Some(&intent.task_id)
+                && projection::current_task_run(&state, &intent.root_id, &intent.task_id)
+                    .is_some_and(|current| current.run_id == run.run_id)
                 && run.result.as_ref().and_then(|report| report.outcome)
                     == Some(ReportOutcome::Succeeded)
                 && (run.stage == RunStage::Reported
@@ -290,8 +292,8 @@ impl OrchestrationService {
                 state.runs[index].annotations.push(Annotation {
                     at: now(),
                     by: intent.supervisor_run_id.as_ref().map_or(ActorRef::Operator, |run_id| ActorRef::Run { run_id: run_id.clone() }),
-                    text: format!("Recovered acceptance of Result {:?} at exact task revision {}; origin {:?}, main session {:?}.",
-                        intent.result_message_id, intent.expected_task_revision, intent.origin, intent.omp_session_id),
+                    text: format!("Recovered acceptance of Result {:?} at exact task revision {}; origin {:?}, conversation {:?}.",
+                        intent.result_message_id, intent.expected_task_revision, intent.origin, intent.conversation),
                 });
             } else {
                 state

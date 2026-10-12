@@ -8,15 +8,15 @@ import { taskStatus } from "./SupervisorActions";
 import { readOffset, revealNearest } from "./reveal";
 import type { TaskLane, TaskView } from "../../protocol/generated/v1";
 import type { SupervisorViewRenderContext } from "./supervisorViewTypes";
-import { keptTaskCount, taskRun } from "./retirementView";
+import { keptTaskCount, taskRun, taskOwnerRun } from "./retirementView";
 
 export function SupervisorViewWorkarea({ view }: { view: SupervisorViewRenderContext }) {
-  const { tasks, scope, layout, changed, observe, attention, tabIndexFor, dimFor, hoverRun, selectedAgent, rootSpace, sharedSpace, focusedTask, select, rowElement, setHoverRun, setHoverSpace, laneRefs, mode, switchView, observations, rootRuns, connected, runtimeLive, selectedNode, detailRun, revealIntent, setDetailSection, bottomInset, graphRef, escapeLayer, observedCount, chips, rootRef, listRef, listProps, navOptions, busy, live, rootState, navigate } = view;
+  const { tasks, scope, layout, changed, observe, attention, tabIndexFor, dimFor, hoverRun, selectedAgent, rootSpace, sharedSpace, focusedTask, select, rowElement, setHoverRun, setHoverSpace, laneRefs, mode, switchView, observations, connected, runtimeLive, selectedNode, detailRun, bottomInset, graphRef, escapeLayer, observedCount, chips, rootRef, listRef, listProps, navOptions, busy, live, rootState, rootRuns, navigate } = view;
   const snapshot = view.snapshot!, root = view.root!, model = view.model!;
   const renderTask = (task: TaskView) => {
     const worker = taskRun(snapshot, task), observed = observe(worker?.run_id);
     const tier = attention?.tierForTask(task) ?? null;
-    return <TaskCard key={task.task.task_id} rowId={task.task.task_id} tabIndex={tabIndexFor(task.task.task_id)} view={{ task, worker, observed, snapshot: snapshot!, live: !!live, status: taskStatus(task, worker, snapshot!), tier, dimReason: dimFor(tier, worker?.run_id ?? null), selected: scope.selectedTask === task.task.task_id, linked: !!worker && (hoverRun === worker.run_id || selectedAgent?.run_id === worker.run_id), subagentCount: snapshot!.subagents.filter(agent => agent.run_id === worker?.run_id).length, showSpace: !!scope.spaceFilter || observed?.workspace_id !== rootSpace, sharedSpace }} onFocus={() => { focusedTask.current = task.task.task_id; }} onSelect={() => select({ task: task.task.task_id }, rowElement(task.task.task_id) ?? null, true, false)} onHover={entering => { setHoverRun(entering ? worker?.run_id ?? null : null); setHoverSpace(entering ? observed?.workspace_id ?? null : null); }} />;
+    return <TaskCard key={task.task.task_id} rowId={task.task.task_id} tabIndex={tabIndexFor(task.task.task_id)} view={{ task, worker, observed, snapshot: snapshot!, live: !!live, semanticLive: connected, status: taskStatus(task, worker, snapshot!), tier, dimReason: dimFor(tier, worker?.run_id ?? null), selected: scope.selectedTask === task.task.task_id, linked: !!worker && (hoverRun === worker.run_id || selectedAgent?.run_id === worker.run_id), showSpace: !!scope.spaceFilter || observed?.workspace_id !== rootSpace, sharedSpace }} onFocus={() => { focusedTask.current = task.task.task_id; }} onSelect={() => select({ task: task.task.task_id }, rowElement(task.task.task_id) ?? null, true, false)} onHover={entering => { setHoverRun(entering ? worker?.run_id ?? null : null); setHoverSpace(entering ? observed?.workspace_id ?? null : null); }} />;
   };
   const renderLane = (lane: TaskLane, label: string) => {
     const laneTasks = tasks.filter(task => task.lane === lane);
@@ -32,23 +32,14 @@ export function SupervisorViewWorkarea({ view }: { view: SupervisorViewRenderCon
           selectedNodeId={selectedNode} highlightedRunId={hoverRun ?? detailRun?.run_id ?? null}
           tierFor={node => node.task ? attention?.tierForTask(node.task) ?? null : node.run ? attention?.tierForRun(node.run.run_id) ?? null : null}
           dimFor={node => dimFor(node.task ? attention?.tierForTask(node.task) ?? null : node.run ? attention?.tierForRun(node.run.run_id) ?? null : null, node.run?.run_id ?? node.assignedRunId)}
-          showSubagents={scope.showSubagents}
-          onShowSubagents={next => {
-            scope.showSubagents = next;
-            if (!next && scope.selectedSubagent && scope.selectedRun) {
-              scope.selectedSubagent = null; revealIntent.current = { focus: true }; setDetailSection("overview");
-            }
-            changed();
-          }}
           sharedSpace={sharedSpace} bottomInset={bottomInset} scrollRef={graphRef}
           onSelect={(node: TopologyNode) => select(nodeSelection(node), rowElement(node.id) ?? null, true, false)}
           onHover={id => { setHoverRun(id); setHoverSpace(observe(id)?.workspace_id ?? null); }}
           onEscape={() => { escapeLayer(); return true; }}
-        /> : mode === "dependencies" ? <SupervisorDependencies tasks={tasks} snapshot={snapshot} selectedTaskId={scope.selectedTask} showCompleted={scope.disclosures.completed} onShowCompleted={() => { scope.disclosures.completed = true; changed(); }} narrow={layout.narrow} scrollRef={graphRef} attentionOnly={scope.attentionOnly} tierFor={task => attention?.tierForTask(task) ?? null} dimFor={task => scope.spaceFilter && observe(task.current_run_id)?.workspace_id !== scope.spaceFilter ? "Space filter" : null} onSelect={(task, invoker) => select({ task: task.task.task_id }, invoker, true, false)} onEscape={() => { escapeLayer(); return true; }} bottomInset={bottomInset} /> : <section className="supervisor-board-surface" aria-label="Tasks">
+        /> : mode === "dependencies" ? <SupervisorDependencies tasks={tasks} snapshot={snapshot} selectedTaskId={scope.selectedTask} showCompleted={scope.disclosures.completed} onShowCompleted={() => { scope.disclosures.completed = true; changed(); }} narrow={layout.narrow} scrollRef={graphRef} attentionOnly={scope.attentionOnly} tierFor={task => attention?.tierForTask(task) ?? null} dimFor={task => scope.spaceFilter && observe(taskOwnerRun(snapshot, task)?.run_id)?.workspace_id !== scope.spaceFilter ? "Space filter" : null} onSelect={(task, invoker) => select({ task: task.task.task_id }, invoker, true, false)} onEscape={() => { escapeLayer(); return true; }} bottomInset={bottomInset} /> : <section className="supervisor-board-surface" aria-label="Tasks">
           {!layout.narrow && !layout.short ? <AgentsStrip
             heading={live ? `Agents · ${observedCount} observed` : "Agents · unobserved"} chips={chips}
-            subagentCount={snapshot.subagents.filter(agent => rootRuns.some(run => run.run_id === agent.run_id && run.stage !== "closed")).length}
-            onSelect={(id, invoker) => select({ run: id, subagent: null }, invoker, true, false)}
+            onSelect={(id, invoker) => select({ run: id }, invoker, true, false)}
             onGraph={() => {
               switchView("graph");
               requestAnimationFrame(() => rootRef.current?.querySelector<HTMLButtonElement>('[data-view-segment="graph"]')?.focus({ preventScroll: true }));

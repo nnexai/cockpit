@@ -7,7 +7,7 @@ use std::{
 use cap_fs_ext::DirExt;
 use cap_std::fs::Dir;
 use cockpit_protocol::orchestration::{
-    IntentState, Message, OperatorOrigin, Run, Subagent, TaskIntent,
+    IntentState, Message, OperatorOrigin, Run, TaskIntent, TaskOwnership,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub(crate) const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const SCHEMA: u32 = 2;
+pub(crate) const SCHEMA: u32 = 3;
 
 /// Canonical machine records and temporary transaction journals. Task content
 /// lives in tasks/*.md; assignment payloads exist only until durable delivery.
@@ -33,7 +33,8 @@ pub(crate) struct OrchestrationState {
     pub revision: u64,
     pub runs: Vec<Run>,
     pub messages: Vec<Message>,
-    pub subagents: Vec<Subagent>,
+    pub task_ownership: Vec<TaskOwnership>,
+    pub inbox_hints: Vec<InboxHint>,
     pub task_intents: Vec<TaskIntent>,
     pub assignment_intents: Vec<AssignmentIntent>,
     pub scope_intents: Vec<super::scope_intents::ScopeIntent>,
@@ -46,6 +47,24 @@ pub(crate) struct OrchestrationState {
     pub resource_sequence: u64,
     #[serde(default)]
     pub owned_resources: Vec<cockpit_protocol::orchestration::OwnedResourceRecord>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HintState { Pending, Submitting, Sent, Unknown, Deferred }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InboxHint {
+    pub run_id: String,
+    pub attachment_id: String,
+    pub attachment_epoch: u64,
+    pub through_seq: u64,
+    pub attempt_id: String,
+    pub bootstrap: bool,
+    pub state: HintState,
+    pub cause: Option<String>,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +81,7 @@ pub(crate) struct AssignmentIntent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DurableOperationKind { SupervisorStart, RunResume, RunAttach, JobChildRegister, WorkerStart, TaskScopeUpdate, IntegrationRecord, Report, MessageSend, ResourceRequest, ResourceRegister, CleanupFinish }
+pub(crate) enum DurableOperationKind { SupervisorStart, RunResume, RunAttach, RunRegister, TaskUnassign, WorkerStart, TaskScopeUpdate, IntegrationRecord, Report, MessageSend, ResourceRequest, ResourceRegister, CleanupFinish }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DurableOperationRecord {
@@ -94,7 +113,8 @@ impl Default for OrchestrationState {
             revision: 0,
             runs: Vec::new(),
             messages: Vec::new(),
-            subagents: Vec::new(),
+            task_ownership: Vec::new(),
+            inbox_hints: Vec::new(),
             task_intents: Vec::new(),
             assignment_intents: Vec::new(),
             scope_intents: Vec::new(),
@@ -285,11 +305,9 @@ impl LockedStore<'_> {
                     .map_err(|_| InspectionError::new("state_corrupt", "invalid orchestration state header"))?;
                 source_schema = header.schema;
                 match header.schema {
-                    // Old completed tracking was explicitly discarded; reading never mutates it.
-                    1 => OrchestrationState { revision: header.revision, ..OrchestrationState::default() },
                     SCHEMA => serde_json::from_slice::<OrchestrationState>(&bytes)
                         .map_err(|e| InspectionError::new("state_corrupt", e.to_string()))?,
-                    _ => return Err(InspectionError::new("state_corrupt", "unsupported orchestration state schema")),
+                    _ => return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema; select a fresh state root. No migration or reset was performed")),
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => OrchestrationState::default(),
@@ -399,6 +417,9 @@ fn validate_counters(state: &OrchestrationState) -> Result<(), InspectionError> 
         || state.runs.iter().any(|run| run.attachment.as_ref().is_some_and(|a| a.epoch > super::MAX_SAFE_COUNTER)
             || run.resume.as_ref().is_some_and(|r| r.previous_attachment_epoch.is_some_and(|e| e > super::MAX_SAFE_COUNTER)
                 || r.replacement_attachment_epoch.is_some_and(|e| e > super::MAX_SAFE_COUNTER)))
+        || state.runs.iter().any(|run| run.assignment_generation.is_some_and(|value| value == 0 || value > super::MAX_SAFE_COUNTER))
+        || state.task_ownership.iter().any(|ownership| ownership.generation > super::MAX_SAFE_COUNTER)
+        || state.inbox_hints.iter().any(|hint| hint.through_seq > super::MAX_SAFE_COUNTER || hint.attachment_epoch > super::MAX_SAFE_COUNTER)
         || state.credentials.iter().any(|c| c.attachment_epoch > super::MAX_SAFE_COUNTER)
         || state.checkout_claims.iter().any(|c| c.revision > super::MAX_SAFE_COUNTER
             || c.holder.as_ref().is_some_and(|h| h.attachment_epoch > super::MAX_SAFE_COUNTER))
@@ -406,12 +427,7 @@ fn validate_counters(state: &OrchestrationState) -> Result<(), InspectionError> 
             .messages
             .iter()
             .any(|message| message.seq > super::MAX_SAFE_COUNTER)
-        || state.subagents.iter().any(|agent| {
-            agent
-                .last_control
-                .as_ref()
-                .is_some_and(|control| control.seq > super::MAX_SAFE_COUNTER)
-        })
+        || state.credentials.iter().any(|credential| credential.assignment_generation.is_some_and(|value| value == 0 || value > super::MAX_SAFE_COUNTER))
     {
         return Err(InspectionError::new(
             "state_corrupt",
@@ -469,9 +485,7 @@ mod tests {
             report: None,
             stale: false,
             escalated_from: None,
-            from_subagent_id: None,
             stage: DeliveryStage::Acked,
-            woken_omp_session: None,
             created_at: "2000-01-01T00:00:00Z".into(),
             acked_at: Some("2000-01-01T00:00:00Z".into()),
         }
@@ -495,7 +509,7 @@ mod tests {
             state: IntentState::Pending,
             origin: None,
             supervisor_run_id: None,
-            omp_session_id: None,
+            conversation: None,
             result_message_id: None,
         });
         assert_eq!(lock.save(&mut state).unwrap(), 1);
@@ -542,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn obsolete_schema_is_discarded_only_by_a_fresh_locked_save() {
+    fn obsolete_schema_is_rejected_without_discarding_durable_bytes() {
         let fixture = Fixture::new();
         let store = fixture.open();
         let lock = store.lock().unwrap();
@@ -555,13 +569,18 @@ mod tests {
         lock.state_dir().write("state.json", &source).unwrap();
         assert_eq!(lock.save(&mut state).unwrap_err().code, "orchestration_revision_conflict");
         assert_eq!(lock.exact_bytes().unwrap(), source);
-        let mut fresh = lock.read().unwrap();
-        assert_eq!(fresh.schema, SCHEMA);
-        assert_eq!(fresh.revision, state.revision);
-        assert!(fresh.runs.is_empty());
+        assert_eq!(lock.read().unwrap_err().code, "orchestration_state_incompatible");
         assert_eq!(lock.exact_bytes().unwrap(), source);
-        lock.save(&mut fresh).unwrap();
-        assert_eq!(lock.read().unwrap().schema, SCHEMA);
+        drop(lock);
+        drop(store);
+        let reopened = fixture.open();
+        let lock = reopened.lock().unwrap();
+        assert_eq!(lock.read().unwrap_err().code, "orchestration_state_incompatible");
+        assert_eq!(lock.exact_bytes().unwrap(), source);
+        let mut fresh = OrchestrationState::default();
+        assert_eq!(lock.save(&mut fresh).unwrap_err().code, "orchestration_state_incompatible");
+        assert_eq!(fresh.revision, 0);
+        assert_eq!(lock.exact_bytes().unwrap(), source);
     }
 
     #[test]

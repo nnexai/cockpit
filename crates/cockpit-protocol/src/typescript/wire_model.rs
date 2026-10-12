@@ -61,7 +61,7 @@ struct Module {
     inputs: BTreeMap<String, DeriveInput>,
 }
 
-type Inputs = BTreeMap<String, (&'static str, DeriveInput)>;
+type Inputs = BTreeMap<String, (&'static str, DeriveInput, Option<(Value, Value)>)>;
 
 pub(crate) fn wire_model(sections: &[&Section]) -> Result<Vec<WireType>, String> {
     let mut modules: BTreeMap<&'static str, Module> = BTreeMap::new();
@@ -122,12 +122,17 @@ pub(crate) fn wire_model(sections: &[&Section]) -> Result<Vec<WireType>, String>
                 ));
             }
             order.push(name);
-            inputs.insert(name.to_owned(), (section.module, input));
+            let defaults = if name == "OrchestrationConfiguration" {
+                Some(source::orchestration_defaults(&module.file)?)
+            } else {
+                None
+            };
+            inputs.insert(name.to_owned(), (section.module, input, defaults));
         }
     }
     let mut result = Vec::with_capacity(order.len());
     for name in order {
-        let (module, input) = &inputs[name];
+        let (module, input, _) = &inputs[name];
         let container = container(input, name)?;
         validate_container(&container, name)?;
         let shape = shape(&container, name, &inputs, public_ts.get(name))?;
@@ -335,7 +340,21 @@ fn fields_model(
             name,
             &field_owner,
         )?;
-        reject_default_path(field.attrs.default(), &field_owner)?;
+        let custom_fill = match field.attrs.default() {
+            attr::Default::Path(path)
+                if owner == "OrchestrationConfiguration"
+                    && matches!(name, "harness_kind" | "command")
+                    && path.path.is_ident("default_harness") =>
+            {
+                Some(inputs[owner].2.as_ref()
+                    .ok_or_else(|| format!("{field_owner}: missing grounded configuration default"))?
+                    .1.clone())
+            }
+            default => {
+                reject_default_path(default, &field_owner)?;
+                None
+            }
+        };
         let ty = attrs::wire_ty(field.ty, &field_owner)?;
         resolve_ty(&ty, inputs, &field_owner)?;
         let ts_attrs = match ts_fields {
@@ -374,7 +393,7 @@ fn fields_model(
             }
             attr::Default::None if matches!(ty, WireTy::Option(_)) => Some(Value::Null),
             attr::Default::None => None,
-            attr::Default::Path(_) => unreachable!("default path rejected above"),
+            attr::Default::Path(_) => custom_fill,
         };
         result.push(WireField {
             name: name.to_owned(),
@@ -459,10 +478,13 @@ fn named_default(
     inputs: &Inputs,
     visiting: &mut BTreeSet<String>,
 ) -> Result<Option<Value>, String> {
-    let (_, input) = inputs
+    let (_, input, grounded_default) = inputs
         .get(name)
         .ok_or_else(|| format!("{name}: unsupported default source type"))?;
-    // Never infer values from a manual Default implementation.
+    if let Some((value, _)) = grounded_default {
+        return Ok(Some(value.clone()));
+    }
+    // Only the explicitly recognized configuration has a manual Default.
     if !attrs::derives(&input.attrs, "Default")? {
         return Ok(None);
     }

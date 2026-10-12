@@ -1,16 +1,13 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use cockpit_core::orchestration::{Actor, JobRole, latest_progress_sequences};
+use cockpit_core::orchestration::{Actor, latest_progress_sequences};
 
 use cockpit_protocol::orchestration::{
     DeliveryStage, Message, MessageKind, OrchestrationSnapshot, OrchestrationWaitRequest,
-    SubagentOp,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use super::args::{AgentKindArg, OrchestrationArgs};
 use super::output::emit;
-use super::retirement::{completed_main_wait, emit_main_wait_deadline};
 use super::{CliError, Context};
 
 #[derive(Serialize)]
@@ -33,7 +30,6 @@ pub(super) fn inbox_counts(messages: &[Message], run_id: &str, after: u64) -> In
     for message in messages.iter().filter(|message| {
         message.to_run_id == run_id
             && message.seq > after
-            && message.kind != MessageKind::SubagentControl
             && message.stage != DeliveryStage::Acked
             && (!message.report.as_ref().is_some_and(|report| {
                 report.kind == cockpit_protocol::orchestration::ReportKind::Progress
@@ -46,7 +42,6 @@ pub(super) fn inbox_counts(messages: &[Message], run_id: &str, after: u64) -> In
             MessageKind::Instruction => "instruction",
             MessageKind::Answer => "answer",
             MessageKind::CancelRequest => "cancel_request",
-            MessageKind::SubagentControl => "subagent_control",
             MessageKind::Report => "report",
             MessageKind::Observation => "observation",
         };
@@ -70,71 +65,21 @@ pub(super) async fn inbox_wait(
     context: &Context,
     after: u64,
     timeout: u64,
-    with_retirement: bool,
-    after_retirement: Option<&str>,
+    // Wait never reads bodies or acknowledges messages.
     json: bool,
 ) -> Result<(), CliError> {
     let mut snapshot = context.snapshot(None).await?;
-    let with_retirement = if with_retirement {
-        let Some(Actor::Agent(caller)) = &context.actor else {
-            return Err(CliError::new("credential_required", "Inbox wait requires a private job credential"));
-        };
-        match context.service.job_role(caller) {
-            Ok((_, role, _)) => role == JobRole::Worker,
-            Err(ordinary_error) => {
-                // Only the existing accepted-worker retirement purpose may outlive ordinary auth.
-                let run = context.service.job_run_retirement(caller)?;
-                if run.stage != cockpit_protocol::orchestration::RunStage::Closed
-                    || run.close_reason != Some(cockpit_protocol::orchestration::CloseReason::Accepted)
-                    || run.retirement.is_none()
-                {
-                    return Err(ordinary_error.into());
-                }
-                true
-            }
-        }
-    } else {
-        false
-    };
+    let own = context.own_run(&snapshot)?.run_id.clone();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
     loop {
-        let narrow = if with_retirement {
-            Some(completed_main_wait(context, &snapshot, after)?)
-        } else {
-            None
-        };
-        let ordinary = if with_retirement {
-            None
-        } else {
-            let own = context.own_run(&snapshot)?;
-            Some(inbox_counts(&snapshot.messages, &own.run_id, after))
-        };
-        if let Some(read) = &narrow {
-            if read.ready(after_retirement) {
-                return emit(read, json);
-            }
-        } else if let Some(result) = &ordinary {
-            if result.pending {
-                return emit(result, json);
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
+        let counts = inbox_counts(&snapshot.messages, &own, after);
+        if counts.pending || tokio::time::Instant::now() >= deadline {
             context.check_caller().await?;
-            if with_retirement {
-                return emit_main_wait_deadline(context, after, json);
-            }
-            return emit(ordinary.as_ref().expect("ordinary wait counts"), json);
+            return emit(&counts, json);
         }
-        drop(narrow);
         match next_snapshot(context, &snapshot, deadline).await? {
             Some(next) => snapshot = next,
-            None => {
-                // next_snapshot has completed the fresh CPU timeout fence.
-                if with_retirement {
-                    return emit_main_wait_deadline(context, after, json);
-                }
-                return emit(ordinary.as_ref().expect("ordinary wait counts"), json);
-            }
+            None => return emit(&counts, json),
         }
     }
 }
@@ -172,7 +117,6 @@ pub(super) async fn wait_next(
         return Err(CliError::new("credential_required", "Inbox wait requires a private job credential"));
     };
     let root_id = context.authenticated_run(caller)?.root_id;
-    // Reobserve idle runtime even without an owner; durable changes wake this wait early.
     let timeout_ms = remaining.min(Duration::from_secs(3)).as_millis().max(1) as u32;
     context
         .service
@@ -185,72 +129,3 @@ pub(super) async fn wait_next(
     Ok(())
 }
 
-#[derive(Deserialize)]
-pub(super) struct ControlPayload {
-    pub(super) subagent_id: String,
-    #[serde(rename = "op")]
-    pub(super) _op: SubagentOp,
-}
-#[derive(Serialize)]
-pub(super) struct Controls<'a> {
-    pub(super) messages: Vec<&'a Message>,
-}
-pub(super) fn pending_controls<'a>(
-    all_messages: &'a [Message],
-    run: &str,
-    id: &str,
-) -> Result<Controls<'a>, CliError> {
-    let mut messages = Vec::new();
-    for message in all_messages.iter().filter(|message| {
-        message.to_run_id == run
-            && message.kind == MessageKind::SubagentControl
-            && message.stage != DeliveryStage::Acked
-    }) {
-        let control: ControlPayload = serde_json::from_str(&message.text).map_err(|error| {
-            CliError::new(
-                "orchestration_control_invalid",
-                format!("invalid stored control at seq {}: {error}", message.seq),
-            )
-        })?;
-        if control.subagent_id == id {
-            messages.push(message);
-        }
-    }
-    messages.sort_by_key(|message| message.seq);
-    Ok(Controls { messages })
-}
-
-pub(super) async fn subagent_controls(
-    context: &Context,
-    common: &OrchestrationArgs,
-    id: &str,
-    wait: bool,
-    timeout: u64,
-) -> Result<(), CliError> {
-    if matches!(common.agent_kind, Some(AgentKindArg::Subagent))
-        && common.subagent_id.as_deref() != Some(id)
-    {
-        return Err(CliError::new(
-            "actor_forbidden",
-            "subagent may only read its own controls",
-        ));
-    }
-    let mut snapshot = context.snapshot(None).await?;
-    let deadline =
-        tokio::time::Instant::now() + Duration::from_secs(if wait { timeout } else { 0 });
-    loop {
-        let own = context.own_run(&snapshot)?;
-        let result = pending_controls(&snapshot.messages, &own.run_id, id)?;
-        if !result.messages.is_empty() {
-            return emit(&result, common.json);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            context.check_caller().await?;
-            return emit(&result, common.json);
-        }
-        match next_snapshot(context, &snapshot, deadline).await? {
-            Some(next) => snapshot = next,
-            None => return emit(&result, common.json),
-        }
-    }
-}

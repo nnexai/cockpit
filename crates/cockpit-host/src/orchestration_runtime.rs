@@ -18,9 +18,7 @@ use cockpit_protocol::{
     projects::{ProjectConfiguration, WorkspaceSetupRequest},
 };
 use std::{
-    fs::{self, OpenOptions},
-    io::{Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    fs,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -52,36 +50,35 @@ impl OrchestrationRuntime {
         cli_role: CliProcessRole,
     ) -> Result<Self, InspectionError> {
         let service = Arc::new(OrchestrationService::open(configuration)?);
-        let extension =
-            std::path::absolute(extension_path(configuration)?).map_err(extension_error)?;
         // Workers have a different cwd; transport selection must not become cwd-relative there.
         let config_path = cockpit_core::config::configuration_path(config_path.as_deref())?
             .map(std::path::absolute)
             .transpose()
-            .map_err(extension_error)?;
+            .map_err(runtime_error)?;
         let herdr_socket = herdr
             .config()
             .socket
             .clone()
             .map(std::path::absolute)
             .transpose()
-            .map_err(extension_error)?;
+            .map_err(runtime_error)?;
         let executable = &herdr.config().executable;
         let herdr_executable = Some(if executable.components().count() > 1 {
-            std::path::absolute(executable).map_err(extension_error)?
+            std::path::absolute(executable).map_err(runtime_error)?
         } else {
             executable.clone()
         });
         let settings = DispatcherSettings {
-            omp_extension: extension,
-            agent_kind: "omp".into(),
+            harness_kind: configuration.orchestration.harness_kind.clone(),
+            command: configuration.orchestration.command.clone(),
             start_timeout_ms: 60_000,
             cli_path: cli_path(cli_role)?,
             config_path,
             herdr_socket,
             herdr_executable,
-            model: configuration.orchestration.model.clone(),
             extra_args: configuration.orchestration.extra_args.clone(),
+            resume_args: configuration.orchestration.resume_args.clone(),
+            inbox_prompt_hints: configuration.orchestration.inbox_prompt_hints,
         };
         let dispatcher =
             Dispatcher::new(service.clone(), projects.clone(), library, herdr.clone(), settings);
@@ -216,47 +213,47 @@ async fn resolve_physical_mutation_input(
         OrchestrationAction::SupervisorStart { target: None, .. } => {
             Ok(ResolvedMutationInput::default())
         }
-        OrchestrationAction::RunAdopt { .. } => {
-            let (endpoint, caller_session, workspace_id, tab_id, pane_id, terminal_id, native_session, process) = match actor {
-                Actor::Bootstrap(caller) => (
-                    &caller.endpoint_identity, &caller.session_id, &caller.workspace_id,
-                    &caller.tab_id, &caller.pane_id, caller.terminal_id.as_ref(),
-                    caller.native_session_id.as_ref(), caller.process.as_ref(),
-                ),
-                Actor::Agent(caller) => (
-                    &caller.endpoint_identity, &caller.session_id, &caller.workspace_id,
-                    &caller.tab_id, &caller.pane_id, caller.terminal_id.as_ref(),
-                    caller.native_session_id.as_ref(), caller.process.as_ref(),
-                ),
-                Actor::Operator(_) => return Err(InspectionError::new(
-                    "actor_forbidden", "Adoption requires a freshly attested native agent pane",
-                )),
-            };
+        OrchestrationAction::RunAdopt { location, .. } => {
+            if !matches!(actor, Actor::Operator(_)) {
+                return Err(InspectionError::new("actor_forbidden", "Only the operator can adopt a selected pane"));
+            }
             let runtime = herdr.runtime(&request.session_id).await?;
-            if caller_session != &request.session_id || runtime.endpoint_identity != *endpoint
-                || !runtime.panes.iter().any(|pane| pane.pane_id == *pane_id
-                    && pane.workspace_id == *workspace_id && pane.tab_id == *tab_id
-                    && terminal_id.is_some_and(|id| pane.terminal_id.as_ref() == Some(id))
-                    && native_session.is_some_and(|id| pane.native_session_id.as_ref() == Some(id))
-                    && pane.agent_kind.as_deref() == Some("omp"))
-                || process.and_then(verified_machine_id).is_none()
+            let mut panes = runtime.panes.iter().filter(|pane| pane.pane_id == location.pane_id);
+            let pane = panes.next();
+            if location.session_id != request.session_id
+                || runtime.endpoint_identity != location.endpoint_identity
+                || panes.next().is_some()
+                || location.boot_id.as_ref().is_some_and(|boot| runtime.boot_id.as_ref() != Some(boot))
+                || pane.is_none_or(|pane| pane.workspace_id != location.workspace_id
+                    || pane.tab_id != location.tab_id
+                    || location.terminal_id.as_ref().is_none_or(|id| id.is_empty() || pane.terminal_id.as_ref() != Some(id))
+                    || location.native_session_id.as_ref().is_some_and(|id| pane.native_session_id.as_ref() != Some(id)))
+                || runtime.panes.iter().filter(|pane| pane.terminal_id == location.terminal_id).count() != 1
             {
-                return Err(InspectionError::new(
-                    "caller_mismatch", "The adopted native process and exact pane must still be present",
-                ));
+                return Err(InspectionError::new("caller_mismatch", "The selected exact endpoint/pane/terminal must still be present"));
             }
-            let workspace = match authoritative_workspace(&runtime, workspace_id) {
-                Ok(workspace) => workspace,
-                Err(_) => return Ok(ResolvedMutationInput::default()),
+            let observed = ExecutionAttachment {
+                attachment_id: uuid::Uuid::new_v4().to_string(), epoch: 1,
+                state: AttachmentState::Connecting, launch_mode: None,
+                location: Some(location.clone()), conversation: None, process: None,
+                shell: None, machine_id: None, launch_attempt: 0,
+                updated_at: time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .map_err(runtime_error)?,
             };
-            // An attested adopted root remains usable when its project cannot be
-            // inspected, but unavailable evidence must never merge it with a root.
-            match resolve_directory(Path::new(&workspace.cwd), None, Some(workspace_id.clone())).await {
-                Ok((project, checkout)) => Ok(ResolvedMutationInput {
-                    project: Some(project), checkout: Some(checkout), ..Default::default()
-                }),
-                Err(_) => Ok(ResolvedMutationInput::default()),
+            let mut resolved = ResolvedMutationInput {
+                attachment_observation: Some(observed), ..Default::default()
+            };
+            // Missing project/process observations do not invent physical ownership.
+            if let Ok(workspace) = authoritative_workspace(&runtime, &location.workspace_id)
+                && let Ok((project, checkout)) = resolve_directory(
+                    Path::new(&workspace.cwd), None, Some(location.workspace_id.clone()),
+                ).await
+            {
+                resolved.project = Some(project);
+                resolved.checkout = Some(checkout);
             }
+            Ok(resolved)
         }
         OrchestrationAction::RunResume { run_id, .. } => {
             let run = service.run_for_review(&request.session_id, run_id)?;
@@ -480,13 +477,18 @@ fn exact_saved_pane(runtime: &RuntimeView, run: &Run) -> bool {
     let Some(attachment) = run.attachment.as_ref() else { return false; };
     let Some(location) = attachment.location.as_ref() else { return false; };
     location.session_id == run.session_id && runtime.endpoint_identity == location.endpoint_identity
+        && location.boot_id.as_ref().zip(runtime.boot_id.as_ref()).is_none_or(|(saved, current)| saved == current)
+        && runtime.panes.iter().filter(|pane| pane.pane_id == location.pane_id).count() == 1
+        && location.terminal_id.as_ref().is_some_and(|terminal|
+            runtime.panes.iter().filter(|pane| pane.terminal_id.as_ref() == Some(terminal)).count() == 1)
         && runtime.panes.iter().any(|pane|
             pane.workspace_id == location.workspace_id && pane.tab_id == location.tab_id
             && pane.pane_id == location.pane_id
             && location.terminal_id.as_ref().is_some_and(|id| pane.terminal_id.as_ref() == Some(id))
-            && location.native_session_id.as_ref().or(attachment.main_session_id.as_ref())
-                .is_some_and(|id| pane.native_session_id.as_ref() == Some(id))
-            && pane.agent_kind.as_deref() == Some("omp") && !pane.launch_pending)
+            && location.native_session_id.as_ref()
+                .is_none_or(|id| pane.native_session_id.as_ref() == Some(id))
+            && pane.agent_kind.as_deref() == Some(run.launch_config.harness_kind.as_str())
+            && !pane.launch_pending)
 }
 
 pub async fn lookup_project_roots(
@@ -544,8 +546,8 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
     ProjectRootCandidate {
         root_id: run.run_id.clone(), connection, resume,
         cause: if incompatible_live { Some(ResumeCause {
-            code: "current_extension_unavailable".into(),
-            message: "The living writer has not authenticated its current attachment through this protocol. Its process and checkout claim are preserved; a loaded older extension is not assumed upgraded.".into(),
+            code: "conversation_unregistered".into(),
+            message: "The living writer has not registered its conversation with this run's capability. Its process and checkout claim are preserved.".into(),
             class: ResumeCauseClass::Recover,
         }) } else { run.resume.as_ref().and_then(|r| r.cause.clone()) },
         updated_at: run.updated_at.clone(),
@@ -557,7 +559,8 @@ fn cli_path(role: CliProcessRole) -> Result<PathBuf, InspectionError> {
     if let Some(path) = std::env::var_os("COCKPIT_CLI_EXECUTABLE") {
         let path = PathBuf::from(path);
         return if path.components().count() > 1 {
-            std::path::absolute(path).map_err(extension_error)
+            std::path::absolute(path)
+                .map_err(|error| InspectionError::new("orchestration_runtime_failed", error.to_string()))
         } else {
             Ok(path)
         };
@@ -593,81 +596,8 @@ fn resolve_cli_path(executable: &Path, role: CliProcessRole) -> PathBuf {
     }
 }
 
-fn extension_path(configuration: &ProjectConfiguration) -> Result<PathBuf, InspectionError> {
-    if let Some(path) = std::env::var_os("COCKPIT_OMP_EXTENSION") {
-        return Ok(path.into());
-    }
-    if let Some(path) = &configuration.orchestration.omp_extension {
-        return Ok(path.into());
-    }
-    let root = Path::new(&configuration.state_root).join("orchestration");
-    let directory = root.join("omp");
-    private_directory(&directory)?;
-    let path = directory.join("cockpit-orchestration.ts");
-    let content = include_bytes!("../../../integrations/omp/cockpit-orchestration.ts");
-    let existing = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW)
-        .open(&path);
-    match existing {
-        Ok(file) => {
-            if !file.metadata().map_err(extension_error)?.is_file() {
-                return Err(extension_error("Extension is not a regular file"));
-            }
-            let mut bytes = Vec::new();
-            file.take(content.len() as u64 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(extension_error)?;
-            if bytes.as_slice() == content.as_slice() {
-                return Ok(path);
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(extension_error(error)),
-    }
-    let temp = directory.join(format!(".extension-{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(nix::libc::O_NOFOLLOW)
-            .open(&temp)
-            .map_err(extension_error)?;
-        file.write_all(content).map_err(extension_error)?;
-        file.sync_all().map_err(extension_error)?;
-        fs::rename(&temp, &path).map_err(extension_error)?;
-        fs::File::open(&directory)
-            .and_then(|directory| directory.sync_all())
-            .map_err(extension_error)?;
-        Ok(path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temp);
-    }
-    result
-}
-fn private_directory(path: &Path) -> Result<(), InspectionError> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-    match fs::DirBuilder::new().mode(0o700).create(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(extension_error(error)),
-    }
-    let metadata = fs::symlink_metadata(path).map_err(extension_error)?;
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != nix::unistd::Uid::current().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(extension_error(
-            "Bundled extension directory must be private and owned by the current user",
-        ));
-    }
-    Ok(())
-}
-fn extension_error(error: impl std::fmt::Display) -> InspectionError {
-    InspectionError::new("omp_extension_unavailable", error.to_string())
+fn runtime_error(error: impl std::fmt::Display) -> InspectionError {
+    InspectionError::new("orchestration_runtime_unavailable", error.to_string())
 }
 
 #[cfg(test)]

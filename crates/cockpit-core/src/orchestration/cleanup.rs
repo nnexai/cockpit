@@ -133,7 +133,6 @@ fn authorize(ctx: &MutationCtx<'_>, root_id: &str, run_id: Option<&str>) -> Resu
                 Ok(())
             } else { Err(error("actor_forbidden", "Only the root or exact owning worker can request cleanup")) }
         }
-        Actor::Bootstrap(_) => Err(error("actor_forbidden", "Bootstrap cannot register or finish cleanup")),
     }
 }
 
@@ -151,21 +150,13 @@ pub(in crate::orchestration) fn authorize_replay(ctx: &MutationCtx<'_>, action: 
 pub(in crate::orchestration) fn admit_caller(state: &OrchestrationState, caller: &AgentCaller, request: &CleanupFinish) -> Result<usize, InspectionError> {
     let job = credentials::validate_cleanup_job_auth(state, &caller.auth)?;
     let run = &state.runs[job.run_index];
-    let attachment = run.attachment.as_ref().ok_or_else(|| error("caller_mismatch", "Cleanup main binding is missing"))?;
-    if caller.agent_kind != Some(AgentKind::Main) || caller.subagent_id.is_some()
-        || caller.provenance.as_ref().is_some_and(|p| p.child_id.is_some())
-        || caller.actual_agent_kind != Some(NativeAgentKind::Omp)
-        || caller.session_id != run.session_id
-        || caller.env_run.as_ref().is_none_or(|(id, attempt)| id != &run.run_id || *attempt != run.attempt)
-        || caller.omp_session_id.as_ref() != attachment.main_session_id.as_ref()
-        || caller.process.is_none() || caller.process.as_ref() != attachment.process.as_ref()
-        || attachment.location.as_ref().is_none_or(|location| !caller::location_matches(location, attachment.main_session_id.as_deref(), caller))
-        || (job.role == JobRole::Root && request.root_id != run.run_id)
+    credentials::validate_current_assignment(state, caller, &job)?;
+    if (job.role == JobRole::Root && request.root_id != run.run_id)
         || (job.role == JobRole::Worker && (request.root_id != run.root_id || request.run_id.as_deref() != Some(run.run_id.as_str()))) {
-        return Err(error("actor_forbidden", "Cleanup requires this exact root main or owning worker main"));
+        return Err(error("actor_forbidden", "Cleanup requires the exact authenticated root or owning worker"));
     }
     if let Some(target) = &request.run_id {
-        if state.runs[scoped_index(state, &caller.session_id, target)?].root_id != request.root_id {
+        if state.runs[scoped_index(state, &run.session_id, target)?].root_id != request.root_id {
             return Err(error("actor_forbidden", "Cleanup target is outside the root"));
         }
     }
@@ -290,10 +281,9 @@ impl OrchestrationService {
     pub fn cleanup_job_run(&self, caller: &AgentCaller, request: &CleanupFinish) -> Result<Run, InspectionError> {
         let state = self.store.lock()?.read()?;
         let job = credentials::validate_cleanup_job_auth(&state, &caller.auth)?;
+        credentials::validate_current_assignment(&state, caller, &job)?;
         let run = &state.runs[job.run_index];
-        if caller.agent_kind != Some(AgentKind::Main) || caller.subagent_id.is_some()
-            || caller.provenance.as_ref().is_some_and(|p| p.child_id.is_some())
-            || (job.role == JobRole::Root && request.root_id != run.run_id)
+        if (job.role == JobRole::Root && request.root_id != run.run_id)
             || (job.role == JobRole::Worker && (request.root_id != run.root_id || request.run_id.as_deref() != Some(run.run_id.as_str()))) {
             return Err(error("actor_forbidden", "Cleanup bootstrap is scoped to the authenticated root or own worker"));
         }
@@ -315,17 +305,14 @@ impl OrchestrationService {
             match actor {
                 Actor::Operator(_) => {}
                 Actor::Agent(agent) => {
-                    let job = credentials::validate_job_auth(&state, &agent.auth)?;
+                    let job = credentials::validate_caller(&state, agent)?;
                     let caller = &state.runs[job.run_index];
                     if caller.session_id != session_id
-                        || agent.agent_kind != Some(AgentKind::Main) || agent.subagent_id.is_some()
-                        || agent.provenance.as_ref().is_some_and(|p| p.child_id.is_some())
                         || !((job.role == JobRole::Root && state.runs[target].root_id == caller.run_id)
                             || (job.role == JobRole::Worker && target == job.run_index)) {
                         return Err(error("actor_forbidden", "Registration is scoped to the root or exact owning worker"));
                     }
                 }
-                Actor::Bootstrap(_) => return Err(error("actor_forbidden", "Bootstrap cannot register owned resources")),
             }
             state.runs[target].clone()
         };
@@ -441,10 +428,18 @@ impl OrchestrationService {
     }
 
     fn writer_quiescent(state: &OrchestrationState, run: &Run, attachment_id: &str, epoch: u64) -> bool {
-        run.attachment.as_ref().is_some_and(|a| a.attachment_id == attachment_id && a.epoch == epoch)
-            && run.stage == RunStage::Closed
-            && retirement::blockers(state, run).is_empty()
-            && run.retirement.as_ref().is_some_and(|r| r.quiescent_stop_at.is_some() && retirement::identity_matches(run, r))
+        let Some(attachment) = run.attachment.as_ref().filter(|a| a.attachment_id == attachment_id && a.epoch == epoch)
+            else { return false };
+        if run.stage != RunStage::Closed || !retirement::blockers(state, run).is_empty() { return false; }
+        // All old-boot consumers are absent only on the same verified machine.
+        // A main-process exit or pane close alone cannot attest detached writers.
+        let reboot = attachment.machine_id.as_ref().is_some_and(|machine|
+            crate::process_identity::machine_id().as_ref() == Some(machine))
+            && attachment.process.as_ref().or_else(|| attachment.shell.as_ref().map(|shell| &shell.process))
+                .and_then(|process| process.kernel_boot_id.as_ref()).is_some_and(|boot|
+                    crate::process_identity::kernel_boot_id().as_ref().is_some_and(|current| current != boot));
+        reboot || run.checkout_claim_id.as_ref().is_some_and(|id|
+            state.checkout_claims.iter().any(|claim| &claim.claim_id == id && claim.state == claims::ClaimState::Released))
     }
 
     fn consumer_unresolved(state: &OrchestrationState, consumer: &AttachmentReference) -> bool {
@@ -485,7 +480,7 @@ impl OrchestrationService {
                     self.record_constituent_receipts(&queued, receipts)?;
                 }
             }
-            let (resource, run, blocked) = {
+            let (resource, run, blocked, drained) = {
                 let state = self.store.lock()?.read()?;
                 let Some(resource) = state.owned_resources.iter().find(|r| r.resource_id == queued.resource_id) else { continue };
                 let run = &state.runs[run_index(&state, &resource.run_id)?];
@@ -493,7 +488,8 @@ impl OrchestrationService {
                 let mut observed = resource.clone();
                 observed.consumers = Self::consumers_unresolved(&state, resource);
                 let writers = Self::known_writers_active(&state, resource);
-                (observed, run.clone(), !blocked.is_empty() || writers)
+                let drained = run.attachment.as_ref().is_some_and(|a| Self::writer_quiescent(&state, run, &a.attachment_id, a.epoch));
+                (observed, run.clone(), !blocked.is_empty() || writers, drained)
             };
             let evaluation = if resource.ownership == ResourceOwnership::Unknown {
                 CleanupEvaluation::Unknown(resource.cleanup.reason.clone().unwrap_or_else(|| reason(CleanupReasonClass::Authority, "ownership_unproven", "Unknown creation authority protects this resource")))
@@ -508,9 +504,9 @@ impl OrchestrationService {
                     || matches!((&run.integration, &run.source_output), (Integration::NotApplicable { .. }, Some(SourceOutput::NonCode { .. })))) {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "integration_pending", "Accepted source output must be integrated before Git removal"))
             } else if blocked {
-                CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumers_active", "Known descendant, subagent or checkout writer consumers remain protected"))
+                CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumers_active", "Known descendant or checkout writer consumers remain protected"))
             } else if matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch)
-                && (!resource.consumers.is_empty() || run.retirement.as_ref().is_none_or(|r| r.quiescent_stop_at.is_none())) {
+                && (!resource.consumers.is_empty() || !drained) {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumer_drain_unproven", "Known consumers have not supplied a proven sealed drain"))
             } else {
                 let inspection = match resource.kind {
@@ -587,7 +583,7 @@ impl OrchestrationService {
         if registered.kind != OwnedResourceKind::FixtureSet
             && registered.cleanup.effects.iter().any(|e| matches!(e.state, CleanupEffectState::Intent | CleanupEffectState::Unknown)) { return Ok(None) }
         if matches!(registered.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch)
-            && (!unresolved.is_empty() || run.retirement.as_ref().is_none_or(|r| r.quiescent_stop_at.is_none())) { return Ok(None) }
+            && (!unresolved.is_empty() || run.attachment.as_ref().is_none_or(|a| !Self::writer_quiescent(&state, run, &a.attachment_id, a.epoch))) { return Ok(None) }
         if matches!(registered.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
             && !(matches!(run.integration, Integration::Integrated { .. })
                 || matches!((&run.integration, &run.source_output), (Integration::NotApplicable { .. }, Some(SourceOutput::NonCode { .. })))) { return Ok(None) }

@@ -2,8 +2,8 @@ use cockpit_protocol::orchestration::*;
 
 use super::{
     Actor, AuthorizedJob, JobRole, AppendMessage, OrchestrationState, agent, actor_ref, append, duplicate, error,
-    current_question, deliverable, is_ancestor, latest_progress_sequences, main_session, message_result, now,
-    run_index, subagent_context, text_bound, upward,
+    current_question, deliverable, is_ancestor, latest_progress_sequences, message_result, now,
+    run_index, text_bound, upward,
 };
 use crate::InspectionError;
 
@@ -52,7 +52,6 @@ pub(super) fn apply(
         }
         OrchestrationAction::InboxPull { after_seq, limit } => {
             let (_, index) = agent(actor, caller)?;
-            main_session(caller)?;
             let own = &state.runs[index].run_id;
             let latest_progress = latest_progress_sequences(&state.messages, own);
             // Append order is per-recipient sequence order; stop before touching the next page.
@@ -64,57 +63,33 @@ pub(super) fn apply(
                 .filter(|message| {
                     message.to_run_id == *own
                         && message.seq > *after_seq
-                        && message.kind != MessageKind::SubagentControl
                         && deliverable(message, &latest_progress)
                 })
                 .take((*limit).min(100) as usize)
             {
-                if matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken) {
+                if message.stage == DeliveryStage::Stored {
                     message.stage = DeliveryStage::Read;
                 }
                 read_through_seq = message.seq;
                 messages.push(message.clone());
+            }
+            if !messages.is_empty() && read_through_seq > 0 {
+                super::super::dispatch::resolve_inbox_hint(state, index, read_through_seq);
             }
             OrchestrationActionResult::Inbox {
                 messages,
                 read_through_seq,
             }
         }
-        OrchestrationAction::InboxWoken {
-            through_seq,
-            omp_session_id,
-        } => {
-            let (_, index) = agent(actor, caller)?;
-            main_session(caller)?;
-            if omp_session_id.trim().is_empty() {
-                return Err(error("invalid_session", "Wake receipt requires a nonempty diagnostic session"));
-            }
-            let own = &state.runs[index].run_id;
-            let latest_progress = latest_progress_sequences(&state.messages, own);
-            for message in state.messages.iter_mut().filter(|message| {
-                message.to_run_id == *own
-                    && message.seq <= *through_seq
-                    && message.kind != MessageKind::SubagentControl
-                    && deliverable(message, &latest_progress)
-            }) {
-                if matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken) {
-                    message.stage = DeliveryStage::Woken;
-                    message.woken_omp_session = Some(omp_session_id.clone());
-                }
-            }
-            OrchestrationActionResult::Done
-        }
         OrchestrationAction::InboxAck { through_seq } => {
             let (_, index) = agent(actor, caller)?;
-            main_session(caller)?;
             let own = &state.runs[index].run_id;
             let latest_progress = latest_progress_sequences(&state.messages, own);
             if state.messages.iter().any(|message| {
                 message.to_run_id == *own
                     && message.seq <= *through_seq
-                    && message.kind != MessageKind::SubagentControl
                     && deliverable(message, &latest_progress)
-                    && matches!(message.stage, DeliveryStage::Stored | DeliveryStage::Woken)
+                    && message.stage == DeliveryStage::Stored
             }) {
                 return Err(error(
                     "ack_before_read",
@@ -125,7 +100,6 @@ pub(super) fn apply(
             for message in state.messages.iter_mut().filter(|message| {
                 message.to_run_id == *own
                     && message.seq <= *through_seq
-                    && message.kind != MessageKind::SubagentControl
                     && deliverable(message, &latest_progress)
             }) {
                 if message.stage != DeliveryStage::Acked {
@@ -133,6 +107,7 @@ pub(super) fn apply(
                     message.acked_at = Some(at.clone());
                 }
             }
+            super::super::dispatch::resolve_inbox_hint(state, index, *through_seq);
             OrchestrationActionResult::Done
         }
         _ => return Ok(None),
@@ -149,7 +124,6 @@ fn recipient(
     kind: MessageKind,
 ) -> Result<(String, Option<String>), InspectionError> {
     match actor {
-        Actor::Bootstrap(_) => Err(error("actor_forbidden", "Bootstrap does not authorize messages")),
         Actor::Operator(_) => {
             if !matches!(
                 kind,
@@ -195,15 +169,13 @@ fn recipient(
                     Ok((to_run_id.to_owned(), None))
                 }
                 MessageKind::Observation => {
-                    if !(job.role == JobRole::Child && to_run_id == own)
-                        && !is_ancestor(state, to_run_id, own)
-                    {
+                    if !is_ancestor(state, to_run_id, own) {
                         return Err(error(
                             "not_ancestor",
                             "Observations require a strict ancestor",
                         ));
                     }
-                    upward(state, index, Some(to_run_id), job.role == JobRole::Child && to_run_id == own)
+                    upward(state, index, Some(to_run_id))
                 }
                 _ => Err(error(
                     "actor_forbidden",
@@ -227,7 +199,6 @@ fn send(
     let target = run_index(state, to_run_id)?;
     let (recipient, escalated) = recipient(state, actor, caller, target, to_run_id, kind)?;
     let from = actor_ref(actor, caller.map(|job| job.run_index), state);
-    let from_subagent_id = subagent_context(caller);
     // An observation retry does not change its original delivery location if ancestors later close.
     if let Some(existing) = duplicate(state, &from, message_id) {
         if existing.kind != kind
@@ -239,7 +210,6 @@ fn send(
                 .as_deref()
                 .unwrap_or(&existing.to_run_id)
                 != to_run_id
-            || existing.from_subagent_id != from_subagent_id
         {
             return Err(error(
                 "message_id_conflict",
@@ -271,7 +241,7 @@ fn send(
         {
             return Err(error(
                 "question_not_current",
-                "The answer must link to the open run's current main NeedsInput report",
+                "The answer must link to the open run's current NeedsInput report",
             ));
         }
         Some(super::super::management_target(
@@ -301,7 +271,6 @@ fn send(
             in_reply_to: in_reply_to.clone(),
             report: None,
             stale: false,
-            from_subagent_id,
             escalated_from: escalated,
         },
     )?;

@@ -152,7 +152,7 @@ fn acceptance_recovery_cannot_substitute_a_new_result_for_the_reviewed_receipt()
     fixture.apply(&worker, fixture.successful_result(&worker))
         .unwrap();
     let reviewed_result = fixture.run(&run_id).result.unwrap().message_id;
-    let supervisor_native = fixture.run(&root).attachment.unwrap().main_session_id;
+    let supervisor_native = fixture.run(&root).attachment.unwrap().conversation;
     let intent_id = fixture.pending_intent(&root, &task, &run_id);
     {
         let locked = fixture.service.store.lock().unwrap();
@@ -164,7 +164,7 @@ fn acceptance_recovery_cannot_substitute_a_new_result_for_the_reviewed_receipt()
             .unwrap();
         intent.origin = Some(DecisionOrigin::Supervisor);
         intent.supervisor_run_id = Some(root.clone());
-        intent.omp_session_id = supervisor_native;
+        intent.conversation = supervisor_native;
         intent.result_message_id = Some(reviewed_result);
         locked.save(&mut state).unwrap();
     }
@@ -252,7 +252,6 @@ fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
         assert_agent_decision(delivered, &child);
         assert_eq!(delivered.to_run_id, parent);
         assert_eq!(delivered.kind, MessageKind::Report);
-        assert_eq!(delivered.from_subagent_id, None);
         assert_eq!(delivered.stage, DeliveryStage::Stored);
         let receipt = delivered.report.as_ref().unwrap();
         assert_eq!(receipt.kind, kind);
@@ -354,25 +353,16 @@ fn nested_reports_and_question_pointers_wake_root_once_without_forwarding_subage
         );
         assert!(!pointers[0].text.contains("Evidence from isolated worker"));
     }
-    fixture.apply(&worker, OrchestrationAction::SubagentUpdate {
-        subagent_id: "internal-evidence".into(), parent_subagent_id: None, role: Some("task".into()),
-        label: "Registered child evidence".into(), status: SubagentStatus::Running, summary: None,
-    }).unwrap();
     let original = fixture.run(&run_id);
-    let subagent = fixture.child_actor(&worker, &run_id, "internal-evidence");
     let mut stale = worker;
     caller_mut(&mut stale).auth.attachment_epoch += 1;
-    for (index, actor) in [&subagent, &stale].into_iter().enumerate() {
+    for actor in [&stale] {
         let action = report(ReportKind::NeedsInput, None, None);
         let OrchestrationAction::Report { message_id, .. } = &action else {
             unreachable!()
         };
         let pointer_id = format!("manage-{run_id}-{message_id}");
-        if index == 1 {
-            assert_code(fixture.apply(actor, action), "job_unauthorized");
-        } else {
-            fixture.apply(actor, action).unwrap();
-        }
+        assert_code(fixture.apply(actor, action), "job_unauthorized");
         assert!(
             fixture
                 .state()
@@ -416,7 +406,7 @@ fn acceptance_intent_recovery_cannot_accept_cancelled_restarted_failed_or_other_
             }
             1 => {
                 run.stage = RunStage::Starting;
-                run.attachment.as_mut().unwrap().main_session_id = None;
+                run.attachment.as_mut().unwrap().conversation = None;
                 run.dispatch.as_mut().unwrap().launch_attempt += 1;
             }
             2 => run.result.as_mut().unwrap().outcome = Some(ReportOutcome::Failed),
