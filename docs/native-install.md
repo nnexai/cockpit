@@ -84,6 +84,8 @@ python3 scripts/install-native.py --prefix /tmp/cockpit-native-check --uninstall
 
 Uninstall uses the receipt to remove only owned launchers, desktop files, application artifacts and CLI. macOS receipts include the bundle's files, modes and symlink identities. Updates and uninstall refuse modified artifacts or path substitutions; configuration, runtime orchestration/task records, harness authentication/settings and unrelated files remain untouched. Verified legacy raw-binary macOS installations migrate through the same journaled transaction rather than an untracked deletion.
 
+An older Linux schema-3 receipt may also own `omp/cockpit-orchestration.ts`. Updates authenticate that retired asset against its recorded path and SHA-256, then remove it through the same journaled publication/rollback; new installs and receipts omit it. Modified assets or substituted ownership paths are refused, and unrecorded extension files remain untouched. This does not migrate configuration or runtime task state.
+
 ## Tab-local Browser
 
 The tab-local inline Browser is the production browser surface.

@@ -370,6 +370,10 @@ def legacy_receipt_paths(paths: InstallPaths) -> dict[str, str]:
     }
 
 
+def _retired_extension_path(paths: InstallPaths) -> Path:
+    return paths.app_root / "omp" / "cockpit-orchestration.ts"
+
+
 def load_receipt(paths: InstallPaths) -> dict[str, object] | None:
     if not paths.receipt.exists():
         return None
@@ -387,7 +391,12 @@ def load_receipt(paths: InstallPaths) -> dict[str, object] | None:
     old_bundle = paths.application is not None and receipt.get("schema") == 3 and receipt.get("paths") == historical_paths
     previous = receipt.get("schema") == 2 and receipt.get("paths") == previous_paths
     legacy = receipt.get("schema") == 1 and receipt.get("paths") == legacy_paths
-    if receipt.get("application_id") != APPLICATION_ID or not (current or old_bundle or previous or legacy):
+    retired_extension = (
+        paths.application is None
+        and receipt.get("schema") == 3
+        and receipt.get("paths") == {**current_paths, "omp_extension": str(_retired_extension_path(paths))}
+    )
+    if receipt.get("application_id") != APPLICATION_ID or not (current or old_bundle or previous or legacy or retired_extension):
         raise InstallError(f"installer receipt at {paths.receipt} does not belong to this destination")
     return receipt
 
@@ -500,6 +509,9 @@ def _recover_pending(paths: InstallPaths) -> None:
         allowed.add("binary")
     if "legacy_binary" in targets:
         allowed.add("legacy_binary")
+    if "omp_extension" in targets:
+        expected["omp_extension"] = str(_retired_extension_path(paths))
+        allowed.add("omp_extension")
     if set(targets) != allowed:
         raise InstallError(f"pending installer transaction does not belong to this destination: {paths.pending}")
     for name, record in targets.items():
@@ -511,6 +523,13 @@ def _recover_pending(paths: InstallPaths) -> None:
         backup = Path(record["backup"])
         if not isinstance(record.get("before"), dict) or not isinstance(record.get("after"), dict):
             raise InstallError(f"pending installer transaction has invalid descriptors: {name}")
+        if name == "omp_extension" and (
+            paths.application is not None
+            or target.parent.is_symlink()
+            or record["before"].get("type") != "file"
+            or record["after"] != {"type": "absent"}
+        ):
+            raise InstallError("pending installer transaction has an invalid retired extension")
         if not _safe_transaction_path(staging, target.parent, token):
             raise InstallError(f"pending installer transaction has an unsafe staging path: {staging}")
         if not _safe_transaction_path(backup, target.parent, token):
@@ -635,6 +654,8 @@ def ensure_installable(paths: InstallPaths) -> None:
             expected["cli_binary"] = paths.cli_binary
         if paths.application is not None and receipt.get("schema") in {3, 4}:
             expected["application"] = paths.application
+        if isinstance(receipt_paths_value, dict) and "omp_extension" in receipt_paths_value:
+            expected["omp_extension"] = _retired_extension_path(paths)
         changed: list[str] = []
         for name, path in expected.items():
             expected_hash = hashes.get(name)
@@ -643,6 +664,8 @@ def ensure_installable(paths: InstallPaths) -> None:
                 matches = isinstance(expected_hash, str) and isinstance(manifest, list) and path.is_dir() and not path.is_symlink() and bundle_manifest(path) == manifest and bundle_manifest_hash(manifest) == expected_hash
             else:
                 matches = isinstance(expected_hash, str) and path.is_file() and not path.is_symlink() and sha256(path) == expected_hash
+                if name == "omp_extension" and path.parent.is_symlink():
+                    matches = False
             if not matches:
                 changed.append(name)
         gui_target = paths.binary if raw_gui_owned else paths.gui_executable
@@ -744,6 +767,8 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
     if paths.application is not None:
         targets["application"] = paths.application
     targets.update({"launcher": paths.launcher, "cli_launcher": paths.cli_launcher})
+    if existing_receipt is not None and "omp_extension" in existing_receipt["paths"]:
+        targets["omp_extension"] = _retired_extension_path(paths)
     targets["receipt"] = paths.receipt
     stage_roots: dict[Path, Path] = {}
     for name, target in targets.items():
@@ -797,6 +822,12 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
         for name, target in targets.items():
             application = name == "application"
             before = _path_descriptor(target, application)
+            if name == "omp_extension" and (
+                target.parent.is_symlink()
+                or before.get("type") != "file"
+                or before.get("sha256") != existing_receipt["artifact_sha256"].get("omp_extension")
+            ):
+                raise InstallError("refusing to remove modified retired extension")
             after = _path_descriptor(stages[name], application)
             backup = target.parent / f".{target.name}.backup-{token}"
             journal_targets[name] = {"target": str(target), "staging": str(stages[name]), "backup": str(backup), "before": before, "after": after}
@@ -808,6 +839,10 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
                 target = Path(record["target"])
                 backup = Path(record["backup"])
                 target.parent.mkdir(parents=True, exist_ok=True)
+                if name == "omp_extension" and (
+                    target.parent.is_symlink() or not _descriptor_matches(target, record["before"])
+                ):
+                    raise InstallError("refusing to remove modified retired extension")
                 published.append(name)
                 if _is_present(target):
                     os.replace(target, backup)
@@ -910,6 +945,8 @@ def _owned_artifacts(paths: InstallPaths, receipt: dict[str, object]) -> list[tu
         owned.extend((("cli_launcher", paths.cli_launcher, "cli_launcher"), ("cli_binary", paths.cli_binary, hashes["cli_binary"])))
     if paths.application is not None and isinstance(hashes.get("application"), str):
         owned.append(("application", paths.application, hashes["application"]))
+    if isinstance(receipt_paths_value, dict) and "omp_extension" in receipt_paths_value:
+        owned.append(("omp_extension", _retired_extension_path(paths), hashes.get("omp_extension")))
     return owned
 
 
@@ -938,6 +975,8 @@ def uninstall(paths: InstallPaths) -> bool:
             valid = isinstance(manifest, list) and path.is_dir() and not path.is_symlink() and bundle_manifest(path) == manifest and bundle_manifest_hash(manifest) == expected
         else:
             valid = isinstance(expected, str) and path.is_file() and sha256(path) == expected
+            if name == "omp_extension" and (path.is_symlink() or path.parent.is_symlink()):
+                valid = False
         if not valid:
             mismatches.append(name)
     if mismatches:

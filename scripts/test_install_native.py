@@ -68,6 +68,17 @@ class NativeInstallTests(unittest.TestCase):
             )
         return path
 
+    def write_retired_extension_receipt(self, paths: installer.InstallPaths) -> Path:
+        installer.install(paths, self.binary, self.cli_binary, self.icon)
+        extension = paths.app_root / "omp" / "cockpit-orchestration.ts"
+        extension.parent.mkdir()
+        extension.write_bytes(b"prior installer-owned extension")
+        receipt = json.loads(paths.receipt.read_text(encoding="utf-8"))
+        receipt["paths"]["omp_extension"] = str(extension)
+        receipt["artifact_sha256"]["omp_extension"] = installer.sha256(extension)
+        paths.receipt.write_text(json.dumps(receipt), encoding="utf-8")
+        return extension
+
     def test_prefix_install_writes_stable_launcher_desktop_entry_and_receipt(self) -> None:
         installer.install(self.paths, self.binary, self.cli_binary, self.icon)
 
@@ -128,6 +139,140 @@ class NativeInstallTests(unittest.TestCase):
                 self.assertTrue(installer.uninstall(paths))
                 self.assertFalse(paths.receipt.exists())
                 assert_foreign_untouched()
+
+    def test_schema3_update_retires_verified_extension_and_installs_pair(self) -> None:
+        extension = self.write_retired_extension_receipt(self.paths)
+        neighbor = extension.parent / "user-owned.ts"
+        neighbor.write_bytes(b"leave untouched")
+        self.binary.write_bytes(b"second native binary")
+        self.cli_binary.write_bytes(b"second Cockpit CLI")
+
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+
+        self.assertFalse(extension.exists())
+        self.assertEqual(neighbor.read_bytes(), b"leave untouched")
+        self.assertEqual(self.paths.binary.read_bytes(), b"second native binary")
+        self.assertEqual(self.paths.cli_binary.read_bytes(), b"second Cockpit CLI")
+        self.assertEqual(self.paths.launcher.resolve(), self.paths.binary)
+        self.assertEqual(self.paths.cli_launcher.resolve(), self.paths.cli_binary)
+        receipt = json.loads(self.paths.receipt.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["schema"], 3)
+        self.assertNotIn("omp_extension", receipt["paths"])
+        self.assertNotIn("omp_extension", receipt["artifact_sha256"])
+        self.assertFalse(self.paths.pending.exists())
+
+    def test_schema3_update_refuses_modified_or_unowned_retired_extension(self) -> None:
+        for kind in ("modified", "missing_hash", "substituted_path", "symlink", "parent_symlink"):
+            with self.subTest(kind=kind):
+                base_paths = installer.install_paths(self.root / kind)
+                paths = installer.InstallPaths(base_paths.data_home, base_paths.bin_home, application=None)
+                extension = self.write_retired_extension_receipt(paths)
+                foreign = self.root / f"{kind}-foreign.ts"
+                foreign.write_bytes(extension.read_bytes())
+                receipt = json.loads(paths.receipt.read_text(encoding="utf-8"))
+                if kind == "modified":
+                    extension.write_bytes(b"locally modified extension")
+                elif kind == "missing_hash":
+                    del receipt["artifact_sha256"]["omp_extension"]
+                elif kind == "substituted_path":
+                    receipt["paths"]["omp_extension"] = str(foreign)
+                elif kind == "symlink":
+                    extension.unlink()
+                    extension.symlink_to(foreign)
+                else:
+                    moved = extension.parent.with_name("foreign-omp")
+                    extension.parent.rename(moved)
+                    extension.parent.symlink_to(moved, target_is_directory=True)
+                paths.receipt.write_text(json.dumps(receipt), encoding="utf-8")
+                preserved = (paths.binary, paths.cli_binary, paths.launcher, paths.cli_launcher,
+                             paths.desktop, paths.icon, paths.receipt, extension, foreign)
+                before = [(path, installer._path_descriptor(path)) for path in preserved]
+                extension_bytes = extension.read_bytes()
+
+                with self.assertRaises(installer.InstallError):
+                    installer.install(paths, self.binary, self.cli_binary, self.icon)
+
+                for path, descriptor in before:
+                    self.assertEqual(installer._path_descriptor(path), descriptor)
+                self.assertEqual(extension.read_bytes(), extension_bytes)
+                self.assertFalse(paths.pending.exists())
+
+    def test_schema3_retired_extension_is_restored_on_publication_failure(self) -> None:
+        extension = self.write_retired_extension_receipt(self.paths)
+        old_receipt = self.paths.receipt.read_bytes()
+        old_extension = extension.read_bytes()
+        self.binary.write_bytes(b"second native binary")
+        self.cli_binary.write_bytes(b"second Cockpit CLI")
+        original_replace = installer.os.replace
+        failed = False
+        observed_retirements = []
+
+        def fail_once(source: Path, destination: Path) -> None:
+            nonlocal failed
+            if destination == self.paths.receipt and not failed:
+                failed = True
+                journal = json.loads(self.paths.pending.read_text(encoding="utf-8"))
+                observed_retirements.append((extension.exists(), journal["targets"]["omp_extension"]))
+                raise OSError("injected publication failure")
+            original_replace(source, destination)
+
+        with mock.patch.object(installer.os, "replace", side_effect=fail_once):
+            with self.assertRaises(installer.InstallError):
+                installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+
+        self.assertTrue(failed)
+        self.assertEqual(len(observed_retirements), 1)
+        extension_present, retired = observed_retirements[0]
+        self.assertFalse(extension_present)
+        self.assertEqual(retired["before"]["sha256"], json.loads(old_receipt)["artifact_sha256"]["omp_extension"])
+        self.assertEqual(retired["after"], {"type": "absent"})
+        self.assertEqual(extension.read_bytes(), old_extension)
+        self.assertEqual(self.paths.receipt.read_bytes(), old_receipt)
+        self.assertEqual(self.paths.binary.read_bytes(), b"first native binary")
+        self.assertEqual(self.paths.cli_binary.read_bytes(), b"first Cockpit CLI")
+        self.assertTrue(self.paths.pending.exists())
+        installer.ensure_installable(self.paths)
+        self.assertFalse(self.paths.pending.exists())
+
+    def test_schema3_retirement_recovers_committed_cleanup(self) -> None:
+        extension = self.write_retired_extension_receipt(self.paths)
+        original_remove = installer._remove_known
+        failed = False
+
+        def fail_once(path: Path) -> None:
+            nonlocal failed
+            if path.name.startswith(f".{extension.name}.backup-") and not failed:
+                failed = True
+                raise OSError("injected cleanup failure")
+            original_remove(path)
+
+        with mock.patch.object(installer, "_remove_known", side_effect=fail_once):
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+
+        self.assertTrue(failed)
+        self.assertFalse(extension.exists())
+        journal = json.loads(self.paths.pending.read_text(encoding="utf-8"))
+        self.assertEqual(journal["status"], "committed")
+        backup = Path(journal["targets"]["omp_extension"]["backup"])
+        self.assertTrue(backup.exists())
+        installer.ensure_installable(self.paths)
+        self.assertFalse(backup.exists())
+        self.assertFalse(self.paths.pending.exists())
+
+    def test_schema3_uninstall_authenticates_retired_extension(self) -> None:
+        extension = self.write_retired_extension_receipt(self.paths)
+        extension.write_bytes(b"locally modified extension")
+
+        self.assertFalse(installer.uninstall(self.paths))
+        self.assertEqual(extension.read_bytes(), b"locally modified extension")
+        self.assertTrue(self.paths.binary.exists())
+        self.assertTrue(self.paths.cli_binary.exists())
+        self.assertTrue(self.paths.receipt.exists())
+
+        extension.write_bytes(b"prior installer-owned extension")
+        self.assertTrue(installer.uninstall(self.paths))
+        self.assertFalse(extension.exists())
+        self.assertFalse(self.paths.receipt.exists())
 
     def test_macos_install_copies_complete_bundle_and_records_manifest(self) -> None:
         paths = self.mac_paths()
