@@ -475,7 +475,7 @@ mod tests {
                 attachment_epoch: attachment.epoch,
             };
             let checkout = CheckoutIdentity {
-                key: "task-checkout".into(), machine_id: "task-machine".into(),
+                key: "task-checkout".into(),
                 path: directory.join("checkout").to_string_lossy().into_owned(),
                 directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() },
                 git: None,

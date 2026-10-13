@@ -299,12 +299,11 @@ pub enum OperatorOrigin {
     Browser,
     Native,
 }
-/// Host-derived identity; aliases and display labels do not determine the key.
+/// Local filesystem identity; aliases and display labels do not determine the key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectIdentity {
     pub key: String,
-    pub machine_id: String,
     pub source: ProjectSource,
     pub repository_id: Option<String>,
     pub source_workspace_id: Option<String>,
@@ -332,7 +331,6 @@ pub struct CheckoutGitIdentity {
 #[serde(deny_unknown_fields)]
 pub struct CheckoutIdentity {
     pub key: String,
-    pub machine_id: String,
     pub path: String,
     pub directory_identity: DirectoryIdentity,
     pub git: Option<CheckoutGitIdentity>,

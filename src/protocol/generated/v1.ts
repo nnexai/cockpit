@@ -1006,7 +1006,7 @@ export type TaskScopeUpdateResult = { operation_id: string, state: TaskScopeUpda
 
 export type OperatorOrigin = "browser" | "native";
 
-export type ProjectIdentity = { key: string, machine_id: string, source: ProjectSource, repository_id: string | null, source_workspace_id: string | null, };
+export type ProjectIdentity = { key: string, source: ProjectSource, repository_id: string | null, source_workspace_id: string | null, };
 
 export type ProjectSource = { "kind": "git", common_dir: string, } | { "kind": "directory", root: string, };
 
@@ -1014,7 +1014,7 @@ export type DirectoryIdentity = { device: string, inode: string, };
 
 export type CheckoutGitIdentity = { common_dir: string, worktree_git_dir: string, };
 
-export type CheckoutIdentity = { key: string, machine_id: string, path: string, directory_identity: DirectoryIdentity, git: CheckoutGitIdentity | null, };
+export type CheckoutIdentity = { key: string, path: string, directory_identity: DirectoryIdentity, git: CheckoutGitIdentity | null, };
 
 export type AttachmentState = "reserved" | "connecting" | "connected" | "disconnected" | "quiescing" | "revoked";
 

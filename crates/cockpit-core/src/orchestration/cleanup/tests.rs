@@ -104,6 +104,40 @@ fn missing_space_receipt_does_not_veto_an_independent_git_wait() {
 }
 
 #[test]
+fn local_checkout_writers_protect_owned_git_by_path_or_directory_fingerprint() {
+    let run = worker();
+    let mut state = OrchestrationState::default();
+    let index = insert_resource(&mut state.owned_resources, &run, OwnedResourceIdentity::Worktree {
+        identity: OwnedGitIdentity {
+            creation_operation_id: id(), machine_id: "physical-receipt-machine".into(),
+            repository_key: "/retained/.git".into(), repository_root: "/retained".into(),
+            repository_device: "1".into(), repository_inode: "2".into(),
+            common_dir: "/retained/.git".into(), common_device: "1".into(), common_inode: "3".into(),
+            checkout_path: "/owned/checkout".into(), checkout_device: "1".into(), checkout_inode: "4".into(),
+            checkout_key: "owned-checkout-key".into(), branch_ref: Some("refs/heads/owned".into()),
+            creation_tip: "a".repeat(40),
+        },
+    }).unwrap();
+    let resource = state.owned_resources[index].clone();
+    for (path, device, inode, protected) in [
+        ("/owned/checkout/sub", "9", "10", true),
+        ("/another/local/path", "1", "4", true),
+        ("/owned/checkout-neighbor", "9", "10", false),
+    ] {
+        state.checkout_claims = vec![claims::CheckoutClaim {
+            claim_id: id(), checkout: CheckoutIdentity {
+                key: "distinct-local-key".into(), path: path.into(),
+                directory_identity: DirectoryIdentity { device: device.into(), inode: inode.into() }, git: None,
+            },
+            revision: 1, state: claims::ClaimState::Held, holder: None, transition_operation_id: None,
+        }];
+        assert_eq!(OrchestrationService::known_writers_active(&state, &resource), protected);
+        state.checkout_claims[0].state = claims::ClaimState::Released;
+        assert!(!OrchestrationService::known_writers_active(&state, &resource));
+    }
+}
+
+#[test]
 fn summary_redacts_effect_output_and_reason_text_without_losing_states() {
     let run = worker();
     let mut state = OrchestrationState::default();
@@ -351,7 +385,7 @@ fn retired_pane_never_releases_claim_or_authorizes_checkout_resource_effects() {
             }),
             conversation: Some(ConversationIdentity { harness: "omp".into(), session_id: "accepted-chat".into() }),
             process: identity.process.clone(), shell: identity.shell.clone(),
-            machine_id: Some(checkout.machine_id.clone()), launch_attempt: identity.launch_attempt, updated_at: now(),
+            machine_id: Some("test-machine".into()), launch_attempt: identity.launch_attempt, updated_at: now(),
         });
         run.source_output = Some(SourceOutput::NonCode {
             result_message_id: "accepted-result".into(), task_revision: "accepted-revision".into(),
@@ -376,7 +410,7 @@ fn retired_pane_never_releases_claim_or_authorizes_checkout_resource_effects() {
             let terminal_index = insert_resource(&mut state.owned_resources, &run,
                 OwnedResourceIdentity::WorkerTerminal { identity }).unwrap();
             let git = OwnedGitIdentity {
-                creation_operation_id: id(), machine_id: checkout.machine_id.clone(),
+                creation_operation_id: id(), machine_id: "test-machine".into(),
                 repository_key: checkout.key.clone(), repository_root: checkout.path.clone(),
                 repository_device: checkout.directory_identity.device.clone(),
                 repository_inode: checkout.directory_identity.inode.clone(),
@@ -391,7 +425,7 @@ fn retired_pane_never_releases_claim_or_authorizes_checkout_resource_effects() {
                 OwnedResourceIdentity::Worktree { identity: git.clone() },
                 OwnedResourceIdentity::Branch { identity: git },
                 OwnedResourceIdentity::Scratch { identity: OwnedFilesystemIdentity {
-                    creation_operation_id: id(), machine_id: checkout.machine_id.clone(),
+                    creation_operation_id: id(), machine_id: "test-machine".into(),
                     root: checkout.path.clone(), device: checkout.directory_identity.device.clone(),
                     inode: checkout.directory_identity.inode.clone(), manifest_path: checkout.path.clone(),
                     manifest_device: checkout.directory_identity.device.clone(),

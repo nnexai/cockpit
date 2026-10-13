@@ -452,14 +452,14 @@ impl OrchestrationService {
     }
 
     fn known_writers_active(state: &OrchestrationState, resource: &OwnedResourceRecord) -> bool {
-        let (machine, path, device, inode) = match &resource.identity {
+        let (path, device, inode) = match &resource.identity {
             OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } =>
-                (&identity.machine_id, &identity.checkout_path, &identity.checkout_device, &identity.checkout_inode),
+                (&identity.checkout_path, &identity.checkout_device, &identity.checkout_inode),
             _ => return false,
         };
-        let overlaps = |checkout: &CheckoutIdentity| checkout.machine_id == *machine
-            && ((checkout.directory_identity.device == *device && checkout.directory_identity.inode == *inode)
-                || claims::paths_overlap(&checkout.path, path));
+        let overlaps = |checkout: &CheckoutIdentity|
+            (checkout.directory_identity.device == *device && checkout.directory_identity.inode == *inode)
+                || claims::paths_overlap(&checkout.path, path);
         state.checkout_claims.iter().any(|claim| claim.state != claims::ClaimState::Released && overlaps(&claim.checkout)
             && claim.holder.as_ref().is_none_or(|holder| Self::consumer_unresolved(state, holder)))
             || state.runs.iter().any(|run| run.checkout.as_ref().is_some_and(overlaps)

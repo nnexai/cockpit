@@ -1,4 +1,4 @@
-//! Fresh host observations. None of these identities grants cleanup authority.
+//! Fresh local filesystem observations. None of these identities grants cleanup authority.
 use std::{path::Path, os::unix::fs::MetadataExt};
 use cockpit_protocol::orchestration::*;
 use sha2::{Digest, Sha256};
@@ -9,13 +9,18 @@ fn unavailable(text: &str) -> InspectionError { InspectionError::new("project_id
 fn path_text(path: &Path) -> Result<String, InspectionError> {
     path.to_str().map(str::to_owned).ok_or_else(|| unavailable("Physical directory is not UTF-8"))
 }
-fn key(domain: &[u8], machine: &str, pieces: &[&str]) -> String {
+fn key(domain: &[u8], pieces: &[&str]) -> String {
     let mut digest = Sha256::new();
     digest.update(domain);
-    for piece in std::iter::once(machine).chain(pieces.iter().copied()) {
+    for piece in pieces {
         digest.update((piece.len() as u64).to_be_bytes()); digest.update(piece.as_bytes());
     }
     format!("{:x}", digest.finalize())
+}
+
+/// Stable local checkout key; directory device/inode is revalidated separately.
+pub(crate) fn checkout_key(checkout_path: &str, worktree_git_dir: &str) -> String {
+    key(b"cockpit:checkout:v1\0", &[checkout_path, worktree_git_dir])
 }
 fn directory(path: &Path) -> Result<(String, DirectoryIdentity), InspectionError> {
     if !path.is_absolute() { return Err(unavailable("Authoritative directory must be absolute")); }
@@ -28,8 +33,7 @@ fn directory(path: &Path) -> Result<(String, DirectoryIdentity), InspectionError
 /// Recheck immutable physical inputs while the caller holds the state lock.
 pub(crate) fn revalidate_checkout(checkout: &CheckoutIdentity) -> Result<(), InspectionError> {
     let changed = || InspectionError::new("checkout_identity_changed", "Physical checkout directory identity changed");
-    if process_identity::machine_id().as_ref() != Some(&checkout.machine_id)
-        || directory(Path::new(&checkout.path))? != (checkout.path.clone(), checkout.directory_identity.clone()) {
+    if directory(Path::new(&checkout.path))? != (checkout.path.clone(), checkout.directory_identity.clone()) {
         return Err(changed());
     }
     if let Some(git) = &checkout.git {
@@ -44,12 +48,11 @@ pub(crate) fn revalidate_checkout(checkout: &CheckoutIdentity) -> Result<(), Ins
 /// Only for the owner-created dedicated supervisor directory. Ordinary targets
 /// must use Git discovery, never this directory-only constructor.
 pub(crate) fn resolve_owned_directory(path: &Path) -> Result<(ProjectIdentity, CheckoutIdentity), InspectionError> {
-    let machine = process_identity::machine_id().ok_or_else(|| unavailable("Stable local machine identity is unavailable"))?;
     let (root, identity) = directory(path)?;
     if Path::new(&root).join(".git").exists() { return Err(unavailable("Owned supervisor directory unexpectedly contains Git metadata")); }
-    let project = ProjectIdentity { key: key(b"cockpit:project:directory:v1\0", &machine, &[&root]), machine_id: machine.clone(),
+    let project = ProjectIdentity { key: key(b"cockpit:project:directory:v1\0", &[&root]),
         source: ProjectSource::Directory { root: root.clone() }, repository_id: None, source_workspace_id: None };
-    let checkout = CheckoutIdentity { key: key(b"cockpit:checkout:v1\0", &machine, &[&root, ""]), machine_id: machine,
+    let checkout = CheckoutIdentity { key: checkout_key(&root, ""),
         path: root, directory_identity: identity, git: None };
     Ok((project, checkout))
 }
@@ -58,7 +61,6 @@ pub(crate) fn resolve_owned_directory(path: &Path) -> Result<(ProjectIdentity, C
 /// Git path overrides. Only Git's explicit not-a-repository reply admits a plain
 /// directory; unavailable Git never silently changes a project's identity.
 pub async fn resolve_directory(path: &Path, repository_id: Option<String>, source_workspace_id: Option<String>) -> Result<(ProjectIdentity, CheckoutIdentity), InspectionError> {
-    let machine = process_identity::machine_id().ok_or_else(|| unavailable("Stable local machine identity is unavailable"))?;
     let (canonical, before) = directory(path)?;
     let probe = space_git::git_output(Path::new(&canonical), &["rev-parse", "--show-toplevel"]).await?;
     let (project_source, checkout_path, git) = if probe.status.success() {
@@ -78,12 +80,12 @@ pub async fn resolve_directory(path: &Path, repository_id: Option<String>, sourc
     if directory(path)? != (canonical, before) { return Err(unavailable("Source directory changed during project inspection")); }
     let (checkout_path, directory_identity) = directory(Path::new(&checkout_path))?;
     let project_key = match &project_source {
-        ProjectSource::Git { common_dir } => key(b"cockpit:project:git:v1\0", &machine, &[common_dir]),
-        ProjectSource::Directory { root } => key(b"cockpit:project:directory:v1\0", &machine, &[root]),
+        ProjectSource::Git { common_dir } => key(b"cockpit:project:git:v1\0", &[common_dir]),
+        ProjectSource::Directory { root } => key(b"cockpit:project:directory:v1\0", &[root]),
     };
-    let checkout_key = key(b"cockpit:checkout:v1\0", &machine, &[&checkout_path, git.as_ref().map_or("", |g| g.worktree_git_dir.as_str())]);
-    Ok((ProjectIdentity { key: project_key, machine_id: machine.clone(), source: project_source, repository_id, source_workspace_id },
-        CheckoutIdentity { key: checkout_key, machine_id: machine, path: checkout_path, directory_identity, git }))
+    let checkout_key = checkout_key(&checkout_path, git.as_ref().map_or("", |g| g.worktree_git_dir.as_str()));
+    Ok((ProjectIdentity { key: project_key, source: project_source, repository_id, source_workspace_id },
+        CheckoutIdentity { key: checkout_key, path: checkout_path, directory_identity, git }))
 }
 
 /// A reboot proves the old OS incarnations gone, not a restored/new occupant.
@@ -251,7 +253,7 @@ fn restored_root_receipt_checkout(run: &Run) -> Result<&CheckoutIdentity, Inspec
         || dispatch.launch_tag.as_deref() != Some(location.launch_tag.as_str())
         || dispatch.launch_attempt != attachment.launch_attempt
         || setup.workspace_id.as_ref() != Some(&location.workspace_id) || setup.checkout_path != checkout.path
-        || attachment.machine_id.as_ref() != Some(&checkout.machine_id) {
+        || attachment.machine_id.is_none() || attachment.machine_id != process_identity::machine_id() {
         return Err(root_container_unproven());
     }
     Ok(checkout)
@@ -432,8 +434,7 @@ impl OrchestrationService {
             || run.checkout.as_ref() != Some(checkout) { return Err(exit_unproven()); }
         let machine = process_identity::machine_id().ok_or_else(exit_unproven)?;
         let boot = process_identity::kernel_boot_id().ok_or_else(exit_unproven)?;
-        if old.machine_id.as_deref() != Some(machine.as_str())
-            || checkout.machine_id != machine { return Err(exit_unproven()); }
+        if old.machine_id.as_deref() != Some(machine.as_str()) { return Err(exit_unproven()); }
         let previous = old.process.as_ref().and_then(|p| p.kernel_boot_id.as_ref())
             .or_else(|| old.shell.as_ref().and_then(|s| s.process.kernel_boot_id.as_ref())).ok_or_else(exit_unproven)?;
         if previous == &boot { return Err(consumer_unproven()); }
@@ -492,7 +493,6 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn plain_nested_directory_keeps_exact_project_but_distinct_checkout() {
-        if process_identity::machine_id().is_none() { return; }
         let root = std::env::temp_dir().join(format!("cockpit-project-identity-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("nested")).unwrap();
         let (outer, a) = resolve_directory(&root, None, None).await.unwrap();
@@ -502,12 +502,36 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[tokio::test]
+    async fn local_keys_ignore_aliases_but_revalidation_rejects_replaced_directory() {
+        let root = std::env::temp_dir().join(format!("cockpit-project-local-{}", uuid::Uuid::new_v4()));
+        let checkout_path = root.join("checkout");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&checkout_path).unwrap();
+        std::os::unix::fs::symlink(&checkout_path, &alias).unwrap();
+        let (project, checkout) = resolve_directory(&checkout_path, Some("first".into()), Some("space-a".into())).await.unwrap();
+        let (aliased_project, aliased_checkout) = resolve_directory(&alias, Some("second".into()), Some("space-b".into())).await.unwrap();
+        assert_eq!(project.key, aliased_project.key);
+        assert_eq!(checkout, aliased_checkout);
+        let (owned_project, owned_checkout) = resolve_owned_directory(&checkout_path).unwrap();
+        assert_eq!(project.key, owned_project.key);
+        assert_eq!(checkout, owned_checkout);
+        revalidate_checkout(&checkout).unwrap();
+        std::fs::rename(&checkout_path, root.join("old-checkout")).unwrap();
+        std::fs::create_dir(&checkout_path).unwrap();
+        let (replacement_project, replacement) = resolve_directory(&checkout_path, None, None).await.unwrap();
+        assert_eq!(project.key, replacement_project.key);
+        assert_eq!(checkout.key, replacement.key);
+        assert_ne!(checkout.directory_identity, replacement.directory_identity);
+        assert_eq!(revalidate_checkout(&checkout).unwrap_err().code, "checkout_identity_changed");
+        revalidate_checkout(&replacement).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
     async fn relative_directory_never_resolves_from_cli_cwd() {
         assert!(resolve_directory(Path::new("."), None, None).await.is_err());
     }
     #[tokio::test]
     async fn linked_worktrees_share_project_not_checkout_and_clones_stay_distinct() {
-        if process_identity::machine_id().is_none() { return; }
         use crate::space_git::tests::git;
         let root = std::env::temp_dir().join(format!("cockpit-project-git-{}", uuid::Uuid::new_v4()));
         let main = root.join("main");

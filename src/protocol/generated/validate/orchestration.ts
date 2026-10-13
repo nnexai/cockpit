@@ -220,7 +220,6 @@ export const wireOperatorOrigin: WireDescriptor<V1.OperatorOrigin> = literal<V1.
 
 export const wireProjectIdentity: WireDescriptor<V1.ProjectIdentity> = struct<V1.ProjectIdentity>("ProjectIdentity", {
   "key": req(str),
-  "machine_id": req(str),
   "source": req(named(() => wireProjectSource)),
   "repository_id": req(nullable(str), { fill: null }),
   "source_workspace_id": req(nullable(str), { fill: null }),
@@ -247,7 +246,6 @@ export const wireCheckoutGitIdentity: WireDescriptor<V1.CheckoutGitIdentity> = s
 
 export const wireCheckoutIdentity: WireDescriptor<V1.CheckoutIdentity> = struct<V1.CheckoutIdentity>("CheckoutIdentity", {
   "key": req(str),
-  "machine_id": req(str),
   "path": req(str),
   "directory_identity": req(named(() => wireDirectoryIdentity)),
   "git": req(nullable(named(() => wireCheckoutGitIdentity)), { fill: null }),

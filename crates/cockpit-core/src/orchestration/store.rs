@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub(crate) const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const SCHEMA: u32 = 3;
+pub(crate) const SCHEMA: u32 = 4;
 
 /// Canonical machine records and temporary transaction journals. Task content
 /// lives in tasks/*.md; assignment payloads exist only until durable delivery.

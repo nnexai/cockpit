@@ -89,7 +89,6 @@ impl Fixture {
         worker.checkout_claim_id = Some(claim_id.clone());
         worker.checkout = Some(CheckoutIdentity {
             key: "physical-checkout".into(),
-            machine_id: "machine".into(),
             path: "/test-checkout".into(),
             directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() },
             git: None,

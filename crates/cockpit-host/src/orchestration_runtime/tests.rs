@@ -142,7 +142,7 @@ impl Fixture {
     }
     fn publish_with_claims(&self, runs: &[Run], claims: &[serde_json::Value]) {
         let state = serde_json::json!({
-            "schema":3,"revision":7,"runs":runs,"messages":[],"task_ownership":[],"inbox_hints":[],
+            "schema":4,"revision":7,"runs":runs,"messages":[],"task_ownership":[],"inbox_hints":[],
             "task_intents":[],"scope_intents":[],"assignment_intents":[],"credentials":[],
             "checkout_claims":claims,"operations":[],
             "resource_requests":[],"resource_sequence":0,"owned_resources":[]

@@ -354,7 +354,7 @@ impl Fixture {
             .unwrap();
         self.seed_run(run_id, |run| {
             let attachment = run.attachment.as_mut().unwrap();
-            attachment.machine_id = Some(self.project.machine_id.clone());
+            attachment.machine_id = Some("test-machine".into());
             attachment.process = Some(NativeProcessIdentity {
                 pid: 42, start_ticks: 123, kernel_boot_id: Some("kernel-one".into()),
             });

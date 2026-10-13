@@ -26,11 +26,11 @@ const shellIdentity: NativeShellIdentity = {
   executable_device: "2049", executable_inode: "18446744073709551615", argv_digest: hash,
 };
 const project: ProjectIdentity = {
-  key: "project-key", machine_id: "machine", source: { kind: "git", common_dir: "/repo/.git" },
+  key: "project-key", source: { kind: "git", common_dir: "/repo/.git" },
   repository_id: "repo", source_workspace_id: "project-space",
 };
 const checkout: CheckoutIdentity = {
-  key: "checkout-key", machine_id: "machine", path: "/repo",
+  key: "checkout-key", path: "/repo",
   directory_identity: { device: "2049", inode: "18446744073709551615" },
   git: { common_dir: "/repo/.git", worktree_git_dir: "/repo/.git/worktrees/worker" },
 };
@@ -840,12 +840,12 @@ describe("orchestration protocol boundary", () => {
 
   it("validates nested project, checkout, attachment and resume semantics", () => {
     for (const [path, bad] of [
-      [["project", "key"], ""], [["project", "machine_id"], "é".repeat(257)],
+      [["project", "key"], ""],
       [["project", "repository_id"], "bad\nid"], [["project", "source_workspace_id"], ""],
       [["project", "source", "kind"], "unknown"], [["project", "source", "common_dir"], "relative"],
       [["project", "source", "common_dir"], "/repo/../other"], [["project", "source", "common_dir"], "/repo/./.git"],
       [["project", "source", "common_dir"], `/${"é".repeat(2048)}`],
-      [["checkout", "key"], ""], [["checkout", "machine_id"], "bad\0id"],
+      [["checkout", "key"], ""],
       [["checkout", "path"], "repo"], [["checkout", "path"], "/repo\nother"],
       [["checkout", "directory_identity", "device"], "01"], [["checkout", "directory_identity", "inode"], "18446744073709551616"],
       [["checkout", "directory_identity", "device"], "-1"], [["checkout", "directory_identity", "inode"], ""],

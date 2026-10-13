@@ -220,7 +220,9 @@ pub(in crate::orchestration) fn apply(ctx: &mut MutationCtx<'_>, action: Orchest
                 return Err(error("resource_source_changed", "Source observation no longer belongs to this request or holder"));
             }
             project_identity::revalidate_checkout(&checkout)?;
-            let record = enqueue(ctx.state, request, checkout.machine_id)?;
+            let machine = process_identity::machine_id()
+                .ok_or_else(|| error("resource_process_unverified", "Local machine evidence for build tracking is unavailable"))?;
+            let record = enqueue(ctx.state, request, machine)?;
             let result = OrchestrationActionResult::Resource { request: record, duplicate: false };
             let root_id = ctx.state.runs[job.run_index].root_id.clone();
             resume::record(ctx, request.operation_id.clone(), DurableOperationKind::ResourceRequest,

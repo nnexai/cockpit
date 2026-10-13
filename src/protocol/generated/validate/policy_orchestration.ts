@@ -369,7 +369,6 @@ export interface WireFields {
   "TaskScopeUpdateResult.instruction_message_id": (V1.TaskScopeUpdateResult)["instruction_message_id"];
   "TaskScopeUpdateResult.duplicate": (V1.TaskScopeUpdateResult)["duplicate"];
   "ProjectIdentity.key": (V1.ProjectIdentity)["key"];
-  "ProjectIdentity.machine_id": (V1.ProjectIdentity)["machine_id"];
   "ProjectIdentity.source": (V1.ProjectIdentity)["source"];
   "ProjectIdentity.repository_id": (V1.ProjectIdentity)["repository_id"];
   "ProjectIdentity.source_workspace_id": (V1.ProjectIdentity)["source_workspace_id"];
@@ -380,7 +379,6 @@ export interface WireFields {
   "CheckoutGitIdentity.common_dir": (V1.CheckoutGitIdentity)["common_dir"];
   "CheckoutGitIdentity.worktree_git_dir": (V1.CheckoutGitIdentity)["worktree_git_dir"];
   "CheckoutIdentity.key": (V1.CheckoutIdentity)["key"];
-  "CheckoutIdentity.machine_id": (V1.CheckoutIdentity)["machine_id"];
   "CheckoutIdentity.path": (V1.CheckoutIdentity)["path"];
   "CheckoutIdentity.directory_identity": (V1.CheckoutIdentity)["directory_identity"];
   "CheckoutIdentity.git": (V1.CheckoutIdentity)["git"];
@@ -783,13 +781,13 @@ export interface WireFieldNames {
   "SetupSummary": "operation_id" | "generation" | "workspace_id" | "checkout_path" | "repository_id" | "branch" | "base" | "base_commit" | "ownership" | "effects" | "warnings" | "project_workspace_id";
   "WorkerStartResult": "operation_id" | "run_id" | "attempt" | "duplicate";
   "TaskScopeUpdateResult": "operation_id" | "state" | "task_revision" | "doc_revision" | "instruction_message_id" | "duplicate";
-  "ProjectIdentity": "key" | "machine_id" | "source" | "repository_id" | "source_workspace_id";
+  "ProjectIdentity": "key" | "source" | "repository_id" | "source_workspace_id";
   "ProjectSource": never;
   "ProjectSource[git]": "common_dir";
   "ProjectSource[directory]": "root";
   "DirectoryIdentity": "device" | "inode";
   "CheckoutGitIdentity": "common_dir" | "worktree_git_dir";
-  "CheckoutIdentity": "key" | "machine_id" | "path" | "directory_identity" | "git";
+  "CheckoutIdentity": "key" | "path" | "directory_identity" | "git";
   "ConversationIdentity": "harness" | "session_id";
   "ExecutionAttachment": "attachment_id" | "epoch" | "state" | "launch_mode" | "location" | "conversation" | "process" | "shell" | "machine_id" | "launch_attempt" | "updated_at";
   "ResumeCause": "code" | "message" | "class";
@@ -1028,13 +1026,13 @@ export interface WireCheckpointFieldNames {
   "SetupSummary": "operation_id" | "generation" | "workspace_id" | "checkout_path" | "repository_id" | "branch" | "base" | "base_commit" | "ownership" | "effects" | "warnings" | "project_workspace_id";
   "WorkerStartResult": "operation_id" | "run_id" | "attempt" | "duplicate";
   "TaskScopeUpdateResult": "operation_id" | "state" | "task_revision" | "doc_revision" | "instruction_message_id" | "duplicate";
-  "ProjectIdentity": "key" | "machine_id" | "source" | "repository_id" | "source_workspace_id";
+  "ProjectIdentity": "key" | "source" | "repository_id" | "source_workspace_id";
   "ProjectSource": "common_dir" | "kind" | "root";
   "ProjectSource[git]": "common_dir" | "kind";
   "ProjectSource[directory]": "root" | "kind";
   "DirectoryIdentity": "device" | "inode";
   "CheckoutGitIdentity": "common_dir" | "worktree_git_dir";
-  "CheckoutIdentity": "key" | "machine_id" | "path" | "directory_identity" | "git";
+  "CheckoutIdentity": "key" | "path" | "directory_identity" | "git";
   "ConversationIdentity": "harness" | "session_id";
   "ExecutionAttachment": "attachment_id" | "epoch" | "state" | "launch_mode" | "location" | "conversation" | "process" | "shell" | "machine_id" | "launch_attempt" | "updated_at";
   "ResumeCause": "code" | "message" | "class";

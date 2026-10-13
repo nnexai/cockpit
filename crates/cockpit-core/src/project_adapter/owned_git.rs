@@ -5,10 +5,9 @@ use std::{collections::HashSet, os::unix::fs::MetadataExt, path::Path,
     process::Output, time::{Duration, Instant}};
 
 use cockpit_protocol::orchestration::OwnedGitIdentity;
-use sha2::{Digest, Sha256};
 use tokio::process::Command;
 
-use crate::{InspectionError, process, process_identity};
+use crate::{InspectionError, process, process_identity, orchestration::project_identity::checkout_key};
 
 fn refusal(message: &str) -> InspectionError {
     InspectionError::new("owned_git_conflict", message)
@@ -87,15 +86,6 @@ fn filesystem_present(path: &str) -> Result<bool, InspectionError> {
 fn oid(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         && value.bytes().any(|b| b != b'0')
-}
-fn checkout_key(machine: &str, checkout: &str, git_dir: &str) -> String {
-    // Same length-framed convention as orchestration::project_identity.
-    let mut digest = Sha256::new();
-    digest.update(b"cockpit:checkout:v1\0");
-    for piece in [machine, checkout, git_dir] {
-        digest.update((piece.len() as u64).to_be_bytes()); digest.update(piece.as_bytes());
-    }
-    format!("{:x}", digest.finalize())
 }
 
 #[derive(Debug)]
@@ -216,7 +206,7 @@ async fn checkout_present(identity: &OwnedGitIdentity, expected: &str, entries: 
     if removal && entries[0].path == binding.path { return Err(refusal("Primary worktree removal is prohibited")); }
     exact_directory(&identity.checkout_path, &identity.checkout_device, &identity.checkout_inode)?;
     let (common, git_dir) = git_paths(&identity.checkout_path, budget).await?;
-    if common != identity.common_dir || checkout_key(&identity.machine_id, &identity.checkout_path, &git_dir) != identity.checkout_key {
+    if common != identity.common_dir || checkout_key(&identity.checkout_path, &git_dir) != identity.checkout_key {
         return Err(refusal("Owned checkout Git identity changed"));
     }
     if budget.line(&identity.checkout_path, &["rev-parse", "--verify", "HEAD"]).await? != expected {
@@ -254,9 +244,9 @@ pub async fn capture_owned_git_identity(operation_id: &str, repository_root: &st
     let (checkout_common, git_dir) = git_paths(&checkout_path, &budget).await?;
     if checkout_common != common_dir { return Err(refusal("Created checkout belongs to a different repository")); }
     let creation_tip = budget.line(&checkout_path, &["rev-parse", "--verify", "HEAD"]).await?;
-    let identity = OwnedGitIdentity { creation_operation_id: operation_id.into(), machine_id: machine.clone(),
+    let identity = OwnedGitIdentity { creation_operation_id: operation_id.into(), machine_id: machine,
         repository_key: common_dir.clone(), repository_root, repository_device, repository_inode,
-        common_dir, common_device, common_inode, checkout_key: checkout_key(&machine, &checkout_path, &git_dir),
+        common_dir, common_device, common_inode, checkout_key: checkout_key(&checkout_path, &git_dir),
         checkout_path, checkout_device, checkout_inode, branch_ref: branch_ref.map(str::to_owned), creation_tip };
     retained(&identity, &identity.creation_tip, &budget).await?;
     let entries = census(&identity, &budget).await?;
@@ -342,6 +332,8 @@ mod tests {
             budget.checked(&main, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial"]).await.unwrap();
             budget.checked(&main, &["worktree", "add", "-b", "owned", &linked]).await.unwrap();
             let identity = capture_owned_git_identity("created", &main, &linked, Some("refs/heads/owned"), 10_000, 128 * 1024).await.unwrap();
+            let (_, checkout) = crate::orchestration::project_identity::resolve_directory(Path::new(&linked), None, None).await.unwrap();
+            assert_eq!(identity.checkout_key, checkout.key);
             Self { root, main, linked, identity }
         }
     }

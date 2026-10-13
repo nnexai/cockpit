@@ -118,7 +118,7 @@ fn no_extension_context_registration_uses_private_capability_without_live_herdr(
         "created_at":"2026-10-12T00:00:00Z", "updated_at":"2026-10-12T00:00:00Z"
     });
     let state = serde_json::json!({
-        "schema":3, "revision":1, "runs":[run], "messages":[], "task_ownership":[], "inbox_hints":[],
+        "schema":4, "revision":1, "runs":[run], "messages":[], "task_ownership":[], "inbox_hints":[],
         "task_intents":[], "assignment_intents":[], "scope_intents":[], "checkout_claims":[],
         "resource_requests":[], "resource_sequence":0, "owned_resources":[],
         "operations":[], "credentials":[{

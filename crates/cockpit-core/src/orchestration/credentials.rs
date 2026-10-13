@@ -712,7 +712,6 @@ pub(crate) fn test_job_auth(
     } else {
         let checkout = run.checkout.get_or_insert_with(|| CheckoutIdentity {
             key: format!("test-checkout-{}", run.run_id),
-            machine_id: "test-machine".into(),
             path: format!("/test-checkouts/{}", run.run_id),
             directory_identity: DirectoryIdentity { device: "test-device".into(), inode: run.run_id.clone() },
             git: None,

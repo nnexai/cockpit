@@ -79,7 +79,7 @@ async function mount(initial: OrchestrationSnapshot, boards?: Map<string, TaskBo
   const client = {
     orchestrationSnapshot: snapshotCall,
     orchestrationProjectRootLookup: vi.fn<CockpitClient["orchestrationProjectRootLookup"]>(async request => ({
-      status: "resolved", project: { key: "project", machine_id: "machine", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: request.workspace_id }, lookup_revision: state.revision,
+      status: "resolved", project: { key: "project", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: request.workspace_id }, lookup_revision: state.revision,
       preferred_root_id: state.runs.some(run => run.run_id === request.selected_root_id && run.stage !== "closed") ? request.selected_root_id : state.roots[0]?.root_id ?? null,
       roots: state.roots.map(root => ({ root_id: root.root_id, connection: "connected", resume: "available", cause: null, updated_at: at })),
     })),

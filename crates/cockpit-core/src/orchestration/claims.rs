@@ -55,10 +55,10 @@ pub(crate) fn paths_overlap(left: &str, right: &str) -> bool {
     Path::new(left).starts_with(right) || Path::new(right).starts_with(left)
 }
 pub(crate) fn checkouts_conflict(left: &CheckoutIdentity, right: &CheckoutIdentity) -> bool {
-    left.key == right.key || (left.machine_id == right.machine_id && paths_overlap(&left.path, &right.path))
+    left.key == right.key || paths_overlap(&left.path, &right.path)
 }
 fn validate_checkout(checkout: &CheckoutIdentity) -> Result<(), InspectionError> {
-    if checkout.key.is_empty() || checkout.machine_id.is_empty() || !absolute_normal(&checkout.path)
+    if checkout.key.is_empty() || !absolute_normal(&checkout.path)
         || checkout.directory_identity.device.is_empty() || checkout.directory_identity.inode.is_empty()
         || checkout.git.as_ref().is_some_and(|git| !absolute_normal(&git.common_dir) || !absolute_normal(&git.worktree_git_dir)) {
         return Err(refusal("checkout_identity_unavailable", "verified physical checkout identity is required"));
@@ -128,7 +128,7 @@ pub(crate) fn revoke_and_reserve_replacement(state: &mut OrchestrationState, cla
     let next = claim.revision.checked_add(1).filter(|n| *n <= MAX_SAFE_COUNTER).ok_or_else(|| refusal("orchestration_state_full", "claim revision exhausted"))?;
     if claim.revision != proof.claim_revision || proof.checkout.as_ref() != Some(&claim.checkout) || claim.holder.as_ref() != Some(&proof.incarnation)
         || claim.state == ClaimState::Released || claim.state == ClaimState::Conflict
-        || old.machine_id.as_ref() != Some(&proof.machine_id) || proof.machine_id != claim.checkout.machine_id
+        || old.machine_id.as_ref() != Some(&proof.machine_id)
         || old_boot != Some(&proof.previous_kernel_boot_id) || proof.previous_kernel_boot_id.is_empty() || proof.observed_kernel_boot_id.is_empty()
         || !proof.all_consumers_absent || proof.previous_kernel_boot_id == proof.observed_kernel_boot_id
         || replacement.epoch != epoch || replacement.attachment_id == old.attachment_id
@@ -183,7 +183,7 @@ mod tests {
     use super::*;
     use cockpit_protocol::orchestration::DirectoryIdentity;
     fn checkout(path: &str, key: &str) -> CheckoutIdentity {
-        CheckoutIdentity { key: key.into(), machine_id: "machine".into(), path: path.into(), directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() }, git: None }
+        CheckoutIdentity { key: key.into(), path: path.into(), directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() }, git: None }
     }
     fn worker(state: &mut OrchestrationState, id: &str) -> AttachmentReference {
         let run = super::super::new_run(id, "session", RunKind::Worker, id.into(), "root", Some("root".into()), Some("task".into()), 1);
@@ -208,6 +208,20 @@ mod tests {
         changed.directory_identity.inode = "replacement-directory".into();
         assert_eq!(reserve_claim(&mut state, &changed, &a, &operation).unwrap_err().code, "checkout_identity_changed");
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    }
+    #[test]
+    fn local_path_overlap_blocks_distinct_claim_keys_without_mutation() {
+        let mut state = OrchestrationState::default();
+        let ancestor = worker(&mut state, "ancestor");
+        let nested = worker(&mut state, "nested");
+        let sibling = worker(&mut state, "sibling");
+        reserve_claim(&mut state, &checkout("/repo", "ancestor-key"), &ancestor, &Uuid::new_v4().to_string()).unwrap();
+        let before = serde_json::to_vec(&state).unwrap();
+        assert_eq!(reserve_claim(&mut state, &checkout("/repo/sub", "nested-key"), &nested,
+            &Uuid::new_v4().to_string()).unwrap_err().code, "checkout_identity_changed");
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        reserve_claim(&mut state, &checkout("/repository", "sibling-key"), &sibling, &Uuid::new_v4().to_string()).unwrap();
+        assert_eq!(state.checkout_claims.len(), 2);
     }
     #[test]
     fn replacement_requires_full_exit_proof_and_atomically_reserves_next_epoch() {

@@ -538,7 +538,6 @@ mod tests {
 
     #[tokio::test]
     async fn full_range_patch_equivalence_rejects_missing_commits_and_unmapped_paths() {
-        if crate::process_identity::machine_id().is_none() { return; }
         let case = GitCase::new(false).await;
         let record = case.record(IntegrationMethod::PatchEquivalent, CheckStatus::Passed);
         assert!(matches!(verify_integration(&record, &case.source, &case.source_checkout, &case.target_checkout).await.unwrap(),
@@ -584,7 +583,6 @@ mod tests {
 
     #[tokio::test]
     async fn ancestry_requires_the_actual_source_head_and_fresh_target_ref() {
-        if crate::process_identity::machine_id().is_none() { return; }
         let case = GitCase::new(false).await;
         let mut record = case.record(IntegrationMethod::Ancestor, CheckStatus::Passed);
         if let Integration::Integrated { mappings, .. } = &mut record.integration { mappings.clear(); }
@@ -603,7 +601,6 @@ mod tests {
 
     #[tokio::test]
     async fn adaptation_requires_full_explanation_and_passed_target_bound_checks() {
-        if crate::process_identity::machine_id().is_none() { return; }
         let case = GitCase::new(true).await;
         let equivalent = case.record(IntegrationMethod::PatchEquivalent, CheckStatus::Passed);
         assert!(verify_integration(&equivalent, &case.source, &case.source_checkout, &case.target_checkout).await.is_err());
@@ -623,7 +620,6 @@ mod tests {
 
     #[tokio::test]
     async fn recorded_output_preserves_later_source_commits_and_dirty_work() {
-        if crate::process_identity::machine_id().is_none() { return; }
         let case = GitCase::new(false).await;
         std::fs::write(case.source_path.join("later.txt"), "later independent commit\n").unwrap();
         git(&case.source_path, &["add", "later.txt"]);

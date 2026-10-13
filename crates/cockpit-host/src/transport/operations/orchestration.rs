@@ -26,8 +26,8 @@ use crate::{
 /// Native GUI startup must not answer this as a GUI transport.
 pub fn orchestration_protocol() -> serde_json::Value {
     serde_json::json!({
-        "orchestration_protocol": 3,
-        "store_schema": 3,
+        "orchestration_protocol": 4,
+        "store_schema": 4,
         "client_role": "host",
     })
 }

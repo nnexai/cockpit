@@ -701,7 +701,7 @@ fn revoked_generation_rejects_scope_messages_resource_mutations_and_message_repl
             request_id: request_id.clone(), sequence: 1, resource_key: request.resource_key.clone(),
             source_identity: request.source_identity.clone(), holder: holder.clone(),
             state: ResourceRequestState::Held, build_processes: Vec::new(),
-            machine_id: fixture.project.machine_id.clone(), blocked_reason: None, updated_at: now(),
+            machine_id: "test-machine".into(), blocked_reason: None, updated_at: now(),
         });
     });
     let requests = serde_json::to_value(fixture.state().resource_requests).unwrap();

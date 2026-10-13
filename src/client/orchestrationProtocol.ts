@@ -175,7 +175,7 @@ const POLICY = definePolicy({
         NativeProcessIdentity: ["kernel_boot_id"], RetirementIdentity: ["launch_tag", "endpoint_identity", "workspace_id", "tab_id", "pane_id", "terminal_id", "herdr_boot_id"],
         RunRetirement: ["result_message_id"],
         Run: ["run_id", "root_id", "parent_run_id", "task_id"], DispatchState: ["launch_tag", "endpoint_identity"],
-        ProjectIdentity: ["key", "machine_id", "repository_id", "source_workspace_id"], CheckoutIdentity: ["key", "machine_id"],
+        ProjectIdentity: ["key", "repository_id", "source_workspace_id"], CheckoutIdentity: ["key"],
         ExecutionAttachment: ["machine_id"], ConversationIdentity: ["harness", "session_id"], TaskOwnership: ["root_id", "task_id"], TaskOwner: ["run_id"], "OrchestrationActionResult[run_registered]": ["run_id"], "OrchestrationActionResult[task_unassigned]": ["task_id", "previous_run_id"], ResumeRecord: ["run_id"], ResumeCause: ["code"],
         ProjectRootLookupRequest: ["workspace_id"], "ProjectRootLookupResponse[unavailable]": ["code"],
         SupervisorStartResult: ["root_id"], RunResumeResult: ["run_id"], RunAttachResult: ["run_id"],
