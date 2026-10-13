@@ -1,8 +1,8 @@
 //! Receipt-owned physical terminal cleanup, independent of logical assignment.
 use std::{collections::BTreeMap, time::{Duration, Instant}};
 use parking_lot::Mutex;
-use cockpit_protocol::orchestration::{NativeProcessIdentity, RetainReason, RetirementState, RetirementStateKind, Run, RunRetirement, TerminalOutcome};
-use super::{dispatch::Dispatcher, herdr::OrchestrationHerdr, retirement::{self, TerminalDecision, OBSERVATION_RETRY_SECS}, now, OrchestrationService};
+use cockpit_protocol::orchestration::{NativeProcessIdentity, RetainReason, RetirementIdentity, RetirementState, RetirementStateKind, Run, RunRetirement, TerminalOutcome, WorkerCleanupPolicy};
+use super::{dispatch::Dispatcher, herdr::{OrchestrationHerdr, RuntimeView}, retirement::{self, TerminalDecision, OBSERVATION_RETRY_SECS}, now, OrchestrationService};
 use crate::{process_identity, InspectionError};
 
 #[derive(Default)]
@@ -14,7 +14,6 @@ impl ObservationBackoff {
     fn unavailable(&self, run: &Run, record: &RunRetirement) {
         self.0.lock().insert(run.run_id.clone(), (record.retirement_id.clone(), Instant::now() + Duration::from_secs(OBSERVATION_RETRY_SECS)));
     }
-    fn clear(&self, run_id: &str) { self.0.lock().remove(run_id); }
     fn retain_queue(&self, queue: &[Run]) {
         self.0.lock().retain(|run_id, (id, _)| queue.iter().any(|run| &run.run_id == run_id && run.retirement.as_ref().is_some_and(|record| &record.retirement_id == id)));
     }
@@ -29,12 +28,13 @@ impl Dispatcher {
 
 pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn OrchestrationHerdr, observations: &ObservationBackoff, queued: &Run) -> Result<(), InspectionError> {
     let Some(_lease) = service.execution_lease(&queued.run_id)? else { return Ok(()) };
-    let run = service.run_for_review(&queued.session_id, &queued.run_id)?;
+    let mut run = service.run_for_review(&queued.session_id, &queued.run_id)?;
     let Some(record) = &run.retirement else { return Ok(()) };
     if queued.retirement.as_ref().is_none_or(|queued| queued.retirement_id != record.retirement_id) { return Ok(()) }
     if !observations.ready(&run, record) { return Ok(()) }
     let expected = record.state.kind();
-    if retirement::terminal(&record.state) && expected != RetirementStateKind::Unknown { return Ok(()) }
+    let reobserve = matches!(record.state, RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable, .. });
+    if retirement::terminal(&record.state) && expected != RetirementStateKind::Unknown && !reobserve { return Ok(()) }
     let Some(identity) = &record.identity else { return Ok(()) };
     let runtime = match herdr.runtime(&identity.session_id).await {
         Ok(runtime) => runtime,
@@ -52,57 +52,127 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
             return Ok(());
         }
     };
-    observations.clear(&run.run_id);
     if matches!(expected, RetirementStateKind::CloseIntent | RetirementStateKind::Unknown) {
         let next = retirement::classify_close(identity, None, Some(&runtime));
-        if matches!(next, RetirementState::Retired { .. }) {
-            service.record_retirement(&run.run_id, &record.retirement_id, expected, next)?;
-        } else if expected == RetirementStateKind::CloseIntent {
+        if matches!(next, RetirementState::Retired { .. }) || expected == RetirementStateKind::CloseIntent {
             service.record_retirement(&run.run_id, &record.retirement_id, expected, next)?;
         }
-        return Ok(()); // An uncertain close is never submitted a second time.
+        observations.unavailable(&run, record);
+        return Ok(()); // A recovered or uncertain close is never submitted again.
     }
     let blockers = service.retirement_blockers(&run.run_id)?;
     if !blockers.is_empty() {
-        if record.state != (RetirementState::Waiting { blockers: blockers.clone() }) {
+        if !reobserve && record.state != (RetirementState::Waiting { blockers: blockers.clone() }) {
             service.record_retirement(&run.run_id, &record.retirement_id, expected, RetirementState::Waiting { blockers })?;
         }
+        observations.unavailable(&run, record);
         return Ok(());
     }
-    let exact_absence = runtime.endpoint_identity == identity.endpoint_identity
-        && super::optional_available(&identity.herdr_boot_id, &runtime.boot_id)
-        && !runtime.panes.iter().any(|pane| pane.pane_id == identity.pane_id || pane.terminal_id.as_deref() == Some(identity.terminal_id.as_str()));
-    if exact_absence {
-        service.record_retirement(&run.run_id, &record.retirement_id, expected, RetirementState::Retired { at: now(), terminal: TerminalOutcome::AlreadyAbsent })?;
-        return Ok(());
-    }
-    let process = identity.process.as_ref().or_else(|| identity.shell.as_ref().map(|shell| &shell.process));
-    let stopped = process.is_some_and(|process| matches!(exact_running(process, process_identity::kernel_boot_id().as_deref()), Ok(false)));
-    if !stopped {
-        service.record_retirement(&run.run_id, &record.retirement_id, expected, RetirementState::Retained { at: now(), reason: RetainReason::NativeProcessUnverifiable, stopped: false })?;
-        return Ok(());
-    }
-    let info = match herdr.pane_process_info(&identity.session_id, &identity.endpoint_identity, &identity.pane_id).await {
-        Ok(info) => info,
+    let next = match observe_terminal(&run, identity, &runtime, herdr).await {
+        Ok(next) => next,
         Err(_) => { observations.unavailable(&run, record); return Ok(()) }
     };
-    match retirement::classify_terminal(identity, &runtime, &info) {
-        Err(TerminalDecision::Absent) => {
-            service.record_retirement(&run.run_id, &record.retirement_id, expected, RetirementState::Retired { at: now(), terminal: TerminalOutcome::AlreadyAbsent })?;
+    if reobserve {
+        // Fresh physical proof, not a migration, is required to reopen the old
+        // process-proof diagnosis. Other retained reasons are never overridden.
+        if matches!(next, Some(RetirementState::Retained { .. })) {
+            observations.unavailable(&run, record);
+            return Ok(());
         }
-        Err(TerminalDecision::Retain(reason)) => {
-            service.record_retirement(&run.run_id, &record.retirement_id, expected, RetirementState::Retained { at: now(), reason, stopped })?;
-        }
-        Ok(()) => {
-            // The RPC enumerates only the foreground group. Main/shell exit
-            // and an empty foreground cannot seal detached/asynchronous writer
-            // admission or protect an unknown PTY consumer from pane.close.
-            // No extension-free exhaustive drain proof is available here.
-            service.record_retirement(&run.run_id, &record.retirement_id, expected,
-                RetirementState::Retained { at: now(), reason: RetainReason::NativeProcessUnverifiable, stopped })?;
-        }
+        service.retirement_waiting(&run.run_id, record, Vec::new())?;
+        run = service.run_for_review(&run.session_id, &run.run_id)?;
     }
+    let record = run.retirement.as_ref().expect("retirement");
+    if record.state.kind() != RetirementStateKind::Waiting { return Ok(()) }
+    if let Some(next) = next {
+        if matches!(next, RetirementState::Waiting { .. }) { observations.unavailable(&run, record); }
+        if record.state != next {
+            service.record_retirement(&run.run_id, &record.retirement_id, RetirementStateKind::Waiting, next)?;
+        }
+        return Ok(());
+    }
+    let intent = RetirementState::CloseIntent { at: now() };
+    service.record_retirement_exact(&run.run_id, record, intent.clone())?;
+    let submitted = service.run_for_review(&run.session_id, &run.run_id)?;
+    let Some(saved) = &submitted.retirement else { return Ok(()) };
+    if saved.retirement_id != record.retirement_id || saved.state != intent
+        || !retirement::identity_matches(&submitted, saved) { return Ok(()) }
+    let identity = saved.identity.as_ref().expect("identity");
+    // Reobserve adjacent to the effect. This branch owns a newly saved intent
+    // and knows no close has been submitted, so a busy/offline preflight can wait.
+    let final_check = match herdr.runtime(&identity.session_id).await {
+        Ok(runtime) => observe_terminal(&submitted, identity, &runtime, herdr).await,
+        Err(error) => Err(error),
+    };
+    let blockers = service.retirement_blockers(&submitted.run_id)?;
+    match final_check {
+        Err(_) | Ok(Some(RetirementState::Waiting { .. })) => {
+            service.retirement_waiting(&submitted.run_id, saved, blockers)?;
+            observations.unavailable(&submitted, saved);
+            return Ok(());
+        }
+        Ok(Some(next)) => {
+            service.record_retirement_exact(&submitted.run_id, saved, next)?;
+            return Ok(());
+        }
+        Ok(None) if !blockers.is_empty() => {
+            service.retirement_waiting(&submitted.run_id, saved, blockers)?;
+            observations.unavailable(&submitted, saved);
+            return Ok(());
+        }
+        Ok(None) => {}
+    }
+    let current = service.run_for_review(&submitted.session_id, &submitted.run_id)?;
+    if current.retirement.as_ref() != Some(saved) || !retirement::identity_matches(&current, saved) {
+        service.record_retirement_exact(&submitted.run_id, saved,
+            RetirementState::Retained { at: now(), reason: RetainReason::IdentityChanged, stopped: false })?;
+        return Ok(());
+    }
+    let response = herdr.close_pane(&identity.session_id, &identity.endpoint_identity, &identity.pane_id).await;
+    let fresh = herdr.runtime(&identity.session_id).await.ok();
+    service.record_retirement_exact(&submitted.run_id, saved,
+        retirement::classify_close(identity, Some(response), fresh.as_ref()))?;
+    observations.unavailable(&submitted, saved);
     Ok(())
+}
+
+/// None authorizes only this pane close; it is never all-consumer exit proof.
+async fn observe_terminal(run: &Run, identity: &RetirementIdentity, runtime: &RuntimeView, herdr: &dyn OrchestrationHerdr) -> Result<Option<RetirementState>, InspectionError> {
+    let retained = |reason, stopped| Some(RetirementState::Retained { at: now(), reason, stopped });
+    if !retirement::identity_matches(run, run.retirement.as_ref().expect("retirement"))
+        || run.cleanup_policy != Some(WorkerCleanupPolicy::OwnedWhenSafe) || run.session_id != identity.session_id {
+        return Ok(retained(RetainReason::IdentityChanged, false));
+    }
+    let exact_absence = retirement::runtime_fence(identity, runtime).is_ok()
+        && !runtime.panes.iter().any(|pane| pane.pane_id == identity.pane_id || pane.terminal_id.as_deref() == Some(identity.terminal_id.as_str()));
+    if exact_absence { return Ok(Some(RetirementState::Retired { at: now(), terminal: TerminalOutcome::AlreadyAbsent })); }
+    if identity.process.is_none() || identity.shell.is_none() {
+        return Ok(retained(RetainReason::NativeProcessUnverifiable, false));
+    }
+    let info = herdr.pane_process_info(&identity.session_id, &identity.endpoint_identity, &identity.pane_id).await?;
+    match retirement::classify_terminal(identity, runtime, &info) {
+        Err(TerminalDecision::Absent) => return Ok(Some(RetirementState::Retired { at: now(), terminal: TerminalOutcome::AlreadyAbsent })),
+        Err(TerminalDecision::Retain(reason)) => return Ok(retained(reason, false)),
+        Ok(()) => {}
+    }
+    let process = identity.process.as_ref().expect("process");
+    match exact_running(process, process_identity::kernel_boot_id().as_deref()) {
+        Ok(true) => {}
+        Ok(false) => return Ok(retained(RetainReason::NativeProcessUnverifiable, true)),
+        Err(_) => return Ok(retained(RetainReason::NativeProcessUnverifiable, false)),
+    }
+    let pane = runtime.panes.iter().find(|pane| pane.pane_id == identity.pane_id).expect("classified pane");
+    if pane.agent_kind.as_ref().is_some_and(|kind| kind != &run.launch_config.harness_kind)
+        || run.attachment.as_ref().and_then(|a| a.location.as_ref())
+            .and_then(|l| l.native_session_id.as_ref()).zip(pane.native_session_id.as_ref())
+            .is_some_and(|(expected, observed)| expected != observed) {
+        return Ok(retained(RetainReason::IdentityChanged, false));
+    }
+    if pane.launch_pending || pane.agent_kind.as_deref() != Some(run.launch_config.harness_kind.as_str())
+        || !matches!(pane.agent_status.as_deref(), Some("idle" | "done")) {
+        return Ok(Some(RetirementState::Waiting { blockers: Vec::new() }));
+    }
+    Ok(None)
 }
 
 pub(super) fn exact_running(process: &NativeProcessIdentity, boot_id: Option<&str>) -> std::io::Result<bool> {

@@ -110,7 +110,11 @@ fn waiting() -> RetirementState {
 fn pin_direct(run: &mut Run) {
     let attachment = run.attachment.as_mut().unwrap();
     attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
-    attachment.shell.as_mut().unwrap().process = attachment.process.clone().unwrap();
+    let pid = std::process::id() as i32;
+    let start = crate::process_identity::start_identity(pid).unwrap();
+    let shell = crate::process_identity::executable_identity(pid, start).unwrap();
+    attachment.process = Some(shell.process.clone());
+    attachment.shell = Some(shell);
     run.retirement.as_mut().unwrap().identity = retirement::identity_for(run);
 }
 fn old() -> String {
@@ -121,10 +125,10 @@ fn runtime(agent: bool) -> RuntimeView {
     RuntimeView { endpoint_identity: "endpoint".into(), boot_id: None, workspaces: vec![],
         panes: vec![RuntimePane { workspace_id: "space".into(), workspace_label: "Space".into(),
             tab_id: "tab".into(), tab_label: "tag".into(), pane_id: "pane".into(),
-            terminal_id: Some("terminal".into()), native_session_id: Some("native".into()),
+            terminal_id: Some("terminal".into()), native_session_id: None,
             native_session_file: None,
             agent_name: agent.then(|| "tag".into()), agent_kind: agent.then(|| "omp".into()),
-            launch_pending: false, agent_status: None, state_changed_at: None }], }
+            launch_pending: false, agent_status: agent.then(|| "idle".into()), state_changed_at: None }], }
 }
 fn absent() -> RuntimeView { let mut r = runtime(false); r.panes.clear(); r }
 fn shell_identity() -> NativeShellIdentity {
@@ -146,16 +150,23 @@ struct Script {
     events: Vec<&'static str>,
     close_count: usize,
     allow_close: bool,
+    close_error: Option<&'static str>,
     runtime_hook: Option<(usize, Box<dyn FnOnce() + Send>)>,
 }
 struct FakeHerdr { script: Mutex<Script> }
 impl FakeHerdr {
-    fn new(_: &Fixture, reads: Vec<RuntimeView>) -> Self {
+    fn new(f: &Fixture, reads: Vec<RuntimeView>) -> Self {
+        let run = f.current();
+        let shell = run.attachment.as_ref().and_then(|a| a.shell.clone());
+        let info = shell.map(|shell| PaneProcessInfo { pane_id: "pane".into(),
+            shell_pid: Some(shell.process.pid), foreground_pgid: Some(shell.process.pid),
+            processes: vec![(shell.process.pid, "agent".into())], shell_identity: Some(shell) })
+            .unwrap_or_else(original_shell_info);
         Self { script: Mutex::new(Script {
-            runtimes: reads.into_iter().map(Ok).collect(), info: original_shell_info(), info_error: false,
+            runtimes: reads.into_iter().map(Ok).collect(), info, info_error: false,
             events: vec![], close_count: 0, runtime_hook: None,
             infos: VecDeque::new(),
-            allow_close: false,
+            allow_close: false, close_error: None,
         }) }
     }
     fn closes(&self) -> usize { self.script.lock().close_count }
@@ -183,9 +194,13 @@ impl OrchestrationHerdr for FakeHerdr {
     async fn close_pane(&self, session: &str, endpoint: &str, pane: &str) -> Result<(), InspectionError> {
         assert_eq!((session, endpoint, pane), ("fixture", "endpoint", "pane"));
         let mut script = self.script.lock();
-        assert!(script.allow_close, "unproven physical consumers must never be cancelled");
+        assert!(script.allow_close, "only the exact idle owned direct-process pane may close");
         script.close_count += 1;
-        Ok(())
+        script.events.push("close");
+        match script.close_error {
+            Some(code) => Err(InspectionError::new(code, "Injected close failure")),
+            None => Ok(()),
+        }
     }
     async fn create_agent_tab(&self, _: &str, _: &AgentTabRequest) -> Result<RunLocation, InspectionError> {
         panic!("retirement cannot create or broadly close tabs/workspaces")
@@ -286,9 +301,10 @@ async fn recovered_close_intent_performs_one_read_only_reclassification() {
     for seen in [0, 1, 2] {
         let f = Fixture::new(RetirementState::CloseIntent { at: now() });
         let h = FakeHerdr::new(&f, match seen { 0 => vec![absent()], 1 => vec![runtime(false)], _ => vec![] });
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
-        assert_eq!(h.closes(), 0); assert_eq!(h.runtime_calls(), if seen == 0 { 1 } else { 2 });
+        let backoff = ObservationBackoff::default();
+        f.step(&h, &backoff).await.unwrap();
+        f.step(&h, &backoff).await.unwrap();
+        assert_eq!(h.closes(), 0); assert_eq!(h.runtime_calls(), 1);
         assert!(retirement::terminal(&f.current().retirement.unwrap().state));
     }
 }
@@ -407,8 +423,8 @@ async fn missing_or_changed_shell_fingerprint_never_authorizes_close() {
     for missing in [false, true] {
         let f = Fixture::new(waiting());
         f.change(pin_direct);
-        let h = FakeHerdr::new(&f, vec![runtime(false)]);
-        let mut changed = original_shell_info();
+        let h = FakeHerdr::new(&f, vec![runtime(true)]);
+        let mut changed = h.script.lock().info.clone();
         if missing { changed.shell_identity = None; }
         else { changed.shell_identity.as_mut().unwrap().argv_digest = "b".repeat(64); }
         h.script.lock().infos = vec![changed].into();
@@ -466,12 +482,11 @@ async fn real_same_pid_exec_sleep_and_exec_bash_are_not_the_original_launch_shel
                 pane_id: "pane".into(), shell_pid: Some(pid), foreground_pgid: Some(pid),
                 processes: vec![(pid, "shell-or-exec".into())], shell_identity: Some(identity),
             };
-            // Exercise fingerprint rejection directly, independently of which
-            // stronger consumer guard rejects the actual retirement path first.
+            // Exercise fingerprint rejection directly and at both preflights.
             let pinned = f.current().retirement.unwrap().identity.unwrap();
-            assert!(matches!(retirement::classify_terminal(&pinned, &runtime(false), &info(fresh.clone())),
+            assert!(matches!(retirement::classify_terminal(&pinned, &runtime(true), &info(fresh.clone())),
                 Err(retirement::TerminalDecision::Retain(RetainReason::ForegroundProcess))));
-            let h = FakeHerdr::new(&f, vec![runtime(false), runtime(false)]);
+            let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true)]);
             h.script.lock().infos = if boundary == 1 { vec![info(fresh)] }
                 else { vec![info(baseline), info(fresh)] }.into();
             let original = f.current();
@@ -576,17 +591,24 @@ async fn historical_unknown_close_retains_pinned_identity_across_attachment_refr
 
 
 #[tokio::test]
-async fn main_exit_and_empty_foreground_do_not_prove_unknown_pty_consumers_drained() {
+async fn exited_main_never_authorizes_close_without_live_process_proof() {
     let f = Fixture::new(waiting());
-    f.change(pin_direct);
+    f.change(|run| {
+        pin_direct(run);
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.process = Some(process());
+        attachment.shell.as_mut().unwrap().process = process();
+        run.retirement.as_mut().unwrap().identity = retirement::identity_for(run);
+    });
     let original = f.current();
     let h = FakeHerdr::new(&f, vec![runtime(false), runtime(false), absent()]);
     {
         let mut script = h.script.lock();
         script.allow_close = true;
+        let shell = f.current().attachment.unwrap().shell.unwrap();
         script.info = PaneProcessInfo {
-            pane_id: "pane".into(), shell_pid: Some(process().pid), foreground_pgid: None,
-            processes: Vec::new(), shell_identity: None,
+            pane_id: "pane".into(), shell_pid: Some(process().pid), foreground_pgid: Some(process().pid),
+            processes: vec![(process().pid, "exited agent".into())], shell_identity: Some(shell),
         };
     }
     f.step(&h, &ObservationBackoff::default()).await.unwrap();
@@ -618,4 +640,302 @@ async fn registered_chat_without_process_proof_retains_its_physical_pane() {
         RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable, stopped: false, .. }));
     assert_eq!(serde_json::to_value(f.current().attachment).unwrap(), serde_json::to_value(original.attachment).unwrap());
     assert_eq!(serde_json::to_value(f.current().result).unwrap(), serde_json::to_value(original.result).unwrap());
+}
+
+fn add_claim(f: &Fixture) {
+    let locked = f.service.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    let run = state.runs.iter().find(|r| r.run_id == f.run.run_id).unwrap();
+    let attachment = run.attachment.as_ref().unwrap();
+    let holder = claims::AttachmentReference { run_id: run.run_id.clone(),
+        attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch };
+    let (_, checkout) = project_identity::resolve_owned_directory(&f.root).unwrap();
+    claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
+    locked.save(&mut state).unwrap();
+}
+
+#[tokio::test]
+async fn accepted_alive_idle_worker_closes_only_exact_owned_pane_once_and_preserves_claims() {
+    for old_retention in [false, true] {
+        for status in ["idle", "done"] {
+            let f = Fixture::new(if old_retention {
+                RetirementState::Retained { at: old(), reason: RetainReason::NativeProcessUnverifiable, stopped: false }
+            } else { waiting() });
+            f.change(pin_direct);
+            add_claim(&f);
+            let original = f.current();
+            let before = f.service.store.lock().unwrap().read().unwrap();
+            let recorded = original.retirement.as_ref().unwrap();
+            assert!(super::retire::exact_running(recorded.identity.as_ref().unwrap().process.as_ref().unwrap(),
+                crate::process_identity::kernel_boot_id().as_deref()).unwrap());
+            let mut view = runtime(true);
+            view.panes[0].agent_status = Some(status.into());
+            if old_retention { view.panes[0].native_session_id = Some("conversation".into()); }
+            let mut sibling = view.panes[0].clone();
+            sibling.tab_id = "unrelated-tab".into();
+            sibling.pane_id = "unrelated-pane".into();
+            sibling.terminal_id = Some("unrelated-terminal".into());
+            view.panes.push(sibling.clone());
+            let mut after = absent();
+            after.panes.push(sibling);
+            let h = FakeHerdr::new(&f, vec![view.clone(), view, after]);
+            h.script.lock().allow_close = true;
+            let svc = Arc::clone(&f.service);
+            let run_id = f.run.run_id.clone();
+            h.script.lock().runtime_hook = Some((2, Box::new(move || {
+                let current = svc.run_for_review("fixture", &run_id).unwrap();
+                assert!(matches!(current.retirement.unwrap().state, RetirementState::CloseIntent { .. }));
+            })));
+            let backoff = ObservationBackoff::default();
+            f.step(&h, &backoff).await.unwrap();
+            let current = f.current();
+            let record = current.retirement.as_ref().unwrap();
+            assert_eq!(record.retirement_id, recorded.retirement_id);
+            assert_eq!(record.identity, recorded.identity);
+            assert!(matches!(record.state, RetirementState::Retired { terminal: TerminalOutcome::ClosedByCockpit, .. }));
+            assert_eq!(h.closes(), 1);
+            assert_eq!(h.script.lock().events, vec!["runtime", "info", "runtime", "info", "close", "runtime"]);
+            let after = f.service.store.lock().unwrap().read().unwrap();
+            assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(), serde_json::to_value(&before.checkout_claims).unwrap());
+            assert_eq!(serde_json::to_value(&current.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
+            assert_eq!(serde_json::to_value(&current.result).unwrap(), serde_json::to_value(&original.result).unwrap());
+            assert_eq!(current.checkout_claim_id, original.checkout_claim_id);
+            assert_eq!(current.stage, RunStage::Closed);
+            f.step(&h, &ObservationBackoff::default()).await.unwrap();
+            assert_eq!(h.closes(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn busy_pending_and_unclassified_workers_wait_without_repetitive_writes_then_idle_closes() {
+    for busy in 0..5 {
+        let f = Fixture::new(waiting());
+        f.change(pin_direct);
+        let mut view = runtime(true);
+        match busy {
+            0 => view.panes[0].agent_status = Some("working".into()),
+            1 => view.panes[0].agent_status = None,
+            2 => view.panes[0].agent_status = Some("blocked".into()),
+            3 => view.panes[0].launch_pending = true,
+            _ => view.panes[0].agent_kind = None,
+        }
+        let h = FakeHerdr::new(&f, vec![view, runtime(true), runtime(true), absent()]);
+        h.script.lock().allow_close = true;
+        let before = std::fs::read(f.service.base().join("state.json")).unwrap();
+        let backoff = ObservationBackoff::default();
+        for _ in 0..1000 { f.step(&h, &backoff).await.unwrap(); }
+        assert_eq!(f.current().retirement.unwrap().state, waiting());
+        assert_eq!(h.runtime_calls(), 1);
+        assert_eq!(h.closes(), 0);
+        assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), before);
+        // A fresh observation window stands in for the existing 30-second expiry.
+        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        assert_eq!(h.closes(), 1);
+        assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Retired { .. }));
+    }
+}
+
+#[tokio::test]
+async fn final_busy_or_unavailable_preflight_withdraws_only_unsubmitted_intent() {
+    for unavailable in [false, true] {
+        let f = Fixture::new(waiting());
+        f.change(pin_direct);
+        let mut busy = runtime(true);
+        busy.panes[0].agent_status = Some("working".into());
+        let h = FakeHerdr::new(&f, if unavailable { vec![runtime(true)] } else { vec![runtime(true), busy] });
+        let backoff = ObservationBackoff::default();
+        f.step(&h, &backoff).await.unwrap();
+        assert_eq!(h.closes(), 0);
+        assert_eq!(f.current().retirement.unwrap().state, waiting());
+        let saved = std::fs::read(f.service.base().join("state.json")).unwrap();
+        for _ in 0..1000 { f.step(&h, &backoff).await.unwrap(); }
+        assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), saved);
+        h.script.lock().runtimes = vec![runtime(true), runtime(true), absent()].into_iter().map(Ok).collect();
+        h.script.lock().allow_close = true;
+        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        assert_eq!(h.closes(), 1);
+    }
+}
+
+#[tokio::test]
+async fn live_preflight_rejects_all_location_process_and_conversation_replacements_at_both_boundaries() {
+    for boundary in [1, 2] {
+        for changed in 0..12 {
+            let f = Fixture::new(waiting());
+            f.change(pin_direct);
+            let mut bad = runtime(true);
+            let mut info = FakeHerdr::new(&f, vec![]).script.lock().info.clone();
+            match changed {
+                0 => bad.endpoint_identity = "other".into(),
+                1 => bad.panes[0].tab_label = "renamed".into(),
+                2 => {
+                    let mut sibling = bad.panes[0].clone();
+                    sibling.pane_id = "sibling".into(); sibling.terminal_id = Some("sibling-terminal".into());
+                    bad.panes.push(sibling);
+                }
+                3 => bad.panes[0].terminal_id = Some("replacement".into()),
+                4 => bad.panes[0].workspace_id = "other".into(),
+                5 => bad.panes[0].tab_id = "other".into(),
+                6 => bad.panes[0].agent_kind = Some("foreign".into()),
+                7 => bad.panes[0].native_session_id = Some("foreign-chat".into()),
+                8 => info.shell_identity.as_mut().unwrap().process.start_ticks += 1,
+                9 => info.shell_identity.as_mut().unwrap().executable_inode = "foreign".into(),
+                10 => info.shell_identity.as_mut().unwrap().argv_digest = "b".repeat(64),
+                _ => info.processes.push((999, "replacement foreground".into())),
+            }
+            let h = FakeHerdr::new(&f, if boundary == 1 { vec![bad] } else { vec![runtime(true), bad] });
+            let original_info = h.script.lock().info.clone();
+            h.script.lock().infos = if boundary == 1 { vec![info] } else { vec![original_info, info] }.into();
+            f.step(&h, &ObservationBackoff::default()).await.unwrap();
+            assert_eq!(h.closes(), 0, "replacement {changed} at boundary {boundary}");
+            assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Retained { .. }));
+        }
+    }
+}
+
+#[tokio::test]
+async fn accepted_result_and_run_identity_cas_fence_the_new_close_effect() {
+    for boundary in [1, 2] {
+        for changed in 0..6 {
+            let f = Fixture::new(waiting());
+            f.change(pin_direct);
+            let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true)]);
+            let svc = Arc::clone(&f.service); let run_id = f.run.run_id.clone();
+            h.script.lock().runtime_hook = Some((boundary, Box::new(move || {
+                change_run(&svc, &run_id, |run| match changed {
+                    0 => run.attachment.as_mut().unwrap().epoch += 1,
+                    1 => run.result.as_mut().unwrap().message_id = "not-accepted".into(),
+                    2 => run.result.as_mut().unwrap().outcome = Some(ReportOutcome::Failed),
+                    3 => run.attachment.as_mut().unwrap().process.as_mut().unwrap().start_ticks += 1,
+                    4 => run.attachment.as_mut().unwrap().location.as_mut().unwrap().session_id = "foreign".into(),
+                    _ => run.close_reason = Some(CloseReason::Cancelled),
+                });
+            })));
+            f.step(&h, &ObservationBackoff::default()).await.unwrap();
+            assert_eq!(h.closes(), 0);
+            assert!(matches!(f.current().retirement.unwrap().state,
+                RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
+        }
+    }
+}
+
+#[tokio::test]
+async fn live_close_requires_fresh_absence_and_failed_or_unknown_effects_never_replay() {
+    for error in [None, Some("herdr_outcome_unknown"), Some("confirmation_required")] {
+        let f = Fixture::new(waiting());
+        f.change(pin_direct);
+        let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true), runtime(true), absent()]);
+        { let mut s = h.script.lock(); s.allow_close = true; s.close_error = error; }
+        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        assert_eq!(h.closes(), 1);
+        let state = f.current().retirement.unwrap().state;
+        if error == Some("confirmation_required") {
+            assert!(matches!(state, RetirementState::Retained { reason: RetainReason::HerdrRefused, stopped: false, .. }));
+        } else {
+            assert!(matches!(state, RetirementState::Unknown { .. }));
+            f.step(&h, &ObservationBackoff::default()).await.unwrap();
+            assert!(matches!(f.current().retirement.unwrap().state,
+                RetirementState::Retired { terminal: TerminalOutcome::AbsentAfterUncertainClose, .. }));
+        }
+        assert_eq!(h.closes(), 1);
+    }
+}
+
+#[tokio::test]
+async fn descendant_created_at_final_preflight_defers_without_submitting_close() {
+    let f = Fixture::new(waiting());
+    f.change(pin_direct);
+    let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true)]);
+    let svc = Arc::clone(&f.service); let run_id = f.run.run_id.clone();
+    h.script.lock().runtime_hook = Some((2, Box::new(move || {
+        let locked = svc.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let mut child = new_run("late-child", "fixture", RunKind::Worker, "Child".into(),
+            &run_id, Some(run_id.clone()), None, 1);
+        child.stage = RunStage::Working;
+        state.runs.push(child);
+        locked.save(&mut state).unwrap();
+    })));
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert_eq!(h.closes(), 0);
+    assert_eq!(f.current().retirement.unwrap().state,
+        RetirementState::Waiting { blockers: vec![RetirementBlocker::OpenDescendantRuns] });
+}
+
+#[tokio::test]
+async fn changed_accepted_receipt_during_observation_cannot_persist_a_new_close_intent() {
+    let f = Fixture::new(waiting());
+    f.change(pin_direct);
+    let h = FakeHerdr::new(&f, vec![runtime(true)]);
+    let svc = Arc::clone(&f.service); let run_id = f.run.run_id.clone();
+    h.script.lock().runtime_hook = Some((1, Box::new(move || {
+        change_run(&svc, &run_id, |run| {
+            run.result.as_mut().unwrap().message_id = "new-result".into();
+            run.retirement.as_mut().unwrap().result_message_id = "new-result".into();
+        });
+    })));
+    assert_eq!(f.step(&h, &ObservationBackoff::default()).await.unwrap_err().code, "retirement_state_changed");
+    assert_eq!(h.closes(), 0);
+    assert_eq!(f.current().retirement.unwrap().state, waiting());
+}
+
+#[tokio::test]
+async fn old_process_retention_reopens_only_with_fresh_unchanged_accepted_worker_proof() {
+    for changed in 0..5 {
+        let f = Fixture::new(RetirementState::Retained {
+            at: old(), reason: RetainReason::NativeProcessUnverifiable, stopped: false,
+        });
+        f.change(pin_direct);
+        let mut view = runtime(true);
+        match changed {
+            0 => view.panes[0].tab_label = "user-renamed".into(),
+            1 => {
+                let mut other = view.panes[0].clone();
+                other.pane_id = "shared-pane".into(); other.terminal_id = Some("shared-terminal".into());
+                view.panes.push(other);
+            }
+            2 => f.change(|run| run.attachment.as_mut().unwrap().epoch += 1),
+            3 => f.change(|run| run.close_reason = Some(CloseReason::Cancelled)),
+            _ => f.change(|run| run.cleanup_policy = None),
+        }
+        let before = std::fs::read(f.service.base().join("state.json")).unwrap();
+        let h = FakeHerdr::new(&f, vec![view]);
+        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        assert_eq!(h.closes(), 0);
+        assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), before);
+    }
+}
+
+#[tokio::test]
+async fn failed_post_close_snapshot_is_unknown_and_owner_restart_never_replays() {
+    let f = Fixture::new(waiting());
+    f.change(pin_direct);
+    let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true)]);
+    h.script.lock().allow_close = true;
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert_eq!(h.closes(), 1);
+    assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Unknown { .. }));
+    h.script.lock().runtimes = vec![runtime(true), absent()].into_iter().map(Ok).collect();
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Unknown { .. }));
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert!(matches!(f.current().retirement.unwrap().state,
+        RetirementState::Retired { terminal: TerminalOutcome::AbsentAfterUncertainClose, .. }));
+    assert_eq!(h.closes(), 1);
+}
+
+#[tokio::test]
+async fn native_metadata_and_registered_chat_are_not_required_for_exact_idle_pane_authority() {
+    let f = Fixture::new(waiting());
+    f.change(|run| {
+        run.attachment.as_mut().unwrap().conversation = None;
+        pin_direct(run);
+    });
+    let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true), absent()]);
+    h.script.lock().allow_close = true;
+    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert_eq!(h.closes(), 1);
+    assert!(matches!(f.current().retirement.unwrap().state,
+        RetirementState::Retired { terminal: TerminalOutcome::ClosedByCockpit, .. }));
 }

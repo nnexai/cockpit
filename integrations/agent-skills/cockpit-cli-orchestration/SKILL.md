@@ -366,9 +366,19 @@ user work and uncertain live writers; do not issue arbitrary shutdown or
 adoption commands. Report Removed, Waiting, Kept, Stalled or Unknown honestly,
 including the concrete reason, rather than claiming all resources were deleted.
 Retain operation UUIDs and complete JSON payloads for exact durable replay.
-Each owned, borrowed or unknown resource is evaluated independently. Unproven
-live-Space UI consumers remain Unknown and keep the claim/terminal; unavailable
-same-boot producer/consumer stop proof cannot be replaced by root-PID exit.
+Each owned, borrowed or unknown resource is evaluated independently. An accepted
+exact succeeded Result can retire only its unchanged, singly owned DirectProcess
+worker pane when fresh Herdr observes the configured harness idle/done and the
+recorded PID/start, complete executable/argv and sole foreground process match.
+Busy, pending or unavailable status waits; changed/user/shared panes stay kept.
+Optional native metadata can veto contradictory identity but is not mandatory.
+Core persists a close intent, repeats preflight, closes that pane once and
+requires fresh exact absence. Recovered/uncertain close intents never resend.
+Idle status does not certify an empty draft; the ID-only close has a read-to-close
+race. No SDK shutdown or direct PID signal is needed. Terminal retirement never
+releases checkout claims or proves background-consumer exit. Unproven live-Space
+UI consumers retain their independent claims; unavailable same-boot consumer stop
+proof cannot be replaced by root-PID exit or pane absence.
 Missing Space evidence and Git deletion safety are independent. Fixture cleanup
 uses normal guarded stop with provenance; scratch removal atomically reserves
 the exact incarnation to protect against a replacement race.

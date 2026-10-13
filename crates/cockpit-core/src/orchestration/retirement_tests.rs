@@ -146,6 +146,20 @@ fn shell() -> PaneProcessInfo {
         processes: vec![(11, "shell".into())], shell_identity: Some(shell_identity()) }
 }
 fn identity() -> RetirementIdentity { retirement_for_accepted(&worker(), RetirementTrigger::Accept, "revision", AT).unwrap().identity.unwrap() }
+fn direct_terminal() -> (RetirementIdentity, RuntimeView, PaneProcessInfo) {
+    let mut identity = identity();
+    identity.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+    let mut shell = identity.shell.clone().unwrap();
+    shell.process = identity.process.clone().unwrap();
+    identity.shell = Some(shell.clone());
+    let mut runtime = runtime();
+    runtime.panes[0].agent_kind = Some("omp".into());
+    runtime.panes[0].agent_status = Some("idle".into());
+    let info = PaneProcessInfo { pane_id: "pane".into(), shell_pid: Some(shell.process.pid),
+        foreground_pgid: Some(shell.process.pid), processes: vec![(shell.process.pid, "agent".into())],
+        shell_identity: Some(shell) };
+    (identity, runtime, info)
+}
 
 #[test]
 fn acceptance_commits_exact_receipt_revision_and_launch_identity() {
@@ -465,42 +479,40 @@ fn execution_lease_is_exclusive_and_released_without_semantic_mutation() {
 
 #[test]
 fn terminal_preflight_fails_closed_on_every_identity_and_shell_mismatch() {
-    let mut identity = identity();
-    identity.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
-    identity.shell.as_mut().unwrap().process = identity.process.clone().unwrap();
-    for contamination in 0..10 {
-        let mut runtime = runtime();
-        let mut info = shell();
+    let (identity, baseline, original) = direct_terminal();
+    assert_eq!(classify_terminal(&identity, &baseline, &original), Ok(()));
+    for contamination in 0..13 {
+        let mut runtime = baseline.clone();
+        let mut info = original.clone();
         let reason = match contamination {
             0 => { runtime.endpoint_identity = "restarted".into(); RetainReason::EndpointChanged },
             1 => { runtime.boot_id = Some("rebooted".into()); RetainReason::IdentityChanged },
             2 => { runtime.panes[0].terminal_id = Some("replacement".into()); RetainReason::PaneMoved },
             3 => { runtime.panes[0].workspace_id = "moved".into(); RetainReason::PaneMoved },
             4 => { runtime.panes[0].tab_id = "moved".into(); RetainReason::PaneMoved },
-            5 => { runtime.panes[0].agent_kind = Some("omp".into()); RetainReason::ForegroundProcess },
-            6 => { runtime.panes[0].launch_pending = true; RetainReason::ForegroundProcess },
+            5 => { runtime.panes[0].agent_kind = Some("foreign".into()); RetainReason::ForegroundProcess },
+            6 => { runtime.panes[0].native_session_id = Some("foreign-chat".into()); RetainReason::ForegroundProcess },
             7 => { info.shell_pid = None; RetainReason::ForegroundProcess },
             8 => { info.foreground_pgid = Some(22); RetainReason::ForegroundProcess },
-            _ => { info.processes.clear(); RetainReason::ForegroundProcess },
+            9 => { info.processes.clear(); RetainReason::ForegroundProcess },
+            10 => { info.processes.push((22, "background".into())); RetainReason::ForegroundProcess },
+            11 => { info.shell_identity.as_mut().unwrap().process.start_ticks += 1; RetainReason::ForegroundProcess },
+            _ => { runtime.boot_id = None; RetainReason::IdentityChanged },
         };
         assert_eq!(classify_terminal(&identity, &runtime, &info), Err(TerminalDecision::Retain(reason)));
     }
-    let mut moved = runtime();
+    let mut moved = baseline;
     moved.panes[0].pane_id = "moved".into();
-    assert_eq!(classify_terminal(&identity, &moved, &shell()), Err(TerminalDecision::Retain(RetainReason::PaneMoved)));
+    assert_eq!(classify_terminal(&identity, &moved, &original), Err(TerminalDecision::Retain(RetainReason::PaneMoved)));
     moved.panes.clear();
-    assert_eq!(classify_terminal(&identity, &moved, &shell()), Err(TerminalDecision::Absent));
+    assert_eq!(classify_terminal(&identity, &moved, &original), Err(TerminalDecision::Absent));
     assert!(OBSERVATION_RETRY_SECS >= 30);
 }
 
 #[test]
 fn exec_replacement_at_identical_pid_and_pgid_cannot_authorize_close() {
-    let mut identity = identity();
-    identity.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
-    identity.shell.as_mut().unwrap().process = identity.process.clone().unwrap();
-    let runtime = runtime();
-    let original_shell = shell();
-    assert_eq!(classify_terminal(&identity, &runtime, &original_shell), Err(TerminalDecision::Retain(RetainReason::ForegroundProcess)));
+    let (identity, runtime, original_shell) = direct_terminal();
+    assert_eq!(classify_terminal(&identity, &runtime, &original_shell), Ok(()));
     for replacement in 0..3 {
         let mut exec = original_shell.clone();
         let current = exec.shell_identity.as_mut().unwrap();
@@ -560,4 +572,152 @@ fn semantic_conversation_does_not_supply_missing_physical_proof() {
     assert!(pinned.shell.is_none());
     assert!(matches!(classify_terminal(&pinned, &runtime(), &shell()),
         Err(TerminalDecision::Retain(_))), "registered session cannot certify an owned pane is safe to close");
+}
+
+#[test]
+fn receipt_conversation_compatibility_does_not_relax_accepted_run_identity() {
+    for left_conversation in [None, Some(conversation())] {
+        for right_conversation in [None, Some(conversation())] {
+            let mut left = identity();
+            left.conversation = left_conversation.clone();
+            let mut right = identity();
+            right.conversation = right_conversation;
+            assert!(receipt_identity_matches(&left, &right));
+            assert!(receipt_identity_matches(&right, &left));
+        }
+    }
+    let mut run = worker();
+    run.stage = RunStage::Closed;
+    run.close_reason = Some(CloseReason::Accepted);
+    let mut retirement = retirement_for_accepted(&run, RetirementTrigger::Accept, "revision", AT).unwrap();
+    assert!(identity_matches(&run, &retirement));
+    retirement.identity.as_mut().unwrap().conversation = None;
+    assert!(receipt_identity_matches(&identity_for(&run).unwrap(), retirement.identity.as_ref().unwrap()));
+    assert!(!identity_matches(&run, &retirement), "receipt compatibility grants no physical-effect admission");
+    run.attachment.as_mut().unwrap().conversation = None;
+    assert!(identity_matches(&run, &retirement));
+    retirement.identity.as_mut().unwrap().conversation = Some(conversation());
+    assert!(!identity_matches(&run, &retirement), "strict matching must reject missing run metadata too");
+}
+
+#[test]
+fn accepted_late_conversation_preserves_creation_history_and_checkout_claims() {
+    use sha2::{Digest, Sha256};
+    for next in [
+        RetirementState::Retained { at: AT.into(), reason: RetainReason::NativeProcessUnverifiable, stopped: false },
+        RetirementState::Retired { at: AT.into(), terminal: TerminalOutcome::AlreadyAbsent },
+        RetirementState::Retired { at: AT.into(), terminal: TerminalOutcome::ClosedByCockpit },
+        RetirementState::Retired { at: AT.into(), terminal: TerminalOutcome::AbsentAfterUncertainClose },
+    ] {
+        let fixture = Fixture::new();
+        // Capture the original launch receipt before semantic registration.
+        let mut before_registration = fixture.run();
+        before_registration.attachment.as_mut().unwrap().conversation = None;
+        let identity = OwnedResourceIdentity::WorkerTerminal {
+            identity: identity_for(&before_registration).unwrap(),
+        };
+        let creation_bytes = serde_json::to_vec(&identity).unwrap();
+        let resource = OwnedResourceRecord {
+            resource_id: format!("{:x}", Sha256::digest(&creation_bytes)),
+            root_id: ROOT.into(), run_id: before_registration.run_id.clone(),
+            kind: OwnedResourceKind::WorkerTerminal, ownership: ResourceOwnership::Owned,
+            creation_operation_id: Some("owned-launch".into()), identity,
+            authority: CleanupAuthority::OwnedWhenSafe,
+            consumers: vec![AttachmentReference {
+                run_id: before_registration.run_id.clone(),
+                attachment_id: before_registration.attachment.as_ref().unwrap().attachment_id.clone(),
+                attachment_epoch: before_registration.attachment.as_ref().unwrap().epoch,
+            }],
+            integration_result_id: None,
+            cleanup: CleanupItem { operation_id: None, state: CleanupState::Unknown,
+                reason: Some(super::cleanup::reason(CleanupReasonClass::Authority,
+                    "terminal_identity_changed", "Old conversation mismatch")),
+                effects: Vec::new(), updated_at: AT.into() },
+        };
+        fixture.edit(|state| state.owned_resources.push(resource.clone()));
+        fixture.accept();
+        let mut before = fixture.state();
+        let accepted = &before.runs[1];
+        let retirement = accepted.retirement.as_ref().unwrap();
+        assert_eq!(retirement.identity.as_ref().unwrap().conversation, Some(conversation()));
+        assert!(identity_matches(accepted, retirement));
+        assert!(!before.checkout_claims.is_empty());
+        let task_path = fixture.service.base().join("tasks").join(format!("{ROOT}.md"));
+        let accepted_task_bytes = std::fs::read(&task_path).unwrap();
+        fixture.service.record_retirement(&accepted.run_id, &retirement.retirement_id,
+            RetirementStateKind::Waiting, next.clone()).unwrap();
+        let after = fixture.state();
+        assert_eq!(after.runs[1].retirement.as_ref().unwrap().state, next);
+        assert_eq!(std::fs::read(task_path).unwrap(), accepted_task_bytes);
+        assert_eq!(serde_json::to_vec(&after.owned_resources[0].identity).unwrap(), creation_bytes);
+        let mut expected_resource = resource;
+        if matches!(next, RetirementState::Retired { .. }) {
+            expected_resource.cleanup.effects.push(CleanupEffectReceipt {
+                effect_id: retirement.retirement_id.clone(), kind: OwnedResourceKind::WorkerTerminal,
+                identity_digest: expected_resource.resource_id.clone(),
+                state: if matches!(next, RetirementState::Retired { terminal: TerminalOutcome::ClosedByCockpit, .. }) {
+                    CleanupEffectState::Applied
+                } else { CleanupEffectState::Absent },
+                evidence: None, updated_at: after.runs[1].retirement.as_ref().unwrap().updated_at.clone(),
+            });
+        }
+        assert_eq!(after.owned_resources[0], expected_resource);
+        // The transaction may change only retirement bookkeeping and its receipt,
+        // never accepted Result/history, semantic ownership, claims or resources.
+        before.revision = after.revision;
+        before.runs[1].retirement = after.runs[1].retirement.clone();
+        before.runs[1].updated_at = after.runs[1].updated_at.clone();
+        before.owned_resources[0].cleanup = after.owned_resources[0].cleanup.clone();
+        assert_eq!(serde_json::to_value(before).unwrap(), serde_json::to_value(after).unwrap());
+    }
+}
+
+#[test]
+fn reobservation_and_unsubmitted_intent_require_exact_saved_record_and_identity() {
+    for state in [
+        RetirementState::Retained { at: AT.into(), reason: RetainReason::NativeProcessUnverifiable, stopped: false },
+        RetirementState::CloseIntent { at: AT.into() },
+    ] {
+        for changed in 0..5 {
+            let fixture = Fixture::new();
+            fixture.accept();
+            fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().state = state.clone());
+            let run = fixture.run();
+            let observed = run.retirement.unwrap();
+            match changed {
+                0 => {},
+                1 => fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().retirement_id = id()),
+                2 => fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().state = RetirementState::CloseIntent { at: now() }),
+                3 => fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().task_revision = "different".into()),
+                _ => fixture.edit(|s| s.runs[1].attachment.as_mut().unwrap().epoch += 1),
+            }
+            let before = fixture.state();
+            let result = fixture.service.retirement_waiting(&run.run_id, &observed, vec![]);
+            match changed {
+                0 => {
+                    result.unwrap();
+                    assert_eq!(fixture.run().retirement.unwrap().state, RetirementState::Waiting { blockers: vec![] });
+                }
+                4 => {
+                    result.unwrap();
+                    assert!(matches!(fixture.run().retirement.unwrap().state,
+                        RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
+                }
+                _ => {
+                    assert!(result.is_err());
+                    assert_eq!(serde_json::to_value(fixture.state()).unwrap(), serde_json::to_value(before).unwrap());
+                }
+            }
+        }
+    }
+    for reason in [RetainReason::IdentityChanged, RetainReason::UserActivity, RetainReason::SharedTab] {
+        let fixture = Fixture::new();
+        fixture.accept();
+        fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().state = RetirementState::Retained {
+            at: AT.into(), reason, stopped: false,
+        });
+        let run = fixture.run();
+        assert!(fixture.service.retirement_queue().unwrap().is_empty());
+        assert!(fixture.service.retirement_waiting(&run.run_id, run.retirement.as_ref().unwrap(), vec![]).is_err());
+    }
 }

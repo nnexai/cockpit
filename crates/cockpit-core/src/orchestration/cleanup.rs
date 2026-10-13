@@ -673,7 +673,7 @@ pub(in crate::orchestration) fn sync_retirement_receipts(state: &mut Orchestrati
     };
     for resource in &mut state.owned_resources {
         if resource.run_id != run.run_id || !matches!(&resource.identity, OwnedResourceIdentity::WorkerTerminal { identity }
-            if retirement.identity.as_ref() == Some(identity)) { continue; }
+            if retirement.identity.as_ref().is_some_and(|retired| retirement::receipt_identity_matches(identity, retired))) { continue; }
         let receipt = CleanupEffectReceipt { effect_id: retirement.retirement_id.clone(),
             kind: OwnedResourceKind::WorkerTerminal, identity_digest: resource.resource_id.clone(),
             state: outcome, evidence: None, updated_at: retirement.updated_at.clone() };
@@ -688,7 +688,7 @@ fn terminal_evaluation(resource: &OwnedResourceRecord, run: &Run) -> CleanupEval
     let Some(retirement) = &run.retirement else {
         return CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "terminal_retirement_pending", "Terminal retirement requires an accepted idle worker or proven quiescent cancellation"));
     };
-    if retirement.identity.as_ref() != Some(identity) {
+    if !retirement.identity.as_ref().is_some_and(|retired| retirement::receipt_identity_matches(identity, retired)) {
         return CleanupEvaluation::Unknown(reason(CleanupReasonClass::Authority, "terminal_identity_changed", "Original terminal retirement identity differs"));
     }
     match &retirement.state {
