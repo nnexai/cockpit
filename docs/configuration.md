@@ -76,41 +76,41 @@ inbox_prompt_hints = false
 
 There is no mandatory OMP extension, `omp_extension`, `COCKPIT_OMP_EXTENSION`, orchestration `model` or OMP-only argument allowlist. This is a clean cutover, not configuration migration: obsolete aliases are unsupported and incompatible orchestration store schemas are rejected without discarding stored bytes. The separate [OMP quota executable](#omp-quota-executable) is unchanged.
 
-Every agent interaction supplies a resumable conversation's `--harness KIND` and `--session-id ID`. Explicit values take selection precedence over `COCKPIT_HARNESS`/`COCKPIT_SESSION_ID`, but independently present conflicting identities fail rather than silently selecting stale context. For harness `omp`, absent a direct session ID, `PI_SESSION_FILE` supplies the actual session-header ID. The bounded reader searches header records within 64 KiB; it does not infer identity from a filename or parse/log the full journal. Explicit non-OMP identity needs no OMP journal. Launch sets the harness kind, never invents or freezes a conversation ID.
+Every orchestration interaction resolves the actual current conversation through `--harness KIND` and `--session-id ID` or harness-provided `COCKPIT_HARNESS`/`COCKPIT_SESSION_ID`. Explicit selection does not bypass conflicting independently present identities. An optional bootstrap JSON “observed conversation identity hint” carries the freshly checked pane's agent-session identity, not its Herdr session/pane/terminal routing ID or role authority. Decode its values as quoted opaque arguments, not shell source; no corroborating journal hunt is required. Without a hint, use actual current harness metadata. For OMP, available `PI_SESSION_FILE` supplies the actual header ID via a bounded 64 KiB reader, never filenames or full transcript parsing. Explicit non-OMP identity needs no detector or OMP journal. If neither source exists, report the missing actual conversation identity rather than inventing one or searching unrelated sessions. Re-resolve after a switch; launch never invents or freezes an ID.
 
-With the issued capability and generic context environment, begin with:
+Read the bundled skill before registration; it needs no identity flags. Then use the issued capability to register and inspect the returned role:
 
 ```sh
-cockpit-cli run context
-# To supply identity explicitly:
-cockpit-cli --harness KIND --session-id ID run context
-cockpit-cli run register --operation-id UUID
+"${COCKPIT_CLI_PATH:-cockpit-cli}" skills show cockpit-cli-orchestration
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run context --harness "$HARNESS" --session-id "$SESSION_ID" --json
 ```
+
+These variables denote actual current identity values. When harness metadata is absent, repeat both options on every task/run/inbox/route call; an export in one tool shell does not configure later shells. Do not persist an observed hint in a profile or global setting. Optional explicit `run register --operation-id UUID` takes the same identity options; context already registers.
 
 Context registers an unbound capability and returns run/root/role/conversation, assignment generation and pending inbox counts; later calls still verify identity. Root registration pins the root conversation. Worker registration atomically claims the authorized vacant task generation; a pending launch is not an owner. Implicit registration uses the credential UUID, so concurrent CLI calls do not create competing claims. Conflicts do not trigger a new UUID retry, and registration without an issued capability is unavailable. Worker commands use the credential's pinned generation, not a fresh task lookup.
 
 Only the owning active supervisor can perform:
 
 ```sh
-cockpit-cli task unassign TASK_ID --operation-id UUID --expected-assignment-generation N
+cockpit-cli task unassign TASK_ID --harness "$HARNESS" --session-id "$SESSION_ID" --operation-id UUID --expected-assignment-generation N
 ```
 
 This clears the exact current owner or pending authorization, increments generation and revokes semantic credentials/launch authorization. A stale generation conflicts; accepted tasks cannot be unassigned. Operator UI sends an instruction to the supervisor, not this mutation directly. Reports/history and physical checkout/resource claims remain: unassignment does not stop a worker or authorize same-checkout replacement or cleanup.
 
 ### Inbox pull, capture and optional prompt hints
 
-CLI waiting is the baseline, including non-OMP harnesses:
+Pull/capture/ACK first, then act within the returned role: the supervisor delegates authorized runnable work with `run worker-start`, monitors and reviews Results before acceptance; task creation alone is not provisioning. Workers read their own WorkBrief/canonical task and execute autonomously within the authorized scope. Keep backlog-only work as backlog and inspect active/pending attempts before starting; a pending launch may still have vacant ownership. The bundled skill owns the exact ordered commands and revision/placement fences. CLI waiting is the baseline, including non-OMP harnesses, when nothing is runnable for that role:
 
 ```sh
-cockpit-cli inbox wait --after N --timeout 300
-cockpit-cli inbox list --after N --json
-# After retaining the returned bodies/cursor durably:
-cockpit-cli inbox ack --through N
+cockpit-cli inbox wait --harness "$HARNESS" --session-id "$SESSION_ID" --after "$AFTER_SEQ" --timeout 300 --json
+cockpit-cli inbox list --harness "$HARNESS" --session-id "$SESSION_ID" --after "$AFTER_SEQ" --limit 100 --json
+# After retaining returned bodies and result.read_through_seq durably:
+cockpit-cli inbox ack --harness "$HARNESS" --session-id "$SESSION_ID" --through "$READ_THROUGH_SEQ" --json
 ```
 
-ACK accepts an already Read prefix and records capture only, not model processing, an Answer, resumed work or ownership change. Answers still name the exact current NeedsInput question. Preserve original operation identity/payload on unknown outcomes and inspect saved receipts before another submission.
+Start `AFTER_SEQ` at 0 without a saved cursor and follow pages without skipping unread gaps. Never ACK the wait's notification cursor. ACK accepts an already Read prefix and records capture only, not model processing, an Answer, resumed work or ownership change. Answers still name the exact current NeedsInput question. Preserve original operation identity/payload on unknown outcomes and inspect saved receipts before another submission.
 
-`inbox_prompt_hints = false` is the default. A new owned-pane bootstrap uses a fixed context/pull instruction after supported harness-ready observation; regular automatic counts-only hints require explicit opt-in. Both use identity-checked Herdr `agent.prompt`, which submits text plus Enter to the owned pane; this is not a paste-only notice. Hints never contain inbox message bodies or target a name/focused pane. Busy, blocked, unready, departed or contradictory targets defer; unsupported transport is explicit and unknown submission is retained without blind replay or raw-key fallback. Where empty-draft evidence is unavailable, enabling hints authorizes terminal submission and does not guarantee preservation of an unknown draft. Waiting, registration and explicit ACK do not require hint transport.
+`inbox_prompt_hints = false` is the default. A new owned-pane bootstrap points first to the bundled skill, then registration/pull/capture/ACK and role-specific next actions, after supported harness-ready observation. It may include the optional freshly observed identity hint described above; credential-scoped context remains role authority. Regular automatic counts-only hints still require explicit opt-in. Both use identity-checked Herdr `agent.prompt`, which submits text plus Enter to the owned pane; this is not a paste-only notice. Hints never contain inbox message bodies or target a name/focused pane. Busy, blocked, unready, departed or contradictory targets defer; unsupported transport is explicit and unknown submission is retained without blind replay or raw-key fallback. Where empty-draft evidence is unavailable, enabling hints authorizes terminal submission and does not guarantee preservation of an unknown draft. Waiting, registration and explicit ACK do not require hint transport.
 
 ## Durable Space Notes
 
