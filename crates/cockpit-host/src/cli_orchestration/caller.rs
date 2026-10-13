@@ -1,11 +1,9 @@
-use std::{io::{BufRead, BufReader, Read}, path::Path};
+use std::path::Path;
 
-use cockpit_core::orchestration::{Actor, AgentCaller, read_job_auth};
+use cockpit_core::orchestration::{Actor, AgentCaller, read_job_auth, session_identity::read_omp_session_file};
 use cockpit_protocol::orchestration::ConversationIdentity;
 
 use super::{CliError, args::OrchestrationArgs, context::Context};
-
-const SESSION_HEADER_BYTES: usize = 64 * 1024;
 
 fn identity_value(value: &str) -> Result<(), CliError> {
     if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
@@ -21,36 +19,6 @@ fn agree(explicit: Option<String>, inherited: Option<String>) -> Result<Option<S
     Ok(explicit.or(inherited))
 }
 
-pub(super) fn session_header(input: impl Read) -> Result<String, CliError> {
-    #[derive(serde::Deserialize)]
-    struct Header {
-        #[serde(rename = "type")]
-        kind: String,
-        id: Option<String>,
-    }
-    let mut input = BufReader::new(input.take(SESSION_HEADER_BYTES as u64));
-    let mut line = Vec::new();
-    let mut total = 0;
-    loop {
-        line.clear();
-        let count = input.read_until(b'\n', &mut line)
-            .map_err(|_| CliError::new("session_header_invalid", "Cannot read session header"))?;
-        if count == 0 { break; }
-        total += count;
-        if total == SESSION_HEADER_BYTES && line.last() != Some(&b'\n') {
-            return Err(CliError::new("session_header_invalid", "No session header within 64 KiB"));
-        }
-        if line.iter().all(u8::is_ascii_whitespace) { continue; }
-        let header: Header = serde_json::from_slice(&line)
-            .map_err(|_| CliError::new("session_header_invalid", "Malformed session header prefix"))?;
-        if header.kind != "session" { continue; }
-        let id = header.id.ok_or_else(|| CliError::new("session_header_invalid", "Session header has no ID"))?;
-        identity_value(&id)?;
-        return Ok(id);
-    }
-    Err(CliError::new("session_header_invalid", "Session file contains no session header"))
-}
-
 pub(super) fn resolve_conversation(
     harness: Option<String>, session: Option<String>,
     inherited_harness: Option<String>, inherited_session: Option<String>, file: Option<&Path>,
@@ -61,9 +29,7 @@ pub(super) fn resolve_conversation(
     let mut session_id = agree(session, inherited_session)?;
     if harness == "omp" {
         if let Some(path) = file {
-            let input = std::fs::File::open(path)
-                .map_err(|_| CliError::new("session_header_invalid", "Cannot open PI_SESSION_FILE"))?;
-            session_id = agree(session_id, Some(session_header(input)?))?;
+            session_id = agree(session_id, Some(read_omp_session_file(path)?))?;
         }
     }
     let session_id = session_id.ok_or_else(|| CliError::usage("Supply actual --session-id, COCKPIT_SESSION_ID or an OMP PI_SESSION_FILE header"))?;

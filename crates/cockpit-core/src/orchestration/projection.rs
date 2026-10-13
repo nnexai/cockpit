@@ -466,7 +466,7 @@ pub(super) fn actual_agent(
         && location.terminal_id.is_some() && pane.terminal_id == location.terminal_id
         && (location.native_session_id.as_ref().is_some_and(|native|
                 pane.native_session_id.as_ref() == Some(native))
-            || (pane.native_session_id.is_none()
+            || ((location.native_session_id.is_none() || pane.native_session_id.is_none())
                 && attachment.process.as_ref().is_some_and(|process| {
                     process.kernel_boot_id.is_some()
                         && attachment.machine_id.as_deref().is_some_and(|expected| {
@@ -788,6 +788,7 @@ mod tests {
                 pane_id: "pane".into(),
                 terminal_id: None,
                 native_session_id: None,
+                native_session_file: None,
                 agent_name: Some("worker".into()),
                 agent_status: Some(status.into()),
                 agent_kind: Some("omp".into()),
@@ -1699,6 +1700,116 @@ mod tests {
         assert!(!super::super::escalation::recovered(&mut durable, 1).unwrap());
         assert_eq!(durable.messages.len(), 3);
     }
+    #[cfg(target_os = "linux")]
+    struct ForegroundProcess {
+        controller: std::process::Child,
+        identity: cockpit_protocol::orchestration::NativeProcessIdentity,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl ForegroundProcess {
+        fn new() -> Self {
+            use std::io::BufRead;
+            // Same real PTY pattern as service_tests::attachment::RootRecoveryPty:
+            // a foreground child waits until its owned controller closes the PTY.
+            let mut controller = std::process::Command::new("python3").args(["-u", "-c", r#"
+import os, pty, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execlp("sh", "sh", "-c", "printf 'ready\\n'; read ignored")
+os.read(fd, 1024)
+print(pid, flush=True)
+sys.stdin.buffer.read()
+os.close(fd)
+os.waitpid(pid, 0)
+"#]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(controller.stdout.take().unwrap()).read_line(&mut line).unwrap();
+            let pid: i32 = line.trim().parse().unwrap();
+            let start_ticks = crate::process_identity::start_identity(pid).unwrap();
+            assert!(crate::process_identity::incarnation_foreground(pid, start_ticks).unwrap());
+            Self {
+                controller,
+                identity: cockpit_protocol::orchestration::NativeProcessIdentity {
+                    pid: pid as u32,
+                    start_ticks,
+                    kernel_boot_id: crate::process_identity::kernel_boot_id(),
+                },
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for ForegroundProcess {
+        fn drop(&mut self) {
+            self.controller.stdin.take();
+            let _ = self.controller.wait();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn actual_agent_keeps_exact_process_owner_when_optional_native_identity_appears() {
+        let process = ForegroundProcess::new();
+        let mut run = worker(RunStage::Working);
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.process = Some(process.identity.clone());
+        attachment.machine_id = crate::process_identity::machine_id();
+        let location = attachment.location.as_mut().unwrap();
+        location.workspace_id = "live-space".into();
+        location.tab_id = "live-tab".into();
+        location.terminal_id = Some("terminal".into());
+        let mut live = runtime("working");
+        live.panes[0].terminal_id = Some("terminal".into());
+
+        // A launch receipt can precede the first OMP header observation. Either
+        // absent optional ID requires exact process proof; two differing IDs
+        // refuse ownership even with that same running foreground process.
+        for (pinned, observed, expected) in [
+            (None, None, true),
+            (None, Some("fresh-header-id"), true),
+            (Some("fresh-header-id"), None, true),
+            (Some("fresh-header-id"), Some("fresh-header-id"), true),
+            (Some("old-header-id"), Some("fresh-header-id"), false),
+        ] {
+            let mut run = run.clone();
+            run.attachment.as_mut().unwrap().location.as_mut().unwrap().native_session_id = pinned.map(str::to_owned);
+            let mut live = live.clone();
+            live.panes[0].native_session_id = observed.map(str::to_owned);
+            let projection = project(&state(run), Ok(live));
+            let RuntimeObservation::Fresh { runs, .. } = projection.runtime else {
+                panic!("fresh observation")
+            };
+            assert_eq!(runs[1].actual_agent, expected, "pinned {pinned:?}, observed ID {observed:?}");
+        }
+
+        live.panes[0].native_session_id = Some("fresh-header-id".into());
+        for mismatch in 0..12 {
+            let mut run = run.clone();
+            let mut live = live.clone();
+            let attachment = run.attachment.as_mut().unwrap();
+            match mismatch {
+                0 => attachment.process = None,
+                1 => attachment.process.as_mut().unwrap().start_ticks += 1,
+                2 => attachment.process.as_mut().unwrap().kernel_boot_id = Some("other-boot".into()),
+                3 => attachment.process.as_mut().unwrap().kernel_boot_id = None,
+                4 => attachment.machine_id = Some("other-machine".into()),
+                5 => attachment.machine_id = None,
+                6 => live.panes[0].agent_kind = Some("other-harness".into()),
+                7 => live.panes[0].terminal_id = Some("other-terminal".into()),
+                8 => live.panes[0].launch_pending = true,
+                9 => attachment.launch_attempt += 1,
+                10 => attachment.state = AttachmentState::Revoked,
+                _ => attachment.location.as_mut().unwrap().native_session_id = Some("other-header-id".into()),
+            }
+            let observed = project(&state(run), Ok(live));
+            let RuntimeObservation::Fresh { runs, .. } = observed.runtime else {
+                panic!("fresh observation")
+            };
+            assert!(!runs[1].actual_agent, "mismatch {mismatch}");
+        }
+    }
+
 
     #[cfg(target_os = "linux")]
     #[test]

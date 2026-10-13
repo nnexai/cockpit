@@ -49,6 +49,8 @@ pub trait OrchestrationHerdr: Send + Sync {
 pub struct AgentPromptRequest {
     pub location: RunLocation,
     pub harness_kind: String,
+    /// Exact observed OMP journal path, pinned only for this prompt submission.
+    pub native_session_file: Option<String>,
     pub text: String,
 }
 
@@ -104,6 +106,8 @@ pub struct RuntimePane {
     pub pane_id: String,
     pub terminal_id: Option<String>,
     pub native_session_id: Option<String>,
+    /// Exact OMP-advertised path, independently of journal creation or readability.
+    pub native_session_file: Option<String>,
     pub agent_name: Option<String>,
     pub agent_kind: Option<String>,
     pub launch_pending: bool,

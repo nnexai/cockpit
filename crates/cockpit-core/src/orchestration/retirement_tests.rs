@@ -131,6 +131,7 @@ fn runtime() -> RuntimeView {
     RuntimeView { endpoint_identity: "endpoint".into(), boot_id: Some("herdr-boot".into()), workspaces: vec![], panes: vec![RuntimePane {
         workspace_id: "space".into(), workspace_label: "Space".into(), tab_id: "tab".into(), tab_label: "owned-launch".into(),
         pane_id: "pane".into(), terminal_id: Some("terminal".into()), native_session_id: None, agent_name: None,
+        native_session_file: None,
         agent_kind: None, launch_pending: false, agent_status: None, state_changed_at: None,
     }] }
 }

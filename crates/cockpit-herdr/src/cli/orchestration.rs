@@ -11,6 +11,7 @@ use cockpit_core::{
         PaneProcessInfo, RuntimePane, RuntimeView, RuntimeWorkspace,
     },
 };
+use cockpit_core::orchestration::session_identity::read_omp_session_file;
 use cockpit_protocol::orchestration::RunLocation;
 use serde_json::{Value, json};
 
@@ -298,6 +299,7 @@ fn validate_prompt_target(runtime: &RuntimeView, request: &AgentPromptRequest) -
         || location.launch_tag.is_empty() || pane.tab_label != location.launch_tag
         || location.boot_id.as_ref().is_some_and(|id| runtime.boot_id.as_ref() != Some(id))
         || location.native_session_id.as_ref().is_some_and(|id| pane.native_session_id.as_ref() != Some(id))
+        || request.native_session_file.as_ref().is_some_and(|path| pane.native_session_file.as_ref() != Some(path))
     {
         return Err(InspectionError::new("stale_identity", "Prompt target no longer matches the owned launch placement and observed occupant"));
     }
@@ -315,9 +317,32 @@ fn validate_prompt_target(runtime: &RuntimeView, request: &AgentPromptRequest) -
     Ok(())
 }
 
+fn observed_omp_session_path(agent: &Value) -> Option<&str> {
+    let session = agent.get("agent_session")?;
+    let value = session.get("value")?.as_str()?;
+    (agent["agent"].as_str() == Some("omp")
+        && session["agent"].as_str() == Some("omp")
+        && session["source"].as_str() == Some("herdr:omp")
+        && session["kind"].as_str() == Some("path")
+        && Path::new(value).is_absolute()
+        && !value.chars().any(char::is_control))
+        .then_some(value)
+}
+
+fn observed_session_id(agent: &Value, omp_path: Option<&str>) -> Option<String> {
+    let session = agent.get("agent_session")?;
+    match session.get("kind")?.as_str()? {
+        "id" => session.get("value")?.as_str().map(str::to_owned),
+        // Physical observations are optional evidence, not registration authority.
+        "path" => read_omp_session_file(Path::new(omp_path?)).ok(),
+        _ => None,
+    }
+}
+
 fn validate_prompt_receipt(result: &Value, request: &AgentPromptRequest) -> Result<(), InspectionError> {
     let location = &request.location;
     let agent = &result["agent"];
+    let omp_path = observed_omp_session_path(agent);
     if result["type"].as_str() != Some("agent_prompted")
         || agent["pane_id"].as_str() != Some(location.pane_id.as_str())
         || agent["terminal_id"].as_str() != location.terminal_id.as_deref()
@@ -325,8 +350,8 @@ fn validate_prompt_receipt(result: &Value, request: &AgentPromptRequest) -> Resu
         || agent["tab_id"].as_str() != Some(location.tab_id.as_str())
         || agent["agent"].as_str() != Some(request.harness_kind.as_str())
         || location.native_session_id.as_ref().is_some_and(|id|
-            agent["agent_session"]["kind"].as_str() != Some("id")
-                || agent["agent_session"]["value"].as_str() != Some(id.as_str()))
+            observed_session_id(agent, omp_path).as_ref() != Some(id))
+        || request.native_session_file.as_deref().is_some_and(|path| omp_path != Some(path))
     {
         return Err(InspectionError::new("herdr_outcome_unknown", "agent.prompt did not acknowledge the exact pinned occupant"));
     }
@@ -390,12 +415,8 @@ impl OrchestrationHerdr for HerdrCliAdapter {
                         .find(|item| item.get("pane_id").and_then(Value::as_str) == Some(&pane.id))
                 });
                 let agent = raw_agent.or(raw_pane);
-                let native_session_id = agent
-                    .and_then(|item| item.get("agent_session"))
-                    .filter(|session| session.get("kind").and_then(Value::as_str) == Some("id"))
-                    .and_then(|session| session.get("value"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
+                let omp_path = agent.and_then(observed_omp_session_path);
+                let native_session_id = agent.and_then(|agent| observed_session_id(agent, omp_path));
                 RuntimePane {
                     workspace_id: pane.space_id.clone(),
                     workspace_label: parsed
@@ -414,6 +435,7 @@ impl OrchestrationHerdr for HerdrCliAdapter {
                     pane_id: pane.id.clone(),
                     terminal_id: Some(pane.terminal_id.clone()),
                     native_session_id,
+                    native_session_file: omp_path.map(str::to_owned),
                     agent_name: agent
                         .and_then(|item| item.get("name"))
                         .and_then(Value::as_str)
@@ -578,6 +600,315 @@ impl OrchestrationHerdr for HerdrCliAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    struct OmpJournal {
+        root: std::path::PathBuf,
+        path: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl OmpJournal {
+        fn new(id: &str) -> Self {
+            let journal = Self::without_header();
+            journal.write_id(id);
+            journal
+        }
+
+        fn without_header() -> Self {
+            use std::sync::atomic::Ordering;
+            use super::super::NEXT_REQUEST_ID;
+
+            let root = std::env::temp_dir().join(format!(
+                "cockpit-herdr-path-{}-{}",
+                std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir(&root).unwrap();
+            Self {
+                path: root.join("filename-is-not-the-header-id.jsonl"),
+                root,
+            }
+        }
+
+        fn write_id(&self, id: &str) {
+            std::fs::write(&self.path, format!("{}\n", json!({"type": "session", "id": id}))).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for OmpJournal {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    fn omp_path_session(path: &Path) -> Value {
+        json!({"source": "herdr:omp", "agent": "omp", "kind": "path", "value": path})
+    }
+
+    #[cfg(unix)]
+    fn omp_path_snapshot(path: &Path) -> Value {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/session-snapshot.json"
+        )).unwrap();
+        let mut result = fixture["result"].clone();
+        let snapshot = &mut result["snapshot"];
+        snapshot["panes"][0]["agent"] = json!("omp");
+        snapshot["panes"][0]["agent_status"] = json!("idle");
+        snapshot["panes"][0]["agent_session"] = omp_path_session(path);
+        snapshot["agents"][0]["agent"] = json!("omp");
+        snapshot["agents"][0]["agent_status"] = json!("idle");
+        snapshot["agents"][0]["terminal_id"] = snapshot["panes"][0]["terminal_id"].clone();
+        snapshot["agents"][0]["launch_pending"] = json!(false);
+        snapshot["agents"][0]["agent_session"] = omp_path_session(path);
+        result
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runtime_projects_only_supported_path_headers_and_preserves_generic_ids() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+        use super::super::HerdrCliConfig;
+
+        for raw_agent_present in [true, false] {
+            for case in 0..16 {
+                let journal = OmpJournal::new("actual opaque session: one");
+                let socket = journal.root.join("runtime.sock");
+                let listener = UnixListener::bind(&socket).unwrap();
+                let mut result = omp_path_snapshot(&journal.path);
+                let snapshot = &mut result["snapshot"];
+                let agent = if raw_agent_present {
+                    // A matching raw agent still takes precedence over the raw pane,
+                    // even when the agent's optional path observation is unsupported.
+                    snapshot["panes"][0]["agent_session"] = json!({"kind": "id", "value": "ignored-pane-id"});
+                    &mut snapshot["agents"][0]
+                } else {
+                    snapshot["agents"] = json!([]);
+                    &mut snapshot["panes"][0]
+                };
+                match case {
+                    1 => agent["agent_session"]["source"] = json!("other:omp"),
+                    2 => agent["agent"] = json!("generic-harness"),
+                    3 => agent["agent_session"]["agent"] = json!("generic-harness"),
+                    4 => { agent["agent_session"].as_object_mut().unwrap().remove("source"); }
+                    5 => agent["agent_session"]["value"] = json!("relative/session.jsonl"),
+                    6 => agent["agent_session"]["kind"] = json!("unknown"),
+                    7 => { std::fs::remove_file(&journal.path).unwrap(); }
+                    8 => agent["agent_session"]["value"] = json!(journal.root),
+                    9 => { std::fs::write(&journal.path, "not a session header\n").unwrap(); }
+                    10 => { std::fs::write(&journal.path, "x".repeat(64 * 1024 + 1)).unwrap(); }
+                    11 => {
+                        agent["agent"] = json!("generic-harness");
+                        agent["agent_session"] = json!({"kind": "id", "value": " raw generic: opaque -id "});
+                    }
+                    12 => { agent["agent_session"].as_object_mut().unwrap().remove("kind"); }
+                    13 => agent["agent_session"]["value"] = json!("/tmp/control\nsession.jsonl"),
+                    14 => agent["agent_session"]["value"] = json!(null),
+                    15 => agent["agent_session"]["value"] = json!(""),
+                    _ => {}
+                }
+                let expected = match case {
+                    0 => Some("actual opaque session: one"),
+                    11 => Some(" raw generic: opaque -id "),
+                    _ => None,
+                };
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(request["method"], "session.snapshot");
+                    reader.into_inner().write_all(format!("{}\n",
+                        json!({"id": request["id"], "result": result})).as_bytes()).await.unwrap();
+                });
+                let config = HerdrCliConfig::from_options(
+                    None, Some("fixture".into()), Some(socket),
+                ).unwrap();
+                let runtime = HerdrCliAdapter::new(config).runtime("fixture").await.unwrap();
+                assert_eq!(runtime.panes.len(), 1);
+                assert_eq!(runtime.panes[0].native_session_id.as_deref(), expected,
+                    "raw agent {raw_agent_present}, case {case}");
+                let expected_path = match case {
+                    0 | 7 | 9 | 10 => Some(journal.path.as_path()),
+                    8 => Some(journal.root.as_path()),
+                    _ => None,
+                };
+                assert_eq!(runtime.panes[0].native_session_file.as_deref(),
+                    expected_path.and_then(Path::to_str),
+                    "raw agent {raw_agent_present}, case {case}");
+                server.await.unwrap();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runtime_preserves_advertised_path_before_creation_then_reads_actual_header() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+        use super::super::HerdrCliConfig;
+
+        let journal = OmpJournal::without_header();
+        assert!(!journal.path.exists());
+        let socket = journal.root.join("lazy-runtime.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let snapshot = omp_path_snapshot(&journal.path);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], "session.snapshot");
+                reader.into_inner().write_all(format!("{}\n",
+                    json!({"id": request["id"], "result": snapshot})).as_bytes()).await.unwrap();
+            }
+        });
+        let config = HerdrCliConfig::from_options(
+            None, Some("fixture".into()), Some(socket),
+        ).unwrap();
+        let adapter = HerdrCliAdapter::new(config);
+        let initial = adapter.runtime("fixture").await.unwrap();
+        assert_eq!(initial.panes[0].native_session_file.as_deref(), journal.path.to_str());
+        assert_eq!(initial.panes[0].native_session_id, None);
+
+        // The first skill/tool turn creates the advertised file; its basename
+        // is deliberately unrelated to the actual opaque session header ID.
+        journal.write_id("actual lazy header: not the filename");
+        let materialized = adapter.runtime("fixture").await.unwrap();
+        assert_eq!(materialized.panes[0].native_session_file.as_deref(), journal.path.to_str());
+        assert_eq!(materialized.panes[0].native_session_id.as_deref(),
+            Some("actual lazy header: not the filename"));
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn path_prompt_rechecks_fresh_headers_and_preserves_unknown_receipts_without_retry() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::{UnixListener, UnixStream};
+        use super::super::HerdrCliConfig;
+
+        for case in 0..16 {
+            let journal = if case == 15 {
+                OmpJournal::without_header()
+            } else {
+                OmpJournal::new("actual opaque session: one")
+            };
+            let replacement = OmpJournal::new(if case >= 10 {
+                "actual opaque session: one"
+            } else {
+                "replacement opaque session: two"
+            });
+            let socket = journal.root.join("prompt.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let probe = UnixStream::connect(&socket).await.unwrap();
+            let endpoint = HerdrCliAdapter::socket_peer_identity(&socket, &probe).unwrap();
+            drop(probe);
+            drop(listener.accept().await.unwrap());
+            let original = omp_path_snapshot(&journal.path);
+            let mut fresh = original.clone();
+            if matches!(case, 2 | 10 | 11) {
+                fresh["snapshot"]["agents"][0]["agent_session"] = omp_path_session(&replacement.path);
+            }
+            if case == 13 {
+                fresh["snapshot"]["agents"][0].as_object_mut().unwrap().remove("agent_session");
+            }
+            let journal_path = journal.path.clone();
+            let replacement_path = replacement.path.clone();
+            let server = tokio::spawn(async move {
+                // Initial observation pins the real header, then prompt_agent must
+                // fetch a second snapshot rather than trust that earlier projection.
+                for result in [original, fresh.clone()] {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    let actual: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(actual["method"], "session.snapshot");
+                    reader.into_inner().write_all(format!("{}\n",
+                        json!({"id": actual["id"], "result": result})).as_bytes()).await.unwrap();
+                }
+                let mut prompt_calls = 0;
+                if !matches!(case, 1..=4 | 11 | 13) {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    let actual: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(actual["method"], "agent.prompt");
+                    assert_eq!(actual["params"], json!({
+                        "target": "pane-a", "text": "Cockpit inbox: fetch with cockpit-cli inbox list.",
+                    }));
+                    prompt_calls += 1;
+                    // The receipt comes from observed state, not from the request's
+                    // pinned ID. The header can change after an accepted submission.
+                    let mut receipt_agent = fresh["snapshot"]["agents"][0].clone();
+                    match case {
+                        5 => { std::fs::write(&journal_path,
+                            format!("{}\n", json!({"type": "session", "id": "replacement opaque session: two"}))).unwrap(); }
+                        6 => receipt_agent["agent_session"] = omp_path_session(&replacement_path),
+                        7 => { std::fs::remove_file(&journal_path).unwrap(); }
+                        8 => { std::fs::write(&journal_path, "not a session header\n").unwrap(); }
+                        12 => receipt_agent["agent_session"] = omp_path_session(&replacement_path),
+                        14 => { receipt_agent.as_object_mut().unwrap().remove("agent_session"); }
+                        _ => {}
+                    }
+                    reader.into_inner().write_all(format!("{}\n", json!({
+                        "id": actual["id"], "result": {"type": "agent_prompted", "agent": receipt_agent},
+                    })).as_bytes()).await.unwrap();
+                }
+                assert!(tokio::time::timeout(
+                    std::time::Duration::from_millis(30), listener.accept(),
+                ).await.is_err(), "No refused submission or uncertain receipt may be replayed");
+                prompt_calls
+            });
+            let config = HerdrCliConfig::from_options(
+                None, Some("fixture".into()), Some(socket),
+            ).unwrap();
+            let adapter = HerdrCliAdapter::new(config);
+            let runtime = adapter.runtime("fixture").await.unwrap();
+            let pane = &runtime.panes[0];
+            assert_eq!(pane.native_session_id.as_deref(),
+                if case == 15 { None } else { Some("actual opaque session: one") });
+            assert_eq!(pane.native_session_file.as_deref(), journal.path.to_str());
+            let request = AgentPromptRequest {
+                location: RunLocation {
+                    endpoint_identity: endpoint, session_id: "fixture".into(),
+                    workspace_id: pane.workspace_id.clone(), tab_id: pane.tab_id.clone(),
+                    pane_id: pane.pane_id.clone(), launch_tag: pane.tab_label.clone(),
+                    boot_id: runtime.boot_id.clone(), terminal_id: pane.terminal_id.clone(),
+                    native_session_id: if case == 9 || case >= 11 { None } else { pane.native_session_id.clone() },
+                },
+                harness_kind: "omp".into(),
+                native_session_file: (case >= 11).then(|| pane.native_session_file.clone().unwrap()),
+                text: "Cockpit inbox: fetch with cockpit-cli inbox list.".into(),
+            };
+            match case {
+                1 => journal.write_id("replacement opaque session: two"),
+                3 | 9 => { std::fs::remove_file(&journal.path).unwrap(); }
+                4 => { std::fs::write(&journal.path, "not a session header\n").unwrap(); }
+                15 => journal.write_id("actual opaque session: one"),
+                _ => {}
+            }
+            let result = adapter.prompt_agent("fixture", &request).await;
+            if matches!(case, 0 | 9 | 10 | 15) {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().code, if matches!(case, 1..=4 | 11 | 13) {
+                    "stale_identity"
+                } else {
+                    "herdr_outcome_unknown"
+                }, "case {case}");
+            }
+            assert_eq!(server.await.unwrap(), if matches!(case, 1..=4 | 11 | 13) { 0 } else { 1 },
+                "case {case}");
+        }
+    }
+
 
     fn direct_launch_request() -> DirectAgentTabRequest {
         DirectAgentTabRequest {
@@ -833,6 +1164,7 @@ mod tests {
             pane_id: location.pane_id.clone(),
             terminal_id: location.terminal_id.clone(),
             native_session_id: None,
+            native_session_file: None,
             agent_name: None,
             agent_kind: None,
             launch_pending: false,
@@ -1109,6 +1441,7 @@ mod tests {
         runtime.panes[0].tab_label = location.launch_tag.clone();
         let request = AgentPromptRequest {
             location, harness_kind: "generic-harness".into(),
+            native_session_file: None,
             text: "Cockpit inbox: fetch with cockpit-cli inbox list.".into(),
         };
         runtime.panes[0].agent_kind = Some("generic-harness".into());
@@ -1190,6 +1523,7 @@ mod tests {
                     boot_id: None, native_session_id: Some("original-occupant".into()),
                 },
                 harness_kind: fixture["result"]["snapshot"]["agents"][0]["agent"].as_str().unwrap().into(),
+                native_session_file: None,
                 text: "Cockpit inbox: fetch with cockpit-cli inbox list.".into(),
             };
             match outcome {

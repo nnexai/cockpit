@@ -104,6 +104,7 @@ fn observed() -> RuntimeView {
             pane_id: "pane".into(),
             terminal_id: Some("terminal".into()),
             native_session_id: None,
+            native_session_file: None,
             agent_name: Some("tag".into()),
             agent_kind: Some("test-harness".into()),
             launch_pending: false,

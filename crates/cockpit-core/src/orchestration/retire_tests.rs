@@ -122,6 +122,7 @@ fn runtime(agent: bool) -> RuntimeView {
         panes: vec![RuntimePane { workspace_id: "space".into(), workspace_label: "Space".into(),
             tab_id: "tab".into(), tab_label: "tag".into(), pane_id: "pane".into(),
             terminal_id: Some("terminal".into()), native_session_id: Some("native".into()),
+            native_session_file: None,
             agent_name: agent.then(|| "tag".into()), agent_kind: agent.then(|| "omp".into()),
             launch_pending: false, agent_status: None, state_changed_at: None }], }
 }

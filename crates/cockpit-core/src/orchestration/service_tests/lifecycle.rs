@@ -717,6 +717,7 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
                 pane_id: location.pane_id.clone(),
                 terminal_id: location.terminal_id.clone(),
                 native_session_id: location.native_session_id.clone(),
+                native_session_file: None,
                 agent_name: Some(location.launch_tag.clone()),
                 agent_kind: Some("service-test".into()),
                 launch_pending: false,

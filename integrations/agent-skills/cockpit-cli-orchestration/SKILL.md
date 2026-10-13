@@ -23,23 +23,41 @@ credential pins run/root/role/attachment epoch and the worker's authorized task
 assignment generation. Never expose its secret bytes in flags, messages or
 Markdown. Invalid credentials never fall back to operator authority.
 
-Every orchestration call resolves its actual current conversation using
-`--harness KIND --session-id ID` or harness-provided `COCKPIT_HARNESS` and
-`COCKPIT_SESSION_ID`. These are opaque namespaced conversation strings, not
-Herdr session, pane or terminal IDs. An optional bootstrap JSON object labeled
-“observed conversation identity hint” contains the freshly checked pane's
-`harness` and `session_id`: decode them as data and pass quoted opaque arguments,
-never execute the JSON as shell text. This observation grants no role authority
-and needs no corroborating journal hunt.
-For OMP, available `PI_SESSION_FILE` supplies the actual session header ID;
-the bounded reader searches a 64 KiB prefix, not filenames or transcript bodies.
-An explicit non-OMP identity needs no journal, PID, SDK or live Herdr. Without
-an observation, use actual current harness metadata; if neither is available,
-report the missing actual conversation identity, never invent an ID or search
-unrelated processes/journals. Conflicting explicit/environment/header sources
-fail; do not clear sources or rotate IDs to bypass them. Launch never invents or
-freezes a conversation ID; discard old hints and re-resolve after a switch.
-New identity alone cannot rebind a capability pinned to another conversation.
+Every orchestration call resolves its actual current conversation. Prefer
+current harness metadata with an actual `COCKPIT_SESSION_ID` and its
+`COCKPIT_HARNESS`, or for OMP, a present `PI_SESSION_FILE` pointing to the journal
+whose session header contains that ID. `COCKPIT_HARNESS=omp` alone is **not**
+current identity metadata and is not enough for bare `run context`.
+Conversation IDs are opaque namespaced strings, not Herdr session, pane or
+terminal IDs. The bounded OMP reader searches a 64 KiB prefix, not filenames
+or transcript bodies. Herdr's optional `herdr:omp` path observation uses the
+same reader for the ID, but may advertise the exact absolute journal path
+before OMP creates that file on its first tool turn.
+An optional bootstrap “observed conversation identity hint” is a populated
+JSON argv array with actual `--harness=KIND` and `--session-id=ID` elements.
+Prefer this actual ID hint when current identity metadata is absent.
+Otherwise an “observed OMP file location” may supply JSON invocation data
+`{"env":{"PI_SESSION_FILE":"<exact advertised path>"},"argv":["run","context","--harness=omp","--json"]}`.
+This is a file location, **not** a conversation ID. After `skills show`, execute
+the populated invocation on the next tool call, not a bare-context trial.
+Apply its environment only to that command, and only when `PI_SESSION_FILE`
+is genuinely absent and no current session ID metadata is available.
+Never overwrite an independently present file source, even empty, invalid or
+conflicting; resolve existing sources normally and retain their errors.
+Select `COCKPIT_CLI_PATH` (or `cockpit-cli` only if absent), decode the JSON
+and pass env/argv separately to a tool supporting them. JSON is data, not shell
+source: shell-only tools must quote every decoded argument and env value,
+never eval JSON. A hint grants no role authority or journal-hunting permission.
+An explicit non-OMP identity needs no journal, PID, SDK or live Herdr; no
+extension is mandatory. Missing, invalid or over-budget file hints are omitted,
+not truncated. With neither current identity nor a usable hint, report the
+missing actual conversation ID; never invent it or search unrelated journals.
+Conflicting explicit/environment/header sources fail; do not clear sources or
+rotate IDs to bypass them. An unreadable supplied CLI OMP file remains an error,
+including if the journal is still absent after the skill turn; do not hunt or
+suppress errors. Launch never invents or freezes an ID. After a conversation
+switch discard old hints and re-resolve. A new identity cannot rebind a
+capability pinned to another conversation.
 
 Read the bundled skill before registration (no identity flags needed):
 
@@ -47,23 +65,36 @@ Read the bundled skill before registration (no identity flags needed):
 "${COCKPIT_CLI_PATH:-cockpit-cli}" skills show cockpit-cli-orchestration
 ```
 
-Then register, inspect `role`, `run_id` and `root_id`, pull bodies, retain them
-and their returned `result.read_through_seq`, and explicitly ACK the Read prefix:
+With actual current identity metadata, register without identity flags:
 
 ```sh
-"${COCKPIT_CLI_PATH:-cockpit-cli}" run context --harness "$HARNESS" --session-id "$SESSION_ID" --json
-"${COCKPIT_CLI_PATH:-cockpit-cli}" inbox list --harness "$HARNESS" --session-id "$SESSION_ID" --after "$AFTER_SEQ" --limit 100 --json
-# Capture returned bodies/cursor before setting READ_THROUGH_SEQ from result.read_through_seq.
-"${COCKPIT_CLI_PATH:-cockpit-cli}" inbox ack --harness "$HARNESS" --session-id "$SESSION_ID" --through "$READ_THROUGH_SEQ" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run context --json
 ```
 
-`HARNESS`/`SESSION_ID` are actual decoded current values, not invented examples.
-Start `AFTER_SEQ` at 0 without a saved cursor; follow returned pages without
-skipping unread gaps. Never ACK a wait notification's `through_seq`.
-When environment metadata is absent, repeat explicit identity options on
-**every** task/run/inbox/route call; a one-shot export does not configure later
-tool shells. Later examples omit them only when current harness metadata
-supplies identity. Do not install permanent exports or global settings.
+Without current identity metadata, execute the bootstrap's populated argv or
+command-scoped env+argv as described above instead.
+Inspect the returned `role`, `run_id` and `root_id`, then pull bodies, retain them
+and their returned `result.read_through_seq`, and explicitly ACK the Read prefix.
+With metadata and no saved cursor, the first pull is:
+
+```sh
+"${COCKPIT_CLI_PATH:-cockpit-cli}" inbox list --after 0 --limit 100 --json
+# Capture returned bodies/cursor, then assign READ_THROUGH_SEQ from result.read_through_seq in this invocation.
+"${COCKPIT_CLI_PATH:-cockpit-cli}" inbox ack --through "$READ_THROUGH_SEQ" --json
+```
+
+Follow returned pages from the saved cursor without skipping unread gaps.
+Never ACK a wait notification's `through_seq`. Without current identity
+metadata, repeat the actual decoded `--harness=KIND` and `--session-id=ID`
+arguments on **every** task/run/inbox/route call. If still using file-derived
+identity, repeat the exact command-scoped `PI_SESSION_FILE` source and
+`--harness=omp` on every call, or use the actual ID returned by context.
+Never replace an independently present file source. For variable-based later
+templates, first assign `HARNESS` and `SESSION_ID` from the actual values in
+that same invocation/tool context; they are not preassigned by this skill.
+A one-shot export does not configure later tool shells. Later examples omit
+identity options only when current identity metadata supplies them. Do not
+install permanent exports or global settings.
 Optional `run register --operation-id "$REGISTER_OPERATION_ID"` uses the same
 identity options; `run context` already registers without this extra call.
 

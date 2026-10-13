@@ -1,27 +1,4 @@
-use std::io::Cursor;
-
-use super::super::caller::{resolve_conversation, session_header};
-
-#[test]
-fn header_discovery_accepts_title_prefix_and_stops_before_transcript() {
-    let prefix = b"{\"type\":\"title\",\"title\":\"PRIVATE\"}\n{\"type\":\"session\",\"version\":3,\"id\":\"actual opaque ID\"}\nnot a transcript parser";
-    assert_eq!(session_header(Cursor::new(prefix)).unwrap(), "actual opaque ID");
-}
-
-#[test]
-fn header_discovery_rejects_malformed_missing_and_over_limit_prefixes() {
-    for prefix in [b"not json\n".as_slice(), b"{\"type\":\"title\"}\n", b"{\"type\":\"session\"}\n",
-        b"{\"type\":\"session\",\"id\":\"\"}\n", b"{\"type\":\"session\",\"id\":\"bad\\nID\"}\n"] {
-        assert!(session_header(Cursor::new(prefix)).is_err());
-    }
-    let header = b"{\"type\":\"session\",\"id\":\"edge\"}\n";
-    let mut within = vec![b' '; 64 * 1024 - header.len()];
-    within.extend_from_slice(header);
-    assert_eq!(session_header(Cursor::new(within)).unwrap(), "edge");
-    let mut outside = vec![b' '; 64 * 1024];
-    outside.extend_from_slice(header);
-    assert_eq!(session_header(Cursor::new(outside)).unwrap_err().code, "session_header_invalid");
-}
+use super::super::caller::resolve_conversation;
 
 #[test]
 fn explicit_non_omp_identity_needs_no_journal_and_rejects_conflicting_sources() {
@@ -48,10 +25,32 @@ fn omp_header_is_checked_against_explicit_and_environment_identity() {
     let file = root.join("unrelated-name.jsonl");
     std::fs::write(&file, b"{\"type\":\"title\"}\n{\"type\":\"session\",\"id\":\"actual\"}\n").unwrap();
     assert_eq!(resolve_conversation(Some("omp".into()), None, None, None, Some(&file)).unwrap().session_id, "actual");
+    assert_eq!(resolve_conversation(Some("omp".into()), Some("actual".into()),
+        Some("omp".into()), Some("actual".into()), Some(&file)).unwrap().session_id, "actual");
     assert_eq!(resolve_conversation(Some("omp".into()), Some("stale".into()), None, None, Some(&file)).unwrap_err().code,
         "conversation_conflict");
     assert_eq!(resolve_conversation(None, None, Some("omp".into()), Some("stale".into()), Some(&file)).unwrap_err().code,
         "conversation_conflict");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn omp_explicit_identity_does_not_hide_header_failures() {
+    let root = std::env::temp_dir().join(format!("cockpit-cli-invalid-header-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let malformed = root.join("malformed.jsonl");
+    std::fs::write(&malformed, b"PRIVATE invalid header\n").unwrap();
+    let invalid_id = root.join("invalid-id.jsonl");
+    std::fs::write(&invalid_id, b"{\"type\":\"session\",\"id\":\"\"}\n").unwrap();
+    let missing = root.join("missing.jsonl");
+    for path in [&root, &missing, &malformed] {
+        let error = resolve_conversation(Some("omp".into()), Some("actual".into()),
+            None, None, Some(path)).unwrap_err();
+        assert_eq!(error.code, "session_header_invalid");
+        assert!(!error.message.contains("PRIVATE"));
+    }
+    assert_eq!(resolve_conversation(Some("omp".into()), Some("actual".into()),
+        None, None, Some(&invalid_id)).unwrap_err().code, "conversation_invalid");
     std::fs::remove_dir_all(root).unwrap();
 }
 

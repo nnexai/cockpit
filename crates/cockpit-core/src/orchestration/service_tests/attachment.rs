@@ -979,6 +979,7 @@ fn root_recovery_runtime(run: &Run, shell: &NativeShellIdentity) -> RootRecovery
                 workspace_id: location.workspace_id.clone(), workspace_label: "Root Space".into(),
                 tab_id: "fresh-root-tab".into(), tab_label: location.launch_tag.clone(), pane_id: "fresh-root-pane".into(),
                 terminal_id: location.terminal_id.clone(), native_session_id: location.native_session_id.clone(),
+                native_session_file: None,
                 agent_name: Some(location.launch_tag.clone()), agent_kind: Some(run.launch_config.harness_kind.clone()),
                 launch_pending: false, agent_status: Some("idle".into()), state_changed_at: None,
             }],

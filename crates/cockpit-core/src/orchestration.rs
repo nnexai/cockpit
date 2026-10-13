@@ -7,6 +7,7 @@ mod steps;
 pub mod dispatch;
 pub mod herdr;
 pub mod project_identity;
+pub mod session_identity;
 mod escalation;
 mod messages;
 mod projection;

@@ -51,6 +51,7 @@ fn runtime() -> RuntimeView {
             pane_id: "pane".into(),
             terminal_id: Some("terminal".into()),
             native_session_id: None,
+            native_session_file: None,
             agent_name: None,
             agent_kind: None,
             launch_pending: false,
@@ -811,6 +812,7 @@ struct CountingHerdr {
     expected_command: Option<Vec<String>>,
     expected_harness: String,
     prompt_calls: std::sync::atomic::AtomicUsize,
+    prompt_requests: parking_lot::Mutex<Vec<super::super::herdr::AgentPromptRequest>>,
     prompt_unknown: bool,
 }
 impl CountingHerdr {
@@ -832,6 +834,7 @@ impl CountingHerdr {
             expected_command: None,
             expected_harness: "omp".into(),
             prompt_calls: 0.into(),
+            prompt_requests: parking_lot::Mutex::new(Vec::new()),
             prompt_unknown: false,
         }
     }
@@ -933,6 +936,7 @@ impl OrchestrationHerdr for CountingHerdr {
         assert_eq!(request.location.launch_tag, self.observed.panes[0].tab_label);
         assert_eq!(request.location.native_session_id, self.observed.panes[0].native_session_id);
         assert!(!request.text.contains("private pending instruction"), "hints must not copy inbox message bodies");
+        self.prompt_requests.lock().push(request.clone());
         self.prompt_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.prompt_unknown {
             Err(InspectionError::new("herdr_outcome_unknown", "Prompt response lost after submission"))
@@ -1731,6 +1735,162 @@ async fn generic_launch_preserves_literal_argv_and_durable_harness_policy() {
     assert!(fixture.current().1.attachment.as_ref().unwrap().conversation.is_none());
 }
 
+#[test]
+fn bootstrap_observed_argv_preserves_opaque_identity_within_prompt_bounds() {
+    let identities = [
+        "opaque-id".to_owned(),
+        "-leading-option".to_owned(),
+        "quotes\" apostrophe' backtick` $(command) slash\\ [brackets]".to_owned(),
+        "\"".repeat(512),
+        "\\".repeat(512),
+        "🧭".repeat(128),
+    ];
+    for kind in [RunKind::Supervisor, RunKind::Adopted, RunKind::Worker] {
+        let mut run = crate::orchestration::new_run(
+            "bootstrap-run", "session", kind, "Bootstrap".into(),
+            "bootstrap-run", None, None, 1,
+        );
+        let mut pane = runtime().panes.remove(0);
+        for harness in &identities {
+            run.launch_config.harness_kind = harness.clone();
+            for session_id in &identities {
+                pane.native_session_id = Some(session_id.clone());
+                let prompt = bootstrap_text(&run, &pane);
+                assert!(prompt.native_session_file.is_none());
+                let text = prompt.text;
+                assert!(text.len() <= 4096, "prompt length: {}", text.len());
+                assert!(!text.chars().any(char::is_control));
+                let argv: Vec<String> = serde_json::from_str(&text[text.find('[').unwrap()..]).unwrap();
+                assert_eq!(argv, vec![
+                    "run".to_owned(), "context".to_owned(),
+                    format!("--harness={harness}"),
+                    format!("--session-id={session_id}"), "--json".to_owned(),
+                ]);
+            }
+        }
+    }
+}
+
+#[test]
+fn bootstrap_missing_or_invalid_observation_has_no_explicit_argv() {
+    let invalid = [String::new(), "\n".into(), "\u{7f}".into(), "x".repeat(513)];
+    for kind in [RunKind::Supervisor, RunKind::Adopted, RunKind::Worker] {
+        let mut run = crate::orchestration::new_run(
+            "bootstrap-run", "session", kind, "Bootstrap".into(),
+            "bootstrap-run", None, None, 1,
+        );
+        let mut pane = runtime().panes.remove(0);
+        for session_id in std::iter::once(None).chain(invalid.iter().cloned().map(Some)) {
+            pane.native_session_id = session_id;
+            let prompt = bootstrap_text(&run, &pane);
+            assert!(prompt.native_session_file.is_none());
+            let text = prompt.text;
+            assert!(!text.contains('['));
+            assert!(text.len() <= 4096);
+            assert!(!text.chars().any(char::is_control));
+        }
+        pane.native_session_id = Some("valid-observation".into());
+        for harness in &invalid {
+            run.launch_config.harness_kind = harness.clone();
+            let prompt = bootstrap_text(&run, &pane);
+            assert!(prompt.native_session_file.is_none());
+            let text = prompt.text;
+            assert!(!text.contains('['));
+            assert!(text.len() <= 4096);
+            assert!(!text.chars().any(char::is_control));
+        }
+    }
+}
+
+#[test]
+fn bootstrap_file_invocation_preserves_exact_path_until_journal_creation() {
+    let fixture = ReviewFixture::new(RunStage::Starting);
+    let path = fixture.root.join("misleading-id ' \" ` $(command) \\ [journal].jsonl");
+    let exact_path = path.to_str().unwrap();
+    assert!(!path.exists());
+    for kind in [RunKind::Supervisor, RunKind::Adopted, RunKind::Worker] {
+        let mut run = fixture.run.clone();
+        run.kind = kind;
+        let mut pane = runtime().panes.remove(0);
+        pane.native_session_file = Some(exact_path.into());
+        let prompt = bootstrap_text(&run, &pane);
+        assert_eq!(prompt.native_session_file.as_deref(), Some(exact_path));
+        assert!(prompt.text.len() <= 4096);
+        assert!(!prompt.text.chars().any(char::is_control));
+        let invocation: serde_json::Value =
+            serde_json::from_str(prompt.text.split_once("Invocation: ").unwrap().1).unwrap();
+        assert_eq!(invocation, serde_json::json!({
+            "env": { "PI_SESSION_FILE": exact_path },
+            "argv": ["run", "context", "--harness=omp", "--json"],
+        }));
+        assert_eq!(super::super::session_identity::read_omp_session_file(
+            std::path::Path::new(invocation["env"]["PI_SESSION_FILE"].as_str().unwrap()),
+        ).unwrap_err().code, "session_header_invalid");
+    }
+    // The first tool turn creates the advertised journal; the next invocation
+    // reads its header, never a conversation ID inferred from its basename.
+    std::fs::write(&path, "{\"type\":\"session\",\"id\":\"actual-header-id\"}\n").unwrap();
+    assert_eq!(super::super::session_identity::read_omp_session_file(&path).unwrap(),
+        "actual-header-id");
+}
+
+#[test]
+fn bootstrap_prefers_actual_id_and_omits_unusable_file_hints_without_truncation() {
+    let fixture = ReviewFixture::new(RunStage::Starting);
+    let mut pane = runtime().panes.remove(0);
+    pane.native_session_file = Some("/exact/advertised.jsonl".into());
+    pane.native_session_id = Some("actual-header-id".into());
+    let prompt = bootstrap_text(&fixture.run, &pane);
+    assert!(prompt.native_session_file.is_none());
+    let argv: Vec<String> =
+        serde_json::from_str(prompt.text.split_once("Argv: ").unwrap().1).unwrap();
+    assert_eq!(argv, ["run", "context", "--harness=omp", "--session-id=actual-header-id", "--json"]);
+
+    pane.native_session_id = None;
+    for path in ["".into(), "relative.jsonl".into(), "/bad\npath".into(),
+        "/bad\u{7f}path".into(), format!("/{}", "\"".repeat(4096))] {
+        pane.native_session_file = Some(path);
+        let prompt = bootstrap_text(&fixture.run, &pane);
+        assert!(prompt.native_session_file.is_none());
+        assert!(!prompt.text.contains("Invocation: "));
+        assert!(prompt.text.len() <= 4096);
+        assert!(!prompt.text.chars().any(char::is_control));
+    }
+    pane.native_session_file = Some("/exact/advertised.jsonl".into());
+    let mut generic = fixture.run.clone();
+    generic.launch_config.harness_kind = "plain-agent".into();
+    let prompt = bootstrap_text(&generic, &pane);
+    assert!(prompt.native_session_file.is_none());
+    assert!(!prompt.text.contains("Invocation: "));
+    pane.native_session_id = Some("generic-current-id".into());
+    let prompt = bootstrap_text(&generic, &pane);
+    assert!(prompt.native_session_file.is_none());
+    let argv: Vec<String> =
+        serde_json::from_str(prompt.text.split_once("Argv: ").unwrap().1).unwrap();
+    assert_eq!(argv, ["run", "context", "--harness=plain-agent", "--session-id=generic-current-id", "--json"]);
+    pane.native_session_id = None;
+
+    // Serialized size (including escaping), not raw path length, gates hints.
+    pane.native_session_file = Some("/".into());
+    let overhead = bootstrap_text(&fixture.run, &pane).text.len();
+    let maximum_quotes = (4096 - overhead) / 2;
+    for (count, emitted) in [(maximum_quotes, true), (maximum_quotes + 1, false)] {
+        let path = format!("/{}", "\"".repeat(count));
+        pane.native_session_file = Some(path.clone());
+        let prompt = bootstrap_text(&fixture.run, &pane);
+        assert!(prompt.text.len() <= 4096);
+        assert_eq!(prompt.native_session_file.is_some(), emitted);
+        if emitted {
+            assert!(prompt.text.len() >= 4095);
+            let invocation: serde_json::Value =
+                serde_json::from_str(prompt.text.split_once("Invocation: ").unwrap().1).unwrap();
+            assert_eq!(invocation["env"]["PI_SESSION_FILE"].as_str(), Some(path.as_str()));
+        } else {
+            assert!(!prompt.text.contains("Invocation: "));
+        }
+    }
+}
+
 fn inbox_hint_fixture(enabled: bool) -> (ReviewFixture, RuntimeView) {
     let mut fixture = ReviewFixture::new(RunStage::Active);
     fixture.change(|run| {
@@ -1754,6 +1914,41 @@ fn inbox_hint_fixture(enabled: bool) -> (ReviewFixture, RuntimeView) {
     observed.panes[0].agent_name = Some("tag".into());
     observed.panes[0].native_session_id = Some("native".into());
     (fixture, observed)
+}
+
+#[tokio::test]
+async fn prompt_pins_advertised_file_only_when_bootstrap_emits_that_invocation() {
+    for source in ["file", "id", "oversized", "ordinary"] {
+        let (mut fixture, mut observed) = inbox_hint_fixture(true);
+        let path = if source == "oversized" {
+            format!("/{}", "\"".repeat(4096))
+        } else {
+            "/exact/advertised.jsonl".into()
+        };
+        observed.panes[0].native_session_file = Some(path.clone());
+        if source != "ordinary" {
+            fixture.change(|run| {
+                run.stage = RunStage::Starting;
+                test_attachment(run).conversation = None;
+                test_attachment(run).location.as_mut().unwrap().native_session_id = None;
+            });
+            fixture.run = fixture.current().1;
+            observed.panes[0].native_session_id =
+                (source == "id").then(|| "actual-id".into());
+        }
+        let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+        fixture.dispatcher(Arc::clone(&adapter)).hint_agents().await.unwrap();
+        let requests = adapter.prompt_requests.lock();
+        assert_eq!(requests.len(), 1, "{source}");
+        assert_eq!(requests[0].native_session_file.as_deref(),
+            (source == "file").then_some(path.as_str()), "{source}");
+        if source == "file" {
+            assert!(requests[0].location.native_session_id.is_none());
+            let invocation: serde_json::Value =
+                serde_json::from_str(requests[0].text.split_once("Invocation: ").unwrap().1).unwrap();
+            assert_eq!(invocation["env"]["PI_SESSION_FILE"].as_str(), Some(path.as_str()));
+        }
+    }
 }
 
 fn append_hint_instruction(fixture: &ReviewFixture, message_id: &str) {
