@@ -693,7 +693,7 @@ user_confirmed: boolean, };
 
 export type WorkspaceTeardownAction = "close_space" | "remove_owned_worktree" | "reconcile_remove_outcome";
 
-export type WorkspaceTeardownOwnership = "owned_created" | "borrowed_opened" | "unknown";
+export type WorkspaceTeardownOwnership = "owned_created" | "borrowed_opened" | "selected_linked" | "unknown";
 
 export type WorkspaceTeardownDirtyState = "clean" | "dirty" | "unknown";
 
@@ -701,9 +701,9 @@ export type WorkspaceTeardownWorkspaceState = "live" | "missing" | "ambiguous";
 
 export type WorkspaceTeardownPreviewRequest = { workspace_id: string, };
 
-export type WorkspaceTeardownExecuteRequest = { operation_id: string, workspace_id: string, expected_endpoint_identity: string, expected_checkout_path: string, action: WorkspaceTeardownAction, confirmation: string, };
+export type WorkspaceTeardownExecuteRequest = { operation_id: string, workspace_id: string, expected_endpoint_identity: string, expected_checkout_path: string, action: WorkspaceTeardownAction, confirmation: string, discard_fingerprint?: string, };
 
-export type WorkspaceTeardownPreview = { operation_id: string, workspace_id: string, endpoint_identity: string, repository_key: string | null, repository_root: string | null, checkout_path: string, ownership: WorkspaceTeardownOwnership, workspace_state: WorkspaceTeardownWorkspaceState, is_linked_worktree: boolean, dirty_state: WorkspaceTeardownDirtyState, allowed_actions: Array<WorkspaceTeardownAction>, blockers: Array<string>, warnings: Array<string>, required_confirmation: string | null, };
+export type WorkspaceTeardownPreview = { operation_id: string, workspace_id: string, endpoint_identity: string, repository_key: string | null, repository_root: string | null, checkout_path: string, ownership: WorkspaceTeardownOwnership, workspace_state: WorkspaceTeardownWorkspaceState, is_linked_worktree: boolean, dirty_state: WorkspaceTeardownDirtyState, discard_count: number, discard_paths: Array<string>, discard_fingerprint: string | null, allowed_actions: Array<WorkspaceTeardownAction>, blockers: Array<string>, warnings: Array<string>, required_confirmation: string | null, };
 
 export type WorkspaceTeardownOutcome = "completed" | "outcome_unknown" | "retained";
 

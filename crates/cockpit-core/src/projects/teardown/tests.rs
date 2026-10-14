@@ -9,6 +9,12 @@ use crate::library::LibraryService;
 use crate::projects::test_support::NestedDirectoryAdapter;
 use crate::sources::SourceService;
 use std::{path::PathBuf, sync::{Arc, atomic::Ordering}};
+use cockpit_protocol::project_teardown::{
+    WorkspaceTeardownAction, WorkspaceTeardownDirtyState, WorkspaceTeardownExecuteRequest,
+    WorkspaceTeardownOutcome, WorkspaceTeardownOwnership, WorkspaceTeardownPreview,
+    WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecoveryState,
+};
+use crate::project_adapter::{ProjectInventory, ProjectWorktreeEntry, WorktreeStatus};
 
 fn identity() -> OwnedSpaceIdentity {
     OwnedSpaceIdentity {
@@ -287,9 +293,9 @@ impl Drop for SpaceFixture { fn drop(&mut self) { let _ = std::fs::remove_dir_al
 #[tokio::test]
 async fn owned_space_inspector_records_physical_absence_without_raw_boot() {
     let mut fixture = SpaceFixture::new().await;
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(), CleanupEvaluation::Absent));
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(), CleanupEvaluation::Absent));
     fixture.adapter.bound_snapshot.lock().as_mut().unwrap().endpoint_identity = "foreign-endpoint".into();
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(),
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(),
         CleanupEvaluation::Unknown(reason) if reason.code == "endpoint_changed"));
     fixture.adapter.bound_snapshot.lock().as_mut().unwrap().endpoint_identity =
         fixture.run.attachment.as_ref().unwrap().location.as_ref().unwrap().endpoint_identity.clone();
@@ -302,21 +308,21 @@ async fn owned_space_inspector_records_physical_absence_without_raw_boot() {
     changed_kernel.kernel_boot_id = Some("8d161f3a-9a82-4509-8e58-83bf5cdd77f9".into());
     for changed in [changed_pid, changed_start, changed_kernel] {
         fixture.adapter.bound_snapshot.lock().as_mut().unwrap().peer_process = Some(changed);
-        assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(),
+        assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(),
             CleanupEvaluation::Unknown(reason) if reason.code == "space_peer_changed"));
     }
     fixture.adapter.bound_snapshot.lock().as_mut().unwrap().peer_process = Some(peer);
     fixture.run.attachment.as_mut().unwrap().location.as_mut().unwrap().boot_id = Some("recorded-raw-boot".into());
     fixture.adapter.bound_snapshot.lock().as_mut().unwrap().boot_id = Some("changed-raw-boot".into());
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(),
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(),
         CleanupEvaluation::Unknown(reason) if reason.code == "space_boot_changed"));
     fixture.run.attachment.as_mut().unwrap().location.as_mut().unwrap().boot_id = None;
     fixture.adapter.bound_snapshot.lock().as_mut().unwrap().boot_id = None;
     fixture.adapter.bound_snapshot.lock().as_mut().unwrap().peer_process = None;
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(),
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(),
         CleanupEvaluation::Unknown(reason) if reason.code == "space_incarnation_unproven"));
     *fixture.adapter.bound_snapshot.lock() = None;
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(),
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(),
         CleanupEvaluation::Unknown(reason) if reason.code == "test_adapter_unused"));
 }
 
@@ -324,7 +330,7 @@ async fn owned_space_inspector_records_physical_absence_without_raw_boot() {
 async fn owned_space_inspector_never_backfills_unrecorded_peer_from_fresh_observation() {
     let mut fixture = SpaceFixture::new().await;
     fixture.run.attachment.as_mut().unwrap().location.as_mut().unwrap().peer_process = None;
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(),
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(),
         CleanupEvaluation::Unknown(reason) if reason.code == "space_incarnation_unproven"));
     assert!(fixture.run.attachment.as_ref().unwrap().location.as_ref().unwrap().peer_process.is_none());
 }
@@ -333,16 +339,16 @@ async fn owned_space_inspector_never_backfills_unrecorded_peer_from_fresh_observ
 async fn retirement_peer_is_immutable_authority_and_not_replaced_by_new_attachment_peer() {
     let mut fixture = SpaceFixture::new().await;
     fixture.run.retirement = Some(fixture.retirement());
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(), CleanupEvaluation::Absent));
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(), CleanupEvaluation::Absent));
     let mut replacement_peer = native_peer();
     replacement_peer.pid = 202;
     fixture.run.attachment.as_mut().unwrap().location.as_mut().unwrap().peer_process = Some(replacement_peer.clone());
     fixture.adapter.bound_snapshot.lock().as_mut().unwrap().peer_process = Some(replacement_peer);
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(),
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(),
         CleanupEvaluation::Unknown(reason) if reason.code == "space_peer_changed"));
     assert_eq!(fixture.run.retirement.as_ref().unwrap().identity.as_ref().unwrap().herdr_peer, Some(native_peer()));
     fixture.run.retirement.as_mut().unwrap().identity.as_mut().unwrap().herdr_peer = None;
-    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None).await.unwrap(),
+    assert!(matches!(fixture.service.inspect_owned_resource(&fixture.resource, &fixture.run, None, None).await.unwrap(),
         CleanupEvaluation::Unknown(reason) if reason.code == "space_incarnation_unproven"));
     assert!(fixture.run.retirement.as_ref().unwrap().identity.as_ref().unwrap().herdr_peer.is_none());
 }
@@ -377,4 +383,350 @@ async fn cleanup_effect_incarnation_refuses_foreign_response_or_replacement_peer
     assert_eq!(fixture.service.validate_cleanup_incarnation(&fixture.run).await.unwrap_err().code, "space_incarnation_unproven");
     *fixture.adapter.bound_snapshot.lock() = None;
     assert_eq!(fixture.service.validate_cleanup_incarnation(&fixture.run).await.unwrap_err().code, "test_adapter_unused");
+}
+
+struct ManualFixture {
+    root: PathBuf,
+    configuration: ProjectConfiguration,
+    service: ProjectService,
+    adapter: Arc<NestedDirectoryAdapter>,
+    checkout: PathBuf,
+}
+
+impl ManualFixture {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!("cockpit-manual-removal-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let configuration = ProjectConfiguration::for_tests(&root);
+        let adapter = Arc::new(NestedDirectoryAdapter::default());
+        let service = ProjectService::new(configuration.clone(), adapter.clone()).unwrap();
+        let checkout = configure_manual_checkout(&root, &service, &adapter, "workspace");
+        Self { root, configuration, service, adapter, checkout }
+    }
+
+    async fn preview(&self) -> WorkspaceTeardownPreview {
+        self.service.teardown_preview("session", &WorkspaceTeardownPreviewRequest {
+            workspace_id: "workspace".into(),
+        }).await.unwrap()
+    }
+
+    fn restart(&mut self) {
+        self.service = ProjectService::new(self.configuration.clone(), self.adapter.clone()).unwrap();
+    }
+}
+
+impl Drop for ManualFixture {
+    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.root); }
+}
+
+fn configure_manual_checkout(
+    root: &std::path::Path,
+    service: &ProjectService,
+    adapter: &NestedDirectoryAdapter,
+    workspace_id: &str,
+) -> PathBuf {
+    let repository_root = root.join("repository");
+    let checkout = root.join("live-linked-checkout");
+    std::fs::create_dir_all(&repository_root).unwrap();
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("untracked.txt"), "reviewed dirty content").unwrap();
+    let checkout_path = checkout.to_string_lossy().into_owned();
+    let repository_path = repository_root.to_string_lossy().into_owned();
+    let repository_key = repository_root.join(".git").to_string_lossy().into_owned();
+    let mut snapshot = observation(&identity());
+    snapshot.endpoint_identity = "endpoint".into();
+    snapshot.snapshot.session_id = "session".into();
+    snapshot.snapshot.spaces.push(SpaceSummary {
+        id: workspace_id.into(), label: "Live linked checkout".into(), number: 1,
+        tab_count: 0, pane_count: 1, focused: false, agent_status: "none".into(),
+        git: Some(cockpit_protocol::v1::SpaceGitSummary {
+            repository_key: repository_key.clone(), repository: "repository".into(),
+            branch: Some("manual-topic".into()), checkout_path: checkout_path.clone(),
+            is_linked_worktree: true,
+        }),
+    });
+    snapshot.snapshot.panes.push(PaneSummary {
+        id: "decoy-pane".into(), terminal_id: "decoy-terminal".into(), space_id: workspace_id.into(),
+        tab_id: "decoy-tab".into(), title: None, focused: false, agent: None,
+        agent_status: "none".into(), revision: 1,
+        cwd: Some(root.join("stale-pane-cwd").to_string_lossy().into_owned()),
+    });
+    let mut stale_unbound_snapshot = snapshot.snapshot.clone();
+    stale_unbound_snapshot.spaces[0].git.as_mut().unwrap().checkout_path =
+        root.join("stale-unbound-checkout").to_string_lossy().into_owned();
+    *adapter.snapshot.lock() = Some(stale_unbound_snapshot);
+    *adapter.bound_snapshot.lock() = Some(snapshot);
+    adapter.selection_available.store(true, Ordering::SeqCst);
+    *adapter.inventory.lock() = Some(ProjectInventory {
+        endpoint_identity: "endpoint".into(), repository_key,
+        repository_root: repository_path.clone(), supported_methods: vec![],
+        worktrees: vec![
+            ProjectWorktreeEntry {
+                checkout_path, branch: Some("manual-topic".into()),
+                open_workspace_id: Some(workspace_id.into()), is_primary: false,
+                is_linked_worktree: true, dirty: Some(true),
+            },
+            ProjectWorktreeEntry {
+                checkout_path: repository_path, branch: Some("main".into()),
+                open_workspace_id: Some("unrelated-space".into()), is_primary: true,
+                is_linked_worktree: false, dirty: Some(false),
+            },
+        ],
+    });
+    *adapter.worktree_status.lock() = Some(WorktreeStatus {
+        porcelain_sha256: "a".repeat(64), entries: vec!["untracked.txt".into()], count: 1,
+    });
+    *adapter.teardown_store.lock() = Some(service.store.clone());
+    checkout
+}
+
+fn manual_request(
+    preview: &WorkspaceTeardownPreview,
+    action: WorkspaceTeardownAction,
+) -> WorkspaceTeardownExecuteRequest {
+    WorkspaceTeardownExecuteRequest {
+        operation_id: preview.operation_id.clone(), workspace_id: preview.workspace_id.clone(),
+        expected_endpoint_identity: preview.endpoint_identity.clone(),
+        expected_checkout_path: preview.checkout_path.clone(), action,
+        confirmation: preview.required_confirmation.clone().unwrap_or_default(),
+        discard_fingerprint: preview.discard_fingerprint.clone(),
+    }
+}
+
+#[tokio::test]
+async fn manual_dirty_linked_removal_without_setup_journals_before_force_dispatch() {
+    let fixture = ManualFixture::new();
+    assert!(fixture.service.store.list().unwrap().is_empty());
+    let preview = fixture.preview().await;
+    assert!(uuid::Uuid::parse_str(&preview.operation_id).is_ok());
+    assert_eq!(preview.ownership, WorkspaceTeardownOwnership::SelectedLinked);
+    assert_eq!(preview.dirty_state, WorkspaceTeardownDirtyState::Dirty);
+    assert_eq!(preview.discard_count, 1);
+    assert_eq!(preview.discard_paths, vec!["untracked.txt"]);
+    assert_eq!(preview.discard_fingerprint, Some("a".repeat(64)));
+    assert_eq!(preview.required_confirmation.as_deref(), Some("DISCARD AND REMOVE"));
+    assert!(preview.allowed_actions.contains(&WorkspaceTeardownAction::RemoveOwnedWorktree));
+    let request = manual_request(&preview, WorkspaceTeardownAction::RemoveOwnedWorktree);
+    let result = fixture.service.teardown_execute("session", &request).await.unwrap();
+    assert_eq!(result.outcome, WorkspaceTeardownOutcome::Completed);
+    let requests = fixture.adapter.remove_requests.lock();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].force);
+    assert_eq!(requests[0].endpoint_identity, "endpoint");
+    assert_eq!(requests[0].workspace_id, "workspace");
+    assert_eq!(requests[0].checkout_path, fixture.checkout.to_string_lossy());
+    drop(requests);
+    let observed = fixture.adapter.receipts_at_remove.lock();
+    assert_eq!(observed.len(), 1);
+    assert!(observed[0].manual);
+    assert_eq!(observed[0].operation_id, request.operation_id);
+    assert_eq!(observed[0].checkout_path, request.expected_checkout_path);
+    assert_eq!(observed[0].state, TeardownReceiptState::Pending);
+    drop(observed);
+    assert_eq!(fixture.service.store.read_teardown_receipt(&request.operation_id).unwrap().unwrap().state,
+        TeardownReceiptState::Completed);
+    assert!(fixture.service.teardown_recoveries("session").unwrap().recoveries.is_empty());
+    assert_eq!(fixture.adapter.inventory_requests.lock().as_slice(),
+        &[preview.checkout_path.clone(), preview.checkout_path.clone()]);
+    assert_eq!(fixture.adapter.status_requests.lock().as_slice(),
+        &[preview.checkout_path.clone(), preview.checkout_path.clone()]);
+    // A reused UUID must not dispatch against a target that exists again.
+    assert_eq!(fixture.service.teardown_execute("session", &request).await.unwrap_err().code, "stale_identity");
+    assert_eq!(fixture.adapter.remove_requests.lock().len(), 1);
+}
+
+#[tokio::test]
+async fn manual_removal_ignores_conflicting_stale_setup_receipts_and_uses_fresh_space_git_source() {
+    let fixture = SpaceFixture::new().await;
+    let setup_id = fixture.run.setup.as_ref().unwrap().operation_id.as_ref().unwrap();
+    let setup = fixture.service.store.load(setup_id).unwrap();
+    let creation = fixture.service.store.read_owned_creation(setup_id).unwrap().unwrap();
+    assert!(creation.resources.iter().any(|resource| matches!(resource,
+        OwnedResourceIdentity::Space { identity } if identity.workspace_id == "owned-space")));
+    // Two historical setup associations deliberately name the same Space.
+    // Neither is authority for its current uniquely selected linked checkout.
+    let mut second_plan = setup.plan.clone();
+    second_plan.operation_id = uuid::Uuid::new_v4().to_string();
+    second_plan.checkout_path = fixture.root.join("another-stale-checkout").to_string_lossy().into_owned();
+    let second_setup = fixture.service.store.persist_plan(second_plan).unwrap();
+    fixture.service.store.update(&second_setup.operation_id, None, |operation| {
+        operation.workspace_id = Some("owned-space".into());
+        operation.state = setup.state;
+        Ok(())
+    }).unwrap();
+    let second_creation = crate::project_store::OwnedCreationReceipt {
+        operation_id: second_setup.operation_id.clone(), git_capture_error: None, moved_space: None,
+        resources: vec![OwnedResourceIdentity::Space { identity: OwnedSpaceIdentity {
+            creation_operation_id: second_setup.operation_id.clone(),
+            endpoint_identity: second_setup.plan.endpoint_identity.clone(),
+            session_id: second_setup.session_id.clone(), workspace_id: "owned-space".into(),
+            checkout_path: second_setup.plan.checkout_path.clone(),
+        } }],
+    };
+    fixture.service.store.write_owned_creation(&second_creation).unwrap();
+    assert_eq!(fixture.service.store.list().unwrap().iter()
+        .filter(|operation| operation.workspace_id.as_deref() == Some("owned-space")).count(), 2);
+    let checkout = configure_manual_checkout(&fixture.root, &fixture.service, &fixture.adapter, "owned-space");
+    assert_ne!(setup.plan.checkout_path, checkout.to_string_lossy());
+    let preview = fixture.service.teardown_preview("session", &WorkspaceTeardownPreviewRequest {
+        workspace_id: "owned-space".into(),
+    }).await.unwrap();
+    assert_ne!(preview.operation_id, *setup_id);
+    assert_ne!(preview.operation_id, second_setup.operation_id);
+    assert_eq!(preview.checkout_path, checkout.to_string_lossy());
+    assert_eq!(preview.ownership, WorkspaceTeardownOwnership::SelectedLinked);
+    let request = manual_request(&preview, WorkspaceTeardownAction::RemoveOwnedWorktree);
+    assert_eq!(fixture.service.teardown_execute("session", &request).await.unwrap().outcome,
+        WorkspaceTeardownOutcome::Completed);
+    assert_eq!(fixture.adapter.inventory_requests.lock().as_slice(),
+        &[preview.checkout_path.clone(), preview.checkout_path.clone()]);
+    let requests = fixture.adapter.remove_requests.lock();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].checkout_path, preview.checkout_path);
+    assert!(requests[0].force);
+    drop(requests);
+    assert_eq!(fixture.service.store.read_owned_creation(setup_id).unwrap().unwrap(), creation);
+    assert_eq!(fixture.service.store.load(setup_id).unwrap().plan.checkout_path, setup.plan.checkout_path);
+    assert_eq!(fixture.service.store.read_owned_creation(&second_setup.operation_id).unwrap().unwrap(),
+        second_creation);
+    assert!(fixture.service.store.read_teardown_receipt(&preview.operation_id).unwrap().unwrap().manual);
+}
+
+#[tokio::test]
+async fn manual_uncertain_removal_survives_service_restart_and_never_redispatches() {
+    for durable_state in [TeardownReceiptState::Pending, TeardownReceiptState::OutcomeUnknown] {
+        let mut fixture = ManualFixture::new();
+        fixture.adapter.remove_error.store(true, Ordering::SeqCst);
+        let preview = fixture.preview().await;
+        let remove = manual_request(&preview, WorkspaceTeardownAction::RemoveOwnedWorktree);
+        assert_eq!(fixture.service.teardown_execute("session", &remove).await.unwrap().outcome,
+            WorkspaceTeardownOutcome::OutcomeUnknown);
+        assert_eq!(fixture.adapter.receipts_at_remove.lock()[0].state, TeardownReceiptState::Pending);
+        let mut receipt = fixture.service.store.read_teardown_receipt(&remove.operation_id).unwrap().unwrap();
+        assert!(receipt.manual);
+        assert_eq!(receipt.state, TeardownReceiptState::OutcomeUnknown);
+        // Pending is the durable state if interruption precedes the error-state write.
+        receipt.state = durable_state;
+        fixture.service.store.write_teardown_receipt(&receipt).unwrap();
+        fixture.restart();
+        let recoveries = fixture.service.teardown_recoveries("session").unwrap().recoveries;
+        assert_eq!(recoveries.len(), 1);
+        assert_eq!(recoveries[0].operation_id, remove.operation_id);
+        assert_eq!(recoveries[0].checkout_path, remove.expected_checkout_path);
+        assert_eq!(recoveries[0].state, match durable_state {
+            TeardownReceiptState::Pending => WorkspaceTeardownRecoveryState::Pending,
+            _ => WorkspaceTeardownRecoveryState::OutcomeUnknown,
+        });
+        let recovery_preview = fixture.preview().await;
+        assert_eq!(recovery_preview.operation_id, remove.operation_id);
+        assert_eq!(recovery_preview.allowed_actions, vec![WorkspaceTeardownAction::ReconcileRemoveOutcome]);
+        let reconcile = manual_request(&recovery_preview, WorkspaceTeardownAction::ReconcileRemoveOutcome);
+        let mut different_uuid = remove.clone();
+        different_uuid.operation_id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(fixture.service.teardown_execute("session", &different_uuid).await.unwrap_err().code,
+            "stale_identity");
+        assert_eq!(fixture.service.teardown_execute("session", &remove).await.unwrap_err().code,
+            "teardown_not_allowed");
+        for _ in 0..2 {
+            assert_eq!(fixture.service.teardown_execute("session", &reconcile).await.unwrap().outcome,
+                WorkspaceTeardownOutcome::OutcomeUnknown);
+            assert_eq!(fixture.service.store.read_teardown_receipt(&remove.operation_id).unwrap().unwrap().state,
+                durable_state);
+            assert_eq!(fixture.adapter.remove_requests.lock().len(), 1);
+        }
+        let selected_space = fixture.adapter.bound_snapshot.lock().as_ref().unwrap().snapshot.spaces.clone();
+        fixture.adapter.bound_snapshot.lock().as_mut().unwrap().snapshot.spaces.clear();
+        assert_eq!(fixture.service.teardown_execute("session", &reconcile).await.unwrap_err().code,
+            "association_conflict");
+        assert_eq!(fixture.adapter.remove_requests.lock().len(), 1);
+        fixture.adapter.bound_snapshot.lock().as_mut().unwrap().snapshot.panes.clear();
+        // Inventory presence alone cannot prove the interrupted effect stopped.
+        assert_eq!(fixture.service.teardown_execute("session", &reconcile).await.unwrap().outcome,
+            WorkspaceTeardownOutcome::OutcomeUnknown);
+        fixture.adapter.inventory.lock().as_mut().unwrap().worktrees.retain(|entry|
+            entry.open_workspace_id.as_deref() != Some("workspace"));
+        // Filesystem presence alone also keeps the journal unresolved.
+        assert_eq!(fixture.service.teardown_execute("session", &reconcile).await.unwrap().outcome,
+            WorkspaceTeardownOutcome::OutcomeUnknown);
+        fixture.adapter.bound_snapshot.lock().as_mut().unwrap().snapshot.spaces = selected_space;
+        std::fs::remove_dir_all(&fixture.checkout).unwrap();
+        // A selected Space remaining live prevents completion even after Git
+        // inventory and the physical checkout have both disappeared.
+        assert_eq!(fixture.service.teardown_execute("session", &reconcile).await.unwrap().outcome,
+            WorkspaceTeardownOutcome::OutcomeUnknown);
+        assert_eq!(fixture.adapter.remove_requests.lock().len(), 1);
+        fixture.adapter.bound_snapshot.lock().as_mut().unwrap().snapshot.spaces.clear();
+        assert_eq!(fixture.service.teardown_execute("session", &reconcile).await.unwrap().outcome,
+            WorkspaceTeardownOutcome::Completed);
+        assert_eq!(fixture.service.store.read_teardown_receipt(&remove.operation_id).unwrap().unwrap().state,
+            TeardownReceiptState::Completed);
+        assert!(fixture.service.teardown_recoveries("session").unwrap().recoveries.is_empty());
+        assert_eq!(fixture.adapter.remove_requests.lock().len(), 1);
+        assert!(fixture.adapter.closed_workspaces.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn manual_primary_checkout_is_refused_without_journal_or_adapter_effect() {
+    let fixture = ManualFixture::new();
+    fixture.adapter.inventory.lock().as_mut().unwrap().worktrees[0].is_primary = true;
+    let preview = fixture.preview().await;
+    assert!(!preview.allowed_actions.contains(&WorkspaceTeardownAction::RemoveOwnedWorktree));
+    let mut request = manual_request(&preview, WorkspaceTeardownAction::RemoveOwnedWorktree);
+    request.confirmation = "DISCARD AND REMOVE".into();
+    assert_eq!(fixture.service.teardown_execute("session", &request).await.unwrap_err().code,
+        "teardown_not_allowed");
+    assert!(fixture.service.store.list_teardown_receipts().unwrap().is_empty());
+    assert!(fixture.adapter.remove_requests.lock().is_empty());
+    assert!(fixture.adapter.receipts_at_remove.lock().is_empty());
+    assert!(fixture.adapter.status_requests.lock().is_empty());
+}
+
+#[tokio::test]
+async fn manual_dirty_removal_rejects_changed_fingerprint_before_journaling() {
+    let fixture = ManualFixture::new();
+    let preview = fixture.preview().await;
+    let request = manual_request(&preview, WorkspaceTeardownAction::RemoveOwnedWorktree);
+    *fixture.adapter.worktree_status.lock() = Some(WorktreeStatus {
+        porcelain_sha256: "b".repeat(64), entries: vec!["another-untracked.txt".into()], count: 1,
+    });
+    assert_eq!(fixture.service.teardown_execute("session", &request).await.unwrap_err().code,
+        "stale_identity");
+    assert!(fixture.service.store.list_teardown_receipts().unwrap().is_empty());
+    assert!(fixture.adapter.remove_requests.lock().is_empty());
+    let refreshed = fixture.preview().await;
+    let mut unconfirmed = manual_request(&refreshed, WorkspaceTeardownAction::RemoveOwnedWorktree);
+    unconfirmed.confirmation = "REMOVE WORKTREE".into();
+    assert_eq!(fixture.service.teardown_execute("session", &unconfirmed).await.unwrap_err().code,
+        "confirmation_required");
+    assert!(fixture.service.store.list_teardown_receipts().unwrap().is_empty());
+    assert!(fixture.adapter.remove_requests.lock().is_empty());
+}
+
+#[tokio::test]
+async fn manual_uncertain_removal_in_historical_session_blocks_fresh_uuid_for_same_live_checkout() {
+    let mut fixture = ManualFixture::new();
+    fixture.adapter.remove_error.store(true, Ordering::SeqCst);
+    let preview = fixture.preview().await;
+    let remove = manual_request(&preview, WorkspaceTeardownAction::RemoveOwnedWorktree);
+    assert_eq!(fixture.service.teardown_execute("session", &remove).await.unwrap().outcome,
+        WorkspaceTeardownOutcome::OutcomeUnknown);
+    fixture.restart();
+    fixture.adapter.bound_snapshot.lock().as_mut().unwrap().snapshot.session_id = "reopened-session".into();
+    let recovery_preview = fixture.service.teardown_preview("reopened-session", &WorkspaceTeardownPreviewRequest {
+        workspace_id: "workspace".into(),
+    }).await.unwrap();
+    assert_eq!(recovery_preview.operation_id, remove.operation_id);
+    assert_eq!(recovery_preview.allowed_actions, vec![WorkspaceTeardownAction::ReconcileRemoveOutcome]);
+    let mut new_removal = remove.clone();
+    new_removal.operation_id = uuid::Uuid::new_v4().to_string();
+    assert_eq!(fixture.service.teardown_execute("reopened-session", &new_removal).await.unwrap_err().code,
+        "stale_identity");
+    let reconcile = manual_request(&recovery_preview, WorkspaceTeardownAction::ReconcileRemoveOutcome);
+    assert_eq!(fixture.service.teardown_execute("reopened-session", &reconcile).await.unwrap().outcome,
+        WorkspaceTeardownOutcome::OutcomeUnknown);
+    assert_eq!(fixture.adapter.remove_requests.lock().len(), 1);
+    let receipt = fixture.service.store.read_teardown_receipt(&remove.operation_id).unwrap().unwrap();
+    assert_eq!(receipt.session_id, "session");
+    assert_eq!(receipt.state, TeardownReceiptState::OutcomeUnknown);
 }

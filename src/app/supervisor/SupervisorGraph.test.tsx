@@ -32,3 +32,14 @@ it("renders task prerequisites only, with no completed/provenance nodes or opera
   act(() => host.querySelector<HTMLButtonElement>('.liaison-dependency-outline [data-row-key="first:0"]')!.click());
   expect(onOpen).toHaveBeenLastCalledWith(first, "first:0");
 });
+it("marks the selected task in both the graph and narrow outline without selecting other tasks", async () => {
+  const first = taskFixture("first"), second = taskFixture("second"), tasks = [first, second], onOpen = vi.fn();
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(<SupervisorGraph tasks={tasks} selectedKey="second:1" onOpen={onOpen} />));
+  expect(host.querySelector('.liaison-graph-task[data-row-key="second:1"]')?.getAttribute("aria-current")).toBe("true");
+  expect(host.querySelector('.liaison-dependency-outline [data-row-key="second:1"]')?.getAttribute("aria-current")).toBe("true");
+  expect(host.querySelector('.liaison-graph-task[data-row-key="first:0"]')?.hasAttribute("aria-current")).toBe(false);
+  expect(host.querySelector('.liaison-dependency-outline [data-row-key="first:0"]')?.hasAttribute("aria-current")).toBe(false);
+  await act(async () => root!.render(<SupervisorGraph tasks={tasks} selectedKey={null} onOpen={onOpen} />));
+  expect(host.querySelector("[aria-current]")).toBeNull();
+});

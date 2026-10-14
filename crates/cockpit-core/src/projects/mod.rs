@@ -162,8 +162,10 @@ impl ProjectService {
         });
     }
 
-    /// Prove an open Space belongs to one configured primary repository, using
-    /// fresh Git provenance and Herdr's authoritative open-worktree inventory.
+    /// Prove a freshly resolved Space cwd belongs to one configured primary
+    /// repository and a unique checkout in Herdr's authoritative inventory.
+    /// Callers resolve the selected Space first; the inventory's singular
+    /// open_workspace_id cannot represent several Spaces sharing one checkout.
     pub async fn space_repository(
         &self,
         session: &str,
@@ -205,19 +207,18 @@ impl ProjectService {
         let mut matching = inventory
             .worktrees
             .iter()
-            .filter(|entry| entry.open_workspace_id.as_deref() == Some(workspace_id));
+            .filter(|entry| std::fs::canonicalize(&entry.checkout_path).ok().as_deref()
+                == Some(Path::new(&checkout.checkout_path)));
         let entry = matching.next().ok_or_else(|| {
             InspectionError::new(
                 "space_repository_mismatch",
                 format!(
-                    "Herdr does not identify Space {workspace_id} as an open checkout of {}",
+                    "Herdr inventory does not identify Space {workspace_id}'s actual checkout {space_cwd} in {}",
                     repository.repository_id
                 ),
             )
         })?;
         if matching.next().is_some()
-            || std::fs::canonicalize(&entry.checkout_path).ok().as_deref()
-                != Some(Path::new(&checkout.checkout_path))
             || entry.is_linked_worktree != checkout.is_linked_worktree
         {
             return Err(InspectionError::new(

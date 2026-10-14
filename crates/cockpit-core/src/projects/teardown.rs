@@ -20,10 +20,12 @@ use crate::project_teardown::{
     self, WorkspaceTeardownCommand, WorkspaceTeardownEvidence, WorkspaceTeardownWorktree,
 };
 
-use super::{ProjectService, validate_session, verify_inventory};
+use super::{ProjectService, validate_session};
 
 struct FreshTeardownEvidence {
-    operation: WorkspaceOperation,
+    operation_id: String,
+    workspace_id: String,
+    checkout_path: String,
     session_id: String,
     endpoint_identity: String,
     repository_key: String,
@@ -35,14 +37,52 @@ struct FreshTeardownEvidence {
 impl FreshTeardownEvidence {
     fn evidence(&self) -> WorkspaceTeardownEvidence<'_> {
         WorkspaceTeardownEvidence {
-            operation: &self.operation,
-            session_id: &self.session_id,
+            operation: None,
+            operation_id: &self.operation_id,
+            checkout_path: &self.checkout_path,
             endpoint_identity: &self.endpoint_identity,
             repository_key: &self.repository_key,
             repository_root: &self.repository_root,
             worktrees: &self.worktrees,
             receipt: self.receipt.as_ref(),
         }
+    }
+}
+
+fn git_terminal_overlaps(target: &std::path::Path, cwd: Option<&str>, canonical: Option<&std::path::Path>) -> Result<bool, InspectionError> {
+    use std::path::{Component, Path, PathBuf};
+    let cwd = cwd.map(Path::new).filter(|cwd| cwd.is_absolute()).ok_or_else(||
+        InspectionError::new("terminal_cwd_unknown", "a current terminal has no absolute classified working directory"))?;
+    // Keep lexical overlap even when a path is absent or traverses out of the
+    // target. A resolvable alias into the target is also a consumer.
+    if cwd.starts_with(target) || canonical.is_some_and(|path| path.starts_with(target)) { return Ok(true) }
+    let mut normalized = PathBuf::new();
+    for component in cwd.components() {
+        match component {
+            Component::ParentDir => { normalized.pop(); }
+            Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    Ok(normalized.starts_with(target))
+}
+
+#[cfg(test)]
+mod git_terminal_tests {
+    use super::git_terminal_overlaps;
+    use std::path::Path;
+
+    #[test]
+    fn missing_unrelated_absolute_cwd_does_not_block_owned_git_cleanup() {
+        let target = Path::new("/work/owned");
+        assert!(!git_terminal_overlaps(target, Some("/deleted/unrelated"), None).unwrap());
+        assert!(!git_terminal_overlaps(target, Some("/work/owned-other"), None).unwrap());
+        for cwd in ["/work/owned", "/work/owned/deleted", "/work/owned/../else", "/work/other/../owned/deleted"] {
+            assert!(git_terminal_overlaps(target, Some(cwd), None).unwrap(), "{cwd}");
+        }
+        assert!(git_terminal_overlaps(target, Some("/alias"), Some(Path::new("/work/owned/subdir"))).unwrap());
+        assert!(git_terminal_overlaps(target, None, None).is_err());
+        assert!(git_terminal_overlaps(target, Some("relative"), None).is_err());
     }
 }
 
@@ -196,9 +236,10 @@ impl ProjectService {
         Ok(matched.unwrap_or_else(|| creation_operation_id.clone()))
     }
 
-    pub async fn inspect_owned_resource(
+    pub(crate) async fn inspect_owned_resource(
         &self, resource: &OwnedResourceRecord, run: &Run,
         proof: Option<&crate::orchestration::cleanup::OwnedConsumerProof<'_>>,
+        merged: Option<&crate::orchestration::cleanup::merged::MergedProof>,
     ) -> Result<CleanupEvaluation, InspectionError> {
         self.validate_owned_resource(&resource.identity).await?;
         let binding_operation_id = self.resource_setup_operation(&resource.identity)?;
@@ -213,10 +254,15 @@ impl ProjectService {
         project_teardown::owned_run_identity(resource, run, creator)?;
         match &resource.identity {
             OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } => {
-                let head = match project_teardown::integrated_owned_head(identity, run) {
+                let head = match project_teardown::cleanup_owned_head(identity, run, merged) {
                     Ok(head) => head,
                     Err(error) => return Ok(CleanupEvaluation::Waiting(cleanup_reason(CleanupReasonClass::Reconcilable, error))),
                 };
+                if let Some(merged) = merged {
+                    if let Err(error) = merged.reprove().await {
+                        return Ok(CleanupEvaluation::Waiting(cleanup_reason(CleanupReasonClass::Reconcilable, error)));
+                    }
+                }
                 let present = crate::project_adapter::inspect_owned_git(
                     identity, head, matches!(resource.identity, OwnedResourceIdentity::Worktree { .. }),
                     self.configuration.limits.git_timeout_ms as u64,
@@ -330,11 +376,12 @@ impl ProjectService {
         validate_server_incarnation(recorded_incarnation(source.boot_id.as_deref(), source.peer_process.as_ref())?, observed)
     }
 
-    pub async fn apply_owned_resource(
+    pub(crate) async fn apply_owned_resource(
         &self, resource: &OwnedResourceRecord, run: &Run,
         proof: Option<&crate::orchestration::cleanup::OwnedConsumerProof<'_>>,
+        merged: Option<&crate::orchestration::cleanup::merged::MergedProof>,
     ) -> Result<CleanupEffectOutcome, InspectionError> {
-        let evaluation = self.inspect_owned_resource(resource, run, proof).await?;
+        let evaluation = self.inspect_owned_resource(resource, run, proof, merged).await?;
         match evaluation {
             CleanupEvaluation::Absent => return Ok(CleanupEffectOutcome { state: CleanupEffectState::Absent, evidence: Some("fresh exact resource inspection confirms absence".into()), reason: None, effects: Vec::new() }),
             CleanupEvaluation::Ready => {}
@@ -347,21 +394,28 @@ impl ProjectService {
             // Re-observe the exact sealed scope and private release CAS after
             // other async inspections, adjacent to the non-force Git effect.
             project_teardown::owned_consumers_quiescent(resource, run, proof).await?;
+            if let Some(merged) = merged {
+                if let Err(error) = merged.reprove().await {
+                    return Ok(CleanupEffectOutcome { state: CleanupEffectState::Refused, evidence: None,
+                        reason: Some(cleanup_reason(CleanupReasonClass::Reconcilable, error)), effects: Vec::new() });
+                }
+            }
         }
         let result = match &resource.identity {
             OwnedResourceIdentity::Worktree { identity } => crate::project_adapter::remove_owned_worktree(
-                identity, project_teardown::integrated_owned_head(identity, run)?,
+                identity, project_teardown::cleanup_owned_head(identity, run, merged)?,
                 self.configuration.limits.git_timeout_ms as u64, self.configuration.limits.git_output_bytes as usize,
             ).await,
             OwnedResourceIdentity::Branch { identity } => crate::project_adapter::remove_owned_branch(
-                identity, project_teardown::integrated_owned_head(identity, run)?,
+                identity, project_teardown::cleanup_owned_head(identity, run, merged)?,
                 self.configuration.limits.git_timeout_ms as u64, self.configuration.limits.git_output_bytes as usize,
             ).await,
             _ => return Err(InspectionError::new("unsupported_resource", "no proven project effect is eligible")),
         };
         Ok(match result {
             Ok(applied) => CleanupEffectOutcome { state: if applied { CleanupEffectState::Applied } else { CleanupEffectState::Absent },
-                evidence: Some("guarded non-force effect followed by exact outcome inspection".into()), reason: None, effects: Vec::new() },
+                evidence: Some(merged.map_or_else(|| "guarded non-force effect followed by exact outcome inspection".into(),
+                    |proof| proof.evidence())), reason: None, effects: Vec::new() },
             Err(error) => CleanupEffectOutcome { state: CleanupEffectState::Unknown, evidence: None,
                 reason: Some(cleanup_reason(CleanupReasonClass::Reconcilable, error)), effects: Vec::new() },
         })
@@ -379,13 +433,8 @@ impl ProjectService {
             let observed = self.adapter.project_snapshot_at_endpoint(&session.id, &endpoint).await?;
             let snapshot = current_physical_snapshot(&observed, &session.id, &endpoint)?;
             for pane in &snapshot.panes {
-                let cwd = pane.cwd.as_deref().ok_or_else(|| {
-                    InspectionError::new("terminal_cwd_unknown", "a current terminal has no classified working directory")
-                })?;
-                let cwd = std::fs::canonicalize(cwd).map_err(|_| {
-                    InspectionError::new("terminal_cwd_unknown", "a current terminal working directory cannot be classified")
-                })?;
-                if cwd.starts_with(target) {
+                let canonical = pane.cwd.as_deref().and_then(|cwd| std::fs::canonicalize(cwd).ok());
+                if git_terminal_overlaps(target, pane.cwd.as_deref(), canonical.as_deref())? {
                     return Err(InspectionError::new("foreign_terminal_consumer", "a current terminal retains this owned checkout"));
                 }
             }
@@ -402,9 +451,7 @@ impl ProjectService {
         request: &WorkspaceTeardownPreviewRequest,
     ) -> Result<WorkspaceTeardownPreview, InspectionError> {
         validate_session(session)?;
-        let operation =
-            self.load_teardown_operation_for_workspace(session, &request.workspace_id)?;
-        let evidence = self.fresh_teardown_evidence(session, operation).await?;
+        let evidence = self.fresh_teardown_evidence(session, &request.workspace_id, None).await?;
         project_teardown::preview(request, evidence.evidence())
     }
 
@@ -416,54 +463,16 @@ impl ProjectService {
     ) -> Result<WorkspaceTeardownRecoveryList, InspectionError> {
         validate_session(session)?;
         let mut recoveries = Vec::new();
-        for operation in self.store.list()? {
-            if operation.session_id != session {
-                continue;
-            }
-            let Some(receipt) = self.store.read_teardown_receipt(&operation.operation_id)? else {
-                continue;
-            };
-            let Some(workspace_id) = operation.workspace_id.as_deref() else {
-                continue;
-            };
-            if receipt.operation_id != operation.operation_id
-                || receipt.workspace_id != workspace_id
-                || receipt.endpoint_identity != operation.plan.endpoint_identity
-                || receipt.checkout_path != operation.plan.checkout_path
-                || receipt.session_id != operation.session_id
-                || receipt.session_id != operation.plan.session_id
-                || receipt.repository_key
-                    != operation
-                        .plan
-                        .repository
-                        .as_ref()
-                        .map(|repository| repository.common_dir.as_str())
-                        .unwrap_or("")
-                || receipt.repository_root
-                    != operation
-                        .plan
-                        .repository
-                        .as_ref()
-                        .map(|repository| repository.root.as_str())
-                        .unwrap_or("")
-            {
-                return Err(InspectionError::new(
-                    "association_conflict",
-                    "teardown receipt differs from its operation journal",
-                ));
-            }
+        for receipt in self.store.list_teardown_receipts()? {
+            if receipt.session_id != session { continue; }
             let state = match receipt.state {
                 TeardownReceiptState::Pending => WorkspaceTeardownRecoveryState::Pending,
-                TeardownReceiptState::OutcomeUnknown => {
-                    WorkspaceTeardownRecoveryState::OutcomeUnknown
-                }
+                TeardownReceiptState::OutcomeUnknown => WorkspaceTeardownRecoveryState::OutcomeUnknown,
                 TeardownReceiptState::Completed => continue,
             };
             recoveries.push(WorkspaceTeardownRecovery {
-                operation_id: operation.operation_id,
-                workspace_id: workspace_id.to_owned(),
-                checkout_path: operation.plan.checkout_path,
-                state,
+                operation_id: receipt.operation_id, workspace_id: receipt.workspace_id,
+                checkout_path: receipt.checkout_path, state,
             });
         }
         recoveries.sort_by(|left, right| {
@@ -474,8 +483,8 @@ impl ProjectService {
         Ok(WorkspaceTeardownRecoveryList { recoveries })
     }
 
-    /// Execute one explicitly reviewed teardown action. Worktree removal is
-    /// always non-force; unrelated directories and existing notes are retained.
+    /// Execute an explicitly reviewed removal, forcing only confirmed dirty
+    /// paths. A durable pending journal always precedes the external effect.
     pub async fn teardown_execute(
         &self,
         session: &str,
@@ -488,14 +497,24 @@ impl ProjectService {
                 "project service is shutting down",
             ));
         }
-        let operation = self.load_teardown_operation(session, &request.operation_id)?;
-        let _lease = self
-            .store
-            .acquire_execution_lease(&operation.operation_id)?;
-        // Reload after acquiring the cross-host lease so a prior executor's
-        // durable receipt is always part of the command decision.
-        let operation = self.load_teardown_operation(session, &request.operation_id)?;
-        let evidence = self.fresh_teardown_evidence(session, operation).await?;
+        // Different previews may name distinct operations for the same Space.
+        use sha2::Digest;
+        let mut workspace_key = sha2::Sha256::new();
+        workspace_key.update(session.as_bytes());
+        workspace_key.update([0]);
+        workspace_key.update(request.workspace_id.as_bytes());
+        let lease_name = format!("manual-teardown-{:x}.lock", workspace_key.finalize());
+        let _workspace_lease = self.store.try_acquire_named_execution_lease(&lease_name)?
+            .ok_or_else(|| InspectionError::new("operation_busy", "another removal of this Space is in progress"))?;
+        let _lease = self.store.acquire_execution_lease(&request.operation_id)?;
+        let evidence = self.fresh_teardown_evidence(
+            session, &request.workspace_id, Some(&request.operation_id),
+        ).await?;
+        if request.action == cockpit_protocol::project_teardown::WorkspaceTeardownAction::RemoveOwnedWorktree
+            && evidence.receipt.as_ref().is_some_and(|receipt| receipt.state == TeardownReceiptState::Completed)
+        {
+            return Err(InspectionError::new("stale_identity", "this removal operation already finished; request a fresh review"));
+        }
         let command = project_teardown::command(request, evidence.evidence())?;
         match command {
             WorkspaceTeardownCommand::CloseSpace {
@@ -556,7 +575,8 @@ impl ProjectService {
                     workspace_id,
                     action: request.action,
                     outcome: WorkspaceTeardownOutcome::Completed,
-                    message: "Herdr removed the owned worktree without force".to_owned(),
+                    message: if force { "Herdr discarded the reviewed changes and removed the worktree" }
+                        else { "Herdr removed the worktree without force" }.to_owned(),
                 })
             }
             WorkspaceTeardownCommand::ReconcileRemoveOutcome { operation_id } => {
@@ -581,49 +601,19 @@ impl ProjectService {
         Ok(operation)
     }
 
-    fn load_teardown_operation_for_workspace(
-        &self,
-        session: &str,
-        workspace_id: &str,
-    ) -> Result<WorkspaceOperation, InspectionError> {
-        let matches = self
-            .store
-            .list()?
-            .into_iter()
-            .filter(|operation| {
-                operation.session_id == session
-                    && operation.workspace_id.as_deref() == Some(workspace_id)
-            })
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [operation] => Ok(operation.clone()),
-            [] => Err(InspectionError::new(
-                "workspace_operation_not_found",
-                "no Cockpit operation is associated with this workspace",
-            )),
-            _ => Err(InspectionError::new(
-                "association_conflict",
-                "multiple Cockpit operations are associated with this workspace",
-            )),
-        }
-    }
-
     fn reviewed_teardown_receipt(
         &self,
         evidence: &FreshTeardownEvidence,
     ) -> Result<TeardownReceipt, InspectionError> {
         Ok(TeardownReceipt {
-            operation_id: evidence.operation.operation_id.clone(),
-            workspace_id: evidence.operation.workspace_id.clone().ok_or_else(|| {
-                InspectionError::new("stale_identity", "operation no longer has a workspace")
-            })?,
+            operation_id: evidence.operation_id.clone(), manual: true,
+            workspace_id: evidence.workspace_id.clone(),
             endpoint_identity: evidence.endpoint_identity.clone(),
             session_id: evidence.session_id.clone(),
             repository_key: evidence.repository_key.clone(),
             repository_root: evidence.repository_root.clone(),
-            checkout_path: evidence.operation.plan.checkout_path.clone(),
-            state: TeardownReceiptState::Pending,
-            updated_at: timestamp(),
+            checkout_path: evidence.checkout_path.clone(),
+            state: TeardownReceiptState::Pending, updated_at: timestamp(),
         })
     }
 
@@ -639,16 +629,9 @@ impl ProjectService {
             )
         })?;
         if receipt.state != expected
-            || receipt.operation_id != evidence.operation.operation_id
-            || receipt.workspace_id
-                != evidence
-                    .operation
-                    .workspace_id
-                    .as_deref()
-                    .unwrap_or_default()
-            || receipt.endpoint_identity != evidence.endpoint_identity
-            || receipt.checkout_path != evidence.operation.plan.checkout_path
-            || receipt.session_id != evidence.session_id
+            || receipt.operation_id != evidence.operation_id
+            || receipt.workspace_id != evidence.workspace_id
+            || receipt.checkout_path != evidence.checkout_path
             || receipt.repository_key != evidence.repository_key
             || receipt.repository_root != evidence.repository_root
         {
@@ -676,109 +659,122 @@ impl ProjectService {
                     Err(error)
                 }
             })?;
-        match evidence.worktrees.as_slice() {
-            [] => {
-                receipt.state = TeardownReceiptState::Completed;
-                receipt.updated_at = timestamp();
-                self.store.write_teardown_receipt(&receipt)?;
-                Ok(WorkspaceTeardownResult {
-                    operation_id: operation_id.to_owned(),
-                    workspace_id: request.workspace_id.clone(),
-                    action: request.action,
-                    outcome: WorkspaceTeardownOutcome::Completed,
-                    message: "fresh Herdr inventory confirms the worktree is gone".to_owned(),
-                })
-            }
-            [worktree]
-                if worktree.open_workspace_id.as_deref() == Some(request.workspace_id.as_str()) =>
-            {
-                receipt.state = TeardownReceiptState::Completed;
-                receipt.updated_at = timestamp();
-                self.store.write_teardown_receipt(&receipt)?;
-                Ok(WorkspaceTeardownResult {
-                    operation_id: operation_id.to_owned(),
-                    workspace_id: request.workspace_id.clone(),
-                    action: request.action,
-                    outcome: WorkspaceTeardownOutcome::Retained,
-                    message: "fresh Herdr inventory confirms the worktree remains; request a new removal review before dispatching again".to_owned(),
-                })
-            }
-            _ => Ok(WorkspaceTeardownResult {
-                operation_id: operation_id.to_owned(),
-                workspace_id: request.workspace_id.clone(),
-                action: request.action,
-                outcome: WorkspaceTeardownOutcome::OutcomeUnknown,
-                message: "fresh Herdr inventory is ambiguous; removal remains blocked".to_owned(),
-            }),
+        // Presence alone cannot prove a timed-out effect stopped running.
+        if evidence.worktrees.is_empty()
+            && std::fs::symlink_metadata(&receipt.checkout_path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            receipt.state = TeardownReceiptState::Completed;
+            receipt.updated_at = timestamp();
+            self.store.write_teardown_receipt(&receipt)?;
+            Ok(WorkspaceTeardownResult {
+                operation_id: operation_id.to_owned(), workspace_id: request.workspace_id.clone(),
+                action: request.action, outcome: WorkspaceTeardownOutcome::Completed,
+                message: "fresh inventory and filesystem evidence confirm removal".to_owned(),
+            })
+        } else {
+            Ok(WorkspaceTeardownResult {
+                operation_id: operation_id.to_owned(), workspace_id: request.workspace_id.clone(),
+                action: request.action, outcome: WorkspaceTeardownOutcome::OutcomeUnknown,
+                message: "removal is not conclusively finished; the durable receipt prevents redispatch".to_owned(),
+            })
         }
     }
 
     async fn fresh_teardown_evidence(
-        &self,
-        session: &str,
-        operation: WorkspaceOperation,
+        &self, session: &str, workspace_id: &str, requested_operation_id: Option<&str>,
     ) -> Result<FreshTeardownEvidence, InspectionError> {
-        if operation.plan.mode == WorkspaceSetupMode::Open || operation.plan.repository.is_none() {
-            let endpoint_identity = self.adapter.project_endpoint_identity(session).await?;
-            return Ok(FreshTeardownEvidence {
-                session_id: session.to_owned(),
-                receipt: self.store.read_teardown_receipt(&operation.operation_id)?,
-                endpoint_identity,
-                repository_key: String::new(),
-                repository_root: String::new(),
-                worktrees: vec![WorkspaceTeardownWorktree {
-                    checkout_path: operation.plan.checkout_path.clone(),
-                    open_workspace_id: operation.workspace_id.clone(),
-                    is_linked_worktree: false,
-                    dirty: None,
-                }],
-                operation,
-            });
-        }
-        let repository = operation.plan.repository.as_ref().expect("checked above");
-        let inventory = self
-            .adapter
-            .project_inventory(session, &repository.checkout_path)
-            .await?;
-        verify_inventory(&inventory, repository)?;
-        let matching_count = inventory
-            .worktrees
-            .iter()
-            .filter(|entry| entry.checkout_path == operation.plan.checkout_path)
-            .count();
-        let dirty = if matching_count == 1 {
-            self.adapter
-                .project_worktree_dirty(
-                    &operation.plan.checkout_path,
-                    self.configuration.limits.git_timeout_ms,
-                    self.configuration.limits.git_output_bytes,
-                )
-                .await
-                .ok()
-        } else {
-            None
+        let endpoint_identity = self.adapter.project_endpoint_identity(session).await?;
+        let observed = self.adapter.project_snapshot_at_endpoint(session, &endpoint_identity).await?;
+        let snapshot = response_bound_snapshot(&observed, session, &endpoint_identity)?;
+        let mut spaces = snapshot.spaces.iter().filter(|space| space.id == workspace_id);
+        let space = match (spaces.next(), spaces.next()) {
+            (Some(space), None) => Some(space), (None, _) => None,
+            _ => return Err(InspectionError::new("association_conflict", "selected Space is ambiguous")),
         };
-        let worktrees = inventory
-            .worktrees
-            .into_iter()
-            .filter(|entry| entry.checkout_path == operation.plan.checkout_path)
-            .map(|entry| WorkspaceTeardownWorktree {
-                checkout_path: entry.checkout_path,
-                open_workspace_id: entry.open_workspace_id,
-                is_linked_worktree: entry.is_linked_worktree,
-                dirty,
-            })
-            .collect();
-        let receipt = self.store.read_teardown_receipt(&operation.operation_id)?;
-        Ok(FreshTeardownEvidence {
-            session_id: session.to_owned(),
-            endpoint_identity: inventory.endpoint_identity,
-            repository_key: inventory.repository_key,
-            repository_root: inventory.repository_root,
-            operation,
-            worktrees,
-            receipt,
-        })
+        if space.is_none() && (snapshot.tabs.iter().any(|tab| tab.space_id == workspace_id)
+            || snapshot.panes.iter().any(|pane| pane.space_id == workspace_id))
+        {
+            return Err(InspectionError::new("association_conflict", "selected Space still has dangling live consumers"));
+        }
+        let live_checkout = space.and_then(|space| space.git.as_ref()).map(|git| git.checkout_path.as_str());
+        let mut pending = self.store.list_teardown_receipts()?.into_iter().filter(|receipt|
+            matches!(receipt.state, TeardownReceiptState::Pending | TeardownReceiptState::OutcomeUnknown)
+                && live_checkout.map_or(receipt.session_id == session && receipt.workspace_id == workspace_id,
+                    |path| receipt.checkout_path == path));
+        let pending = match (pending.next(), pending.next()) {
+            (Some(receipt), None) => Some(receipt), (None, _) => None,
+            _ => return Err(InspectionError::new("association_conflict", "multiple uncertain removals name this Space")),
+        };
+        if let (Some(receipt), Some(requested)) = (&pending, requested_operation_id)
+            && receipt.operation_id != requested
+        {
+            return Err(InspectionError::new("stale_identity", "an earlier removal must be reconciled before dispatch"));
+        }
+        let operation_id = pending.as_ref().map(|receipt| receipt.operation_id.clone())
+            .or_else(|| requested_operation_id.map(str::to_owned))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let receipt = match pending {
+            Some(receipt) => Some(receipt), None => self.store.read_teardown_receipt(&operation_id)?,
+        };
+        if receipt.as_ref().is_some_and(|receipt|
+            receipt.workspace_id != workspace_id
+                || (receipt.state == TeardownReceiptState::Completed && receipt.session_id != session))
+        {
+            return Err(InspectionError::new("stale_identity", "teardown journal belongs to another selected target"));
+        }
+        let source = live_checkout
+            .or_else(|| receipt.as_ref().map(|receipt| receipt.repository_root.as_str()).filter(|path| !path.is_empty()));
+        let mut evidence = FreshTeardownEvidence {
+            operation_id, workspace_id: workspace_id.to_owned(),
+            checkout_path: receipt.as_ref().map(|receipt| receipt.checkout_path.clone()).unwrap_or_default(),
+            session_id: session.to_owned(), endpoint_identity: endpoint_identity.clone(),
+            repository_key: String::new(), repository_root: String::new(),
+            worktrees: Vec::new(), receipt: None,
+        };
+        if let Some(source) = source {
+            let inventory = self.adapter.project_inventory(session, source).await?;
+            if inventory.endpoint_identity != endpoint_identity {
+                return Err(InspectionError::new("stale_identity", "Herdr endpoint changed during target inspection"));
+            }
+            let relevant = inventory.worktrees.into_iter().filter(|entry|
+                entry.open_workspace_id.as_deref() == Some(workspace_id)
+                    || receipt.as_ref().is_some_and(|receipt| entry.checkout_path == receipt.checkout_path))
+                .collect::<Vec<_>>();
+            if relevant.len() == 1 { evidence.checkout_path = relevant[0].checkout_path.clone(); }
+            evidence.repository_key = inventory.repository_key;
+            evidence.repository_root = inventory.repository_root;
+            for entry in relevant {
+                let status = if entry.is_linked_worktree && !entry.is_primary {
+                    self.adapter.project_worktree_dirty(
+                        &entry.checkout_path, self.configuration.limits.git_timeout_ms,
+                        self.configuration.limits.git_output_bytes,
+                    ).await.ok()
+                } else { None };
+                evidence.worktrees.push(WorkspaceTeardownWorktree {
+                    checkout_path: entry.checkout_path, open_workspace_id: entry.open_workspace_id,
+                    is_linked_worktree: entry.is_linked_worktree, is_primary: entry.is_primary, status,
+                });
+            }
+            if space.is_some() && evidence.worktrees.is_empty() {
+                evidence.worktrees.push(WorkspaceTeardownWorktree {
+                    checkout_path: evidence.checkout_path.clone(), open_workspace_id: Some(workspace_id.to_owned()),
+                    is_linked_worktree: false, is_primary: false, status: None,
+                });
+            }
+        } else if let Some(space) = space {
+            evidence.checkout_path = snapshot.panes.iter()
+                .find(|pane| pane.space_id == space.id)
+                .and_then(|pane| pane.cwd.clone()).unwrap_or_default();
+            evidence.worktrees.push(WorkspaceTeardownWorktree {
+                checkout_path: evidence.checkout_path.clone(), open_workspace_id: Some(space.id.clone()),
+                is_linked_worktree: false, is_primary: false, status: None,
+            });
+        } else if receipt.is_none() {
+            return Err(InspectionError::new("workspace_not_found", "selected Space is no longer live"));
+        }
+        evidence.receipt = receipt;
+        Ok(evidence)
     }
 }
 

@@ -182,7 +182,7 @@ impl OrchestrationService {
     pub(crate) fn retirement_queue(&self) -> Result<Vec<Run>, InspectionError> {
         Ok(self.store.lock()?.read()?.runs.into_iter().filter(|run| run.retirement.as_ref().is_some_and(|r|
             (!terminal(&r.state) || matches!(r.state, RetirementState::Unknown { .. }
-                | RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable, .. }))
+                | RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable | RetainReason::ForegroundProcess, .. }))
                 && run.kind == RunKind::Worker && run.stage == RunStage::Closed
                 && (run.close_reason == Some(CloseReason::Accepted)
                     || (run.close_reason == Some(CloseReason::Superseded) && r.trigger == RetirementTrigger::Replacement)))).collect())
@@ -247,7 +247,7 @@ impl OrchestrationService {
     }
 
     /// Only the executor may withdraw an intent it knows it has not submitted,
-    /// or reobserve the old process-proof retention. Recovered intents never use this.
+    /// or reobserve a transient process/observation retention. Recovered intents never use this.
     pub(crate) fn retirement_waiting(&self, run_id: &str, observed: &RunRetirement, blockers: Vec<RetirementBlocker>) -> Result<(), InspectionError> {
         let locked = self.store.lock()?;
         let mut state = locked.read()?;
@@ -257,7 +257,7 @@ impl OrchestrationService {
         let current = run.retirement.as_ref().ok_or_else(|| error("retirement_state_changed", "Retirement is absent"))?;
         if current != observed
             || !matches!(current.state, RetirementState::CloseIntent { .. }
-                | RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable, .. }) {
+                | RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable | RetainReason::ForegroundProcess, .. }) {
             return Err(error("retirement_state_changed", "Physical retirement state changed"));
         }
         let next = if authorized { RetirementState::Waiting { blockers } }

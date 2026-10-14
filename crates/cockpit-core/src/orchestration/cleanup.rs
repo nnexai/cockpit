@@ -5,6 +5,7 @@ use super::store::DurableOperationKind;
 use crate::projects::ProjectService;
 mod scopes;
 mod attempt_directory;
+pub(crate) mod merged;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanupEvaluation {
@@ -31,6 +32,7 @@ pub struct OwnedConsumerProof<'a> {
     resource: &'a OwnedResourceRecord,
     run: &'a Run,
     claim_revision: u64,
+    merged: Option<&'a merged::MergedProof>,
 }
 
 impl OwnedConsumerProof<'_> {
@@ -43,13 +45,13 @@ impl OwnedConsumerProof<'_> {
             || resource.root_id != self.run.root_id || run.run_id != self.run.run_id
             || !consumer_run_matches(run, self.run) || run.checkout != self.run.checkout
             || run.retirement != self.run.retirement || !resource.consumers.is_empty() { return Err(refusal()); }
-        self.service.validate_consumer_release(self.resource, self.run, self.claim_revision)?;
+        self.service.validate_consumer_release(self.resource, self.run, self.claim_revision, self.merged)?;
         let scope = self.run.attachment.as_ref().and_then(|attachment| attachment.process_scope.as_ref()).ok_or_else(refusal)?;
         let observation = crate::process_scope::observe(scope).await?;
         if observation.scope != *scope || !matches!(observation.state, crate::process_scope::ScopeState::Drained) {
             return Err(error("consumer_scope_populated", "Fresh exact owned scope has not proved every contained descendant drained"));
         }
-        self.service.validate_consumer_release(self.resource, self.run, self.claim_revision)
+        self.service.validate_consumer_release(self.resource, self.run, self.claim_revision, self.merged)
     }
 }
 
@@ -405,17 +407,18 @@ fn attempt_directory_released(state: &OrchestrationState, run: &Run) -> bool {
 }
 
 impl OrchestrationService {
-    fn owned_consumer_proof<'a>(&'a self, resource: &'a OwnedResourceRecord, run: &'a Run) -> Result<Option<OwnedConsumerProof<'a>>, InspectionError> {
+    fn owned_consumer_proof<'a>(&'a self, resource: &'a OwnedResourceRecord, run: &'a Run, merged: Option<&'a merged::MergedProof>) -> Result<Option<OwnedConsumerProof<'a>>, InspectionError> {
         let locked = self.store.lock()?;
         let state = locked.read()?;
-        Ok(released_consumer_revision(&state, resource, run).map(|claim_revision|
-            OwnedConsumerProof { service: self, resource, run, claim_revision }))
+        Ok(released_consumer_revision(&state, resource, run).filter(|_| merged.is_none_or(|proof| proof.matches_state(&state, run)))
+            .map(|claim_revision| OwnedConsumerProof { service: self, resource, run, claim_revision, merged }))
     }
 
-    fn validate_consumer_release(&self, resource: &OwnedResourceRecord, run: &Run, claim_revision: u64) -> Result<(), InspectionError> {
+    fn validate_consumer_release(&self, resource: &OwnedResourceRecord, run: &Run, claim_revision: u64, merged: Option<&merged::MergedProof>) -> Result<(), InspectionError> {
         let locked = self.store.lock()?;
         let state = locked.read()?;
-        if released_consumer_revision(&state, resource, run) != Some(claim_revision) {
+        if released_consumer_revision(&state, resource, run) != Some(claim_revision)
+            || merged.is_some_and(|proof| !proof.matches_state(&state, run)) {
             return Err(error("consumer_proof_missing", "Exact released claim revision, holder epoch, creation identity or owned scope journal is no longer current"));
         }
         Ok(())
@@ -440,11 +443,17 @@ impl OrchestrationService {
             }
         }
         for run in state.runs.iter().filter(|run| run.stage == RunStage::Closed
-            && run.close_reason == Some(CloseReason::Accepted) && run.integration == Integration::Pending) {
+            && run.close_reason == Some(CloseReason::Accepted) && !git_integration_eligible(run)
+            && state.owned_resources.iter().any(|resource| resource.run_id == run.run_id
+                && matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
+                && resource.cleanup.state != CleanupState::Removed)) {
             for related in state.runs.iter().filter(|related| related.root_id == run.root_id
                 && related.session_id == run.session_id) {
                 if let Some(git) = related.checkout.as_ref().and_then(|checkout| checkout.git.as_ref()) {
                     paths.insert(std::path::PathBuf::from(&git.common_dir));
+                    if related.run_id == run.root_id {
+                        paths.insert(std::path::PathBuf::from(&git.worktree_git_dir));
+                    }
                 }
             }
         }
@@ -730,7 +739,7 @@ impl OrchestrationService {
                     self.record_constituent_receipts(&queued, receipts)?;
                 }
             }
-            let (resource, run, blocked, drained, directory_released) = {
+            let (resource, run, blocked, drained, directory_released, state) = {
                 let state = self.store.lock()?.read()?;
                 let Some(resource) = state.owned_resources.iter().find(|r| r.resource_id == queued.resource_id) else { continue };
                 let run = &state.runs[run_index(&state, &resource.run_id)?];
@@ -740,7 +749,18 @@ impl OrchestrationService {
                 let writers = Self::known_writers_active(&state, resource);
                 let drained = run.attachment.as_ref().is_some_and(|a| Self::writer_quiescent(&state, run, &a.attachment_id, a.epoch));
                 let directory_released = resource.kind != OwnedResourceKind::AttemptDirectory || attempt_directory_released(&state, run);
-                (observed, run.clone(), !blocked.is_empty() || writers, drained, directory_released)
+                (observed, run.clone(), !blocked.is_empty() || writers, drained, directory_released, state)
+            };
+            let needs_merged = matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
+                && !git_integration_eligible(&run);
+            let merged = if needs_merged { merged::merged_proof(&state, &run).await } else { Ok(None) };
+            let merged = match merged {
+                Ok(proof) => proof,
+                Err(why) => {
+                    self.save_evaluation(&resource, CleanupEvaluation::Unknown(
+                        reason(CleanupReasonClass::Transient, &why.code, why.message)))?;
+                    continue;
+                }
             };
             let evaluation = if resource.ownership == ResourceOwnership::Unknown {
                 CleanupEvaluation::Unknown(resource.cleanup.reason.clone().unwrap_or_else(|| reason(CleanupReasonClass::Authority, "ownership_unproven", "Unknown creation authority protects this resource")))
@@ -751,7 +771,7 @@ impl OrchestrationService {
             } else if run.stage != RunStage::Closed {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumers_active", "Run or descendant consumers are still active"))
             } else if run.close_reason == Some(CloseReason::Superseded) && resource.kind == OwnedResourceKind::Space {
-                match projects.inspect_owned_resource(&resource, &run, None).await {
+                match projects.inspect_owned_resource(&resource, &run, None, None).await {
                     Ok(CleanupEvaluation::Absent) => CleanupEvaluation::Absent,
                     _ => CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork, "superseded_space_preserved",
                         "No explicit Space teardown is authorized for replaced work; only fresh exact-incarnation absence can settle its bookkeeping")),
@@ -781,11 +801,9 @@ impl OrchestrationService {
                     CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumer_drain_unproven",
                         "Private attempt removal requires its exact checkout claim to be Released with consumer-exit proof and its own pane retired"))
                 }
-            } else if matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
-                && !(matches!(run.integration, Integration::Integrated { .. })
-                    || matches!((&run.integration, &run.source_output), (Integration::NotApplicable { .. }, Some(SourceOutput::NonCode { .. })))) {
+            } else if needs_merged && merged.is_none() {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "integration_pending",
-                    "Record IntegrationRecord for this exact accepted Result and target commit with required passed target checks; source checks or Git containment alone are not target-check proof"))
+                    "Record IntegrationRecord with required passed target checks, or merge the accepted head into the root's checked-out target"))
             } else if !drained && resource.cleanup.reason.as_ref().is_some_and(|why|
                 why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_")) {
                 CleanupEvaluation::Kept(resource.cleanup.reason.clone().expect("classified scope hold"))
@@ -802,8 +820,8 @@ impl OrchestrationService {
                         Err(why) => Err(why),
                     },
                     _ => {
-                        let proof = self.owned_consumer_proof(&resource, &run)?;
-                        projects.inspect_owned_resource(&resource, &run, proof.as_ref()).await
+                        let proof = self.owned_consumer_proof(&resource, &run, merged.as_ref())?;
+                        projects.inspect_owned_resource(&resource, &run, proof.as_ref(), merged.as_ref()).await
                     },
                 };
                 inspection.unwrap_or_else(|why| if resource.kind == OwnedResourceKind::AttemptDirectory {
@@ -822,7 +840,7 @@ impl OrchestrationService {
                 self.save_evaluation(&resource, evaluated)?;
                 continue;
             }
-            let intent = self.begin_cleanup_effect(&resource, &run)?;
+            let intent = self.begin_cleanup_effect(&resource, &run, merged.as_ref())?;
             let Some(intent) = intent else { continue };
             let outcome = match resource.kind {
                 OwnedResourceKind::FixtureSet | OwnedResourceKind::Scratch => super::fixture_resources::apply_owned_resource(&intent, &run).await,
@@ -832,8 +850,8 @@ impl OrchestrationService {
                         reason: Some(reason(CleanupReasonClass::Authority, &why.code, why.message)), effects: Vec::new() }),
                 },
                 _ => {
-                    let proof = self.owned_consumer_proof(&intent, &run)?;
-                    projects.apply_owned_resource(&intent, &run, proof.as_ref()).await
+                    let proof = self.owned_consumer_proof(&intent, &run, merged.as_ref())?;
+                    projects.apply_owned_resource(&intent, &run, proof.as_ref(), merged.as_ref()).await
                 },
             }.unwrap_or_else(|_| CleanupEffectOutcome { state: CleanupEffectState::Unknown, evidence: None,
                 reason: Some(reason(CleanupReasonClass::Transient, "effect_outcome_unknown", "Effect did not return a confirmed outcome")), effects: Vec::new() });
@@ -872,11 +890,13 @@ impl OrchestrationService {
         Ok(())
     }
 
-    fn begin_cleanup_effect(&self, expected: &OwnedResourceRecord, observed: &Run) -> Result<Option<OwnedResourceRecord>, InspectionError> {
+    fn begin_cleanup_effect(&self, expected: &OwnedResourceRecord, observed: &Run, merged: Option<&merged::MergedProof>) -> Result<Option<OwnedResourceRecord>, InspectionError> {
         let locked = self.store.lock()?;
         let mut state = locked.read()?;
         let run = &state.runs[run_index(&state, &expected.run_id)?];
-        if run.stage != RunStage::Closed || run.attempt != observed.attempt || run.integration != observed.integration
+        if run.stage != RunStage::Closed || !consumer_run_matches(run, observed)
+            || run.result.as_ref().map(|result| (&result.message_id, &result.kind, &result.outcome, &result.source_output))
+                != observed.result.as_ref().map(|result| (&result.message_id, &result.kind, &result.outcome, &result.source_output))
             || run.attachment.as_ref().map(|a| (&a.attachment_id, a.epoch)) != observed.attachment.as_ref().map(|a| (&a.attachment_id, a.epoch))
             || !retirement::blockers(&state, run).is_empty() { return Ok(None) }
         if run.close_reason == Some(CloseReason::Superseded) { return Ok(None); }
@@ -891,8 +911,7 @@ impl OrchestrationService {
         if matches!(registered.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch | OwnedResourceKind::AttemptDirectory)
             && (!unresolved.is_empty() || run.attachment.as_ref().is_none_or(|a| !Self::writer_quiescent(&state, run, &a.attachment_id, a.epoch))) { return Ok(None) }
         if matches!(registered.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
-            && !(matches!(run.integration, Integration::Integrated { .. })
-                || matches!((&run.integration, &run.source_output), (Integration::NotApplicable { .. }, Some(SourceOutput::NonCode { .. })))) { return Ok(None) }
+            && !git_integration_eligible(run) && !merged.is_some_and(|proof| proof.matches_state(&state, run)) { return Ok(None) }
         let Some(resource) = state.owned_resources.iter_mut().find(|r| r.resource_id == expected.resource_id) else { return Ok(None) };
         if resource.identity != expected.identity || resource.cleanup != expected.cleanup || resource.ownership != ResourceOwnership::Owned
             || resource.authority != CleanupAuthority::OwnedWhenSafe { return Ok(None) }
@@ -1005,9 +1024,15 @@ impl OrchestrationService {
     }
 }
 
+fn git_integration_eligible(run: &Run) -> bool {
+    matches!(run.integration, Integration::Integrated { .. })
+        || matches!((&run.integration, &run.source_output),
+            (Integration::NotApplicable { .. }, Some(SourceOutput::NonCode { .. })))
+}
+
 fn cleanup_hold_action(code: &str) -> &'static str {
     match code {
-        "integration_pending" => "Integrate and record exact target checks through IntegrationRecord; cleanup reevaluates on the resulting event.",
+        "integration_pending" => "Record exact target checks through IntegrationRecord, or merge the accepted head into the root's checked-out target; cleanup reevaluates on the resulting event.",
         "terminal_observation_unavailable" => "Restore the exact runtime observation connection; the next connection/pane event reevaluates automatically without resubmitting an uncertain effect.",
         "terminal_primary_checkout_space" => "Leave this explicitly borrowed primary checkout Space and foreign Spaces untouched; normal Git workers should use an isolated worktree. Do not retry this close or delete state to bypass the guard.",
         "containment_unproven" => "Preserve this exact claim until its owned scope and fresh pane inventory prove drain; old uncontained launches are not retrofitted. Do not substitute PID absence or another scope.",
@@ -1066,6 +1091,9 @@ fn terminal_evaluation(resource: &OwnedResourceRecord, run: &Run) -> CleanupEval
         RetirementState::Retained { reason: RetainReason::ObservationUnavailable, .. } =>
             CleanupEvaluation::Waiting(reason(CleanupReasonClass::Transient, "terminal_observation_unavailable",
                 "Fresh endpoint/pane/process evidence is unavailable; preserved terminal will be reobserved on reconnection or the next physical event")),
+        RetirementState::Retained { reason: RetainReason::ForegroundProcess, .. } =>
+            CleanupEvaluation::Waiting(reason(CleanupReasonClass::Transient, "terminal_retirement_pending",
+                "An extra foreground process protects this pane; physical events and a bounded targeted retirement retry reobserve its exact idle identity")),
         RetirementState::Retained { reason: RetainReason::PrimaryCheckoutSpace, .. } =>
             CleanupEvaluation::Kept(reason(CleanupReasonClass::Authority, "terminal_primary_checkout_space",
                 "Automatic closure was refused before pane.close: this worker used an explicitly borrowed primary checkout Space, whose source group cannot atomically exclude foreign Spaces; the terminal and source group were retained")),
@@ -1081,3 +1109,6 @@ fn terminal_evaluation(resource: &OwnedResourceRecord, run: &Run) -> CleanupEval
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod merged_tests;

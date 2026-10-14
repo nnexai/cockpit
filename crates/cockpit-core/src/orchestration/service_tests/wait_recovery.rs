@@ -20,8 +20,8 @@ fn root_wait_request(fixture: &Fixture, root_id: &str, timeout_ms: u32) -> Orche
 }
 
 #[tokio::test]
-async fn cleanup_ref_watch_delivers_external_packed_and_loose_ref_replacements() {
-    for relative in ["packed-refs", "refs/heads/main"] {
+async fn cleanup_ref_watch_delivers_external_head_packed_and_loose_ref_replacements() {
+    for relative in ["HEAD", "packed-refs", "refs/heads/main"] {
         let fixture = Fixture::new();
         fixture.root();
         let common = fixture.root.join("git-common");
@@ -39,6 +39,25 @@ async fn cleanup_ref_watch_delivers_external_packed_and_loose_ref_replacements()
         assert_eq!(fixture.state().revision, revision, "External ref wake must not mutate orchestration state");
         fixture.service.watch_cleanup_refs(&[]).unwrap();
     }
+}
+
+#[tokio::test]
+async fn linked_root_head_watch_ignores_index_objects_and_head_lock_churn() {
+    let fixture = Fixture::new();
+    fixture.root();
+    let git_dir = fixture.root.join("git-common/worktrees/root");
+    std::fs::create_dir_all(git_dir.join("objects")).unwrap();
+    std::fs::write(git_dir.join("HEAD"), "old head").unwrap();
+    let mut changes = fixture.service.changes().unwrap();
+    fixture.service.watch_cleanup_refs(&[git_dir.clone()]).unwrap();
+    for relative in ["index", "HEAD.lock", "objects/object"] {
+        std::fs::write(git_dir.join(relative), "unrelated churn").unwrap();
+    }
+    assert!(tokio::time::timeout(Duration::from_millis(100), changes.changed()).await.is_err());
+    std::fs::write(git_dir.join("HEAD.lock"), "new detached head").unwrap();
+    std::fs::rename(git_dir.join("HEAD.lock"), git_dir.join("HEAD")).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), changes.changed()).await.unwrap().unwrap();
+    fixture.service.watch_cleanup_refs(&[]).unwrap();
 }
 
 #[tokio::test]

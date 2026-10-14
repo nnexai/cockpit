@@ -5,7 +5,7 @@ use cockpit_protocol::projects::WorkspaceSetupMode;
 
 use crate::{HerdrAdapter, InspectionError};
 
-mod owned_git;
+pub(crate) mod owned_git;
 pub use owned_git::{
     capture_owned_git_identity, inspect_owned_git, remove_owned_branch, remove_owned_worktree,
 };
@@ -88,6 +88,15 @@ pub struct ProjectWorktreeRemoveRequest {
     pub force: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeStatus {
+    pub porcelain_sha256: String,
+    /// At most 50 repository-relative changed paths; renames use their destination.
+    pub entries: Vec<String>,
+    /// Total changed entries, including those omitted from `entries`.
+    pub count: u32,
+}
+
 /// Typed lifecycle operations, separate from ordinary workbench layout mutations.
 #[async_trait]
 pub trait ProjectHerdrAdapter: HerdrAdapter {
@@ -122,7 +131,7 @@ pub trait ProjectHerdrAdapter: HerdrAdapter {
         checkout_path: &str,
         timeout_ms: u32,
         output_bytes: u32,
-    ) -> Result<bool, InspectionError>;
+    ) -> Result<WorktreeStatus, InspectionError>;
 
     async fn project_close_workspace(
         &self,

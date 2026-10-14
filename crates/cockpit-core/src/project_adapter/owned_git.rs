@@ -1,13 +1,13 @@
 //! Exact local effects only. The caller supplies creation ownership, accepted
-//! integration and exhaustive consumer quiescence; these observations grant none
-//! of that authority. A failed/interrupted effect must be inspected before retry.
+//! output integration or fresh root containment, and exhaustive consumer
+//! quiescence. Unknown effects must be inspected before retry.
 use std::{collections::HashSet, os::unix::fs::MetadataExt, path::Path,
     process::Output, time::{Duration, Instant}};
 
-use cockpit_protocol::orchestration::OwnedGitIdentity;
+use cockpit_protocol::orchestration::{CheckoutIdentity, OwnedGitIdentity};
 use tokio::process::Command;
 
-use crate::{InspectionError, process, process_identity, orchestration::project_identity::checkout_key};
+use crate::{InspectionError, process, process_identity, orchestration::project_identity::{checkout_key, revalidate_checkout}};
 
 fn refusal(message: &str) -> InspectionError {
     InspectionError::new("owned_git_conflict", message)
@@ -180,8 +180,8 @@ async fn branch_tip(identity: &OwnedGitIdentity, budget: &Budget) -> Result<Opti
     Ok(Some(tip))
 }
 async fn clean_checkout(path: &str, budget: &Budget) -> Result<(), InspectionError> {
-    let status = budget.checked(path, &["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none"]).await?;
-    if !status.stdout.is_empty() { return Err(refusal("Owned checkout has tracked, untracked, ignored or submodule changes")); }
+    let status = budget.checked(path, &["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"]).await?;
+    if !status.stdout.is_empty() { return Err(refusal("Owned checkout has tracked, untracked or submodule changes")); }
     let files = budget.checked(path, &["ls-files", "--stage", "-z"]).await?;
     // Non-force Git removal does not support worktrees containing submodules;
     // never flatten or recursively remove their otherwise unclassified contents.
@@ -278,6 +278,40 @@ async fn inspect(identity: &OwnedGitIdentity, expected: &str, worktree: bool, bu
     }
 }
 
+async fn containment_head(checkout: &CheckoutIdentity, budget: &Budget) -> Result<String, InspectionError> {
+    revalidate_checkout(checkout)?;
+    let git = checkout.git.as_ref().ok_or_else(|| refusal("Merge target has no recorded Git binding"))?;
+    let (common, git_dir) = git_paths(&checkout.path, budget).await?;
+    if common != git.common_dir || git_dir != git.worktree_git_dir
+        || checkout_key(&checkout.path, &git_dir) != checkout.key {
+        return Err(refusal("Merge target Git binding changed"));
+    }
+    match std::fs::symlink_metadata(Path::new(&common).join("info/grafts")) {
+        Ok(_) => return Err(refusal("Git grafts cannot establish accepted output containment")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(_) => return Err(refusal("Git graft presence cannot be established")),
+    }
+    let head = budget.line(&checkout.path, &["rev-parse", "--verify", "HEAD^{commit}"]).await?;
+    if !oid(&head) { return Err(refusal("Merge target HEAD is not an exact commit object")); }
+    revalidate_checkout(checkout)?;
+    Ok(head)
+}
+
+/// Deletion-specific containment proof under an unchanged physical Git binding.
+pub(crate) async fn contained_head(checkout: &CheckoutIdentity, accepted_head: &str,
+    expected_head: Option<&str>) -> Result<Option<String>, InspectionError> {
+    if !oid(accepted_head) { return Err(refusal("Accepted output is not an exact commit object")); }
+    let budget = Budget::new(2_000, 4096)?;
+    let head = containment_head(checkout, &budget).await?;
+    let changed = || InspectionError::new("merged_target_changed", "Merge target HEAD changed during cleanup");
+    if expected_head.is_some_and(|expected| expected != head) { return Err(changed()); }
+    let ancestor = budget.git(&checkout.path, &["merge-base", "--is-ancestor", accepted_head, &head]).await?;
+    if ancestor.status.code() == Some(1) { return Ok(None); }
+    if !ancestor.status.success() { return Err(refusal("Git could not establish accepted output containment")); }
+    if containment_head(checkout, &budget).await? != head { return Err(changed()); }
+    Ok(Some(head))
+}
+
 /// True means present and eligible; false means exact absence, never uncertain state.
 pub async fn inspect_owned_git(identity: &OwnedGitIdentity, expected_head: &str, worktree: bool,
     timeout_ms: u64, output_bytes: usize) -> Result<bool, InspectionError> {
@@ -342,6 +376,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn containment_requires_exact_target_head_and_real_ancestry() {
+        let fixture = Fixture::new().await;
+        let (_, checkout) = crate::orchestration::project_identity::resolve_directory(Path::new(&fixture.main), None, None).await.unwrap();
+        let tip = &fixture.identity.creation_tip;
+        assert_eq!(contained_head(&checkout, tip, None).await.unwrap(), Some(tip.clone()));
+        assert_eq!(contained_head(&checkout, tip, Some(tip)).await.unwrap(), Some(tip.clone()));
+        let budget = Budget::new(10_000, 128 * 1024).unwrap();
+        budget.checked(&fixture.linked, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "unmerged output"]).await.unwrap();
+        let unmerged = budget.line(&fixture.linked, &["rev-parse", "--verify", "HEAD"]).await.unwrap();
+        assert!(contained_head(&checkout, &unmerged, None).await.unwrap().is_none());
+        budget.checked(&fixture.main, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "target moved"]).await.unwrap();
+        assert_eq!(contained_head(&checkout, tip, Some(tip)).await.unwrap_err().code, "merged_target_changed");
+        let current = budget.line(&fixture.main, &["rev-parse", "--verify", "HEAD"]).await.unwrap();
+        assert_eq!(contained_head(&checkout, tip, None).await.unwrap(), Some(current));
+    }
+
+    #[tokio::test]
+    async fn containment_rejects_grafts_and_changed_git_binding() {
+        let fixture = Fixture::new().await;
+        let (_, mut checkout) = crate::orchestration::project_identity::resolve_directory(Path::new(&fixture.main), None, None).await.unwrap();
+        let grafts = Path::new(&fixture.identity.common_dir).join("info/grafts");
+        std::fs::write(&grafts, format!("{}\n", fixture.identity.creation_tip)).unwrap();
+        assert!(contained_head(&checkout, &fixture.identity.creation_tip, None).await.is_err());
+        std::fs::remove_file(grafts).unwrap();
+        checkout.git.as_mut().unwrap().worktree_git_dir = fixture.linked.clone();
+        assert!(contained_head(&checkout, &fixture.identity.creation_tip, None).await.is_err());
+    }
+
+    #[tokio::test]
     async fn exact_tip_conflict_preserves_worktree_and_branch() {
         let fixture = Fixture::new().await;
         let budget = Budget::new(10_000, 128 * 1024).unwrap();
@@ -377,14 +440,16 @@ mod tests {
 
     #[tokio::test]
     async fn tracked_edits_and_concealing_index_flags_are_preserved() {
-        let fixture = Fixture::new().await;
-        let tracked = Path::new(&fixture.linked).join("tracked");
-        std::fs::write(&tracked, "preserve\n").unwrap();
-        assert!(remove_owned_worktree(&fixture.identity, &fixture.identity.creation_tip, 10_000, 128 * 1024).await.is_err());
-        let budget = Budget::new(10_000, 128 * 1024).unwrap();
-        budget.checked(&fixture.linked, &["update-index", "--assume-unchanged", "--", "tracked"]).await.unwrap();
-        assert!(remove_owned_worktree(&fixture.identity, &fixture.identity.creation_tip, 10_000, 128 * 1024).await.is_err());
-        assert_eq!(std::fs::read_to_string(tracked).unwrap(), "preserve\n");
+        for flag in ["--assume-unchanged", "--skip-worktree"] {
+            let fixture = Fixture::new().await;
+            let tracked = Path::new(&fixture.linked).join("tracked");
+            std::fs::write(&tracked, "preserve\n").unwrap();
+            assert!(remove_owned_worktree(&fixture.identity, &fixture.identity.creation_tip, 10_000, 128 * 1024).await.is_err());
+            let budget = Budget::new(10_000, 128 * 1024).unwrap();
+            budget.checked(&fixture.linked, &["update-index", flag, "--", "tracked"]).await.unwrap();
+            assert!(remove_owned_worktree(&fixture.identity, &fixture.identity.creation_tip, 10_000, 128 * 1024).await.is_err());
+            assert_eq!(std::fs::read_to_string(tracked).unwrap(), "preserve\n");
+        }
     }
 
     #[tokio::test]
@@ -395,18 +460,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dirty_untracked_and_ignored_files_are_preserved() {
+    async fn nonignored_untracked_files_are_preserved_alongside_ignored_outputs() {
         let fixture = Fixture::new().await;
-        for file in ["untracked", "ignored"] {
-            if file == "ignored" {
-                std::fs::write(Path::new(&fixture.identity.common_dir).join("info/exclude"), "ignored\n").unwrap();
-            }
-            let path = Path::new(&fixture.linked).join(file);
-            std::fs::write(&path, "preserve").unwrap();
-            assert!(remove_owned_worktree(&fixture.identity, &fixture.identity.creation_tip, 10_000, 128 * 1024).await.is_err());
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), "preserve");
-            std::fs::remove_file(path).unwrap();
-        }
+        std::fs::write(Path::new(&fixture.identity.common_dir).join("info/exclude"), "ignored\n").unwrap();
+        let ignored = Path::new(&fixture.linked).join("ignored");
+        let untracked = Path::new(&fixture.linked).join("untracked");
+        std::fs::write(&ignored, "output").unwrap();
+        std::fs::write(&untracked, "preserve").unwrap();
+        assert!(remove_owned_worktree(&fixture.identity, &fixture.identity.creation_tip, 10_000, 128 * 1024).await.is_err());
+        assert_eq!(std::fs::read_to_string(untracked).unwrap(), "preserve");
+        assert_eq!(std::fs::read_to_string(ignored).unwrap(), "output");
+    }
+
+    #[tokio::test]
+    async fn ignored_only_outputs_are_removed_with_nonforce_worktree_removal() {
+        let fixture = Fixture::new().await;
+        std::fs::write(Path::new(&fixture.identity.common_dir).join("info/exclude"), "ignored/\n").unwrap();
+        let ignored = Path::new(&fixture.linked).join("ignored");
+        std::fs::create_dir(&ignored).unwrap();
+        std::fs::write(ignored.join("output"), "generated").unwrap();
+        assert!(remove_owned_worktree(&fixture.identity, &fixture.identity.creation_tip, 10_000, 128 * 1024).await.unwrap());
+        assert!(!Path::new(&fixture.linked).exists());
+        assert!(!inspect_owned_git(&fixture.identity, &fixture.identity.creation_tip, true, 10_000, 128 * 1024).await.unwrap());
+        let budget = Budget::new(10_000, 128 * 1024).unwrap();
+        assert_eq!(branch_tip(&fixture.identity, &budget).await.unwrap(), Some(fixture.identity.creation_tip.clone()));
+        assert_eq!(std::fs::read_to_string(Path::new(&fixture.main).join("tracked")).unwrap(), "original\n");
+    }
+
+    #[tokio::test]
+    async fn clean_submodule_checkout_is_preserved_by_nonforce_removal_guard() {
+        let fixture = Fixture::new().await;
+        let budget = Budget::new(10_000, 128 * 1024).unwrap();
+        budget.checked(&fixture.linked, &["-c", "protocol.file.allow=always", "submodule", "add", "--", &fixture.main, "submodule"]).await.unwrap();
+        budget.checked(&fixture.linked, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "add submodule"]).await.unwrap();
+        let expected = budget.line(&fixture.linked, &["rev-parse", "--verify", "HEAD"]).await.unwrap();
+        let status = budget.checked(&fixture.linked, &["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"]).await.unwrap();
+        assert!(status.stdout.is_empty());
+        assert!(remove_owned_worktree(&fixture.identity, &expected, 10_000, 128 * 1024).await.is_err());
+        assert_eq!(std::fs::read_to_string(Path::new(&fixture.linked).join("submodule/tracked")).unwrap(), "original\n");
+        assert!(Path::new(&fixture.linked).is_dir());
     }
 
     #[tokio::test]

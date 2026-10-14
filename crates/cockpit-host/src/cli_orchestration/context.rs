@@ -87,6 +87,14 @@ impl OrchestrationArgs {
     }
 }
 
+pub(super) fn require_job(args: &OrchestrationArgs) -> Result<(), CliError> {
+    if args.operator {
+        return Err(CliError::new("actor_forbidden",
+            "Operator mode cannot act as a job; use an explicit task or run management target"));
+    }
+    Ok(())
+}
+
 pub(super) struct Context {
     pub(super) service: OrchestrationService,
     pub(super) adapter: Arc<HerdrCliAdapter>,
@@ -104,6 +112,7 @@ impl Context {
         let OrchestrationAction::Report { kind: cockpit_protocol::orchestration::ReportKind::Result, message_id, .. } = action else {
             return Ok(None);
         };
+        require_job(args)?;
         let Some(mut actor) = job_actor(args)? else { return Ok(None) };
         let service = OrchestrationService::open(&args.configuration()?)?;
         let Actor::Agent(caller) = &mut actor else { unreachable!() };
@@ -123,6 +132,7 @@ impl Context {
     pub(super) async fn finish_cleanup(
         args: &OrchestrationArgs, action: OrchestrationAction,
     ) -> Result<OrchestrationMutationResponse, CliError> {
+        require_job(args)?;
         let OrchestrationAction::CleanupFinish { request: finish } = &action else {
             return Err(CliError::new("actor_forbidden", "Dedicated cleanup admission only accepts CleanupFinish"));
         };
@@ -151,6 +161,7 @@ impl Context {
     pub(super) fn register(
         args: &OrchestrationArgs, operation_id: String,
     ) -> Result<OrchestrationMutationResponse, CliError> {
+        require_job(args)?;
         let actor = job_actor(args)?.ok_or_else(|| CliError::new(
             "credential_required", "Registration requires an issued private job credential",
         ))?;
@@ -170,7 +181,7 @@ impl Context {
             return Err(CliError::new("credential_mismatch", "Launch run and credential differ"));
         }
         if args.herdr_session.as_ref().is_some_and(|session| *session != job.session_id) {
-            return Err(CliError::new("session_mismatch", "Job belongs to another Herdr session"));
+            return Err(CliError::new("session_mismatch", "Job belongs to another Herdr session; explicit local management can use --operator with a named --root/TASK/RUN and the actual --herdr-session/--herdr-socket"));
         }
         Ok(())
     }
@@ -185,21 +196,23 @@ impl Context {
     ) -> Result<Self, CliError> {
         let configuration = args.configuration()?;
         let service = OrchestrationService::open(&configuration)?;
-        // A present but invalid credential never falls back to operator authority.
-        let mut actor = job_actor(args)?;
+        // Invalid credentials never fall back implicitly; operator authority is explicit.
+        let mut actor = if args.operator {
+            Some(Actor::Operator(cockpit_protocol::orchestration::OperatorOrigin::Native))
+        } else { job_actor(args)? };
         let job = if let Some(Actor::Agent(caller)) = &mut actor {
             let job = service.job_registration_run(caller)?;
             Self::check_launch(args, &job)?;
             caller.session_id = job.session_id.clone();
             Some(service.ensure_registered(caller)?)
         } else { None };
-        let agent_context = caller_required
+        let agent_context = !args.operator && (caller_required
             || std::env::var_os("COCKPIT_RUN_ID").is_some()
             || std::env::var_os("COCKPIT_ATTACHMENT_ID").is_some()
             || args.harness.is_some() || args.session_id.is_some()
             || std::env::var_os("COCKPIT_HARNESS").is_some()
             || std::env::var_os("COCKPIT_SESSION_ID").is_some()
-            || std::env::var("HERDR_ENV").ok().as_deref() == Some("1");
+            || std::env::var("HERDR_ENV").ok().as_deref() == Some("1"));
         if agent_context && actor.is_none() {
             return Err(CliError::new("credential_required", "This command requires a private job credential"));
         }
@@ -225,7 +238,7 @@ impl Context {
         let root = if let Some(Actor::Agent(caller)) = &self.actor {
             let job = self.authenticated_run(caller)?;
             if root.as_ref().is_some_and(|root| *root != job.root_id) {
-                return Err(CliError::new("actor_forbidden", "Job reads are restricted to its task root"));
+                return Err(CliError::new("actor_forbidden", "Job reads are restricted to its task root; explicit local inspection may use --operator --root ROOT"));
             }
             Some(job.root_id)
         } else {
@@ -241,6 +254,9 @@ impl Context {
         &self,
         snapshot: &'a OrchestrationSnapshot,
     ) -> Result<&'a Run, CliError> {
+        if matches!(self.actor, Some(Actor::Operator(_))) {
+            return Err(CliError::new("actor_forbidden", "Operator mode has no job identity; name the task or run explicitly"));
+        }
         let Some(Actor::Agent(caller)) = &self.actor else {
             return Err(CliError::new("credential_required", "This command requires a private job credential"));
         };
@@ -254,13 +270,16 @@ impl Context {
         args: &OrchestrationArgs,
         writing: bool,
     ) -> Result<String, CliError> {
+        if args.operator && writing {
+            return args.root.clone().ok_or_else(|| CliError::usage("operator writes require --root"));
+        }
         let snapshot = self.snapshot(None).await?;
         if writing {
             let own = self.own_run(&snapshot)?;
             if args.root.as_ref().is_some_and(|root| *root != own.root_id) {
                 return Err(CliError::new(
                     "actor_forbidden",
-                    "task writes are restricted to the caller run's root",
+                    "task writes are restricted to the caller run's root; explicit local management may use --operator --root ROOT",
                 ));
             }
             return Ok(own.root_id.clone());
@@ -268,7 +287,7 @@ impl Context {
         if let Some(root) = &args.root {
             return Ok(root.clone());
         }
-        if self.actor.is_some() {
+        if matches!(self.actor, Some(Actor::Agent(_))) {
             match self.own_run(&snapshot) {
                 Ok(own) => return Ok(own.root_id.clone()),
                 Err(error) if error.code == "caller_unbound" => {}
@@ -316,7 +335,11 @@ impl Context {
             input.resource_source = self.service.resolve_resource_source(actor, &request).await?;
             input
         };
-        let result = self.service.mutate_resolved(actor, request, &input)?;
+        let result = self.service.mutate_resolved(actor, request, &input).map_err(|error| {
+            if matches!(actor, Actor::Agent(_)) && matches!(error.code.as_str(), "actor_forbidden" | "session_mismatch") {
+                CliError::new(&error.code, format!("{}; explicit local management may use --operator with --root and named TASK/RUN targets in the actual --herdr-session/--herdr-socket", error.message))
+            } else { error.into() }
+        })?;
         // A failure here is explicitly not a promise that the durable write was undone.
         self.check_caller().await.map_err(|error| CliError::new(
             &error.code, format!("{}; durable mutation may already be committed", error.message),
@@ -330,12 +353,15 @@ impl Context {
     ) -> Result<OrchestrationAction, CliError> {
         use cockpit_core::orchestration::JobRole;
         use cockpit_protocol::orchestration::RunStage;
-        let Some(Actor::Agent(caller)) = &self.actor else {
-            return Err(CliError::new("credential_required", "Replacement requires the managing root credential"));
-        };
-        let (own, role) = self.service.job_role(caller)?;
-        if role != JobRole::Root || own.root_id != root {
-            return Err(CliError::new("actor_forbidden", "Only the managing root replaces task attempts"));
+        match &self.actor {
+            Some(Actor::Operator(_)) => {}
+            Some(Actor::Agent(caller)) => {
+                let (own, role) = self.service.job_role(caller)?;
+                if role != JobRole::Root || own.root_id != root {
+                    return Err(CliError::new("actor_forbidden", "Only the managing root replaces task attempts in job mode; explicit local management may use --operator --root ROOT with a named TASK/RUN"));
+                }
+            }
+            None => return Err(CliError::new("credential_required", "Replacement requires the managing root credential or --operator")),
         }
         let snapshot = self.snapshot(Some(root.into())).await?;
         let ownership = snapshot.task_ownership.iter().find(|ownership| ownership.root_id == root && ownership.task_id == task)

@@ -27,6 +27,8 @@ const MAX_OPERATION_ENTRIES: usize = 4096;
 #[serde(deny_unknown_fields)]
 pub(crate) struct TeardownReceipt {
     pub operation_id: String,
+    #[serde(default)]
+    pub manual: bool,
     pub workspace_id: String,
     pub endpoint_identity: String,
     pub checkout_path: String,
@@ -140,9 +142,6 @@ fn receipt_matches_operation(receipt: &TeardownReceipt, operation: &WorkspaceOpe
     receipt.operation_id == operation.operation_id
         && receipt.operation_id == operation.plan.operation_id
         && operation.workspace_id.as_deref() == Some(receipt.workspace_id.as_str())
-        && receipt.endpoint_identity == operation.plan.endpoint_identity
-        && receipt.session_id == operation.session_id
-        && receipt.session_id == operation.plan.session_id
         && receipt.checkout_path == operation.plan.checkout_path
         && receipt.repository_key == repository.map(|repository| repository.common_dir.as_str()).unwrap_or("")
         && receipt.repository_root == repository.map(|repository| repository.root.as_str()).unwrap_or("")
@@ -475,11 +474,55 @@ impl ProjectStore {
             ),
             Ok(_) => {
                 let receipt: TeardownReceipt = read_json(&self.root_dir, &name)?;
+                if receipt.operation_id != operation_id {
+                    return Err(InspectionError::new(
+                        "association_conflict",
+                        "teardown receipt belongs to another operation",
+                    ));
+                }
                 Ok(Some(receipt))
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(map_io(error, "teardown_read")),
         }
+    }
+
+    pub(crate) fn list_teardown_receipts(&self) -> Result<Vec<TeardownReceipt>, InspectionError> {
+        let mut result = Vec::new();
+        let entries = self.root_dir.entries().map_err(io_error("teardown_read"))?;
+        let mut entries_seen = 0usize;
+        for entry in entries {
+            entries_seen = entries_seen.saturating_add(1);
+            if entries_seen > MAX_OPERATION_ENTRIES {
+                return Err(InspectionError::new(
+                    "state_lookup_bounded",
+                    "teardown lookup exceeded its bounded entry limit",
+                ));
+            }
+            let entry = entry.map_err(io_error("teardown_read"))?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(operation_id) = name.strip_suffix(".teardown.json") else { continue };
+            if Uuid::parse_str(operation_id).is_err() {
+                continue;
+            }
+            let file_type = entry.file_type().map_err(io_error("teardown_read"))?;
+            if file_type.is_symlink() || !file_type.is_file() {
+                return Err(InspectionError::new(
+                    "unsafe_path",
+                    "teardown receipt is not a regular file",
+                ));
+            }
+            if let Some(receipt) = self.read_teardown_receipt(operation_id)? {
+                result.push(receipt);
+            }
+        }
+        result.sort_by(|a, b| {
+            a.updated_at
+                .cmp(&b.updated_at)
+                .then(a.operation_id.cmp(&b.operation_id))
+        });
+        Ok(result)
     }
 
     pub(crate) fn write_teardown_receipt(
@@ -490,12 +533,20 @@ impl ProjectStore {
         validate_resource_id(&receipt.workspace_id, "workspace")?;
         validate_resource_id(&receipt.session_id, "session")?;
         validate_endpoint_identity(&receipt.endpoint_identity)?;
-        let operation = self.load(&receipt.operation_id)?;
-        if !receipt_matches_operation(receipt, &operation) {
-            return Err(InspectionError::new(
-                "stale_identity",
-                "teardown receipt does not match the exact workspace operation",
-            ));
+        let _operation_lock = self.acquire_lock(&receipt.operation_id)?;
+        let operation_name = record_name(&receipt.operation_id);
+        match self.root_dir.symlink_metadata(&operation_name) {
+            Ok(_) => {
+                let operation = self.read_stored_operation(&operation_name)?.operation;
+                if !receipt_matches_operation(receipt, &operation) {
+                    return Err(InspectionError::new(
+                        "stale_identity",
+                        "teardown receipt does not match the exact workspace operation",
+                    ));
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && receipt.manual => {}
+            Err(error) => return Err(map_io(error, "state_read")),
         }
         let _lock =
             self.acquire_named_lock(&teardown_lock_name(&receipt.operation_id), "teardown_lock")?;
@@ -1043,6 +1094,7 @@ mod tests {
     fn teardown_receipt(id: &str, state: TeardownReceiptState) -> TeardownReceipt {
         TeardownReceipt {
             operation_id: id.to_owned(),
+            manual: false,
             workspace_id: "workspace-a".to_owned(),
             endpoint_identity: "endpoint-a".to_owned(),
             session_id: "setup-fixture".to_owned(),
@@ -1101,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn teardown_receipt_accepts_full_endpoint_identity_only_when_exactly_matching() {
+    fn teardown_receipt_accepts_fresh_endpoint_identity_and_rejects_invalid_identity() {
         let endpoint = "unix-socket:/tmp/cockpit-fixture/config/herdr/sessions/fixture/herdr.sock:pid=939432:uid=1000:gid=1000:start=5501986";
         let root = temp_root("teardown-endpoint");
         let id = Uuid::new_v4().to_string();
@@ -1118,12 +1170,112 @@ mod tests {
         store.write_teardown_receipt(&receipt).expect("full matching endpoint");
         assert_eq!(store.read_teardown_receipt(&id).expect("read").expect("receipt").endpoint_identity, endpoint);
         receipt.endpoint_identity = endpoint.replace("pid=939432", "pid=939433");
-        assert_eq!(store.write_teardown_receipt(&receipt).expect_err("different endpoint").code, "stale_identity");
+        receipt.session_id = "fresh-fixture".to_owned();
+        store.write_teardown_receipt(&receipt).expect("fresh endpoint");
+        let fresh_endpoint = receipt.endpoint_identity.clone();
         for invalid in ["".to_owned(), format!("{endpoint}\n"), "x".repeat(4097)] {
             receipt.endpoint_identity = invalid;
             assert_eq!(store.write_teardown_receipt(&receipt).expect_err("invalid endpoint").code, "invalid_identity");
         }
-        assert_eq!(store.read_teardown_receipt(&id).expect("retained read").expect("retained receipt").endpoint_identity, endpoint);
+        assert_eq!(store.read_teardown_receipt(&id).expect("retained read").expect("retained receipt").endpoint_identity, fresh_endpoint);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn standalone_manual_receipt_survives_reopen_and_is_listed_without_setup() {
+        let root = temp_root("manual-teardown-restart");
+        let id = Uuid::new_v4().to_string();
+        let mut receipt = teardown_receipt(&id, TeardownReceiptState::OutcomeUnknown);
+        receipt.manual = true;
+        let store = ProjectStore::new(&root).expect("store");
+        store.write_teardown_receipt(&receipt).expect("manual receipt");
+        assert!(store.list().expect("setup list").is_empty());
+        assert!(!root.join(record_name(&id)).exists());
+        drop(store);
+
+        let reopened = ProjectStore::new(&root).expect("reopened store");
+        assert_eq!(reopened.read_teardown_receipt(&id).expect("read"), Some(receipt.clone()));
+        assert_eq!(reopened.list_teardown_receipts().expect("receipt list"), vec![receipt.clone()]);
+        assert!(reopened.list().expect("reopened setup list").is_empty());
+        receipt.state = TeardownReceiptState::Completed;
+        receipt.updated_at = "2".to_owned();
+        reopened.write_teardown_receipt(&receipt).expect("complete manual receipt");
+        assert_eq!(reopened.list_teardown_receipts().expect("completed list"), vec![receipt]);
+        assert!(!root.join(record_name(&id)).exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn setup_receipt_still_requires_setup_and_defaults_to_non_manual() {
+        let root = temp_root("teardown-default");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        let receipt = teardown_receipt(&id, TeardownReceiptState::Pending);
+        assert!(store.write_teardown_receipt(&receipt).is_err());
+        assert!(store.read_teardown_receipt(&id).expect("absent receipt").is_none());
+
+        store.persist_plan(plan(&id)).expect("plan");
+        store.update(&id, None, |operation| {
+            operation.workspace_id = Some(receipt.workspace_id.clone());
+            Ok(())
+        }).expect("workspace receipt");
+        let operation = store.load(&id).expect("operation before receipt");
+        let mut legacy = serde_json::to_value(&receipt).expect("receipt JSON");
+        legacy.as_object_mut().expect("object").remove("manual");
+        fs::write(root.join(teardown_record_name(&id)), serde_json::to_vec(&legacy).expect("legacy JSON")).expect("legacy receipt");
+        assert_eq!(store.read_teardown_receipt(&id).expect("legacy read"), Some(receipt.clone()));
+        assert_eq!(store.list_teardown_receipts().expect("legacy list"), vec![receipt.clone()]);
+        store.write_teardown_receipt(&receipt).expect("rewrite legacy receipt");
+        let retained = store.load(&id).expect("operation after receipt");
+        assert_eq!(serde_json::to_value(retained).unwrap(), serde_json::to_value(operation).unwrap());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn teardown_listing_combines_manual_and_setup_receipts_and_ignores_other_files() {
+        let root = temp_root("teardown-list");
+        let store = ProjectStore::new(&root).expect("store");
+        let setup_id = Uuid::new_v4().to_string();
+        store.persist_plan(plan(&setup_id)).expect("plan");
+        store.update(&setup_id, None, |operation| {
+            operation.workspace_id = Some("workspace-a".to_owned());
+            Ok(())
+        }).expect("workspace receipt");
+        let setup = teardown_receipt(&setup_id, TeardownReceiptState::Pending);
+        store.write_teardown_receipt(&setup).expect("setup receipt");
+        let mut manual = teardown_receipt(&Uuid::new_v4().to_string(), TeardownReceiptState::OutcomeUnknown);
+        manual.manual = true;
+        manual.updated_at = "2".to_owned();
+        store.write_teardown_receipt(&manual).expect("manual receipt");
+        fs::write(root.join("notes.json"), "not a receipt").expect("unrelated file");
+        fs::write(root.join("not-a-uuid.teardown.json"), "not a receipt").expect("unrelated namespace");
+        assert_eq!(store.list_teardown_receipts().expect("list"), vec![setup, manual]);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn teardown_receipt_read_and_listing_reject_embedded_id_different_from_key() {
+        let root = temp_root("teardown-key");
+        let store = ProjectStore::new(&root).expect("store");
+        let key = Uuid::new_v4().to_string();
+        let mut receipt = teardown_receipt(&Uuid::new_v4().to_string(), TeardownReceiptState::OutcomeUnknown);
+        receipt.manual = true;
+        fs::write(root.join(teardown_record_name(&key)), serde_json::to_vec(&receipt).expect("receipt JSON")).expect("mismatched receipt");
+        assert_eq!(store.read_teardown_receipt(&key).expect_err("different key").code, "association_conflict");
+        assert_eq!(store.list_teardown_receipts().expect_err("different listed key").code, "association_conflict");
+        receipt.operation_id = "../not-a-uuid".to_owned();
+        assert_eq!(store.write_teardown_receipt(&receipt).expect_err("unsafe key").code, "invalid_operation_id");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn teardown_listing_is_bounded_by_directory_entry_count() {
+        let root = temp_root("teardown-bounded");
+        let store = ProjectStore::new(&root).expect("store");
+        for entry in 0..=MAX_OPERATION_ENTRIES {
+            fs::write(root.join(format!("unrelated-{entry}")), "").expect("entry");
+        }
+        assert_eq!(store.list_teardown_receipts().expect_err("entry limit").code, "state_lookup_bounded");
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -1329,15 +1481,13 @@ mod tests {
             Ok(())
         }).unwrap();
         let valid = teardown_receipt(&id, TeardownReceiptState::Pending);
-        for mutation in 0..6 {
+        for mutation in 0..4 {
             let mut receipt = valid.clone();
             match mutation {
-                0 => receipt.session_id = "other".to_owned(),
-                1 => receipt.workspace_id = "other".to_owned(),
-                2 => receipt.endpoint_identity = "other".to_owned(),
-                3 => receipt.checkout_path = "/other".to_owned(),
-                4 => receipt.repository_key = "/other/.git".to_owned(),
-                5 => receipt.repository_root = "/other".to_owned(),
+                0 => receipt.workspace_id = "other".to_owned(),
+                1 => receipt.checkout_path = "/other".to_owned(),
+                2 => receipt.repository_key = "/other/.git".to_owned(),
+                3 => receipt.repository_root = "/other".to_owned(),
                 _ => unreachable!(),
             }
             assert_eq!(store.write_teardown_receipt(&receipt).unwrap_err().code, "stale_identity");
@@ -1347,13 +1497,17 @@ mod tests {
             operation.plan.session_id = "different-plan-session".to_owned();
             Ok(())
         }).unwrap();
-        assert_eq!(store.write_teardown_receipt(&valid).unwrap_err().code, "stale_identity");
+        store.write_teardown_receipt(&valid).expect("historical plan session does not veto receipt");
         store.update(&id, None, |operation| {
             operation.plan.session_id = valid.session_id.clone();
             operation.session_id = "different-operation-session".to_owned();
             Ok(())
         }).unwrap();
-        assert_eq!(store.write_teardown_receipt(&valid).unwrap_err().code, "stale_identity");
+        store.write_teardown_receipt(&valid).expect("historical operation session does not veto receipt");
+        let mut manual = valid.clone();
+        manual.manual = true;
+        manual.workspace_id = "other".to_owned();
+        assert_eq!(store.write_teardown_receipt(&manual).expect_err("manual receipt cannot bypass existing setup association").code, "stale_identity");
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -1368,6 +1522,7 @@ mod tests {
         fs::write(&target, "notes").unwrap();
         symlink(&target, root.join(teardown_record_name(&id))).unwrap();
         assert_eq!(store.read_teardown_receipt(&id).unwrap_err().code, "unsafe_path");
+        assert_eq!(store.list_teardown_receipts().unwrap_err().code, "unsafe_path");
         assert_eq!(fs::read_to_string(target).unwrap(), "notes");
         fs::remove_dir_all(root).expect("cleanup");
     }

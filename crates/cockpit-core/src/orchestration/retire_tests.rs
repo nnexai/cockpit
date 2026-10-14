@@ -327,6 +327,66 @@ async fn foreground_process_never_authorizes_terminal_cancellation() {
 }
 
 #[tokio::test]
+async fn extra_foreground_process_retains_then_same_exact_pane_requeues_and_retires() {
+    let f = Fixture::new(waiting());
+    f.change(pin_direct);
+    add_claim(&f);
+    let original = f.current();
+    let before = f.service.store.lock().unwrap().read().unwrap();
+    let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true), runtime(true), runtime(true), absent()]);
+    let exact_info = h.script.lock().info.clone();
+    h.script.lock().info.processes.push((999, "extra foreground process".into()));
+    h.script.lock().allow_close = true;
+
+    f.step(&h).await.unwrap();
+    assert_eq!(h.closes(), 0);
+    let retained = f.current().retirement.unwrap();
+    assert!(matches!(retained.state, RetirementState::Retained { reason: RetainReason::ForegroundProcess, .. }));
+    let queued = f.service.retirement_queue().unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].retirement.as_ref(), Some(&retained));
+    let saved = std::fs::read(f.service.base().join("state.json")).unwrap();
+    retire_run(&f.service, &h, &queued[0]).await.unwrap();
+    assert_eq!(h.closes(), 0);
+    assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), saved);
+
+    // The next process event reports the extra foreground process gone, with
+    // the original launch and pane unchanged; no timer or signal is required.
+    h.script.lock().info = exact_info;
+    let queued = f.service.retirement_queue().unwrap();
+    retire_run(&f.service, &h, &queued[0]).await.unwrap();
+    let current = f.current();
+    let retired = current.retirement.as_ref().unwrap();
+    assert_eq!(retired.retirement_id, retained.retirement_id);
+    assert_eq!(retired.identity, retained.identity);
+    assert!(matches!(retired.state, RetirementState::Retired { terminal: TerminalOutcome::ClosedByCockpit, .. }));
+    assert_eq!(h.closes(), 1);
+    assert!(f.service.retirement_queue().unwrap().is_empty());
+    let after = f.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(), serde_json::to_value(&before.checkout_claims).unwrap());
+    assert_eq!(serde_json::to_value(&current.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
+    assert_eq!(serde_json::to_value(&current.result).unwrap(), serde_json::to_value(&original.result).unwrap());
+}
+
+#[tokio::test]
+async fn unsafe_retained_reasons_never_reopen_even_with_idle_exact_pane() {
+    for reason in [RetainReason::IdentityChanged, RetainReason::IdentityIncomplete, RetainReason::UserActivity,
+        RetainReason::SharedTab, RetainReason::TabRenamed, RetainReason::PaneMoved, RetainReason::EndpointChanged,
+        RetainReason::HerdrRefused, RetainReason::PrimaryCheckoutSpace] {
+        let f = Fixture::new(RetirementState::Retained { at: old(), reason, stopped: false });
+        f.change(pin_direct);
+        let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true), absent()]);
+        h.script.lock().allow_close = true;
+        let saved = std::fs::read(f.service.base().join("state.json")).unwrap();
+        assert!(f.service.retirement_queue().unwrap().is_empty());
+        f.step(&h).await.unwrap();
+        assert_eq!(h.closes(), 0);
+        assert_eq!(h.runtime_calls(), 0);
+        assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), saved);
+    }
+}
+
+#[tokio::test]
 async fn interrupted_close_observation_never_resends_the_historical_effect() {
     for seen in [false, true] {
         let f = Fixture::new(RetirementState::CloseIntent { at: now() });

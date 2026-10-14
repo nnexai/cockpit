@@ -242,6 +242,81 @@ async fn neutral_cli_recovery_context_child() {
 }
 
 #[test]
+#[ignore = "private CLI environment child, launched with stale operator ambient metadata"]
+fn explicit_operator_cli_environment_child() {
+    use clap::Parser;
+    use super::{TestCli, TestCommand};
+    use super::super::context::Context;
+    use cockpit_core::orchestration::Actor;
+    use cockpit_protocol::orchestration::OperatorOrigin;
+    // Drive each CLI invocation independently, as the binary does. Embedding
+    // both TaskArgs and RunArgs futures in one async-test frame compounds their
+    // large command enums on the libtest worker stack.
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let root = "00000000-0000-4000-8000-000000000003";
+    let task = uuid::Uuid::new_v4().to_string();
+    let TestCommand::Run(agent) = TestCli::try_parse_from([
+        "test", "run", "list",
+    ]).unwrap().command else { panic!("expected run") };
+    let error = match runtime.block_on(Context::open(&agent.common, false)) {
+        Ok(_) => panic!("stale ambient credentials must still fence normal agent mode"),
+        Err(error) => error,
+    };
+    assert!(matches!(error.code.as_str(), "job_credential_invalid" | "unsafe_path"));
+    assert!(error.message.contains("--operator"));
+    let TestCommand::Task(create) = TestCli::try_parse_from([
+        "test", "task", "--operator", "--root", root, "create",
+        "--task-id", &task, "--title", "Operator-created task",
+    ]).unwrap().command else { panic!("expected task") };
+    let context = runtime.block_on(Context::open(&create.common, true)).unwrap();
+    assert!(matches!(context.actor, Some(Actor::Operator(OperatorOrigin::Native))));
+    assert_eq!(context.session, "physical");
+    runtime.block_on(Box::pin(create.run())).unwrap();
+    let snapshot = runtime.block_on(context.snapshot(Some(root.into()))).unwrap();
+    let revision = snapshot.board.unwrap().tasks.into_iter()
+        .find(|view| view.task.task_id == task).unwrap().task.task_revision;
+    let TestCommand::Task(update) = TestCli::try_parse_from([
+        "test", "task", "update", &task, "--operator", "--root", root,
+        "--revision", &revision, "--title", "Operator-updated task",
+    ]).unwrap().command else { panic!("expected task") };
+    runtime.block_on(Box::pin(update.run())).unwrap();
+    let snapshot = runtime.block_on(context.snapshot(Some(root.into()))).unwrap();
+    assert_eq!(snapshot.board.unwrap().tasks.into_iter()
+        .find(|view| view.task.task_id == task).unwrap().task.title, "Operator-updated task");
+    for argv in [
+        vec!["test", "task", "--operator", "--root", root, "schedule", &task, "--space", "explicit-space"],
+        vec!["test", "task", "--operator", "--root", root, "schedule-cancel", &task],
+    ] {
+        let TestCommand::Task(args) = TestCli::try_parse_from(argv).unwrap().command else { panic!("expected task") };
+        runtime.block_on(Box::pin(args.run())).unwrap();
+    }
+    let cleanup_file = std::path::Path::new(&context.configuration.state_root)
+        .join(format!("operator-cleanup-{task}.json"));
+    std::fs::write(&cleanup_file, serde_json::to_vec(&serde_json::json!({
+        "operation_id": uuid::Uuid::new_v4().to_string(), "root_id": root, "run_id": root,
+    })).unwrap()).unwrap();
+    for selected_root in [root, "different-root"] {
+        let TestCommand::Run(cleanup) = TestCli::try_parse_from([
+            "test", "run", "--operator", "--root", selected_root, "cleanup-finish",
+            "--request-file", cleanup_file.to_str().unwrap(),
+        ]).unwrap().command else { panic!("expected run") };
+        let result = runtime.block_on(Box::pin(cleanup.run()));
+        if selected_root == root { result.unwrap(); }
+        else { assert_eq!(result.unwrap_err().code, "actor_forbidden"); }
+    }
+    std::fs::remove_file(cleanup_file).unwrap();
+    let TestCommand::Task(foreign) = TestCli::try_parse_from([
+        "test", "task", "--operator", "--root", root, "--herdr-session", "foreign",
+        "create", "--task-id", &uuid::Uuid::new_v4().to_string(), "--title", "Wrong session",
+    ]).unwrap().command else { panic!("expected task") };
+    assert_eq!(runtime.block_on(Box::pin(foreign.run())).unwrap_err().code, "session_mismatch");
+    let TestCommand::Task(no_root) = TestCli::try_parse_from([
+        "test", "task", "--operator", "create", "--title", "No implicit write root",
+    ]).unwrap().command else { panic!("expected task") };
+    assert_eq!(runtime.block_on(Box::pin(no_root.run())).unwrap_err().code, "orchestration_usage");
+}
+
+#[test]
 fn no_extension_context_registration_uses_private_capability_without_live_herdr() {
     use std::os::unix::fs::PermissionsExt;
     use sha2::{Digest, Sha256};
@@ -341,6 +416,24 @@ fn no_extension_context_registration_uses_private_capability_without_live_herdr(
     let recovery = child("cli_orchestration::tests::identity::neutral_cli_recovery_context_child")
         .output().unwrap();
     assert!(recovery.status.success(), "{}", String::from_utf8_lossy(&recovery.stderr));
+    let operator = child("cli_orchestration::tests::identity::explicit_operator_cli_environment_child")
+        .env("HERDR_ENV", "1")
+        .env("COCKPIT_RUN_ID", "stale-run")
+        .env("COCKPIT_ATTACHMENT_ID", "stale-attachment")
+        .env("COCKPIT_ATTACHMENT_EPOCH", "999")
+        .env("COCKPIT_HARNESS", "stale-harness")
+        .env("COCKPIT_SESSION_ID", "stale-conversation")
+        .output().unwrap();
+    assert!(operator.status.success(), "{}", String::from_utf8_lossy(&operator.stderr));
+    let missing = child("cli_orchestration::tests::identity::explicit_operator_cli_environment_child")
+        .env("HERDR_ENV", "1")
+        .env("COCKPIT_JOB_CREDENTIAL_FILE", root.join("missing-credential"))
+        .env("COCKPIT_RUN_ID", "stale-run")
+        .env("COCKPIT_ATTACHMENT_ID", "stale-attachment")
+        .env("COCKPIT_HARNESS", "stale-harness")
+        .env("COCKPIT_SESSION_ID", "stale-conversation")
+        .output().unwrap();
+    assert!(missing.status.success(), "{}", String::from_utf8_lossy(&missing.stderr));
     let stdout = String::from_utf8_lossy(&recovery.stdout);
     let context = stdout.lines().filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|value| value.get("inbox_capture_directory").is_some()).expect("subsequent run context pointer");

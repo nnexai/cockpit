@@ -4,7 +4,7 @@ import { struct, tagged, literal, req, opt, named, str, bool, f64, u8, u16, u32,
 
 export const wireWorkspaceTeardownAction: WireDescriptor<V1.WorkspaceTeardownAction> = literal<V1.WorkspaceTeardownAction>("WorkspaceTeardownAction", ["close_space", "remove_owned_worktree", "reconcile_remove_outcome"]);
 
-export const wireWorkspaceTeardownOwnership: WireDescriptor<V1.WorkspaceTeardownOwnership> = literal<V1.WorkspaceTeardownOwnership>("WorkspaceTeardownOwnership", ["owned_created", "borrowed_opened", "unknown"]);
+export const wireWorkspaceTeardownOwnership: WireDescriptor<V1.WorkspaceTeardownOwnership> = literal<V1.WorkspaceTeardownOwnership>("WorkspaceTeardownOwnership", ["owned_created", "borrowed_opened", "selected_linked", "unknown"]);
 
 export const wireWorkspaceTeardownDirtyState: WireDescriptor<V1.WorkspaceTeardownDirtyState> = literal<V1.WorkspaceTeardownDirtyState>("WorkspaceTeardownDirtyState", ["clean", "dirty", "unknown"]);
 
@@ -21,6 +21,7 @@ export const wireWorkspaceTeardownExecuteRequest: WireDescriptor<V1.WorkspaceTea
   "expected_checkout_path": req(str),
   "action": req(named(() => wireWorkspaceTeardownAction)),
   "confirmation": req(str),
+  "discard_fingerprint": opt(str, OMIT, { fill: null, rustOmits: true }),
 });
 
 export const wireWorkspaceTeardownPreview: WireDescriptor<V1.WorkspaceTeardownPreview> = struct<V1.WorkspaceTeardownPreview>("WorkspaceTeardownPreview", {
@@ -34,6 +35,9 @@ export const wireWorkspaceTeardownPreview: WireDescriptor<V1.WorkspaceTeardownPr
   "workspace_state": req(named(() => wireWorkspaceTeardownWorkspaceState)),
   "is_linked_worktree": req(bool),
   "dirty_state": req(named(() => wireWorkspaceTeardownDirtyState)),
+  "discard_count": req(u32),
+  "discard_paths": req(list(str)),
+  "discard_fingerprint": req(nullable(str), { fill: null }),
   "allowed_actions": req(list(named(() => wireWorkspaceTeardownAction))),
   "blockers": req(list(str)),
   "warnings": req(list(str)),

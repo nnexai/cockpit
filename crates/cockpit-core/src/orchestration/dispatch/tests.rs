@@ -37,7 +37,7 @@ impl ProjectHerdrAdapter for ReadOnlyProjectAdapter {
     }
     async fn project_worktree(&self, _: &str, _: &ProjectWorktreeRequest) -> Result<ProjectWorktreeResult, InspectionError> { unused_project_call() }
     async fn project_terminal(&self, _: &str, _: &ProjectTerminalRequest) -> Result<ProjectTerminalResult, InspectionError> { unused_project_call() }
-    async fn project_worktree_dirty(&self, _: &str, _: u32, _: u32) -> Result<bool, InspectionError> { unused_project_call() }
+    async fn project_worktree_dirty(&self, _: &str, _: u32, _: u32) -> Result<crate::project_adapter::WorktreeStatus, InspectionError> { unused_project_call() }
     async fn project_close_workspace(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> { unused_project_call() }
     async fn project_remove_worktree(&self, _: &str, _: &ProjectWorktreeRemoveRequest) -> Result<(), InspectionError> { unused_project_call() }
 }
@@ -2123,6 +2123,41 @@ async fn pane_events_coalesce_and_disconnect_reconnects_without_snapshot_polling
     assert_eq!(adapter.runtime_calls.load(Ordering::SeqCst), 0, "event adapter must not drive idle runtime polling");
     stop.cancel();
     task.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn foreground_retirement_deadline_advances_without_global_idle_polling() {
+    use cockpit_protocol::orchestration::{RetainReason, RetirementState, RetirementTrigger, RunRetirement};
+    let fixture = ReviewFixture::new(RunStage::Closed);
+    let mut run = fixture.run.clone();
+    run.retirement = Some(RunRetirement {
+        retirement_id: "pending-retirement".into(), trigger: RetirementTrigger::Accept,
+        result_message_id: None, task_revision: None, replacement: None, identity: None,
+        state: RetirementState::Retained {
+            at: "old observation".into(), reason: RetainReason::ForegroundProcess, stopped: false,
+        },
+        created_at: "0".into(), updated_at: "0".into(),
+    });
+    let at = tokio::time::Instant::now();
+    let mut retries = BTreeMap::from([(run.run_id.clone(), at)]);
+    let due = due_retirement_retries(&mut retries, vec![run.clone()], at);
+    assert_eq!(due.len(), 1);
+    assert_eq!(retries[&run.run_id], at + RETIREMENT_RETRY_DELAY);
+    assert!(due_retirement_retries(&mut retries, vec![run.clone()], at).is_empty(),
+        "unchanged observations or lease contention must not leave a past deadline");
+    tokio::time::advance(RETIREMENT_RETRY_DELAY - Duration::from_millis(1)).await;
+    assert!(due_retirement_retries(&mut retries, vec![run.clone()], tokio::time::Instant::now()).is_empty());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_eq!(due_retirement_retries(&mut retries, vec![run.clone()], tokio::time::Instant::now()).len(), 1);
+    assert_eq!(retries[&run.run_id], at + RETIREMENT_RETRY_DELAY * 2);
+    run.retirement.as_mut().unwrap().state = RetirementState::Retained {
+        at: "permanent guard".into(), reason: RetainReason::IdentityChanged, stopped: false,
+    };
+    assert!(due_retirement_retries(&mut retries, vec![run.clone()], at + RETIREMENT_RETRY_DELAY * 2).is_empty());
+    assert!(retries.is_empty(), "permanent guards have no retry deadline");
+    retries.insert(run.run_id.clone(), at);
+    assert!(due_retirement_retries(&mut retries, Vec::new(), at).is_empty());
+    assert!(retries.is_empty(), "retired or absent candidates have no retry deadline");
 }
 
 #[test]

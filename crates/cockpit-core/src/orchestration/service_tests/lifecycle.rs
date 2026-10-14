@@ -1,6 +1,88 @@
 use super::*;
 
 #[test]
+fn operator_schedule_executes_without_a_current_supervisor_capability() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let agent = fixture.launch_and_bind(&root);
+    let task = fixture.create_task(&root, "Local scheduled execution");
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        for credential in &mut state.credentials {
+            if credential.run_id == root { credential.state = credentials::CredentialState::Revoked; }
+        }
+        locked.save(&mut state).unwrap();
+    }
+    let action = OrchestrationAction::TaskSchedule {
+        operation_id: id(), root_id: root.clone(), task_id: task.task_id.clone(),
+        target: Some(target()), brief: String::new(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+        label: None, expected_task_revision: Some(task.task_revision), expected_doc_revision: None,
+    };
+    assert_code(fixture.apply(&agent, action.clone()), "job_unauthorized");
+    fixture.apply(&Actor::Operator(OperatorOrigin::Native), action).unwrap();
+    let candidates = fixture.service.schedule_candidates(4).unwrap();
+    assert_eq!(candidates.len(), 1, "operator receipts must reach execution, not merely save a schedule");
+    let start = fixture.service.scheduled_start(&candidates[0], &ResolvedMutationInput {
+        project: Some(fixture.project()), ..Default::default()
+    }).unwrap().unwrap();
+    assert_eq!(fixture.run(&start.run_id).task_id, Some(task.task_id));
+    assert_eq!(fixture.run(&start.run_id).stage, RunStage::Queued);
+}
+
+#[test]
+fn local_operator_manages_explicit_tasks_and_attempts_without_a_job_credential() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.launch_and_bind(&root);
+    let operator = Actor::Operator(OperatorOrigin::Native);
+    let task = fixture.create_task(&root, "Operator task");
+    let updated = task_result(fixture.apply(&operator, OrchestrationAction::TaskUpdate {
+        root_id: root.clone(), task_id: task.task_id.clone(),
+        expected_task_revision: task.task_revision, title: Some("Updated by operator".into()), description: None,
+    }).unwrap());
+    assert_eq!(updated.title, "Updated by operator");
+    fixture.apply(&operator, OrchestrationAction::TaskSchedule {
+        operation_id: id(), root_id: root.clone(), task_id: updated.task_id.clone(),
+        target: Some(target()), brief: String::new(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+        label: None, expected_task_revision: Some(updated.task_revision.clone()), expected_doc_revision: None,
+    }).unwrap();
+    fixture.apply(&operator, OrchestrationAction::TaskScheduleCancel {
+        operation_id: id(), root_id: root.clone(), task_id: updated.task_id.clone(),
+    }).unwrap();
+    let response = fixture.apply(&operator, fixture.start_action(&root, &updated)).unwrap();
+    let OrchestrationActionResult::WorkerStarted { start } = response.result else { unreachable!() };
+    let unassign = OrchestrationAction::TaskUnassign {
+        operation_id: id(), root_id: root.clone(), task_id: updated.task_id.clone(),
+        expected_assignment_generation: 0,
+    };
+    let mut stale = unassign.clone();
+    let OrchestrationAction::TaskUnassign { expected_assignment_generation, .. } = &mut stale else { unreachable!() };
+    *expected_assignment_generation = 99;
+    assert_code(fixture.apply(&operator, stale), "assignment_generation_conflict");
+    fixture.apply(&operator, unassign).unwrap();
+    assert_eq!(fixture.run(&start.run_id).close_reason, Some(CloseReason::Superseded));
+}
+
+#[test]
+fn local_operator_refuses_foreign_session_and_worker_roots_without_writes() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.launch_and_bind(&root);
+    let task = fixture.create_task(&root, "Scope fences");
+    let operator = Actor::Operator(OperatorOrigin::Native);
+    let before = fixture.state().revision;
+    assert_code(fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
+        session_id: "another-session".into(), expected_revision: None,
+        action: fixture.start_action(&root, &task),
+    }, &ResolvedMutationInput { project: Some(fixture.project()), ..Default::default() }), "session_mismatch");
+    assert_eq!(fixture.state().revision, before);
+    let worker = fixture.start(&root, &task);
+    assert_code(fixture.apply(&operator, fixture.start_action(&worker, &task)), "root_not_found");
+    assert_code(fixture.apply(&operator, OrchestrationAction::RunRegister { operation_id: id() }), "actor_forbidden");
+}
+
+#[test]
 fn machine_revision_cas_rejects_stale_service_and_preserves_durable_state() {
     let fixture = Fixture::new();
     let other = OrchestrationService::open(&fixture.configuration).unwrap();

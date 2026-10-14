@@ -93,10 +93,8 @@
 .setup-inline-status.is-invalid { color: var(--blocked); }
 
 .setup-diagnostics strong { color: var(--text-primary); }
-.setup-diagnostics ul,
-.setup-warnings ul { margin: 6px 0 0; padding-left: 18px; }
-.setup-diagnostics li + li,
-.setup-warnings li + li { margin-top: 3px; }
+.setup-diagnostics ul { margin: 6px 0 0; padding-left: 18px; }
+.setup-diagnostics li + li { margin-top: 3px; }
 .setup-diagnostics {
   margin-top: 16px;
   border: 1px solid var(--border);
@@ -106,6 +104,8 @@
   line-height: 18px;
   border-color: var(--warning);
 }
+.setup-diagnostics .setup-discard-list { max-height: 132px; overflow-y: auto; list-style: none; padding-left: 0; }
+.setup-discard-list code { font-family: var(--font-mono); font-size: var(--font-size-control); overflow-wrap: anywhere; }
 
 .setup-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
 .setup-actions button:first-child:not(.setup-primary) { margin-right: auto; }
@@ -118,8 +118,6 @@
 .setup-summary-row { display: grid; grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr); gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
 .setup-summary-row > :last-child { min-width: 0; overflow-wrap: anywhere; color: var(--text-primary); }
 .setup-summary-row code { font-family: var(--font-mono); font-size: var(--font-size-control); overflow-wrap: anywhere; color: var(--text-primary); }
-.setup-warnings strong { color: var(--text-primary); }
-.setup-warnings { padding: 10px 12px; font-size: var(--font-size-control); line-height: 18px; border-top: 1px solid var(--border); color: var(--warning); }
 
 .setup-error { margin: 10px 0 0; border-left: 2px solid var(--blocked); padding-left: 9px; color: var(--blocked); font-size: var(--font-size-control); line-height: 18px; }
 

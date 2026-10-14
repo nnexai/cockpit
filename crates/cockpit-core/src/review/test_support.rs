@@ -121,7 +121,7 @@ impl ProjectHerdrAdapter for NoopAdapter {
         _: &str,
         _: u32,
         _: u32,
-    ) -> Result<bool, InspectionError> {
+    ) -> Result<crate::project_adapter::WorktreeStatus, InspectionError> {
         unavailable()
     }
     async fn project_close_workspace(

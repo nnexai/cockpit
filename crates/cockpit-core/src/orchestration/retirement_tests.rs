@@ -714,6 +714,8 @@ fn accepted_late_conversation_preserves_creation_history_and_checkout_claims() {
 fn reobservation_and_unsubmitted_intent_require_exact_saved_record_and_identity() {
     for state in [
         RetirementState::Retained { at: AT.into(), reason: RetainReason::NativeProcessUnverifiable, stopped: false },
+        RetirementState::Retained { at: AT.into(), reason: RetainReason::ObservationUnavailable, stopped: false },
+        RetirementState::Retained { at: AT.into(), reason: RetainReason::ForegroundProcess, stopped: false },
         RetirementState::CloseIntent { at: AT.into() },
     ] {
         for changed in 0..5 {
@@ -722,6 +724,7 @@ fn reobservation_and_unsubmitted_intent_require_exact_saved_record_and_identity(
             fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().state = state.clone());
             let run = fixture.run();
             let observed = run.retirement.unwrap();
+            assert_eq!(fixture.service.retirement_queue().unwrap().len(), 1);
             match changed {
                 0 => {},
                 1 => fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().retirement_id = id()),
@@ -748,7 +751,9 @@ fn reobservation_and_unsubmitted_intent_require_exact_saved_record_and_identity(
             }
         }
     }
-    for reason in [RetainReason::IdentityChanged, RetainReason::UserActivity, RetainReason::SharedTab] {
+    for reason in [RetainReason::IdentityChanged, RetainReason::IdentityIncomplete, RetainReason::UserActivity,
+        RetainReason::SharedTab, RetainReason::TabRenamed, RetainReason::PaneMoved, RetainReason::EndpointChanged,
+        RetainReason::HerdrRefused, RetainReason::PrimaryCheckoutSpace] {
         let fixture = Fixture::new();
         fixture.accept();
         fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().state = RetirementState::Retained {

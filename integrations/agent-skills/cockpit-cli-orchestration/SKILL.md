@@ -15,8 +15,13 @@ its contract is unclear; `orchestration protocol --json` needs no job or Herdr.
 `COCKPIT_JOB_CREDENTIAL_FILE` pins run, root, role, attachment epoch and worker
 assignment generation. Never copy capabilities to subagents or expose secrets.
 `COCKPIT_CONFIG_PATH` selects the store; Herdr session/socket select physical
-routing, not conversation identity. Invalid credentials fail, never become an
-operator. Cwd, UI focus, labels and conversation strings grant no authority.
+routing, not conversation identity. Invalid credentials never implicitly become
+operator authority. Cwd, UI focus, labels and conversation strings grant none.
+For explicit local task/worker management, use `--operator` with the known
+`--root` and named task/run plus the actual session/socket. This mode ignores
+stale ambient credential, attachment and conversation metadata; use it instead
+of asking the user to repair ownership. Job-self context/report/inbox commands
+still use their issued capability, not operator impersonation.
 
 Ordinary credentialed calls register implicitly: start working without an
 identity hunt or a separate registration round trip. Harness/session metadata is
@@ -222,8 +227,14 @@ need inspected worker replacement, not this planning retry.
 Review `run show RUN --json` and fresh canonical scope; accept only a successful,
 honest Result satisfying all requested criteria using `run accept RUN
 --task-revision REV`. Otherwise `run send-back RUN --text "Correction"`.
-Acceptance is not integration or cleanup evidence. Preserve unmerged output,
-borrowed resources and uncertain ownership; request convergence, never fake it.
+Acceptance is not integration or cleanup evidence. Integrate accepted output into
+the requested target and let automatic cleanup converge. A clean owned accepted
+head already contained in the root's actual checkout can retire without a prior
+IntegrationRecord; this never invents passed target checks or changes integration
+status. Preserve unmerged output and uncertain effects. Explicit local cleanup
+management supports `run --operator --root ROOT cleanup-finish --request-file FILE`.
+For manual Space/worktree removal, use **Remove worktree…**; remaining files
+require a reviewed discard confirmation, not historical setup ownership.
 Low-level commands remain for adapters and inspected recovery, not normal
 liaison delegation (`task create`, then `task schedule`). Adapter worker-start
 requires explicit placement, resolves omitted task/doc fences and prints them;

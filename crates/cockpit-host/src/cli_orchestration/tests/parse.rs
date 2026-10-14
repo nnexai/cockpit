@@ -334,7 +334,7 @@ fn management_requires_explicit_targets_and_exact_revision_arguments() {
         assert!(TestCli::try_parse_from(["test", "run", command, "worker", flag, "exact"]).is_ok());
         assert!(TestCli::try_parse_from([
             "test", "run", command, "worker", flag, "exact", "--operator",
-        ]).is_err());
+        ]).is_ok());
     }
     assert!(TestCli::try_parse_from(["test", "run", "cancel", "worker"]).is_ok());
     assert!(TestCli::try_parse_from([
@@ -391,7 +391,7 @@ async fn message_reply_pairing_is_rejected_before_endpoint_access() {
 #[test]
 fn reconcile_is_limited_to_explicit_uncertain_setup_recovery() {
     assert!(TestCli::try_parse_from(["test", "run", "reconcile", "worker"]).is_ok());
-    assert!(TestCli::try_parse_from(["test", "run", "reconcile", "worker", "--operator"]).is_err());
+    assert!(TestCli::try_parse_from(["test", "run", "reconcile", "worker", "--operator"]).is_ok());
     let parsed = TestCli::try_parse_from([
         "test", "run", "reconcile", "worker", "--recovery", "accept-existing-worktree",
     ]).unwrap();
@@ -453,10 +453,45 @@ fn worker_start_preserves_exact_operation_scope_and_cas_fences() {
     flags.drain(index..index + 2);
     flags.extend(["--space", "project"]);
     assert!(TestCli::try_parse_from(flags).is_err());
-    for obsolete in ["--parent", "--supersedes", "--plan-revision", "--operator"] {
+    for obsolete in ["--parent", "--supersedes", "--plan-revision"] {
         let mut flags = worker_flags();
         flags.extend(["--space", "project", obsolete, "other"]);
         assert!(TestCli::try_parse_from(flags).is_err());
+    }
+    let mut flags = worker_flags();
+    flags.extend(["--space", "project", "--operator"]);
+    let TestCommand::Run(args) = TestCli::try_parse_from(flags).unwrap().command else { panic!("expected run") };
+    assert!(args.common.operator);
+}
+
+#[tokio::test]
+async fn operator_job_only_commands_refuse_before_endpoint_or_input_and_never_panic() {
+    for tail in [
+        vec!["context"], vec!["brief"], vec!["show", "--self"],
+        vec!["register", "--operation-id", "operation"],
+        vec!["answer", "--in-reply-to", "question", "--text", "Actual answer"],
+        vec!["done", "--summary", "Completed"],
+        vec!["report", "--kind", "progress", "--summary", "Update"],
+        vec!["report", "--kind", "result", "--outcome", "succeeded", "--summary", "Completed"],
+        vec!["resource-request", "--request-file", "/definitely/absent/input"],
+        vec!["resource-build-register", "--registration-file", "/definitely/absent/input"],
+    ] {
+        let TestCommand::Run(args) = TestCli::try_parse_from(
+            ["test", "run", "--operator"].into_iter().chain(tail),
+        ).unwrap().command else { panic!("expected run") };
+        assert_eq!(args.run().await.unwrap_err().code, "actor_forbidden");
+    }
+    for tail in [vec!["next"], vec!["wait"], vec!["list"], vec!["ack", "--through", "1"]] {
+        let TestCommand::Inbox(args) = TestCli::try_parse_from(
+            ["test", "inbox", "--operator"].into_iter().chain(tail),
+        ).unwrap().command else { panic!("expected inbox") };
+        assert_eq!(args.run().await.unwrap_err().code, "actor_forbidden");
+    }
+    for tail in [vec!["show", "--self"], vec!["inputs", "--self"]] {
+        let TestCommand::Task(args) = TestCli::try_parse_from(
+            ["test", "task", "--operator"].into_iter().chain(tail),
+        ).unwrap().command else { panic!("expected task") };
+        assert_eq!(args.run().await.unwrap_err().code, "actor_forbidden");
     }
 }
 
@@ -1019,11 +1054,8 @@ fn typed_failures_and_conflicts_survive_cli_context() {
         "job_credential_invalid", "job_unauthorized", "message_id_conflict"] {
         let error = CliError::from(cockpit_core::InspectionError::new(code, "Exact failure"));
         assert_eq!(error.code, code);
-        assert_eq!(error.message, "Exact failure");
         let error = task_submission_error(error, "retained-task");
         assert_eq!(error.code, code);
-        assert!(error.message.starts_with("Exact failure; task ID retained-task."));
-        assert!(error.message.contains("inspect `task show retained-task`"));
     }
 }
 

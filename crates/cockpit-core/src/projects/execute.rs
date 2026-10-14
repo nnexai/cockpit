@@ -1444,6 +1444,30 @@ mod tests {
             nested_path
         );
 
+        adapter.selection_available.store(true, Ordering::SeqCst);
+        let mut snapshot = crate::HerdrAdapter::session_snapshot(adapter.as_ref(), "session")
+            .await
+            .expect("live nested-directory snapshot");
+        snapshot.spaces[0].tab_count = 1;
+        snapshot.spaces[0].pane_count = 1;
+        snapshot.tabs.push(cockpit_protocol::v1::TabSummary {
+            id: "workspace:context".to_owned(), space_id: "workspace".to_owned(),
+            label: "Context".to_owned(), number: 1, pane_count: 1, focused: false,
+            focused_pane_id: Some("workspace:context-pane".to_owned()),
+        });
+        snapshot.panes.push(cockpit_protocol::v1::PaneSummary {
+            id: "workspace:context-pane".to_owned(), terminal_id: "context-terminal".to_owned(),
+            space_id: "workspace".to_owned(), tab_id: "workspace:context".to_owned(),
+            title: None, focused: false, agent: None, agent_status: "none".to_owned(),
+            revision: 1, cwd: Some(nested_path.clone()),
+        });
+        *adapter.bound_snapshot.lock() = Some(crate::project_adapter::ProjectSnapshot {
+            snapshot,
+            endpoint_identity: "endpoint".to_owned(),
+            boot_id: None,
+            peer_process: None,
+        });
+
         let preview = service
             .teardown_preview(
                 "session",
@@ -1468,12 +1492,13 @@ mod tests {
             .teardown_execute(
                 "session",
                 &WorkspaceTeardownExecuteRequest {
-                    operation_id: plan.operation_id,
+                    operation_id: preview.operation_id,
                     workspace_id: "workspace".to_owned(),
                     expected_endpoint_identity: preview.endpoint_identity,
                     expected_checkout_path: preview.checkout_path,
                     action: WorkspaceTeardownAction::CloseSpace,
                     confirmation: String::new(),
+                    discard_fingerprint: None,
                 },
             )
             .await

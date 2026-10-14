@@ -529,15 +529,11 @@ fn registration_replay_and_implicit_same_chat_context_are_inert_but_other_chat_c
 }
 
 #[test]
-fn worker_start_is_root_only_and_preclaim_capability_cannot_write() {
+fn worker_start_is_root_or_operator_only_and_preclaim_capability_cannot_write() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let task = fixture.create_task(&root, "Pending authority");
     let root_actor = fixture.root_actor(&root);
-    let bytes = fixture.state_bytes();
-    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser),
-        fixture.start_action(&root, &task)), "actor_forbidden");
-    assert_eq!(fixture.state_bytes(), bytes);
     let (run, actor) = pending_worker(&fixture, &root, &task);
     let bytes = fixture.state_bytes();
     for action in content_actions(&root, &task).into_iter().chain([
@@ -573,26 +569,34 @@ fn unassign_is_active_same_root_only_and_exact_generation_fenced() {
     caller_mut(&mut other_chat).conversation.as_mut().unwrap().session_id = "different-supervisor-chat".into();
     let action = unassign(&root, &task, 1);
     let bytes = fixture.state_bytes();
-    for actor in [&worker, &outsider, &other_chat, &Actor::Operator(OperatorOrigin::Browser)] {
+    for actor in [&worker, &outsider, &other_chat] {
         assert!(fixture.apply(actor, action.clone()).is_err());
         assert_eq!(fixture.state_bytes(), bytes);
     }
+    let operator = Actor::Operator(OperatorOrigin::Native);
+    assert!(fixture.apply(&operator, unassign(&other_root, &task, 1)).is_err());
+    assert_code(fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
+        session_id: "foreign-session".into(), expected_revision: None, action: action.clone(),
+    }, &ResolvedMutationInput::default()), "session_mismatch");
+    assert_eq!(fixture.state_bytes(), bytes);
     for stage in [RunStage::Starting, RunStage::Reported, RunStage::Closed] {
         fixture.seed_run(&root, |run| run.stage = stage);
         let bytes = fixture.state_bytes();
         assert!(fixture.apply(&supervisor, action.clone()).is_err());
+        assert!(fixture.apply(&operator, action.clone()).is_err());
         assert_eq!(fixture.state_bytes(), bytes);
     }
     fixture.seed_run(&root, |run| run.stage = RunStage::Active);
     let bytes = fixture.state_bytes();
     assert_code(fixture.apply(&supervisor, unassign(&root, &task, 0)), "assignment_generation_conflict");
+    assert_code(fixture.apply(&operator, unassign(&root, &task, 0)), "assignment_generation_conflict");
     assert_eq!(fixture.state_bytes(), bytes);
-    let first = fixture.apply(&supervisor, action.clone()).unwrap();
+    let first = fixture.apply(&operator, action.clone()).unwrap();
     assert!(matches!(&first.result, OrchestrationActionResult::TaskUnassigned {
         assignment_generation: 2, previous_run_id: Some(previous), duplicate: false, ..
     } if previous == &run));
     let bytes = fixture.state_bytes();
-    let replay = fixture.apply(&supervisor, action).unwrap();
+    let replay = fixture.apply(&operator, action).unwrap();
     assert!(matches!(replay.result, OrchestrationActionResult::TaskUnassigned { duplicate: true, .. }));
     assert_eq!(fixture.state_bytes(), bytes);
     assert_code(fixture.apply(&supervisor, unassign(&root, &task, 1)), "assignment_generation_conflict");
@@ -905,6 +909,34 @@ fn replacement_input(fixture: &Fixture, run: &Run) -> ResolvedMutationInput {
         project: Some(project), ..Default::default() }
 }
 
+
+#[test]
+fn explicit_operator_replaces_pending_attempt_with_generation_fences() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Operator replacement");
+    let _ = fixture.root_actor(&root);
+    let worker = fixture.start(&root, &task);
+    replacement_source(&fixture, &root, &worker);
+    let old = fixture.run(&worker);
+    let operator = Actor::Operator(OperatorOrigin::Native);
+    let mut stale = replacement_action(&root, &task, &old);
+    let OrchestrationAction::WorkerReplace { expected_assignment_generation, .. } = &mut stale else { unreachable!() };
+    *expected_assignment_generation += 1;
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None, action: stale,
+    }, &replacement_input(&fixture, &old)), "assignment_generation_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+    let response = fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None, action: replacement_action(&root, &task, &old),
+    }, &replacement_input(&fixture, &old)).unwrap();
+    let OrchestrationActionResult::WorkerReplaced { start, .. } = response.result else { unreachable!() };
+    assert_eq!(fixture.run(&worker).close_reason, Some(CloseReason::Superseded));
+    assert_eq!(fixture.run(&start.run_id).task_id, Some(task.task_id));
+    assert_eq!(serde_json::to_value(fixture.run(&worker).attachment).unwrap(),
+        serde_json::to_value(old.attachment).unwrap(), "operator authority never stops the old writer");
+}
 fn replacement_source(fixture: &Fixture, root: &str, run: &str) {
     let source = fixture.root.join("borrowed-source");
     std::fs::create_dir_all(&source).unwrap();

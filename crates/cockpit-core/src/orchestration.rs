@@ -1024,7 +1024,7 @@ fn operator(actor: &Actor) -> Result<OperatorOrigin, InspectionError> {
         Actor::Operator(origin) => Ok(*origin),
         _ => Err(error(
             "actor_forbidden",
-            "This action requires the GUI operator",
+            "This action requires an explicit local operator",
         )),
     }
 }
@@ -1186,6 +1186,16 @@ fn admit(
             }
             OrchestrationAction::Annotate { run_id, .. } => {
                 scoped_index(state, &request.session_id, run_id)?;
+            }
+            OrchestrationAction::WorkerStart { root_id, .. }
+            | OrchestrationAction::TaskSchedule { root_id, .. }
+            | OrchestrationAction::TaskScheduleCancel { root_id, .. }
+            | OrchestrationAction::TaskUnassign { root_id, .. }
+            | OrchestrationAction::WorkerReplace { root_id, .. } => {
+                scoped_index(state, &request.session_id, root_id)?;
+                if let OrchestrationAction::WorkerReplace { expected_run_id, .. } = &request.action {
+                    scoped_index(state, &request.session_id, expected_run_id)?;
+                }
             }
             _ => {}
         }

@@ -25,8 +25,9 @@ function preview(actions: WorkspaceTeardownPreview["allowed_actions"], confirmat
   return {
     operation_id: "operation-1", workspace_id: "space-1", endpoint_identity: "endpoint-1",
     repository_key: "repo", repository_root: "/repo", checkout_path: "/worktrees/task",
-    ownership: "owned_created", workspace_state: "missing",
+    ownership: "selected_linked", workspace_state: "missing",
     is_linked_worktree: true, dirty_state: "unknown",
+    discard_count: 0, discard_paths: [], discard_fingerprint: null,
     allowed_actions: actions, blockers: ["the exact worktree is not live in the requested workspace"],
     warnings: [], required_confirmation: confirmation,
   };

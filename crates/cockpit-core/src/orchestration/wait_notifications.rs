@@ -82,7 +82,7 @@ impl WaitNotifications {
                                 && path.extension().is_some_and(|extension| extension == "md")
                             || callback_roots.lock().unwrap_or_else(|error| error.into_inner()).iter().any(|common| {
                                 path == common || path.strip_prefix(common).is_ok_and(|relative| {
-                                    relative == Path::new("packed-refs") || relative.starts_with("refs")
+                                    relative == Path::new("HEAD") || relative == Path::new("packed-refs") || relative.starts_with("refs")
                                         && !relative.extension().is_some_and(|extension| extension == "lock")
                                 })
                             })

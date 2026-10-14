@@ -16,7 +16,7 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
     if queued.retirement.as_ref().is_none_or(|queued| queued.retirement_id != record.retirement_id) { return Ok(()) }
     let expected = record.state.kind();
     let reobserve = matches!(record.state, RetirementState::Retained {
-        reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable, ..
+        reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable | RetainReason::ForegroundProcess, ..
     });
     if retirement::terminal(&record.state) && expected != RetirementStateKind::Unknown && !reobserve { return Ok(()) }
     if !service.retirement_authorized(&run.run_id, record)?
@@ -70,8 +70,8 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
         }
     };
     if reobserve {
-        // Fresh physical proof, not a migration, is required to reopen the old
-        // process-proof diagnosis. Other retained reasons are never overridden.
+        // Fresh physical proof, not a migration, is required to reopen a transient
+        // process/observation diagnosis. Other retained reasons are never overridden.
         if matches!(next, Some(RetirementState::Retained { .. })) {
             return Ok(());
         }

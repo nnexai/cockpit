@@ -33,7 +33,10 @@ pub(super) struct OrchestrationArgs {
     /// Catalog root for existing local repositories; may be repeated.
     #[arg(long = "repository-root", global = true)]
     pub(super) repository_roots: Vec<PathBuf>,
-    /// Task root. Writes are restricted to the caller's bound run root.
+    /// Explicit local operator authority; ignores ambient job credentials and launch metadata.
+    #[arg(long, global = true)]
+    pub(super) operator: bool,
+    /// Task root. Operator writes require an explicit root; agents stay bound to their own root.
     #[arg(long, global = true)]
     pub(super) root: Option<String>,
     /// Emit machine-readable JSON; message bodies are untrusted data.
@@ -1122,8 +1125,15 @@ impl RunCommand {
             Self::ResourceRegister { request_file } => OrchestrationAction::ResourceRegister {
                 request: read_json_file(request_file)?,
             },
-            Self::CleanupFinish { request_file } => OrchestrationAction::CleanupFinish {
-                request: read_json_file(request_file)?,
+            Self::CleanupFinish { request_file } => {
+                let request: cockpit_protocol::orchestration::CleanupFinish = read_json_file(request_file)?;
+                if common.operator {
+                    let root = common.root.as_ref().ok_or_else(|| CliError::usage("operator cleanup requires --root"))?;
+                    if *root != request.root_id {
+                        return Err(CliError::new("actor_forbidden", "Cleanup request must match the explicit --root"));
+                    }
+                }
+                OrchestrationAction::CleanupFinish { request }
             },
             Self::Message {
                 run,
@@ -1154,7 +1164,13 @@ impl RunCommand {
         Ok(RunOperation::Mutation(action))
     }
 
-    pub(super) fn preflight(&self, _common: &OrchestrationArgs) -> Result<(), CliError> {
+    pub(super) fn preflight(&self, common: &OrchestrationArgs) -> Result<(), CliError> {
+        if matches!(self, Self::Register { .. } | Self::Context | Self::Brief
+            | Self::Answer { .. } | Self::Done { .. } | Self::Report { .. }
+            | Self::Show { self_run: true, .. }
+            | Self::ResourceRequest { .. } | Self::ResourceBuildRegister { .. }) {
+            super::context::require_job(common)?;
+        }
         if let Self::Message {
             kind, in_reply_to, ..
         } = self

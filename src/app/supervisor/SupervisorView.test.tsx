@@ -12,7 +12,7 @@ async function render(tasks: TaskView[], overrides: Partial<ComponentProps<typeo
   const snapshot = orchestrationFixture(tasks);
   await act(async () => root!.render(<SupervisorView tasks={tasks} runs={snapshot.runs} snapshot={snapshot} rootId="root" fresh waiting={false} status={null} onClose={vi.fn()} {...overrides} />));
 }
-it("opens the board with Back focused, changes to a task-only graph and closes on Escape", async () => {
+it("opens the board with Conversation focused, changes to a task-only graph and closes on Escape", async () => {
   const task = taskFixture("Work"), close = vi.fn();
   await render([task], { onClose: close });
   expect(host.querySelectorAll(".liaison-task-lane")).toHaveLength(5);
@@ -40,13 +40,15 @@ it("opens full snapshot history from a board card and restores origin focus and 
   const board = host.querySelector<HTMLElement>(".liaison-task-board")!, lane = card.closest("ul")!;
   board.scrollLeft = 120; lane.scrollTop = 40;
   act(() => { card.focus(); card.click(); });
-  const detail = host.querySelector(".liaison-fullscreen-detail")!;
+  const detail = host.querySelector(".liaison-overview-detail")!;
   expect(detail.textContent).toContain("answered by you 2 min later");
   expect(detail.textContent).toContain("Outputs kept");
   expect(document.activeElement).toBe(host.querySelector(".liaison-detail-back"));
-  expect(host.querySelector('[aria-label="Overview view"]')).toBeNull();
-  expect(board.closest("[hidden]")).not.toBeNull();
-  expect(board.parentElement?.hasAttribute("inert")).toBe(true);
+  expect(host.querySelector('[aria-label="Overview view"]')).not.toBeNull();
+  expect(host.querySelector(".liaison-task-overview > header h1")?.textContent).toBe("Overview");
+  expect(board.closest("[hidden]")).toBeNull();
+  expect(board.parentElement?.hasAttribute("inert")).toBe(false);
+  expect(card.getAttribute("aria-current")).toBe("true");
   const outerEscape = vi.fn(); document.addEventListener("keydown", outerEscape);
   const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   act(() => document.activeElement!.dispatchEvent(escape));
@@ -57,6 +59,7 @@ it("opens full snapshot history from a board card and restores origin focus and 
   expect(host.querySelector(".liaison-task-board")).toBe(board);
   expect(board.scrollLeft).toBe(120); expect(lane.scrollTop).toBe(40);
   expect(document.activeElement).toBe(card);
+  expect(card.hasAttribute("aria-current")).toBe(false);
   expect(board.closest("[hidden]")).toBeNull();
   act(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(close).toHaveBeenCalledOnce();
@@ -180,7 +183,75 @@ it("resolves the selected task across reordering and restores its new board loca
   const changed = { ...task, lane: "working" as const };
   await render([other, changed]);
   expect(host.querySelector('[aria-label="History of Work"]')).not.toBeNull();
+  expect(host.querySelector('[data-row-key="Work:1"]')?.getAttribute("aria-current")).toBe("true");
   expect(document.activeElement).toBe(host.querySelector(".liaison-detail-back"));
   act(() => host.querySelector<HTMLButtonElement>(".liaison-detail-back")!.click());
   expect(document.activeElement).toBe(host.querySelector('[data-row-key="Work:1"]'));
+});
+
+it("swaps selected history beside the visible board and closes the latest detail before Overview", async () => {
+  const first = taskFixture("First"), second = taskFixture("Second"), close = vi.fn();
+  await render([first, second], { onClose: close });
+  const header = host.querySelector(".liaison-task-overview > header")!;
+  const board = host.querySelector(".liaison-task-board")!;
+  const firstCard = host.querySelector<HTMLButtonElement>('[data-row-key="First:0"]')!;
+  const secondCard = host.querySelector<HTMLButtonElement>('[data-row-key="Second:1"]')!;
+  act(() => firstCard.click());
+  expect(host.querySelector('[aria-label="History of First"]')).not.toBeNull();
+  expect(board.closest("[hidden], [inert]")).toBeNull();
+  act(() => secondCard.click());
+  expect(host.querySelector('[aria-label="History of First"]')).toBeNull();
+  expect(host.querySelector('[aria-label="History of Second"]')).not.toBeNull();
+  expect(firstCard.hasAttribute("aria-current")).toBe(false);
+  expect(secondCard.getAttribute("aria-current")).toBe("true");
+  expect(host.querySelector(".liaison-task-board")).toBe(board);
+  expect(host.querySelector(".liaison-task-overview > header")).toBe(header);
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Close task history");
+  act(() => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(host.querySelector(".liaison-overview-detail")).toBeNull();
+  expect(document.activeElement).toBe(secondCard);
+  expect(close).not.toHaveBeenCalled();
+  act(() => secondCard.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it("keeps history open across Board and Graph switches and restores the visible selected row", async () => {
+  const task = taskFixture("Work");
+  await render([task]);
+  act(() => host.querySelector<HTMLButtonElement>(".liaison-card-open")!.click());
+  const detail = host.querySelector(".liaison-overview-detail")!;
+  act(() => [...host.querySelectorAll<HTMLButtonElement>("header button")].find(button => button.textContent === "Graph")!.click());
+  expect(host.querySelector(".liaison-overview-detail")).toBe(detail);
+  const node = host.querySelector<HTMLButtonElement>(".liaison-graph-task")!;
+  expect(node.getAttribute("aria-current")).toBe("true");
+  expect(host.querySelector(".liaison-task-graph")?.closest("[hidden], [inert]")).toBeNull();
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Close task history"]')!.click());
+  expect(document.activeElement).toBe(node);
+  act(() => node.click());
+  act(() => [...host.querySelectorAll<HTMLButtonElement>("header button")].find(button => button.textContent === "Board")!.click());
+  expect(host.querySelector('[aria-label="History of Work"]')).not.toBeNull();
+  const card = host.querySelector<HTMLButtonElement>(".liaison-card-open")!;
+  expect(card.getAttribute("aria-current")).toBe("true");
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Close task history"]')!.click());
+  expect(document.activeElement).toBe(card);
+});
+
+it("leaves Overview directly from Conversation while task history is open", async () => {
+  const task = taskFixture("Work"), close = vi.fn();
+  await render([task], { onClose: close });
+  act(() => host.querySelector<HTMLButtonElement>(".liaison-card-open")!.click());
+  act(() => host.querySelector<HTMLButtonElement>(".liaison-conversation")!.click());
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it("keeps Done history visible when Graph omits its row and closes back to Conversation", async () => {
+  const task = taskFixture("Done", { lane: "accepted" }); task.task.checked = true;
+  await render([task]);
+  act(() => host.querySelector<HTMLButtonElement>(".liaison-card-open")!.click());
+  act(() => [...host.querySelectorAll<HTMLButtonElement>("header button")].find(button => button.textContent === "Graph")!.click());
+  expect(host.querySelector('[aria-label="History of Done"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="Task dependency graph"]')).not.toBeNull();
+  expect(host.querySelector(".liaison-graph-task")).toBeNull();
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Close task history"]')!.click());
+  expect(document.activeElement).toBe(host.querySelector(".liaison-conversation"));
 });

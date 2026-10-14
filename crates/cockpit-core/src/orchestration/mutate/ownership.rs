@@ -85,12 +85,7 @@ pub(super) fn register(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -
 
 pub(super) fn unassign(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
     let OrchestrationAction::TaskUnassign { operation_id, root_id, task_id, expected_assignment_generation } = &action else { unreachable!() };
-    let Actor::Agent(caller) = ctx.actor else { return Err(error("actor_forbidden", "Only the owning supervisor may unassign a task")); };
-    let job = credentials::validate_caller(ctx.state, caller)?;
-    let root = &ctx.state.runs[job.run_index];
-    if job.role != JobRole::Root || root.run_id != *root_id || root.stage != RunStage::Active {
-        return Err(error("actor_forbidden", "Only the active owning supervisor may unassign a task"));
-    }
+    super::tasks::task_root_authority(ctx.state, ctx.actor, ctx.caller, ctx.session_id, root_id)?;
     if let Some(result) = super::resume::replay(ctx, operation_id, DurableOperationKind::TaskUnassign, &action)? {
         return Ok(Applied::Document(result));
     }

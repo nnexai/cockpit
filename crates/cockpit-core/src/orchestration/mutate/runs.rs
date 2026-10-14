@@ -164,13 +164,7 @@ pub(in crate::orchestration) fn worker_start(
         operation_id, root_id, task_id, expected_task_revision, expected_doc_revision,
         target, label, brief, cleanup_policy,
     } = &action else { unreachable!() };
-    task_root_authority(ctx.state, ctx.actor, ctx.caller, ctx.session_id, root_id)?;
-    let Actor::Agent(agent) = ctx.actor else {
-        return Err(error("actor_forbidden", "Only the owning supervisor may authorize a worker"));
-    };
-    if credentials::validate_caller(ctx.state, agent)?.role != JobRole::Root {
-        return Err(error("actor_forbidden", "Only the owning supervisor may authorize a worker"));
-    }
+    root_authority(ctx, root_id)?;
     if let Some(result) = super::resume::replay(ctx, operation_id, DurableOperationKind::WorkerStart, &action)? {
         return Ok(Applied::Document(result));
     }
@@ -274,13 +268,23 @@ pub(in crate::orchestration) fn next_attempt(state: &OrchestrationState, root_id
 
 fn root_authority(ctx: &MutationCtx<'_>, root_id: &str) -> Result<(), InspectionError> {
     task_root_authority(ctx.state, ctx.actor, ctx.caller, ctx.session_id, root_id)?;
-    let Actor::Agent(agent) = ctx.actor else {
-        return Err(error("actor_forbidden", "Only the owning liaison may authorize task execution"));
-    };
-    if credentials::validate_caller(ctx.state, agent)?.role != JobRole::Root {
-        return Err(error("actor_forbidden", "Only the owning liaison may authorize task execution"));
+    if let Actor::Agent(agent) = ctx.actor {
+        if credentials::validate_caller(ctx.state, agent)?.role != JobRole::Root {
+            return Err(error("actor_forbidden", "Only the owning liaison or explicit operator may authorize task execution"));
+        }
     }
     Ok(())
+}
+
+fn execution_provenance(ctx: &MutationCtx<'_>, root_id: &str) -> DecisionProvenance {
+    match ctx.actor {
+        Actor::Operator(origin) => DecisionProvenance {
+            origin: match origin { OperatorOrigin::Browser => DecisionOrigin::Browser, OperatorOrigin::Native => DecisionOrigin::Native },
+            supervisor_run_id: None, conversation: None,
+        },
+        Actor::Agent(caller) => DecisionProvenance { origin: DecisionOrigin::Supervisor,
+            supervisor_run_id: Some(root_id.into()), conversation: caller.conversation.clone() },
+    }
 }
 
 pub(super) fn schedule(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
@@ -340,10 +344,10 @@ pub(super) fn schedule(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -
                         "Failed planning attempt has ownership or physical receipts; preserve it and inspect run show before choosing worker-replace"));
                 }
                 super::ownership::supersede_current(ctx, root_id, task_id, generation, Some(&run_id))?;
-                let provenance = DecisionProvenance { origin: DecisionOrigin::Supervisor, supervisor_run_id: Some(root_id.clone()),
-                    conversation: match ctx.actor { Actor::Agent(caller) => caller.conversation.clone(), _ => None } };
+                let provenance = execution_provenance(ctx, root_id);
+                let by = actor_ref(ctx.actor, ctx.caller, ctx.state);
                 ctx.state.runs[run_index].annotations.push(decision_annotation(
-                    ActorRef::Run { run_id: root_id.clone() }, &provenance,
+                    by, &provenance,
                     "Superseded unstarted plan-failed attempt by explicit re-schedule; no physical effects were recorded"));
                 corrected_attempt = true;
             }
@@ -488,10 +492,9 @@ pub(super) fn worker_replace(ctx: &mut MutationCtx<'_>, action: OrchestrationAct
     let authority = ReplacementRetirementAuthority { operation_id: operation_id.clone(), previous_run_id: expected_run_id.clone(),
         previous_generation: *expected_assignment_generation, replacement_run_id: start.run_id.clone() };
     ctx.state.runs[old_index].retirement = retirement::retirement_for_replacement(&ctx.state.runs[old_index], authority, &now());
-    let provenance = DecisionProvenance { origin: DecisionOrigin::Supervisor, supervisor_run_id: Some(root_id.clone()),
-        conversation: match ctx.actor { Actor::Agent(caller) => caller.conversation.clone(), _ => None } };
-    ctx.state.runs[old_index].annotations.push(decision_annotation(
-        ActorRef::Run { run_id: root_id.clone() }, &provenance, reason));
+    let provenance = execution_provenance(ctx, root_id);
+    let by = actor_ref(ctx.actor, ctx.caller, ctx.state);
+    ctx.state.runs[old_index].annotations.push(decision_annotation(by, &provenance, reason));
     let result = OrchestrationActionResult::WorkerReplaced { start, previous_run_id: expected_run_id.clone(), assignment_generation: generation, placement };
     super::resume::record(ctx, operation_id.clone(), DurableOperationKind::WorkerReplace, &action, root_id.clone(), result.clone(), Vec::new())?;
     Ok(Applied::Machine(result))
@@ -570,10 +573,12 @@ fn unfocused(mut target: DispatchTarget) -> DispatchTarget {
 }
 
 fn schedule_principal_current(state: &OrchestrationState, root: &Run, schedule: &TaskSchedule) -> bool {
-    root.stage == RunStage::Active && has_current_binding(state, root)
+    let operator_schedule = schedule.principal_key == "operator";
+    root.stage == RunStage::Active && (operator_schedule || has_current_binding(state, root))
         && state.operations.iter().any(|receipt| receipt.operation_id == schedule.operation_id
             && receipt.kind == super::super::store::DurableOperationKind::TaskSchedule
-            && receipt.root_id == root.run_id && receipt.actor_run_id.as_ref() == Some(&root.run_id)
+            && receipt.root_id == root.run_id
+            && (if operator_schedule { receipt.actor_run_id.is_none() } else { receipt.actor_run_id.as_ref() == Some(&root.run_id) })
             && receipt.principal_key == schedule.principal_key
             && matches!(&receipt.result, Some(OrchestrationActionResult::TaskScheduled { .. })))
 }

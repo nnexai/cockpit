@@ -1006,11 +1006,17 @@ mod tests {
             .resolve_base(&repository, "HEAD")
             .await
             .unwrap();
-        for (space, cwd) in [("primary-space", &primary), ("linked-space", &linked)] {
+        for (space, cwd) in [
+            ("primary-space", &primary), ("another-primary-space", &primary),
+            ("linked-space", &linked), ("another-linked-space", &linked),
+        ] {
+            let inventory_calls = adapter.inventory_calls.load(Ordering::SeqCst);
             let source = service
                 .space_repository("session", space, cwd.to_str().unwrap())
                 .await
                 .unwrap();
+            assert_eq!(adapter.inventory_calls.load(Ordering::SeqCst), inventory_calls + 1,
+                "each Space proof reads fresh inventory, including a second Space on the same checkout");
             assert_eq!(source.repository.repository_id, repository.repository_id);
             let checkout = RepositoryCatalog::new(service.configuration())
                 .discover_checkout(cwd)
@@ -1021,7 +1027,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(source.source_head, expected_head);
-            if space == "linked-space" {
+            if cwd == &linked {
                 assert_ne!(
                     source.source_head, primary_head,
                     "source linked checkout has its own HEAD"
@@ -1055,23 +1061,17 @@ mod tests {
                 .unwrap(),
             vec!["linked-space", "primary-space"]
         );
-        assert_eq!(
-            service
-                .space_repository("session", "missing", primary.to_str().unwrap())
-                .await
-                .unwrap_err()
-                .code,
-            "space_repository_mismatch"
-        );
-        // A valid repository key alone does not prove this Space's checkout.
-        assert_eq!(
-            service
-                .space_repository("session", "primary-space", linked.to_str().unwrap())
-                .await
-                .unwrap_err()
-                .code,
-            "space_repository_mismatch"
-        );
+        // A configured repository alone does not prove the actual checkout cwd.
+        let mut wrong_checkout = inventory.clone();
+        wrong_checkout.worktrees[0].checkout_path = linked.to_string_lossy().into_owned();
+        *adapter.inventory.lock() = Some(wrong_checkout);
+        assert_eq!(service.space_repository("session", "primary-space", primary.to_str().unwrap())
+            .await.unwrap_err().code, "space_repository_mismatch");
+        let mut wrong_link_status = inventory.clone();
+        wrong_link_status.worktrees[0].is_linked_worktree = true;
+        *adapter.inventory.lock() = Some(wrong_link_status);
+        assert_eq!(service.space_repository("session", "primary-space", primary.to_str().unwrap())
+            .await.unwrap_err().code, "space_repository_mismatch");
         let mut duplicate = inventory.clone();
         duplicate.worktrees.push(duplicate.worktrees[0].clone());
         *adapter.inventory.lock() = Some(duplicate);
@@ -1121,11 +1121,6 @@ mod tests {
         assert!(
             adapter.terminal_requests.lock().unwrap().is_empty(),
             "proof must not create a terminal"
-        );
-        assert_eq!(
-            adapter.inventory_calls.load(Ordering::SeqCst),
-            16,
-            "each proof and each Create plan uses fresh inventory"
         );
         std::fs::remove_dir_all(&root).unwrap();
     }

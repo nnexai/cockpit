@@ -33,6 +33,7 @@ export interface WireFields {
   "WorkspaceTeardownExecuteRequest.expected_checkout_path": (V1.WorkspaceTeardownExecuteRequest)["expected_checkout_path"];
   "WorkspaceTeardownExecuteRequest.action": (V1.WorkspaceTeardownExecuteRequest)["action"];
   "WorkspaceTeardownExecuteRequest.confirmation": (V1.WorkspaceTeardownExecuteRequest)["confirmation"];
+  "WorkspaceTeardownExecuteRequest.discard_fingerprint": (V1.WorkspaceTeardownExecuteRequest)["discard_fingerprint"];
   "WorkspaceTeardownPreview.operation_id": (V1.WorkspaceTeardownPreview)["operation_id"];
   "WorkspaceTeardownPreview.workspace_id": (V1.WorkspaceTeardownPreview)["workspace_id"];
   "WorkspaceTeardownPreview.endpoint_identity": (V1.WorkspaceTeardownPreview)["endpoint_identity"];
@@ -43,6 +44,9 @@ export interface WireFields {
   "WorkspaceTeardownPreview.workspace_state": (V1.WorkspaceTeardownPreview)["workspace_state"];
   "WorkspaceTeardownPreview.is_linked_worktree": (V1.WorkspaceTeardownPreview)["is_linked_worktree"];
   "WorkspaceTeardownPreview.dirty_state": (V1.WorkspaceTeardownPreview)["dirty_state"];
+  "WorkspaceTeardownPreview.discard_count": (V1.WorkspaceTeardownPreview)["discard_count"];
+  "WorkspaceTeardownPreview.discard_paths": (V1.WorkspaceTeardownPreview)["discard_paths"];
+  "WorkspaceTeardownPreview.discard_fingerprint": (V1.WorkspaceTeardownPreview)["discard_fingerprint"];
   "WorkspaceTeardownPreview.allowed_actions": (V1.WorkspaceTeardownPreview)["allowed_actions"];
   "WorkspaceTeardownPreview.blockers": (V1.WorkspaceTeardownPreview)["blockers"];
   "WorkspaceTeardownPreview.warnings": (V1.WorkspaceTeardownPreview)["warnings"];
@@ -61,8 +65,8 @@ export interface WireFields {
 
 export interface WireFieldNames {
   "WorkspaceTeardownPreviewRequest": "workspace_id";
-  "WorkspaceTeardownExecuteRequest": "operation_id" | "workspace_id" | "expected_endpoint_identity" | "expected_checkout_path" | "action" | "confirmation";
-  "WorkspaceTeardownPreview": "operation_id" | "workspace_id" | "endpoint_identity" | "repository_key" | "repository_root" | "checkout_path" | "ownership" | "workspace_state" | "is_linked_worktree" | "dirty_state" | "allowed_actions" | "blockers" | "warnings" | "required_confirmation";
+  "WorkspaceTeardownExecuteRequest": "operation_id" | "workspace_id" | "expected_endpoint_identity" | "expected_checkout_path" | "action" | "confirmation" | "discard_fingerprint";
+  "WorkspaceTeardownPreview": "operation_id" | "workspace_id" | "endpoint_identity" | "repository_key" | "repository_root" | "checkout_path" | "ownership" | "workspace_state" | "is_linked_worktree" | "dirty_state" | "discard_count" | "discard_paths" | "discard_fingerprint" | "allowed_actions" | "blockers" | "warnings" | "required_confirmation";
   "WorkspaceTeardownResult": "operation_id" | "workspace_id" | "action" | "outcome" | "message";
   "WorkspaceTeardownRecovery": "operation_id" | "workspace_id" | "checkout_path" | "state";
   "WorkspaceTeardownRecoveryList": "recoveries";
@@ -76,23 +80,27 @@ export interface WireTagNames {
 
 export interface WireCheckpointFieldNames {
   "WorkspaceTeardownPreviewRequest": "workspace_id";
-  "WorkspaceTeardownExecuteRequest": "operation_id" | "workspace_id" | "expected_endpoint_identity" | "expected_checkout_path" | "action" | "confirmation";
-  "WorkspaceTeardownPreview": "operation_id" | "workspace_id" | "endpoint_identity" | "repository_key" | "repository_root" | "checkout_path" | "ownership" | "workspace_state" | "is_linked_worktree" | "dirty_state" | "allowed_actions" | "blockers" | "warnings" | "required_confirmation";
+  "WorkspaceTeardownExecuteRequest": "operation_id" | "workspace_id" | "expected_endpoint_identity" | "expected_checkout_path" | "action" | "confirmation" | "discard_fingerprint";
+  "WorkspaceTeardownPreview": "operation_id" | "workspace_id" | "endpoint_identity" | "repository_key" | "repository_root" | "checkout_path" | "ownership" | "workspace_state" | "is_linked_worktree" | "dirty_state" | "discard_count" | "discard_paths" | "discard_fingerprint" | "allowed_actions" | "blockers" | "warnings" | "required_confirmation";
   "WorkspaceTeardownResult": "operation_id" | "workspace_id" | "action" | "outcome" | "message";
   "WorkspaceTeardownRecovery": "operation_id" | "workspace_id" | "checkout_path" | "state";
   "WorkspaceTeardownRecoveryList": "recoveries";
 }
 
 export type WireOmittableField =
+  | "WorkspaceTeardownExecuteRequest.discard_fingerprint"
   | "WorkspaceTeardownPreview.repository_key"
   | "WorkspaceTeardownPreview.repository_root"
+  | "WorkspaceTeardownPreview.discard_fingerprint"
   | "WorkspaceTeardownPreview.required_confirmation"
   | never;
 
 export type WireOptionalField =
+  | "WorkspaceTeardownExecuteRequest.discard_fingerprint"
   | never;
 
 export type WireListField =
+  | "WorkspaceTeardownPreview.discard_paths"
   | "WorkspaceTeardownPreview.allowed_actions"
   | "WorkspaceTeardownPreview.blockers"
   | "WorkspaceTeardownPreview.warnings"

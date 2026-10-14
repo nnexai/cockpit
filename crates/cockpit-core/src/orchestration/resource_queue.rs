@@ -196,6 +196,23 @@ impl OrchestrationService {
 }
 
 pub(in crate::orchestration) fn apply(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
+    if matches!(ctx.actor, Actor::Operator(_)) {
+        let OrchestrationAction::ResourceRelease { release } = &action else {
+            return Err(error("actor_forbidden", "Resource request and build registration require a current job credential"));
+        };
+        let index = request_index(ctx.state, &release.request_id)?;
+        let run_index = scoped_index(ctx.state, ctx.session_id, &release.expected_holder.run_id)?;
+        let run = &ctx.state.runs[run_index];
+        let attachment = run.attachment.as_ref()
+            .ok_or_else(|| error("resource_holder_conflict", "Resource holder has no current attachment"))?;
+        let current = AttachmentReference { run_id: run.run_id.clone(),
+            attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch };
+        fence(&ctx.state.resource_requests[index], &release.expected_holder, &current)?;
+        let duplicate = ctx.state.resource_requests[index].state == ResourceRequestState::Released;
+        release_request(&mut ctx.state.resource_requests[index], &mut native_running)?;
+        let result = OrchestrationActionResult::Resource { request: ctx.state.resource_requests[index].clone(), duplicate };
+        return Ok(if duplicate { Applied::Document(result) } else { Applied::Machine(result) });
+    }
     let job = job(ctx.state, ctx.actor)?;
     if ctx.caller != Some(job.run_index) { return Err(error("caller_unbound", "Resource caller is not the admitted job")); }
     let current = holder(ctx.state, &job);
@@ -565,6 +582,57 @@ mod tests {
         };
         assert!(authorize_request(&f.state, &f.worker, &same_operation).is_ok());
         assert!(authorize_request(&f.state, &root, &same_operation).is_err());
+    }
+
+    #[test]
+    fn operator_release_keeps_exact_holder_session_and_registered_build_fences() {
+        let mut f = Fixture::new();
+        let index = f.enqueue(10);
+        let record = f.state.resource_requests[index].clone();
+        let directory = std::env::temp_dir().join(format!("cockpit-operator-resource-{}", id()));
+        let service = OrchestrationService {
+            store: OrchestrationStore::open(&directory).unwrap(),
+            revision: watch::channel(f.state.revision).0,
+            notifications: std::sync::Mutex::new(None), launch_config: Default::default(),
+        };
+        let locked = service.store.lock().unwrap();
+        let operator = Actor::Operator(OperatorOrigin::Native);
+        let release = OrchestrationAction::ResourceRelease { release: ResourceRelease {
+            request_id: record.request_id.clone(), expected_holder: record.holder.clone(),
+        } };
+        let apply_operator = |state: &mut OrchestrationState, session_id: &str, action| {
+            apply(&mut MutationCtx { service: &service, locked: &locked, state,
+                actor: &operator, caller: None, session_id, resolved: None }, action)
+        };
+        let before = serde_json::to_value(&f.state).unwrap();
+        assert_eq!(apply_operator(&mut f.state, "foreign", release.clone()).err().unwrap().code, "session_mismatch");
+        let mut stale = release.clone();
+        let OrchestrationAction::ResourceRelease { release: expected } = &mut stale else { unreachable!() };
+        expected.expected_holder.attachment_epoch += 1;
+        assert_eq!(apply_operator(&mut f.state, "test", stale).err().unwrap().code, "resource_holder_conflict");
+        for action in [
+            OrchestrationAction::ResourceRequest { request: ResourceRequest {
+                operation_id: record.request_id.clone(), resource_key: record.resource_key.clone(),
+                source_identity: record.source_identity.clone(), holder: record.holder.clone(),
+            } },
+            OrchestrationAction::ResourceBuildRegister { registration: ResourceBuildRegistration {
+                request_id: record.request_id.clone(), expected_holder: record.holder.clone(),
+                process: process(41).process,
+            } },
+        ] {
+            assert_eq!(apply_operator(&mut f.state, "test", action).err().unwrap().code, "actor_forbidden");
+        }
+        assert_eq!(serde_json::to_value(&f.state).unwrap(), before);
+        f.state.resource_requests[index].state = ResourceRequestState::Held;
+        assert!(apply_operator(&mut f.state, "test", release.clone()).is_err(),
+            "operator authority cannot bypass the unknown registered-build gap");
+        assert_eq!(f.state.resource_requests[index].state, ResourceRequestState::Held);
+        f.state.resource_requests[index].state = ResourceRequestState::Queued;
+        assert!(apply_operator(&mut f.state, "test", release).is_ok());
+        assert_eq!(f.state.resource_requests[index].state, ResourceRequestState::Released);
+        drop(locked);
+        drop(service);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

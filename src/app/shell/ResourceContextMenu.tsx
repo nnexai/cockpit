@@ -18,7 +18,7 @@ export function ResourceContextMenu(props: WorkbenchContentProps) {
     return <ContextMenu menu={menu} onDismiss={dismissMenu}>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button>
       <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}><UiIcon name="close" />Close</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}><UiIcon name="trash" />Review task cleanup…</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}><UiIcon name="trash" />Remove worktree…</button>
       {git ? <>
         <div className="context-menu-separator" role="presentation" />
         <p className="context-menu-heading" role="presentation">Branch · {git.checkout.state === "branch" ? git.checkout.branch : git.checkout.state === "detached" ? "detached HEAD" : "unavailable"}</p>

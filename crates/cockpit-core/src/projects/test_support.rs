@@ -15,7 +15,7 @@ use cockpit_protocol::v1::{
 
 use crate::project_adapter::{
     ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult, ProjectWorktreeRemoveRequest,
-    ProjectWorktreeRequest, ProjectWorktreeResult,
+    ProjectWorktreeRequest, ProjectWorktreeResult, WorktreeStatus,
 };
 use crate::repositories;
 use crate::sources::{SourceFetchRequest, instance_authority};
@@ -28,6 +28,13 @@ use super::ProjectService;
 #[derive(Default)]
 pub(super) struct NestedDirectoryAdapter {
     pub(super) inventory_calls: AtomicUsize,
+    pub(super) inventory_requests: parking_lot::Mutex<Vec<String>>,
+    pub(super) status_requests: parking_lot::Mutex<Vec<String>>,
+    pub(super) worktree_status: parking_lot::Mutex<Option<WorktreeStatus>>,
+    pub(super) remove_requests: parking_lot::Mutex<Vec<ProjectWorktreeRemoveRequest>>,
+    pub(super) remove_error: AtomicBool,
+    pub(super) teardown_store: parking_lot::Mutex<Option<crate::project_store::ProjectStore>>,
+    pub(super) receipts_at_remove: parking_lot::Mutex<Vec<crate::project_store::TeardownReceipt>>,
     pub(super) worktree_requests: StdMutex<Vec<ProjectWorktreeRequest>>,
     pub(super) terminal_requests: StdMutex<Vec<ProjectTerminalRequest>>,
     pub(super) closed_workspaces: StdMutex<Vec<String>>,
@@ -141,9 +148,10 @@ impl ProjectHerdrAdapter for NestedDirectoryAdapter {
     async fn project_inventory(
         &self,
         _: &str,
-        _: &str,
+        source: &str,
     ) -> Result<ProjectInventory, InspectionError> {
         self.inventory_calls.fetch_add(1, Ordering::Relaxed);
+        self.inventory_requests.lock().push(source.to_owned());
         if let Some(inventory) = self.inventory.lock().clone() {
             return Ok(inventory);
         }
@@ -222,11 +230,14 @@ impl ProjectHerdrAdapter for NestedDirectoryAdapter {
 
     async fn project_worktree_dirty(
         &self,
-        _: &str,
+        checkout_path: &str,
         _: u32,
         _: u32,
-    ) -> Result<bool, InspectionError> {
-        unused()
+    ) -> Result<WorktreeStatus, InspectionError> {
+        self.status_requests.lock().push(checkout_path.to_owned());
+        self.worktree_status.lock().clone().ok_or_else(|| InspectionError::new(
+            "test_adapter_unused", "worktree status fixture was not supplied",
+        ))
     }
 
     async fn project_close_workspace(
@@ -245,9 +256,18 @@ impl ProjectHerdrAdapter for NestedDirectoryAdapter {
     async fn project_remove_worktree(
         &self,
         _: &str,
-        _: &ProjectWorktreeRemoveRequest,
+        request: &ProjectWorktreeRemoveRequest,
     ) -> Result<(), InspectionError> {
-        unused()
+        let store = self.teardown_store.lock().clone().ok_or_else(|| InspectionError::new(
+            "test_adapter_unused", "teardown store fixture was not supplied",
+        ))?;
+        self.remove_requests.lock().push(request.clone());
+        self.receipts_at_remove.lock().extend(store.list_teardown_receipts()?);
+        if self.remove_error.load(Ordering::SeqCst) {
+            Err(InspectionError::new("transport_timeout", "removal acknowledgement was lost"))
+        } else {
+            Ok(())
+        }
     }
 }
 

@@ -6,12 +6,13 @@ use async_trait::async_trait;
 use cockpit_core::project_adapter::{
     ProjectHerdrAdapter, ProjectInventory, ProjectSnapshot, ProjectTerminalRequest, ProjectTerminalResult,
     ProjectWorktreeEntry, ProjectWorktreeRemoveRequest, ProjectWorktreeRequest,
-    ProjectWorktreeResult,
+    ProjectWorktreeResult, WorktreeStatus,
 };
 use cockpit_core::{HerdrAdapter, InspectionError};
 use cockpit_protocol::projects::WorkspaceSetupMode;
 use cockpit_protocol::v1::HerdrCompatibility;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 
 use super::{
@@ -94,10 +95,10 @@ fn parse_worktree_list(
         "source_checkout_path",
         "worktree.list result.source",
     )?;
-    if source_checkout != source_cwd || !Path::new(&source_checkout).is_absolute() {
+    if !Path::new(&source_checkout).is_absolute() || !Path::new(source_cwd).is_absolute() {
         return Err(InspectionError::new(
             "provenance_conflict",
-            "worktree.list source checkout does not exactly match the requested cwd",
+            "worktree.list source and requested checkout paths must be absolute",
         ));
     }
     if repository_key.is_empty()
@@ -135,13 +136,13 @@ fn parse_worktree_list(
                 "worktree.list contains a repeated or malformed workspace identity",
             ));
         }
-        let is_primary = checkout_path == source_cwd;
+        let is_primary = checkout_path == repository_root;
         if is_primary {
             primary_count += 1;
             if is_linked {
                 return Err(InspectionError::new(
                     "provenance_conflict",
-                    "source checkout is unexpectedly marked as a linked worktree",
+                    "primary checkout is unexpectedly marked as a linked worktree",
                 ));
             }
         }
@@ -158,10 +159,13 @@ fn parse_worktree_list(
             dirty: None,
         });
     }
-    if primary_count != 1 {
+    // Herdr may normalize source to the canonical repository origin even
+    // when cwd names a linked checkout. Both paths must independently occur
+    // in this same repository's unique checkout inventory.
+    if primary_count != 1 || !paths.contains(&source_checkout) || !paths.contains(source_cwd) {
         return Err(InspectionError::new(
             "provenance_conflict",
-            "worktree.list did not identify exactly one source checkout",
+            "worktree.list did not identify the source, requested and primary checkouts",
         ));
     }
     Ok((repository_key, repository_root, entries))
@@ -467,6 +471,75 @@ fn parse_worktree_removed(
     Ok(())
 }
 
+fn take_porcelain_record<'a>(bytes: &mut &'a [u8]) -> Result<&'a [u8], InspectionError> {
+    let end = bytes.iter().position(|byte| *byte == 0).ok_or_else(|| {
+        InspectionError::new("malformed_worktree_status", "Git status record is not NUL-terminated")
+    })?;
+    let (record, rest) = bytes.split_at(end);
+    *bytes = &rest[1..];
+    Ok(record)
+}
+
+fn parse_worktree_status(porcelain: &[u8]) -> Result<WorktreeStatus, InspectionError> {
+    let mut remaining = porcelain;
+    let mut entries = Vec::new();
+    let mut count = 0;
+    while !remaining.is_empty() {
+        let record = take_porcelain_record(&mut remaining)?;
+        if record.len() < 4 || record[2] != b' ' {
+            return Err(InspectionError::new(
+                "malformed_worktree_status", "Git status record has no changed path",
+            ));
+        }
+        // Porcelain v1 -z emits the destination first, followed by a separate
+        // source-path record for renames and copies. The source is not a change.
+        if record[..2].iter().any(|status| matches!(*status, b'R' | b'C')) {
+            if take_porcelain_record(&mut remaining)?.is_empty() {
+                return Err(InspectionError::new(
+                    "malformed_worktree_status", "Git rename or copy has no source path",
+                ));
+            }
+        }
+        count += 1;
+        if entries.len() < 50 {
+            entries.push(String::from_utf8_lossy(&record[3..]).into_owned());
+        }
+    }
+    Ok(WorktreeStatus {
+        porcelain_sha256: format!("{:x}", Sha256::digest(porcelain)),
+        entries,
+        count,
+    })
+}
+
+fn worktree_status_command(
+    checkout_path: &str,
+    inherited_keys: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Command {
+    let mut command = Command::new("git");
+    // Match owned Git operations: inherited repository/config/discovery overrides
+    // must never redirect the preview away from the checkout being removed.
+    for key in inherited_keys {
+        if key.as_encoded_bytes().starts_with(b"GIT_") {
+            command.env_remove(key);
+        }
+    }
+    command
+        .current_dir(checkout_path)
+        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"])
+        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("LC_ALL", "C");
+    command
+}
+
 #[async_trait]
 impl ProjectHerdrAdapter for HerdrCliAdapter {
     async fn project_snapshot_at_endpoint(
@@ -619,27 +692,15 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
         checkout_path: &str,
         timeout_ms: u32,
         output_bytes: u32,
-    ) -> Result<bool, InspectionError> {
+    ) -> Result<WorktreeStatus, InspectionError> {
         ensure_text(checkout_path, "checkout_path")?;
         if !Path::new(checkout_path).is_absolute() || timeout_ms == 0 || output_bytes == 0 {
             return Err(invalid("worktree status"));
         }
-        let mut command = Command::new("git");
-        command
-            .current_dir(checkout_path)
-            .arg("-c")
-            .arg("core.hooksPath=/dev/null")
-            .arg("-c")
-            .arg("core.fsmonitor=false")
-            .arg("status")
-            .arg("--porcelain=v1")
-            .arg("--untracked-files=all")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_ASKPASS", "");
+        let command = worktree_status_command(
+            checkout_path,
+            std::env::vars_os().map(|(key, _)| key),
+        );
         let output = cockpit_core::process::run_bounded_command(
             command,
             output_bytes as usize,
@@ -654,7 +715,7 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
                 "Git could not determine worktree status",
             ));
         }
-        Ok(!output.stdout.is_empty())
+        parse_worktree_status(&output.stdout)
     }
 
     async fn project_close_workspace(
@@ -693,19 +754,39 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
         ensure_text(&request.checkout_path, "checkout_path")?;
         if !valid_pane_id(&request.workspace_id)
             || !Path::new(&request.checkout_path).is_absolute()
-            || request.force
         {
             return Err(invalid("worktree removal"));
         }
-        let methods = self.project_methods(session_id).await?;
-        if !methods.contains("worktree.remove") {
+        let inventory = self.project_inventory(session_id, &request.checkout_path).await?;
+        if inventory.endpoint_identity != request.endpoint_identity {
+            return Err(InspectionError::new(
+                "provenance_conflict", "Worktree removal inventory belongs to a different endpoint",
+            ));
+        }
+        if !inventory.supported_methods.iter().any(|method| method == "worktree.remove") {
             return Err(unsupported("Herdr method worktree.remove is unavailable"));
+        }
+        let mut targets = inventory.worktrees.iter().filter(|entry| {
+            entry.open_workspace_id.as_deref() == Some(request.workspace_id.as_str())
+        });
+        let target = targets.next();
+        if targets.next().is_some()
+            || !target.is_some_and(|entry| {
+                entry.checkout_path == request.checkout_path
+                    && entry.is_linked_worktree
+                    && !entry.is_primary
+            })
+            || Path::new(&inventory.repository_root).starts_with(&request.checkout_path)
+        {
+            return Err(InspectionError::new(
+                "provenance_conflict", "Workspace no longer identifies the requested linked worktree",
+            ));
         }
         let (result, _) = self
             .socket_request_with_identity(
                 session_id,
                 "worktree.remove",
-                json!({"workspace_id": request.workspace_id, "force": false}),
+                json!({"workspace_id": request.workspace_id, "force": request.force}),
                 Some(&request.endpoint_identity),
             )
             .await?;
@@ -716,6 +797,292 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_status_command_removes_git_injection_without_mutating_process_env() {
+        use std::ffi::{OsStr, OsString};
+        let injection_keys = [
+            "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+            "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+        ];
+        let command = worktree_status_command(
+            "/task",
+            injection_keys.into_iter().chain(["GIT_CONFIG_GLOBAL", "PATH"]).map(OsString::from),
+        );
+        let configured = command.as_std();
+        for key in injection_keys {
+            assert_eq!(
+                configured.get_envs().find(|(name, _)| *name == OsStr::new(key)),
+                Some((OsStr::new(key), None)),
+            );
+        }
+        for (key, value) in [
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_NO_REPLACE_OBJECTS", "1"),
+            ("GIT_NO_LAZY_FETCH", "1"),
+        ] {
+            assert_eq!(
+                configured.get_envs().find(|(name, _)| *name == OsStr::new(key)),
+                Some((OsStr::new(key), Some(OsStr::new(value)))),
+            );
+        }
+        assert!(!configured.get_envs().any(|(key, _)| key == OsStr::new("PATH")));
+        assert_eq!(configured.get_current_dir(), Some(Path::new("/task")));
+        assert!(configured.get_args().any(|arg| arg == "--ignore-submodules=none"));
+    }
+
+    #[test]
+    fn worktree_status_fingerprints_exact_porcelain_bytes() {
+        let clean = parse_worktree_status(b"").unwrap();
+        assert_eq!(clean.count, 0);
+        assert!(clean.entries.is_empty());
+        assert_eq!(
+            clean.porcelain_sha256,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let modified = parse_worktree_status(b" M src/file.rs\0").unwrap();
+        let staged = parse_worktree_status(b"M  src/file.rs\0").unwrap();
+        assert_eq!(modified.count, 1);
+        assert_eq!(modified.entries, ["src/file.rs"]);
+        assert_eq!(modified.entries, staged.entries);
+        assert_ne!(modified.porcelain_sha256, clean.porcelain_sha256);
+        assert_ne!(modified.porcelain_sha256, staged.porcelain_sha256);
+        assert_eq!(
+            modified.porcelain_sha256,
+            format!("{:x}", Sha256::digest(b" M src/file.rs\0"))
+        );
+    }
+
+    #[test]
+    fn worktree_status_counts_renames_and_copies_once_with_destination_paths() {
+        let status = parse_worktree_status(
+            b"R  new name\n.rs\0old name.rs\0 C copy.rs\0source.rs\0?? untracked.rs\0",
+        ).unwrap();
+        assert_eq!(status.count, 3);
+        assert_eq!(status.entries, ["new name\n.rs", "copy.rs", "untracked.rs"]);
+        let changed_source = parse_worktree_status(
+            b"R  new name\n.rs\0other source.rs\0 C copy.rs\0source.rs\0?? untracked.rs\0",
+        ).unwrap();
+        assert_eq!(status.entries, changed_source.entries);
+        assert_ne!(status.porcelain_sha256, changed_source.porcelain_sha256);
+    }
+
+    #[test]
+    fn worktree_status_bounds_paths_without_truncating_count_or_fingerprint() {
+        let mut porcelain = Vec::new();
+        for index in 0..75 {
+            porcelain.extend_from_slice(format!("?? file-{index}\0").as_bytes());
+        }
+        let status = parse_worktree_status(&porcelain).unwrap();
+        assert_eq!(status.count, 75);
+        assert_eq!(status.entries.len(), 50);
+        assert_eq!(status.entries[49], "file-49");
+        porcelain.extend_from_slice(b"?? omitted-path\0");
+        let changed = parse_worktree_status(&porcelain).unwrap();
+        assert_eq!(changed.count, 76);
+        assert_eq!(changed.entries, status.entries);
+        assert_ne!(changed.porcelain_sha256, status.porcelain_sha256);
+    }
+
+    #[test]
+    fn worktree_status_rejects_incomplete_porcelain_records() {
+        for malformed in [
+            b" M file.rs".as_slice(),
+            b"R  destination.rs\0".as_slice(),
+            b"R  destination.rs\0\0".as_slice(),
+            b" M \0".as_slice(),
+        ] {
+            assert!(parse_worktree_status(malformed).is_err());
+        }
+    }
+
+    struct ProjectFixture(std::path::PathBuf);
+
+    impl ProjectFixture {
+        fn new() -> Self {
+            use std::sync::atomic::Ordering;
+            let root = std::env::temp_dir().join(format!(
+                "cp-project-{}-{}",
+                std::process::id(),
+                super::super::NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+
+        fn git(&self, args: &[&str]) {
+            let output = std::process::Command::new("git")
+                .current_dir(&self.0)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        }
+
+        #[cfg(unix)]
+        fn herdr_executable(&self) -> std::path::PathBuf {
+            use std::os::unix::fs::PermissionsExt;
+            let executable = self.0.join("herdr");
+            std::fs::write(self.0.join("schema.json"), include_str!(
+                "../../tests/fixtures/herdr-0.9.0-protocol-22-schema-1.json"
+            )).unwrap();
+            std::fs::write(&executable, concat!(
+                "#!/bin/sh\n",
+                "case \"$*\" in\n",
+                "  *'status server'*) printf '%s\\n' '{\"version\":\"0.9.0\",\"protocol\":22,\"running\":true}';;\n",
+                "  *'api schema'*) cat \"${0%/*}/schema.json\";;\n",
+                "  *) exit 91;;\n",
+                "esac\n",
+            )).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            executable
+        }
+    }
+
+    impl Drop for ProjectFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn adapter_worktree_status_reads_clean_dirty_and_renamed_paths() {
+        use super::super::HerdrCliConfig;
+        let fixture = ProjectFixture::new();
+        fixture.git(&["init", "-q"]);
+        std::fs::write(fixture.0.join("old name.rs"), "tracked content\n").unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&[
+            "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "-c", "commit.gpgsign=false", "commit", "-qm", "initial",
+        ]);
+        let adapter = HerdrCliAdapter::new(
+            HerdrCliConfig::from_options(None, Some("fixture".into()), None).unwrap(),
+        );
+        let path = fixture.0.to_str().unwrap();
+        let clean = adapter.project_worktree_dirty(path, 5_000, 64 * 1024).await.unwrap();
+        assert_eq!(clean.count, 0);
+        fixture.git(&["mv", "old name.rs", "new name.rs"]);
+        std::fs::write(fixture.0.join("untracked.rs"), "untracked content\n").unwrap();
+        let dirty = adapter.project_worktree_dirty(path, 5_000, 64 * 1024).await.unwrap();
+        assert_eq!(dirty.count, 2);
+        assert_eq!(dirty.entries, ["new name.rs", "untracked.rs"]);
+        assert_ne!(dirty.porcelain_sha256, clean.porcelain_sha256);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn adapter_worktree_removal_forwards_force_after_preflight() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::{UnixListener, UnixStream};
+        use super::super::HerdrCliConfig;
+
+        let fixture = ProjectFixture::new();
+        let socket = fixture.0.join("runtime.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let probe = UnixStream::connect(&socket).await.unwrap();
+        let endpoint = HerdrCliAdapter::socket_peer_identity(&socket, &probe).unwrap();
+        drop(probe);
+        drop(listener.accept().await.unwrap());
+        let executable = fixture.herdr_executable();
+        let server = tokio::spawn(async move {
+            for force in [false, true] {
+                for method in ["ping", "worktree.list", "worktree.remove"] {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(request["method"], method);
+                    let result = if method == "ping" {
+                        json!({"type": "pong", "version": "0.9.0", "protocol": 22})
+                    } else if method == "worktree.list" {
+                        assert_eq!(request["params"], json!({"cwd": "/task"}));
+                        json!({
+                            "type": "worktree_list",
+                            "source": {"repo_key": "repo", "repo_name": "repo", "repo_root": "/repo", "source_checkout_path": "/repo"},
+                            "worktrees": [worktree("/repo", Some("main"), false, Some("w1")), worktree("/task", Some("task"), true, Some("w2"))],
+                        })
+                    } else {
+                        assert_eq!(request["params"], json!({"workspace_id": "w2", "force": force}));
+                        json!({"type": "worktree_removed", "workspace_id": "w2", "forced": force, "path": "/task"})
+                    };
+                    let response = json!({"id": request["id"], "result": result});
+                    reader.into_inner().write_all(format!("{response}\n").as_bytes()).await.unwrap();
+                }
+            }
+        });
+        let adapter = HerdrCliAdapter::new(HerdrCliConfig::from_options(
+            Some(executable), Some("fixture".into()), Some(socket),
+        ).unwrap());
+        for force in [false, true] {
+            adapter.project_remove_worktree("fixture", &ProjectWorktreeRemoveRequest {
+                endpoint_identity: endpoint.clone(),
+                workspace_id: "w2".into(),
+                checkout_path: "/task".into(),
+                force,
+            }).await.unwrap();
+        }
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn adapter_worktree_removal_rejects_retargeted_workspace_before_dispatch() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::{UnixListener, UnixStream};
+        use super::super::HerdrCliConfig;
+
+        let fixture = ProjectFixture::new();
+        let socket = fixture.0.join("runtime.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let probe = UnixStream::connect(&socket).await.unwrap();
+        let endpoint = HerdrCliAdapter::socket_peer_identity(&socket, &probe).unwrap();
+        drop(probe);
+        drop(listener.accept().await.unwrap());
+        let server = tokio::spawn(async move {
+            for method in ["ping", "worktree.list"] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], method);
+                let result = if method == "ping" {
+                    json!({"type": "pong", "version": "0.9.0", "protocol": 22})
+                } else {
+                    assert_eq!(request["params"], json!({"cwd": "/task"}));
+                    json!({
+                        "type": "worktree_list",
+                        "source": {"repo_key": "repo", "repo_name": "repo", "repo_root": "/repo", "source_checkout_path": "/repo"},
+                        "worktrees": [
+                            worktree("/repo", Some("main"), false, Some("w1")),
+                            worktree("/task", Some("task"), true, Some("w3")),
+                            worktree("/other", Some("other"), true, Some("w2")),
+                        ],
+                    })
+                };
+                let response = json!({"id": request["id"], "result": result});
+                reader.into_inner().write_all(format!("{response}\n").as_bytes()).await.unwrap();
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err(),
+                "retargeted workspace must not receive worktree.remove",
+            );
+        });
+        let adapter = HerdrCliAdapter::new(HerdrCliConfig::from_options(
+            Some(fixture.herdr_executable()), Some("fixture".into()), Some(socket),
+        ).unwrap());
+        let error = adapter.project_remove_worktree("fixture", &ProjectWorktreeRemoveRequest {
+            endpoint_identity: endpoint,
+            workspace_id: "w2".into(),
+            checkout_path: "/task".into(),
+            force: true,
+        }).await.unwrap_err();
+        assert_eq!(error.code, "provenance_conflict");
+        server.await.unwrap();
+    }
 
     #[test]
     fn accepts_stock_workspace_close_acknowledgement() {
@@ -749,6 +1116,41 @@ mod tests {
         assert_eq!(root, "/repo");
         assert!(entries[0].is_primary);
         assert_eq!(entries[1].open_workspace_id.as_deref(), Some("w2"));
+    }
+
+    #[test]
+    fn inventory_from_linked_request_accepts_canonical_primary_source() {
+        let value = json!({
+            "type": "worktree_list",
+            "source": {"repo_key": "repo", "repo_name": "repo", "repo_root": "/repo", "source_checkout_path": "/repo"},
+            "worktrees": [worktree("/repo", Some("main"), false, Some("w1")), worktree("/task", Some("task"), true, Some("w2"))],
+        });
+        let (_, root, entries) = parse_worktree_list(&value, "/task").unwrap();
+        assert_eq!(root, "/repo");
+        assert!(entries[0].is_primary);
+        assert!(!entries[1].is_primary);
+        assert!(entries[1].is_linked_worktree);
+    }
+
+    #[test]
+    fn inventory_independently_requires_registered_origin_and_requested_checkout() {
+        let value = json!({
+            "type": "worktree_list",
+            "source": {"repo_key": "repo", "repo_name": "repo", "repo_root": "/repo", "source_checkout_path": "/repo"},
+            "worktrees": [worktree("/repo", Some("main"), false, Some("w1")), worktree("/task", Some("task"), true, Some("w2"))],
+        });
+        assert!(parse_worktree_list(&value, "/missing").is_err());
+        assert!(parse_worktree_list(&value, "task").is_err());
+        let mut absent_origin = value.clone();
+        absent_origin["source"]["source_checkout_path"] = json!("/missing");
+        assert!(parse_worktree_list(&absent_origin, "/task").is_err());
+        let mut relative_origin = value.clone();
+        relative_origin["source"]["source_checkout_path"] = json!("repo");
+        assert!(parse_worktree_list(&relative_origin, "/task").is_err());
+        let mut duplicate_requested = value;
+        duplicate_requested["worktrees"].as_array_mut().unwrap()
+            .push(worktree("/task", Some("task"), true, None));
+        assert!(parse_worktree_list(&duplicate_requested, "/task").is_err());
     }
 
     #[test]
@@ -816,28 +1218,30 @@ mod tests {
 
     #[test]
     fn parses_installed_worktree_removal_receipt() {
-        let request = ProjectWorktreeRemoveRequest {
-            endpoint_identity: "unix-socket:/tmp/herdr.sock:pid=1:uid=1:gid=1:start=1".into(),
-            workspace_id: "w2".into(),
-            checkout_path: "/task".into(),
-            force: false,
-        };
-        let result = json!({
-            "type": "worktree_removed",
-            "workspace_id": "w2",
-            "forced": false,
-            "path": "/task"
-        });
+        for force in [false, true] {
+            let request = ProjectWorktreeRemoveRequest {
+                endpoint_identity: "unix-socket:/tmp/herdr.sock:pid=1:uid=1:gid=1:start=1".into(),
+                workspace_id: "w2".into(),
+                checkout_path: "/task".into(),
+                force,
+            };
+            let result = json!({
+                "type": "worktree_removed",
+                "workspace_id": "w2",
+                "forced": force,
+                "path": "/task"
+            });
 
-        parse_worktree_removed(&result, &request).expect("installed Herdr removal receipt");
-        for (field, replacement) in [
-            ("workspace_id", json!("w3")),
-            ("path", json!("/another-task")),
-            ("forced", json!(true)),
-        ] {
-            let mut mismatched = result.clone();
-            mismatched[field] = replacement;
-            assert!(parse_worktree_removed(&mismatched, &request).is_err());
+            parse_worktree_removed(&result, &request).expect("installed Herdr removal receipt");
+            for (field, replacement) in [
+                ("workspace_id", json!("w3")),
+                ("path", json!("/another-task")),
+                ("forced", json!(!force)),
+            ] {
+                let mut mismatched = result.clone();
+                mismatched[field] = replacement;
+                assert!(parse_worktree_removed(&mismatched, &request).is_err());
+            }
         }
     }
 

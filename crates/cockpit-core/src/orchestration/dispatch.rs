@@ -103,6 +103,28 @@ fn pending_operation_delay(run: &Run, timeout_ms: u64) -> Option<Duration> {
     }
 }
 
+const RETIREMENT_RETRY_DELAY: Duration = Duration::from_secs(5);
+
+fn foreground_retirement_pending(run: &Run) -> bool {
+    run.retirement.as_ref().is_some_and(|record| matches!(record.state,
+        cockpit_protocol::orchestration::RetirementState::Retained {
+            reason: cockpit_protocol::orchestration::RetainReason::ForegroundProcess, ..
+        }))
+}
+
+fn due_retirement_retries(retries: &mut BTreeMap<String, tokio::time::Instant>, queue: Vec<Run>,
+    at: tokio::time::Instant) -> Vec<Run> {
+    retries.retain(|run_id, _| queue.iter().any(|run| run.run_id == *run_id && foreground_retirement_pending(run)));
+    queue.into_iter().filter_map(|run| {
+        if !foreground_retirement_pending(&run)
+            || retries.get(&run.run_id).is_none_or(|deadline| *deadline > at) { return None; }
+        // Advance before dispatch, including lease contention and unchanged
+        // observations. An overdue retained timestamp must never busy-loop.
+        retries.insert(run.run_id.clone(), at + RETIREMENT_RETRY_DELAY);
+        Some(run)
+    }).collect()
+}
+
 async fn wait_deadline(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -192,6 +214,7 @@ impl Dispatcher {
             let mut active = std::collections::HashSet::new();
             let mut deferred = std::collections::HashSet::new();
             let mut deadlines = BTreeMap::<String, tokio::time::Instant>::new();
+            let mut retirement_retries = BTreeMap::<String, tokio::time::Instant>::new();
             let mut watcher_retry = files.is_none().then(|| tokio::time::Instant::now() + Duration::from_millis(250));
             let mut watcher_backoff = Duration::from_millis(250);
             loop {
@@ -247,6 +270,11 @@ impl Dispatcher {
                     }
                 }
                 let retirements = dispatcher.service.retirement_queue().unwrap_or_default();
+                retirement_retries.retain(|run_id, _| retirements.iter().any(|run|
+                    run.run_id == *run_id && foreground_retirement_pending(run)));
+                for run in retirements.iter().filter(|run| foreground_retirement_pending(run)) {
+                    retirement_retries.insert(run.run_id.clone(), tokio::time::Instant::now() + RETIREMENT_RETRY_DELAY);
+                }
                 if let Ok(runs) = dispatcher.service.observation_runs() {
                     let mut needed: std::collections::BTreeSet<_> = runs.iter().chain(retirements.iter())
                         .map(|run| run.session_id.clone()).collect();
@@ -300,6 +328,19 @@ impl Dispatcher {
                         _ = filesystem_changed(&mut files) => { break; },
                         _ = pane_events.recv() => { break; },
                         _ = wait_deadline(deadline) => { break; },
+                        _ = wait_deadline(retirement_retries.values().copied().min()), if !retirement_retries.is_empty() => {
+                            let queue = dispatcher.service.retirement_queue().unwrap_or_default();
+                            let due = due_retirement_retries(&mut retirement_retries, queue, tokio::time::Instant::now());
+                            for run in due {
+                                let key = format!("retire:{}", run.run_id);
+                                if !active.insert(key.clone()) { continue; }
+                                let dispatcher = Arc::clone(&dispatcher);
+                                workers.spawn(async move { let _ = dispatcher.retire(&run).await; key });
+                            }
+                            // A pending pane gets only its own fresh preflight.
+                            // Real mutations publish changes and cause a normal
+                            // pass; unchanged retries never rebuild global state.
+                        },
                         Some(done) = workers.join_next(), if !workers.is_empty() => {
                             if let Ok(key) = done {
                                 active.remove(&key);

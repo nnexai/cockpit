@@ -14,6 +14,7 @@ pub enum WorkspaceTeardownAction {
 pub enum WorkspaceTeardownOwnership {
     OwnedCreated,
     BorrowedOpened,
+    SelectedLinked,
     Unknown,
 }
 
@@ -48,6 +49,9 @@ pub struct WorkspaceTeardownExecuteRequest {
     pub expected_checkout_path: String,
     pub action: WorkspaceTeardownAction,
     pub confirmation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub discard_fingerprint: Option<String>,
 }
 
 /// A fresh, reviewable description of one requested teardown target. The
@@ -65,6 +69,9 @@ pub struct WorkspaceTeardownPreview {
     pub workspace_state: WorkspaceTeardownWorkspaceState,
     pub is_linked_worktree: bool,
     pub dirty_state: WorkspaceTeardownDirtyState,
+    pub discard_count: u32,
+    pub discard_paths: Vec<String>,
+    pub discard_fingerprint: Option<String>,
     pub allowed_actions: Vec<WorkspaceTeardownAction>,
     pub blockers: Vec<String>,
     pub warnings: Vec<String>,
@@ -108,4 +115,37 @@ pub struct WorkspaceTeardownResult {
     pub action: WorkspaceTeardownAction,
     pub outcome: WorkspaceTeardownOutcome,
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn execute_discard_fingerprint_is_optional_and_omitted_when_absent() {
+        let clean = json!({
+            "operation_id": "manual-operation", "workspace_id": "space",
+            "expected_endpoint_identity": "endpoint", "expected_checkout_path": "/worktrees/task",
+            "action": "remove_owned_worktree", "confirmation": "task"
+        });
+        let request: WorkspaceTeardownExecuteRequest =
+            serde_json::from_value(clean.clone()).expect("clean request");
+        assert!(request.discard_fingerprint.is_none());
+        assert_eq!(serde_json::to_value(request).expect("serialize clean request"), clean);
+        let mut dirty = clean;
+        dirty["discard_fingerprint"] = json!("a".repeat(64));
+        let request: WorkspaceTeardownExecuteRequest =
+            serde_json::from_value(dirty.clone()).expect("dirty request");
+        assert_eq!(request.discard_fingerprint.as_deref(), Some("a".repeat(64).as_str()));
+        assert_eq!(serde_json::to_value(request).expect("serialize dirty request"), dirty);
+    }
+
+    #[test]
+    fn selected_linked_is_distinct_from_setup_ownership() {
+        let ownership: WorkspaceTeardownOwnership =
+            serde_json::from_value(json!("selected_linked")).expect("selected linked ownership");
+        assert_eq!(ownership, WorkspaceTeardownOwnership::SelectedLinked);
+        assert_eq!(serde_json::to_value(ownership).expect("serialize ownership"), json!("selected_linked"));
+    }
 }

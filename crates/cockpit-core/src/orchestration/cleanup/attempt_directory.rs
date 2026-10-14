@@ -283,7 +283,7 @@ mod tests {
         std::fs::rename(fixture.directory.join("nested"), fixture.source.join("published-nested")).unwrap();
         let resource = fixture.resource();
         assert_eq!(inspect(fixture.service.base(), &resource, &fixture.run).unwrap(), CleanupEvaluation::Ready);
-        let intent = fixture.service.begin_cleanup_effect(&resource, &fixture.run).unwrap().unwrap();
+        let intent = fixture.service.begin_cleanup_effect(&resource, &fixture.run, None).unwrap().unwrap();
         let result = apply(fixture.service.base(), &intent, &fixture.run).unwrap();
         assert_eq!(result.state, CleanupEffectState::Applied);
         fixture.service.finish_cleanup_effect(&intent, result).unwrap();
@@ -322,7 +322,7 @@ mod tests {
         let before = std::fs::read(fixture.service.base().join("state.json")).unwrap();
         let state = fixture.service.store.lock().unwrap().read().unwrap();
         assert!(!attempt_directory_released(&state, &fixture.run));
-        assert!(fixture.service.begin_cleanup_effect(&fixture.resource(), &fixture.run).unwrap().is_none());
+        assert!(fixture.service.begin_cleanup_effect(&fixture.resource(), &fixture.run, None).unwrap().is_none());
         assert_eq!(std::fs::read(fixture.service.base().join("state.json")).unwrap(), before);
         assert!(fixture.directory.is_dir());
     }

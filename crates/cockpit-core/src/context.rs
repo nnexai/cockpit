@@ -1843,7 +1843,7 @@ mod review_checkout_tests {
             _: &str,
             _: u32,
             _: u32,
-        ) -> Result<bool, InspectionError> {
+        ) -> Result<crate::project_adapter::WorktreeStatus, InspectionError> {
             unavailable()
         }
         async fn project_close_workspace(

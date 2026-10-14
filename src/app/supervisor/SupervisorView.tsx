@@ -13,12 +13,13 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
 }) {
   const [mode, setMode] = useState<"tasks" | "graph">("tasks");
   const [selected, setSelected] = useState<{ taskId: string; rowKey: string } | null>(null);
-  const overview = useRef<HTMLElement>(null), back = useRef<HTMLButtonElement>(null);
+  const overview = useRef<HTMLElement>(null), conversation = useRef<HTMLButtonElement>(null), closeDetail = useRef<HTMLButtonElement>(null);
   const focusIntent = useRef<"back" | "origin" | "conversation" | null>("conversation");
   const origin = useRef<HTMLElement | null>(null), returnRow = useRef<string | null>(null);
   const lastFocused = useRef<HTMLElement | null>(null);
   const view = selected ? tasks.find((task, index) => `${task.task.task_id}:${index}` === selected.rowKey) ?? tasks.find(task => task.task.task_id === selected.taskId) : null;
   const history = useMemo(() => snapshot && rootId && view ? taskHistory(snapshot, rootId, view, tasks, fresh) : null, [snapshot, rootId, view, tasks, fresh]);
+  const selectedKey = view ? `${view.task.task_id}:${tasks.indexOf(view)}` : null;
   const visible = (element: HTMLElement) => {
     for (let ancestor: HTMLElement | null = element; ancestor && ancestor !== overview.current; ancestor = ancestor.parentElement) {
       if (ancestor.hidden || getComputedStyle(ancestor).display === "none") return false;
@@ -40,10 +41,14 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
       setSelected(null);
       return;
     }
-    if (focusIntent.current === "back" || focusIntent.current === "conversation") back.current?.focus({ preventScroll: true });
+    if (focusIntent.current === "back") {
+      closeDetail.current?.focus({ preventScroll: true });
+      findRow(selectedKey)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    }
+    if (focusIntent.current === "conversation") conversation.current?.focus({ preventScroll: true });
     if (focusIntent.current === "origin") {
       const target = origin.current?.isConnected && visible(origin.current) ? origin.current : findRow(returnRow.current);
-      (target ?? back.current)?.focus({ preventScroll: true });
+      (target ?? conversation.current)?.focus({ preventScroll: true });
     }
     focusIntent.current = null;
   }, [selected, view, tasks]);
@@ -64,10 +69,15 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
   }).join(" · ");
   return <section ref={overview} className="liaison-task-overview" aria-label="Task overview" onFocusCapture={event => { lastFocused.current = event.target as HTMLElement; }}
     onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (selected) goBack(); else onClose(); } }}>
-    <header><button type="button" className={selected ? "liaison-detail-back" : "liaison-conversation"} aria-label={selected ? "Overview" : undefined} ref={back} onClick={selected ? goBack : onClose}>{selected ? "‹ Overview" : "‹ Conversation"}</button><h1>{selected ? "Task history" : "Overview"}</h1>{!selected ? <div role="group" aria-label="Overview view"><button type="button" aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Board</button><button type="button" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>Graph</button></div> : null}<span className={waiting ? "liaison-waiting" : "liaison-task-status"}>{waiting ? "● waiting for you" : status ?? summary}</span></header>
-    <div className="liaison-overview-content" hidden={!!selected} inert={!!selected}>
-      {mode === "tasks" ? <SupervisorTasks tasks={tasks} runs={runs} onOpen={open} /> : <SupervisorGraph tasks={tasks} onOpen={open} />}
+    <header><button type="button" className="liaison-conversation" ref={conversation} onClick={onClose}>‹ Conversation</button><h1>Overview</h1><div role="group" aria-label="Overview view"><button type="button" aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Board</button><button type="button" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>Graph</button></div><span className={waiting ? "liaison-waiting" : "liaison-task-status"}>{waiting ? "● waiting for you" : status ?? summary}</span></header>
+    <div className="liaison-overview-body">
+      <div className="liaison-overview-content">
+        {mode === "tasks" ? <SupervisorTasks tasks={tasks} runs={runs} selectedKey={selectedKey} onOpen={open} /> : <SupervisorGraph tasks={tasks} selectedKey={selectedKey} onOpen={open} />}
+      </div>
+      {selected && view ? <aside className="liaison-overview-detail" aria-label="Task history">
+        <header><button type="button" className="liaison-detail-back" ref={closeDetail} aria-label="Close task history" onClick={goBack}>✕ Close</button></header>
+        <TaskHistoryDetail view={view} history={history} />
+      </aside> : null}
     </div>
-    {selected && view ? <div className="liaison-fullscreen-detail"><TaskHistoryDetail view={view} history={history} /></div> : null}
   </section>;
 }

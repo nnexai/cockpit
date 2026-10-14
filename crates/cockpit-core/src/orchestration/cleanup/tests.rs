@@ -64,12 +64,12 @@ fn creation_identity_deduplicates_only_exact_provenance() {
 #[test]
 fn intent_is_durable_before_dispatch_and_uncertain_effect_is_not_repeated() {
     let fixture = Fixture::new();
-    let intent = fixture.service.begin_cleanup_effect(&fixture.resource, &fixture.run).unwrap().unwrap();
+    let intent = fixture.service.begin_cleanup_effect(&fixture.resource, &fixture.run, None).unwrap().unwrap();
     let reopened = OrchestrationStore::open(&fixture.root).unwrap();
     let saved = reopened.lock().unwrap().read().unwrap();
     assert_eq!(saved.owned_resources[0].cleanup.state, CleanupState::Running);
     assert_eq!(saved.owned_resources[0].cleanup.effects[0].state, CleanupEffectState::Intent);
-    assert!(fixture.service.begin_cleanup_effect(&intent, &fixture.run).unwrap().is_none());
+    assert!(fixture.service.begin_cleanup_effect(&intent, &fixture.run, None).unwrap().is_none());
     fixture.service.save_evaluation(&intent, CleanupEvaluation::Absent).unwrap();
     let saved = fixture.service.store.lock().unwrap().read().unwrap();
     assert_eq!(saved.owned_resources[0].cleanup.state, CleanupState::Removed);
@@ -169,7 +169,7 @@ fn borrowed_and_unknown_resources_never_receive_cleanup_effect_authority() {
             locked.save(&mut state).unwrap();
             expected
         };
-        assert!(fixture.service.begin_cleanup_effect(&expected, &fixture.run).unwrap().is_none());
+        assert!(fixture.service.begin_cleanup_effect(&expected, &fixture.run, None).unwrap().is_none());
     }
 }
 
@@ -464,7 +464,7 @@ fn retired_pane_never_releases_claim_or_authorizes_checkout_resource_effects() {
             if resource.kind != OwnedResourceKind::Scratch {
                 assert!(OrchestrationService::known_writers_active(&after_terminal, resource));
             }
-            assert!(fixture.service.begin_cleanup_effect(resource, run).unwrap().is_none(),
+            assert!(fixture.service.begin_cleanup_effect(resource, run, None).unwrap().is_none(),
                 "{:?}: retired pane must not admit a resource effect without consumer drain", resource.kind);
         }
         let after_attempts = fixture.service.store.lock().unwrap().read().unwrap();
@@ -545,15 +545,20 @@ fn cleanup_hold_is_actionable_once_after_ack_and_owner_reopen() {
 
 #[test]
 fn transient_observation_retention_is_waiting_with_concrete_reconnection_action() {
-    let identity = terminal_identity();
-    let run = terminal_run(identity.clone(), RetirementState::Retained {
-        at: now(), reason: RetainReason::ObservationUnavailable, stopped: false,
-    });
-    let mut state = OrchestrationState::default();
-    let index = insert_resource(&mut state.owned_resources, &run,
-        OwnedResourceIdentity::WorkerTerminal { identity }).unwrap();
-    assert!(matches!(terminal_evaluation(&state.owned_resources[index], &run),
-        CleanupEvaluation::Waiting(why) if why.code == "terminal_observation_unavailable"));
+    for (retained, code) in [
+        (RetainReason::ObservationUnavailable, "terminal_observation_unavailable"),
+        (RetainReason::ForegroundProcess, "terminal_retirement_pending"),
+    ] {
+        let identity = terminal_identity();
+        let run = terminal_run(identity.clone(), RetirementState::Retained {
+            at: now(), reason: retained, stopped: false,
+        });
+        let mut state = OrchestrationState::default();
+        let index = insert_resource(&mut state.owned_resources, &run,
+            OwnedResourceIdentity::WorkerTerminal { identity }).unwrap();
+        assert!(matches!(terminal_evaluation(&state.owned_resources[index], &run),
+            CleanupEvaluation::Waiting(why) if why.code == code));
+    }
 }
 
 #[test]

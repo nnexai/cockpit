@@ -61,19 +61,16 @@ fn passed_checks(checks: &[CheckOutcome]) -> bool {
 
 fn stop_output_proven(run: &Run) -> bool {
     let Some(source) = run.source_output.as_ref() else { return false };
-    let (result_message_id, task_revision) = match source {
-        SourceOutput::Code { result_message_id, task_revision, .. }
-        | SourceOutput::NonCode { result_message_id, task_revision, .. } => (result_message_id, task_revision),
+    let result_message_id = match source {
+        SourceOutput::Code { result_message_id, .. }
+        | SourceOutput::NonCode { result_message_id, .. } => result_message_id,
     };
     if run.result.as_ref().is_none_or(|result| result.outcome != Some(ReportOutcome::Succeeded)
         || result.message_id != *result_message_id || result.source_output.as_ref() != Some(source)) {
         return false;
     }
     match (&run.integration, source) {
-        (Integration::Integrated { source: integrated, accepted_result_message_id, accepted_task_revision,
-            checks, verified_at, .. }, SourceOutput::Code { .. }) =>
-            !verified_at.is_empty() && integrated == source && accepted_result_message_id == result_message_id
-                && accepted_task_revision == task_revision && passed_checks(checks),
+        (_, SourceOutput::Code { .. }) => true,
         (Integration::NotApplicable { result_message_id: exempt_result, reason },
             SourceOutput::NonCode { artifacts, focused_checks, .. }) =>
             exempt_result == result_message_id && !reason.trim().is_empty()
@@ -114,7 +111,7 @@ async fn stop_output_preflight(run: &Run) -> Result<(), InspectionError> {
             // No Git or borrowed-directory deletion authority is inferred here.
             project_identity::revalidate_checkout(checkout)
         }
-        _ => Err(error("scope_completion_unproven", "Accepted output lacks exact integration/exemption and passed completion evidence")),
+        _ => Err(error("scope_completion_unproven", "Accepted output lacks exact succeeded Result or non-code exemption evidence")),
     }
 }
 
@@ -122,14 +119,14 @@ async fn clean_accepted_head(run: &Run) -> Result<(), InspectionError> {
     let checkout = run.checkout.as_ref().ok_or_else(|| error("containment_unproven", "Exact checkout receipt is unavailable"))?;
     project_identity::revalidate_checkout(checkout)?;
     let SourceOutput::Code { head_commit, .. } = run.source_output.as_ref()
-        .ok_or_else(|| error("integration_pending", "Stopping an owned scope requires accepted integrated code output"))? else {
-        return Err(error("integration_pending", "Stopping an owned scope requires verified target integration"));
+        .ok_or_else(|| error("scope_completion_unproven", "Stopping an owned scope requires accepted code output"))? else {
+        return Err(error("scope_completion_unproven", "Stopping an owned scope requires accepted code output"));
     };
     let root = Path::new(&checkout.path);
     if crate::space_git::git_line(root, &["rev-parse", "--verify", "HEAD^{commit}"]).await? != *head_commit {
         return Err(error("scope_unaccepted_commits", "Later or unaccepted commits protect this attempt and its scope"));
     }
-    let status = crate::space_git::git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"]).await?;
+    let status = crate::space_git::git_output(root, &["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]).await?;
     if !status.status.success() { return Err(error("containment_unproven", "Git cleanliness could not be inspected")); }
     if !status.stdout.is_empty() { return Err(error("scope_dirty_checkout", "Uncommitted or untracked work protects this attempt and its scope")); }
     project_identity::revalidate_checkout(checkout)
@@ -506,7 +503,7 @@ mod tests {
                 0 => run.kind = RunKind::Supervisor,
                 1 => run.close_reason = Some(CloseReason::Superseded),
                 2 => run.close_reason = Some(CloseReason::Cancelled),
-                3 => run.integration = Integration::Pending,
+                3 => run.result.as_mut().unwrap().outcome = Some(ReportOutcome::Failed),
                 4 => run.retirement.as_mut().unwrap().state = RetirementState::Waiting { blockers: Vec::new() },
                 5 => run.attachment.as_mut().unwrap().process_scope = None,
                 _ => run.cleanup_policy = None,
@@ -516,8 +513,19 @@ mod tests {
         for status in [CheckStatus::Failed, CheckStatus::NotRun] {
             let mut run = fixture.run.clone();
             if let Integration::Integrated { checks, .. } = &mut run.integration { checks[0].outcome = status; }
-            assert!(!stop_eligible(&state, &run));
+            assert!(stop_eligible(&state, &run), "target checks do not authorize isolated accepted-scope stop");
         }
+    }
+
+    #[test]
+    fn accepted_code_scope_stop_does_not_require_integration() {
+        let fixture = Fixture::new();
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        let mut run = fixture.run.clone();
+        run.integration = Integration::Pending;
+        assert!(stop_eligible(&state, &run));
+        run.result.as_mut().unwrap().message_id = "foreign-result".into();
+        assert!(!stop_eligible(&state, &run));
     }
 
     #[test]
@@ -742,10 +750,10 @@ mod tests {
         resource.consumers.clear();
         assert_eq!(crate::project_teardown::owned_consumers_quiescent(&resource, &run, None).await.unwrap_err().code,
             "consumer_proof_missing", "an empty consumer list without service authority remains fail-closed");
-        assert!(fixture.service.owned_consumer_proof(&resource, &run).unwrap().is_none(),
+        assert!(fixture.service.owned_consumer_proof(&resource, &run, None).unwrap().is_none(),
             "empty refs and a retired pane do not imply consumer exit");
         let sealed = fixture.service.seal_scope_release(&run).unwrap().unwrap();
-        assert!(fixture.service.owned_consumer_proof(&resource, &sealed).unwrap().is_none(),
+        assert!(fixture.service.owned_consumer_proof(&resource, &sealed, None).unwrap().is_none(),
             "a sealed intent is not completed drain/release");
         let state = fixture.service.store.lock().unwrap().read().unwrap();
         let attachment = sealed.attachment.as_ref().unwrap();
@@ -760,8 +768,8 @@ mod tests {
         fixture.service.release_scope_claim(&sealed, &exit).unwrap();
         let state = fixture.service.store.lock().unwrap().read().unwrap();
         let released = state.runs[0].clone();
-        let proof = fixture.service.owned_consumer_proof(&resource, &released).unwrap().unwrap();
-        fixture.service.validate_consumer_release(&resource, &released, proof.claim_revision).unwrap();
+        let proof = fixture.service.owned_consumer_proof(&resource, &released, None).unwrap().unwrap();
+        fixture.service.validate_consumer_release(&resource, &released, proof.claim_revision, None).unwrap();
         assert!(proof.validate(&resource, &released).await.is_err(),
             "cached release authority never substitutes for fresh real scope observation");
         for changed in 0..9 {

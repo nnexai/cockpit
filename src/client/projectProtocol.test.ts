@@ -143,9 +143,32 @@ it("decodes worktree teardown and rejects invalid ownership and actions", () => 
     operation_id: "operation-1", workspace_id: "space-1", endpoint_identity: "endpoint-1",
     repository_key: "repo", repository_root: "/repos/repo", checkout_path: "/worktrees/task",
     ownership: "owned_created", workspace_state: "live", is_linked_worktree: true, dirty_state: "clean",
+    discard_count: 0, discard_paths: [], discard_fingerprint: null,
     allowed_actions: ["close_space", "remove_owned_worktree"], blockers: [], warnings: [], required_confirmation: "task",
   };
   expect(parseWorkspaceTeardownPreview(preview)).toEqual(preview);
+  expect(parseWorkspaceTeardownPreview({ ...preview, ownership: "selected_linked" }).ownership).toBe("selected_linked");
+  const fingerprint = "a".repeat(64);
+  const dirty = { ...preview, dirty_state: "dirty", discard_count: 51,
+    discard_paths: Array.from({ length: 50 }, (_, index) => `file-${index}`), discard_fingerprint: fingerprint };
+  expect(parseWorkspaceTeardownPreview(dirty)).toEqual(dirty);
+  for (const discard_count of [-1, 0.5, 0x100000000, NaN]) {
+    expect(() => parseWorkspaceTeardownPreview({ ...preview, discard_count })).toThrow();
+  }
+  expect(() => parseWorkspaceTeardownPreview({ ...dirty, discard_paths: Array(51).fill("file") })).toThrow();
+  expect(() => parseWorkspaceTeardownPreview({ ...dirty, discard_count: 49 })).toThrow();
+  for (const path of ["", "/absolute", "../outside", "dir/../outside", "C:\\outside", "\\outside", "nul\0path"]) {
+    expect(() => parseWorkspaceTeardownPreview({ ...dirty, discard_paths: [path] })).toThrow();
+  }
+  for (const discard_fingerprint of ["", "a".repeat(63), "g".repeat(64), "A".repeat(64), 1]) {
+    expect(() => parseWorkspaceTeardownPreview({ ...dirty, discard_fingerprint })).toThrow();
+  }
+  const { discard_count: _count, ...missingCount } = preview;
+  const { discard_paths: _paths, ...missingPaths } = preview;
+  const { discard_fingerprint: _fingerprint, ...missingFingerprint } = preview;
+  for (const missing of [missingCount, missingPaths, missingFingerprint]) {
+    expect(() => parseWorkspaceTeardownPreview(missing)).toThrow();
+  }
   expect(() => parseWorkspaceTeardownPreview({ ...preview, ownership: "foreign" })).toThrow();
   const request = {
     operation_id: "operation-1", workspace_id: "space-1",
@@ -153,6 +176,17 @@ it("decodes worktree teardown and rejects invalid ownership and actions", () => 
     action: "remove_owned_worktree", confirmation: "task",
   };
   expect(parseWorkspaceTeardownExecuteRequest(request)).toEqual(request);
+  const closeEmpty = { ...request, action: "close_space", expected_checkout_path: "" };
+  expect(parseWorkspaceTeardownExecuteRequest(closeEmpty)).toEqual(closeEmpty);
+  expect(() => parseWorkspaceTeardownExecuteRequest({ ...request, expected_checkout_path: "" })).toThrow();
+  expect(() => parseWorkspaceTeardownExecuteRequest({
+    ...request, action: "reconcile_remove_outcome", expected_checkout_path: "",
+  })).toThrow();
+  expect(parseWorkspaceTeardownExecuteRequest({ ...request, discard_fingerprint: fingerprint }))
+    .toEqual({ ...request, discard_fingerprint: fingerprint });
+  for (const discard_fingerprint of [null, "", "a".repeat(63), "g".repeat(64)]) {
+    expect(() => parseWorkspaceTeardownExecuteRequest({ ...request, discard_fingerprint })).toThrow();
+  }
   expect(() => parseWorkspaceTeardownExecuteRequest({ ...request, action: "invalid" })).toThrow();
   expect(() => parseWorkspaceTeardownPreview({ ...preview, allowed_actions: ["invalid"] })).toThrow();
 });
