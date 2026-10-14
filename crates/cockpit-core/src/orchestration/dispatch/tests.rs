@@ -2034,13 +2034,14 @@ fn same_chat_resume_substitutes_only_the_whole_opaque_session_argument() {
     use cockpit_protocol::orchestration::{ConversationIdentity, ResumePhase, ResumeRecord};
     let fixture = ReviewFixture::new(RunStage::Starting);
     let mut run = fixture.run.clone();
+    run.launch_config.harness_kind = "omp".into();
     run.launch_config.extra_args = vec!["--fresh-only".into()];
     run.launch_config.resume_args = Some(vec![
-        "--resume".into(), "{session_id}".into(), "literal-{session_id}".into(),
+        "--custom-resume".into(), "{session_id}".into(), "literal-{session_id}".into(),
     ]);
     assert_eq!(launch_args(&run).unwrap(), ["--fresh-only"]);
     run.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
-        harness: "plain-agent".into(), session_id: "opaque/chat ; $(literal)".into(),
+        harness: "omp".into(), session_id: "opaque/chat ; $(literal)".into(),
     });
     run.resume = Some(ResumeRecord {
         operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
@@ -2048,10 +2049,18 @@ fn same_chat_resume_substitutes_only_the_whole_opaque_session_argument() {
         phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
     });
     assert_eq!(launch_args(&run).unwrap(), [
-        "--resume", "opaque/chat ; $(literal)", "literal-{session_id}",
+        "--custom-resume", "opaque/chat ; $(literal)", "literal-{session_id}",
     ]);
     run.launch_config.resume_args = None;
+    assert!(resume_supported(&run.launch_config));
+    assert_eq!(launch_args(&run).unwrap(), ["--resume", "opaque/chat ; $(literal)"]);
+    run.launch_config.harness_kind = "plain-agent".into();
+    assert!(!resume_supported(&run.launch_config));
     assert_eq!(launch_args(&run).unwrap_err().code, "harness_resume_unsupported");
+    run.launch_config.resume_args = Some(vec!["--foreign-resume".into(), "{session_id}".into()]);
+    assert!(resume_supported(&run.launch_config));
+    assert_eq!(launch_args(&run).unwrap(), ["--foreign-resume", "opaque/chat ; $(literal)"]);
+    run.launch_config.harness_kind = "omp".into();
     for invalid in [
         vec!["--resume".into()],
         vec!["prefix-{session_id}".into()],

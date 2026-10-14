@@ -883,6 +883,43 @@ async fn resume_does_not_reconnect_quiescing_live_attachment() {
 }
 
 #[test]
+fn root_lookup_offers_retry_only_for_stale_unsupported_omp_resume() {
+    for (harness, configured_resume, code, expected) in [
+        ("omp", false, "harness_resume_unsupported", RootResumeAvailability::Available),
+        ("unknown-custom", false, "harness_resume_unsupported", RootResumeAvailability::Blocked),
+        ("omp", false, "same_boot_replacement_unsupported", RootResumeAvailability::Blocked),
+        ("unknown-custom", true, "harness_resume_unsupported", RootResumeAvailability::Available),
+    ] {
+        let mut run = reviewed();
+        run.launch_config.harness_kind = harness.into();
+        if !configured_resume {
+            run.launch_config.resume_args = None;
+        }
+        run.resume = Some(ResumeRecord {
+            operation_id: "resume".into(), run_id: run.run_id.clone(),
+            previous_attachment_epoch: Some(1), phase: ResumePhase::Blocked,
+            cause: Some(ResumeCause {
+                code: code.into(),
+                message: "Current attachment and claim are preserved".into(),
+                class: ResumeCauseClass::Decision,
+            }),
+            decision_id: Some("decision".into()), replacement_attachment_epoch: None,
+            updated_at: run.updated_at.clone(),
+        });
+        let before = serde_json::to_value(&run).unwrap();
+        let candidate = root_candidate(&run, false);
+        assert_eq!(candidate.resume, expected, "{harness}, {code}");
+        assert_eq!(candidate.connection, RootConnection::Unknown);
+        if expected == RootResumeAvailability::Available {
+            assert!(candidate.cause.is_none());
+        } else {
+            assert_eq!(candidate.cause.unwrap().code, code);
+        }
+        assert_eq!(serde_json::to_value(&run).unwrap(), before);
+    }
+}
+
+#[test]
 fn root_lookup_preserves_guarded_refusal_without_inventing_connection() {
     let mut run = reviewed();
     assert_eq!(root_candidate(&run, false).connection, RootConnection::Unknown);
@@ -917,6 +954,25 @@ fn living_process_without_current_authenticated_attachment_is_not_connected() {
     assert_eq!(unregistered.connection, RootConnection::Unknown);
     assert_eq!(unregistered.resume, RootResumeAvailability::Blocked);
     assert!(unregistered.cause.is_some());
+    run.launch_config.harness_kind = "omp".into();
+    run.launch_config.resume_args = None;
+    run.resume = Some(ResumeRecord {
+        operation_id: "resume".into(), run_id: run.run_id.clone(),
+        previous_attachment_epoch: Some(1), phase: ResumePhase::Blocked,
+        cause: Some(ResumeCause {
+            code: "harness_resume_unsupported".into(),
+            message: "Configured harness has no supported same-conversation resume arguments".into(),
+            class: ResumeCauseClass::Decision,
+        }),
+        decision_id: Some("decision".into()), replacement_attachment_epoch: None,
+        updated_at: run.updated_at.clone(),
+    });
+    let before = serde_json::to_value(&run).unwrap();
+    let still_protected = root_candidate(&run, false);
+    assert_eq!(still_protected.connection, RootConnection::Unknown);
+    assert_eq!(still_protected.resume, RootResumeAvailability::Blocked);
+    assert_eq!(still_protected.cause.unwrap().code, "conversation_unregistered");
+    assert_eq!(serde_json::to_value(&run).unwrap(), before);
 }
 
 fn start_request(target: Option<DispatchTarget>, mode: SupervisorStartMode) -> OrchestrationMutationRequest {

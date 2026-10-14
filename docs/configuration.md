@@ -74,7 +74,7 @@ inbox_prompt_hints = false
 # initial_prompt_args = ["--prompt", "{prompt}"]
 # OMP defaults to ["--hook", "{hook_path}"]; [] explicitly disables its hook.
 # hook_args = []
-# Optional same-chat resume; exactly one whole "{session_id}".
+# OMP defaults to same-chat ["--resume", "{session_id}"]; override for other harnesses.
 # resume_args = ["--resume", "{session_id}"]
 ```
 
@@ -86,10 +86,12 @@ inbox_prompt_hints = false
 | `hook_args` | Absent: OMP uses `["--hook", "{hook_path}"]` for its materialized per-launch hook; other harnesses have no hook arguments. `[]` explicitly disables the hook. A nonempty list requires exactly one whole `{hook_path}`. |
 | `max_parallel` | `4`, inclusive range `1–64`; bounds concurrently live task attempts under a root, not canonical task count. |
 | `process_scope` | `"auto"`; new DirectProcess incarnations attempt a harness-neutral owned systemd user scope on supported Linux/cgroup-v2 hosts. `"off"` launches directly with no scope receipt. Unsupported/probe-failed auto launch remains uncontained, not blocked. |
-| `resume_args` | Absent: no same-chat resume launch. When configured, replaces fresh-start arguments and requires exactly one whole `{session_id}` argument with an actual registered conversation ID. |
+| `resume_args` | Absent: OMP uses `["--resume", "{session_id}"]`; other harnesses have no same-chat resume launch. An explicit list overrides this adapter. Resume replaces fresh-start `extra_args` and requires exactly one whole `{session_id}` argument with an actual registered conversation ID. |
 | `inbox_prompt_hints` | `false`; explicit opt-in counts-only supported terminal prompt hints, not required inbox delivery or bootstrap. |
 
 Placeholder replacement is whole-argument only; there is no general interpolation, shell expansion, guessed `--continue` or fallback harness. `harness_kind` is nonempty printable, at most 512 bytes; `command` is nonempty printable, at most 4096 bytes and not an option. Literal argv lists are bounded to 16 arguments, each nonempty printable and at most 4096 bytes; NUL is rejected. The explicit empty `hook_args` disable value is allowed. Default OMP launch retains a stable per-run `--session-dir`, never a fabricated conversation ID. Resolved configuration persists with durable launch intent; routing remains task placement, not harness selection.
+
+After closing a supervisor terminal, select its original Space and choose **Resume supervisor** in the tab strip or Commands. Cockpit reopens the registered conversation and retains its root and tasks; repeated requests join the same restart rather than launching another supervisor. OMP needs no `resume_args` setting. Previously saved OMP roots blocked by `harness_resume_unsupported` become retryable after updating Cockpit. Other harnesses still require their explicit resume argv. Physical-exit and live-writer protections remain in force.
 
 Core task/schedule/replacement/credential/messaging/cleanup authority is harness-neutral; OMP auth export, session files and native detection are not prerequisites. Herdr-supported agent interactions, credential CLI and optional harness hooks are allowed adapters. OMP's thin public-API hook is the first optional adapter, not exclusive support or a requirement for Claude Code, Copilot, Codex or other configured harnesses. It is per-launch, with no custom tool gates, global installs/settings, raw terminal typing or draft replacement. Extension-free credential CLI remains complete. A different harness can use configured literal prompt/hook argv only when that hook API is compatible; otherwise disable the OMP hook and use CLI. No obsolete `omp_extension`, `COCKPIT_OMP_EXTENSION` or orchestration `model` alias is supported. [OMP quota executable](#omp-quota-executable) selection remains separate.
 

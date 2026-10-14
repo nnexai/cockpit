@@ -163,6 +163,46 @@ fn startup_registration_pending(state: &OrchestrationState, run: &Run) -> bool {
                 && holder.attachment_id == attachment.attachment_id && holder.attachment_epoch == attachment.epoch)))
 }
 
+fn retryable_unsupported_resume_launch(state: &OrchestrationState, run: &Run) -> bool {
+    let (Some(resume), Some(attachment), Some(dispatch)) = (&run.resume, &run.attachment, &run.dispatch) else { return false };
+    // An older dispatcher can refuse the newly supported adapter before writing
+    // launch intent. Retry only that effect-free, already-authorized reservation.
+    run.stage == RunStage::Starting
+        && dispatch::resume_supported(&run.launch_config)
+        && resume.phase == ResumePhase::Launching
+        && resume.run_id == run.run_id
+        && resume.replacement_attachment_epoch == Some(attachment.epoch)
+        && resume.previous_attachment_epoch.is_some_and(|previous|
+            previous > 0 && previous.checked_add(1) == Some(attachment.epoch))
+        && attachment.state == AttachmentState::Reserved
+        && attachment.conversation.is_some()
+        && attachment.location.is_none()
+        && attachment.process.is_none()
+        && attachment.shell.is_none()
+        && attachment.process_scope.is_none()
+        && dispatch.step == DispatchStep::NeedsReview
+        && dispatch.error.as_ref().is_some_and(|error| error.code == "harness_resume_unsupported")
+        && dispatch.launch_attempt > 0
+        && dispatch.launch_attempt == attachment.launch_attempt
+        && !dispatch.agent_started
+        && dispatch.launch_tag.is_none()
+        && dispatch.endpoint_identity.is_none()
+        && dispatch.scope_unit.is_none()
+        && dispatch.pre_move_scope.is_none()
+        && dispatch.latch.is_none()
+        && dispatch.latch_state.is_none()
+        && dispatch.source_location.is_none()
+        && dispatch.move_operation_id.is_none()
+        && dispatch.staging_workspace_id.is_none()
+        && dispatch.recovery.is_none()
+        && state.operations.iter().any(|operation| operation.operation_id == resume.operation_id
+            && operation.kind == DurableOperationKind::RunResume
+            && operation.run_id.as_ref() == Some(&run.run_id) && operation.result.is_none())
+        && !state.credentials.iter().any(|credential| credential.run_id == run.run_id
+            && credential.state == credentials::CredentialState::Active
+            && (credential.attachment_id != attachment.attachment_id || credential.attachment_epoch != attachment.epoch))
+}
+
 pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
     let OrchestrationAction::RunResume { run_id, operation_id, expected_attachment_epoch } = &action else { unreachable!() };
     let index = resume_target(ctx, run_id)?;
@@ -190,6 +230,14 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
     if let Some(current) = ctx.state.runs[index].resume.as_ref().filter(|r|
         matches!(r.phase, ResumePhase::Reconciling | ResumePhase::Launching)) {
         let result = OrchestrationActionResult::RunResumed { resume: RunResumeResult { run_id: run_id.clone(), resume: current.clone(), duplicate: false } };
+        if retryable_unsupported_resume_launch(ctx.state, &ctx.state.runs[index]) {
+            let run = &mut ctx.state.runs[index];
+            let dispatch = run.dispatch.as_mut().expect("effect-free dispatch checked");
+            dispatch.step = DispatchStep::SetupPending;
+            dispatch.error = None;
+            dispatch.updated_at = now();
+            run.updated_at = dispatch.updated_at.clone();
+        }
         record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id, result.clone(), Vec::new())?;
         return Ok(Applied::Machine(result));
     }
@@ -294,7 +342,7 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
             return block(state, index, "resume_effect_unknown", "Unsettled setup must be reconciled before replacement");
         }
         let current = state.runs[index].attachment.as_ref().ok_or_else(|| error("writer_exit_unproven", "No recorded incarnation to replace"))?;
-        if current.conversation.is_some() && state.runs[index].launch_config.resume_args.is_none() {
+        if current.conversation.is_some() && !dispatch::resume_supported(&state.runs[index].launch_config) {
             return block(state, index, "harness_resume_unsupported", "The configured harness has no same-conversation resume arguments; the existing attachment is preserved");
         }
         let receipts = effects(&state.runs[index]);

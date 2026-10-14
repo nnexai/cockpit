@@ -5,7 +5,7 @@ use cockpit_core::{
     orchestration::{
         Actor, OrchestrationService, ResolvedMutationInput, is_project_root_candidate,
         preferred_project_root,
-        dispatch::{Dispatcher, DispatcherSettings},
+        dispatch::{Dispatcher, DispatcherSettings, resume_supported},
         herdr::{OrchestrationHerdr, RuntimeView, RuntimeWorkspace},
         project_identity::{replacement_consumers_preflight, resolve_directory},
     },
@@ -608,9 +608,14 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
         .and_then(|attachment| attachment.process.as_ref().map(|process|
             same_machine_process_running(process, attachment.machine_id.as_deref())));
     let incompatible_live = !modern_binding && matches!(&live, Some(Ok(true)));
+    let stale_unsupported = run.resume.as_ref().is_some_and(|record|
+        record.phase == ResumePhase::Blocked
+            && record.cause.as_ref().is_some_and(|cause| cause.code == "harness_resume_unsupported"))
+        && resume_supported(&run.launch_config);
     let resume = if incompatible_live { RootResumeAvailability::Blocked } else { match run.resume.as_ref().map(|r| r.phase) {
         Some(ResumePhase::Reconciling | ResumePhase::Launching) =>
             RootResumeAvailability::InProgress,
+        Some(ResumePhase::Blocked) if stale_unsupported => RootResumeAvailability::Available,
         Some(ResumePhase::Blocked) => RootResumeAvailability::Blocked,
         _ => RootResumeAvailability::Available,
     }};
@@ -630,7 +635,7 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
             code: "conversation_unregistered".into(),
             message: "The living writer has not registered its conversation with this run's capability. Its process and checkout claim are preserved.".into(),
             class: ResumeCauseClass::Recover,
-        }) } else { run.resume.as_ref().and_then(|r| r.cause.clone()) },
+        }) } else if stale_unsupported { None } else { run.resume.as_ref().and_then(|r| r.cause.clone()) },
         updated_at: run.updated_at.clone(),
     }
 }

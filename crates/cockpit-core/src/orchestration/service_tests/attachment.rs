@@ -1186,6 +1186,157 @@ async fn surviving_root_refreshes_settled_endpoint_and_rejects_stale_location_re
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn omp_default_resume_relaunches_root_after_saved_unsupported_block() {
+    for harness in ["omp", "service-test"] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        fixture.seed_run(&root, |run| {
+            run.launch_config.harness_kind = harness.into();
+            run.launch_config.resume_args = None;
+        });
+        let mut main = RootRecoveryPty::new();
+        let shell = RootRecoveryPty::new();
+        let old_actor = root_recovery_binding(&fixture, &root, main.shell.process.clone(), shell.shell.clone());
+        fixture.create_task(&root, "Retain this task across same-chat recovery");
+        let original = fixture.run(&root);
+        let attachment = original.attachment.as_ref().unwrap();
+        let conversation = attachment.conversation.clone();
+        assert_eq!(conversation.as_ref().unwrap().harness, harness);
+        let tasks_before = fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap();
+        let credentials_before = serde_json::to_value(&fixture.state().credentials).unwrap();
+        let old_credential_id = caller_auth(&old_actor).credential_id.clone();
+        main.finish();
+        let runtime = root_recovery_runtime(&original, &shell.shell);
+        let proof = fixture.service.observe_root_resume(&runtime, &original).await;
+        assert!(proof.root_main_recovery.is_some());
+        assert!(proof.writer_exit_proof.is_none());
+        let blocked_operation = id();
+        fixture.seed_run(&root, |run| {
+            run.resume = Some(ResumeRecord {
+                operation_id: blocked_operation.clone(), run_id: root.clone(),
+                previous_attachment_epoch: Some(attachment.epoch), replacement_attachment_epoch: None,
+                phase: ResumePhase::Blocked,
+                cause: Some(ResumeCause { code: "harness_resume_unsupported".into(),
+                    message: "Saved harness had no same-conversation resume arguments".into(), class: ResumeCauseClass::Recover }),
+                decision_id: None, updated_at: now(),
+            });
+        });
+        let resumed = apply_root_recovery(&fixture, &root, &proof);
+        assert_ne!(resumed.resume.operation_id, blocked_operation);
+        assert_eq!(resumed.run_id, root);
+        let replacement = fixture.run(&root);
+        assert_eq!(replacement.run_id, original.run_id);
+        assert_eq!(replacement.root_id, original.root_id);
+        assert_eq!(replacement.attachment.as_ref().unwrap().conversation, conversation);
+        assert_eq!(fixture.state().runs.len(), 1);
+        assert_eq!(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap(), tasks_before);
+        let state = fixture.state();
+        let old_credential = state.credentials.iter().find(|record| record.credential_id == old_credential_id).unwrap();
+        if harness == "omp" {
+            assert_eq!(resumed.resume.phase, ResumePhase::Launching);
+            assert!(resumed.resume.cause.is_none());
+            assert_eq!(resumed.resume.previous_attachment_epoch, Some(attachment.epoch));
+            assert_eq!(resumed.resume.replacement_attachment_epoch, Some(attachment.epoch + 1));
+            assert_eq!(replacement.attachment.as_ref().unwrap().epoch, attachment.epoch + 1);
+            assert_eq!(replacement.dispatch.as_ref().unwrap().launch_attempt, original.dispatch.as_ref().unwrap().launch_attempt + 1);
+            assert_eq!(old_credential.state, credentials::CredentialState::Revoked);
+            assert_code(fixture.apply(&old_actor, report(ReportKind::Progress, None, None)), "job_unauthorized");
+            let joined = apply_root_recovery(&fixture, &root, &proof);
+            assert_eq!(joined.resume.operation_id, resumed.resume.operation_id);
+            assert_eq!(fixture.run(&root).attachment.as_ref().unwrap().epoch, attachment.epoch + 1,
+                "Joining the pending resume must not rotate the attachment twice");
+        } else {
+            assert_eq!(resumed.resume.phase, ResumePhase::Blocked);
+            assert_eq!(resumed.resume.cause.as_ref().unwrap().code, "harness_resume_unsupported");
+            assert!(resumed.resume.replacement_attachment_epoch.is_none());
+            assert_eq!(replacement.attachment.as_ref().unwrap().epoch, attachment.epoch);
+            assert_eq!(serde_json::to_value(&replacement.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
+            assert_eq!(serde_json::to_value(&state.credentials).unwrap(), credentials_before);
+            assert_eq!(old_credential.state, credentials::CredentialState::Active);
+            assert!(state.credentials.iter().filter(|record| record.run_id == root)
+                .all(|record| record.state == credentials::CredentialState::Active));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn pending_resume_requeues_only_supported_effect_free_prelaunch_refusal() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.seed_run(&root, |run| {
+        run.launch_config.harness_kind = "omp".into();
+        run.launch_config.resume_args = None;
+    });
+    let mut main = RootRecoveryPty::new();
+    let shell = RootRecoveryPty::new();
+    root_recovery_binding(&fixture, &root, main.shell.process.clone(), shell.shell.clone());
+    fixture.create_task(&root, "Preserve the task and reserved capability on upgrade retry");
+    let original = fixture.run(&root);
+    main.finish();
+    let proof = fixture.service.observe_root_resume(&root_recovery_runtime(&original, &shell.shell), &original).await;
+    assert!(proof.root_main_recovery.is_some());
+    let pending = apply_root_recovery(&fixture, &root, &proof);
+    assert_eq!(pending.resume.phase, ResumePhase::Launching);
+    let (credential, _) = credentials::stage_credential(fixture.service.base(), &fixture.run(&root), JobRole::Root).unwrap();
+    fixture.seed_state(|state| state.credentials.push(credential));
+    fixture.service.record_dispatch(&root, DispatchUpdate::Step {
+        step: DispatchStep::NeedsReview,
+        error: Some(cockpit_protocol::ErrorResponse {
+            code: "harness_resume_unsupported".into(), message: "Previous owner did not support built-in OMP resume".into(),
+        }),
+    }).unwrap();
+    let stalled = fixture.run(&root);
+    let attachment_before = serde_json::to_value(&stalled.attachment).unwrap();
+    let credentials_before = serde_json::to_value(&fixture.state().credentials).unwrap();
+    let tasks_before = fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap();
+    for fault in 0..12 {
+        fixture.seed_run(&root, |run| {
+            *run = stalled.clone();
+            let dispatch = run.dispatch.as_mut().unwrap();
+            match fault {
+                0 => {}
+                1 => dispatch.launch_tag = Some("possibly-created-tab".into()),
+                2 => dispatch.latch_state = Some(AgentLatchState::Unknown),
+                3 => dispatch.source_location = original.attachment.as_ref().unwrap().location.clone(),
+                4 => dispatch.move_operation_id = Some(id()),
+                5 => dispatch.scope_unit = Some("possibly-created-scope".into()),
+                6 => dispatch.agent_started = true,
+                7 => run.attachment.as_mut().unwrap().location = original.attachment.as_ref().unwrap().location.clone(),
+                8 => dispatch.launch_attempt += 1,
+                9 => dispatch.error.as_mut().unwrap().code = "launch_outcome_unknown".into(),
+                10 => run.launch_config.harness_kind = "unsupported-agent".into(),
+                11 => run.attachment.as_mut().unwrap().state = AttachmentState::Connecting,
+                _ => unreachable!(),
+            }
+        });
+        let before = fixture.run(&root);
+        let joined = apply_root_recovery(&fixture, &root, &ResolvedMutationInput::default());
+        assert_eq!(joined.resume.operation_id, pending.resume.operation_id);
+        assert_eq!(joined.resume.phase, ResumePhase::Launching);
+        let after = fixture.run(&root);
+        assert_eq!(after.attachment.as_ref().unwrap().epoch, stalled.attachment.as_ref().unwrap().epoch);
+        assert_eq!(serde_json::to_value(&fixture.state().credentials).unwrap(), credentials_before);
+        assert_eq!(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap(), tasks_before);
+        assert_eq!(fixture.state().runs.len(), 1);
+        if fault == 0 {
+            assert_eq!(after.dispatch.as_ref().unwrap().step, DispatchStep::SetupPending);
+            assert!(after.dispatch.as_ref().unwrap().error.is_none());
+            assert_eq!(after.dispatch.as_ref().unwrap().launch_attempt, stalled.dispatch.as_ref().unwrap().launch_attempt);
+            assert_eq!(serde_json::to_value(&after.attachment).unwrap(), attachment_before);
+            let repeated = apply_root_recovery(&fixture, &root, &ResolvedMutationInput::default());
+            assert_eq!(repeated.resume.operation_id, pending.resume.operation_id);
+            assert_eq!(serde_json::to_value(&fixture.run(&root).dispatch).unwrap(), serde_json::to_value(&after.dispatch).unwrap(),
+                "A queued replacement is joined without resetting or rotating it again");
+        } else {
+            assert_eq!(serde_json::to_value(&after.dispatch).unwrap(), serde_json::to_value(&before.dispatch).unwrap(), "fault {fault}");
+            assert_eq!(serde_json::to_value(&after.attachment).unwrap(), serde_json::to_value(&before.attachment).unwrap(), "fault {fault}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn manually_resumed_different_root_pid_blocks_until_its_exit_then_uses_same_owner_operation() {
     let fixture = Fixture::new();
     let root = fixture.root();

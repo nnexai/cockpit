@@ -1584,14 +1584,23 @@ fn moved_location(runtime: &RuntimeView, source: &RunLocation) -> Option<RunLoca
 }
 
 
+/// Same-conversation resume is configured, or the OMP built-in adapter applies.
+pub fn resume_supported(config: &cockpit_protocol::projects::OrchestrationConfiguration) -> bool {
+    config.resume_args.is_some() || config.harness_kind == "omp"
+}
+
 fn launch_args(run: &Run) -> Result<Vec<String>, InspectionError> {
     let previous = run.resume.as_ref().and_then(|resume|
         resume.previous_attachment_epoch.filter(|_| resume.replacement_attachment_epoch.is_some()));
     if previous.is_none() { return Ok(run.launch_config.extra_args.clone()); }
     let conversation = run.attachment.as_ref().and_then(|attachment| attachment.conversation.as_ref());
     let conversation = conversation.ok_or_else(|| InspectionError::new("resume_session_unavailable", "Resume has no registered conversation"))?;
-    let args = run.launch_config.resume_args.as_ref()
-        .ok_or_else(|| InspectionError::new("harness_resume_unsupported", "Configured harness has no supported same-conversation resume arguments"))?;
+    let Some(args) = run.launch_config.resume_args.as_ref() else {
+        if !resume_supported(&run.launch_config) {
+            return Err(InspectionError::new("harness_resume_unsupported", "Configured harness has no supported same-conversation resume arguments"));
+        }
+        return Ok(vec!["--resume".into(), conversation.session_id.clone()]);
+    };
     if args.iter().filter(|arg| arg.as_str() == "{session_id}").count() != 1 {
         return Err(InspectionError::new("invalid_launch_settings", "Resume needs exactly one whole session placeholder"));
     }
