@@ -6,7 +6,7 @@ import { useSupervisor, type LiaisonAction, type MutationRequestScope } from "./
 type RetainedOperation = { action: LiaisonAction; scope: MutationRequestScope; spaceId: string };
 export interface LiaisonController {
   snapshot: OrchestrationSnapshot | null; root: Run | null; tasks: TaskView[];
-  waiting: boolean; status: string | null; actionLabel: string | null; startAvailable: boolean; error: string | null;
+  waiting: boolean; fresh: boolean; status: string | null; actionLabel: string | null; startAvailable: boolean; error: string | null;
   paneId: string | null; tabId: string | null; start(): Promise<void>;
 }
 export function useLiaison(props: WorkbenchProps, openConversation: () => void, navigate: (paneId: string, run: Run, snapshot: OrchestrationSnapshot) => Promise<void>, conversationVisible: boolean): LiaisonController {
@@ -89,5 +89,5 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
     }).finally(() => { navigating.current = false; });
   }, [root, snapshot, observation, state.sessionId, state.snapshot, selection.paneId, conversationVisible, navigate]);
   const savedLocation = root?.session_id === state.sessionId ? root.attachment?.location : null;
-  return { snapshot, root, tasks, waiting, status, actionLabel, startAvailable, start, error: observer.error ?? navigationError, paneId: observation?.presence === "present" ? observation.pane_id : savedLocation?.pane_id ?? null, tabId: observation?.presence === "present" ? observation.tab_id : savedLocation?.tab_id ?? null };
+  return { snapshot, root, tasks, waiting, fresh, status, actionLabel, startAvailable, start, error: observer.error ?? navigationError, paneId: observation?.presence === "present" ? observation.pane_id : savedLocation?.pane_id ?? null, tabId: observation?.presence === "present" ? observation.tab_id : savedLocation?.tab_id ?? null };
 }

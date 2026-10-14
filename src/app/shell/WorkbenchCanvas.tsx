@@ -25,7 +25,7 @@ export function WorkbenchCanvas(props: WorkbenchContentProps) {
     const pending = selected && state.focusPending !== null;
     const focusError = selected ? state.focusError : null;
     return <LeafHost ctx={ctx} tab={hostTab} leaf={leaf} rect={rect} pane={pane} selected={selected}
-      taskRail={leaf.kind === "terminal" && props.liaison.paneId === leaf.id ? <TaskRail tasks={props.liaison.tasks} waiting={props.liaison.waiting} status={props.liaison.status} onOverview={props.openOverview} /> : undefined}
+      taskRail={leaf.kind === "terminal" && props.liaison.paneId === leaf.id ? <TaskRail key={`${props.liaison.snapshot?.state_store_id}:${props.liaison.root?.run_id}`} tasks={props.liaison.tasks} waiting={props.liaison.waiting} status={props.liaison.status} snapshot={props.liaison.snapshot} rootId={props.liaison.root?.run_id ?? null} fresh={props.liaison.fresh} onOverview={props.openOverview} /> : undefined}
       terminalTitle={leaf.kind === "terminal" && props.liaison.paneId === leaf.id && pane?.title === props.liaison.root?.attachment?.location?.launch_tag ? "Liaison" : undefined}
       widgetInputBlocked={modalOpen || !active || props.overviewOpen} widgetLive={state.sync === "live"} widgetLocation={`${spaces.find(space => space.id === hostTab.spaceId)?.label ?? "Space"} · ${allTabs.find(tab => tab.id === hostTab.tabId)?.label ?? "tab"}`}
       onWidgetAgent={(paneId, tabId, spaceId) => { if (state.sync === "live") onFocus({ kind: "pane", target_id: paneId }, { paneId, tabId, spaceId }); }}
