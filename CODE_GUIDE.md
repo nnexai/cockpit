@@ -85,7 +85,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | --- | --- |
 | Liaison project-root lookup/start/reuse/resume/focus | `src/app/supervisor/useLiaison.ts`; `src/app/shell/useLiaisonNavigation.ts` |
 | Scoped notification observer and start/resume actions | `src/app/supervisor/useSupervisor.ts` |
-| Optional fullscreen Overview and conversation return | `src/app/supervisor/SupervisorView.tsx`; `src/app/shell/useWorkarea.ts` |
+| Optional fullscreen Overview, shared task-history drill-down and conversation return | `src/app/supervisor/SupervisorView.tsx`; `src/app/shell/WorkbenchContent.tsx`; `src/app/shell/useWorkarea.ts` |
 | Compact terminal task rail, task history and read-only board | `src/app/supervisor/SupervisorTasks.tsx`; `TaskHistoryDetail.tsx` (record disclosure); `taskHistory.ts` (selected-task evidence projection); `src/app/layout/LeafHost.tsx`; `src/app/layout/TerminalLeaf.tsx` |
 | Task prerequisite graph and geometry | `src/app/supervisor/SupervisorGraph.tsx`; `src/app/supervisor/dependencies.ts`; `src/app/supervisor/dependencyLayout.ts` |
 | Rail/overview presentation | `src/app/supervisor/supervisor.css` |
@@ -374,7 +374,7 @@ These are verification recipes, not exercised results. Select affected checks an
 | Canonical tasks | Exact-byte Markdown CAS, dependencies/checklist stages, safe overflow, current credential/generation authority, stale/ABA rejection and current-scope source acceptance |
 | Scheduling/replacement/owner recovery | Disposable dependency release and bounded parallelism, atomic credential claim, generation-fenced replacement while an old writer works, isolated committed-base placement, old dirty work/claims retained and liaison reattachment |
 | Supervisor transports/CLI | Root-only schedule/replace authority, optional actual conversation metadata, extension-free credential commands and internal inbox capture, physical versus semantic proof and durable revisions |
-| Supervisor UI | Real liaison terminal with compact task rail, per-task recorded history, completed-task disclosure/all-done bar; optional fullscreen board/prerequisite graph, Conversation/Escape return, root waiting hint and no dead operational forms; see `docs/supervisor-surfaces.md` |
+| Supervisor UI | Real liaison terminal with compact task rail, shared per-task history in rail and fullscreen board/graph drill-down, completed-task disclosure/all-done bar, nested Back/Escape focus/scroll restoration, root waiting hint and no dead operational forms; see `docs/supervisor-surfaces.md` |
 | Harness/install/inbox | Literal initial prompt and optional per-launch hook, wait/pull/internal capture, unknown delivery without replay, separate launch/model timestamps, installer protections, ordinary offline tools and unchanged OMP quota |
 | Notes | Real Markdown/CAS, sibling bytes, concurrent/external edits, orphans, boot-scoped attach and disposable browser/native drag/comment/draft recovery |
 | Notes transports/CLI | Standalone CLI without Herdr, Origin rejection, equivalent DTOs, custom-root copied recipes and real native IPC |

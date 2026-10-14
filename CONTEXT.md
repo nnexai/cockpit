@@ -79,7 +79,7 @@ The existing bottom strip presents read-only OMP-owned Codex, Claude and Copilot
 
 ## Supervisor lifecycle and authority
 
-The liaison's real Herdr terminal is the primary supervisor conversation. A compact read-only task rail beside it opens per-task recorded history without leaving the conversation. Completed tasks remain accessible, collapsing to a bottom bar when all are done; an empty task board hides the rail. Optional fullscreen Overview shows a task board or prerequisite graph and returns to the conversation. Human decisions happen through the liaison, not worker-answer, task-editing, diagnostics or operational retry forms. Unmanaged agents remain legitimate; harness-internal children are not Cockpit ownership or control surfaces.
+The liaison's real Herdr terminal is the primary supervisor conversation. A compact read-only task rail beside it opens per-task recorded history without leaving the conversation. Completed tasks remain accessible, collapsing to a bottom bar when all are done; an empty task board hides the rail. Optional fullscreen Overview shows a task board or prerequisite graph with drill-down into the same task history: Back/Escape returns to the originating task, then Escape returns to the conversation. Human decisions happen through the liaison, not worker-answer, task-editing, diagnostics or operational retry forms. Unmanaged agents remain legitimate; harness-internal children are not Cockpit ownership or control surfaces.
 
 The liaison finishes a batch conversationally and remains Active/available for later tasks on the same project root. `run done` is worker-only; a low-level root Result is diagnostic history, not root retirement or a reason to create another liaison.
 

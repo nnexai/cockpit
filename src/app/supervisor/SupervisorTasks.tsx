@@ -82,20 +82,22 @@ export function TaskRail({ tasks, waiting, status, onOverview, snapshot, rootId,
     </>}
   </aside>;
 }
-export function SupervisorTasks({ tasks, runs }: { tasks: readonly TaskView[]; runs: readonly Run[] }) {
+export function SupervisorTasks({ tasks, runs, onOpen }: { tasks: readonly TaskView[]; runs: readonly Run[]; onOpen(view: TaskView, rowKey: string): void }) {
+  const [doneLimit, setDoneLimit] = useState(12);
   const completed = orderDoneTasks(tasks.filter(view => view.lane === "accepted"), runs);
   return <div className="liaison-task-board" role="group" aria-label="Task board" tabIndex={0}>{taskLanes.map(({ lane, label }) => {
     const laneTasks = tasks.filter(view => view.lane === lane);
-    const shown = lane === "accepted" ? completed.slice(0, 12) : laneTasks;
+    const shown = lane === "accepted" ? completed.slice(0, doneLimit) : laneTasks;
     return <section className={`liaison-task-lane lane-${lane}${!laneTasks.length ? " is-empty" : ""}`} key={lane} aria-label={`${label} tasks`}>
       <h2><span className="liaison-task-dot" aria-hidden="true" />{label}<span>{laneTasks.length}</span></h2>
-      <ul>{shown.map((view, index) => {
+      <ul>{shown.map(view => {
         const dependency = dependencySummary(view, tasks), worker = runs.find(run => run.run_id === view.current_run_id)?.label;
         const meta = lane === "accepted" ? null : dependency ? `↳ ${dependency}` : [worker, view.scheduled && lane === "ready" ? "scheduled" : null, view.attempt && view.attempt.attempt > 1 ? `attempt ${view.attempt.attempt}` : null].filter(Boolean).join(" · ");
         const attemptState = lane !== "accepted" && !dependency && view.attempt && view.attempt.state !== "running" ? view.attempt.state : null;
-        return <li className={`liaison-task-card lane-${lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}`} key={`${view.task.task_id}:${index}`}><div className="liaison-card-title">{view.task.title}</div>{meta || attemptState ? <div className="liaison-card-meta">{meta}{meta && attemptState ? " · " : null}{attemptState ? <span className={attemptState === "stalled" ? "liaison-attempt-stalled" : undefined}>{attemptState}</span> : null}</div> : null}</li>;
+        const rowKey = `${view.task.task_id}:${tasks.indexOf(view)}`;
+        return <li className={`liaison-task-card lane-${lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}`} key={rowKey}><button type="button" className="liaison-card-open" data-row-key={rowKey} aria-label={`${view.task.title}, ${taskStage(view)}. Open history`} onClick={() => onOpen(view, rowKey)}><div className="liaison-card-title">{view.task.title}</div>{meta || attemptState ? <div className="liaison-card-meta">{meta}{meta && attemptState ? " · " : null}{attemptState ? <span className={attemptState === "stalled" ? "liaison-attempt-stalled" : undefined}>{attemptState}</span> : null}</div> : null}</button></li>;
       })}</ul>
-      {lane === "accepted" && laneTasks.length > shown.length ? <p className="liaison-task-earlier">+{laneTasks.length - shown.length} earlier</p> : null}
+      {lane === "accepted" && laneTasks.length > shown.length ? <button type="button" className="liaison-task-earlier" onClick={() => setDoneLimit(value => value + 12)}>Show {Math.min(12, laneTasks.length - shown.length)} earlier tasks</button> : null}
     </section>;
   })}</div>;
 }
