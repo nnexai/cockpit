@@ -83,7 +83,12 @@ fn next_steps(run: &Run) -> (&'static str, &'static [&'static str], Option<&'sta
             Some("Owned launch cancellation or source-Space preservation was refused or remains unproven; inspect the exact recorded Space, tab and terminal. Do not repeat uncertain creation or closure."));
     }
     if dispatch.step == DispatchStep::PlanFailed {
-        return ("none", &["show", "reconcile"], None);
+        return if super::dispatch::plan_failed_before_effects(run) {
+            ("none", &["show", "schedule"], None)
+        } else {
+            ("unknown", &["show", "worker_replace"],
+                Some("Planning failure includes physical or launch evidence; preserve the attempt and inspect its receipts before replacement."))
+        };
     }
     let unknown_setup = dispatch.launch_tag.is_none()
         && run.setup.as_ref().is_some_and(|setup| setup.operation_id.is_some() && setup.workspace_id.is_none());

@@ -801,7 +801,7 @@ export const wireRetirementBlocker: WireDescriptor<V1.RetirementBlocker> = liter
 
 export const wireTerminalOutcome: WireDescriptor<V1.TerminalOutcome> = literal<V1.TerminalOutcome>("TerminalOutcome", ["closed_by_cockpit", "already_absent", "absent_after_uncertain_close"]);
 
-export const wireRetainReason: WireDescriptor<V1.RetainReason> = literal<V1.RetainReason>("RetainReason", ["identity_incomplete", "identity_changed", "endpoint_changed", "native_process_unverifiable", "process_pane_mismatch", "worker_unresponsive", "worker_busy_timeout", "user_activity", "native_refused", "shared_tab", "tab_renamed", "pane_moved", "foreground_process", "observation_unavailable", "herdr_refused"]);
+export const wireRetainReason: WireDescriptor<V1.RetainReason> = literal<V1.RetainReason>("RetainReason", ["identity_incomplete", "identity_changed", "endpoint_changed", "native_process_unverifiable", "process_pane_mismatch", "worker_unresponsive", "worker_busy_timeout", "user_activity", "native_refused", "shared_tab", "tab_renamed", "pane_moved", "foreground_process", "observation_unavailable", "primary_checkout_space", "herdr_refused"]);
 
 export const wireRetirementPhase: WireDescriptor<V1.RetirementPhase> = literal<V1.RetirementPhase>("RetirementPhase", ["terminal_close"]);
 

@@ -557,6 +557,62 @@ fn transient_observation_retention_is_waiting_with_concrete_reconnection_action(
 }
 
 #[test]
+fn primary_checkout_refusal_settles_receipt_and_reports_authority_hold_without_touching_spaces() {
+    let fixture = Fixture::new();
+    let identity = terminal_identity();
+    let mut run = terminal_run(identity.clone(), RetirementState::CloseIntent { at: now() });
+    run.run_id = fixture.run.run_id.clone();
+    run.root_id = fixture.run.root_id.clone();
+    let terminal_index = {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.runs[0] = run.clone();
+        let mut root = worker();
+        root.run_id = run.root_id.clone();
+        root.root_id = root.run_id.clone();
+        root.kind = RunKind::Supervisor;
+        root.parent_run_id = None;
+        root.stage = RunStage::Active;
+        state.runs.push(root);
+        let index = insert_resource(&mut state.owned_resources, &run,
+            OwnedResourceIdentity::WorkerTerminal { identity: identity.clone() }).unwrap();
+        sync_retirement_receipts(&mut state, 0);
+        assert_eq!(state.owned_resources[index].cleanup.effects[0].state, CleanupEffectState::Intent);
+        locked.save(&mut state).unwrap();
+        index
+    };
+    let protected_space = fixture.service.store.lock().unwrap().read().unwrap().owned_resources[0].clone();
+    run.retirement.as_mut().unwrap().state = retirement::classify_close(&identity,
+        Some(Err(error("foreign_space_group_close_risk", "opaque adapter diagnostic"))), None);
+    let resource = {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.runs[0] = run.clone();
+        sync_retirement_receipts(&mut state, 0);
+        let resource = state.owned_resources[terminal_index].clone();
+        assert_eq!(resource.cleanup.effects.len(), 1);
+        assert_eq!(resource.cleanup.effects[0].state, CleanupEffectState::Refused);
+        assert_eq!(state.owned_resources[0], protected_space);
+        locked.save(&mut state).unwrap();
+        resource
+    };
+    let evaluation = terminal_evaluation(&resource, &run);
+    assert!(matches!(&evaluation, CleanupEvaluation::Kept(why)
+        if why.class == CleanupReasonClass::Authority && why.code == "terminal_primary_checkout_space"));
+    fixture.service.save_evaluation(&resource, evaluation).unwrap();
+    fixture.service.report_cleanup_holds().unwrap();
+    let saved = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(saved.owned_resources[0], protected_space);
+    assert_eq!(saved.owned_resources[terminal_index].cleanup.state, CleanupState::Kept);
+    assert_eq!(saved.messages.len(), 1);
+    assert_eq!(saved.messages[0].message_id,
+        format!("cleanup:{}:terminal_primary_checkout_space", resource.resource_id));
+    fixture.service.report_cleanup_holds().unwrap();
+    let unchanged = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(serde_json::to_value(unchanged).unwrap(), serde_json::to_value(saved).unwrap());
+}
+
+#[test]
 fn explicit_supervisor_finish_replay_is_inert_and_preserves_unknown_effect() {
     let fixture = Fixture::new();
     {

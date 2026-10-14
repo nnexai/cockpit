@@ -394,6 +394,22 @@ fn close_classifier_never_retries_unknown_and_requires_same_endpoint_absence() {
     assert!(matches!(classify_close(&identity, Some(Err(error("confirmation_required", "refused"))), None), RetirementState::Retained { reason: RetainReason::HerdrRefused, .. }));
 }
 
+#[test]
+fn primary_checkout_close_refusal_is_specific_even_without_fresh_observation() {
+    let identity = identity();
+    let present = runtime();
+    let mut absent = runtime();
+    absent.panes.clear();
+    for fresh in [None, Some(&present), Some(&absent)] {
+        assert!(matches!(classify_close(&identity,
+            Some(Err(error("foreign_space_group_close_risk", "opaque adapter diagnostic"))), fresh),
+            RetirementState::Retained { reason: RetainReason::PrimaryCheckoutSpace, stopped: false, .. }));
+    }
+    assert!(matches!(classify_close(&identity,
+        Some(Err(error("foreign_space_group_close_risk_other", "opaque adapter diagnostic"))), None),
+        RetirementState::Retained { reason: RetainReason::HerdrRefused, stopped: false, .. }));
+}
+
 
 #[test]
 fn unknown_attention_is_visible_for_closed_runs_and_retention_is_not_recovery() {

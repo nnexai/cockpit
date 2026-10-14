@@ -349,7 +349,7 @@ fn dispatch_failure_wakes_root_once_with_typed_next_steps() {
         "run_attempt": run.attempt, "launch_attempt": run.dispatch.as_ref().unwrap().launch_attempt,
         "stage": run.stage, "step": "plan_failed", "agent_started": false,
         "error": {"code": "endpoint_unavailable", "message": "Herdr endpoint is unavailable"},
-        "automatic": "none", "effect": "none", "next": ["show", "reconcile"], "operator_reason": null,
+        "automatic": "none", "effect": "none", "next": ["show", "schedule"], "operator_reason": null,
     }));
     fixture.service.record_dispatch(&worker, failure()).unwrap();
     assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 1);
@@ -368,6 +368,26 @@ fn dispatch_failure_wakes_root_once_with_typed_next_steps() {
         &reopened_state.runs[run_index(&reopened_state, &worker).unwrap()]);
     assert_eq!(serde_json::to_value(reopened_state.messages).unwrap(),
         serde_json::to_value(fixture.state().messages).unwrap());
+}
+
+#[test]
+fn plan_failed_with_process_receipt_preserves_unknown_effect_and_never_advertises_reschedule() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Preserve unknown planning attempt");
+    let worker = fixture.start(&root, &task);
+    fixture.seed_run(&worker, |run| run.attachment.as_mut().unwrap().process = Some(NativeProcessIdentity {
+        pid: 123, start_ticks: 1, kernel_boot_id: Some("boot".into()),
+    }));
+    fixture.service.record_dispatch(&worker, DispatchUpdate::PlanFailed { error: ErrorResponse {
+        code: "endpoint_unavailable".into(), message: "Inspection unavailable".into(),
+    } }).unwrap();
+    let event: serde_json::Value = serde_json::from_str(
+        &dispatch_events(&fixture, &root, "dispatch_failure")[0].text,
+    ).unwrap();
+    assert_eq!(event["effect"], "unknown");
+    assert_eq!(event["next"], serde_json::json!(["show", "worker_replace"]));
+    assert!(fixture.run(&worker).attachment.unwrap().process.is_some());
 }
 
 #[test]

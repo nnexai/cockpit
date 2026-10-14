@@ -331,6 +331,8 @@ pub(crate) fn classify_close(identity: &RetirementIdentity, response: Option<Res
     let absence = fresh.filter(|runtime| server_fence(identity, runtime).is_ok()).map(|runtime|
         !runtime.panes.iter().any(|pane| pane.pane_id == identity.pane_id || pane.terminal_id.as_deref() == Some(identity.terminal_id.as_str())));
     match response {
+        Some(Err(error)) if error.code == "foreign_space_group_close_risk" =>
+            RetirementState::Retained { at, reason: RetainReason::PrimaryCheckoutSpace, stopped: false },
         Some(Err(error)) if error.code != "herdr_outcome_unknown" && error.code != "pane_not_found" =>
             RetirementState::Retained { at, reason: RetainReason::HerdrRefused, stopped: false },
         response if absence == Some(true) => RetirementState::Retired { at, terminal: match response {

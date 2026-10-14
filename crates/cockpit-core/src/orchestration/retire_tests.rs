@@ -903,6 +903,39 @@ async fn live_close_requires_fresh_absence_and_failed_or_unknown_effects_never_r
 }
 
 #[tokio::test]
+async fn primary_checkout_guard_refusal_retains_exact_worker_and_never_replays_close() {
+    let f = Fixture::new(waiting());
+    f.change(pin_direct);
+    let original = f.current();
+    let mut snapshot = runtime(true);
+    let mut foreign = snapshot.panes[0].clone();
+    foreign.workspace_id = "foreign-space".into();
+    foreign.tab_id = "foreign-tab".into();
+    foreign.pane_id = "foreign-pane".into();
+    foreign.terminal_id = Some("foreign-terminal".into());
+    snapshot.panes.push(foreign);
+    let h = FakeHerdr::new(&f, vec![snapshot.clone(), snapshot.clone(), snapshot.clone()]);
+    {
+        let mut script = h.script.lock();
+        script.allow_close = true;
+        script.close_error = Some("foreign_space_group_close_risk");
+    }
+    f.step(&h).await.unwrap();
+    let retained = f.current();
+    assert!(matches!(retained.retirement.as_ref().unwrap().state,
+        RetirementState::Retained { reason: RetainReason::PrimaryCheckoutSpace, stopped: false, .. }));
+    assert_eq!(serde_json::to_value(&retained.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
+    assert_eq!(serde_json::to_value(&retained.result).unwrap(), serde_json::to_value(&original.result).unwrap());
+    assert_eq!(retained.checkout_claim_id, original.checkout_claim_id);
+    assert!(f.service.retirement_queue().unwrap().is_empty());
+    let reads = h.runtime_calls();
+    f.step(&h).await.unwrap();
+    assert_eq!(h.closes(), 1);
+    assert_eq!(h.runtime_calls(), reads);
+    assert_eq!(serde_json::to_value(f.current()).unwrap(), serde_json::to_value(retained).unwrap());
+}
+
+#[tokio::test]
 async fn descendant_created_at_final_preflight_defers_without_submitting_close() {
     let f = Fixture::new(waiting());
     f.change(pin_direct);

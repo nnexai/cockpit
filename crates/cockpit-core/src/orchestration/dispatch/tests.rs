@@ -11,12 +11,13 @@ use crate::{
     HerdrAdapter, ProjectHerdrAdapter, SessionSubscription, TerminalSession,
 };
 
-struct UnusedProjectAdapter;
+#[derive(Default)]
+struct ReadOnlyProjectAdapter { inventory: Option<ProjectInventory> }
 fn unused_project_call<T>() -> Result<T, InspectionError> {
     panic!("Prepared-launch test must not dispatch a project effect")
 }
 #[async_trait::async_trait]
-impl HerdrAdapter for UnusedProjectAdapter {
+impl HerdrAdapter for ReadOnlyProjectAdapter {
     async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError> { unused_project_call() }
     async fn inspect_session(&self, _: &str) -> Result<HerdrCompatibility, InspectionError> { unused_project_call() }
     async fn sessions(&self) -> Result<SessionListResponse, InspectionError> { unused_project_call() }
@@ -27,9 +28,13 @@ impl HerdrAdapter for UnusedProjectAdapter {
     async fn open_terminal(&self, _: &TerminalOpenRequest) -> Result<TerminalSession, InspectionError> { unused_project_call() }
 }
 #[async_trait::async_trait]
-impl ProjectHerdrAdapter for UnusedProjectAdapter {
-    async fn project_endpoint_identity(&self, _: &str) -> Result<String, InspectionError> { unused_project_call() }
-    async fn project_inventory(&self, _: &str, _: &str) -> Result<ProjectInventory, InspectionError> { unused_project_call() }
+impl ProjectHerdrAdapter for ReadOnlyProjectAdapter {
+    async fn project_endpoint_identity(&self, _: &str) -> Result<String, InspectionError> {
+        self.inventory.as_ref().map(|inventory| inventory.endpoint_identity.clone()).map_or_else(unused_project_call, Ok)
+    }
+    async fn project_inventory(&self, _: &str, _: &str) -> Result<ProjectInventory, InspectionError> {
+        self.inventory.clone().map_or_else(unused_project_call, Ok)
+    }
     async fn project_worktree(&self, _: &str, _: &ProjectWorktreeRequest) -> Result<ProjectWorktreeResult, InspectionError> { unused_project_call() }
     async fn project_terminal(&self, _: &str, _: &ProjectTerminalRequest) -> Result<ProjectTerminalResult, InspectionError> { unused_project_call() }
     async fn project_worktree_dirty(&self, _: &str, _: u32, _: u32) -> Result<bool, InspectionError> { unused_project_call() }
@@ -497,7 +502,7 @@ impl ReviewFixture {
         self.run = self.current().1;
     }
     fn dispatcher(&self, herdr: Arc<CountingHerdr>) -> Arc<Dispatcher> {
-        let projects = Arc::new(ProjectService::new(self.config.clone(), Arc::new(UnusedProjectAdapter)).unwrap());
+        let projects = Arc::new(ProjectService::new(self.config.clone(), Arc::new(ReadOnlyProjectAdapter::default())).unwrap());
         let sources = Arc::new(crate::sources::SourceService::new(&self.config, vec![]).unwrap());
         let library = Arc::new(LibraryService::new(self.config.clone(), sources));
         Arc::new(Dispatcher::new(Arc::clone(&self.service), projects, library, herdr,
@@ -2268,5 +2273,143 @@ fn retained_space_restart_requires_exact_resumed_epoch_and_journalled_retained_l
             _ => unreachable!(),
         }
         assert!(!restarts_in_retained_space(&changed), "{mismatch}");
+    }
+}
+
+async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
+    use cockpit_protocol::orchestration::{OrchestrationActionResult, TaskOwnership, TaskSchedule};
+    use super::super::store::{DurableOperationKind, DurableOperationRecord};
+    let mut fixture = ReviewFixture::new(RunStage::Active);
+    let repositories = fixture.root.join("repositories");
+    let checkout = repositories.join("primary");
+    std::fs::create_dir_all(&checkout).unwrap();
+    // This review fixture intentionally permits only one catalog entry.
+    // Configure the actual checkout, not its parent discovery directory.
+    fixture.config.repository_roots = vec![checkout.to_string_lossy().into_owned()];
+    fixture.config.branch_template = "test/{task_id}".into();
+    fixture.config.checkout_template = "{task_id}".into();
+    if mode != "directory" {
+        for args in [
+            vec!["init", "-q"],
+            vec!["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-q", "--allow-empty", "-m", "source"],
+        ] {
+            assert!(tokio::process::Command::new("git").current_dir(&checkout)
+                .args(args).status().await.unwrap().success());
+        }
+    }
+    let (project, _) = super::super::project_identity::resolve_directory(&checkout, None, None).await.unwrap();
+    let mut observed = runtime();
+    observed.workspaces[0].workspace_id = "source-space".into();
+    observed.workspaces[0].cwd = checkout.to_string_lossy().into_owned();
+    if mode == "ambiguous" {
+        let mut duplicate = observed.workspaces[0].clone();
+        duplicate.workspace_id = "second-space".into();
+        observed.workspaces.push(duplicate);
+    }
+    let inventory = ProjectInventory {
+        endpoint_identity: "endpoint".into(),
+        repository_key: match &project.source {
+            cockpit_protocol::orchestration::ProjectSource::Git { common_dir } if mode != "foreign_inventory" => common_dir.clone(),
+            _ => "not-the-source".into(),
+        },
+        repository_root: checkout.to_string_lossy().into_owned(),
+        supported_methods: vec![],
+        worktrees: vec![crate::project_adapter::ProjectWorktreeEntry {
+            checkout_path: checkout.to_string_lossy().into_owned(), branch: None,
+            open_workspace_id: Some("source-space".into()), is_primary: true, is_linked_worktree: false, dirty: Some(false),
+        }],
+    };
+    let herdr = Arc::new(CountingHerdr::new(observed, false, false));
+    let mut dispatcher = fixture.dispatcher(herdr);
+    Arc::get_mut(&mut dispatcher).unwrap().projects = Arc::new(ProjectService::new(
+        fixture.config.clone(), Arc::new(ReadOnlyProjectAdapter { inventory: Some(inventory) }),
+    ).unwrap());
+    let mut document = String::new();
+    let locked = fixture.service.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    state.credentials.push(super::super::credentials::test_job_credential(&fixture.run, super::super::JobRole::Root).0);
+    for label in ["First independent task", "Second independent task"] {
+        let task_id = uuid::Uuid::new_v4().to_string();
+        document.push_str(&format!("- [ ] {label} <!-- cockpit-task: {task_id} -->\n"));
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let schedule = TaskSchedule { operation_id: operation_id.clone(), principal_key: "root-source-fixture".into(),
+            target: Some(if mode == "explicit_space" {
+                DispatchTarget::ExistingSpace { workspace_id: "source-space".into() }
+            } else {
+                DispatchTarget::Setup { request: WorkspaceSetupRequest::Open {
+                    path: checkout.to_string_lossy().into_owned(), label: None, task_name: None, focus: false,
+                } }
+            }), brief: "Execute independently".into(), cleanup_policy: cockpit_protocol::orchestration::WorkerCleanupPolicy::OwnedWhenSafe,
+            label: None, scheduled_at: now() };
+        state.operations.push(DurableOperationRecord { operation_id: operation_id.clone(),
+            actor_run_id: Some(fixture.run.run_id.clone()), principal_key: schedule.principal_key.clone(),
+            root_id: fixture.run.run_id.clone(), kind: DurableOperationKind::TaskSchedule,
+            request_digest: "persisted authorized schedule fixture".into(), run_id: None, resume_operation_id: None,
+            result: Some(OrchestrationActionResult::TaskScheduled { operation_id, task_id: task_id.clone(), duplicate: false }),
+            effect_receipts: vec![], created_at: now(), updated_at: now() });
+        state.task_ownership.push(TaskOwnership { root_id: fixture.run.run_id.clone(), task_id,
+            generation: 0, owner: None, schedule: Some(schedule) });
+    }
+    fixture.service.store.tasks_dir().write(
+        super::super::tasks_md::root_filename(&fixture.run.run_id).unwrap(), document.as_bytes(),
+    ).unwrap();
+    locked.save(&mut state).unwrap();
+    drop(locked);
+    (fixture, dispatcher)
+}
+
+#[tokio::test]
+async fn path_to_verified_git_space_schedules_two_isolated_attempts_with_original_source_context() {
+    let (fixture, dispatcher) = path_schedule_fixture("git").await;
+    let candidates = fixture.service.schedule_candidates(4).unwrap();
+    assert_eq!(candidates.len(), 2);
+    let mut checkouts = Vec::new();
+    let mut branches = Vec::new();
+    for candidate in candidates {
+        let resolved = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+        assert!(resolved.checkout.is_none(), "The borrowed source cannot become the worker's writable checkout");
+        assert_eq!(resolved.project.as_ref().unwrap().source_workspace_id.as_deref(), Some("source-space"));
+        let start = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+        let run = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
+        assert!(matches!(&run.target, Some(DispatchTarget::SpaceWorktree { workspace_id, .. }) if workspace_id == "source-space"));
+        dispatcher.plan(&run).await.unwrap();
+        let planned = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
+        assert_eq!(planned.dispatch.as_ref().unwrap().step, DispatchStep::SetupPending);
+        let setup = planned.setup.unwrap();
+        assert_eq!(setup.project_workspace_id.as_deref(), Some("source-space"));
+        assert_eq!(setup.ownership, Some(WorkspaceCheckoutOwnership::OwnedWorktree));
+        assert!(setup.checkout_path.starts_with(&fixture.config.worktree_root));
+        assert_ne!(setup.checkout_path, fixture.root.join("repositories/primary").to_string_lossy());
+        assert!(planned.checkout.is_none(), "Setup planning has not claimed or modified the borrowed source");
+        checkouts.push(setup.checkout_path);
+        branches.push(setup.branch.unwrap());
+    }
+    assert_ne!(checkouts[0], checkouts[1]);
+    assert_ne!(branches[0], branches[1]);
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(state.task_ownership.iter().all(|record| matches!(&record.schedule.as_ref().unwrap().target,
+        Some(DispatchTarget::Setup { request: WorkspaceSetupRequest::Open { .. } }))),
+        "Normalization applies only to this freshly verified attempt, not the durable authorization");
+}
+
+#[tokio::test]
+async fn path_schedule_preserves_directory_ambiguous_and_unverified_git_space_boundaries() {
+    for mode in ["directory", "ambiguous", "foreign_inventory", "explicit_space"] {
+        let (fixture, dispatcher) = path_schedule_fixture(mode).await;
+        let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+        let resolved = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+        assert!(resolved.normalized_target.is_none(), "{mode}");
+        assert!(resolved.checkout.is_some(), "{mode}: explicit borrowing or unverified Open must not become owned");
+        if matches!(mode, "directory" | "ambiguous") {
+            let start = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+            let run = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
+            let error = dispatcher.plan(&run).await.unwrap_err();
+            assert_eq!(error.code, "space_exists_for_path", "{mode}");
+            fixture.service.record_dispatch(&start.run_id, DispatchUpdate::PlanFailed { error: as_response(error) }).unwrap();
+            let failed = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
+            assert!(plan_failed_before_effects(&failed));
+            assert!(failed.setup.is_none());
+        }
     }
 }

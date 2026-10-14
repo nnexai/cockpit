@@ -1182,7 +1182,7 @@ export type RetirementBlocker = "open_descendant_runs" | "resource_admissions";
 
 export type TerminalOutcome = "closed_by_cockpit" | "already_absent" | "absent_after_uncertain_close";
 
-export type RetainReason = "identity_incomplete" | "identity_changed" | "endpoint_changed" | "native_process_unverifiable" | "process_pane_mismatch" | "worker_unresponsive" | "worker_busy_timeout" | "user_activity" | "native_refused" | "shared_tab" | "tab_renamed" | "pane_moved" | "foreground_process" | "observation_unavailable" | "herdr_refused";
+export type RetainReason = "identity_incomplete" | "identity_changed" | "endpoint_changed" | "native_process_unverifiable" | "process_pane_mismatch" | "worker_unresponsive" | "worker_busy_timeout" | "user_activity" | "native_refused" | "shared_tab" | "tab_renamed" | "pane_moved" | "foreground_process" | "observation_unavailable" | "primary_checkout_space" | "herdr_refused";
 
 export type RetirementPhase = "terminal_close";
 

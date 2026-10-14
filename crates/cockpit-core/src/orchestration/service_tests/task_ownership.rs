@@ -1059,6 +1059,191 @@ fn schedule_action(root: &str, task: &Task) -> OrchestrationAction {
         expected_task_revision: Some(task.task_revision.clone()), expected_doc_revision: None }
 }
 
+fn failed_scheduled_attempt() -> (Fixture, String, Task, Actor, ScheduleCandidate, WorkerStartResult) {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Correct placement");
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, schedule_action(&root, &task)).unwrap();
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let start = fixture.service.scheduled_start(&candidate, &ResolvedMutationInput {
+        project: Some(fixture.project()), ..Default::default()
+    }).unwrap().unwrap();
+    fixture.service.record_dispatch(&start.run_id, DispatchUpdate::PlanFailed { error: ErrorResponse {
+        code: "space_exists_for_path".into(), message: "Checkout already belongs to a Space".into(),
+    } }).unwrap();
+    (fixture, root, task, supervisor, candidate, start)
+}
+
+#[test]
+fn explicit_schedule_correction_supersedes_only_failed_pending_authorization_and_dispatches_attempt_two() {
+    for cancel_first in [false, true] {
+        let (fixture, root, task, supervisor, stale_candidate, old) = failed_scheduled_attempt();
+        fixture.seed_state(|state| {
+            let run = state.runs.iter().find(|run| run.run_id == old.run_id).unwrap();
+            state.credentials.push(credentials::test_job_credential(run, JobRole::Worker).0);
+        });
+        if cancel_first {
+            fixture.apply(&supervisor, OrchestrationAction::TaskScheduleCancel {
+                operation_id: id(), root_id: root.clone(), task_id: task.task_id.clone(),
+            }).unwrap();
+        }
+        let mut correction = schedule_action(&root, &task);
+        if let OrchestrationAction::TaskSchedule { target, expected_doc_revision, .. } = &mut correction {
+            *target = Some(DispatchTarget::ExistingSpace { workspace_id: "corrected-source".into() });
+            *expected_doc_revision = Some(task_document_revision(&fixture, &root));
+        }
+        fixture.apply(&supervisor, correction.clone()).unwrap();
+        let closed = fixture.run(&old.run_id);
+        assert_eq!(closed.stage, RunStage::Closed);
+        assert_eq!(closed.close_reason, Some(CloseReason::Superseded));
+        assert!(closed.setup.is_none());
+        assert!(closed.checkout.is_none());
+        assert!(fixture.state().credentials.iter().filter(|credential| credential.run_id == old.run_id)
+            .all(|credential| credential.state == credentials::CredentialState::Revoked));
+        assert_eq!(ownership(&fixture, &root, &task).generation, closed.assignment_generation.unwrap() + 1);
+        let bytes = fixture.state_bytes();
+        assert!(matches!(fixture.apply(&supervisor, correction).unwrap().result,
+            OrchestrationActionResult::TaskScheduled { duplicate: true, .. }));
+        assert_eq!(fixture.state_bytes(), bytes, "Exact replay cannot revoke a second generation");
+        let resolved = ResolvedMutationInput { project: Some(fixture.project()), ..Default::default() };
+        assert!(fixture.service.scheduled_start(&stale_candidate, &resolved).unwrap().is_none());
+        let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+        let successor = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+        assert_eq!(successor.attempt, 2);
+        assert_eq!(fixture.run(&successor.run_id).assignment_generation,
+            Some(ownership(&fixture, &root, &task).generation + 1));
+        fixture.setup(&successor.run_id);
+        fixture.launch_and_bind(&successor.run_id);
+        assert_eq!(ownership(&fixture, &root, &task).owner.unwrap().run_id, successor.run_id,
+            "Consumer registration must not encounter the old logical assignment");
+        assert_eq!(fixture.state().runs.iter().filter(|run| run.task_id.as_ref() == Some(&task.task_id)
+            && run.stage != RunStage::Closed).count(), 1);
+    }
+}
+
+#[test]
+fn schedule_correction_preserves_started_unknown_and_ambiguous_attempts_atomically() {
+    for boundary in ["started", "working", "setup", "checkout", "claim", "location", "process", "scope", "source_location", "launch_attempt",
+        "latch", "move", "attachment", "generation", "owner", "orphan_claim", "duplicate",
+        "session", "parent", "cancelled_unknown", "implicit", "task_revision", "doc_revision"] {
+        let (fixture, root, task, supervisor, _, old) = failed_scheduled_attempt();
+        let mut correction = schedule_action(&root, &task);
+        match boundary {
+            "started" => fixture.seed_run(&old.run_id, |run| run.dispatch.as_mut().unwrap().agent_started = true),
+            "working" => fixture.seed_run(&old.run_id, |run| {
+                run.stage = RunStage::Working;
+                run.dispatch.as_mut().unwrap().step = DispatchStep::Launched;
+            }),
+            "source_location" => fixture.seed_run(&old.run_id, |run| {
+                let mut attachment = run.attachment.as_ref().unwrap().clone();
+                attachment.location = Some(RunLocation {
+                    boot_id: None, peer_process: None, terminal_id: None, native_session_id: None,
+                    endpoint_identity: "unknown".into(), session_id: SESSION.into(), workspace_id: "unknown".into(),
+                    tab_id: "unknown".into(), pane_id: "unknown".into(), launch_tag: "unknown".into(),
+                });
+                run.dispatch.as_mut().unwrap().source_location = attachment.location;
+            }),
+            "launch_attempt" => fixture.seed_run(&old.run_id, |run| run.dispatch.as_mut().unwrap().launch_attempt = 2),
+            "setup" => fixture.setup(&old.run_id),
+            "checkout" => fixture.seed_run(&old.run_id, |run| run.checkout = Some(CheckoutIdentity {
+                key: "unknown".into(), path: "/unknown".into(), git: None,
+                directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() },
+            })),
+            "claim" => fixture.seed_run(&old.run_id, |run| run.checkout_claim_id = Some(id())),
+            "location" => fixture.seed_run(&old.run_id, |run| run.attachment.as_mut().unwrap().location = Some(RunLocation {
+                boot_id: None, peer_process: None, terminal_id: None, native_session_id: None,
+                endpoint_identity: "unknown".into(), session_id: SESSION.into(), workspace_id: "unknown".into(),
+                tab_id: "unknown".into(), pane_id: "unknown".into(), launch_tag: "unknown".into(),
+            })),
+            "process" => fixture.seed_run(&old.run_id, |run| run.attachment.as_mut().unwrap().process = Some(NativeProcessIdentity {
+                pid: 123, start_ticks: 1, kernel_boot_id: Some("boot".into()),
+            })),
+            "scope" => fixture.seed_run(&old.run_id, |run| run.dispatch.as_mut().unwrap().scope_unit = Some("unknown.scope".into())),
+            "latch" => fixture.seed_run(&old.run_id, |run| run.dispatch.as_mut().unwrap().latch_state = Some(AgentLatchState::ReleaseIntent)),
+            "move" => fixture.seed_run(&old.run_id, |run| run.dispatch.as_mut().unwrap().move_operation_id = Some(id())),
+            "attachment" => fixture.seed_run(&old.run_id, |run| run.attachment.as_mut().unwrap().state = AttachmentState::Connecting),
+            "generation" => fixture.seed_state(|state| {
+                state.task_ownership.iter_mut().find(|record| record.task_id == task.task_id).unwrap().generation += 1;
+            }),
+            "owner" => fixture.seed_state(|state| {
+                state.task_ownership.iter_mut().find(|record| record.task_id == task.task_id).unwrap().owner =
+                    Some(TaskOwner { run_id: old.run_id.clone(), conversation: None, claim_operation_id: id() });
+            }),
+            "orphan_claim" => fixture.seed_state(|state| {
+                let run = state.runs.iter().find(|run| run.run_id == old.run_id).unwrap();
+                let attachment = run.attachment.as_ref().unwrap();
+                state.checkout_claims.push(claims::CheckoutClaim { claim_id: id(), revision: 1,
+                    state: claims::ClaimState::Reserved, transition_operation_id: None,
+                    checkout: CheckoutIdentity { key: "unknown".into(), path: "/unknown".into(), git: None,
+                        directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() } },
+                    holder: Some(AttachmentReference { run_id: old.run_id.clone(),
+                        attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch }) });
+            }),
+            "session" => fixture.seed_run(&old.run_id, |run| run.session_id = "foreign".into()),
+            "parent" => fixture.seed_run(&old.run_id, |run| run.parent_run_id = Some(id())),
+            "cancelled_unknown" => {
+                fixture.seed_run(&old.run_id, |run| run.dispatch.as_mut().unwrap().agent_started = true);
+                fixture.apply(&supervisor, OrchestrationAction::TaskScheduleCancel {
+                    operation_id: id(), root_id: root.clone(), task_id: task.task_id.clone(),
+                }).unwrap();
+            },
+            "duplicate" => fixture.seed_state(|state| {
+                let mut extra = state.runs.iter().find(|run| run.run_id == old.run_id).unwrap().clone();
+                extra.run_id = id();
+                state.runs.push(extra);
+            }),
+            "implicit" => if let OrchestrationAction::TaskSchedule { target, .. } = &mut correction { *target = None; },
+            "task_revision" => if let OrchestrationAction::TaskSchedule { expected_task_revision, .. } = &mut correction { *expected_task_revision = Some("stale".into()); },
+            "doc_revision" => if let OrchestrationAction::TaskSchedule { expected_doc_revision, .. } = &mut correction { *expected_doc_revision = Some("stale".into()); },
+            _ => unreachable!(),
+        }
+        let bytes = fixture.state_bytes();
+        assert!(fixture.apply(&supervisor, correction).is_err(), "{boundary}");
+        assert_eq!(fixture.state_bytes(), bytes, "{boundary}: refusal cannot erase unknown authority or overwrite schedule");
+    }
+}
+
+#[test]
+fn schedule_normalization_cannot_override_explicit_space_or_unverified_source() {
+    for mismatch in ["explicit_space", "directory", "wrong_space", "missing_repository", "retained_checkout", "changed_authorized_path"] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let task = fixture.create_task(&root, "Normalization fence");
+        let supervisor = fixture.root_actor(&root);
+        let mut action = schedule_action(&root, &task);
+        if mismatch != "explicit_space"
+            && let OrchestrationAction::TaskSchedule { target, .. } = &mut action {
+            *target = Some(DispatchTarget::Setup { request: WorkspaceSetupRequest::Open {
+                path: fixture.root.to_string_lossy().into_owned(), label: None, task_name: None, focus: false,
+            } });
+        }
+        fixture.apply(&supervisor, action).unwrap();
+        let mut candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+        let mut project = fixture.project();
+        project.source = ProjectSource::Git { common_dir: "/git/common".into() };
+        project.repository_id = Some("configured".into());
+        project.source_workspace_id = Some("source".into());
+        let mut resolved = ResolvedMutationInput { project: Some(project), normalized_target: Some(DispatchTarget::SpaceWorktree {
+            workspace_id: "source".into(), branch: None, base_ref: None,
+        }), ..Default::default() };
+        match mismatch {
+            "directory" => resolved.project = Some(fixture.project()),
+            "wrong_space" => resolved.project.as_mut().unwrap().source_workspace_id = Some("foreign".into()),
+            "missing_repository" => resolved.project.as_mut().unwrap().repository_id = None,
+            "retained_checkout" => resolved.checkout = Some(CheckoutIdentity { key: "borrowed".into(),
+                path: "/borrowed".into(), git: None, directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() } }),
+            "changed_authorized_path" => if let Some(DispatchTarget::Setup {
+                request: WorkspaceSetupRequest::Open { path, .. },
+            }) = &mut candidate.schedule.target { *path = "/foreign-request".into(); },
+            _ => {},
+        }
+        let bytes = fixture.state_bytes();
+        assert_eq!(fixture.service.scheduled_start(&candidate, &resolved).unwrap_err().code, "schedule_source_unresolved");
+        assert_eq!(fixture.state_bytes(), bytes, "{mismatch}");
+    }
+}
+
 #[test]
 fn dependency_schedule_queues_until_acceptance_rechecks_fresh_graph_and_is_idempotent() {
     let fixture = Fixture::new();

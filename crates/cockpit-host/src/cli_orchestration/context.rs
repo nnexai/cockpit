@@ -367,16 +367,13 @@ impl Context {
         let task = snapshot.board.as_ref().and_then(|board| board.tasks.iter().find(|view| &view.task.task_id == task_id))
             .ok_or_else(|| CliError::new("task_not_found", "Assigned canonical task is unavailable"))?;
         let focused_checks = checks.into_iter().map(super::args::check_outcome).collect::<Result<Vec<_>, _>>()?;
-        let Some(checkout) = run.checkout.as_ref().filter(|checkout| checkout.git.is_some()) else {
-            if artifacts.is_empty() {
-                return Err(CliError::usage("Non-code Result needs actual --artifact paths or --source-output-file"));
-            }
+        if !artifacts.is_empty() {
             return Ok(SourceOutput::NonCode { result_message_id: message_id.into(),
                 task_revision: task.task.task_revision.clone(), artifacts, focused_checks });
-        };
-        if !artifacts.is_empty() {
-            return Err(CliError::usage("--artifact is for non-code Results; code source is the committed Git range"));
         }
+        let Some(checkout) = run.checkout.as_ref().filter(|checkout| checkout.git.is_some()) else {
+            return Err(CliError::usage("Non-code Result needs actual --artifact paths or --source-output-file"));
+        };
         let project = run.project.as_ref().ok_or_else(|| CliError::new("source_output_required", "Run has no proven project identity"))?;
         let base_commit = run.setup.as_ref().and_then(|setup| setup.base_commit.as_ref())
             .ok_or_else(|| CliError::new("source_output_required", "Run has no frozen pre-work base commit"))?;

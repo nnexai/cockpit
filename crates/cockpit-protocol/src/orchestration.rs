@@ -1032,6 +1032,7 @@ pub enum RetainReason {
     PaneMoved,
     ForegroundProcess,
     ObservationUnavailable,
+    PrimaryCheckoutSpace,
     HerdrRefused,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

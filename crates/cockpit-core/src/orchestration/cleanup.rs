@@ -1009,6 +1009,7 @@ fn cleanup_hold_action(code: &str) -> &'static str {
     match code {
         "integration_pending" => "Integrate and record exact target checks through IntegrationRecord; cleanup reevaluates on the resulting event.",
         "terminal_observation_unavailable" => "Restore the exact runtime observation connection; the next connection/pane event reevaluates automatically without resubmitting an uncertain effect.",
+        "terminal_primary_checkout_space" => "Leave this explicitly borrowed primary checkout Space and foreign Spaces untouched; normal Git workers should use an isolated worktree. Do not retry this close or delete state to bypass the guard.",
         "containment_unproven" => "Preserve this exact claim until its owned scope and fresh pane inventory prove drain; old uncontained launches are not retrofitted. Do not substitute PID absence or another scope.",
         "scope_dirty_checkout" | "scope_unaccepted_commits" => "Review and integrate the remaining output separately or retain it; neither the process scope nor checkout is stopped/discarded while this work is protected.",
         "scope_resource_admission" => "Finish and release the exact holder's build/resource request with actual build-process exit proof; never remove its queue entry or steal the grant.",
@@ -1037,6 +1038,7 @@ pub(in crate::orchestration) fn sync_retirement_receipts(state: &mut Orchestrati
         RetirementState::Retired { terminal: TerminalOutcome::ClosedByCockpit, .. } => CleanupEffectState::Applied,
         RetirementState::Retired { .. } => CleanupEffectState::Absent,
         RetirementState::Unknown { phase: RetirementPhase::TerminalClose, .. } => CleanupEffectState::Unknown,
+        RetirementState::Retained { reason: RetainReason::PrimaryCheckoutSpace, .. } => CleanupEffectState::Refused,
         _ => return,
     };
     for resource in &mut state.owned_resources {
@@ -1064,6 +1066,9 @@ fn terminal_evaluation(resource: &OwnedResourceRecord, run: &Run) -> CleanupEval
         RetirementState::Retained { reason: RetainReason::ObservationUnavailable, .. } =>
             CleanupEvaluation::Waiting(reason(CleanupReasonClass::Transient, "terminal_observation_unavailable",
                 "Fresh endpoint/pane/process evidence is unavailable; preserved terminal will be reobserved on reconnection or the next physical event")),
+        RetirementState::Retained { reason: RetainReason::PrimaryCheckoutSpace, .. } =>
+            CleanupEvaluation::Kept(reason(CleanupReasonClass::Authority, "terminal_primary_checkout_space",
+                "Automatic closure was refused before pane.close: this worker used an explicitly borrowed primary checkout Space, whose source group cannot atomically exclude foreign Spaces; the terminal and source group were retained")),
         RetirementState::Retained { reason: retained, .. } => CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork,
             &format!("terminal_retained_{retained:?}"), format!("Exact terminal retirement guard refused closure: {retained:?}; preserve its physical identity and user work"))),
         RetirementState::Unknown { .. } => CleanupEvaluation::Unknown(reason(CleanupReasonClass::Reconcilable, "terminal_outcome_unknown", "Actual terminal retirement remains unconfirmed")),

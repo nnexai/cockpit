@@ -299,6 +299,7 @@ pub(super) fn schedule(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -
     let document = ctx.locked.tasks(root_id)?;
     let task = document.task(task_id)?;
     if task.checked { return Err(error("task_accepted", "Accepted tasks cannot be scheduled")); }
+    let mut corrected_attempt = false;
     let schedule = if let OrchestrationAction::TaskSchedule {
         target, brief, cleanup_policy, label, expected_task_revision, expected_doc_revision, ..
     } = &action {
@@ -311,13 +312,56 @@ pub(super) fn schedule(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -
         if dependencies::DependencyGraph::new(&document.tasks).evaluate(task).state == TaskDependencyState::Invalid {
             return Err(error("task_dependencies_invalid", "Task relationships are structurally invalid"));
         }
+        if target.is_some() {
+            let mut attempts = ctx.state.runs.iter().enumerate().filter(|(_, run)|
+                run.root_id == *root_id && run.task_id.as_deref() == Some(task_id.as_str())
+                    && run.stage != RunStage::Closed);
+            let failed = attempts.next().filter(|(_, run)| run.session_id == ctx.session_id
+                && run.parent_run_id.as_deref() == Some(root_id.as_str())
+                && super::super::dispatch::plan_failed_before_effects(run))
+                .map(|(index, run)| (index, run.run_id.clone(), run.assignment_generation));
+            if let Some((run_index, run_id, Some(generation))) = failed && attempts.next().is_none() {
+                let unclaimed = ctx.state.task_ownership.iter().find(|record|
+                    record.root_id == *root_id && record.task_id == *task_id)
+                    .is_some_and(|record| record.owner.is_none() && record.generation.checked_add(1) == Some(generation));
+                let physical_receipt = ctx.state.checkout_claims.iter().any(|claim|
+                    claim.holder.as_ref().is_some_and(|holder| holder.run_id == run_id))
+                    || ctx.state.owned_resources.iter().any(|resource| resource.run_id == run_id
+                        || resource.consumers.iter().any(|consumer| consumer.run_id == run_id))
+                    || ctx.state.resource_requests.iter().any(|request| request.holder.run_id == run_id)
+                    || ctx.state.operations.iter().any(|operation|
+                        (operation.run_id.as_deref() == Some(run_id.as_str())
+                            || operation.actor_run_id.as_deref() == Some(run_id.as_str())
+                            || matches!(&operation.result, Some(OrchestrationActionResult::WorkerStarted { start })
+                                | Some(OrchestrationActionResult::WorkerReplaced { start, .. }) if start.run_id == run_id))
+                            && !operation.effect_receipts.is_empty());
+                if !unclaimed || physical_receipt {
+                    return Err(error("plan_failed_attempt_unproven",
+                        "Failed planning attempt has ownership or physical receipts; preserve it and inspect run show before choosing worker-replace"));
+                }
+                super::ownership::supersede_current(ctx, root_id, task_id, generation, Some(&run_id))?;
+                let provenance = DecisionProvenance { origin: DecisionOrigin::Supervisor, supervisor_run_id: Some(root_id.clone()),
+                    conversation: match ctx.actor { Actor::Agent(caller) => caller.conversation.clone(), _ => None } };
+                ctx.state.runs[run_index].annotations.push(decision_annotation(
+                    ActorRef::Run { run_id: root_id.clone() }, &provenance,
+                    "Superseded unstarted plan-failed attempt by explicit re-schedule; no physical effects were recorded"));
+                corrected_attempt = true;
+            }
+        }
         Some(TaskSchedule { operation_id: operation_id.clone(), principal_key: super::resume::principal_key(ctx)?,
             target: target.clone().map(unfocused), brief: brief.clone(), cleanup_policy: *cleanup_policy,
             label: label.clone(), scheduled_at: now() })
     } else { None };
     let index = ownership_index(ctx.state, root_id, task_id);
-    if schedule.is_some() && ctx.state.task_ownership[index].schedule.is_some() {
-        return Err(error("task_already_scheduled", "Cancel the current task schedule before changing its authorization"));
+    if schedule.is_some() && ctx.state.task_ownership[index].schedule.is_some() && !corrected_attempt {
+        return Err(error("task_already_scheduled", "An existing schedule may only be corrected with an explicit target after proven pre-effect planning failure; preserve started or uncertain attempts and use worker-replace"));
+    }
+    if schedule.is_some() && !corrected_attempt && ctx.state.runs.iter().any(|run|
+        run.root_id == *root_id && run.task_id.as_deref() == Some(task_id.as_str())
+            && run.stage != RunStage::Closed
+            && run.dispatch.as_ref().is_some_and(|dispatch| dispatch.step == DispatchStep::PlanFailed)) {
+        return Err(error("plan_failed_attempt_unproven",
+            "Re-schedule requires one never-started failed planning attempt and an explicit target; inspect run show and preserve uncertain receipts"));
     }
     ctx.state.task_ownership[index].schedule = schedule;
     let result = OrchestrationActionResult::TaskScheduled { operation_id: operation_id.clone(), task_id: task_id.clone(), duplicate: false };
@@ -593,9 +637,20 @@ impl OrchestrationService {
         let graph = dependencies::DependencyGraph::new(&document.tasks);
         if !schedule_ready(&state, root, task, &graph, root.launch_config.max_parallel)
             || next_attempt(&state, &candidate.root_id, &candidate.task_id)? != candidate.next_attempt { return Ok(None); }
-        let mut target = match schedule.target.clone() {
-            Some(target) => target,
-            None => {
+        let mut target = match (resolved.normalized_target.clone(), schedule.target.clone()) {
+            (Some(target @ DispatchTarget::SpaceWorktree { .. }), Some(DispatchTarget::Setup {
+                request: cockpit_protocol::projects::WorkspaceSetupRequest::Open { path, .. },
+            })) if matches!(&candidate.schedule.target, Some(DispatchTarget::Setup {
+                request: cockpit_protocol::projects::WorkspaceSetupRequest::Open { path: observed, .. },
+            }) if observed == &path)
+                && resolved.checkout.is_none() && resolved.project.as_ref().is_some_and(|project|
+                matches!(&project.source, ProjectSource::Git { .. }) && project.repository_id.is_some()
+                    && matches!(&target, DispatchTarget::SpaceWorktree { workspace_id, branch: None, base_ref: None }
+                        if project.source_workspace_id.as_ref() == Some(workspace_id))) => target,
+            (Some(_), _) => return Err(error("schedule_source_unresolved",
+                "Only a verified Git source Space may normalize an authorized path into an isolated worktree")),
+            (None, Some(target)) => target,
+            (None, None) => {
                 let project = root.project.as_ref()
                     .ok_or_else(|| error("schedule_source_unresolved", "Default placement requires the liaison's original project"))?;
                 let source_workspace_id = project.source_workspace_id.clone()

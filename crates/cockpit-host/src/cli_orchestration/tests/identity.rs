@@ -359,3 +359,195 @@ fn no_extension_context_registration_uses_private_capability_without_live_herdr(
     assert_eq!(cockpit_core::orchestration::read_job_auth(&credential).unwrap().assignment_generation, Some(7));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+#[ignore = "private CLI environment child, launched by the artifact Result boundary test"]
+async fn artifact_result_cli_child() {
+    use clap::Parser;
+    use super::{TestCli, TestCommand};
+    use super::super::context::Context;
+    use cockpit_protocol::orchestration::{CheckStatus, SourceOutput};
+    let parse = |flags: &[&str]| {
+        let TestCommand::Run(args) = TestCli::try_parse_from(
+            ["test", "run"].into_iter().chain(flags.iter().copied()),
+        ).unwrap().command else { panic!("expected run") };
+        args
+    };
+    let initial = parse(&["context", "--json"]);
+    let context = Context::open(&initial.common, true).await.unwrap();
+    let snapshot = context.snapshot(None).await.unwrap();
+    let task = &snapshot.board.as_ref().unwrap().tasks[0].task;
+    if std::env::var("COCKPIT_TEST_RESULT_ROLE").unwrap() == "root" {
+        let worker = snapshot.runs.iter().find(|run| run.task_id.is_some()).unwrap();
+        assert!(matches!(&worker.source_output, Some(SourceOutput::NonCode {
+            task_revision, result_message_id, ..
+        }) if task_revision == &task.task_revision && result_message_id == "research-result"));
+        parse(&["accept", &worker.run_id, "--task-revision", &task.task_revision, "--json"])
+            .run().await.unwrap();
+        let accepted = context.snapshot(None).await.unwrap();
+        assert!(accepted.board.unwrap().tasks[0].task.checked);
+        return;
+    }
+    let run = context.own_run(&snapshot).unwrap();
+    if run.checkout.as_ref().unwrap().git.is_some() {
+        let output = context.source_output("code-result", Vec::new(), Vec::new()).await.unwrap();
+        assert!(matches!(output, SourceOutput::Code {
+            result_message_id, task_revision, base_commit, head_commit, commits, ..
+        } if result_message_id == "code-result" && task_revision == task.task_revision
+            && base_commit == head_commit && commits.is_empty()));
+    } else {
+        assert_eq!(context.source_output("missing-artifact", Vec::new(), Vec::new())
+            .await.unwrap_err().code, "orchestration_usage");
+    }
+    let artifact = std::env::var("COCKPIT_TEST_RESULT_ARTIFACT").unwrap();
+    let malformed = parse(&["done", "--message-id", "invalid-check", "--summary", "Research",
+        "--artifact", &artifact, "--check", "research::read report::unknown"]);
+    assert_eq!(malformed.run().await.unwrap_err().code, "orchestration_usage");
+    let invalid = parse(&["done", "--message-id", "invalid-artifact", "--summary", "Research",
+        "--artifact", " "]);
+    assert_eq!(invalid.run().await.unwrap_err().code, "invalid_source_output");
+    assert_eq!(context.snapshot(None).await.unwrap().revision, snapshot.revision);
+    parse(&["done", "--message-id", "research-result", "--summary", "Read-only repository analysis",
+        "--artifact", &artifact, "--check", "research::read analysis report::passed", "--json"])
+        .run().await.unwrap();
+    let reported = context.snapshot(None).await.unwrap();
+    let worker = context.own_run(&reported).unwrap();
+    assert!(matches!(&worker.source_output, Some(SourceOutput::NonCode {
+        result_message_id, task_revision, artifacts, focused_checks,
+    }) if result_message_id == "research-result" && task_revision == &task.task_revision
+        && artifacts.as_slice() == std::slice::from_ref(&artifact) && focused_checks.len() == 1
+        && focused_checks[0].outcome == CheckStatus::Passed
+        && focused_checks[0].contract == "research"
+        && focused_checks[0].command_or_scenario == "read analysis report"));
+}
+
+#[tokio::test]
+async fn explicit_artifact_result_from_git_worktree_and_directory_is_root_acceptable() {
+    use std::os::unix::fs::PermissionsExt;
+    use sha2::{Digest, Sha256};
+    use base64::Engine;
+    use serde_json::json;
+    for git_checkout in [true, false] {
+        let root = std::env::temp_dir().join(format!("cockpit-cli-artifact-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("state/orchestration/tasks")).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir(root.join("catalog")).unwrap();
+        let checkout_path = root.join("research");
+        if git_checkout {
+            let repository = root.join("catalog/repository");
+            let git = |directory: &std::path::Path, args: &[&str]| {
+                let output = std::process::Command::new("git").current_dir(directory)
+                    .args(args).output().unwrap();
+                assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            };
+            git(&root, &["init", "--initial-branch=main", repository.to_str().unwrap()]);
+            git(&repository, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "--allow-empty", "-m", "Fixture base"]);
+            git(&repository, &["worktree", "add", "-b", "research", checkout_path.to_str().unwrap()]);
+        } else {
+            std::fs::create_dir(&checkout_path).unwrap();
+        }
+        let (project, checkout) = cockpit_core::orchestration::project_identity::resolve_directory(
+            &checkout_path, None, None,
+        ).await.unwrap();
+        let base_commit = if git_checkout {
+            Some(cockpit_core::space_git::git_line(&checkout_path,
+                &["rev-parse", "--verify", "HEAD^{commit}"]).await.unwrap())
+        } else { None };
+        let config = root.join("config.toml");
+        let directory = root.to_str().unwrap();
+        std::fs::write(&config, format!(
+            "repository_roots = ['{directory}/catalog']\nstate_root = '{directory}/state'\ncache_root = '{directory}/cache'\nworktree_root = '{directory}/worktrees'\nlibrary_root = '{directory}/library'\nnotes_root = '{directory}/notes'\n"
+        )).unwrap();
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let worker_id = uuid::Uuid::new_v4().to_string();
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let claim_id = uuid::Uuid::new_v4().to_string();
+        std::fs::write(root.join(format!("state/orchestration/tasks/{root_id}.md")),
+            format!("# Tasks\n\n- [ ] Read-only repository analysis <!-- cockpit-task: {task_id} -->\n")).unwrap();
+        let artifact = root.join("analysis.txt");
+        std::fs::write(&artifact, "Actual analysis of the repository; no code changes required.\n").unwrap();
+        let retained = checkout_path.join("user-draft.txt");
+        std::fs::write(&retained, "Pre-existing unrelated draft\n").unwrap();
+        let credentials_dir = root.join("credentials");
+        std::fs::create_dir(&credentials_dir).unwrap();
+        std::fs::set_permissions(&credentials_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut runs = Vec::new();
+        let mut credentials = Vec::new();
+        let mut capabilities = Vec::new();
+        for (run_id, role, generation, kind, stage) in [
+            (&root_id, "root", None, "supervisor", "active"),
+            (&worker_id, "worker", Some(1_u64), "worker", "working"),
+        ] {
+            let attachment_id = uuid::Uuid::new_v4().to_string();
+            let credential_id = uuid::Uuid::new_v4().to_string();
+            let mut run = json!({
+                "session_id":"physical", "brief":"Read-only repository analysis", "run_id":run_id,
+                "kind":kind, "label":role, "root_id":root_id, "attempt":1,
+                "assignment_generation":generation, "launch_config":{"harness_kind":"other","command":"other"},
+                "stage":stage, "annotations":[], "created_at":"2026-10-14T00:00:00Z",
+                "updated_at":"2026-10-14T00:00:00Z",
+                "attachment":{"attachment_id":attachment_id,"epoch":1,"state":"connected",
+                    "launch_attempt":1,"updated_at":"2026-10-14T00:00:00Z"}
+            });
+            if role == "worker" {
+                run["parent_run_id"] = json!(root_id);
+                run["task_id"] = json!(task_id);
+                run["project"] = json!(project);
+                run["checkout"] = json!(checkout);
+                run["checkout_claim_id"] = json!(claim_id);
+                run["setup"] = json!({"checkout_path":checkout.path,"base_commit":base_commit,
+                    "effects":[],"warnings":[]});
+            }
+            credentials.push(json!({"credential_id":credential_id,"run_id":run_id,"root_id":root_id,
+                "role":role,"assignment_generation":generation,"attachment_id":attachment_id,
+                "attachment_epoch":1,"secret_digest":format!("{:x}", Sha256::digest([7_u8;32])),
+                "state":"active","issued_at":"2026-10-14T00:00:00Z"}));
+            let credential = credentials_dir.join(format!("{attachment_id}-1-{credential_id}.json"));
+            std::fs::write(&credential, serde_json::to_vec(&json!({
+                "schema":2,"credential_id":credential_id,"run_id":run_id,"root_id":root_id,"role":role,
+                "assignment_generation":generation,"attachment_id":attachment_id,"attachment_epoch":1,
+                "secret":base64::engine::general_purpose::STANDARD.encode([7_u8;32])
+            })).unwrap()).unwrap();
+            std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+            capabilities.push(credential);
+            runs.push(run);
+        }
+        let state = json!({"schema":4,"revision":1,"runs":runs,"credentials":credentials,
+            "messages":[],"inbox_hints":[],"task_intents":[],"assignment_intents":[],
+            "scope_intents":[],"operations":[],
+            "task_ownership":[{"root_id":root_id,"task_id":task_id,"generation":1,"schedule":null,
+                "owner":{"run_id":worker_id,"conversation":null,"claim_operation_id":uuid::Uuid::new_v4().to_string()}}],
+            "checkout_claims":[{"claim_id":claim_id,"checkout":checkout,"revision":1,"state":"held",
+                "holder":{"run_id":worker_id,"attachment_id":runs[1]["attachment"]["attachment_id"],
+                    "attachment_epoch":1},"transition_operation_id":null}]});
+        let state_path = root.join("state/orchestration/state.json");
+        std::fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+        for (run_id, role, credential) in [
+            (&worker_id, "worker", &capabilities[1]), (&root_id, "root", &capabilities[0]),
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "cli_orchestration::tests::identity::artifact_result_cli_child",
+                    "--ignored", "--nocapture"])
+                .env_clear().env("PATH", std::env::var_os("PATH").unwrap())
+                .env("HOME", &root).env("COCKPIT_CONFIG_PATH", &config)
+                .env("COCKPIT_JOB_CREDENTIAL_FILE", credential).env("COCKPIT_RUN_ID", run_id)
+                .env("COCKPIT_HERDR_SESSION", "physical")
+                .env("COCKPIT_HERDR_EXECUTABLE", "/definitely/absent/herdr")
+                .env("COCKPIT_TEST_RESULT_ROLE", role).env("COCKPIT_TEST_RESULT_ARTIFACT", &artifact)
+                .output().unwrap();
+            assert!(output.status.success(), "stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        }
+        let accepted: serde_json::Value = serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(accepted["runs"][1]["stage"], "closed");
+        assert_eq!(accepted["runs"][1]["close_reason"], "accepted");
+        assert_eq!(accepted["runs"][1]["source_output"]["kind"], "non_code");
+        assert_eq!(accepted["runs"][1]["integration"]["state"], "not_applicable");
+        assert_eq!(accepted["runs"][1]["integration"]["result_message_id"], "research-result");
+        assert_eq!(std::fs::read_to_string(&retained).unwrap(), "Pre-existing unrelated draft\n");
+        assert_eq!(std::fs::read_to_string(&artifact).unwrap(),
+            "Actual analysis of the repository; no code changes required.\n");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

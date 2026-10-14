@@ -58,7 +58,17 @@ TASK_ID="$(uuidgen)"
 
 Schedule uses the current canonical revisions unless exact `--task-revision` /
 `--doc-revision` fences are supplied. Placement defaults to an owned isolated
-worktree from the task's source Space, never arbitrary cwd or the root's folder.
+worktree from the task's source Space. Discover the actual project from
+Library/Space context (`context --current`) or configured routing; never infer
+it from arbitrary cwd or the root's folder. `run context` identifies authority,
+not necessarily a project checkout. Prefer `--space-worktree` for Git workers,
+even read-only research, so owned worker terminals can be cleaned up after
+acceptance. `--path` to an already-open Git Space creates an isolated worktree
+from that Space; otherwise it borrows/opens the checkout. `--space` is deliberate
+advanced borrowed reuse, only for safe shared/read-only inspection that changes
+no HEAD, index or build outputs. A primary Git Space's borrowed worker terminal
+cannot be auto-closed and remains until the user closes it. Review/testing an MR
+is writer work: use `--space-worktree`, optionally with `--base REF`.
 Optional `--brief` / `--brief-file` add instructions, not another task store.
 Dependencies and the parallel slot gate launch; authorization survives waiting.
 If source placement cannot be resolved, inspect the returned blocker.
@@ -186,7 +196,9 @@ The checks above are syntax examples: supply only checks actually exercised.
 `--check contract::command::passed|failed|not_run[::limitation]` records evidence,
 does not run a command. Never fabricate passed checks, commits, artifacts or
 cleanup. Code done derives real committed Git-range/current-task evidence;
-non-code done requires actual artifacts. Failed done may omit source output.
+non-code done requires actual artifacts: `run done --artifact PATH` records
+non-code output even in Git worktrees, without manual JSON. Failed done may omit
+source output.
 Explicit `--source-output-file FILE` requires `--message-id ID` matching its
 Result identity and is an alternative to `--check` / `--artifact`. Low-level
 `run report --kind result --outcome succeeded|failed` retains structured source
@@ -195,9 +207,15 @@ output support. Initialized/Progress are diagnostics, not permission gates.
 Generated operation/message IDs print to stderr; explicit IDs remain supported.
 Retain exact IDs, payloads and printed fences after uncertain outcomes. Existing
 journals are authoritative: inspect state before an exact replay; never blindly
-resubmit, change an ID to escape a conflict or create another writer. Low-level
-worker-start requires explicit placement, resolves omitted task/doc fences and
-prints them; preserve those exact fences for an inspected replay after changes.
+resubmit, change an ID to escape a conflict or create another writer.
+
+A `dispatch_failure` with `step:plan_failed`, `agent_started:false` and
+`effect:none` is pre-effect, not an uncertain physical write. Inspect the
+blocker, then re-run `task schedule TASK` with a corrected explicit target,
+normally `--space-worktree SPACE` from the error. This call atomically supersedes
+the unstarted attempt and replaces its stored schedule; no reconcile, restart,
+unassign or schedule-cancel is needed. Started or uncertain attempts still
+need inspected worker replacement, not this planning retry.
 
 ## Review, integration and retained adapter commands
 
@@ -206,7 +224,10 @@ honest Result satisfying all requested criteria using `run accept RUN
 --task-revision REV`. Otherwise `run send-back RUN --text "Correction"`.
 Acceptance is not integration or cleanup evidence. Preserve unmerged output,
 borrowed resources and uncertain ownership; request convergence, never fake it.
-Low-level commands remain for adapters and inspected recovery:
+Low-level commands remain for adapters and inspected recovery, not normal
+liaison delegation (`task create`, then `task schedule`). Adapter worker-start
+requires explicit placement, resolves omitted task/doc fences and prints them;
+preserve those exact fences for an inspected replay after changes:
 
 - `run integration-record --record-file FILE`
 - `run resource-register --request-file FILE`; `run cleanup-finish --request-file FILE`

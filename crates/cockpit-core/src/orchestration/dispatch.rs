@@ -46,6 +46,26 @@ fn dispatch_actionable(run: &Run) -> bool {
     })
 }
 
+pub(super) fn plan_failed_before_effects(run: &Run) -> bool {
+    run.kind == RunKind::Worker && run.stage == RunStage::Queued
+        && run.setup.is_none() && run.checkout.is_none() && run.checkout_claim_id.is_none()
+        && run.resume.is_none() && run.retirement.is_none()
+        && run.attachment.as_ref().is_none_or(|attachment|
+            attachment.state == cockpit_protocol::orchestration::AttachmentState::Reserved
+                && attachment.location.is_none() && attachment.process.is_none()
+                && attachment.shell.is_none() && attachment.conversation.is_none()
+                && attachment.process_scope.is_none() && attachment.launch_mode.is_none()
+                && attachment.launch_attempt == 0)
+        && run.dispatch.as_ref().is_some_and(|dispatch|
+            dispatch.step == DispatchStep::PlanFailed && !dispatch.agent_started
+                && dispatch.launch_tag.is_none() && dispatch.endpoint_identity.is_none()
+                && dispatch.scope_unit.is_none() && dispatch.pre_move_scope.is_none()
+                && dispatch.latch.is_none() && dispatch.latch_state.is_none()
+                && dispatch.source_location.is_none() && dispatch.move_operation_id.is_none()
+                && dispatch.staging_workspace_id.is_none() && dispatch.recovery.is_none()
+                && dispatch.launch_attempt <= 1)
+}
+
 fn scope_creation_pending(run: &Run) -> bool {
     run.dispatch.as_ref().is_some_and(|dispatch| dispatch.scope_unit.is_some()
         && (dispatch.latch.is_none() || dispatch.latch_state == Some(cockpit_protocol::orchestration::AgentLatchState::Released)))
@@ -332,6 +352,7 @@ impl Dispatcher {
                 schedule_inputs: Some(super::ScheduleInputFacts { snapshot: inputs, base_commit: None, verified_code_runs: Vec::new() }),
                 ..Default::default() });
         }
+        let mut normalized_target = None;
         let (project, checkout, git_source) = match target {
             DispatchTarget::ExistingSpace { workspace_id }
             | DispatchTarget::SpaceWorktree { workspace_id, .. } => {
@@ -374,7 +395,39 @@ impl Dispatcher {
                             std::path::Path::new(path), None, None,
                         ).await?;
                         let source = checkout.path.clone();
-                        (project, Some(checkout), Some(source))
+                        if matches!(&project.source, cockpit_protocol::orchestration::ProjectSource::Git { .. }) {
+                            let runtime = self.herdr.runtime(&candidate.session_id).await?;
+                            let mut matching = open_spaces_for_path(&runtime, &source);
+                            if let Some(space) = matching.next() && matching.next().is_none()
+                                && runtime.workspaces.iter().filter(|candidate| candidate.workspace_id == space.workspace_id).count() == 1
+                                && let Ok(repository) = self.projects.space_repository(
+                                    &candidate.session_id, &space.workspace_id, &space.cwd,
+                                ).await
+                                && matches!(&project.source, cockpit_protocol::orchestration::ProjectSource::Git { common_dir }
+                                    if common_dir == &repository.repository.common_dir)
+                            {
+                                drop(matching);
+                                let (verified_project, verified_checkout) = super::project_identity::resolve_directory(
+                                    std::path::Path::new(&space.cwd), Some(repository.repository.repository_id),
+                                    Some(space.workspace_id.clone()),
+                                ).await?;
+                                if verified_checkout == checkout
+                                    && verified_project.key == project.key
+                                {
+                                    normalized_target = Some(DispatchTarget::SpaceWorktree {
+                                        workspace_id: space.workspace_id.clone(), branch: None, base_ref: None,
+                                    });
+                                    (verified_project, None, Some(source))
+                                } else {
+                                    (project, Some(checkout), Some(source))
+                                }
+                            } else {
+                                drop(matching);
+                                (project, Some(checkout), Some(source))
+                            }
+                        } else {
+                            (project, Some(checkout), Some(source))
+                        }
                     }
                 }
             }
@@ -405,7 +458,7 @@ impl Dispatcher {
             }
             (Some(base), verified)
         };
-        Ok(super::ResolvedMutationInput { project: Some(project), checkout,
+        Ok(super::ResolvedMutationInput { project: Some(project), checkout, normalized_target,
             schedule_inputs: Some(super::ScheduleInputFacts { snapshot: inputs, base_commit, verified_code_runs }),
             ..Default::default() })
     }
@@ -641,7 +694,7 @@ impl Dispatcher {
                     if let Some(workspace_id) = open_space_for_path(&runtime, &plan.checkout_path) {
                         return Err(InspectionError::new(
                             "space_exists_for_path",
-                            format!("Checkout {} already belongs to Space {workspace_id}; propose --space {workspace_id} for independent work or --space-worktree {workspace_id} for conflicting or uncertain work", plan.checkout_path),
+                            format!("Checkout {} already belongs to Space {workspace_id}; re-run task schedule TASK --space-worktree {workspace_id} for an isolated attempt, or --space {workspace_id} only for deliberately borrowed independent work (supersedes a proven unstarted planning failure)", plan.checkout_path),
                         ));
                     }
                 }
@@ -1949,11 +2002,16 @@ fn as_response(error: InspectionError) -> ErrorResponse {
     }
 }
 
-fn open_space_for_path(runtime: &RuntimeView, checkout: &str) -> Option<String> {
+fn open_spaces_for_path<'a>(runtime: &'a RuntimeView, checkout: &'a str) -> impl Iterator<Item = &'a super::herdr::RuntimeWorkspace> + 'a {
     let checkout = std::path::Path::new(checkout);
-    runtime.workspaces.iter().find(|workspace| {
-        std::fs::canonicalize(&workspace.cwd).ok().as_deref() == Some(checkout)
-    }).map(|workspace| workspace.workspace_id.clone())
+    runtime.workspaces.iter().filter(move |workspace| {
+        std::path::Path::new(&workspace.cwd).is_absolute()
+            && std::fs::canonicalize(&workspace.cwd).ok().as_deref() == Some(checkout)
+    })
+}
+
+fn open_space_for_path(runtime: &RuntimeView, checkout: &str) -> Option<String> {
+    open_spaces_for_path(runtime, checkout).next().map(|space| space.workspace_id.clone())
 }
 
 async fn setup_base_commit(
